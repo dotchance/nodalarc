@@ -1,0 +1,51 @@
+"""TO link event models — all frozen (immutable after creation).
+
+Published on ZeroMQ port 5561 (TO_EVENTS_PORT).
+"""
+
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict
+
+
+class LinkUp(BaseModel):
+    """Link came up between two nodes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sim_time: datetime
+    wall_time: datetime
+    node_a: str
+    node_b: str
+    interface_a: str
+    interface_b: str
+    latency_ms: float
+    bandwidth_mbps: float
+    reason: str  # vis_gained, gs_above_horizon, scenario_inject_up, scenario_reconciliation
+
+
+class LinkDown(BaseModel):
+    """Link went down between two nodes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sim_time: datetime
+    wall_time: datetime
+    node_a: str
+    node_b: str
+    interface_a: str
+    interface_b: str
+    reason: str  # vis_lost, tracking_exceeded, terminal_exhausted, gs_below_horizon, scenario_inject_down, scenario_reconciliation, satellite_loss
+
+
+class LatencyUpdate(BaseModel):
+    """Latency changed on an active link (range-dependent)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    sim_time: datetime
+    wall_time: datetime
+    node_a: str
+    node_b: str
+    latency_ms: float
+    range_km: float

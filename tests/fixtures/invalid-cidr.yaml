@@ -1,0 +1,14 @@
+default_terminals:
+  - type: optical
+    count: 2
+    bandwidth_mbps: 1000
+    tracking_capacity: 1
+default_min_elevation_deg: 25
+default_scheduling_policy: highest-elevation
+stations:
+  - name: bad-station
+    lat_deg: 33.92
+    lon_deg: -118.33
+    terrestrial_prefixes:
+      - prefix: "not-a-cidr"
+        metric: -5

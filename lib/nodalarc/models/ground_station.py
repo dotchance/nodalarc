@@ -1,0 +1,109 @@
+"""Ground station configuration models."""
+
+from pydantic import BaseModel, field_validator, model_validator
+
+
+class TerrestrialPrefix(BaseModel):
+    """Explicit terrestrial prefix for a ground station."""
+
+    prefix: str  # CIDR notation, e.g. "172.16.100.0/24"
+    metric: int
+
+    @field_validator("metric")
+    @classmethod
+    def _non_negative_metric(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"metric must be non-negative, got {v}")
+        return v
+
+
+class TerrestrialPrefixTemplate(BaseModel):
+    """Default terrestrial prefix template using {gs_index}."""
+
+    ipv4_template: str = "172.16.{gs_index}.0/24"
+    ipv6_template: str = "fd10::{gs_index}:0/112"
+    metric: int = 10
+
+    @field_validator("metric")
+    @classmethod
+    def _non_negative_metric(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"metric must be non-negative, got {v}")
+        return v
+
+
+class GroundTerminalDef(BaseModel):
+    """Terminal definition for ground stations."""
+
+    type: str  # "optical" or "rf"
+    count: int
+    bandwidth_mbps: float
+    tracking_capacity: int
+    frequency_band: str | None = None  # For future environmental modeling
+
+    @field_validator("count")
+    @classmethod
+    def _count_range(cls, v: int) -> int:
+        if not 1 <= v <= 8:
+            raise ValueError(f"terminal count must be 1-8, got {v}")
+        return v
+
+
+class GroundStationConfig(BaseModel):
+    """Configuration for a single ground station."""
+
+    name: str
+    lat_deg: float
+    lon_deg: float
+    alt_m: float = 0.0
+    min_elevation_deg: float | None = None  # Override default
+    scheduling_policy: str | None = None  # Override default
+    terminals: list[GroundTerminalDef] | None = None  # Override default
+    terrestrial_prefixes: list[TerrestrialPrefix] | None = None  # Override template
+
+    @field_validator("lat_deg")
+    @classmethod
+    def _lat_range(cls, v: float) -> float:
+        if not -90 <= v <= 90:
+            raise ValueError(f"lat_deg must be -90 to 90, got {v}")
+        return v
+
+    @field_validator("lon_deg")
+    @classmethod
+    def _lon_range(cls, v: float) -> float:
+        if not -180 <= v <= 180:
+            raise ValueError(f"lon_deg must be -180 to 180, got {v}")
+        return v
+
+    @field_validator("min_elevation_deg")
+    @classmethod
+    def _elev_range(cls, v: float | None) -> float | None:
+        if v is not None and not 0 <= v <= 90:
+            raise ValueError(f"min_elevation_deg must be 0-90, got {v}")
+        return v
+
+
+class GroundStationFile(BaseModel):
+    """Top-level ground station configuration file."""
+
+    default_terminals: list[GroundTerminalDef]
+    default_min_elevation_deg: float = 25.0
+    default_scheduling_policy: str = "highest-elevation"
+    default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None
+    stations: list[GroundStationConfig]
+
+    @model_validator(mode="after")
+    def _validate_stations(self):
+        if len(self.stations) == 0:
+            raise ValueError("at least one station must be defined")
+        names = [s.name for s in self.stations]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate station names found")
+        return self
+
+    @field_validator("default_min_elevation_deg")
+    @classmethod
+    def _elev_range(cls, v: float) -> float:
+        if not 0 <= v <= 90:
+            raise ValueError(f"default_min_elevation_deg must be 0-90, got {v}")
+        return v

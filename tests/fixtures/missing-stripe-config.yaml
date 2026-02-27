@@ -1,0 +1,8 @@
+session:
+  name: bad-session
+constellation: configs/constellations/starlink-mini.yaml
+ground_stations: configs/ground-stations/global-default.yaml
+routing:
+  stack: configs/routing-stacks/frr-isis-sr
+  area_assignment:
+    strategy: stripe

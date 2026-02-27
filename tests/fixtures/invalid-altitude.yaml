@@ -1,0 +1,18 @@
+mode: parametric
+name: invalid-altitude
+orbit:
+  altitude_km: 100
+  inclination_deg: 53
+  pattern: walker-delta
+planes:
+  count: 2
+  raan_spacing_deg: 30
+  sats_per_plane: 2
+  phase_offset_deg: 6
+default_terminals:
+  isl:
+    - type: optical
+      count: 2
+      max_range_km: 5000
+      bandwidth_mbps: 1000
+      max_tracking_rate_deg_s: 3.0

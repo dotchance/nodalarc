@@ -1,0 +1,248 @@
+"""Test ISL neighbor assignment for all constellation types."""
+
+import yaml
+import pytest
+from pydantic import TypeAdapter
+
+from nodalarc.models.addressing import (
+    AddressingScheme,
+    NeighborAssignment,
+    assign_isl_neighbors,
+    neighbors_by_node,
+)
+from nodalarc.models.constellation import ConstellationConfig
+from tests.conftest import CONFIGS_DIR
+
+adapter = TypeAdapter(ConstellationConfig)
+
+
+@pytest.fixture
+def addressing():
+    return AddressingScheme()
+
+
+@pytest.fixture
+def four_node_config():
+    data = yaml.safe_load((CONFIGS_DIR / "constellations/4-node-test.yaml").read_text())
+    return adapter.validate_python(data)
+
+
+@pytest.fixture
+def starlink_config():
+    data = yaml.safe_load((CONFIGS_DIR / "constellations/starlink-mini.yaml").read_text())
+    return adapter.validate_python(data)
+
+
+@pytest.fixture
+def polar_seam_config():
+    data = yaml.safe_load((CONFIGS_DIR / "constellations/polar-seam-demo.yaml").read_text())
+    return adapter.validate_python(data)
+
+
+class TestFourNodeAssignment:
+    def test_result_is_frozenset(self, four_node_config, addressing):
+        result = assign_isl_neighbors(four_node_config, addressing)
+        assert isinstance(result, frozenset)
+
+    def test_four_node_assignments_count(self, four_node_config, addressing):
+        """4-node-test: 2 OCTs per sat → intra-fwd + intra-aft only."""
+        result = assign_isl_neighbors(four_node_config, addressing)
+        by_node = neighbors_by_node(result)
+        # Each of 4 satellites gets exactly 2 assignments
+        assert len(by_node) == 4
+        for node_id, assignments in by_node.items():
+            assert len(assignments) == 2, f"{node_id} has {len(assignments)} assignments"
+
+    def test_four_node_only_intra_plane(self, four_node_config, addressing):
+        """With only 2 terminals, only intra-plane links (no cross-plane)."""
+        result = assign_isl_neighbors(four_node_config, addressing)
+        by_node = neighbors_by_node(result)
+        for node_id, assignments in by_node.items():
+            for na in assignments:
+                assert na.link_type == "intra", f"{node_id} has cross-plane link {na}"
+
+    def test_four_node_priority_ordering(self, four_node_config, addressing):
+        result = assign_isl_neighbors(four_node_config, addressing)
+        by_node = neighbors_by_node(result)
+        for node_id, assignments in by_node.items():
+            # Priority 0 (intra-fwd) comes before priority 1 (intra-aft)
+            assert assignments[0].priority == 0
+            assert assignments[1].priority == 1
+
+    def test_four_node_interface_names(self, four_node_config, addressing):
+        result = assign_isl_neighbors(four_node_config, addressing)
+        by_node = neighbors_by_node(result)
+        for node_id, assignments in by_node.items():
+            assert assignments[0].interface == "isl0"
+            assert assignments[1].interface == "isl1"
+
+    def test_four_node_intra_fwd_peer(self, four_node_config, addressing):
+        """Plane 0: sat-P00S00 fwd peer is sat-P00S01 (next slot mod 2)."""
+        result = assign_isl_neighbors(four_node_config, addressing)
+        by_node = neighbors_by_node(result)
+        p00s00 = by_node["sat-P00S00"]
+        fwd = next(na for na in p00s00 if na.priority == 0)
+        assert fwd.peer_node_id == "sat-P00S01"
+
+    def test_four_node_intra_aft_wraps(self, four_node_config, addressing):
+        """Plane 0: sat-P00S00 aft peer is sat-P00S01 (slot -1 mod 2 = slot 1)."""
+        result = assign_isl_neighbors(four_node_config, addressing)
+        by_node = neighbors_by_node(result)
+        p00s00 = by_node["sat-P00S00"]
+        aft = next(na for na in p00s00 if na.priority == 1)
+        # With 2 sats_per_plane, (0-1) % 2 = 1 → sat-P00S01
+        assert aft.peer_node_id == "sat-P00S01"
+
+
+class TestStarlinkMiniAssignment:
+    def test_starlink_four_terminals(self, starlink_config, addressing):
+        """starlink-mini: 4 OCTs → intra-fwd, intra-aft, cross-right, cross-left."""
+        result = assign_isl_neighbors(starlink_config, addressing)
+        by_node = neighbors_by_node(result)
+        # Interior node gets all 4 assignments
+        interior = by_node["sat-P03S05"]
+        assert len(interior) == 4
+
+    def test_starlink_no_cross_wrap(self, starlink_config, addressing):
+        """Walker-delta (RAAN spread 30°×6=180° < 360°): no cross-plane wrap.
+        Plane 0 has no cross-left neighbor. Plane 5 has no cross-right neighbor."""
+        result = assign_isl_neighbors(starlink_config, addressing)
+        by_node = neighbors_by_node(result)
+        # Plane 0: should only have 3 assignments (no cross-left)
+        p0s0 = by_node["sat-P00S00"]
+        assert len(p0s0) == 3
+        link_types = [na.link_type for na in p0s0]
+        priorities = [na.priority for na in p0s0]
+        assert 0 in priorities  # intra-fwd
+        assert 1 in priorities  # intra-aft
+        assert 2 in priorities  # cross-right
+        assert 3 not in priorities  # NO cross-left
+
+    def test_starlink_last_plane_no_cross_right(self, starlink_config, addressing):
+        """Plane 5 (last): no cross-right because no wrap in walker-delta."""
+        result = assign_isl_neighbors(starlink_config, addressing)
+        by_node = neighbors_by_node(result)
+        p5s0 = by_node["sat-P05S00"]
+        assert len(p5s0) == 3
+        priorities = [na.priority for na in p5s0]
+        assert 0 in priorities  # intra-fwd
+        assert 1 in priorities  # intra-aft
+        assert 3 in priorities  # cross-left
+        assert 2 not in priorities  # NO cross-right
+
+    def test_starlink_total_satellites(self, starlink_config, addressing):
+        result = assign_isl_neighbors(starlink_config, addressing)
+        by_node = neighbors_by_node(result)
+        assert len(by_node) == 60  # 6 × 10
+
+    def test_starlink_cross_plane_peers(self, starlink_config, addressing):
+        """Interior node: cross-right goes to next plane, cross-left to prev plane."""
+        result = assign_isl_neighbors(starlink_config, addressing)
+        by_node = neighbors_by_node(result)
+        p03s05 = by_node["sat-P03S05"]
+        cross_right = next(na for na in p03s05 if na.priority == 2)
+        cross_left = next(na for na in p03s05 if na.priority == 3)
+        assert cross_right.peer_node_id == "sat-P04S05"
+        assert cross_left.peer_node_id == "sat-P02S05"
+
+
+class TestPolarSeamAssignment:
+    def test_polar_seam_cross_plane_wraps(self, polar_seam_config, addressing):
+        """Walker-star (RAAN spacing 90° × 4 planes = 360°): cross-plane DOES wrap."""
+        result = assign_isl_neighbors(polar_seam_config, addressing)
+        by_node = neighbors_by_node(result)
+        # Plane 0 should have cross-left wrapping to plane 3
+        p0s0 = by_node["sat-P00S00"]
+        assert len(p0s0) == 4
+        cross_left = next(na for na in p0s0 if na.priority == 3)
+        assert cross_left.peer_node_id == "sat-P03S00"
+
+    def test_polar_seam_last_plane_wraps_right(self, polar_seam_config, addressing):
+        """Plane 3 (last): cross-right wraps to plane 0."""
+        result = assign_isl_neighbors(polar_seam_config, addressing)
+        by_node = neighbors_by_node(result)
+        p3s0 = by_node["sat-P03S00"]
+        cross_right = next(na for na in p3s0 if na.priority == 2)
+        assert cross_right.peer_node_id == "sat-P00S00"
+
+    def test_polar_seam_all_4_terminals(self, polar_seam_config, addressing):
+        """All nodes get 4 assignments (4 OCTs, all cross-plane links wrap)."""
+        result = assign_isl_neighbors(polar_seam_config, addressing)
+        by_node = neighbors_by_node(result)
+        for node_id, assignments in by_node.items():
+            assert len(assignments) == 4, f"{node_id} has {len(assignments)} assignments"
+
+    def test_polar_seam_total_satellites(self, polar_seam_config, addressing):
+        result = assign_isl_neighbors(polar_seam_config, addressing)
+        by_node = neighbors_by_node(result)
+        assert len(by_node) == 32  # 4 × 8
+
+
+class TestIslOverrides:
+    def test_override_applied(self, addressing):
+        data = {
+            "mode": "explicit", "name": "with-override",
+            "default_terminals": {"isl": [
+                {"type": "optical", "count": 2, "max_range_km": 5000,
+                 "bandwidth_mbps": 1000, "max_tracking_rate_deg_s": 3.0}
+            ]},
+            "satellites": [
+                {"plane": 0, "slot": 0, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 0}},
+                {"plane": 0, "slot": 1, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 180}},
+            ],
+            "isl_overrides": [
+                {"node": "sat-P00S00", "links": [
+                    {"terminal": "isl0", "peer": "sat-P00S01"},
+                ]},
+            ],
+        }
+        config = adapter.validate_python(data)
+        result = assign_isl_neighbors(config, addressing)
+        by_node = neighbors_by_node(result)
+        p00s00 = by_node["sat-P00S00"]
+        # Override applied — only 1 assignment from override
+        assert len(p00s00) == 1
+        assert p00s00[0].interface == "isl0"
+        assert p00s00[0].peer_node_id == "sat-P00S01"
+        assert p00s00[0].link_type == "override"
+
+    def test_non_overridden_node_still_auto(self, addressing):
+        data = {
+            "mode": "explicit", "name": "with-override",
+            "default_terminals": {"isl": [
+                {"type": "optical", "count": 2, "max_range_km": 5000,
+                 "bandwidth_mbps": 1000, "max_tracking_rate_deg_s": 3.0}
+            ]},
+            "satellites": [
+                {"plane": 0, "slot": 0, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 0}},
+                {"plane": 0, "slot": 1, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 180}},
+            ],
+            "isl_overrides": [
+                {"node": "sat-P00S00", "links": [
+                    {"terminal": "isl0", "peer": "sat-P00S01"},
+                ]},
+            ],
+        }
+        config = adapter.validate_python(data)
+        result = assign_isl_neighbors(config, addressing)
+        by_node = neighbors_by_node(result)
+        # sat-P00S01 not overridden — gets auto assignment
+        p00s01 = by_node["sat-P00S01"]
+        assert len(p00s01) == 2  # 2 terminals, intra only (single plane)
+        assert all(na.link_type == "intra" for na in p00s01)
+
+
+class TestFrozenResult:
+    def test_frozenset_is_immutable(self, four_node_config, addressing):
+        result = assign_isl_neighbors(four_node_config, addressing)
+        with pytest.raises(AttributeError):
+            result.add(("fake", NeighborAssignment("isl0", "sat-P99S99", "intra", 0)))
+
+    def test_neighbor_assignment_is_namedtuple(self, four_node_config, addressing):
+        result = assign_isl_neighbors(four_node_config, addressing)
+        for node_id, na in result:
+            assert isinstance(na, NeighborAssignment)
+            assert hasattr(na, 'interface')
+            assert hasattr(na, 'peer_node_id')
+            assert hasattr(na, 'link_type')
+            assert hasattr(na, 'priority')

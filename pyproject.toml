@@ -1,6 +1,30 @@
 [project]
 name = "nodal"
 version = "0.1.0"
-description = "Add your description here"
+description = "Nodal Arc - Orbital Network Emulation Lab"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "pydantic>=2.0",
+    "pyzmq",
+    "pyyaml",
+    "numpy",
+    "sgp4",
+    "skyfield",
+    "jinja2",
+    "fastapi",
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "mypy",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "requires_root: tests that need root/namespace access",
+    "integration: integration tests requiring K3s",
+]

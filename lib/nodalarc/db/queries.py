@@ -1,0 +1,242 @@
+"""Typed insert/query functions for Nodal Arc SQLite database.
+
+All functions accept and return Pydantic model instances.
+No component writes raw SQL — use these functions instead.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+
+from nodalarc.models.link_events import LinkUp, LinkDown, LatencyUpdate
+from nodalarc.models.metrics import ConvergenceResult, ProbeResult, AdapterEvent
+
+
+# ---------------------------------------------------------------------------
+# Link events
+# ---------------------------------------------------------------------------
+
+def insert_link_up(conn: sqlite3.Connection, event: LinkUp) -> int:
+    cur = conn.execute(
+        """INSERT INTO link_events (sim_time, wall_time, event_type, node_a, node_b,
+           interface_a, interface_b, latency_ms, bandwidth_mbps, reason)
+           VALUES (?, ?, 'LinkUp', ?, ?, ?, ?, ?, ?, ?)""",
+        (event.sim_time.isoformat(), event.wall_time.isoformat(),
+         event.node_a, event.node_b,
+         event.interface_a, event.interface_b,
+         event.latency_ms, event.bandwidth_mbps, event.reason),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def insert_link_down(conn: sqlite3.Connection, event: LinkDown) -> int:
+    cur = conn.execute(
+        """INSERT INTO link_events (sim_time, wall_time, event_type, node_a, node_b,
+           interface_a, interface_b, reason)
+           VALUES (?, ?, 'LinkDown', ?, ?, ?, ?, ?)""",
+        (event.sim_time.isoformat(), event.wall_time.isoformat(),
+         event.node_a, event.node_b,
+         event.interface_a, event.interface_b, event.reason),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def insert_latency_update(conn: sqlite3.Connection, event: LatencyUpdate) -> int:
+    cur = conn.execute(
+        """INSERT INTO link_events (sim_time, wall_time, event_type, node_a, node_b,
+           interface_a, interface_b, latency_ms, range_km)
+           VALUES (?, ?, 'LatencyUpdate', ?, ?, '', '', ?, ?)""",
+        (event.sim_time.isoformat(), event.wall_time.isoformat(),
+         event.node_a, event.node_b,
+         event.latency_ms, event.range_km),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def query_link_events(
+    conn: sqlite3.Connection,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    node: str | None = None,
+) -> list[dict]:
+    """Query link events with optional time range and node filter."""
+    sql = "SELECT * FROM link_events WHERE 1=1"
+    params: list = []
+    if start_time is not None:
+        sql += " AND sim_time >= ?"
+        params.append(start_time)
+    if end_time is not None:
+        sql += " AND sim_time <= ?"
+        params.append(end_time)
+    if node is not None:
+        sql += " AND (node_a = ? OR node_b = ?)"
+        params.extend([node, node])
+    sql += " ORDER BY sim_time"
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Convergence events
+# ---------------------------------------------------------------------------
+
+def insert_convergence_result(conn: sqlite3.Connection, result: ConvergenceResult) -> int:
+    cur = conn.execute(
+        """INSERT INTO convergence_events (event_id, converged, duration_ms,
+           packets_lost, packets_sent, sim_time_start, sim_time_end)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (result.event_id, 1 if result.converged else 0,
+         result.duration_ms, result.packets_lost, result.packets_sent,
+         result.sim_time_start.isoformat(), result.sim_time_end.isoformat()),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def query_convergence_events(
+    conn: sqlite3.Connection,
+    event_id: str | None = None,
+) -> list[dict]:
+    sql = "SELECT * FROM convergence_events WHERE 1=1"
+    params: list = []
+    if event_id is not None:
+        sql += " AND event_id = ?"
+        params.append(event_id)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Probe results
+# ---------------------------------------------------------------------------
+
+def insert_probe_result(conn: sqlite3.Connection, result: ProbeResult) -> int:
+    cur = conn.execute(
+        """INSERT INTO probe_results (sim_time, wall_time, flow_id, src_node, dst_node,
+           packets_sent, packets_received, latency_min_ms, latency_max_ms,
+           latency_avg_ms, jitter_ms)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (result.sim_time.isoformat(), result.wall_time.isoformat(),
+         result.flow_id, result.src_node, result.dst_node,
+         result.packets_sent, result.packets_received,
+         result.latency_min_ms, result.latency_max_ms,
+         result.latency_avg_ms, result.jitter_ms),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def query_probe_results(
+    conn: sqlite3.Connection,
+    flow_id: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> list[dict]:
+    sql = "SELECT * FROM probe_results WHERE 1=1"
+    params: list = []
+    if flow_id is not None:
+        sql += " AND flow_id = ?"
+        params.append(flow_id)
+    if start_time is not None:
+        sql += " AND sim_time >= ?"
+        params.append(start_time)
+    if end_time is not None:
+        sql += " AND sim_time <= ?"
+        params.append(end_time)
+    sql += " ORDER BY sim_time"
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Adapter events
+# ---------------------------------------------------------------------------
+
+def insert_adapter_event(conn: sqlite3.Connection, event: AdapterEvent) -> int:
+    cur = conn.execute(
+        """INSERT INTO adapter_events (sim_time, wall_time, node_id,
+           event_type, event_data)
+           VALUES (?, ?, ?, ?, ?)""",
+        (event.sim_time.isoformat(), event.wall_time.isoformat(),
+         event.node_id, event.event_type,
+         json.dumps(event.event_data)),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def query_adapter_events(
+    conn: sqlite3.Connection,
+    node_id: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> list[dict]:
+    sql = "SELECT * FROM adapter_events WHERE 1=1"
+    params: list = []
+    if node_id is not None:
+        sql += " AND node_id = ?"
+        params.append(node_id)
+    if start_time is not None:
+        sql += " AND sim_time >= ?"
+        params.append(start_time)
+    if end_time is not None:
+        sql += " AND sim_time <= ?"
+        params.append(end_time)
+    sql += " ORDER BY sim_time"
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(sql, params).fetchall()
+    results = []
+    for row in rows:
+        d = dict(row)
+        if d.get("event_data"):
+            d["event_data"] = json.loads(d["event_data"])
+        results.append(d)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Session metadata
+# ---------------------------------------------------------------------------
+
+def set_metadata(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO session_metadata (key, value) VALUES (?, ?)",
+        (key, value),
+    )
+    conn.commit()
+
+
+def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute(
+        "SELECT value FROM session_metadata WHERE key = ?", (key,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Config changes
+# ---------------------------------------------------------------------------
+
+def insert_config_change(
+    conn: sqlite3.Connection,
+    timestamp_s: float,
+    node_id: str,
+    config_type: str,
+    new_hash: str,
+    old_hash: str | None = None,
+) -> int:
+    cur = conn.execute(
+        """INSERT INTO config_changes (timestamp_s, node_id, config_type,
+           old_hash, new_hash)
+           VALUES (?, ?, ?, ?, ?)""",
+        (timestamp_s, node_id, config_type, old_hash, new_hash),
+    )
+    conn.commit()
+    return cur.lastrowid

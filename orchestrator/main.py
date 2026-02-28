@@ -79,7 +79,10 @@ def _build_interface_map(
     return interface_map, bandwidth_map
 
 
-def _scenario_handler(pub_sock: zmq.Socket) -> None:
+def _scenario_handler(
+    pub_sock: zmq.Socket,
+    interface_map: dict[tuple[str, str], tuple[str, str]],
+) -> None:
     """Handle scenario injection requests on port 5564."""
     ctx = zmq.Context()
     sock = ctx.socket(zmq.REP)
@@ -112,6 +115,25 @@ def _scenario_handler(pub_sock: zmq.Socket) -> None:
                 pair = (min(pair), max(pair))
                 with override_lock:
                     override_set.discard(pair)
+                sock.send(b'{"status":"ok"}')
+
+            elif action == "inject_satellite_loss":
+                node = cmd["node"]
+                with override_lock:
+                    # Add override for every link involving this node
+                    for pair in list(interface_map.keys()):
+                        if node in pair:
+                            override_set.add(pair)
+                            event = LinkDown(
+                                sim_time=now, wall_time=now,
+                                node_a=pair[0], node_b=pair[1],
+                                interface_a="", interface_b="",
+                                reason="satellite_loss",
+                            )
+                            pub_sock.send(encode_message(
+                                TOPIC_LINK_DOWN, event.model_dump_json().encode(),
+                            ))
+                log.info(f"Satellite loss injected for {node}")
                 sock.send(b'{"status":"ok"}')
 
             elif action == "clear_overrides":
@@ -157,7 +179,7 @@ def main() -> None:
 
     # Start scenario handler thread
     scenario_thread = threading.Thread(
-        target=_scenario_handler, args=(pub_sock,), daemon=True,
+        target=_scenario_handler, args=(pub_sock, interface_map), daemon=True,
     )
     scenario_thread.start()
 

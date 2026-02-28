@@ -27,7 +27,11 @@ exit
 {% if node_type == "ground_station" and terrestrial_prefixes is defined %}
 interface terr0
 {% for tp in terrestrial_prefixes %}
- ip address {{ tp.prefix }}
+{% if ':' in tp.host_address %}
+ ipv6 address {{ tp.host_address }}
+{% else %}
+ ip address {{ tp.host_address }}
+{% endif %}
 {% endfor %}
 exit
 {% endif %}

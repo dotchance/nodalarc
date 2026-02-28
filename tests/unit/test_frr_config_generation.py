@@ -221,11 +221,12 @@ class TestSrMpls:
         # All unique
         assert len(sids) == 5  # 4 sats + 1 GS
 
-    def test_ti_lfa_enabled(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
+    def test_sr_prefix_index(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
         vars = _get_vars(flat_session, four_node_config, gs_file, addressing, isis_stack,
                          node_type="satellite", plane=0, slot=0)
         rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "fast-reroute ti-lfa" in rendered
+        assert "segment-routing prefix" in rendered
+        assert "index 1" in rendered
 
 
 class TestTimerScaling:
@@ -287,7 +288,7 @@ class TestZebraConfig:
                          node_type="ground_station", gs_name="hawthorne", gs_index=0)
         rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
         assert "interface terr0" in rendered
-        assert "172.16.0.0/24" in rendered
+        assert "172.16.0.1/24" in rendered
 
     def test_mgmt_passive(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
         vars = _get_vars(flat_session, four_node_config, gs_file, addressing, isis_stack,

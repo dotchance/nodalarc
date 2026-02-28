@@ -148,6 +148,7 @@ class RealtimeDispatcher:
             if is_gs_link:
                 link_manager.create_veth_pair(
                     info.pid_a, info.pid_b, ifaces[0], ifaces[1],
+                    node_id_a=vis.node_a, node_id_b=vis.node_b,
                 )
                 link_manager.enable_mpls_input(info.pid_a, ifaces[0])
                 link_manager.enable_mpls_input(info.pid_b, ifaces[1])

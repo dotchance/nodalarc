@@ -9,6 +9,7 @@ All netlink operations use pyroute2 directly (PRD 13.6).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -64,10 +65,13 @@ def create_veth_pair(
     ifname_a: str,
     ifname_b: str,
     mtu: int = 9000,
+    node_id_a: str = "",
+    node_id_b: str = "",
 ) -> None:
     """Create a veth pair and move ends into the given namespaces.
 
     Each end is renamed to the specified ifname inside its namespace.
+    PRD 13.6: sets MTU, disables IPv6 autoconfig, sets deterministic MACs.
     """
     # Clean up stale interfaces if they exist in the target namespaces
     for pid, ifname in [(pid_a, ifname_a), (pid_b, ifname_b)]:
@@ -122,6 +126,12 @@ def create_veth_pair(
     finally:
         ns_b.close()
 
+    # PRD 13.6 step 5: disable IPv6 autoconfig, set deterministic MACs
+    if node_id_a:
+        configure_interface(pid_a, ifname_a, node_id_a)
+    if node_id_b:
+        configure_interface(pid_b, ifname_b, node_id_b)
+
     log.info(f"Created veth pair: ns({pid_a})/{ifname_a} <-> ns({pid_b})/{ifname_b}")
 
 
@@ -147,6 +157,47 @@ def create_dummy_interface(
     log.info(f"Created dummy {ifname} in ns({pid}) with {len(addresses)} addrs")
 
 
+def disable_ipv6_autoconfig(pid: int, ifname: str) -> None:
+    """Disable IPv6 autoconfig on an interface (PRD 13.6 step 5).
+
+    Writes directly through /proc/{pid}/root — no subprocess.
+    """
+    for param in ("accept_ra", "autoconf"):
+        path = f"/proc/{pid}/root/proc/sys/net/ipv6/conf/{ifname}/{param}"
+        try:
+            with open(path, "w") as f:
+                f.write("0")
+        except (FileNotFoundError, OSError) as e:
+            log.warning(f"Failed to set {param}=0 for {ifname} in ns({pid}): {e}")
+
+
+def deterministic_mac(node_id: str, ifname: str) -> str:
+    """Derive a deterministic locally-administered unicast MAC address.
+
+    Format: 02:na:XX:XX:XX:XX where XX bytes come from SHA-256 of
+    node_id + ifname. The 02 prefix sets the locally-administered bit.
+    """
+    digest = hashlib.sha256(f"{node_id}:{ifname}".encode()).digest()
+    return f"02:na:{digest[0]:02x}:{digest[1]:02x}:{digest[2]:02x}:{digest[3]:02x}"
+
+
+def configure_interface(pid: int, ifname: str, node_id: str) -> None:
+    """Apply PRD 13.6 step 5 configuration to a veth interface.
+
+    Disables IPv6 autoconfig and sets a deterministic MAC address.
+    MTU is set during veth creation.
+    """
+    disable_ipv6_autoconfig(pid, ifname)
+    mac = deterministic_mac(node_id, ifname)
+    ns = NetNS(f"/proc/{pid}/ns/net")
+    try:
+        idx = ns.link_lookup(ifname=ifname)[0]
+        ns.link("set", index=idx, address=mac)
+    finally:
+        ns.close()
+    log.debug(f"Configured {ifname} in ns({pid}): mac={mac}, ipv6_autoconfig=off")
+
+
 def destroy_veth_pair(pid: int, ifname: str) -> None:
     """Destroy a veth pair by deleting one end inside a namespace.
 
@@ -163,13 +214,18 @@ def destroy_veth_pair(pid: int, ifname: str) -> None:
 
 
 def enable_mpls_input(pid: int, ifname: str) -> None:
-    """Enable MPLS input on an interface via /proc/sys inside the namespace."""
-    subprocess.run(
-        ["nsenter", f"--net=/proc/{pid}/ns/net", "--",
-         "sh", "-c",
-         f"echo 1 > /proc/sys/net/mpls/conf/{ifname}/input"],
-        check=True, capture_output=True,
-    )
+    """Enable MPLS input on an interface via /proc/sys inside the namespace.
+
+    Writes directly through /proc/{pid}/root — no subprocess, no nsenter.
+    """
+    sysctl_path = f"/proc/{pid}/root/proc/sys/net/mpls/conf/{ifname}/input"
+    try:
+        with open(sysctl_path, "w") as f:
+            f.write("1")
+    except FileNotFoundError:
+        log.warning(f"MPLS sysctl not available for {ifname} in ns({pid})")
+    except OSError as e:
+        log.warning(f"Failed to enable MPLS input for {ifname} in ns({pid}): {e}")
 
 
 def set_interface_up(pid: int, ifname: str) -> None:

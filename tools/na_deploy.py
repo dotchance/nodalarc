@@ -189,9 +189,11 @@ def deploy(session_path: str) -> None:
     # === Step 7: Wire data plane ===
     log.info("Step 7: Wire data plane")
     from orchestrator.link_manager import (
+        configure_interface,
         create_dummy_interface,
         create_veth_pair,
         discover_pod_pids,
+        enable_mpls_input,
     )
 
     # Retry PID discovery — containers may still be initializing
@@ -206,15 +208,17 @@ def deploy(session_path: str) -> None:
         _fail(f"Could not discover PIDs for: {zero_nodes}")
     log.info(f"Discovered PIDs for {len(pid_map)} pods")
 
-    # Configure kernel networking in each pod namespace
+    # Configure kernel networking in each pod namespace (no shelling out — PRD 13.6)
     for node_id, pid in pid_map.items():
-        subprocess.run(
-            ["nsenter", f"--net=/proc/{pid}/ns/net", "--",
-             "sh", "-c",
-             "echo 1 > /proc/sys/net/ipv6/conf/all/forwarding; "
-             "echo 100000 > /proc/sys/net/mpls/platform_labels"],
-            check=True, capture_output=True,
-        )
+        for sysctl_path, value in [
+            (f"/proc/{pid}/root/proc/sys/net/ipv6/conf/all/forwarding", "1"),
+            (f"/proc/{pid}/root/proc/sys/net/mpls/platform_labels", "100000"),
+        ]:
+            try:
+                with open(sysctl_path, "w") as f:
+                    f.write(value)
+            except OSError as e:
+                _fail(f"Failed to write {sysctl_path}: {e}")
     log.info("Configured IPv6 forwarding and MPLS in all pod namespaces")
 
     # Compute ISL neighbor assignments to know which veths to create
@@ -247,21 +251,19 @@ def deploy(session_path: str) -> None:
                 log.warning(f"No reciprocal assignment for {node_id} <-> {na.peer_node_id}")
                 continue
 
-            create_veth_pair(pid_a, pid_b, peer_iface, remote_iface)
+            create_veth_pair(
+                pid_a, pid_b, peer_iface, remote_iface,
+                node_id_a=node_id, node_id_b=na.peer_node_id,
+            )
             created_links.add(pair)
 
     log.info(f"Created {len(created_links)} veth pairs (all admin down)")
 
-    # Enable MPLS input on ISL interfaces in each pod namespace
+    # Enable MPLS input on ISL interfaces (no shelling out — PRD 13.6)
     for node_id, assignments in by_node.items():
         pid = pid_map[node_id]
         for na in assignments:
-            subprocess.run(
-                ["nsenter", f"--net=/proc/{pid}/ns/net", "--",
-                 "sh", "-c",
-                 f"echo 1 > /proc/sys/net/mpls/conf/{na.interface}/input"],
-                check=True, capture_output=True,
-            )
+            enable_mpls_input(pid, na.interface)
     log.info("Enabled MPLS input on all ISL interfaces")
 
     # Create dummy terr0 interfaces for ground stations

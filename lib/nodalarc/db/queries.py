@@ -57,6 +57,13 @@ def insert_latency_update(conn: sqlite3.Connection, event: LatencyUpdate) -> int
     return cur.lastrowid
 
 
+def insert_link_event(conn: sqlite3.Connection, event: LinkUp | LinkDown) -> int:
+    """Dispatch to insert_link_up or insert_link_down based on event type."""
+    if isinstance(event, LinkUp):
+        return insert_link_up(conn, event)
+    return insert_link_down(conn, event)
+
+
 def query_link_events(
     conn: sqlite3.Connection,
     start_time: str | None = None,
@@ -96,6 +103,11 @@ def insert_convergence_result(conn: sqlite3.Connection, result: ConvergenceResul
     )
     conn.commit()
     return cur.lastrowid
+
+
+def insert_convergence_event(conn: sqlite3.Connection, result: ConvergenceResult) -> int:
+    """Alias for insert_convergence_result (used by dispatcher)."""
+    return insert_convergence_result(conn, result)
 
 
 def query_convergence_events(

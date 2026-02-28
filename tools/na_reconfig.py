@@ -152,7 +152,11 @@ def reconfig(session_path: str, target: str, set_args: list[str] | None = None, 
 
 
 def _render_and_push(env, stack_config, node_id, vars):
-    """Render templates and push to pod."""
+    """Render templates and push to pod.
+
+    Uses the stack's reconfigure_command with {config_path} placeholder
+    (PRD Section 13.19). The command is executed once per config template.
+    """
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -163,26 +167,31 @@ def _render_and_push(env, stack_config, node_id, vars):
             dest_name = Path(tpl_config.dst).name
             (tmp_path / dest_name).write_text(rendered)
 
-        # kubectl cp into pod
-        result = subprocess.run(
-            ["kubectl", "cp", str(tmp_path) + "/.", f"nodalarc/{node_id}:/etc/frr/",
-             "-c", "frr"],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            log.error(f"Config copy failed for {node_id}: {result.stderr}")
-            sys.exit(1)
-
-        # Apply each rendered config via vtysh
-        for tpl_config in stack_config.config_templates:
-            dest = tpl_config.dst
+        # kubectl cp into pod — copy to the directory containing the config files
+        # Derive the common config directory from the first template's dst
+        config_dirs = {str(Path(tc.dst).parent) for tc in stack_config.config_templates}
+        for config_dir in config_dirs:
             result = subprocess.run(
-                ["kubectl", "exec", "-n", "nodalarc", node_id, "-c", "frr",
-                 "--", "vtysh", "-f", dest],
+                ["kubectl", "cp", str(tmp_path) + "/.",
+                 f"nodalarc/{node_id}:{config_dir}/", "-c", "frr"],
                 capture_output=True, text=True,
             )
             if result.returncode != 0:
-                log.error(f"Reconfigure failed for {node_id} ({dest}): {result.stderr}")
+                log.error(f"Config copy failed for {node_id}: {result.stderr}")
+                sys.exit(1)
+
+        # Apply using reconfigure_command from stack.yaml (PRD 13.19)
+        for tpl_config in stack_config.config_templates:
+            cmd = stack_config.reconfigure_command.format(
+                config_path=tpl_config.dst,
+            )
+            result = subprocess.run(
+                ["kubectl", "exec", "-n", "nodalarc", node_id, "-c", "frr",
+                 "--", "sh", "-c", cmd],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                log.error(f"Reconfigure failed for {node_id} ({cmd}): {result.stderr}")
                 sys.exit(1)
 
         log.info(f"Reconfigured {node_id}")

@@ -77,25 +77,48 @@ def _build_interface_info(
     return interfaces
 
 
+def _host_address_from_prefix(prefix: str) -> str:
+    """Derive a host address (.1 / ::1) from a CIDR network prefix.
+
+    '172.16.0.0/24' -> '172.16.0.1/24'
+    'fd10::0:0/112' -> 'fd10::0:1/112'
+    """
+    import ipaddress
+
+    net = ipaddress.ip_network(prefix, strict=False)
+    # First usable host = network_address + 1
+    host = net.network_address + 1
+    return f"{host}/{net.prefixlen}"
+
+
 def _resolve_terrestrial_prefixes(
     station,
     gs_file: GroundStationFile,
     gs_index: int,
 ) -> list[dict[str, Any]]:
-    """Resolve terrestrial prefixes for a ground station."""
+    """Resolve terrestrial prefixes for a ground station.
+
+    Each prefix includes both the network prefix (for routing announcements)
+    and the host_address (for interface configuration).
+    """
+    prefixes: list[tuple[str, int]] = []
     if station.terrestrial_prefixes:
-        return [
-            {"prefix": tp.prefix, "metric": tp.metric}
-            for tp in station.terrestrial_prefixes
-        ]
-    tpl = gs_file.default_terrestrial_prefixes
-    if tpl is None:
-        return []
-    ipv4 = tpl.ipv4_template.format(gs_index=gs_index)
-    ipv6 = tpl.ipv6_template.format(gs_index=gs_index)
+        prefixes = [(tp.prefix, tp.metric) for tp in station.terrestrial_prefixes]
+    else:
+        tpl = gs_file.default_terrestrial_prefixes
+        if tpl is None:
+            return []
+        ipv4 = tpl.ipv4_template.format(gs_index=gs_index)
+        ipv6 = tpl.ipv6_template.format(gs_index=gs_index)
+        prefixes = [(ipv4, tpl.metric), (ipv6, tpl.metric)]
+
     return [
-        {"prefix": ipv4, "metric": tpl.metric},
-        {"prefix": ipv6, "metric": tpl.metric},
+        {
+            "prefix": pfx,
+            "host_address": _host_address_from_prefix(pfx),
+            "metric": metric,
+        }
+        for pfx, metric in prefixes
     ]
 
 

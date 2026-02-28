@@ -17,10 +17,7 @@ router isis NODAL
  metric-style wide
  segment-routing on
  segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block 40000 49999
- segment-routing node-mfc-bit clear
  segment-routing prefix {{ loopback_ipv4 }}/32 index {{ sid_index }}
- fast-reroute ti-lfa level-1
- fast-reroute ti-lfa level-2
 {% set lsp_interval = [1, 15 // compression_factor] | max %}
  lsp-gen-interval {{ lsp_interval }}
  spf-interval {{ lsp_interval }}

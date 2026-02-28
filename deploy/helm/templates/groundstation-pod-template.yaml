@@ -1,0 +1,27 @@
+{{- range .Values.groundStations }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .nodeId }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    nodalarc.io/node-id: {{ .nodeId }}
+    nodalarc.io/role: ground_station
+    nodalarc.io/gs-name: {{ .gsName }}
+spec:
+  containers:
+    - name: frr
+      image: {{ $.Values.images.frr }}
+      resources:
+        limits:
+          memory: {{ $.Values.groundStation.memoryLimit }}
+          cpu: {{ $.Values.groundStation.cpuLimit }}
+      volumeMounts:
+        - name: frr-config
+          mountPath: /etc/frr
+  volumes:
+    - name: frr-config
+      emptyDir: {}
+  restartPolicy: Never
+{{- end }}

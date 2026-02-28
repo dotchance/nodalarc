@@ -1,0 +1,32 @@
+# Default values for Nodal Arc deployment
+namespace: nodalarc
+
+images:
+  frr: nodalarc/frr:10
+  orchestrator: nodalarc/orchestrator:latest
+  ome: nodalarc/ome:latest
+
+satellite:
+  memoryLimit: 128Mi
+  cpuLimit: 200m
+
+groundStation:
+  memoryLimit: 128Mi
+  cpuLimit: 200m
+
+orchestrator:
+  memoryLimit: 512Mi
+  cpuLimit: 500m
+
+ome:
+  memoryLimit: 256Mi
+  cpuLimit: 200m
+
+# Populated by na-deploy from constellation expansion
+satellites: []
+groundStations: []
+
+# Session config (mounted as ConfigMap)
+sessionConfig: ""
+timelineFile: ""
+mode: de

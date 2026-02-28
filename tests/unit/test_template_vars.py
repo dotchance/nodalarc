@@ -4,14 +4,16 @@ import yaml
 import pytest
 from pydantic import TypeAdapter
 
-from nodalarc.models.addressing import (
-    AddressingScheme,
-    assign_isl_neighbors,
-    compute_area_assignments,
-)
+from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.constellation import ConstellationConfig
 from nodalarc.models.ground_station import GroundStationFile
-from nodalarc.models.session import AreaAssignmentConfig
+from nodalarc.models.session import (
+    AreaAssignmentConfig,
+    RoutingConfig,
+    SessionConfig,
+    SessionMeta,
+    TimeConfig,
+)
 from nodalarc.template_vars import build_template_vars
 from tests.conftest import CONFIGS_DIR
 
@@ -42,46 +44,45 @@ def gs_file():
 
 
 @pytest.fixture
-def stripe_area_assignments(addressing):
-    config = AreaAssignmentConfig(
-        strategy="stripe", planes_per_stripe=2, gs_area_id="49.0000",
-    )
-    return compute_area_assignments(
-        config, plane_count=6, sats_per_plane=10,
-        addressing=addressing,
-        gs_names=["hawthorne", "ashburn", "frankfurt", "singapore",
-                  "sao-paulo", "sydney", "mcmurdo"],
-    )
-
-
-@pytest.fixture
-def flat_area_assignments(addressing):
-    config = AreaAssignmentConfig(strategy="flat", gs_area_id="49.0000")
-    return compute_area_assignments(
-        config, plane_count=2, sats_per_plane=2,
-        addressing=addressing,
-        gs_names=["hawthorne"],
+def flat_session():
+    """Session with flat area assignment (for 4-node-test)."""
+    return SessionConfig(
+        session=SessionMeta(name="test-flat"),
+        constellation="configs/constellations/4-node-test.yaml",
+        ground_stations="configs/ground-stations/global-default.yaml",
+        routing=RoutingConfig(
+            stack="configs/routing-stacks/frr-isis-sr",
+            area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0000"),
+        ),
+        time=TimeConfig(mode="discrete-event", compression=1),
     )
 
 
 @pytest.fixture
-def starlink_neighbors(starlink_config, addressing):
-    return assign_isl_neighbors(starlink_config, addressing)
-
-
-@pytest.fixture
-def four_node_neighbors(four_node_config, addressing):
-    return assign_isl_neighbors(four_node_config, addressing)
+def stripe_session():
+    """Session with stripe area assignment (for starlink-mini)."""
+    return SessionConfig(
+        session=SessionMeta(name="test-stripe"),
+        constellation="configs/constellations/starlink-mini.yaml",
+        ground_stations="configs/ground-stations/global-default.yaml",
+        routing=RoutingConfig(
+            stack="configs/routing-stacks/frr-isis-sr",
+            area_assignment=AreaAssignmentConfig(
+                strategy="stripe", planes_per_stripe=2, gs_area_id="49.0000",
+            ),
+        ),
+        time=TimeConfig(mode="discrete-event", compression=5),
+    )
 
 
 class TestSatelliteVars:
-    def test_basic_satellite_vars(self, addressing, flat_area_assignments, four_node_neighbors):
+    def test_basic_satellite_vars(self, flat_session, four_node_config, gs_file, addressing):
         result = build_template_vars(
-            node_id="sat-P00S00",
-            node_type="satellite",
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
             addressing=addressing,
-            area_assignments=flat_area_assignments,
-            neighbors=four_node_neighbors,
+            node_type="satellite",
             plane=0, slot=0,
         )
         assert result["node_id"] == "sat-P00S00"
@@ -92,66 +93,142 @@ class TestSatelliteVars:
         assert result["loopback_ipv6"] == "fd00::0:0:1"
         assert result["area_id"] == "49.0001"
 
-    def test_satellite_interface_info(self, addressing, flat_area_assignments, four_node_neighbors):
+    def test_hostname_equals_node_id(self, flat_session, four_node_config, gs_file, addressing):
         result = build_template_vars(
-            node_id="sat-P00S00",
-            node_type="satellite",
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
             addressing=addressing,
-            area_assignments=flat_area_assignments,
-            neighbors=four_node_neighbors,
+            node_type="satellite",
             plane=0, slot=0,
         )
-        assert "interface_info" in result
-        assert result["isl_count"] == 2  # 4-node has 2 OCTs
-        for iface in result["interface_info"]:
-            assert "interface" in iface
-            assert "peer_node_id" in iface
-            assert "link_type" in iface
-            assert "cross_area" in iface
+        assert result["hostname"] == result["node_id"]
+        assert result["hostname"] == "sat-P00S00"
 
-    def test_satellite_cross_area_flag(self, addressing, stripe_area_assignments, starlink_neighbors):
+    def test_mgmt_interface(self, flat_session, four_node_config, gs_file, addressing):
+        result = build_template_vars(
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+        )
+        assert result["mgmt_interface"] == "eth0"
+
+    def test_compression_factor(self, stripe_session, starlink_config, gs_file, addressing):
+        result = build_template_vars(
+            session=stripe_session,
+            constellation=starlink_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+        )
+        assert result["compression_factor"] == 5
+
+    def test_isl_interfaces_match_terminal_count(self, flat_session, four_node_config, gs_file, addressing):
+        result = build_template_vars(
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+        )
+        assert result["isl_interfaces"] == ["isl0", "isl1"]  # 4-node has 2 OCTs
+        assert result["isl_count"] == 2
+
+    def test_gnd_interfaces_present(self, flat_session, four_node_config, gs_file, addressing):
+        result = build_template_vars(
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+        )
+        assert result["gnd_interfaces"] == ["gnd0"]  # 4-node has 1 ground terminal
+
+    def test_neighbors_dict(self, flat_session, four_node_config, gs_file, addressing):
+        result = build_template_vars(
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+        )
+        neighbors = result["neighbors"]
+        assert isinstance(neighbors, dict)
+        assert len(neighbors) == 2  # 2 ISL terminals
+        # Each key is an interface name, value is peer_node_id
+        for iface, peer in neighbors.items():
+            assert iface.startswith("isl")
+            assert peer.startswith("sat-")
+
+    def test_interface_info_is_dict(self, flat_session, four_node_config, gs_file, addressing):
+        result = build_template_vars(
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+        )
+        iinfo = result["interface_info"]
+        assert isinstance(iinfo, dict)
+        assert len(iinfo) == 2  # 4-node has 2 OCTs
+        for iface_name, info in iinfo.items():
+            assert isinstance(iface_name, str)
+            assert "peer_node_id" in info
+            assert "link_type" in info
+            assert "cross_area" in info
+            assert "bandwidth_mbps" in info
+            assert info["bandwidth_mbps"] == 1000.0
+
+    def test_satellite_cross_area_flag(self, stripe_session, starlink_config, gs_file, addressing):
         """Node in plane 1 has cross-plane link to plane 2 — different stripe."""
         result = build_template_vars(
-            node_id="sat-P01S05",
-            node_type="satellite",
+            session=stripe_session,
+            constellation=starlink_config,
+            ground_stations=gs_file,
             addressing=addressing,
-            area_assignments=stripe_area_assignments,
-            neighbors=starlink_neighbors,
+            node_type="satellite",
             plane=1, slot=5,
         )
-        # Should have a cross-area interface (plane 1 in stripe 1, plane 2 in stripe 2)
-        cross_area_ifaces = [i for i in result["interface_info"] if i["cross_area"]]
+        iinfo = result["interface_info"]
+        cross_area_ifaces = {k: v for k, v in iinfo.items() if v["cross_area"]}
         assert len(cross_area_ifaces) > 0
         # The cross-plane right link to plane 2 should be cross_area=True
-        cross_right = next(i for i in result["interface_info"] if i["peer_node_id"] == "sat-P02S05")
+        cross_right = next(v for v in iinfo.values() if v["peer_node_id"] == "sat-P02S05")
         assert cross_right["cross_area"] is True
 
-    def test_satellite_same_area_flag(self, addressing, stripe_area_assignments, starlink_neighbors):
+    def test_satellite_same_area_flag(self, stripe_session, starlink_config, gs_file, addressing):
         """Cross-plane link within same stripe is NOT cross_area."""
         result = build_template_vars(
-            node_id="sat-P00S05",
-            node_type="satellite",
+            session=stripe_session,
+            constellation=starlink_config,
+            ground_stations=gs_file,
             addressing=addressing,
-            area_assignments=stripe_area_assignments,
-            neighbors=starlink_neighbors,
+            node_type="satellite",
             plane=0, slot=5,
         )
+        iinfo = result["interface_info"]
         # Plane 0 and plane 1 are in same stripe (planes_per_stripe=2)
-        cross_right = next(i for i in result["interface_info"] if i["peer_node_id"] == "sat-P01S05")
+        cross_right = next(v for v in iinfo.values() if v["peer_node_id"] == "sat-P01S05")
         assert cross_right["cross_area"] is False
 
 
 class TestGroundStationVars:
-    def test_basic_gs_vars(self, addressing, stripe_area_assignments, starlink_neighbors, gs_file):
+    def test_basic_gs_vars(self, stripe_session, starlink_config, gs_file, addressing):
         result = build_template_vars(
-            node_id="gs-hawthorne",
-            node_type="ground_station",
+            session=stripe_session,
+            constellation=starlink_config,
+            ground_stations=gs_file,
             addressing=addressing,
-            area_assignments=stripe_area_assignments,
-            neighbors=starlink_neighbors,
-            gs_file=gs_file,
-            gs_index=0,
-            gs_name="hawthorne",
+            node_type="ground_station",
+            gs_index=0, gs_name="hawthorne",
         )
         assert result["node_id"] == "gs-hawthorne"
         assert result["node_type"] == "ground_station"
@@ -160,18 +237,33 @@ class TestGroundStationVars:
         assert result["loopback_ipv4"] == "10.255.0.1"
         assert result["loopback_ipv6"] == "fd00::ff:0:1"
         assert result["area_id"] == "49.0000"
+        assert result["hostname"] == "gs-hawthorne"
+        assert result["mgmt_interface"] == "eth0"
 
-    def test_gs_terrestrial_prefix_from_template(self, addressing, stripe_area_assignments, starlink_neighbors, gs_file):
+    def test_gs_gnd_interfaces(self, stripe_session, starlink_config, gs_file, addressing):
+        result = build_template_vars(
+            session=stripe_session,
+            constellation=starlink_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="ground_station",
+            gs_index=0, gs_name="hawthorne",
+        )
+        assert len(result["gnd_interfaces"]) > 0
+        assert result["isl_interfaces"] == []
+        assert result["isl_count"] == 0
+        assert result["interface_info"] == {}
+        assert result["neighbors"] == {}
+
+    def test_gs_terrestrial_prefix_from_template(self, stripe_session, starlink_config, gs_file, addressing):
         """Hawthorne uses default template (no per-station override)."""
         result = build_template_vars(
-            node_id="gs-hawthorne",
-            node_type="ground_station",
+            session=stripe_session,
+            constellation=starlink_config,
+            ground_stations=gs_file,
             addressing=addressing,
-            area_assignments=stripe_area_assignments,
-            neighbors=starlink_neighbors,
-            gs_file=gs_file,
-            gs_index=0,
-            gs_name="hawthorne",
+            node_type="ground_station",
+            gs_index=0, gs_name="hawthorne",
         )
         prefixes = result["terrestrial_prefixes"]
         assert len(prefixes) == 2  # IPv4 + IPv6
@@ -180,17 +272,15 @@ class TestGroundStationVars:
         assert prefixes[1]["prefix"] == "fd10::0:0/112"
         assert prefixes[1]["metric"] == 10
 
-    def test_gs_terrestrial_prefix_per_station_override(self, addressing, stripe_area_assignments, starlink_neighbors, gs_file):
+    def test_gs_terrestrial_prefix_per_station_override(self, stripe_session, starlink_config, gs_file, addressing):
         """McMurdo has per-station prefix override."""
         result = build_template_vars(
-            node_id="gs-mcmurdo",
-            node_type="ground_station",
+            session=stripe_session,
+            constellation=starlink_config,
+            ground_stations=gs_file,
             addressing=addressing,
-            area_assignments=stripe_area_assignments,
-            neighbors=starlink_neighbors,
-            gs_file=gs_file,
-            gs_index=6,
-            gs_name="mcmurdo",
+            node_type="ground_station",
+            gs_index=6, gs_name="mcmurdo",
         )
         prefixes = result["terrestrial_prefixes"]
         assert len(prefixes) == 2
@@ -201,71 +291,57 @@ class TestGroundStationVars:
 
 
 class TestConfigOverrides:
-    def test_stack_vars_merged(self, addressing, flat_area_assignments, four_node_neighbors):
+    def test_config_overrides_merged(self, flat_session, four_node_config, gs_file, addressing):
         result = build_template_vars(
-            node_id="sat-P00S00",
-            node_type="satellite",
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
             addressing=addressing,
-            area_assignments=flat_area_assignments,
-            neighbors=four_node_neighbors,
+            node_type="satellite",
             plane=0, slot=0,
-            stack_vars={"router_id_format": "ospf", "metric_type": "wide"},
+            config_overrides={"srgb_start": 16000, "srgb_end": 23999, "reference_bandwidth": 10000},
+        )
+        assert result["srgb_start"] == 16000
+        assert result["srgb_end"] == 23999
+        assert result["reference_bandwidth"] == 10000
+
+    def test_node_vars_override_config_overrides(self, flat_session, four_node_config, gs_file, addressing):
+        """Node-specific vars (node_id, area_id, etc.) should not be overwritten by config_overrides."""
+        result = build_template_vars(
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+            config_overrides={"node_id": "should-not-win"},
+        )
+        assert result["node_id"] == "sat-P00S00"
+
+    def test_config_overrides_custom_keys(self, flat_session, four_node_config, gs_file, addressing):
+        result = build_template_vars(
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+            config_overrides={"router_id_format": "ospf", "metric_type": "wide"},
         )
         assert result["router_id_format"] == "ospf"
         assert result["metric_type"] == "wide"
 
-    def test_config_overrides_merged(self, addressing, flat_area_assignments, four_node_neighbors):
-        result = build_template_vars(
-            node_id="sat-P00S00",
-            node_type="satellite",
-            addressing=addressing,
-            area_assignments=flat_area_assignments,
-            neighbors=four_node_neighbors,
-            plane=0, slot=0,
-            config_overrides={"isis_level": 2, "custom_key": "value"},
-        )
-        assert result["isis_level"] == 2
-        assert result["custom_key"] == "value"
 
-    def test_config_overrides_override_stack_vars(self, addressing, flat_area_assignments, four_node_neighbors):
-        """config_overrides should win over stack_vars for same key."""
+class TestBandwidthInInterfaceInfo:
+    def test_bandwidth_mbps_present(self, flat_session, four_node_config, gs_file, addressing):
         result = build_template_vars(
-            node_id="sat-P00S00",
-            node_type="satellite",
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
             addressing=addressing,
-            area_assignments=flat_area_assignments,
-            neighbors=four_node_neighbors,
-            plane=0, slot=0,
-            stack_vars={"metric_type": "narrow"},
-            config_overrides={"metric_type": "wide"},
-        )
-        assert result["metric_type"] == "wide"
-
-    def test_node_vars_override_stack_vars(self, addressing, flat_area_assignments, four_node_neighbors):
-        """Node-specific vars (node_id, area_id, etc.) should not be overwritten by stack_vars."""
-        result = build_template_vars(
-            node_id="sat-P00S00",
             node_type="satellite",
-            addressing=addressing,
-            area_assignments=flat_area_assignments,
-            neighbors=four_node_neighbors,
-            plane=0, slot=0,
-            stack_vars={"node_id": "should-not-win"},
-        )
-        # Node-level vars are applied after stack_vars
-        assert result["node_id"] == "sat-P00S00"
-
-
-class TestPrecomputedNeighbors:
-    def test_receives_frozen_neighbors(self, addressing, flat_area_assignments, four_node_neighbors):
-        """build_template_vars receives pre-computed frozen neighbors — does not compute them."""
-        assert isinstance(four_node_neighbors, frozenset)
-        result = build_template_vars(
-            node_id="sat-P00S00",
-            node_type="satellite",
-            addressing=addressing,
-            area_assignments=flat_area_assignments,
-            neighbors=four_node_neighbors,
             plane=0, slot=0,
         )
-        assert result["isl_count"] == 2
+        for iface_name, info in result["interface_info"].items():
+            assert "bandwidth_mbps" in info
+            assert info["bandwidth_mbps"] == 1000.0

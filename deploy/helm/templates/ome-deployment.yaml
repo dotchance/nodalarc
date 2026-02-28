@@ -1,0 +1,37 @@
+{{- if eq .Values.mode "rt" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodalarc-ome
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      nodalarc.io/role: ome
+  template:
+    metadata:
+      labels:
+        nodalarc.io/role: ome
+    spec:
+      containers:
+        - name: ome
+          image: {{ .Values.images.ome }}
+          args:
+            - "--session"
+            - "/data/session.yaml"
+            - "--output-dir"
+            - "/data"
+          resources:
+            limits:
+              memory: {{ .Values.ome.memoryLimit }}
+              cpu: {{ .Values.ome.cpuLimit }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          hostPath:
+            path: /var/nodalarc/sessions
+            type: DirectoryOrCreate
+{{- end }}

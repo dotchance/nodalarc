@@ -258,3 +258,62 @@ def read_timeline_jsonl(path: Path) -> list[dict]:
             if line.strip():
                 events.append(json.loads(line))
     return events
+
+
+def publish_timeline_zmq(
+    timeline_path: Path,
+    compression_factor: float = 1.0,
+) -> None:
+    """Read pre-computed timeline and publish on ZMQ PUB with timing.
+
+    Binds to OME_EVENTS_BIND (port 5560). Publishes each event with
+    topic prefix. Paces at wall-clock × compression_factor.
+
+    Used in RT mode to replay a pre-computed timeline.
+    """
+    import time
+    import zmq
+    from nodalarc.zmq_channels import (
+        OME_EVENTS_BIND,
+        TOPIC_CLOCK_TICK,
+        TOPIC_VISIBILITY_EVENT,
+        encode_message,
+    )
+
+    ctx = zmq.Context()
+    pub = ctx.socket(zmq.PUB)
+    pub.bind(OME_EVENTS_BIND)
+    logger.info(f"OME ZMQ publisher bound on {OME_EVENTS_BIND}")
+
+    # Allow subscribers to connect
+    time.sleep(0.5)
+
+    records = read_timeline_jsonl(timeline_path)
+    if not records:
+        logger.warning("Empty timeline, nothing to publish")
+        pub.close()
+        ctx.term()
+        return
+
+    prev_ts = records[0]["timestamp_s"]
+    for record in records:
+        # Pace: sleep for the time delta scaled by compression
+        ts = record["timestamp_s"]
+        delta = (ts - prev_ts) / compression_factor if compression_factor > 0 else 0
+        if delta > 0:
+            time.sleep(delta)
+        prev_ts = ts
+
+        event_type = record["event_type"]
+        payload = json.dumps(record["data"]).encode()
+
+        if event_type == "ClockTick":
+            pub.send(encode_message(TOPIC_CLOCK_TICK, payload))
+        elif event_type == "Snapshot":
+            pub.send(encode_message(b"Snapshot", payload))
+        elif event_type == "VisibilityEvent":
+            pub.send(encode_message(TOPIC_VISIBILITY_EVENT, payload))
+
+    logger.info("OME ZMQ replay complete")
+    pub.close()
+    ctx.term()

@@ -1,0 +1,20 @@
+default_terminals:
+  - type: optical
+    count: 1
+    bandwidth_mbps: 1000
+    tracking_capacity: 1
+default_min_elevation_deg: 25
+default_scheduling_policy: highest-elevation
+default_terrestrial_prefixes:
+  ipv4_template: "172.16.{gs_index}.0/24"
+  ipv6_template: "fd10::{gs_index}:0/112"
+  metric: 10
+stations:
+  - name: hawthorne
+    lat_deg: 33.92
+    lon_deg: -118.33
+    alt_m: 20
+  - name: ashburn
+    lat_deg: 39.04
+    lon_deg: -77.49
+    alt_m: 100

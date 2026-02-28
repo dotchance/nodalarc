@@ -3,7 +3,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: {{ .nodeId }}
+  name: {{ .nodeId | lower }}
   namespace: {{ $.Values.namespace }}
   labels:
     nodalarc.io/node-id: {{ .nodeId }}

@@ -266,22 +266,13 @@ class TestZebraConfig:
         assert "ip forwarding" in rendered
         assert "ipv6 forwarding" in rendered
 
-    def test_unnumbered_isl_interfaces(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
-        """ISL interfaces should have no IP address — unnumbered."""
+    def test_isl_interfaces_use_loopback_ip(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
+        """ISL interfaces borrow the loopback IP (unnumbered style) for IS-IS."""
         vars = _get_vars(flat_session, four_node_config, gs_file, addressing, isis_stack,
                          node_type="satellite", plane=0, slot=0)
         rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        # ISL interfaces should exist but without ip address directives (except loopback)
-        lines = rendered.split("\n")
-        in_isl = False
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("interface isl"):
-                in_isl = True
-            elif stripped == "exit" and in_isl:
-                in_isl = False
-            elif in_isl and "ip address" in stripped:
-                pytest.fail(f"ISL interface has IP address: {stripped}")
+        loopback_ip = vars["loopback_ipv4"]
+        assert f"ip address {loopback_ip}/32" in rendered
 
     def test_gs_terrestrial_interface(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
         vars = _get_vars(flat_session, four_node_config, gs_file, addressing, isis_stack,

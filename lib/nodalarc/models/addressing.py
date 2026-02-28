@@ -286,8 +286,17 @@ def assign_isl_neighbors(
                     priority=3,
                 ))
 
+            # Deduplicate: if fwd and aft resolve to the same peer
+            # (e.g. 2 sats per plane), keep only the higher-priority one
+            seen_peers: set[str] = set()
+            deduped: list[NeighborAssignment] = []
+            for c in candidates:
+                if c.peer_node_id not in seen_peers:
+                    seen_peers.add(c.peer_node_id)
+                    deduped.append(c)
+
             # Trim to available terminal count
-            assigned = candidates[:isl_count]
+            assigned = deduped[:isl_count]
 
             # Assign interface names
             for idx, na in enumerate(assigned):

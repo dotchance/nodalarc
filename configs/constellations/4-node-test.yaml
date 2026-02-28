@@ -25,7 +25,7 @@ satellites:
       altitude_km: 550
       inclination_deg: 53
       raan_deg: 0
-      true_anomaly_deg: 180
+      true_anomaly_deg: 30
   - plane: 1
     slot: 0
     orbit:
@@ -39,4 +39,4 @@ satellites:
       altitude_km: 550
       inclination_deg: 53
       raan_deg: 30
-      true_anomaly_deg: 186
+      true_anomaly_deg: 36

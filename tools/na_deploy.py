@@ -50,8 +50,8 @@ def deploy(session_path: str) -> None:
     gs_data = yaml.safe_load(Path(session.ground_stations).read_text())
     gs_file = GroundStationFile.model_validate(gs_data)
 
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    session_id = f"{session.session.name}-{ts}"
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%Sz")
+    session_id = f"{session.session.name}-{ts}".lower()
     data_dir = Path(session.session.data_dir) / session_id
     data_dir.mkdir(parents=True, exist_ok=True)
     log.info(f"Session: {session_id}, data_dir: {data_dir}")
@@ -133,7 +133,7 @@ def deploy(session_path: str) -> None:
     result = subprocess.run(
         [
             "helm", "install", session_id, "deploy/helm",
-            "-n", "nodalarc",
+            "-n", "nodalarc", "--create-namespace",
             "-f", str(values_file),
         ],
         capture_output=True, text=True,
@@ -162,10 +162,11 @@ def deploy(session_path: str) -> None:
     # === Step 6: Copy configs into pods, signal readiness ===
     log.info("Step 6: Copy configs into pods")
     for node_id in node_vars:
+        pod_name = node_id.lower()
         node_dir = configs_dir / node_id
         # Copy rendered configs
         result = subprocess.run(
-            ["kubectl", "cp", str(node_dir) + "/.", f"nodalarc/{node_id}:/etc/frr/",
+            ["kubectl", "cp", str(node_dir) + "/.", f"nodalarc/{pod_name}:/etc/frr/",
              "-c", "frr"],
             capture_output=True, text=True,
         )
@@ -173,13 +174,17 @@ def deploy(session_path: str) -> None:
             _fail(f"Config copy failed for {node_id}: {result.stderr}")
         # Touch sentinel so entrypoint starts FRR daemons
         result = subprocess.run(
-            ["kubectl", "exec", "-n", "nodalarc", node_id, "-c", "frr",
+            ["kubectl", "exec", "-n", "nodalarc", pod_name, "-c", "frr",
              "--", "touch", "/etc/frr/.config-ready"],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
             _fail(f"Config ready signal failed for {node_id}: {result.stderr}")
     log.info("Configs copied and daemons signaled for all pods")
+
+    # Wait for FRR daemons to start (entrypoint waits for sentinel, then launches)
+    log.info("Waiting 5s for FRR daemons to start...")
+    time.sleep(5)
 
     # === Step 7: Wire data plane ===
     log.info("Step 7: Wire data plane")
@@ -189,8 +194,28 @@ def deploy(session_path: str) -> None:
         discover_pod_pids,
     )
 
-    pid_map = discover_pod_pids(namespace="nodalarc")
+    # Retry PID discovery — containers may still be initializing
+    for attempt in range(5):
+        pid_map = discover_pod_pids(namespace="nodalarc")
+        if all(pid > 0 for pid in pid_map.values()):
+            break
+        log.info(f"Some PIDs are 0, retrying in 3s (attempt {attempt + 1}/5)...")
+        time.sleep(3)
+    if any(pid == 0 for pid in pid_map.values()):
+        zero_nodes = [n for n, p in pid_map.items() if p == 0]
+        _fail(f"Could not discover PIDs for: {zero_nodes}")
     log.info(f"Discovered PIDs for {len(pid_map)} pods")
+
+    # Configure kernel networking in each pod namespace
+    for node_id, pid in pid_map.items():
+        subprocess.run(
+            ["nsenter", f"--net=/proc/{pid}/ns/net", "--",
+             "sh", "-c",
+             "echo 1 > /proc/sys/net/ipv6/conf/all/forwarding; "
+             "echo 100000 > /proc/sys/net/mpls/platform_labels"],
+            check=True, capture_output=True,
+        )
+    log.info("Configured IPv6 forwarding and MPLS in all pod namespaces")
 
     # Compute ISL neighbor assignments to know which veths to create
     from nodalarc.models.addressing import assign_isl_neighbors, neighbors_by_node
@@ -226,6 +251,18 @@ def deploy(session_path: str) -> None:
             created_links.add(pair)
 
     log.info(f"Created {len(created_links)} veth pairs (all admin down)")
+
+    # Enable MPLS input on ISL interfaces in each pod namespace
+    for node_id, assignments in by_node.items():
+        pid = pid_map[node_id]
+        for na in assignments:
+            subprocess.run(
+                ["nsenter", f"--net=/proc/{pid}/ns/net", "--",
+                 "sh", "-c",
+                 f"echo 1 > /proc/sys/net/mpls/conf/{na.interface}/input"],
+                check=True, capture_output=True,
+            )
+    log.info("Enabled MPLS input on all ISL interfaces")
 
     # Create dummy terr0 interfaces for ground stations
     for i, station in enumerate(gs_file.stations):

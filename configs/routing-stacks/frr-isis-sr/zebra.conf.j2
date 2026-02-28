@@ -12,6 +12,7 @@ exit
 
 {% for iface in isl_interfaces %}
 interface {{ iface }}
+ ip address {{ loopback_ipv4 }}/32
  ip router isis NODAL
  no ipv6 nd suppress-ra
 exit
@@ -19,6 +20,7 @@ exit
 
 {% for iface in gnd_interfaces %}
 interface {{ iface }}
+ ip address {{ loopback_ipv4 }}/32
  ip router isis NODAL
  no ipv6 nd suppress-ra
 exit

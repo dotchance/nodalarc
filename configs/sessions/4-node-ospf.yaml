@@ -1,0 +1,25 @@
+session:
+  name: 4node-ospf
+  data_dir: /tmp/nodalarc/sessions
+
+constellation: configs/constellations/4-node-test.yaml
+ground_stations: configs/ground-stations/two-station.yaml
+
+addressing:
+  sat_id_template: "sat-P{plane:02d}S{slot:02d}"
+  gs_id_template: "gs-{name}"
+
+routing:
+  stack: configs/routing-stacks/frr-ospf-te
+  area_assignment:
+    strategy: flat
+    gs_area_id: "0.0.0.1"
+
+time:
+  mode: discrete-event
+  step_seconds: 1
+  latency_update_interval_seconds: 10
+
+convergence:
+  stability_period_s: 2.0
+  timeout_s: 30.0

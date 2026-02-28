@@ -159,22 +159,97 @@ def deploy(session_path: str) -> None:
         _fail("Timeout waiting for pods to be Running")
     log.info(f"All {len(phases)} pods Running")
 
-    # === Step 6: Copy configs into pods ===
+    # === Step 6: Copy configs into pods, signal readiness ===
     log.info("Step 6: Copy configs into pods")
     for node_id in node_vars:
         node_dir = configs_dir / node_id
+        # Copy rendered configs
         result = subprocess.run(
-            ["kubectl", "cp", str(node_dir), f"nodalarc/{node_id}:/etc/frr/",
+            ["kubectl", "cp", str(node_dir) + "/.", f"nodalarc/{node_id}:/etc/frr/",
              "-c", "frr"],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
             _fail(f"Config copy failed for {node_id}: {result.stderr}")
-    log.info("Configs copied to all pods")
+        # Touch sentinel so entrypoint starts FRR daemons
+        result = subprocess.run(
+            ["kubectl", "exec", "-n", "nodalarc", node_id, "-c", "frr",
+             "--", "touch", "/etc/frr/.config-ready"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            _fail(f"Config ready signal failed for {node_id}: {result.stderr}")
+    log.info("Configs copied and daemons signaled for all pods")
 
     # === Step 7: Wire data plane ===
     log.info("Step 7: Wire data plane")
-    log.info("  (Data plane wiring handled by orchestrator at startup)")
+    from orchestrator.link_manager import (
+        create_dummy_interface,
+        create_veth_pair,
+        discover_pod_pids,
+    )
+
+    pid_map = discover_pod_pids(namespace="nodalarc")
+    log.info(f"Discovered PIDs for {len(pid_map)} pods")
+
+    # Compute ISL neighbor assignments to know which veths to create
+    from nodalarc.models.addressing import assign_isl_neighbors, neighbors_by_node
+    neighbors = assign_isl_neighbors(constellation, addressing)
+    by_node = neighbors_by_node(neighbors)
+
+    # Create veth pair for each unique ISL link (deduplicate A→B and B→A)
+    created_links: set[tuple[str, str]] = set()
+    for node_id, assignments in by_node.items():
+        pid_a = pid_map.get(node_id)
+        if pid_a is None:
+            _fail(f"No PID for node {node_id}")
+        for na in assignments:
+            pair = (min(node_id, na.peer_node_id), max(node_id, na.peer_node_id))
+            if pair in created_links:
+                continue
+            pid_b = pid_map.get(na.peer_node_id)
+            if pid_b is None:
+                _fail(f"No PID for peer node {na.peer_node_id}")
+            # Find the peer's interface name for this link
+            peer_iface = na.interface  # This node's interface
+            peer_assignments = by_node.get(na.peer_node_id, [])
+            remote_iface = ""
+            for pa in peer_assignments:
+                if pa.peer_node_id == node_id:
+                    remote_iface = pa.interface
+                    break
+            if not remote_iface:
+                log.warning(f"No reciprocal assignment for {node_id} <-> {na.peer_node_id}")
+                continue
+
+            create_veth_pair(pid_a, pid_b, peer_iface, remote_iface)
+            created_links.add(pair)
+
+    log.info(f"Created {len(created_links)} veth pairs (all admin down)")
+
+    # Create dummy terr0 interfaces for ground stations
+    for i, station in enumerate(gs_file.stations):
+        gs_id = addressing.gs_id(station.name)
+        gs_pid = pid_map.get(gs_id)
+        if gs_pid is None:
+            _fail(f"No PID for ground station {gs_id}")
+        addrs = []
+        if station.terrestrial_prefixes:
+            for tp in station.terrestrial_prefixes:
+                addrs.append(tp.prefix)
+        else:
+            tpl = gs_file.default_terrestrial_prefixes
+            if tpl:
+                addrs.append(tpl.ipv4_template.format(gs_index=i))
+                addrs.append(tpl.ipv6_template.format(gs_index=i))
+        create_dummy_interface(gs_pid, "terr0", addrs)
+
+    log.info(f"Created terr0 dummy interfaces for {len(gs_file.stations)} ground stations")
+
+    # Save pid_map for orchestrator
+    pid_map_file = data_dir / "pid_map.json"
+    pid_map_file.write_text(json.dumps(pid_map))
+    log.info(f"PID map saved to {pid_map_file}")
 
     # === Step 8: Start MI (convergence gate stub) ===
     log.info("Step 8: Start MI convergence gate stub")
@@ -200,18 +275,31 @@ def deploy(session_path: str) -> None:
             "--session", session_path,
             "--timeline", str(timeline_path),
             "--mode", mode_flag,
+            "--pid-map", str(pid_map_file),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     log.info(f"Orchestrator PID: {to_proc.pid}")
 
-    # === Complete ===
+    # === Complete — save session state and print summary ===
+    session_state = {
+        "session_id": session_id,
+        "data_dir": str(data_dir),
+        "timeline": str(timeline_path),
+        "mi_pid": mi_proc.pid,
+        "orchestrator_pid": to_proc.pid,
+        "session_config": session_path,
+    }
+    state_file = data_dir / "session-state.json"
+    state_file.write_text(json.dumps(session_state, indent=2))
+
     print(f"\nSession: {session_id}")
     print(f"Data directory: {data_dir}")
     print(f"Timeline: {timeline_path}")
     print(f"Convergence stub PID: {mi_proc.pid}")
     print(f"Orchestrator PID: {to_proc.pid}")
+    print(f"Session state: {state_file}")
 
 
 def main() -> None:

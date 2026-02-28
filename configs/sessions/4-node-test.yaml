@@ -1,8 +1,8 @@
 session:
-  name: isis-baseline
+  name: 4node-isis
   data_dir: /tmp/nodalarc/sessions
 
-constellation: configs/constellations/starlink-mini.yaml
+constellation: configs/constellations/4-node-test.yaml
 ground_stations: configs/ground-stations/global-default.yaml
 
 addressing:
@@ -12,9 +12,8 @@ addressing:
 routing:
   stack: configs/routing-stacks/frr-isis-sr
   area_assignment:
-    strategy: stripe
-    planes_per_stripe: 2
-    gs_area_id: "49.0000"
+    strategy: flat
+    gs_area_id: "49.0001"
 
 time:
   mode: discrete-event

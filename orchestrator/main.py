@@ -121,12 +121,19 @@ def main() -> None:
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument("--timeline", required=True, help="Path to timeline JSONL")
     parser.add_argument("--mode", choices=["de", "rt"], default="de")
+    parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     args = parser.parse_args()
 
     data = yaml.safe_load(Path(args.session).read_text())
     session = SessionConfig.model_validate(data)
     addressing = AddressingScheme(session.addressing)
     interface_map, bandwidth_map = _build_interface_map(session, addressing)
+
+    # Load pid_map if provided (from na-deploy step 7)
+    pid_map: dict[str, int] = {}
+    if args.pid_map:
+        pid_map = json.loads(Path(args.pid_map).read_text())
+        log.info(f"Loaded PID map with {len(pid_map)} entries")
 
     # ZMQ PUB for TO events (shared with scenario handler)
     ctx = zmq.Context()
@@ -145,6 +152,7 @@ def main() -> None:
             bandwidth_map=bandwidth_map,
             override_set=override_set,
             override_lock=override_lock,
+            pid_map=pid_map,
             latency_update_interval_s=session.time.latency_update_interval_seconds,
         )
         dispatcher.run()
@@ -154,6 +162,7 @@ def main() -> None:
             bandwidth_map=bandwidth_map,
             override_set=override_set,
             override_lock=override_lock,
+            pid_map=pid_map,
             latency_update_interval_s=session.time.latency_update_interval_seconds,
         )
         dispatcher.run()

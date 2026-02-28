@@ -3,7 +3,7 @@ session:
   data_dir: /tmp/nodalarc/sessions
 
 constellation: configs/constellations/4-node-test.yaml
-ground_stations: configs/ground-stations/global-default.yaml
+ground_stations: configs/ground-stations/two-station.yaml
 
 addressing:
   sat_id_template: "sat-P{plane:02d}S{slot:02d}"

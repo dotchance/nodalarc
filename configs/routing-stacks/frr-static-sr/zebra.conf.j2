@@ -10,11 +10,13 @@ exit
 
 {% for iface in isl_interfaces %}
 interface {{ iface }}
+ ip address {{ loopback_ipv4 }}/32
 exit
 {% endfor %}
 
 {% for iface in gnd_interfaces %}
 interface {{ iface }}
+ ip address {{ loopback_ipv4 }}/32
 exit
 {% endfor %}
 

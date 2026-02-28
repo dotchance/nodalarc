@@ -29,7 +29,10 @@ def discover_pod_pids(
     Uses K8s API → container ID → crictl inspect → PID.
     Returns {node_id: pid}.
     """
-    kubernetes.config.load_incluster_config()
+    try:
+        kubernetes.config.load_kube_config()
+    except kubernetes.config.config_exception.ConfigException:
+        kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
     pods = v1.list_namespaced_pod(namespace, label_selector=label_selector)
 
@@ -167,11 +170,11 @@ def apply_link_shaping(
     ns = NetNS(f"/proc/{pid}/ns/net")
     try:
         idx = ns.link_lookup(ifname=ifname)[0]
-        # Root: tbf for bandwidth shaping
-        ns.tc("add", kind="tbf", index=idx,
+        # Root: tbf for bandwidth shaping (handle 1:0)
+        ns.tc("add", kind="tbf", index=idx, handle=0x00010000,
               rate=rate_bps, burst=burst, latency=latency_us)
-        # Child: netem for delay
-        ns.tc("add", kind="netem", index=idx,
+        # Child: netem for delay (under class 1:1)
+        ns.tc("add", kind="netem", index=idx, handle=0x00100000,
               parent=0x00010001, delay=delay_us)
     finally:
         ns.close()
@@ -184,7 +187,7 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
     ns = NetNS(f"/proc/{pid}/ns/net")
     try:
         idx = ns.link_lookup(ifname=ifname)[0]
-        ns.tc("change", kind="netem", index=idx,
+        ns.tc("change", kind="netem", index=idx, handle=0x00100000,
               parent=0x00010001, delay=delay_us)
     finally:
         ns.close()
@@ -195,6 +198,6 @@ def remove_link_shaping(pid: int, ifname: str) -> None:
     ns = NetNS(f"/proc/{pid}/ns/net")
     try:
         idx = ns.link_lookup(ifname=ifname)[0]
-        ns.tc("del", index=idx, parent=0xFFFF0000)
+        ns.tc("del", index=idx, handle=0x00010000, parent=0xFFFF0000)
     finally:
         ns.close()

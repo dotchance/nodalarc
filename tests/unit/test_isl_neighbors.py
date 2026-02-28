@@ -53,21 +53,22 @@ class TestFourNodeAssignment:
         for node_id, assignments in by_node.items():
             assert len(assignments) == 2, f"{node_id} has {len(assignments)} assignments"
 
-    def test_four_node_only_intra_plane(self, four_node_config, addressing):
-        """With only 2 terminals, only intra-plane links (no cross-plane)."""
+    def test_four_node_intra_plus_cross(self, four_node_config, addressing):
+        """With 2 terminals and 2 sats/plane, isl0=intra, isl1=cross (deduped)."""
         result = assign_isl_neighbors(four_node_config, addressing)
         by_node = neighbors_by_node(result)
         for node_id, assignments in by_node.items():
-            for na in assignments:
-                assert na.link_type == "intra", f"{node_id} has cross-plane link {na}"
+            link_types = {na.interface: na.link_type for na in assignments}
+            assert link_types["isl0"] == "intra"
+            assert link_types["isl1"] == "cross"
 
     def test_four_node_priority_ordering(self, four_node_config, addressing):
         result = assign_isl_neighbors(four_node_config, addressing)
         by_node = neighbors_by_node(result)
         for node_id, assignments in by_node.items():
-            # Priority 0 (intra-fwd) comes before priority 1 (intra-aft)
+            # Priority 0 (intra-fwd) comes before priority 2 (cross-right)
             assert assignments[0].priority == 0
-            assert assignments[1].priority == 1
+            assert assignments[1].priority in (2, 3)
 
     def test_four_node_interface_names(self, four_node_config, addressing):
         result = assign_isl_neighbors(four_node_config, addressing)
@@ -84,14 +85,13 @@ class TestFourNodeAssignment:
         fwd = next(na for na in p00s00 if na.priority == 0)
         assert fwd.peer_node_id == "sat-P00S01"
 
-    def test_four_node_intra_aft_wraps(self, four_node_config, addressing):
-        """Plane 0: sat-P00S00 aft peer is sat-P00S01 (slot -1 mod 2 = slot 1)."""
+    def test_four_node_cross_plane_peer(self, four_node_config, addressing):
+        """Plane 0: sat-P00S00 cross-right peer is sat-P01S00."""
         result = assign_isl_neighbors(four_node_config, addressing)
         by_node = neighbors_by_node(result)
         p00s00 = by_node["sat-P00S00"]
-        aft = next(na for na in p00s00 if na.priority == 1)
-        # With 2 sats_per_plane, (0-1) % 2 = 1 → sat-P00S01
-        assert aft.peer_node_id == "sat-P00S01"
+        cross = next(na for na in p00s00 if na.link_type == "cross")
+        assert cross.peer_node_id == "sat-P01S00"
 
 
 class TestStarlinkMiniAssignment:
@@ -228,8 +228,9 @@ class TestIslOverrides:
         by_node = neighbors_by_node(result)
         # sat-P00S01 not overridden — gets auto assignment
         p00s01 = by_node["sat-P00S01"]
-        assert len(p00s01) == 2  # 2 terminals, intra only (single plane)
-        assert all(na.link_type == "intra" for na in p00s01)
+        # 1 plane only → 1 unique intra peer, so only 1 assignment
+        assert len(p00s01) == 1
+        assert p00s01[0].link_type == "intra"
 
 
 class TestFrozenResult:

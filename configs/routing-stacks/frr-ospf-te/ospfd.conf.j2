@@ -50,6 +50,13 @@ interface {{ iface }}
 exit
 {% endfor %}
 
+{% if node_type == "ground_station" and terrestrial_prefixes is defined %}
+interface terr0
+ ip ospf area {{ area_id }}
+ ip ospf passive
+exit
+{% endif %}
+
 interface {{ mgmt_interface }}
  ip ospf area {{ area_id }}
 exit

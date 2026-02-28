@@ -173,18 +173,17 @@ def _render_and_push(env, stack_config, node_id, vars):
             log.error(f"Config copy failed for {node_id}: {result.stderr}")
             sys.exit(1)
 
-        # Execute reconfigure command
-        reconfig_cmd = stack_config.reconfigure_command.format(
-            config_path="/etc/frr/frr.conf",
-        )
-        result = subprocess.run(
-            ["kubectl", "exec", "-n", "nodalarc", node_id, "-c", "frr",
-             "--", "bash", "-c", reconfig_cmd],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            log.error(f"Reconfigure failed for {node_id}: {result.stderr}")
-            sys.exit(1)
+        # Apply each rendered config via vtysh
+        for tpl_config in stack_config.config_templates:
+            dest = tpl_config.dst
+            result = subprocess.run(
+                ["kubectl", "exec", "-n", "nodalarc", node_id, "-c", "frr",
+                 "--", "vtysh", "-f", dest],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                log.error(f"Reconfigure failed for {node_id} ({dest}): {result.stderr}")
+                sys.exit(1)
 
         log.info(f"Reconfigured {node_id}")
 

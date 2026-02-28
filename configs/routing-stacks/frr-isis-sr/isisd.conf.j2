@@ -52,6 +52,13 @@ interface lo
  isis passive
 exit
 
+{% if node_type == "ground_station" and terrestrial_prefixes is defined %}
+interface terr0
+ ip router isis NODAL
+ isis passive
+exit
+{% endif %}
+
 interface {{ mgmt_interface }}
  ip router isis NODAL
  isis passive

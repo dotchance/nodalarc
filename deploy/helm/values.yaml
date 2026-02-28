@@ -2,9 +2,11 @@
 namespace: nodalarc
 
 images:
-  frr: nodalarc/frr:10
-  orchestrator: nodalarc/orchestrator:latest
-  ome: nodalarc/ome:latest
+  frr: docker.io/nodalarc/frr:10
+  orchestrator: docker.io/nodalarc/orchestrator:latest
+  ome: docker.io/nodalarc/ome:latest
+
+imagePullPolicy: Never
 
 satellite:
   memoryLimit: 128Mi

@@ -13,15 +13,16 @@ spec:
   containers:
     - name: frr
       image: {{ $.Values.images.frr }}
+      imagePullPolicy: {{ $.Values.imagePullPolicy }}
+      securityContext:
+        capabilities:
+          add:
+            - NET_ADMIN
+            - NET_RAW
+            - SYS_ADMIN
       resources:
         limits:
           memory: {{ $.Values.groundStation.memoryLimit }}
           cpu: {{ $.Values.groundStation.cpuLimit }}
-      volumeMounts:
-        - name: frr-config
-          mountPath: /etc/frr
-  volumes:
-    - name: frr-config
-      emptyDir: {}
   restartPolicy: Never
 {{- end }}

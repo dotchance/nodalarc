@@ -1,0 +1,38 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nodalarc-orchestrator
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nodalarc-orchestrator
+  namespace: {{ .Values.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nodalarc-orchestrator
+  namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nodalarc-orchestrator
+subjects:
+  - kind: ServiceAccount
+    name: nodalarc-orchestrator
+    namespace: {{ .Values.namespace }}

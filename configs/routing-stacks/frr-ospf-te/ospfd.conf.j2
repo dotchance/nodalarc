@@ -1,0 +1,55 @@
+hostname {{ hostname }}
+log syslog informational
+
+router ospf
+ ospf router-id {{ loopback_ipv4 }}
+ mpls-te on
+ mpls-te router-address {{ loopback_ipv4 }}
+{% set hello_interval = [1, 10 // compression_factor] | max %}
+{% set dead_interval = hello_interval * 4 %}
+ timers throttle spf {{ [50, 200 // compression_factor] | max }} {{ [50, 200 // compression_factor] | max }} {{ [1000, 5000 // compression_factor] | max }}
+ network {{ loopback_ipv4 }}/32 area {{ area_id }}
+{% for iface_name, info in interface_info.items() %}
+{% if info.cross_area %}
+ network 0.0.0.0/0 area 0.0.0.0
+{% else %}
+ network 0.0.0.0/0 area {{ area_id }}
+{% endif %}
+{% endfor %}
+ passive-interface {{ mgmt_interface }}
+ passive-interface lo
+exit
+
+interface lo
+ ip ospf area {{ area_id }}
+exit
+
+{% for iface_name, info in interface_info.items() %}
+interface {{ iface_name }}
+{% if info.cross_area %}
+ ip ospf area 0.0.0.0
+{% else %}
+ ip ospf area {{ area_id }}
+{% endif %}
+ ip ospf network point-to-point
+ ip ospf cost {{ (reference_bandwidth / info.bandwidth_mbps) | int }}
+ ip ospf hello-interval {{ hello_interval }}
+ ip ospf dead-interval {{ dead_interval }}
+ no ipv6 nd suppress-ra
+exit
+{% endfor %}
+
+{% for iface in gnd_interfaces %}
+interface {{ iface }}
+ ip ospf area {{ area_id }}
+ ip ospf network point-to-point
+ ip ospf cost 10
+ ip ospf hello-interval {{ hello_interval }}
+ ip ospf dead-interval {{ dead_interval }}
+ no ipv6 nd suppress-ra
+exit
+{% endfor %}
+
+interface {{ mgmt_interface }}
+ ip ospf area {{ area_id }}
+exit

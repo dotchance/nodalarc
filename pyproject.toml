@@ -13,6 +13,8 @@ dependencies = [
     "jinja2",
     "fastapi",
     "uvicorn",
+    "pyroute2",
+    "kubernetes",
 ]
 
 [project.optional-dependencies]

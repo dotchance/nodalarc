@@ -1,0 +1,28 @@
+{{- range .Values.satellites }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .nodeId }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    nodalarc.io/node-id: {{ .nodeId }}
+    nodalarc.io/role: satellite
+    nodalarc.io/plane: "{{ .plane }}"
+    nodalarc.io/slot: "{{ .slot }}"
+spec:
+  containers:
+    - name: frr
+      image: {{ $.Values.images.frr }}
+      resources:
+        limits:
+          memory: {{ $.Values.satellite.memoryLimit }}
+          cpu: {{ $.Values.satellite.cpuLimit }}
+      volumeMounts:
+        - name: frr-config
+          mountPath: /etc/frr
+  volumes:
+    - name: frr-config
+      emptyDir: {}
+  restartPolicy: Never
+{{- end }}

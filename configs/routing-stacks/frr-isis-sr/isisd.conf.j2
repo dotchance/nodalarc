@@ -1,0 +1,61 @@
+hostname {{ hostname }}
+log syslog informational
+
+{% if node_type == "satellite" %}
+{# System-ID for satellites: plane and slot encoded as hex #}
+{% set system_id = "%04x.%04x.0001" | format(plane, slot) %}
+{% set sid_index = plane * 100 + slot + 1 %}
+{% elif node_type == "ground_station" %}
+{# System-ID for ground stations: 00ff prefix with gs_index #}
+{% set system_id = "00ff.%04x.0002" | format(gs_index) %}
+{% set sid_index = 8000 + gs_index %}
+{% endif %}
+
+router isis NODAL
+ net {{ area_id }}.{{ system_id }}.00
+ is-type level-1-2
+ metric-style wide
+ segment-routing on
+ segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block 40000 49999
+ segment-routing node-mfc-bit clear
+ segment-routing prefix {{ loopback_ipv4 }}/32 index {{ sid_index }}
+ fast-reroute ti-lfa level-1
+ fast-reroute ti-lfa level-2
+{% set lsp_interval = [1, 15 // compression_factor] | max %}
+ lsp-gen-interval {{ lsp_interval }}
+ spf-interval {{ lsp_interval }}
+ max-lsp-lifetime {{ [350, 1200 // compression_factor] | max }}
+ lsp-refresh-interval {{ [150, 900 // compression_factor] | max }}
+exit
+
+{% for iface_name, info in interface_info.items() %}
+interface {{ iface_name }}
+ ip router isis NODAL
+ isis network point-to-point
+ isis metric {{ (reference_bandwidth / info.bandwidth_mbps) | int }}
+ isis hello-interval {{ [1, 10 // compression_factor] | max }}
+ isis hello-multiplier 3
+ no ipv6 nd suppress-ra
+exit
+{% endfor %}
+
+{% for iface in gnd_interfaces %}
+interface {{ iface }}
+ ip router isis NODAL
+ isis network point-to-point
+ isis metric 10
+ isis hello-interval {{ [1, 10 // compression_factor] | max }}
+ isis hello-multiplier 3
+ no ipv6 nd suppress-ra
+exit
+{% endfor %}
+
+interface lo
+ ip router isis NODAL
+ isis passive
+exit
+
+interface {{ mgmt_interface }}
+ ip router isis NODAL
+ isis passive
+exit

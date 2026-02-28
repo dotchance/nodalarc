@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodalarc-orchestrator
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      nodalarc.io/role: orchestrator
+  template:
+    metadata:
+      labels:
+        nodalarc.io/role: orchestrator
+    spec:
+      hostPID: true
+      serviceAccountName: nodalarc-orchestrator
+      containers:
+        - name: orchestrator
+          image: {{ .Values.images.orchestrator }}
+          args:
+            - "--session"
+            - "/data/session.yaml"
+            - "--timeline"
+            - "/data/timeline.jsonl"
+            - "--mode"
+            - {{ .Values.mode | quote }}
+          resources:
+            limits:
+              memory: {{ .Values.orchestrator.memoryLimit }}
+              cpu: {{ .Values.orchestrator.cpuLimit }}
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - SYS_ADMIN
+          volumeMounts:
+            - name: containerd-sock
+              mountPath: /run/containerd/containerd.sock
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: containerd-sock
+          hostPath:
+            path: /run/containerd/containerd.sock
+            type: Socket
+        - name: data
+          hostPath:
+            path: /var/nodalarc/sessions
+            type: DirectoryOrCreate

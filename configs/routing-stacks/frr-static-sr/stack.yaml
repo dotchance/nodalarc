@@ -1,0 +1,12 @@
+stack:
+  name: frr-static-sr
+  image: nodalarc/frr:10
+  daemons:
+    - zebra
+  config_templates:
+    - src: zebra.conf.j2
+      dst: /etc/frr/zebra.conf
+  template_variables: {}
+  mi_adapter: frr_static_adapter
+  max_compression: 1
+  reconfigure_command: "vtysh -f {config_path}"

@@ -1,0 +1,27 @@
+scenario:
+  name: isl-failure
+  description: "Inject ISL failure between two satellites and observe reconvergence"
+
+  steps:
+    - action: wait
+      duration_s: 30
+
+    - action: inject_link_down
+      node_a: sat-P02S03
+      node_b: sat-P02S04
+
+    - action: wait_converge
+      timeout_s: 60
+
+    - action: measure
+      duration_s: 30
+
+    - action: inject_link_up
+      node_a: sat-P02S03
+      node_b: sat-P02S04
+
+    - action: wait_converge
+      timeout_s: 60
+
+    - action: measure
+      duration_s: 30

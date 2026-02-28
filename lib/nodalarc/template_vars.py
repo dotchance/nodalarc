@@ -60,13 +60,15 @@ def _build_interface_info(
     area_assignments: dict[str, str],
     node_id: str,
     bandwidth_mbps: float,
+    loopback_map: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Build interface_info dict keyed by interface name for a satellite."""
     node_area = area_assignments.get(node_id, "")
+    lb = loopback_map or {}
     interfaces: dict[str, dict[str, Any]] = {}
     for na in node_neighbors:
         peer_area = area_assignments.get(na.peer_node_id, "")
-        interfaces[na.interface] = {
+        info: dict[str, Any] = {
             "peer_node_id": na.peer_node_id,
             "link_type": na.link_type,
             "priority": na.priority,
@@ -74,6 +76,9 @@ def _build_interface_info(
             "cross_area": node_area != peer_area and node_area != "" and peer_area != "",
             "bandwidth_mbps": bandwidth_mbps,
         }
+        if na.peer_node_id in lb:
+            info["peer_loopback_ipv4"] = lb[na.peer_node_id]
+        interfaces[na.interface] = info
     return interfaces
 
 
@@ -120,6 +125,32 @@ def _resolve_terrestrial_prefixes(
         }
         for pfx, metric in prefixes
     ]
+
+
+def _build_loopback_map(
+    constellation: ConstellationConfig,
+    ground_stations: GroundStationFile,
+    addressing: AddressingScheme,
+) -> dict[str, str]:
+    """Build node_id -> loopback_ipv4 mapping for all nodes.
+
+    Used by static routing templates that need peer loopback IPs for
+    explicit next-hop routes (no IGP to discover them).
+    """
+    lb: dict[str, str] = {}
+    if isinstance(constellation, ParametricConstellation):
+        for p in range(constellation.planes.count):
+            for s in range(constellation.planes.sats_per_plane):
+                nid = addressing.sat_id(p, s)
+                lb[nid] = addressing.sat_ipv4(p, s)
+    elif isinstance(constellation, ExplicitConstellation):
+        for sat in constellation.satellites:
+            nid = addressing.sat_id(sat.plane, sat.slot)
+            lb[nid] = addressing.sat_ipv4(sat.plane, sat.slot)
+    for idx, station in enumerate(ground_stations.stations):
+        nid = addressing.gs_id(station.name)
+        lb[nid] = addressing.gs_ipv4(idx)
+    return lb
 
 
 def build_template_vars(
@@ -169,6 +200,11 @@ def build_template_vars(
     neighbors = assign_isl_neighbors(constellation, addressing)
     by_node = neighbors_by_node(neighbors)
 
+    # Build loopback map for peer IP resolution (used by static routes)
+    loopback_map = _build_loopback_map(
+        constellation, ground_stations, addressing,
+    )
+
     # Derive node_id
     if node_type == "satellite":
         assert plane is not None and slot is not None
@@ -205,6 +241,7 @@ def build_template_vars(
         result["loopback_ipv6"] = addressing.sat_ipv6(plane, slot)
         result["interface_info"] = _build_interface_info(
             node_neighbors, area_assignments, node_id, bandwidth,
+            loopback_map=loopback_map,
         )
         result["isl_count"] = len(node_neighbors)
         result["isl_interfaces"] = addressing.isl_interfaces(len(node_neighbors))

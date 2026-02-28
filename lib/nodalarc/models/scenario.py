@@ -40,6 +40,12 @@ class MeasureStep(BaseModel):
     duration_s: float
 
 
+class ReconfigStep(BaseModel):
+    action: Literal["reconfig"]
+    target: str          # e.g. "all", "plane:3", "node:sat-P03S07"
+    set_values: dict[str, str] = {}
+
+
 # Discriminated union on `action` field
 ScenarioStep = Annotated[
     Annotated[WaitStep, Tag("wait")]
@@ -47,7 +53,8 @@ ScenarioStep = Annotated[
     | Annotated[InjectLinkUpStep, Tag("inject_link_up")]
     | Annotated[InjectSatelliteLossStep, Tag("inject_satellite_loss")]
     | Annotated[WaitConvergeStep, Tag("wait_converge")]
-    | Annotated[MeasureStep, Tag("measure")],
+    | Annotated[MeasureStep, Tag("measure")]
+    | Annotated[ReconfigStep, Tag("reconfig")],
     Discriminator("action"),
 ]
 

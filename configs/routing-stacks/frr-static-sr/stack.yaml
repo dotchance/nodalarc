@@ -3,9 +3,12 @@ stack:
   image: nodalarc/frr:10
   daemons:
     - zebra
+    - staticd
   config_templates:
     - src: zebra.conf.j2
       dst: /etc/frr/zebra.conf
+    - src: staticd.conf.j2
+      dst: /etc/frr/staticd.conf
   template_variables: {}
   mi_adapter: frr_static_adapter
   max_compression: 1

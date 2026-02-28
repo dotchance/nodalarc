@@ -144,6 +144,13 @@ class RealtimeDispatcher:
         info = self._active_links[pair]
         if info.pid_a and info.pid_b:
             from orchestrator import link_manager
+            is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+            if is_gs_link:
+                link_manager.create_veth_pair(
+                    info.pid_a, info.pid_b, ifaces[0], ifaces[1],
+                )
+                link_manager.enable_mpls_input(info.pid_a, ifaces[0])
+                link_manager.enable_mpls_input(info.pid_b, ifaces[1])
             link_manager.set_interface_up(info.pid_a, ifaces[0])
             link_manager.set_interface_up(info.pid_b, ifaces[1])
             link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
@@ -167,8 +174,12 @@ class RealtimeDispatcher:
 
         if info.pid_a and info.pid_b:
             from orchestrator import link_manager
-            link_manager.set_interface_down(info.pid_a, info.interface_a)
-            link_manager.set_interface_down(info.pid_b, info.interface_b)
+            is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+            if is_gs_link:
+                link_manager.destroy_veth_pair(info.pid_a, info.interface_a)
+            else:
+                link_manager.set_interface_down(info.pid_a, info.interface_a)
+                link_manager.set_interface_down(info.pid_b, info.interface_b)
 
         self._last_latencies.pop(pair, None)
         now = datetime.now(timezone.utc)

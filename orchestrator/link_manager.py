@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 
 import kubernetes.client
@@ -68,12 +69,31 @@ def create_veth_pair(
 
     Each end is renamed to the specified ifname inside its namespace.
     """
-    # Create veth pair in the host namespace with temp names
-    tmp_a = f"_na_{ifname_a}_{pid_a}"[:15]
-    tmp_b = f"_na_{ifname_b}_{pid_b}"[:15]
+    # Clean up stale interfaces if they exist in the target namespaces
+    for pid, ifname in [(pid_a, ifname_a), (pid_b, ifname_b)]:
+        ns = NetNS(f"/proc/{pid}/ns/net")
+        try:
+            links = ns.link_lookup(ifname=ifname)
+            if links:
+                ns.link("del", index=links[0])
+                log.info(f"Cleaned stale {ifname} in ns({pid})")
+        except Exception:
+            pass
+        finally:
+            ns.close()
 
+    # Use random temp names to avoid collisions with stale interfaces
+    rand = os.urandom(3).hex()
+    tmp_a = f"_na_a{rand}"[:15]
+    tmp_b = f"_na_b{rand}"[:15]
+
+    # Clean stale temp names from host namespace (just in case)
     ipr = IPRoute()
     try:
+        for tmp in [tmp_a, tmp_b]:
+            links = ipr.link_lookup(ifname=tmp)
+            if links:
+                ipr.link("del", index=links[0])
         ipr.link("add", ifname=tmp_a, peer={"ifname": tmp_b}, kind="veth")
 
         # Move end A into pid_a's namespace
@@ -127,6 +147,31 @@ def create_dummy_interface(
     log.info(f"Created dummy {ifname} in ns({pid}) with {len(addresses)} addrs")
 
 
+def destroy_veth_pair(pid: int, ifname: str) -> None:
+    """Destroy a veth pair by deleting one end inside a namespace.
+
+    Deleting one end automatically removes the peer end.
+    """
+    ns = NetNS(f"/proc/{pid}/ns/net")
+    try:
+        links = ns.link_lookup(ifname=ifname)
+        if links:
+            ns.link("del", index=links[0])
+    finally:
+        ns.close()
+    log.info(f"Destroyed veth {ifname} in ns({pid})")
+
+
+def enable_mpls_input(pid: int, ifname: str) -> None:
+    """Enable MPLS input on an interface via /proc/sys inside the namespace."""
+    subprocess.run(
+        ["nsenter", f"--net=/proc/{pid}/ns/net", "--",
+         "sh", "-c",
+         f"echo 1 > /proc/sys/net/mpls/conf/{ifname}/input"],
+        check=True, capture_output=True,
+    )
+
+
 def set_interface_up(pid: int, ifname: str) -> None:
     """Bring an interface up inside a namespace."""
     ns = NetNS(f"/proc/{pid}/ns/net")
@@ -170,6 +215,11 @@ def apply_link_shaping(
     ns = NetNS(f"/proc/{pid}/ns/net")
     try:
         idx = ns.link_lookup(ifname=ifname)[0]
+        # Remove existing qdiscs (idempotent)
+        try:
+            ns.tc("del", index=idx, root=True)
+        except Exception:
+            pass
         # Root: tbf for bandwidth shaping (handle 1:0)
         ns.tc("add", kind="tbf", index=idx, handle=0x00010000,
               rate=rate_bps, burst=burst, latency=latency_us)
@@ -198,6 +248,8 @@ def remove_link_shaping(pid: int, ifname: str) -> None:
     ns = NetNS(f"/proc/{pid}/ns/net")
     try:
         idx = ns.link_lookup(ifname=ifname)[0]
-        ns.tc("del", index=idx, handle=0x00010000, parent=0xFFFF0000)
+        ns.tc("del", index=idx, root=True)
+    except Exception:
+        pass  # Interface may already be gone (dynamic veth)
     finally:
         ns.close()

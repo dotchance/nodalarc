@@ -37,9 +37,11 @@ def _build_interface_map(
     session: SessionConfig,
     addressing: AddressingScheme,
 ) -> tuple[dict[tuple[str, str], tuple[str, str]], dict[tuple[str, str], float]]:
-    """Build interface and bandwidth maps from ISL neighbor assignments."""
+    """Build interface and bandwidth maps from ISL + GS neighbor assignments."""
     from pydantic import TypeAdapter
     from nodalarc.models.constellation import ConstellationConfig
+    from nodalarc.models.ground_station import GroundStationFile
+    from ome.constellation_loader import expand_constellation
     adapter = TypeAdapter(ConstellationConfig)
     constellation = adapter.validate_python(
         yaml.safe_load(Path(session.constellation).read_text()),
@@ -50,6 +52,7 @@ def _build_interface_map(
     interface_map: dict[tuple[str, str], tuple[str, str]] = {}
     bandwidth_map: dict[tuple[str, str], float] = {}
 
+    # ISL links
     for node_id, assignments in by_node.items():
         for na in assignments:
             pair = (min(node_id, na.peer_node_id), max(node_id, na.peer_node_id))
@@ -60,6 +63,18 @@ def _build_interface_map(
                 existing = interface_map[pair]
                 if existing[0] and not existing[1]:
                     interface_map[pair] = (existing[0], na.interface)
+
+    # GS-satellite links (all use gnd0 on both sides)
+    gs_data = yaml.safe_load(Path(session.ground_stations).read_text())
+    gs_file = GroundStationFile.model_validate(gs_data)
+    satellites = expand_constellation(constellation)
+    for station in gs_file.stations:
+        gs_id = addressing.gs_id(station.name)
+        for sat in satellites:
+            sat_id = addressing.sat_id(sat.plane, sat.slot)
+            pair = (min(gs_id, sat_id), max(gs_id, sat_id))
+            interface_map[pair] = ("gnd0", "gnd0")
+            bandwidth_map[pair] = 1000.0
 
     return interface_map, bandwidth_map
 
@@ -122,6 +137,7 @@ def main() -> None:
     parser.add_argument("--timeline", required=True, help="Path to timeline JSONL")
     parser.add_argument("--mode", choices=["de", "rt"], default="de")
     parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
+    parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell (seconds)")
     args = parser.parse_args()
 
     data = yaml.safe_load(Path(args.session).read_text())
@@ -154,6 +170,7 @@ def main() -> None:
             override_lock=override_lock,
             pid_map=pid_map,
             latency_update_interval_s=session.time.latency_update_interval_seconds,
+            dwell_s=args.dwell,
         )
         dispatcher.run()
     else:

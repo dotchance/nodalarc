@@ -52,7 +52,7 @@ def flat_session():
         ground_stations="configs/ground-stations/global-default.yaml",
         routing=RoutingConfig(
             stack="configs/routing-stacks/frr-isis-sr",
-            area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0000"),
+            area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
         ),
         time=TimeConfig(mode="discrete-event", compression=1),
     )

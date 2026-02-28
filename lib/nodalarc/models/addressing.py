@@ -95,7 +95,7 @@ def compute_area_assignments(
     strategy = config.strategy
 
     if strategy == "flat":
-        area_id = "49.0001"
+        area_id = config.gs_area_id or "49.0001"
         for p in range(plane_count):
             for s in range(sats_per_plane):
                 result[addressing.sat_id(p, s)] = area_id

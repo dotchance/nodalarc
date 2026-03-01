@@ -1,5 +1,5 @@
 hostname {{ hostname }}
-log syslog informational
+log file /var/log/frr/ospfd.log informational
 
 router ospf
  ospf router-id {{ loopback_ipv4 }}

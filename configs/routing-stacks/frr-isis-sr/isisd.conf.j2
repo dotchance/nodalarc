@@ -1,5 +1,5 @@
 hostname {{ hostname }}
-log syslog informational
+log file /var/log/frr/isisd.log informational
 
 {% if node_type == "satellite" %}
 {# System-ID for satellites: plane and slot encoded as hex #}

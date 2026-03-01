@@ -24,5 +24,19 @@ spec:
         limits:
           memory: {{ $.Values.groundStation.memoryLimit }}
           cpu: {{ $.Values.groundStation.cpuLimit }}
+    - name: probe
+      image: {{ $.Values.images.probe }}
+      imagePullPolicy: {{ $.Values.imagePullPolicy }}
+      securityContext:
+        capabilities:
+          add:
+            - NET_RAW
+      ports:
+        - containerPort: 9100
+          name: probe-api
+      resources:
+        limits:
+          memory: 64Mi
+          cpu: 100m
   restartPolicy: Never
 {{- end }}

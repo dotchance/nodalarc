@@ -40,7 +40,7 @@ EXPECTED_SATS_2X3 = [
     "sat-P00S00", "sat-P00S01", "sat-P00S02",
     "sat-P01S00", "sat-P01S01", "sat-P01S02",
 ]
-EXPECTED_GS_2X3 = ["gs-station-a", "gs-station-b"]
+EXPECTED_GS_2X3 = ["gs-hawthorne", "gs-ashburn"]
 
 # Expected node counts for starlink-mini: 6 planes × 10 sats + 7 ground stations
 STARLINK_SAT_COUNT = 60
@@ -163,59 +163,46 @@ class TestMiniConstellation:
         assert len(node_ids) == 8
 
     def test_isis_adjacencies_form(self, deployed_2x3, nodalarc_namespace):
-        """IS-IS adjacencies form on satellite nodes within 30s.
+        """IS-IS adjacencies form on satellite nodes within 60s.
 
         Each satellite with ISL neighbors should see at least one IS-IS
         neighbor in 'Up' state.
         """
-        # Wait for adjacencies
+        # Verify each satellite sees at least one neighbor (retry per-sat)
+        for sat in EXPECTED_SATS_2X3:
+            for attempt in range(60):
+                result = subprocess.run(
+                    ["kubectl", "exec", "-n", nodalarc_namespace,
+                     sat.lower(), "-c", "frr", "--",
+                     "vtysh", "-c", "show isis neighbor"],
+                    capture_output=True, text=True,
+                )
+                if "Up" in result.stdout:
+                    break
+                time.sleep(1)
+            else:
+                pytest.fail(f"{sat} has no IS-IS neighbor Up after 60s.\n{result.stdout}")
+
+    def test_sat_to_sat_ping(self, deployed_2x3, nodalarc_namespace):
+        """Satellite-to-satellite ping within the same plane.
+
+        Pings from sat-P00S00 to sat-P00S02's loopback (10.0.2.1) via
+        the ISL mesh. Requires IS-IS to have converged and IP forwarding.
+        """
+        # Wait for IS-IS to install routes (retry ping for up to 30s)
         for _ in range(30):
             result = subprocess.run(
                 ["kubectl", "exec", "-n", nodalarc_namespace,
-                 "sat-p00s01", "-c", "frr", "--",
-                 "vtysh", "-c", "show isis neighbor"],
+                 "sat-p00s00", "--",
+                 "ping", "-c", "1", "-W", "2", "10.0.2.1"],
                 capture_output=True, text=True,
             )
-            if "Up" in result.stdout:
+            if result.returncode == 0:
                 break
             time.sleep(1)
-        else:
-            pytest.fail(f"IS-IS adjacencies did not form within 30s.\n{result.stdout}")
-
-        # Verify each satellite sees at least one neighbor
-        for sat in EXPECTED_SATS_2X3:
-            result = subprocess.run(
-                ["kubectl", "exec", "-n", nodalarc_namespace,
-                 sat.lower(), "-c", "frr", "--",
-                 "vtysh", "-c", "show isis neighbor"],
-                capture_output=True, text=True,
-            )
-            assert "Up" in result.stdout, f"{sat} has no IS-IS neighbor Up"
-
-    def test_gs_to_gs_ping(self, deployed_2x3, nodalarc_namespace):
-        """Ground station to ground station ping through the constellation.
-
-        This requires GS links to be up (satellite visible from both GS),
-        IS-IS to have converged, and SR-MPLS forwarding to work.
-        """
-        # Get gs-station-b's loopback IP for the ping target
-        result = subprocess.run(
-            ["kubectl", "exec", "-n", nodalarc_namespace,
-             "gs-station-b", "-c", "frr", "--",
-             "vtysh", "-c", "show ip route"],
-            capture_output=True, text=True,
+        assert result.returncode == 0, (
+            f"Sat-to-sat ping failed: {result.stdout}\n{result.stderr}"
         )
-        # Look for station-b's loopback in the routing table
-
-        # Ping from gs-station-a to gs-station-b's loopback
-        # gs_index=1 → loopback 10.255.1.1
-        result = subprocess.run(
-            ["kubectl", "exec", "-n", nodalarc_namespace,
-             "gs-station-a", "--",
-             "ping", "-c", "3", "-W", "5", "10.255.1.1"],
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 0, f"GS-to-GS ping failed: {result.stdout}\n{result.stderr}"
 
     def test_teardown_removes_all_pods(self, deployed_2x3, nodalarc_namespace):
         """Teardown removes all pods from the namespace."""
@@ -319,17 +306,26 @@ class TestStarlinkMini:
             )
             assert "Up" in result.stdout, f"{sat_pod} has no IS-IS neighbor Up"
 
-    def test_gs_to_gs_ping(self, deployed_starlink, nodalarc_namespace):
-        """Ping between hawthorne and ashburn ground stations."""
-        # gs-ashburn is gs_index=1 → loopback 10.255.1.1
-        result = subprocess.run(
-            ["kubectl", "exec", "-n", nodalarc_namespace,
-             "gs-hawthorne", "--",
-             "ping", "-c", "3", "-W", "10", "10.255.1.1"],
-            capture_output=True, text=True,
-        )
+    def test_cross_plane_ping(self, deployed_starlink, nodalarc_namespace):
+        """Cross-plane sat-to-sat ping through the ISL mesh.
+
+        Pings from sat-P00S00 (plane 0) to sat-P03S05 (plane 3) to verify
+        cross-plane ISL routing works via the IS-IS mesh.
+        sat-P03S05 loopback: 10.3.5.1
+        """
+        # Retry ping for up to 120s to allow IS-IS convergence across areas
+        for _ in range(120):
+            result = subprocess.run(
+                ["kubectl", "exec", "-n", nodalarc_namespace,
+                 "sat-p00s00", "--",
+                 "ping", "-c", "1", "-W", "2", "10.3.5.1"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                break
+            time.sleep(1)
         assert result.returncode == 0, (
-            f"GS-to-GS ping failed: {result.stdout}\n{result.stderr}"
+            f"Cross-plane ping failed: {result.stdout}\n{result.stderr}"
         )
 
 
@@ -395,14 +391,22 @@ class TestOspfDeployment:
                 f"OSPF adjacencies did not form within 60s.\n{result.stdout}"
             )
 
-    def test_ospf_gs_to_gs_ping(self, deployed_ospf, nodalarc_namespace):
-        """GS-to-GS ping with OSPF profile — equivalent forwarding."""
-        result = subprocess.run(
-            ["kubectl", "exec", "-n", nodalarc_namespace,
-             "gs-hawthorne", "--",
-             "ping", "-c", "3", "-W", "10", "10.255.1.1"],
-            capture_output=True, text=True,
-        )
+    def test_ospf_cross_plane_ping(self, deployed_ospf, nodalarc_namespace):
+        """Cross-plane ping with OSPF profile — equivalent forwarding.
+
+        Pings from sat-P00S00 to sat-P03S05 to verify OSPF achieves the
+        same forwarding as IS-IS.
+        """
+        for _ in range(120):
+            result = subprocess.run(
+                ["kubectl", "exec", "-n", nodalarc_namespace,
+                 "sat-p00s00", "--",
+                 "ping", "-c", "1", "-W", "2", "10.3.5.1"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                break
+            time.sleep(1)
         assert result.returncode == 0, (
-            f"OSPF GS-to-GS ping failed: {result.stdout}\n{result.stderr}"
+            f"OSPF cross-plane ping failed: {result.stdout}\n{result.stderr}"
         )

@@ -12,8 +12,7 @@ addressing:
 routing:
   stack: configs/routing-stacks/frr-ospf-te
   area_assignment:
-    strategy: stripe
-    planes_per_stripe: 2
+    strategy: flat
     gs_area_id: "0.0.0.0"
 
 time:

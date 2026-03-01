@@ -23,13 +23,16 @@ import yaml
 import zmq
 import zmq.asyncio
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.db.queries import (
+    insert_snapshot,
     query_adapter_events,
     query_convergence_events,
     query_link_events,
+    query_nearest_snapshot,
     query_probe_results,
 )
 from nodalarc.db.schema import create_tables
@@ -292,10 +295,30 @@ app = FastAPI(title="Nodal Arc VS-API", version="1.0", lifespan=lifespan)
 
 
 async def _ws_broadcaster() -> None:
-    """Broadcast StateSnapshot to all WebSocket clients at ~1Hz."""
+    """Broadcast StateSnapshot to all WebSocket clients at ~1Hz.
+
+    Also records snapshots to SQLite every 10 seconds for historical playback.
+    """
+    tick = 0
     while True:
         await asyncio.sleep(1.0)
         snapshot = _build_snapshot()
+
+        # Store snapshot every 10 ticks (~10 seconds) for historical playback
+        tick += 1
+        if tick % 10 == 0 and _db_path:
+            try:
+                conn = sqlite3.connect(_db_path)
+                insert_snapshot(
+                    conn,
+                    sim_time=snapshot["sim_time"],
+                    wall_time=snapshot["wall_time"],
+                    snapshot_json=json.dumps(snapshot),
+                )
+                conn.close()
+            except Exception as exc:
+                log.warning(f"Failed to store snapshot: {exc}")
+
         async with _ws_lock:
             dead = []
             for ws in _ws_clients:
@@ -342,10 +365,17 @@ def get_state() -> dict:
 
 @app.get("/api/v1/state/{sim_time}")
 def get_historical_state(sim_time: str) -> dict:
-    """Historical state at a specific sim_time (from SQLite)."""
-    # For Phase 1C, return current state — full historical reconstruction
-    # would require storing complete snapshots in SQLite
-    return _build_snapshot()
+    """Historical state at a specific sim_time (nearest snapshot from SQLite)."""
+    if not _db_path:
+        return {"error": "No database configured"}
+    conn = sqlite3.connect(_db_path)
+    try:
+        result = query_nearest_snapshot(conn, sim_time)
+        if result is None:
+            return JSONResponse(status_code=404, content={"error": "No snapshots available"})
+        return json.loads(result["snapshot_json"])
+    finally:
+        conn.close()
 
 
 @app.get("/api/v1/links")

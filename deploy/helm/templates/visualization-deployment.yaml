@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: visualization
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: visualization
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: visualization
+  template:
+    metadata:
+      labels:
+        app: visualization
+    spec:
+      containers:
+        - name: visualization
+          image: {{ .Values.images.visualization }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - containerPort: 8081
+              name: http
+          resources:
+            limits:
+              memory: {{ .Values.visualization.memoryLimit }}
+              cpu: {{ .Values.visualization.cpuLimit }}
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: visualization
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    app: visualization
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: http

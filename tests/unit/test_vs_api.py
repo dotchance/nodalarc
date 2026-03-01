@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from nodalarc.db.schema import create_tables
-from nodalarc.db.queries import insert_link_up, insert_convergence_result
+from nodalarc.db.queries import insert_link_up, insert_convergence_result, insert_snapshot, query_nearest_snapshot
 from nodalarc.models.link_events import LinkUp
 from nodalarc.models.metrics import ConvergenceResult
 from nodalarc.models.vs_api import (
@@ -276,4 +276,52 @@ class TestSQLiteQueries:
         results = query_convergence_events(conn)
         assert len(results) == 1
         assert results[0]["converged"] == 1
+        conn.close()
+
+
+class TestSnapshotStorage:
+    """Test periodic snapshot storage and nearest-time retrieval."""
+
+    def test_insert_and_query_snapshot(self):
+        conn = sqlite3.connect(":memory:")
+        create_tables(conn)
+
+        snapshot_data = json.dumps({"schema_version": 1, "nodes": [], "links": []})
+        insert_snapshot(conn, "2025-01-01T00:00:00", "2025-01-01T00:00:00", snapshot_data)
+
+        result = query_nearest_snapshot(conn, "2025-01-01T00:00:00")
+        assert result is not None
+        assert result["sim_time"] == "2025-01-01T00:00:00"
+        parsed = json.loads(result["snapshot_json"])
+        assert parsed["schema_version"] == 1
+        conn.close()
+
+    def test_nearest_snapshot_selection(self):
+        """Given two snapshots, nearest query returns the closest one."""
+        conn = sqlite3.connect(":memory:")
+        create_tables(conn)
+
+        snap1 = json.dumps({"id": "snap1", "sim_time": "2025-01-01T00:00:00"})
+        snap2 = json.dumps({"id": "snap2", "sim_time": "2025-01-01T00:01:00"})
+        insert_snapshot(conn, "2025-01-01T00:00:00", "2025-01-01T00:00:00", snap1)
+        insert_snapshot(conn, "2025-01-01T00:01:00", "2025-01-01T00:01:00", snap2)
+
+        # Query closer to snap1
+        result = query_nearest_snapshot(conn, "2025-01-01T00:00:10")
+        assert result is not None
+        parsed = json.loads(result["snapshot_json"])
+        assert parsed["id"] == "snap1"
+
+        # Query closer to snap2
+        result = query_nearest_snapshot(conn, "2025-01-01T00:00:50")
+        assert result is not None
+        parsed = json.loads(result["snapshot_json"])
+        assert parsed["id"] == "snap2"
+        conn.close()
+
+    def test_no_snapshots_returns_none(self):
+        conn = sqlite3.connect(":memory:")
+        create_tables(conn)
+        result = query_nearest_snapshot(conn, "2025-01-01T00:00:00")
+        assert result is None
         conn.close()

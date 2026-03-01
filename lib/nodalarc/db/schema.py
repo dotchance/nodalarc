@@ -88,6 +88,16 @@ CREATE TABLE IF NOT EXISTS config_changes (
 );
 """
 
+DDL_SNAPSHOTS = """
+CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sim_time TEXT NOT NULL,
+    wall_time TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_link_events_sim_time ON link_events(sim_time);",
     "CREATE INDEX IF NOT EXISTS idx_link_events_nodes ON link_events(node_a, node_b);",
@@ -98,6 +108,7 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_adapter_events_node ON adapter_events(node_id);",
     "CREATE INDEX IF NOT EXISTS idx_config_changes_timestamp ON config_changes(timestamp_s);",
     "CREATE INDEX IF NOT EXISTS idx_config_changes_node ON config_changes(node_id);",
+    "CREATE INDEX IF NOT EXISTS idx_snapshots_sim_time ON snapshots(sim_time);",
 ]
 
 ALL_DDL = [
@@ -107,6 +118,7 @@ ALL_DDL = [
     DDL_ADAPTER_EVENTS,
     DDL_SESSION_METADATA,
     DDL_CONFIG_CHANGES,
+    DDL_SNAPSHOTS,
 ]
 
 

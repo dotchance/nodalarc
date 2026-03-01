@@ -6,6 +6,7 @@ images:
   probe: docker.io/nodalarc/probe:1
   orchestrator: docker.io/nodalarc/orchestrator:latest
   ome: docker.io/nodalarc/ome:latest
+  visualization: docker.io/nodalarc/visualization:1
 
 imagePullPolicy: Never
 
@@ -24,6 +25,10 @@ orchestrator:
 ome:
   memoryLimit: 256Mi
   cpuLimit: 200m
+
+visualization:
+  memoryLimit: 128Mi
+  cpuLimit: 100m
 
 # Populated by na-deploy from constellation expansion
 satellites: []

@@ -1,0 +1,35 @@
+:root {
+  --bg-main: #0d0d1a;
+  --bg-panel: #1a1a2e;
+  --bg-panel-hover: #222240;
+  --bg-toolbar: rgba(26, 26, 46, 0.85);
+  --bg-bar: #12122a;
+
+  --text-primary: #e0e0e0;
+  --text-secondary: #8888aa;
+  --text-dim: #555577;
+
+  --border: #2a2a4a;
+  --border-active: #4444aa;
+
+  --accent-blue: #4488ff;
+  --accent-teal: #00d4aa;
+  --accent-orange: #ff8800;
+  --accent-red: #ff3333;
+  --accent-green: #44cc66;
+  --accent-amber: #ffaa00;
+
+  --area-red: #ff4444;
+  --area-green: #44cc66;
+  --area-blue: #4488ff;
+  --area-amber: #ffaa00;
+
+  --ws-connected: #44cc66;
+  --ws-reconnecting: #ffaa00;
+  --ws-disconnected: #ff3333;
+
+  --topbar-height: 48px;
+  --bottombar-height: 32px;
+  --panel-width: 360px;
+  --toolbar-width: 48px;
+}

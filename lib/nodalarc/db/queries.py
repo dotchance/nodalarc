@@ -252,3 +252,31 @@ def insert_config_change(
     )
     conn.commit()
     return cur.lastrowid
+
+
+# ---------------------------------------------------------------------------
+# Snapshots (periodic full-state capture for historical playback)
+# ---------------------------------------------------------------------------
+
+def insert_snapshot(conn: sqlite3.Connection, sim_time: str, wall_time: str, snapshot_json: str) -> int:
+    """Store a complete StateSnapshot JSON blob."""
+    cur = conn.execute(
+        """INSERT INTO snapshots (sim_time, wall_time, snapshot_json)
+           VALUES (?, ?, ?)""",
+        (sim_time, wall_time, snapshot_json),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def query_nearest_snapshot(conn: sqlite3.Connection, sim_time: str) -> dict | None:
+    """Return the snapshot closest to the given sim_time, or None."""
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """SELECT sim_time, wall_time, snapshot_json FROM snapshots
+           ORDER BY ABS(julianday(sim_time) - julianday(?)) LIMIT 1""",
+        (sim_time,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"sim_time": row["sim_time"], "wall_time": row["wall_time"], "snapshot_json": row["snapshot_json"]}

@@ -1,16 +1,29 @@
-/** Satellite mesh management — shared geometry, per-sat mesh + lerp. */
+/** Satellite mesh management — shared geometry, per-sat mesh + smooth motion.
+ *
+ *  Motion model: dead-reckoning via velocity vectors provides frame-to-frame
+ *  continuity. When a new snapshot arrives (1Hz), the "true" position is
+ *  stored separately and the dead-reckoned target is gently steered toward
+ *  it, avoiding visible jumps.
+ */
 
 import * as THREE from "three";
-import { SAT_RADIUS, SAT_SEGMENTS, LERP_FACTOR, AREA_COLORS, PLANE_COLORS } from "../config";
+import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, PLANE_COLORS, EARTH_RADIUS, KM_PER_UNIT } from "../config";
 import { geoToWorld, velocityToScene } from "./geo";
 import type { NodeState, ColorMode } from "../types";
 
 /** Shared geometry for all satellites. */
 const sharedGeo = new THREE.SphereGeometry(SAT_RADIUS, SAT_SEGMENTS, SAT_SEGMENTS);
 
+/** Correction blend per frame: how fast dead-reckoning steers toward snapshot truth.
+ *  0.03 at 60fps → ~83% corrected after 1 second (before next snapshot). */
+const CORRECTION_RATE = 0.03;
+
 export interface SatelliteEntry {
   mesh: THREE.Mesh;
+  /** Dead-reckoned position (updated every frame by velocity). */
   targetPosition: THREE.Vector3;
+  /** Latest ground-truth position from snapshot (updated at 1Hz). */
+  snapshotPosition: THREE.Vector3;
   velocity: THREE.Vector3 | null;
   nodeState: NodeState;
 }
@@ -32,27 +45,29 @@ export function updateSatellites(
     if (node.node_type !== "satellite") continue;
     seen.add(node.node_id);
 
-    const target = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
+    const pos = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
     const vel = node.vel_x_km_s != null && node.vel_y_km_s != null && node.vel_z_km_s != null
       ? velocityToScene(node.vel_x_km_s, node.vel_y_km_s, node.vel_z_km_s)
       : null;
 
     const existing = satellites.get(node.node_id);
     if (existing) {
-      existing.targetPosition.copy(target);
+      // Update snapshot truth — dead-reckoning will steer toward it
+      existing.snapshotPosition.copy(pos);
       existing.velocity = vel;
       existing.nodeState = node;
       updateSatColor(existing, colorMode);
     } else {
       const material = new THREE.MeshBasicMaterial({ color: getSatColor(node, colorMode) });
       const mesh = new THREE.Mesh(sharedGeo, material);
-      mesh.position.copy(target);
+      mesh.position.copy(pos);
       mesh.userData["nodeId"] = node.node_id;
       mesh.userData["nodeType"] = "satellite";
       scene.add(mesh);
       satellites.set(node.node_id, {
         mesh,
-        targetPosition: target,
+        targetPosition: pos.clone(),
+        snapshotPosition: pos.clone(),
         velocity: vel,
         nodeState: node,
       });
@@ -71,10 +86,19 @@ export function updateSatellites(
 export function animateSatellites(dt: number): void {
   for (const entry of satellites.values()) {
     if (entry.velocity) {
-      // Dead-reckoning: move target by velocity * dt
+      // Dead-reckoning: advance target by velocity
       entry.targetPosition.addScaledVector(entry.velocity, dt);
     }
-    entry.mesh.position.lerp(entry.targetPosition, LERP_FACTOR);
+
+    // Gently steer dead-reckoned target toward snapshot truth
+    entry.targetPosition.lerp(entry.snapshotPosition, CORRECTION_RATE);
+
+    // Re-project onto orbital shell so satellites don't drift inward/outward
+    const alt = EARTH_RADIUS + entry.nodeState.alt_km / KM_PER_UNIT;
+    entry.targetPosition.normalize().multiplyScalar(alt);
+
+    // Smooth mesh toward target
+    entry.mesh.position.lerp(entry.targetPosition, 0.15);
   }
 }
 

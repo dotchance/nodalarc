@@ -1,5 +1,6 @@
 /** Link rendering using Line2 for pixel-width lines.
- *  Links are drawn as great-circle arcs raised above the earth surface.
+ *  Comm links get a gentle outward bow (lifts midpoint away from earth center)
+ *  so they read as smooth curves rather than hard polygon edges.
  *  Fail-flash: red hold 5s → fade to dark → hidden.
  *  Link up: immediate appear + brightness pulse.
  */
@@ -21,6 +22,43 @@ import {
 import { getSatellites } from "./satellites";
 import { getGroundStations } from "./groundStations";
 import type { LinkState } from "../types";
+
+const _mid = new THREE.Vector3();
+const _outward = new THREE.Vector3();
+
+/**
+ * Build a gently bowed line between two positions.
+ * The midpoint is pushed outward from earth center by a fraction of
+ * the chord length, giving links a smooth curved appearance.
+ */
+function bowedPositions(a: THREE.Vector3, b: THREE.Vector3): number[] {
+  const segments = 16;
+  const positions: number[] = [];
+
+  // Outward direction at midpoint (away from earth center)
+  _mid.lerpVectors(a, b, 0.5);
+  _outward.copy(_mid).normalize();
+
+  // Bow amount: 3% of chord length, pushed outward
+  const chord = a.distanceTo(b);
+  const lift = chord * 0.03;
+
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    // Linear interpolation between endpoints
+    const x = a.x + (b.x - a.x) * t;
+    const y = a.y + (b.y - a.y) * t;
+    const z = a.z + (b.z - a.z) * t;
+    // Parabolic bow: peaks at midpoint (t=0.5), zero at endpoints
+    const bow = 4 * t * (1 - t) * lift;
+    positions.push(
+      x + _outward.x * bow,
+      y + _outward.y * bow,
+      z + _outward.z * bow,
+    );
+  }
+  return positions;
+}
 
 interface LinkEntry {
   line: Line2;
@@ -55,47 +93,6 @@ function isGroundLink(nodeA: string, nodeB: string): boolean {
   return nodeA.startsWith("gs-") || nodeB.startsWith("gs-");
 }
 
-const _va = new THREE.Vector3();
-const _vb = new THREE.Vector3();
-const _pt = new THREE.Vector3();
-
-/**
- * Build smooth great-circle arc between two 3D positions.
- * Slerps the direction on the unit sphere and interpolates altitude,
- * producing a curve that follows the earth's curvature at orbital height.
- */
-function arcPositions(a: THREE.Vector3, b: THREE.Vector3): number[] {
-  _va.copy(a).normalize();
-  _vb.copy(b).normalize();
-  const dot = Math.min(1, Math.max(-1, _va.dot(_vb)));
-  const angle = Math.acos(dot);
-
-  // Enough segments for a visually smooth curve
-  const segments = Math.max(24, Math.ceil(angle * 40));
-  const altA = a.length();
-  const altB = b.length();
-
-  if (angle < 0.001) {
-    return [a.x, a.y, a.z, b.x, b.y, b.z];
-  }
-
-  const sinAngle = Math.sin(angle);
-  const positions: number[] = [];
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const wA = Math.sin((1 - t) * angle) / sinAngle;
-    const wB = Math.sin(t * angle) / sinAngle;
-    _pt.set(
-      _va.x * wA + _vb.x * wB,
-      _va.y * wA + _vb.y * wB,
-      _va.z * wA + _vb.z * wB,
-    );
-    const r = altA + (altB - altA) * t;
-    _pt.normalize().multiplyScalar(r);
-    positions.push(_pt.x, _pt.y, _pt.z);
-  }
-  return positions;
-}
 
 export function updateLinks(
   linkStates: LinkState[],
@@ -179,10 +176,9 @@ export function animateLinks(): void {
       continue;
     }
 
-    // Update geometry as a great-circle arc
-    const arcPts = arcPositions(posA, posB);
-    entry.geometry.setPositions(arcPts);
-    entry.line.computeLineDistances();
+    // Gently bowed curve so links read as smooth, not polygonal
+    entry.geometry.setPositions(bowedPositions(posA, posB));
+    if (entry.isGround) entry.line.computeLineDistances();
 
     // Fail-flash animation
     if (entry.failTime !== null) {

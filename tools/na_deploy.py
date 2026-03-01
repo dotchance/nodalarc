@@ -39,7 +39,7 @@ def _fail(msg: str) -> None:
     sys.exit(1)
 
 
-def deploy(session_path: str) -> None:
+def deploy(session_path: str, dwell: float = 0.05) -> None:
     """Execute the 11-step startup sequence."""
     # === Step 1: Load and validate ===
     log.info("Step 1: Load and validate session config")
@@ -331,7 +331,7 @@ def deploy(session_path: str) -> None:
             "--timeline", str(timeline_path),
             "--mode", mode_flag,
             "--pid-map", str(pid_map_file),
-            "--dwell", "0",
+            "--dwell", str(dwell),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -365,8 +365,9 @@ def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc deployment tool")
     parser.add_argument("--session", required=True, help="Path to session YAML")
+    parser.add_argument("--dwell", type=float, default=0.05, help="DE mode dwell between event batches (seconds)")
     args = parser.parse_args()
-    deploy(args.session)
+    deploy(args.session, dwell=args.dwell)
 
 
 if __name__ == "__main__":

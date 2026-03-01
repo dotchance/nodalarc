@@ -1,0 +1,158 @@
+.info-panel {
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.info-panel h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.info-panel h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 8px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.detail-label {
+  color: var(--text-secondary);
+}
+
+.detail-value {
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.detail-value--active {
+  color: var(--accent-green);
+}
+
+.detail-value--failed {
+  color: var(--accent-red);
+}
+
+.event-log {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+.event-entry {
+  display: flex;
+  gap: 8px;
+  padding: 3px 6px;
+  font-size: 11px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.event-entry:hover {
+  background: var(--bg-panel-hover);
+}
+
+.event-time {
+  color: var(--text-dim);
+  flex-shrink: 0;
+  width: 72px;
+}
+
+.event-type {
+  flex-shrink: 0;
+  width: 64px;
+  font-weight: 600;
+}
+
+.event-type--link_up {
+  color: var(--accent-green);
+}
+
+.event-type--link_down {
+  color: var(--accent-red);
+}
+
+.event-type--convergence {
+  color: var(--accent-amber);
+}
+
+.event-type--adjacency {
+  color: var(--accent-blue);
+}
+
+.event-summary {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-filter-bar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 0;
+  flex-wrap: wrap;
+}
+
+.filter-toggle {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  transition: all 0.15s;
+}
+
+.filter-toggle--active {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.trace-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.trace-dialog select {
+  width: 100%;
+  padding: 4px 8px;
+}
+
+.trace-button {
+  background: var(--accent-blue);
+  color: var(--bg-main);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.trace-button:hover {
+  opacity: 0.9;
+}
+
+.section-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}

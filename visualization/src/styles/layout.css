@@ -1,0 +1,43 @@
+.app-layout {
+  display: grid;
+  grid-template-rows: var(--topbar-height) 1fr var(--bottombar-height);
+  grid-template-columns: 1fr var(--panel-width);
+  grid-template-areas:
+    "topbar topbar"
+    "viewport panel"
+    "bottombar bottombar";
+  width: 100%;
+  height: 100%;
+}
+
+.app-layout--historical {
+  grid-template-rows: var(--topbar-height) 1fr 40px var(--bottombar-height);
+  grid-template-areas:
+    "topbar topbar"
+    "viewport panel"
+    "time-controls time-controls"
+    "bottombar bottombar";
+}
+
+.area-topbar {
+  grid-area: topbar;
+}
+
+.area-viewport {
+  grid-area: viewport;
+  position: relative;
+  overflow: hidden;
+}
+
+.area-panel {
+  grid-area: panel;
+  overflow-y: auto;
+}
+
+.area-bottombar {
+  grid-area: bottombar;
+}
+
+.area-time-controls {
+  grid-area: time-controls;
+}

@@ -15,6 +15,7 @@ dependencies = [
     "uvicorn",
     "pyroute2",
     "kubernetes",
+    "websockets>=16.0",
 ]
 
 [project.optional-dependencies]

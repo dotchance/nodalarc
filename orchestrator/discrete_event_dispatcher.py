@@ -28,11 +28,13 @@ from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.metrics import ConvergenceRequest, ConvergenceResult
 from nodalarc.zmq_channels import (
     MI_CONVERGENCE_GATE_CONNECT,
+    OME_EVENTS_BIND,
     TO_EVENTS_BIND,
     encode_message,
     TOPIC_LATENCY_UPDATE,
     TOPIC_LINK_DOWN,
     TOPIC_LINK_UP,
+    TOPIC_POSITION_EVENT,
 )
 from orchestrator.latency_model import PositionTable
 
@@ -139,20 +141,28 @@ class DiscreteEventDispatcher:
         pub_sock = ctx.socket(zmq.PUB)
         pub_sock.bind(TO_EVENTS_BIND)
 
+        # OME PUB socket for position events (VS-API subscribes to this)
+        ome_pub_sock = ctx.socket(zmq.PUB)
+        ome_pub_sock.bind(OME_EVENTS_BIND)
+
         conv_sock = None
         if self._use_convergence_gate:
             conv_sock = ctx.socket(zmq.REQ)
             conv_sock.connect(MI_CONVERGENCE_GATE_CONNECT)
 
+        # Allow subscribers time to connect (ZMQ slow joiner)
+        time.sleep(0.5)
+
         try:
             for batch_idx, batch in enumerate(batches):
-                self._process_batch(batch, pub_sock, conv_sock)
+                self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)
                 self._steps_since_latency_update += 1
 
                 if batch_idx < len(batches) - 1:
                     time.sleep(self._dwell_s)
         finally:
             pub_sock.close()
+            ome_pub_sock.close()
             if conv_sock:
                 conv_sock.close()
             ctx.term()
@@ -164,6 +174,7 @@ class DiscreteEventDispatcher:
         batch: list[dict[str, Any]],
         pub_sock: zmq.Socket,
         conv_sock: zmq.Socket | None,
+        ome_pub_sock: zmq.Socket | None = None,
     ) -> None:
         """Process a batch of events at the same timestamp."""
         link_events: list[LinkUp | LinkDown] = []
@@ -173,6 +184,43 @@ class DiscreteEventDispatcher:
             if record["event_type"] == "Snapshot":
                 snap = TimelinePositionSnapshot.model_validate(record["data"])
                 self._position_table.update_from_snapshot(snap)
+                # Publish position event for VS-API
+                if ome_pub_sock is not None:
+                    positions_list = []
+                    for node_id, pos in snap.positions.items():
+                        node_type = "ground_station" if node_id.startswith("gs-") else "satellite"
+                        plane = None
+                        slot = None
+                        if node_type == "satellite":
+                            # Parse plane/slot from node_id: sat-P00S05
+                            parts = node_id.replace("sat-P", "").split("S")
+                            if len(parts) == 2:
+                                plane = int(parts[0])
+                                slot = int(parts[1])
+                        positions_list.append({
+                            "node_id": node_id,
+                            "node_type": node_type,
+                            "lat_deg": pos.lat_deg,
+                            "lon_deg": pos.lon_deg,
+                            "alt_km": pos.alt_km,
+                            "vel_x_km_s": pos.vel_x_km_s,
+                            "vel_y_km_s": pos.vel_y_km_s,
+                            "vel_z_km_s": pos.vel_z_km_s,
+                            "plane": plane,
+                            "slot": slot,
+                            "routing_area": None,
+                            "neighbor_count": 0,
+                            "isl_count": 0,
+                            "gnd_count": 0,
+                        })
+                    position_data = {
+                        "sim_time": snap.sim_time.isoformat(),
+                        "positions": positions_list,
+                    }
+                    ome_pub_sock.send(encode_message(
+                        TOPIC_POSITION_EVENT,
+                        json.dumps(position_data).encode(),
+                    ))
             elif record["event_type"] == "ClockTick":
                 pass  # Clock ticks are informational
 

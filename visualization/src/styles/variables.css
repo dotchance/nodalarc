@@ -1,15 +1,15 @@
 :root {
   --bg-main: #0d0d1a;
   --bg-panel: #1a1a2e;
-  --bg-panel-hover: #222240;
-  --bg-toolbar: rgba(26, 26, 46, 0.85);
-  --bg-bar: #12122a;
+  --bg-panel-hover: #2a2a4e;
+  --bg-toolbar: rgba(26, 26, 46, 0.8);
+  --bg-bar: #16162a;
 
   --text-primary: #e0e0e0;
-  --text-secondary: #8888aa;
+  --text-secondary: #888899;
   --text-dim: #555577;
 
-  --border: #2a2a4a;
+  --border: #2a2a4e;
   --border-active: #4444aa;
 
   --accent-blue: #4488ff;
@@ -19,10 +19,10 @@
   --accent-green: #44cc66;
   --accent-amber: #ffaa00;
 
-  --area-red: #ff4444;
-  --area-green: #44cc66;
-  --area-blue: #4488ff;
-  --area-amber: #ffaa00;
+  --area-red: #cc4444;
+  --area-green: #44aa44;
+  --area-blue: #4477bb;
+  --area-amber: #cc8844;
 
   --ws-connected: #44cc66;
   --ws-reconnecting: #ffaa00;

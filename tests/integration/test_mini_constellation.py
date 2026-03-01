@@ -87,7 +87,7 @@ class TestPrerequisites:
     def test_frr_image_available(self, k3s_available):
         """FRR container image is available."""
         result = subprocess.run(
-            ["crictl", "images", "--no-trunc"],
+            ["sudo", "crictl", "images", "--no-trunc"],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
@@ -111,7 +111,7 @@ class TestMiniConstellation:
     def _skip_without_images(self, k3s_available):
         """Skip entire class if container images aren't available."""
         result = subprocess.run(
-            ["crictl", "images", "--no-trunc"],
+            ["sudo", "crictl", "images", "--no-trunc"],
             capture_output=True, text=True,
         )
         if result.returncode != 0 or "nodalarc/frr" not in result.stdout:
@@ -230,7 +230,7 @@ class TestStarlinkMini:
     @pytest.fixture(autouse=True)
     def _skip_without_images(self, k3s_available):
         result = subprocess.run(
-            ["crictl", "images", "--no-trunc"],
+            ["sudo", "crictl", "images", "--no-trunc"],
             capture_output=True, text=True,
         )
         if result.returncode != 0 or "nodalarc/frr" not in result.stdout:
@@ -339,7 +339,7 @@ class TestOspfDeployment:
     @pytest.fixture(autouse=True)
     def _skip_without_images(self, k3s_available):
         result = subprocess.run(
-            ["crictl", "images", "--no-trunc"],
+            ["sudo", "crictl", "images", "--no-trunc"],
             capture_output=True, text=True,
         )
         if result.returncode != 0 or "nodalarc/frr" not in result.stdout:

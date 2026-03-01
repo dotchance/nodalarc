@@ -3,8 +3,9 @@
 export const EARTH_RADIUS = 100;
 export const KM_PER_UNIT = 6371 / EARTH_RADIUS;
 
-export const WS_URL = import.meta.env.VITE_VSAPI_WS_URL as string || "ws://localhost:8080/ws/v1/state";
-export const REST_URL = import.meta.env.VITE_VSAPI_REST_URL as string || "http://localhost:8080";
+const _host = typeof window !== "undefined" ? window.location.hostname : "localhost";
+export const WS_URL = import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
+export const REST_URL = import.meta.env.VITE_VSAPI_REST_URL as string || `http://${_host}:8080`;
 
 /** Satellite sphere radius in scene units */
 export const SAT_RADIUS = 0.3;

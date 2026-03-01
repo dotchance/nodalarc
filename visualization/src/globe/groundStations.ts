@@ -1,13 +1,17 @@
-/** Ground station sprites with canvas-drawn antenna icons. */
+/** Ground station sprites with canvas-drawn antenna icons.
+ *  Includes elevation cone (RingGeometry) per VF spec Section 4.
+ */
 
 import * as THREE from "three";
-import { GS_COLOR, GS_SIZE, EARTH_RADIUS } from "../config";
+import { GS_COLOR, GS_SIZE, EARTH_RADIUS, KM_PER_UNIT } from "../config";
 import { geoToWorld } from "./geo";
 import type { NodeState } from "../types";
 
 export interface GroundStationEntry {
   sprite: THREE.Sprite;
   label: HTMLDivElement;
+  cone: THREE.Mesh;
+  coneOutline: THREE.LineLoop;
   nodeState: NodeState;
 }
 
@@ -24,7 +28,6 @@ function createGSTexture(): THREE.Texture {
   canvas.height = size;
   const ctx = canvas.getContext("2d")!;
 
-  // Antenna icon
   const color = `#${GS_COLOR.toString(16).padStart(6, "0")}`;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
@@ -61,6 +64,81 @@ function getSharedTexture(): THREE.Texture {
   return gsTexture;
 }
 
+/** Compute elevation cone radius on the globe surface.
+ *  For a minimum elevation angle of ~5°, at LEO altitude ~550km,
+ *  the ground footprint radius is roughly 2400km.
+ */
+function computeConeRadius(): number {
+  const minElevDeg = 5;
+  const orbitalAltKm = 550;
+  const earthRadiusKm = 6371;
+
+  // Slant angle from zenith to horizon at min elevation
+  const elevRad = (minElevDeg * Math.PI) / 180;
+  // Central angle subtended by footprint
+  const centralAngle = Math.acos(
+    (earthRadiusKm * Math.cos(elevRad)) / (earthRadiusKm + orbitalAltKm),
+  ) - elevRad;
+
+  // Arc distance on surface in km, converted to scene units
+  const arcKm = earthRadiusKm * centralAngle;
+  return arcKm / KM_PER_UNIT;
+}
+
+const coneRadius = computeConeRadius();
+
+/** Create the elevation cone ring (coverage area indicator) positioned on the surface. */
+function createElevationCone(
+  pos: THREE.Vector3,
+): { cone: THREE.Mesh; outline: THREE.LineLoop } {
+  // Ring on the surface plane
+  const ringGeo = new THREE.RingGeometry(0, coneRadius, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: GS_COLOR,
+    transparent: true,
+    opacity: 0.05,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const cone = new THREE.Mesh(ringGeo, ringMat);
+
+  // Outline ring
+  const outlineGeo = new THREE.BufferGeometry();
+  const outlinePoints: number[] = [];
+  for (let i = 0; i <= 48; i++) {
+    const angle = (i / 48) * Math.PI * 2;
+    outlinePoints.push(
+      Math.cos(angle) * coneRadius,
+      Math.sin(angle) * coneRadius,
+      0,
+    );
+  }
+  outlineGeo.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(outlinePoints, 3),
+  );
+  const outlineMat = new THREE.LineBasicMaterial({
+    color: GS_COLOR,
+    transparent: true,
+    opacity: 0.2,
+    depthWrite: false,
+  });
+  const outline = new THREE.LineLoop(outlineGeo, outlineMat);
+
+  // Position and orient to surface normal
+  const surfaceNormal = pos.clone().normalize();
+  const surfacePos = surfaceNormal.clone().multiplyScalar(EARTH_RADIUS * 1.001);
+
+  cone.position.copy(surfacePos);
+  outline.position.copy(surfacePos);
+
+  // Orient ring to lie flat on globe surface
+  cone.lookAt(surfaceNormal.clone().multiplyScalar(EARTH_RADIUS * 2));
+  outline.lookAt(surfaceNormal.clone().multiplyScalar(EARTH_RADIUS * 2));
+
+  return { cone, outline };
+}
+
 export function updateGroundStations(
   nodes: NodeState[],
   scene: THREE.Scene,
@@ -88,6 +166,11 @@ export function updateGroundStations(
       sprite.userData["nodeType"] = "ground_station";
       scene.add(sprite);
 
+      // Elevation cone
+      const { cone, outline: coneOutline } = createElevationCone(pos);
+      scene.add(cone);
+      scene.add(coneOutline);
+
       // HTML label
       const label = document.createElement("div");
       label.className = "gs-label";
@@ -106,7 +189,7 @@ export function updateGroundStations(
       `;
       labelContainer.appendChild(label);
 
-      groundStations.set(node.node_id, { sprite, label, nodeState: node });
+      groundStations.set(node.node_id, { sprite, label, cone, coneOutline, nodeState: node });
     }
   }
 
@@ -114,6 +197,10 @@ export function updateGroundStations(
   for (const [id, entry] of groundStations) {
     if (!seen.has(id)) {
       scene.remove(entry.sprite);
+      scene.remove(entry.cone);
+      scene.remove(entry.coneOutline);
+      entry.cone.geometry.dispose();
+      entry.coneOutline.geometry.dispose();
       entry.label.remove();
       groundStations.delete(id);
     }
@@ -134,7 +221,7 @@ export function updateGSLabels(camera: THREE.Camera, container: HTMLDivElement):
       continue;
     }
 
-    // Check if occluded by Earth (rough check: distance from center < EARTH_RADIUS)
+    // Check if occluded by Earth
     const worldPos = entry.sprite.position;
     const cameraPos = camera.position;
     const dirToGS = worldPos.clone().sub(cameraPos).normalize();

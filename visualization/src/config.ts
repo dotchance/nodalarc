@@ -27,8 +27,13 @@ export const LINK_FAIL_COLOR = 0xff3333;
 export const LINK_INACTIVE_COLOR = 0x333333;
 export const LINK_FLOW_COLOR = 0xff8800;
 
+/** Cross-area ISL (dashed white per VF spec) */
+export const LINK_CROSS_AREA_COLOR = 0xffffff;
+export const LINK_CROSS_AREA_OPACITY = 0.5;
+
 /** Link widths (px) */
 export const LINK_ISL_WIDTH = 1.0;
+export const LINK_CROSS_AREA_WIDTH = 1.5;
 export const LINK_GROUND_WIDTH = 1.5;
 export const LINK_FLOW_WIDTH = 3;
 

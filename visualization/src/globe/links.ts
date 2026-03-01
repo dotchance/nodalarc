@@ -1,4 +1,5 @@
 /** Link rendering using Line2 for pixel-width lines.
+ *  Links are drawn as great-circle arcs raised above the earth surface.
  *  Fail-flash: red hold 5s → fade to dark → hidden.
  *  Link up: immediate appear + brightness pulse.
  */
@@ -52,6 +53,48 @@ function linkKey(a: string, b: string): string {
 
 function isGroundLink(nodeA: string, nodeB: string): boolean {
   return nodeA.startsWith("gs-") || nodeB.startsWith("gs-");
+}
+
+const _va = new THREE.Vector3();
+const _vb = new THREE.Vector3();
+const _pt = new THREE.Vector3();
+
+/**
+ * Build smooth great-circle arc between two 3D positions.
+ * Slerps the direction on the unit sphere and interpolates altitude,
+ * producing a curve that follows the earth's curvature at orbital height.
+ */
+function arcPositions(a: THREE.Vector3, b: THREE.Vector3): number[] {
+  _va.copy(a).normalize();
+  _vb.copy(b).normalize();
+  const dot = Math.min(1, Math.max(-1, _va.dot(_vb)));
+  const angle = Math.acos(dot);
+
+  // Enough segments for a visually smooth curve
+  const segments = Math.max(24, Math.ceil(angle * 40));
+  const altA = a.length();
+  const altB = b.length();
+
+  if (angle < 0.001) {
+    return [a.x, a.y, a.z, b.x, b.y, b.z];
+  }
+
+  const sinAngle = Math.sin(angle);
+  const positions: number[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const wA = Math.sin((1 - t) * angle) / sinAngle;
+    const wB = Math.sin(t * angle) / sinAngle;
+    _pt.set(
+      _va.x * wA + _vb.x * wB,
+      _va.y * wA + _vb.y * wB,
+      _va.z * wA + _vb.z * wB,
+    );
+    const r = altA + (altB - altA) * t;
+    _pt.normalize().multiplyScalar(r);
+    positions.push(_pt.x, _pt.y, _pt.z);
+  }
+  return positions;
 }
 
 export function updateLinks(
@@ -136,8 +179,10 @@ export function animateLinks(): void {
       continue;
     }
 
-    // Update geometry positions
-    entry.geometry.setPositions([posA.x, posA.y, posA.z, posB.x, posB.y, posB.z]);
+    // Update geometry as a great-circle arc
+    const arcPts = arcPositions(posA, posB);
+    entry.geometry.setPositions(arcPts);
+    entry.line.computeLineDistances();
 
     // Fail-flash animation
     if (entry.failTime !== null) {

@@ -160,15 +160,18 @@ def create_dummy_interface(
 def disable_ipv6_autoconfig(pid: int, ifname: str) -> None:
     """Disable IPv6 autoconfig on an interface (PRD 13.6 step 5).
 
-    Writes directly through /proc/{pid}/root — no subprocess.
+    Uses nsenter to enter the network namespace because K3s mounts
+    /proc/sys read-only inside containers.
     """
     for param in ("accept_ra", "autoconf"):
-        path = f"/proc/{pid}/root/proc/sys/net/ipv6/conf/{ifname}/{param}"
-        try:
-            with open(path, "w") as f:
-                f.write("0")
-        except (FileNotFoundError, OSError) as e:
-            log.warning(f"Failed to set {param}=0 for {ifname} in ns({pid}): {e}")
+        sysctl_key = f"net.ipv6.conf.{ifname}.{param}"
+        result = subprocess.run(
+            ["nsenter", "--target", str(pid), "--net", "--",
+             "sysctl", "-w", f"{sysctl_key}=0"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            log.warning(f"Failed to set {param}=0 for {ifname} in ns({pid}): {result.stderr.strip()}")
 
 
 def deterministic_mac(node_id: str, ifname: str) -> str:
@@ -214,18 +217,18 @@ def destroy_veth_pair(pid: int, ifname: str) -> None:
 
 
 def enable_mpls_input(pid: int, ifname: str) -> None:
-    """Enable MPLS input on an interface via /proc/sys inside the namespace.
+    """Enable MPLS input on an interface inside the namespace.
 
-    Writes directly through /proc/{pid}/root — no subprocess, no nsenter.
+    Uses nsenter to enter the network namespace because K3s mounts
+    /proc/sys read-only inside containers.
     """
-    sysctl_path = f"/proc/{pid}/root/proc/sys/net/mpls/conf/{ifname}/input"
-    try:
-        with open(sysctl_path, "w") as f:
-            f.write("1")
-    except FileNotFoundError:
-        log.warning(f"MPLS sysctl not available for {ifname} in ns({pid})")
-    except OSError as e:
-        log.warning(f"Failed to enable MPLS input for {ifname} in ns({pid}): {e}")
+    result = subprocess.run(
+        ["nsenter", "--target", str(pid), "--net", "--",
+         "sysctl", "-w", f"net.mpls.conf.{ifname}.input=1"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        log.warning(f"Failed to enable MPLS input for {ifname} in ns({pid}): {result.stderr}")
 
 
 def set_interface_up(pid: int, ifname: str) -> None:

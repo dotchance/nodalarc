@@ -208,17 +208,21 @@ def deploy(session_path: str) -> None:
         _fail(f"Could not discover PIDs for: {zero_nodes}")
     log.info(f"Discovered PIDs for {len(pid_map)} pods")
 
-    # Configure kernel networking in each pod namespace (no shelling out — PRD 13.6)
+    # Configure kernel networking in each pod namespace.
+    # K3s mounts /proc/sys read-only inside containers, so we use nsenter
+    # to enter the network namespace and write sysctls from the host.
     for node_id, pid in pid_map.items():
-        for sysctl_path, value in [
-            (f"/proc/{pid}/root/proc/sys/net/ipv6/conf/all/forwarding", "1"),
-            (f"/proc/{pid}/root/proc/sys/net/mpls/platform_labels", "100000"),
+        for sysctl_key, value in [
+            ("net.ipv6.conf.all.forwarding", "1"),
+            ("net.mpls.platform_labels", "100000"),
         ]:
-            try:
-                with open(sysctl_path, "w") as f:
-                    f.write(value)
-            except OSError as e:
-                _fail(f"Failed to write {sysctl_path}: {e}")
+            result = subprocess.run(
+                ["nsenter", "--target", str(pid), "--net", "--",
+                 "sysctl", "-w", f"{sysctl_key}={value}"],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                _fail(f"Failed to set {sysctl_key}={value} in ns({pid}): {result.stderr}")
     log.info("Configured IPv6 forwarding and MPLS in all pod namespaces")
 
     # Compute ISL neighbor assignments to know which veths to create
@@ -315,6 +319,7 @@ def deploy(session_path: str) -> None:
             "--timeline", str(timeline_path),
             "--mode", mode_flag,
             "--pid-map", str(pid_map_file),
+            "--dwell", "0",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

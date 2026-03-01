@@ -23,8 +23,12 @@ from ome.propagator import (
     orbital_period,
 )
 from ome.visibility import (
+    GroundVisibility,
     check_ground_visibility,
     check_isl_visibility,
+    enforce_symmetric_scheduling,
+    schedule_ground_links,
+    schedule_isl_terminals,
 )
 from nodalarc.constants import SPEED_OF_LIGHT_KM_S
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
@@ -119,21 +123,35 @@ def precompute_timeline(
     events: list[TimelineEvent] = []
     by_node = neighbors_by_node(neighbors)
 
-    # Pre-compute ground station ECEF positions (fixed)
+    # Build satellite terminal count lookup
+    sat_isl_terminals: dict[str, int] = {}
+    for sat in satellites:
+        nid = addressing.sat_id(sat.plane, sat.slot)
+        sat_isl_terminals[nid] = sat.isl_terminal_count
+
+    # Pre-compute ground station ECEF positions, terminal counts, policies
     gs_positions: dict[str, tuple[Vec3, GeoPosition]] = {}
     gs_min_elevations: dict[str, float] = {}
+    gs_terminal_counts: dict[str, int] = {}
+    gs_policies: dict[str, str] = {}
     if gs_file:
+        default_gs_count = sum(t.count for t in gs_file.default_terminals)
+        default_gs_policy = gs_file.default_scheduling_policy or "highest-elevation"
         for i, station in enumerate(gs_file.stations):
             node_id = addressing.gs_id(station.name)
             geo = GeoPosition(station.lat_deg, station.lon_deg, (station.alt_m or 0) / 1000.0)
             ecef = geodetic_to_ecef(geo)
             gs_positions[node_id] = (ecef, geo)
             gs_min_elevations[node_id] = station.min_elevation_deg or gs_file.default_min_elevation_deg or 25.0
+            gs_terminal_counts[node_id] = (
+                sum(t.count for t in station.terminals) if station.terminals else default_gs_count
+            )
+            gs_policies[node_id] = station.scheduling_policy or default_gs_policy
 
-    # Track ISL visibility state: (node_a, node_b) -> visible
-    isl_state: dict[tuple[str, str], bool] = {}
-    # Track GS visibility state: (gs_id, sat_id) -> visible
-    gs_state: dict[tuple[str, str], bool] = {}
+    # Track ISL state: (node_a, node_b) -> (visible, scheduled)
+    isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    # Track GS state: (gs_id, sat_id) -> (visible, scheduled)
+    gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
 
     steps = int(duration_s / step_seconds)
     for step in range(steps + 1):
@@ -158,7 +176,9 @@ def precompute_timeline(
         events.append(TimelineEvent(timestamp_s, "ClockTick", clock_tick))
         events.append(TimelineEvent(timestamp_s, "Snapshot", snapshot))
 
-        # 3. Check ISL visibility for each assigned neighbor pair
+        # 3. Check ISL visibility for all assigned neighbor pairs
+        isl_visibility: dict[tuple[str, str], tuple[bool, float]] = {}
+
         for sat in satellites:
             node_id = addressing.sat_id(sat.plane, sat.slot)
             node_neighbors = by_node.get(node_id, [])
@@ -189,26 +209,72 @@ def precompute_timeline(
                     geo_a=geo_a, geo_b=geo_b,
                 )
 
-                prev_visible = isl_state.get(pair, False)
-                now_visible = result.visible
+                isl_visibility[pair] = (result.visible, result.range_km)
 
-                if now_visible != prev_visible:
-                    isl_state[pair] = now_visible
-                    vis_event = VisibilityEvent(
-                        sim_time=sim_time,
-                        node_a=pair[0],
-                        node_b=pair[1],
-                        visible=now_visible,
-                        scheduled=now_visible,
-                        range_km=result.range_km,
-                        elevation_deg=None,  # ISL — no elevation
-                        terminal_type="optical",
+        # 4. Schedule ISL terminals per node
+        node_feasible_isls: dict[str, list[tuple[str, int, float]]] = {}
+        for pair, (visible, range_km) in isl_visibility.items():
+            if not visible:
+                continue
+            node_a, node_b = pair
+            # Find priority from each node's perspective
+            for na in by_node.get(node_a, []):
+                if na.peer_node_id == node_b:
+                    node_feasible_isls.setdefault(node_a, []).append(
+                        (node_b, na.priority, range_km),
                     )
-                    events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
+                    break
+            for na in by_node.get(node_b, []):
+                if na.peer_node_id == node_a:
+                    node_feasible_isls.setdefault(node_b, []).append(
+                        (node_a, na.priority, range_km),
+                    )
+                    break
 
-        # 4. Check ground station visibility
+        all_isl_schedules: dict[str, list] = {}
+        for nid, feasible in node_feasible_isls.items():
+            tc = sat_isl_terminals.get(nid, 2)
+            all_isl_schedules[nid] = schedule_isl_terminals(nid, feasible, tc)
+
+        all_isl_schedules = enforce_symmetric_scheduling(all_isl_schedules)
+
+        # Build pair -> scheduled lookup (both sides must agree)
+        isl_scheduled: dict[tuple[str, str], bool] = {}
+        for nid, links in all_isl_schedules.items():
+            for link in links:
+                pair = (min(link.node_a, link.node_b), max(link.node_a, link.node_b))
+                if pair not in isl_scheduled:
+                    isl_scheduled[pair] = link.scheduled
+                else:
+                    isl_scheduled[pair] = isl_scheduled[pair] and link.scheduled
+
+        # 5. Emit ISL visibility events on state changes
+        for pair, (visible, range_km) in isl_visibility.items():
+            scheduled = isl_scheduled.get(pair, False) if visible else False
+            prev_state = isl_state.get(pair, (False, False))
+            new_state = (visible, scheduled)
+
+            if new_state != prev_state:
+                isl_state[pair] = new_state
+                vis_event = VisibilityEvent(
+                    sim_time=sim_time,
+                    node_a=pair[0],
+                    node_b=pair[1],
+                    visible=visible,
+                    scheduled=scheduled,
+                    range_km=range_km,
+                    elevation_deg=None,  # ISL — no elevation
+                    terminal_type="optical",
+                )
+                events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
+
+        # 6. Check ground station visibility and schedule
+        gs_vis_details: dict[tuple[str, str], tuple[bool, float, float | None]] = {}
+        gs_visible_per_station: dict[str, list[GroundVisibility]] = {}
+
         for gs_id, (gs_ecef, gs_geo) in gs_positions.items():
             min_elev = gs_min_elevations.get(gs_id, 25.0)
+            visible_sats: list[GroundVisibility] = []
             for sat in satellites:
                 sat_id = addressing.sat_id(sat.plane, sat.slot)
                 if sat_id not in sat_positions:
@@ -217,21 +283,41 @@ def precompute_timeline(
 
                 gv = check_ground_visibility(gs_ecef, gs_geo, sat_ecef, min_elev)
                 pair = (min(gs_id, sat_id), max(gs_id, sat_id))
-                prev_visible = gs_state.get(pair, False)
-
-                if gv.visible != prev_visible:
-                    gs_state[pair] = gv.visible
-                    vis_event = VisibilityEvent(
-                        sim_time=sim_time,
-                        node_a=pair[0],
-                        node_b=pair[1],
-                        visible=gv.visible,
-                        scheduled=gv.visible,
-                        range_km=gv.range_km,
-                        elevation_deg=gv.elevation_deg,
-                        terminal_type="optical",
+                gs_vis_details[pair] = (gv.visible, gv.range_km, gv.elevation_deg)
+                if gv.visible:
+                    visible_sats.append(
+                        GroundVisibility(sat_id, gv.visible, gv.elevation_deg, gv.range_km),
                     )
-                    events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
+            gs_visible_per_station[gs_id] = visible_sats
+
+        # 7. Schedule ground links per station
+        gs_scheduled: dict[tuple[str, str], bool] = {}
+        for gs_id, visible_sats in gs_visible_per_station.items():
+            tc = gs_terminal_counts.get(gs_id, 1)
+            policy = gs_policies.get(gs_id, "highest-elevation")
+            for sl in schedule_ground_links(gs_id, visible_sats, tc, policy):
+                pair = (min(sl.node_a, sl.node_b), max(sl.node_a, sl.node_b))
+                gs_scheduled[pair] = sl.scheduled
+
+        # 8. Emit ground visibility events on state changes
+        for pair, (visible, range_km, elev_deg) in gs_vis_details.items():
+            scheduled = gs_scheduled.get(pair, False) if visible else False
+            prev_state = gs_state.get(pair, (False, False))
+            new_state = (visible, scheduled)
+
+            if new_state != prev_state:
+                gs_state[pair] = new_state
+                vis_event = VisibilityEvent(
+                    sim_time=sim_time,
+                    node_a=pair[0],
+                    node_b=pair[1],
+                    visible=visible,
+                    scheduled=scheduled,
+                    range_km=range_km,
+                    elevation_deg=elev_deg,
+                    terminal_type="optical",
+                )
+                events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
 
     return events
 

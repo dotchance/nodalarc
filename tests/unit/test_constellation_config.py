@@ -136,6 +136,27 @@ class TestValidationRejections:
             adapter.validate_python(data)
 
 
+class TestInvalidFixtures:
+    def test_missing_terminals_rejected(self):
+        """Parametric constellation without default_terminals is rejected."""
+        data = yaml.safe_load((FIXTURES_DIR / "invalid/missing-terminals.yaml").read_text())
+        with pytest.raises(ValidationError, match="default_terminals"):
+            adapter.validate_python(data)
+
+    def test_duplicate_slots_loads(self):
+        """Duplicate plane/slot in explicit mode loads but produces duplicate node_ids.
+
+        Model doesn't validate uniqueness, but expansion produces ambiguous identity.
+        This is a data quality issue, not a schema validation issue.
+        """
+        data = yaml.safe_load((FIXTURES_DIR / "invalid/duplicate-slots.yaml").read_text())
+        config = adapter.validate_python(data)
+        assert isinstance(config, ExplicitConstellation)
+        # Both satellites have plane=0, slot=0
+        assert config.satellites[0].plane == config.satellites[1].plane
+        assert config.satellites[0].slot == config.satellites[1].slot
+
+
 class TestIslOverride:
     def test_override_loads(self):
         data = {

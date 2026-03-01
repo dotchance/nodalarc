@@ -111,3 +111,11 @@ class TestValidationRejections:
     def test_invalid_elevation(self):
         with pytest.raises(ValidationError, match="min_elevation_deg must be 0-90"):
             GroundStationConfig(name="bad", lat_deg=0, lon_deg=0, min_elevation_deg=91)
+
+
+class TestInvalidFixtures:
+    def test_bad_prefix_negative_metric(self):
+        """Ground station with negative terrestrial prefix metric is rejected."""
+        data = yaml.safe_load((FIXTURES_DIR / "invalid/bad-prefix.yaml").read_text())
+        with pytest.raises(ValidationError, match="metric must be non-negative"):
+            GroundStationFile.model_validate(data)

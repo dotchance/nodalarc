@@ -14,12 +14,34 @@ import type { NodeState, ColorMode } from "../types";
 /** Shared geometry for all satellites. */
 const sharedGeo = new THREE.SphereGeometry(SAT_RADIUS, SAT_SEGMENTS, SAT_SEGMENTS);
 
+/** Shared glow texture for satellite visibility at distance. */
+let glowTexture: THREE.Texture | null = null;
+function getGlowTexture(): THREE.Texture {
+  if (!glowTexture) {
+    const size = 64;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d")!;
+    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, "rgba(255, 255, 255, 0.6)");
+    gradient.addColorStop(0.3, "rgba(255, 255, 255, 0.15)");
+    gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, size, size);
+    glowTexture = new THREE.CanvasTexture(canvas);
+    glowTexture.needsUpdate = true;
+  }
+  return glowTexture;
+}
+
 /** Correction blend per frame: how fast dead-reckoning steers toward snapshot truth.
  *  0.03 at 60fps → ~83% corrected after 1 second (before next snapshot). */
 const CORRECTION_RATE = 0.03;
 
 export interface SatelliteEntry {
   mesh: THREE.Mesh;
+  glow: THREE.Sprite;
   /** Dead-reckoned position (updated every frame by velocity). */
   targetPosition: THREE.Vector3;
   /** Latest ground-truth position from snapshot (updated at 1Hz). */
@@ -58,14 +80,30 @@ export function updateSatellites(
       existing.nodeState = node;
       updateSatColor(existing, colorMode);
     } else {
-      const material = new THREE.MeshBasicMaterial({ color: getSatColor(node, colorMode) });
+      const color = getSatColor(node, colorMode);
+      const material = new THREE.MeshBasicMaterial({ color });
       const mesh = new THREE.Mesh(sharedGeo, material);
       mesh.position.copy(pos);
       mesh.userData["nodeId"] = node.node_id;
       mesh.userData["nodeType"] = "satellite";
       scene.add(mesh);
+
+      // Glow sprite for far-distance visibility
+      const glowMat = new THREE.SpriteMaterial({
+        map: getGlowTexture(),
+        color,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const glow = new THREE.Sprite(glowMat);
+      glow.scale.set(SAT_RADIUS * 5, SAT_RADIUS * 5, 1);
+      glow.position.copy(pos);
+      scene.add(glow);
+
       satellites.set(node.node_id, {
         mesh,
+        glow,
         targetPosition: pos.clone(),
         snapshotPosition: pos.clone(),
         velocity: vel,
@@ -78,6 +116,7 @@ export function updateSatellites(
   for (const [id, entry] of satellites) {
     if (!seen.has(id)) {
       scene.remove(entry.mesh);
+      scene.remove(entry.glow);
       satellites.delete(id);
     }
   }
@@ -99,6 +138,7 @@ export function animateSatellites(dt: number): void {
 
     // Smooth mesh toward target
     entry.mesh.position.lerp(entry.targetPosition, 0.15);
+    entry.glow.position.copy(entry.mesh.position);
   }
 }
 
@@ -115,6 +155,7 @@ function getSatColor(node: NodeState, mode: ColorMode): number {
 function updateSatColor(entry: SatelliteEntry, mode: ColorMode): void {
   const color = getSatColor(entry.nodeState, mode);
   (entry.mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
+  (entry.glow.material as THREE.SpriteMaterial).color.setHex(color);
 }
 
 export function recolorAllSatellites(colorMode: ColorMode): void {

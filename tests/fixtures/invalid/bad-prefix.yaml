@@ -1,0 +1,13 @@
+default_terminals:
+  - type: optical
+    count: 1
+    bandwidth_mbps: 1000
+    tracking_capacity: 1
+default_min_elevation_deg: 25
+stations:
+  - name: bad-prefix-station
+    lat_deg: 0.0
+    lon_deg: 0.0
+    terrestrial_prefixes:
+      - prefix: "172.16.0.0/24"
+        metric: -5

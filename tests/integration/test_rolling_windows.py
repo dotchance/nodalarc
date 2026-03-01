@@ -1,0 +1,87 @@
+"""Integration test: Rolling window verification.
+
+PRD Appendix B: Since rolling windows are deferred (single-window approach
+per CLAUDE.md), verify:
+- Single window covers full orbital period
+- Timeline duration matches orbital_period() for the constellation
+- Events span from t=0 to t=period
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from ome.propagator import orbital_period
+
+pytestmark = pytest.mark.integration
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+
+@pytest.fixture
+def four_node_timeline(tmp_path):
+    """Generate 4-node-test timeline."""
+    from ome.main import run as ome_run
+
+    session_path = PROJECT_ROOT / "configs/sessions/4-node-test.yaml"
+    if not session_path.exists():
+        pytest.skip("4-node-test session not available")
+    return ome_run(str(session_path), str(tmp_path))
+
+
+def _load_events(path):
+    events = []
+    with open(path) as f:
+        for line in f:
+            if line.strip():
+                events.append(json.loads(line))
+    return events
+
+
+class TestSingleWindowCoverage:
+    def test_timeline_starts_at_zero(self, four_node_timeline):
+        """Timeline begins at t=0."""
+        events = _load_events(four_node_timeline)
+        assert events[0]["timestamp_s"] == 0.0
+
+    def test_timeline_ends_at_orbital_period(self, four_node_timeline):
+        """Timeline duration matches orbital_period() for 550 km altitude."""
+        events = _load_events(four_node_timeline)
+        expected_period = orbital_period(550.0)
+        last_timestamp = max(e["timestamp_s"] for e in events)
+        # Allow ±1 step tolerance (step_seconds=1 for 4-node-test)
+        assert abs(last_timestamp - expected_period) < 2.0, (
+            f"Last timestamp {last_timestamp:.1f}s should match "
+            f"orbital period {expected_period:.1f}s"
+        )
+
+    def test_single_window_covers_full_period(self, four_node_timeline):
+        """Clock ticks span from t=0 to t~=period without gaps > step_seconds."""
+        events = _load_events(four_node_timeline)
+        clock_ticks = [e for e in events if e["event_type"] == "ClockTick"]
+        timestamps = sorted(e["timestamp_s"] for e in clock_ticks)
+
+        assert len(timestamps) > 100  # Should have many ticks
+        assert timestamps[0] == 0.0
+        # Check no gaps larger than step_seconds + small tolerance
+        for i in range(1, len(timestamps)):
+            gap = timestamps[i] - timestamps[i - 1]
+            assert gap <= 1.5, f"Gap of {gap}s at t={timestamps[i]}s exceeds step_seconds"
+
+    def test_events_span_full_duration(self, four_node_timeline):
+        """All event types occur across the full timeline duration."""
+        events = _load_events(four_node_timeline)
+        period = orbital_period(550.0)
+
+        # Clock ticks should span from 0 to ~period
+        clock_ts = [e["timestamp_s"] for e in events if e["event_type"] == "ClockTick"]
+        assert min(clock_ts) == 0.0
+        assert max(clock_ts) >= period - 2.0
+
+        # Snapshots should also span full period
+        snap_ts = [e["timestamp_s"] for e in events if e["event_type"] == "Snapshot"]
+        assert min(snap_ts) == 0.0
+        assert max(snap_ts) >= period - 2.0

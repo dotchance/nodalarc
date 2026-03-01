@@ -1,0 +1,28 @@
+mode: explicit
+name: duplicate-slots
+default_terminals:
+  isl:
+    - type: optical
+      count: 2
+      max_range_km: 5000
+      bandwidth_mbps: 1000
+      max_tracking_rate_deg_s: 3.0
+  ground:
+    - type: optical
+      count: 1
+      bandwidth_mbps: 1000
+satellites:
+  - plane: 0
+    slot: 0
+    orbit:
+      altitude_km: 550
+      inclination_deg: 53
+      raan_deg: 0
+      true_anomaly_deg: 0
+  - plane: 0
+    slot: 0
+    orbit:
+      altitude_km: 550
+      inclination_deg: 53
+      raan_deg: 0
+      true_anomaly_deg: 30

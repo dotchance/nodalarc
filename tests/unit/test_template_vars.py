@@ -181,11 +181,46 @@ class TestSatelliteVars:
         assert len(iinfo) == 2  # 4-node has 2 OCTs
         for iface_name, info in iinfo.items():
             assert isinstance(iface_name, str)
+            # All 6 PRD-required fields
             assert "peer_node_id" in info
             assert "link_type" in info
             assert "cross_area" in info
             assert "bandwidth_mbps" in info
+            assert "peer_area_id" in info
+            assert "priority" in info
             assert info["bandwidth_mbps"] == 1000.0
+
+    def test_interface_info_peer_area_id(self, flat_session, four_node_config, gs_file, addressing):
+        """Peer area_id is populated for all ISL interfaces."""
+        result = build_template_vars(
+            session=flat_session,
+            constellation=four_node_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+        )
+        iinfo = result["interface_info"]
+        for iface_name, info in iinfo.items():
+            assert info["peer_area_id"] != "", f"peer_area_id empty for {iface_name}"
+            # In flat strategy, all nodes have the same area
+            assert info["peer_area_id"] == "49.0001"
+
+    def test_interface_info_peer_loopback_ipv4(self, stripe_session, starlink_config, gs_file, addressing):
+        """Peer loopback IPv4 is populated for all ISL interfaces."""
+        result = build_template_vars(
+            session=stripe_session,
+            constellation=starlink_config,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=0, slot=0,
+        )
+        iinfo = result["interface_info"]
+        for iface_name, info in iinfo.items():
+            assert "peer_loopback_ipv4" in info, f"peer_loopback_ipv4 missing for {iface_name}"
+            # Should be a valid IPv4 address in 10.x.x.x range
+            assert info["peer_loopback_ipv4"].startswith("10.")
 
     def test_satellite_cross_area_flag(self, stripe_session, starlink_config, gs_file, addressing):
         """Node in plane 1 has cross-plane link to plane 2 — different stripe."""

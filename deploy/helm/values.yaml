@@ -3,6 +3,7 @@ namespace: nodalarc
 
 images:
   frr: docker.io/nodalarc/frr:10
+  probe: docker.io/nodalarc/probe:1
   orchestrator: docker.io/nodalarc/orchestrator:latest
   ome: docker.io/nodalarc/ome:latest
 

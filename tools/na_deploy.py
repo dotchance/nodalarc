@@ -294,20 +294,32 @@ def deploy(session_path: str) -> None:
     pid_map_file.write_text(json.dumps(pid_map))
     log.info(f"PID map saved to {pid_map_file}")
 
-    # === Step 8: Start MI (convergence gate stub) ===
-    log.info("Step 8: Start MI convergence gate stub")
+    # === Step 8: Start MI ===
+    log.info("Step 8: Start MI service")
+    mi_db = str(data_dir / "session.db")
     mi_proc = subprocess.Popen(
-        [sys.executable, "-m", "measurement.stubs.convergence_stub"],
+        [sys.executable, "-m", "measurement.mi_main",
+         "--session", session_path,
+         "--db", mi_db],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    log.info(f"Convergence gate stub PID: {mi_proc.pid}")
+    log.info(f"MI service PID: {mi_proc.pid}")
 
     # === Step 9: Configure probe flows ===
     log.info("Step 9: Configure probe flows (skipped in Phase 1B)")
 
     # === Step 10: Start VS-API ===
-    log.info("Step 10: Start VS-API (skipped in Phase 1B)")
+    log.info("Step 10: Start VS-API")
+    vsapi_proc = subprocess.Popen(
+        [sys.executable, "-m", "vs_api.main",
+         "--session", session_path,
+         "--db", mi_db,
+         "--port", "8080"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    log.info(f"VS-API PID: {vsapi_proc.pid}")
 
     # === Step 11: Begin event dispatch ===
     log.info("Step 11: Begin event dispatch")
@@ -332,8 +344,10 @@ def deploy(session_path: str) -> None:
         "data_dir": str(data_dir),
         "timeline": str(timeline_path),
         "mi_pid": mi_proc.pid,
+        "vsapi_pid": vsapi_proc.pid,
         "orchestrator_pid": to_proc.pid,
         "session_config": session_path,
+        "db_path": mi_db,
     }
     state_file = data_dir / "session-state.json"
     state_file.write_text(json.dumps(session_state, indent=2))
@@ -341,7 +355,8 @@ def deploy(session_path: str) -> None:
     print(f"\nSession: {session_id}")
     print(f"Data directory: {data_dir}")
     print(f"Timeline: {timeline_path}")
-    print(f"Convergence stub PID: {mi_proc.pid}")
+    print(f"MI service PID: {mi_proc.pid}")
+    print(f"VS-API PID: {vsapi_proc.pid}")
     print(f"Orchestrator PID: {to_proc.pid}")
     print(f"Session state: {state_file}")
 

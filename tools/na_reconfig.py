@@ -1,6 +1,7 @@
-"""na-reconfig — push config changes to running pods.
+"""na-reconfig — push config changes to running pods and manage probe flows.
 
 PRD 13.10: re-render templates and push to targeted nodes.
+PRD line 822: flow management via --add-flow / --remove-flow.
 
 Usage:
   python -m tools.na_reconfig --session <path> --target all
@@ -10,6 +11,8 @@ Usage:
   python -m tools.na_reconfig --session <path> --target type:satellite
   python -m tools.na_reconfig --session <path> --target type:ground_station
   python -m tools.na_reconfig --session <path> --target all --set metric_type=wide
+  python -m tools.na_reconfig --session <path> --add-flow test1:gs-hawthorne:gs-frankfurt:udp:100:continuous
+  python -m tools.na_reconfig --session <path> --remove-flow test1
 """
 
 from __future__ import annotations
@@ -197,17 +200,106 @@ def _render_and_push(env, stack_config, node_id, vars):
         log.info(f"Reconfigured {node_id}")
 
 
+def _parse_flow_spec(spec: str) -> dict:
+    """Parse flow spec string: flow_id:src:dst:protocol:bandwidth_kbps:probe_type"""
+    parts = spec.split(":")
+    if len(parts) != 6:
+        raise ValueError(
+            f"Flow spec must be flow_id:src:dst:protocol:bandwidth_kbps:probe_type, got: {spec}"
+        )
+    return {
+        "flow_id": parts[0],
+        "src": parts[1],
+        "dst": parts[2],
+        "protocol": parts[3],
+        "bandwidth_kbps": float(parts[4]),
+        "probe_type": parts[5],
+    }
+
+
+def add_flow(session_path: str, flow_spec: str) -> None:
+    """Add a probe flow to a running session.
+
+    Configures the probe daemon on the source GS pod directly and
+    records the flow in the session database.
+    """
+    raw = yaml.safe_load(Path(session_path).read_text())
+    session = SessionConfig.model_validate(raw)
+    gs_file = GroundStationFile.model_validate(
+        yaml.safe_load(Path(session.ground_stations).read_text()),
+    )
+
+    spec = _parse_flow_spec(flow_spec)
+    from measurement.flow_manager import resolve_dst_ip, resolve_src_pod_ip
+    from measurement import probe_client
+
+    dst_ip = resolve_dst_ip(spec["dst"], gs_file, session)
+    src_pod_ip = resolve_src_pod_ip(spec["src"])
+    if src_pod_ip is None:
+        log.error(f"Cannot resolve pod IP for {spec['src']}")
+        sys.exit(1)
+
+    probe_client.configure_flow(
+        pod_ip=src_pod_ip,
+        flow_id=spec["flow_id"],
+        dst_ip=dst_ip,
+        protocol=spec["protocol"],
+        bandwidth_kbps=spec["bandwidth_kbps"],
+        probe_type=spec["probe_type"],
+    )
+    log.info(f"Added flow {spec['flow_id']}: {spec['src']} → {spec['dst']} ({dst_ip})")
+
+
+def remove_flow(session_path: str, flow_id: str) -> None:
+    """Remove a probe flow from a running session."""
+    raw = yaml.safe_load(Path(session_path).read_text())
+    session = SessionConfig.model_validate(raw)
+    gs_file = GroundStationFile.model_validate(
+        yaml.safe_load(Path(session.ground_stations).read_text()),
+    )
+
+    # We need to find which GS pod this flow runs on.
+    # Check all GS pods for the flow.
+    from measurement.flow_manager import resolve_src_pod_ip
+    from measurement import probe_client
+
+    for station in gs_file.stations:
+        gs_id = f"gs-{station.name}"
+        pod_ip = resolve_src_pod_ip(gs_id)
+        if pod_ip is None:
+            continue
+        try:
+            probe_client.delete_flow(pod_ip, flow_id)
+            log.info(f"Removed flow {flow_id} from {gs_id}")
+            return
+        except Exception:
+            continue
+
+    log.warning(f"Flow {flow_id} not found on any GS pod")
+
+
 def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc reconfiguration tool")
     parser.add_argument("--session", required=True)
-    parser.add_argument("--target", required=True,
+    parser.add_argument("--target",
                         help="Target: all, plane:N, node:ID, area:N, type:satellite|ground_station")
     parser.add_argument("--set", nargs="*", dest="set_args",
                         help="Override variables: key=value")
     parser.add_argument("--vars-file", help="YAML file with override variables")
+    parser.add_argument("--add-flow",
+                        help="Add probe flow: flow_id:src:dst:protocol:bandwidth_kbps:probe_type")
+    parser.add_argument("--remove-flow", help="Remove probe flow by flow_id")
     args = parser.parse_args()
-    reconfig(args.session, args.target, args.set_args, args.vars_file)
+
+    if args.add_flow:
+        add_flow(args.session, args.add_flow)
+    elif args.remove_flow:
+        remove_flow(args.session, args.remove_flow)
+    elif args.target:
+        reconfig(args.session, args.target, args.set_args, args.vars_file)
+    else:
+        parser.error("One of --target, --add-flow, or --remove-flow is required")
 
 
 if __name__ == "__main__":

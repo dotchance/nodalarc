@@ -99,7 +99,10 @@ export function updateGroundStations(
         font-weight: bold;
         pointer-events: none;
         white-space: nowrap;
-        text-shadow: 0 0 6px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9);
+        text-shadow: 0 0 6px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
+        background: rgba(13, 13, 26, 0.6);
+        padding: 1px 4px;
+        border-radius: 2px;
       `;
       labelContainer.appendChild(label);
 

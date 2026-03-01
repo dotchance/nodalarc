@@ -174,11 +174,11 @@ def disable_ipv6_autoconfig(pid: int, ifname: str) -> None:
 def deterministic_mac(node_id: str, ifname: str) -> str:
     """Derive a deterministic locally-administered unicast MAC address.
 
-    Format: 02:na:XX:XX:XX:XX where XX bytes come from SHA-256 of
+    Format: 02:XX:XX:XX:XX:XX where XX bytes come from SHA-256 of
     node_id + ifname. The 02 prefix sets the locally-administered bit.
     """
     digest = hashlib.sha256(f"{node_id}:{ifname}".encode()).digest()
-    return f"02:na:{digest[0]:02x}:{digest[1]:02x}:{digest[2]:02x}:{digest[3]:02x}"
+    return f"02:{digest[0]:02x}:{digest[1]:02x}:{digest[2]:02x}:{digest[3]:02x}:{digest[4]:02x}"
 
 
 def configure_interface(pid: int, ifname: str, node_id: str) -> None:

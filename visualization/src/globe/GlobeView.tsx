@@ -9,7 +9,7 @@ import {
   CAMERA_MIN_DISTANCE,
   CAMERA_MAX_DISTANCE,
 } from "../config";
-import { createEarth, createAtmosphere, createLights } from "./earth";
+import { createEarth, createAtmosphere, createStarfield, createLights } from "./earth";
 import { updateSatellites, animateSatellites, recolorAllSatellites } from "./satellites";
 import { updateGroundStations, updateGSLabels } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
@@ -17,6 +17,7 @@ import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
 import { updateGroundTracks } from "./groundTracks";
 import { updateOrbitalTrails } from "./orbitalTrails";
 import { setupRaycaster } from "./raycaster";
+import { updateSelection, animateSelection } from "./selection";
 import type { StateSnapshot, Selection, ColorMode } from "../types";
 
 interface GlobeViewProps {
@@ -91,6 +92,7 @@ export function GlobeView({
     controls.maxDistance = CAMERA_MAX_DISTANCE;
     controlsRef.current = controls;
 
+    createStarfield(scene);
     createEarth(scene);
     createAtmosphere(scene);
     createLights(scene);
@@ -123,6 +125,8 @@ export function GlobeView({
       animateLinks();
       animateFlowPaths();
       updateOrbitalTrails(scene);
+      updateSelection(selectionRef.current, scene, camera);
+      animateSelection(camera);
       controls.update();
       updateGSLabels(camera, labelContainer);
       renderer.render(scene, camera);

@@ -104,12 +104,12 @@ export function animateSatellites(dt: number): void {
 
 function getSatColor(node: NodeState, mode: ColorMode): number {
   if (mode === "area" && node.routing_area) {
-    return AREA_COLORS[node.routing_area] ?? 0x888888;
+    return AREA_COLORS[node.routing_area] ?? 0xaabbcc;
   }
   if (mode === "plane" && node.plane != null) {
-    return PLANE_COLORS[node.plane % PLANE_COLORS.length] ?? 0x888888;
+    return PLANE_COLORS[node.plane % PLANE_COLORS.length] ?? 0xaabbcc;
   }
-  return 0x888888;
+  return 0xccddee;
 }
 
 function updateSatColor(entry: SatelliteEntry, mode: ColorMode): void {

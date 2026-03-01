@@ -8,11 +8,11 @@ export const WS_URL = import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_ho
 export const REST_URL = import.meta.env.VITE_VSAPI_REST_URL as string || `http://${_host}:8080`;
 
 /** Satellite sphere radius in scene units */
-export const SAT_RADIUS = 0.3;
-export const SAT_SEGMENTS = 8;
+export const SAT_RADIUS = 0.6;
+export const SAT_SEGMENTS = 12;
 
 /** Ground station sprite size */
-export const GS_SIZE = 1.2;
+export const GS_SIZE = 1.6;
 
 /** Camera defaults */
 export const CAMERA_FOV = 45;
@@ -20,17 +20,17 @@ export const CAMERA_DISTANCE = EARTH_RADIUS * 2.5;
 export const CAMERA_MIN_DISTANCE = EARTH_RADIUS * 1.05;
 export const CAMERA_MAX_DISTANCE = EARTH_RADIUS * 6;
 
-/** Link colors */
-export const LINK_ISL_COLOR = 0x44cc66;
-export const LINK_GROUND_COLOR = 0x00ccff;
+/** Link colors (dimmer so they don't overpower the globe) */
+export const LINK_ISL_COLOR = 0x44aa66;
+export const LINK_GROUND_COLOR = 0x00bbcc;
 export const LINK_FAIL_COLOR = 0xff3333;
 export const LINK_INACTIVE_COLOR = 0x333333;
 export const LINK_FLOW_COLOR = 0xff8800;
 
 /** Link widths (px) */
-export const LINK_ISL_WIDTH = 1.5;
-export const LINK_GROUND_WIDTH = 2;
-export const LINK_FLOW_WIDTH = 4;
+export const LINK_ISL_WIDTH = 1.0;
+export const LINK_GROUND_WIDTH = 1.5;
+export const LINK_FLOW_WIDTH = 3;
 
 /** Area colors (for routing area coloring mode) */
 export const AREA_COLORS: Record<string, number> = {

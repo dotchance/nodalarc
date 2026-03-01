@@ -126,10 +126,13 @@ export function updateLinks(
         color,
         linewidth: width,
         resolution,
+        transparent: true,
+        opacity: ground ? 0.6 : 0.35,
         dashed: ground,
         dashScale: ground ? 4 : 1,
         dashSize: ground ? 0.5 : 1,
         gapSize: ground ? 0.3 : 0,
+        depthWrite: false,
       });
 
       const line = new Line2(geometry, material);

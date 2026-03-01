@@ -5,14 +5,14 @@ import type { ColorMode } from "../types";
 
 /** Get hex color for a routing area string. */
 export function areaColor(area: string | null): number {
-  if (!area) return 0x888888;
-  return AREA_COLORS[area] ?? 0x888888;
+  if (!area) return 0xaabbcc;
+  return AREA_COLORS[area] ?? 0xaabbcc;
 }
 
 /** Get hex color for an orbital plane index. */
 export function planeColor(plane: number | null): number {
-  if (plane == null) return 0x888888;
-  return PLANE_COLORS[plane % PLANE_COLORS.length] ?? 0x888888;
+  if (plane == null) return 0xaabbcc;
+  return PLANE_COLORS[plane % PLANE_COLORS.length] ?? 0xaabbcc;
 }
 
 /** Get CSS color string for a routing area. */

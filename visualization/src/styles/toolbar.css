@@ -6,6 +6,8 @@
   flex-direction: column;
   gap: 2px;
   background: var(--bg-toolbar);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px;

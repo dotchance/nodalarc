@@ -95,10 +95,11 @@ export function updateGroundStations(
       label.style.cssText = `
         position: absolute;
         color: #00d4aa;
-        font-size: 10px;
+        font-size: 11px;
+        font-weight: bold;
         pointer-events: none;
         white-space: nowrap;
-        text-shadow: 0 0 4px rgba(0,0,0,0.8);
+        text-shadow: 0 0 6px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.9);
       `;
       labelContainer.appendChild(label);
 

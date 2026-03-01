@@ -15,6 +15,7 @@ import { updateGroundStations, updateGSLabels } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
 import { updateGroundTracks } from "./groundTracks";
+import { updateOrbitalTrails } from "./orbitalTrails";
 import { setupRaycaster } from "./raycaster";
 import type { StateSnapshot, Selection, ColorMode } from "../types";
 
@@ -121,6 +122,7 @@ export function GlobeView({
       animateSatellites(dt);
       animateLinks();
       animateFlowPaths();
+      updateOrbitalTrails(scene);
       controls.update();
       updateGSLabels(camera, labelContainer);
       renderer.render(scene, camera);

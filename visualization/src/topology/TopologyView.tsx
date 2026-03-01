@@ -49,18 +49,31 @@ export function TopologyView({ snapshot, selection, onSelect }: TopologyViewProp
       : null;
     drawLinks(ctx, layout.links, nodeMap, flowPath);
 
-    // Draw nodes
-    // Determine isolated nodes (no active links)
+    // Determine isolated nodes (no active links) and ABR nodes (links in multiple areas)
     const connectedNodes = new Set<string>();
+    const nodeAreas = new Map<string, Set<string>>();
     for (const l of layout.links) {
       connectedNodes.add(l.nodeA);
       connectedNodes.add(l.nodeB);
+      // Track areas each node has links to
+      const areaA = nodeMap.get(l.nodeA)?.area;
+      const areaB = nodeMap.get(l.nodeB)?.area;
+      if (areaA && areaB) {
+        if (!nodeAreas.has(l.nodeA)) nodeAreas.set(l.nodeA, new Set());
+        if (!nodeAreas.has(l.nodeB)) nodeAreas.set(l.nodeB, new Set());
+        nodeAreas.get(l.nodeA)!.add(areaA).add(areaB);
+        nodeAreas.get(l.nodeB)!.add(areaA).add(areaB);
+      }
+    }
+    const abrNodes = new Set<string>();
+    for (const [id, areas] of nodeAreas) {
+      if (areas.size > 1) abrNodes.add(id);
     }
 
     for (const node of layout.nodes) {
       const isSelected = selection?.id === node.id;
       const isIsolated = !connectedNodes.has(node.id);
-      drawNode(ctx, node, isSelected, isIsolated);
+      drawNode(ctx, node, isSelected, isIsolated, abrNodes.has(node.id));
     }
 
     ctx.restore();

@@ -1,6 +1,8 @@
 /** Link rendering using Line2 for pixel-width lines.
- *  Comm links get a gentle outward bow (lifts midpoint away from earth center)
- *  so they read as smooth curves rather than hard polygon edges.
+ *  Per VF spec:
+ *   - Intra-area ISL: solid, area green, 1px
+ *   - Cross-area ISL: dashed, white, 50% opacity, 1.5px
+ *   - Ground: solid, teal, 1.5px
  *  Fail-flash: red hold 5s → fade to dark → hidden.
  *  Link up: immediate appear + brightness pulse.
  */
@@ -12,9 +14,12 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import {
   LINK_ISL_COLOR,
   LINK_GROUND_COLOR,
+  LINK_CROSS_AREA_COLOR,
+  LINK_CROSS_AREA_OPACITY,
   LINK_FAIL_COLOR,
   LINK_INACTIVE_COLOR,
   LINK_ISL_WIDTH,
+  LINK_CROSS_AREA_WIDTH,
   LINK_GROUND_WIDTH,
   FAIL_HOLD_MS,
   FAIL_FADE_MS,
@@ -45,11 +50,9 @@ function bowedPositions(a: THREE.Vector3, b: THREE.Vector3): number[] {
 
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
-    // Linear interpolation between endpoints
     const x = a.x + (b.x - a.x) * t;
     const y = a.y + (b.y - a.y) * t;
     const z = a.z + (b.z - a.z) * t;
-    // Parabolic bow: peaks at midpoint (t=0.5), zero at endpoints
     const bow = 4 * t * (1 - t) * lift;
     positions.push(
       x + _outward.x * bow,
@@ -68,6 +71,7 @@ interface LinkEntry {
   nodeA: string;
   nodeB: string;
   isGround: boolean;
+  isCrossArea: boolean;
   /** Timestamp when link went down (for fail-flash). */
   failTime: number | null;
   /** Timestamp when link came up (for brightness pulse). */
@@ -93,6 +97,15 @@ function isGroundLink(nodeA: string, nodeB: string): boolean {
   return nodeA.startsWith("gs-") || nodeB.startsWith("gs-");
 }
 
+/** Check if a non-ground link crosses routing area boundaries. */
+function isCrossAreaLink(nodeA: string, nodeB: string): boolean {
+  const sats = getSatellites();
+  const areaA = sats.get(nodeA)?.nodeState.routing_area;
+  const areaB = sats.get(nodeB)?.nodeState.routing_area;
+  if (areaA == null || areaB == null) return false;
+  return areaA !== areaB;
+}
+
 
 export function updateLinks(
   linkStates: LinkState[],
@@ -106,6 +119,7 @@ export function updateLinks(
     const key = linkKey(ls.node_a, ls.node_b);
     active.add(key);
     const ground = isGroundLink(ls.node_a, ls.node_b);
+    const crossArea = !ground && isCrossAreaLink(ls.node_a, ls.node_b);
 
     const existing = links.get(key);
     if (existing) {
@@ -116,27 +130,67 @@ export function updateLinks(
         existing.line.visible = true;
       }
       existing.state = ls.state;
+      // Update cross-area status (areas can change over time)
+      if (existing.isCrossArea !== crossArea && !ground) {
+        existing.isCrossArea = crossArea;
+        if (crossArea) {
+          existing.material.color.setHex(LINK_CROSS_AREA_COLOR);
+          existing.material.opacity = LINK_CROSS_AREA_OPACITY;
+          existing.material.linewidth = LINK_CROSS_AREA_WIDTH;
+          existing.material.dashed = true;
+          existing.material.dashScale = 4;
+          existing.material.dashSize = 0.5;
+          existing.material.gapSize = 0.3;
+          existing.baseColor.setHex(LINK_CROSS_AREA_COLOR);
+        } else {
+          existing.material.color.setHex(LINK_ISL_COLOR);
+          existing.material.opacity = 0.35;
+          existing.material.linewidth = LINK_ISL_WIDTH;
+          existing.material.dashed = false;
+          existing.baseColor.setHex(LINK_ISL_COLOR);
+        }
+        existing.material.needsUpdate = true;
+      }
     } else {
       // New link
       const geometry = new LineGeometry();
       geometry.setPositions([0, 0, 0, 0, 0, 0]); // placeholder
-      const color = ground ? LINK_GROUND_COLOR : LINK_ISL_COLOR;
-      const width = ground ? LINK_GROUND_WIDTH : LINK_ISL_WIDTH;
+
+      let color: number;
+      let width: number;
+      let opacity: number;
+      let dashed = false;
+
+      if (ground) {
+        color = LINK_GROUND_COLOR;
+        width = LINK_GROUND_WIDTH;
+        opacity = 0.6;
+      } else if (crossArea) {
+        color = LINK_CROSS_AREA_COLOR;
+        width = LINK_CROSS_AREA_WIDTH;
+        opacity = LINK_CROSS_AREA_OPACITY;
+        dashed = true;
+      } else {
+        color = LINK_ISL_COLOR;
+        width = LINK_ISL_WIDTH;
+        opacity = 0.35;
+      }
+
       const material = new LineMaterial({
         color,
         linewidth: width,
         resolution,
         transparent: true,
-        opacity: ground ? 0.6 : 0.35,
-        dashed: ground,
-        dashScale: ground ? 4 : 1,
-        dashSize: ground ? 0.5 : 1,
-        gapSize: ground ? 0.3 : 0,
+        opacity,
+        dashed,
+        dashScale: dashed ? 4 : 1,
+        dashSize: dashed ? 0.5 : 1,
+        gapSize: dashed ? 0.3 : 0,
         depthWrite: false,
       });
 
       const line = new Line2(geometry, material);
-      line.computeLineDistances();
+      if (dashed) line.computeLineDistances();
       scene.add(line);
 
       links.set(key, {
@@ -147,6 +201,7 @@ export function updateLinks(
         nodeA: ls.node_a,
         nodeB: ls.node_b,
         isGround: ground,
+        isCrossArea: crossArea,
         failTime: null,
         upTime: now,
         baseColor: new THREE.Color(color),
@@ -181,7 +236,7 @@ export function animateLinks(): void {
 
     // Gently bowed curve so links read as smooth, not polygonal
     entry.geometry.setPositions(bowedPositions(posA, posB));
-    if (entry.isGround) entry.line.computeLineDistances();
+    if (entry.isCrossArea) entry.line.computeLineDistances();
 
     // Fail-flash animation
     if (entry.failTime !== null) {
@@ -200,7 +255,6 @@ export function animateLinks(): void {
       } else {
         // Hidden
         entry.line.visible = false;
-        // Clean up old failed links
         links.delete(key);
         continue;
       }

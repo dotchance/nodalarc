@@ -1,6 +1,6 @@
 /** GlobeView — Three.js globe with satellites, ground stations, and links. */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
@@ -8,17 +8,24 @@ import {
   CAMERA_DISTANCE,
   CAMERA_MIN_DISTANCE,
   CAMERA_MAX_DISTANCE,
+  EARTH_RADIUS,
 } from "../config";
 import { createEarth, createAtmosphere, createStarfield, createLights } from "./earth";
-import { updateSatellites, animateSatellites, recolorAllSatellites } from "./satellites";
-import { updateGroundStations, updateGSLabels } from "./groundStations";
+import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites } from "./satellites";
+import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
-import { updateGroundTracks } from "./groundTracks";
+import { updateGroundTracks, clearGroundTracks } from "./groundTracks";
 import { updateOrbitalTrails } from "./orbitalTrails";
 import { setupRaycaster } from "./raycaster";
 import { updateSelection, animateSelection } from "./selection";
 import type { StateSnapshot, Selection, ColorMode } from "../types";
+
+export interface GlobeActions {
+  flyToTopView: () => void;
+  setFollowTarget: (nodeId: string | null) => void;
+  captureScreenshot: () => void;
+}
 
 interface GlobeViewProps {
   snapshot: StateSnapshot | null;
@@ -27,6 +34,8 @@ interface GlobeViewProps {
   colorMode: ColorMode;
   showGroundTracks: boolean;
   showAllLinks: boolean;
+  actionsRef?: MutableRefObject<GlobeActions | null>;
+  followNode?: boolean;
 }
 
 export function GlobeView({
@@ -36,6 +45,8 @@ export function GlobeView({
   colorMode,
   showGroundTracks,
   showAllLinks,
+  actionsRef,
+  followNode: _followNode,
 }: GlobeViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
@@ -49,16 +60,22 @@ export function GlobeView({
   const selectionRef = useRef<Selection | null>(null);
   const showGroundTracksRef = useRef(showGroundTracks);
   const showAllLinksRef = useRef(showAllLinks);
+  const followTargetRef = useRef<string | null>(null);
 
   // Keep refs in sync
   snapshotRef.current = snapshot;
   colorModeRef.current = colorMode;
   selectionRef.current = selection;
-  showGroundTracksRef.current = showGroundTracks;
   showAllLinksRef.current = showAllLinks;
 
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+
+  // Clear ground tracks when toggled off
+  if (!showGroundTracks && showGroundTracksRef.current && sceneRef.current) {
+    clearGroundTracks(sceneRef.current);
+  }
+  showGroundTracksRef.current = showGroundTracks;
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -79,7 +96,7 @@ export function GlobeView({
     camera.position.set(0, CAMERA_DISTANCE * 0.5, CAMERA_DISTANCE * 0.87);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(renderer.domElement);
@@ -102,6 +119,30 @@ export function GlobeView({
       onSelectRef.current(sel);
     });
 
+    // Expose imperative actions
+    if (actionsRef) {
+      actionsRef.current = {
+        flyToTopView: () => {
+          // Fly camera to top-down view, altitude ~20000km equivalent
+          const topDist = EARTH_RADIUS * 4;
+          camera.position.set(0, topDist, 0);
+          camera.lookAt(0, 0, 0);
+          controls.target.set(0, 0, 0);
+          controls.update();
+        },
+        setFollowTarget: (nodeId: string | null) => {
+          followTargetRef.current = nodeId;
+        },
+        captureScreenshot: () => {
+          const dataUrl = renderer.domElement.toDataURL("image/png");
+          const link = document.createElement("a");
+          link.download = `nodalarc-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+          link.href = dataUrl;
+          link.click();
+        },
+      };
+    }
+
     // Animation loop
     let lastSnapshotRef: StateSnapshot | null = null;
 
@@ -118,6 +159,16 @@ export function GlobeView({
         updateFlowPaths(snap.traced_paths, scene);
         if (showGroundTracksRef.current) {
           updateGroundTracks(snap.nodes, scene);
+        }
+      }
+
+      // Follow selected node
+      if (followTargetRef.current) {
+        const sat = getSatellites().get(followTargetRef.current);
+        const gs = getGroundStations().get(followTargetRef.current);
+        const targetPos = sat?.mesh.position ?? gs?.sprite.position;
+        if (targetPos) {
+          controls.target.lerp(targetPos, 0.05);
         }
       }
 

@@ -11,6 +11,7 @@ export function drawNode(
   node: LayoutNode,
   selected: boolean,
   isolated: boolean,
+  isABR: boolean,
 ): void {
   const radius = node.type === "ground_station" ? GS_RADIUS : SAT_RADIUS;
   const color = node.type === "ground_station"
@@ -25,8 +26,18 @@ export function drawNode(
   ctx.fillStyle = color;
   ctx.fill();
 
-  // ABR diamond badge (if node is in multiple areas — placeholder detection)
-  // For now, we skip ABR detection
+  // ABR diamond badge — indicates Area Border Router
+  if (isABR) {
+    const d = radius * 0.5;
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.moveTo(node.x + radius + 3, node.y - radius);
+    ctx.lineTo(node.x + radius + 3 + d, node.y - radius + d);
+    ctx.lineTo(node.x + radius + 3, node.y - radius + 2 * d);
+    ctx.lineTo(node.x + radius + 3 - d, node.y - radius + d);
+    ctx.closePath();
+    ctx.fill();
+  }
 
   // Selection ring
   if (selected) {

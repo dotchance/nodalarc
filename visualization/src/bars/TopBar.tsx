@@ -1,5 +1,6 @@
 /** Top bar — session info, sim time, health indicator, mode selector. */
 
+import { useRef } from "react";
 import { formatTime, formatDuration } from "../translate";
 import type { StateSnapshot } from "../types";
 
@@ -10,7 +11,33 @@ interface TopBarProps {
   onToggleHistorical: () => void;
 }
 
+/** Compute compression factor from recent snapshots. */
+function useCompressionFactor(snapshot: StateSnapshot | null): string {
+  const historyRef = useRef<{ simMs: number; wallMs: number }[]>([]);
+
+  if (snapshot) {
+    const simMs = new Date(snapshot.sim_time).getTime();
+    const wallMs = Date.now();
+    const history = historyRef.current;
+    history.push({ simMs, wallMs });
+    if (history.length > 5) history.shift();
+
+    if (history.length >= 2) {
+      const first = history[0]!;
+      const last = history[history.length - 1]!;
+      const simDelta = last.simMs - first.simMs;
+      const wallDelta = last.wallMs - first.wallMs;
+      if (wallDelta > 0) {
+        const factor = simDelta / wallDelta;
+        return `${factor.toFixed(1)}x`;
+      }
+    }
+  }
+  return "--";
+}
+
 export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical }: TopBarProps) {
+  const compressionFactor = useCompressionFactor(snapshot);
   const healthStatus = snapshot?.network_health.status ?? "unknown";
   const healthColor =
     healthStatus === "converged"
@@ -38,6 +65,9 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
       </span>
       <span style={{ color: "var(--text-dim)" }}>
         Wall: {snapshot ? formatTime(snapshot.wall_time) : "--:--:--"}
+      </span>
+      <span style={{ color: "var(--text-dim)" }}>
+        {compressionFactor}
       </span>
       {snapshot?.network_health.last_convergence_ms != null && (
         <span style={{ color: "var(--text-dim)" }}>

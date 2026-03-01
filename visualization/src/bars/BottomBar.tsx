@@ -1,5 +1,6 @@
 /** Bottom bar — link/node counts, convergence, WS status. */
 
+import { WS_URL } from "../config";
 import type { StateSnapshot } from "../types";
 
 interface BottomBarProps {
@@ -37,15 +38,17 @@ export function BottomBar({ snapshot, connected }: BottomBarProps) {
       <span>Flows {flowCount}</span>
       <div style={{ flex: 1 }} />
       <span
+        title={WS_URL}
         style={{
           width: 6,
           height: 6,
           borderRadius: "50%",
           background: wsColor,
           display: "inline-block",
+          cursor: "help",
         }}
       />
-      <span style={{ color: wsColor }}>{wsLabel}</span>
+      <span style={{ color: wsColor }} title={WS_URL}>{wsLabel}</span>
     </div>
   );
 }

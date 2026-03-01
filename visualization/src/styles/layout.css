@@ -42,6 +42,21 @@
   grid-area: time-controls;
 }
 
+/* Connection lost banner — VF spec Section 14 */
+.connection-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 6px 16px;
+  background: rgba(26, 26, 46, 0.9);
+  color: var(--ws-reconnecting);
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+
 /* Split view: side by side globe + topology */
 .area-viewport--split {
   display: flex;

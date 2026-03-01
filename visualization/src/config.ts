@@ -20,43 +20,39 @@ export const CAMERA_DISTANCE = EARTH_RADIUS * 2.5;
 export const CAMERA_MIN_DISTANCE = EARTH_RADIUS * 1.05;
 export const CAMERA_MAX_DISTANCE = EARTH_RADIUS * 6;
 
-/** Link colors (dimmer so they don't overpower the globe) */
-export const LINK_ISL_COLOR = 0x44aa66;
-export const LINK_GROUND_COLOR = 0x00bbcc;
+/** Link colors — VF spec Section 10.2 */
+export const LINK_ISL_COLOR = 0x44cc66;
+export const LINK_GROUND_COLOR = 0x00ccff;
 export const LINK_FAIL_COLOR = 0xff3333;
 export const LINK_INACTIVE_COLOR = 0x333333;
 export const LINK_FLOW_COLOR = 0xff8800;
+export const LINK_FLOW_SECONDARY_COLOR = 0xff00aa;
 
-/** Cross-area ISL (dashed white per VF spec) */
-export const LINK_CROSS_AREA_COLOR = 0xffffff;
-export const LINK_CROSS_AREA_OPACITY = 0.5;
+/** Link widths (px) — VF spec Sections 7.3, 7.4, 7.5 */
+export const LINK_ISL_WIDTH = 1.5;
+export const LINK_GROUND_WIDTH = 2;
+export const LINK_FLOW_WIDTH = 4;
 
-/** Link widths (px) */
-export const LINK_ISL_WIDTH = 1.0;
-export const LINK_CROSS_AREA_WIDTH = 1.5;
-export const LINK_GROUND_WIDTH = 1.5;
-export const LINK_FLOW_WIDTH = 3;
-
-/** Area colors (for routing area coloring mode) */
+/** Area colors — VF spec Section 10.1 */
 export const AREA_COLORS: Record<string, number> = {
-  "49.0001": 0xff4444, // red
-  "49.0002": 0x44cc66, // green
-  "49.0003": 0x4488ff, // blue
-  "49.0004": 0xffaa00, // amber
-  "0.0.0.0": 0xff4444,
-  "0.0.0.1": 0x44cc66,
-  "0.0.0.2": 0x4488ff,
-  "0.0.0.3": 0xffaa00,
+  "49.0001": 0xcc4444, // deep red
+  "49.0002": 0x44aa44, // deep green
+  "49.0003": 0x4477bb, // deep blue
+  "49.0004": 0xcc8844, // deep amber
+  "0.0.0.0": 0xcc4444,
+  "0.0.0.1": 0x44aa44,
+  "0.0.0.2": 0x4477bb,
+  "0.0.0.3": 0xcc8844,
 };
 
-/** Plane colors (for orbital plane coloring mode) */
+/** Plane colors — VF spec Section 10.1 */
 export const PLANE_COLORS: number[] = [
-  0xff4444, // red
-  0x44cc66, // green
-  0x4488ff, // blue
-  0xffaa00, // amber
-  0xff44ff, // magenta
-  0x44ffff, // cyan
+  0xe06666, // red
+  0xe09c66, // orange
+  0xd4cc66, // yellow
+  0x66c266, // green
+  0x6699cc, // blue
+  0x9966cc, // purple
 ];
 
 /** Ground station color */

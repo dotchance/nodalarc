@@ -93,6 +93,11 @@ export function App() {
       />
 
       <div className={`area-viewport ${viewMode === "split" ? "area-viewport--split" : ""}`}>
+        {!connected && (
+          <div className="connection-banner">
+            Connection lost. Reconnecting...
+          </div>
+        )}
         {(viewMode === "globe" || viewMode === "split") && (
           <div className={viewMode === "split" ? "split-pane" : "full-pane"}>
             <GlobeView

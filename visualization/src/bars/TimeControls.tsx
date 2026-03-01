@@ -58,10 +58,19 @@ export function TimeControls({ onSeek, startTime, endTime }: TimeControlsProps) 
     seekTo(p);
   };
 
+  const stepSpeed = (direction: number) => {
+    const idx = SPEEDS.indexOf(speed);
+    const next = idx + direction;
+    if (next >= 0 && next < SPEEDS.length) setSpeed(SPEEDS[next]!);
+  };
+
   return (
     <div className="time-controls area-time-controls">
-      <button className="time-btn" onClick={() => seekTo(progress - 300000 / duration)} title="-5min">
+      <button className="time-btn" onClick={() => seekTo(progress - 300000 / duration)} title="Skip back 5min">
         ⏮
+      </button>
+      <button className="time-btn" onClick={() => stepSpeed(-1)} title="Slower">
+        ◀
       </button>
       <button
         className={`time-btn ${playing ? "time-btn--active" : ""}`}
@@ -70,7 +79,10 @@ export function TimeControls({ onSeek, startTime, endTime }: TimeControlsProps) 
       >
         {playing ? "⏸" : "▶"}
       </button>
-      <button className="time-btn" onClick={() => seekTo(progress + 300000 / duration)} title="+5min">
+      <button className="time-btn" onClick={() => stepSpeed(1)} title="Faster">
+        ▶
+      </button>
+      <button className="time-btn" onClick={() => seekTo(progress + 300000 / duration)} title="Skip forward 5min">
         ⏭
       </button>
       <div className="time-scrubber" onClick={handleScrubberClick}>

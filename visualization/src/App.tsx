@@ -79,18 +79,16 @@ export function App() {
             onSelect={select}
           />
         )}
-        {viewMode !== "topology" && (
-          <Toolbar
-            viewMode={viewMode}
-            colorMode={colorMode}
-            showGroundTracks={showGroundTracks}
-            showAllLinks={showAllLinks}
-            onViewMode={setViewMode}
-            onColorMode={setColorMode}
-            onToggleGroundTracks={() => setShowGroundTracks((v) => !v)}
-            onToggleAllLinks={() => setShowAllLinks((v) => !v)}
-          />
-        )}
+        <Toolbar
+          viewMode={viewMode}
+          colorMode={colorMode}
+          showGroundTracks={showGroundTracks}
+          showAllLinks={showAllLinks}
+          onViewMode={setViewMode}
+          onColorMode={setColorMode}
+          onToggleGroundTracks={() => setShowGroundTracks((v) => !v)}
+          onToggleAllLinks={() => setShowAllLinks((v) => !v)}
+        />
       </div>
 
       <div className="area-panel">

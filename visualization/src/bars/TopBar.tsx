@@ -94,22 +94,42 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
         }}
         title={`Network: ${healthStatus}`}
       />
-      <span style={{ color: "var(--text-secondary)" }}>{healthStatus}</span>
+      <span style={{ color: "var(--text-secondary)" }}>
+        {healthStatus}
+        {healthStatus === "converging" && snapshot?.network_health.converging_since_ms != null && (
+          <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>
+            ({formatDuration(snapshot.network_health.converging_since_ms)})
+          </span>
+        )}
+      </span>
       <div style={{ flex: 1 }} />
-      <button
-        onClick={onToggleHistorical}
-        style={{
-          padding: "3px 10px",
-          borderRadius: 4,
-          border: "1px solid var(--border)",
-          background: historicalMode ? "var(--accent-blue)" : "transparent",
-          color: historicalMode ? "var(--bg-main)" : "var(--text-secondary)",
-          fontSize: 11,
-          fontWeight: 600,
-        }}
-      >
-        {historicalMode ? "Historical" : "Live"}
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            background: historicalMode ? "var(--ws-reconnecting)" : "var(--ws-connected)",
+            display: "inline-block",
+          }}
+        />
+        <select
+          value={historicalMode ? "historical" : "live"}
+          onChange={() => onToggleHistorical()}
+          style={{
+            padding: "2px 6px",
+            borderRadius: 4,
+            border: "1px solid var(--border)",
+            background: "transparent",
+            color: "var(--text-secondary)",
+            fontSize: 11,
+            fontWeight: 600,
+          }}
+        >
+          <option value="live">Live</option>
+          <option value="historical">Historical</option>
+        </select>
+      </div>
     </div>
   );
 }

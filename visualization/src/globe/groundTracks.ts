@@ -3,17 +3,21 @@
  */
 
 import * as THREE from "three";
-import { EARTH_RADIUS } from "../config";
+import { EARTH_RADIUS, AREA_COLORS, getPlaneColor } from "../config";
 import { geoToWorld, velocityToScene } from "./geo";
 import type { NodeState } from "../types";
 
 const trackLines = new Map<string, THREE.Line>();
-const trackMaterial = new THREE.LineBasicMaterial({
-  color: 0x4488ff,
-  transparent: true,
-  opacity: 0.15,
-  depthWrite: false,
-});
+
+function getTrackColor(node: NodeState): number {
+  if (node.routing_area && AREA_COLORS[node.routing_area]) {
+    return AREA_COLORS[node.routing_area]!;
+  }
+  if (node.plane != null) {
+    return getPlaneColor(node.plane);
+  }
+  return 0x4488ff;
+}
 
 /** Surface offset (scene units) to avoid z-fighting with earth sphere. */
 const SURFACE_OFFSET = EARTH_RADIUS * 1.002;
@@ -58,7 +62,13 @@ export function updateGroundTracks(nodes: NodeState[], scene: THREE.Scene): void
     if (points.length < 2) continue;
 
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const line = new THREE.Line(geometry, trackMaterial);
+    const material = new THREE.LineBasicMaterial({
+      color: getTrackColor(sat),
+      transparent: true,
+      opacity: 0.15,
+      depthWrite: false,
+    });
+    const line = new THREE.Line(geometry, material);
     scene.add(line);
     trackLines.set(sat.node_id, line);
   }

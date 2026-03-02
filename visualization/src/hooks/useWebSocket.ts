@@ -17,6 +17,7 @@ export function useWebSocket(): WebSocketState {
   const wsRef = useRef<WebSocket | null>(null);
   const retriesRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const everConnectedRef = useRef(false);
 
   const connect = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
@@ -27,6 +28,7 @@ export function useWebSocket(): WebSocketState {
     ws.onopen = () => {
       setConnected(true);
       setHasEverConnected(true);
+      everConnectedRef.current = true;
       retriesRef.current = 0;
     };
 
@@ -42,7 +44,11 @@ export function useWebSocket(): WebSocketState {
     ws.onclose = () => {
       setConnected(false);
       wsRef.current = null;
-      scheduleReconnect();
+      // Only auto-retry after having connected at least once (VF spec Section 14).
+      // On initial startup failure, show error screen with manual Retry button.
+      if (everConnectedRef.current) {
+        scheduleReconnect();
+      }
     };
 
     ws.onerror = () => {

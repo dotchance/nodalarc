@@ -135,7 +135,22 @@ export function GlobeView({
           followTargetRef.current = nodeId;
         },
         captureScreenshot: () => {
-          const dataUrl = renderer.domElement.toDataURL("image/png");
+          // Draw timestamp watermark on the canvas
+          const ctx2d = document.createElement("canvas");
+          const w = renderer.domElement.width;
+          const h = renderer.domElement.height;
+          ctx2d.width = w;
+          ctx2d.height = h;
+          const ctx = ctx2d.getContext("2d")!;
+          ctx.drawImage(renderer.domElement, 0, 0);
+          const now = new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC";
+          const label = `Nodal Arc — ${now}`;
+          ctx.font = `${Math.max(12, h * 0.015)}px monospace`;
+          ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+          ctx.textAlign = "right";
+          ctx.fillText(label, w - 12, h - 12);
+
+          const dataUrl = ctx2d.toDataURL("image/png");
           const link = document.createElement("a");
           link.download = `nodalarc-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
           link.href = dataUrl;

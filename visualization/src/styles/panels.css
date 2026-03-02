@@ -234,3 +234,18 @@
   border-top: 1px solid var(--border);
   margin: 4px 0;
 }
+
+/* Draggable panel divider */
+.panel-divider {
+  flex-shrink: 0;
+  height: 5px;
+  cursor: ns-resize;
+  background: var(--border);
+  margin: 2px 0;
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+
+.panel-divider:hover {
+  background: var(--accent-blue);
+}

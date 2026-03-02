@@ -54,6 +54,12 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
         <span className="detail-label">Area</span>
         <span className="detail-value">ground</span>
       </div>
+      {node.prefix && (
+        <div className="detail-row">
+          <span className="detail-label">Prefix</span>
+          <span className="detail-value">{node.prefix}</span>
+        </div>
+      )}
       <div className="detail-row">
         <span className="detail-label">Terminals</span>
         <span className="detail-value">

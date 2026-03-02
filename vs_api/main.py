@@ -112,6 +112,7 @@ def _update_position(event_data: dict) -> None:
                 "neighbor_count": node.get("neighbor_count", 0),
                 "isl_count": node.get("isl_count", 0),
                 "gnd_count": node.get("gnd_count", 0),
+                "prefix": node.get("prefix"),
             }
 
 

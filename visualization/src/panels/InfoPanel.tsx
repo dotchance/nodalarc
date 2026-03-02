@@ -1,5 +1,8 @@
-/** Right panel — switches display based on selection type. */
+/** Right panel — switches display based on selection type.
+ *  Includes a draggable divider between detail section and event log.
+ */
 
+import { useState, useRef, useEffect, useCallback } from "react";
 import { NetworkSummary } from "./NetworkSummary";
 import { SatelliteDetail } from "./SatelliteDetail";
 import { GroundStationDetail } from "./GroundStationDetail";
@@ -15,6 +18,31 @@ interface InfoPanelProps {
 }
 
 export function InfoPanel({ snapshot, selection, onSelect, onFlyTo }: InfoPanelProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [splitPct, setSplitPct] = useState(50); // percentage for detail section
+  const draggingRef = useRef(false);
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    draggingRef.current = true;
+    e.preventDefault();
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!draggingRef.current || !panelRef.current) return;
+      const rect = panelRef.current.getBoundingClientRect();
+      const pct = ((e.clientY - rect.top) / rect.height) * 100;
+      setSplitPct(Math.max(15, Math.min(85, pct)));
+    };
+    const onUp = () => { draggingRef.current = false; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
   if (!snapshot) {
     return (
       <div className="info-panel">
@@ -55,10 +83,17 @@ export function InfoPanel({ snapshot, selection, onSelect, onFlyTo }: InfoPanelP
   }
 
   return (
-    <div className="info-panel">
-      {detailSection}
-      <hr className="section-divider" />
-      <EventLog events={snapshot.recent_events} onSelect={onSelect} onFlyTo={onFlyTo} />
+    <div className="info-panel" ref={panelRef}>
+      <div style={{ flex: `0 0 ${splitPct}%`, overflow: "auto", minHeight: 0 }}>
+        {detailSection}
+      </div>
+      <div
+        className="panel-divider"
+        onMouseDown={handleDragStart}
+      />
+      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <EventLog events={snapshot.recent_events} onSelect={onSelect} onFlyTo={onFlyTo} />
+      </div>
     </div>
   );
 }

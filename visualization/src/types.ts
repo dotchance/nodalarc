@@ -17,6 +17,7 @@ export interface NodeState {
   neighbor_count: number;
   isl_count: number;
   gnd_count: number;
+  prefix: string | null;
 }
 
 export interface LinkState {

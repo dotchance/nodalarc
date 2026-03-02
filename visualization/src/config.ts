@@ -55,6 +55,19 @@ export const PLANE_COLORS: number[] = [
   0x9966cc, // purple
 ];
 
+/** Get plane color with lightness reduction for planes beyond the base palette. */
+export function getPlaneColor(plane: number): number {
+  const base = PLANE_COLORS[plane % PLANE_COLORS.length] ?? 0xaabbcc;
+  const cycle = Math.floor(plane / PLANE_COLORS.length);
+  if (cycle === 0) return base;
+  // Reduce lightness by 25% per cycle
+  const factor = Math.max(0.25, 1 - cycle * 0.25);
+  const r = Math.round(((base >> 16) & 0xff) * factor);
+  const g = Math.round(((base >> 8) & 0xff) * factor);
+  const b = Math.round((base & 0xff) * factor);
+  return (r << 16) | (g << 8) | b;
+}
+
 /** Ground station color */
 export const GS_COLOR = 0x00d4aa;
 

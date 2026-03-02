@@ -8,16 +8,31 @@ interface TimeControlsProps {
   startTime: string;
   endTime: string;
   events?: RecentEvent[];
+  externalPlaying?: boolean;
+  onPlayingChange?: (playing: boolean) => void;
 }
 
 const SPEEDS = [0.25, 0.5, 1, 2, 5, 10];
 
-export function TimeControls({ onSeek, startTime, endTime, events }: TimeControlsProps) {
-  const [playing, setPlaying] = useState(false);
+export function TimeControls({ onSeek, startTime, endTime, events, externalPlaying, onPlayingChange }: TimeControlsProps) {
+  const [internalPlaying, setInternalPlaying] = useState(false);
+  const playing = externalPlaying ?? internalPlaying;
+  const setPlaying = useCallback((val: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof val === "function" ? val(playing) : val;
+    setInternalPlaying(next);
+    onPlayingChange?.(next);
+  }, [playing, onPlayingChange]);
   const [speed, setSpeed] = useState(1);
   const [progress, setProgress] = useState(0); // 0-1
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const heatmapCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Sync external playing state
+  useEffect(() => {
+    if (externalPlaying !== undefined && externalPlaying !== internalPlaying) {
+      setInternalPlaying(externalPlaying);
+    }
+  }, [externalPlaying]);
 
   const start = new Date(startTime).getTime();
   const end = new Date(endTime).getTime();
@@ -97,11 +112,35 @@ export function TimeControls({ onSeek, startTime, endTime, events }: TimeControl
     }
   }, [events, start, duration]);
 
-  const handleScrubberClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const p = (e.clientX - rect.left) / rect.width;
+  const scrubberRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
+
+  const scrubFromEvent = (clientX: number) => {
+    const el = scrubberRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const p = (clientX - rect.left) / rect.width;
     seekTo(p);
   };
+
+  const handleScrubberDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    draggingRef.current = true;
+    scrubFromEvent(e.clientX);
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (draggingRef.current) scrubFromEvent(e.clientX);
+    };
+    const onUp = () => { draggingRef.current = false; };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [seekTo]);
 
   const stepSpeed = (direction: number) => {
     const idx = SPEEDS.indexOf(speed);
@@ -130,7 +169,7 @@ export function TimeControls({ onSeek, startTime, endTime, events }: TimeControl
       <button className="time-btn" onClick={() => seekTo(progress + 300000 / duration)} title="Skip forward 5min">
         ⏭
       </button>
-      <div className="time-scrubber" onClick={handleScrubberClick}>
+      <div className="time-scrubber" ref={scrubberRef} onMouseDown={handleScrubberDown}>
         <canvas ref={heatmapCanvasRef} className="time-scrubber-heatmap" />
         <div className="time-scrubber-track" />
         <div className="time-scrubber-fill" style={{ width: `${progress * 100}%` }} />

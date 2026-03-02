@@ -2,7 +2,7 @@
 
 import { useRef, useEffect, useState } from "react";
 import { EventFilter } from "./EventFilter";
-import { formatTime } from "../translate";
+import { formatTimeShort } from "../translate";
 import type { RecentEvent, Selection } from "../types";
 
 interface EventLogProps {
@@ -119,7 +119,7 @@ export function EventLog({ events, onSelect, onFlyTo }: EventLogProps) {
             key={i}
             onClick={() => handleEventClick(e)}
           >
-            <span className="event-time">{formatTime(e.sim_time)}</span>
+            <span className="event-time">{formatTimeShort(e.sim_time)}</span>
             <span className={`event-type ${eventColorClass(e.event_type)}`}>
               {abbreviateType(e.event_type)}
             </span>

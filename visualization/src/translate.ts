@@ -39,8 +39,18 @@ export function formatDuration(ms: number): string {
   return `${(ms / 60000).toFixed(1)}m`;
 }
 
-/** Format ISO datetime string to compact time. */
+/** Format ISO datetime string to full YYYY-MM-DD HH:MM:SS UTC. */
 export function formatTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toISOString().replace("T", " ").substring(0, 19) + " UTC";
+  } catch {
+    return iso;
+  }
+}
+
+/** Format ISO datetime string to compact HH:MM:SS (for event log). */
+export function formatTimeShort(iso: string): string {
   try {
     const d = new Date(iso);
     return d.toISOString().substring(11, 19);

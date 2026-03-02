@@ -1,6 +1,6 @@
 default_terminals:
   - type: optical
-    count: 2
+    count: 1
     bandwidth_mbps: 1000
     tracking_capacity: 1
 default_min_elevation_deg: 25

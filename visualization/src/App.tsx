@@ -33,6 +33,8 @@ export function App() {
   const [showAllLinks, setShowAllLinks] = useState(true);
   const [followNode, setFollowNode] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const [historicalPlaying, setHistoricalPlaying] = useState(false);
+  const playingRef = useRef(historicalPlaying);
 
   // Track window width for split view gate
   useEffect(() => {
@@ -87,11 +89,18 @@ export function App() {
       onToggleGroundTracks: () => setShowGroundTracks((v) => !v),
       onToggleAllLinks: () => setShowAllLinks((v) => !v),
       onToggleHistorical: toggleHistorical,
-      onPlayPause: () => {}, // Handled by TimeControls
+      onPlayPause: () => {
+        if (historicalMode) {
+          setHistoricalPlaying((prev) => {
+            playingRef.current = !prev;
+            return !prev;
+          });
+        }
+      },
       onFollowNode: handleFollowNode,
       onTopView: handleTopView,
     }),
-    [clearSelection, toggleView, toggleHistorical, handleFollowNode, handleTopView],
+    [clearSelection, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode],
   );
 
   useKeyboard(keyboardActions);
@@ -142,6 +151,7 @@ export function App() {
               snapshot={snapshot}
               selection={selection}
               onSelect={select}
+              onFlyTo={handleFlyToNode}
             />
           </div>
         )}
@@ -172,6 +182,8 @@ export function App() {
           startTime={snapshot?.sim_time ?? new Date().toISOString()}
           endTime={new Date().toISOString()}
           events={snapshot?.recent_events}
+          externalPlaying={historicalPlaying}
+          onPlayingChange={setHistoricalPlaying}
         />
       )}
 

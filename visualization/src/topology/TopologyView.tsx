@@ -11,13 +11,15 @@ interface TopologyViewProps {
   snapshot: StateSnapshot | null;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
+  onFlyTo?: (nodeId: string) => void;
 }
 
-export function TopologyView({ snapshot, selection, onSelect }: TopologyViewProps) {
+export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: TopologyViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const transformRef = useRef<ViewTransform>({ offsetX: 0, offsetY: 0, scale: 1 });
   const animFrameRef = useRef<number>(0);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const dashOffsetRef = useRef(0);
   const [tooltipContent, setTooltipContent] = useState<string | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
@@ -46,11 +48,14 @@ export function TopologyView({ snapshot, selection, onSelect }: TopologyViewProp
     // Build node map for link drawing
     const nodeMap = new Map(layout.nodes.map((n) => [n.id, n]));
 
+    // Animate flow path dash
+    dashOffsetRef.current = (dashOffsetRef.current + 0.5) % 18;
+
     // Draw links first (below nodes)
     const flowPath = snapshot.traced_paths.length > 0
       ? snapshot.traced_paths[0]!.hops
       : null;
-    drawLinks(ctx, layout.links, nodeMap, flowPath);
+    drawLinks(ctx, layout.links, nodeMap, flowPath, dashOffsetRef.current);
 
     // Determine isolated nodes (no active links) and ABR nodes (links in multiple areas)
     const connectedNodes = new Set<string>();
@@ -110,6 +115,7 @@ export function TopologyView({ snapshot, selection, onSelect }: TopologyViewProp
             type: hitNode.type === "ground_station" ? "ground_station" : "satellite",
             id: hitNode.id,
           });
+          onFlyTo?.(hitNode.id);
           return;
         }
 
@@ -145,8 +151,12 @@ export function TopologyView({ snapshot, selection, onSelect }: TopologyViewProp
               `${hitNode.id}: ${nodeState.isl_count} ISLs, ${nodeState.gnd_count} GND, Area ${nodeState.routing_area ?? "?"}`,
             );
           } else if (nodeState) {
+            const prefix = nodeState.prefix ? `, ${nodeState.prefix}` : "";
+            const activeLinks = snapshot.links.filter(
+              (l) => (l.node_a === hitNode.id || l.node_b === hitNode.id) && l.state === "active",
+            ).length;
             setTooltipContent(
-              `${hitNode.id}: ${nodeState.lat_deg.toFixed(1)}, ${nodeState.lon_deg.toFixed(1)}`,
+              `${hitNode.id}: ${activeLinks} active links${prefix}`,
             );
           }
           return;

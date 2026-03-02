@@ -7,7 +7,7 @@
  */
 
 import * as THREE from "three";
-import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, PLANE_COLORS, EARTH_RADIUS, KM_PER_UNIT } from "../config";
+import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor, EARTH_RADIUS, KM_PER_UNIT } from "../config";
 import { geoToWorld, velocityToScene } from "./geo";
 import type { NodeState, ColorMode } from "../types";
 
@@ -147,7 +147,7 @@ function getSatColor(node: NodeState, mode: ColorMode): number {
     return AREA_COLORS[node.routing_area] ?? 0xaabbcc;
   }
   if (mode === "plane" && node.plane != null) {
-    return PLANE_COLORS[node.plane % PLANE_COLORS.length] ?? 0xaabbcc;
+    return getPlaneColor(node.plane);
   }
   return 0xccddee;
 }

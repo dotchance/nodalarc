@@ -52,6 +52,7 @@ export function drawLinks(
   links: LayoutLink[],
   nodeMap: Map<string, LayoutNode>,
   flowPath: string[] | null,
+  dashOffset: number = 0,
 ): void {
   // Draw regular links
   for (const link of links) {
@@ -87,11 +88,12 @@ export function drawLinks(
     ctx.setLineDash([]);
   }
 
-  // Draw flow path overlay (if any)
+  // Draw flow path overlay with animated dash
   if (flowPath && flowPath.length >= 2) {
     ctx.strokeStyle = "#ff8800";
     ctx.lineWidth = 3;
     ctx.setLineDash([6, 3]);
+    ctx.lineDashOffset = -dashOffset;
 
     for (let i = 0; i < flowPath.length - 1; i++) {
       const a = nodeMap.get(flowPath[i]!);
@@ -105,5 +107,6 @@ export function drawLinks(
     }
 
     ctx.setLineDash([]);
+    ctx.lineDashOffset = 0;
   }
 }

@@ -27,6 +27,7 @@ class NodeState(BaseModel):
     neighbor_count: int
     isl_count: int
     gnd_count: int
+    prefix: str | None = None  # Ground station advertised prefix
 
 
 class LinkState(BaseModel):

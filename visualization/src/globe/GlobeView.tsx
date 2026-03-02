@@ -16,7 +16,7 @@ import { updateGroundStations, updateGSLabels, getGroundStations } from "./groun
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
 import { updateGroundTracks, clearGroundTracks } from "./groundTracks";
-import { updateOrbitalTrails } from "./orbitalTrails";
+import { updateOrbitalTrails, flushTrails } from "./orbitalTrails";
 import { setupRaycaster } from "./raycaster";
 import { updateSelection, animateSelection } from "./selection";
 import type { StateSnapshot, Selection, ColorMode } from "../types";
@@ -174,6 +174,12 @@ export function GlobeView({
 
     renderer.setAnimationLoop(() => {
       const dt = clockRef.current.getDelta();
+
+      // Tab was backgrounded — flush trail history to avoid ghost lines
+      if (dt > 1.0) {
+        flushTrails();
+      }
+
       const snap = snapshotRef.current;
 
       // Update entities when snapshot changes

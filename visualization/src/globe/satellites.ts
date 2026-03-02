@@ -122,11 +122,28 @@ export function updateSatellites(
   }
 }
 
+/** Max dt for dead-reckoning. Clamp so a background-tab gap doesn't
+ *  cause wild extrapolation — the next snapshot corrects position. */
+const MAX_DT = 0.1; // seconds
+
 export function animateSatellites(dt: number): void {
+  const clamped = Math.min(dt, MAX_DT);
+
+  // If tab was backgrounded (large gap), snap to snapshot truth
+  // then continue normal animation from there.
+  if (dt > 1.0) {
+    for (const entry of satellites.values()) {
+      entry.targetPosition.copy(entry.snapshotPosition);
+      entry.mesh.position.copy(entry.snapshotPosition);
+      entry.glow.position.copy(entry.snapshotPosition);
+    }
+    // Don't return — fall through so velocity still applies on this frame
+  }
+
   for (const entry of satellites.values()) {
     if (entry.velocity) {
       // Dead-reckoning: advance target by velocity
-      entry.targetPosition.addScaledVector(entry.velocity, dt);
+      entry.targetPosition.addScaledVector(entry.velocity, clamped);
     }
 
     // Gently steer dead-reckoned target toward snapshot truth

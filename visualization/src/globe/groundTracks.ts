@@ -31,8 +31,6 @@ export function updateGroundTracks(nodes: NodeState[], scene: THREE.Scene): void
   for (const sat of sats) {
     seen.add(sat.node_id);
 
-    if (trackLines.has(sat.node_id)) continue;
-
     // Get current position and velocity in scene coordinates
     const pos = geoToWorld(sat.lat_deg, sat.lon_deg, sat.alt_km);
     const vel = velocityToScene(
@@ -48,11 +46,9 @@ export function updateGroundTracks(nodes: NodeState[], scene: THREE.Scene): void
 
     for (let i = -steps / 2; i <= steps / 2; i++) {
       const t = i * dtPerStep;
-      // Extrapolate position in scene space
       const px = pos.x + vel.x * t;
       const py = pos.y + vel.y * t;
       const pz = pos.z + vel.z * t;
-      // Project onto earth surface (normalize to SURFACE_OFFSET radius)
       const len = Math.sqrt(px * px + py * py + pz * pz);
       if (len < 0.01) continue;
       const scale = SURFACE_OFFSET / len;
@@ -61,16 +57,23 @@ export function updateGroundTracks(nodes: NodeState[], scene: THREE.Scene): void
 
     if (points.length < 2) continue;
 
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = new THREE.LineBasicMaterial({
-      color: getTrackColor(sat),
-      transparent: true,
-      opacity: 0.15,
-      depthWrite: false,
-    });
-    const line = new THREE.Line(geometry, material);
-    scene.add(line);
-    trackLines.set(sat.node_id, line);
+    // Update existing track geometry in-place, or create new
+    const existing = trackLines.get(sat.node_id);
+    if (existing) {
+      existing.geometry.dispose();
+      existing.geometry = new THREE.BufferGeometry().setFromPoints(points);
+    } else {
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const material = new THREE.LineBasicMaterial({
+        color: getTrackColor(sat),
+        transparent: true,
+        opacity: 0.15,
+        depthWrite: false,
+      });
+      const line = new THREE.Line(geometry, material);
+      scene.add(line);
+      trackLines.set(sat.node_id, line);
+    }
   }
 
   // Remove tracks for missing satellites

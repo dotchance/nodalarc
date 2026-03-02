@@ -11,10 +11,12 @@ import math
 import pytest
 
 from ome.propagator import (
+    EARTH_ROTATION_RATE,
     GeoPosition,
     Vec3,
     distance_km,
     ecef_to_geodetic,
+    eci_to_ecef_velocity,
     elements_from_params,
     geodetic_to_ecef,
     orbital_period,
@@ -204,3 +206,54 @@ class TestMultipleSatellites:
         # Opposite sides: should be ~2 * (R + alt) = ~13842 km
         expected = 2 * (EARTH_RADIUS_KM + 550.0)
         assert abs(dist - expected) < 10.0
+
+
+class TestEcefVelocity:
+    """Verify ECEF velocity differs from ECI by Earth rotation contribution."""
+
+    def test_ecef_velocity_differs_from_eci(self):
+        """For equatorial orbit, ECEF speed differs from ECI by ~0.465 km/s."""
+        elements = elements_from_params(550.0, 0.0, 0.0, 0.0)
+        pos_eci, vel_eci = propagate_eci(elements, 0.0)
+        vel_ecef = eci_to_ecef_velocity(pos_eci, vel_eci, EPOCH)
+
+        eci_speed = math.sqrt(vel_eci.x**2 + vel_eci.y**2 + vel_eci.z**2)
+        ecef_speed = math.sqrt(vel_ecef.x**2 + vel_ecef.y**2 + vel_ecef.z**2)
+
+        # Earth surface rotation speed at equator: ~0.465 km/s
+        # ECEF speed should differ from ECI speed
+        assert abs(eci_speed - ecef_speed) > 0.3
+        assert abs(eci_speed - ecef_speed) < 0.6
+
+    def test_propagate_returns_ecef_velocity(self):
+        """propagate_keplerian now returns ECEF velocity, not ECI."""
+        elements = elements_from_params(550.0, 53.0, 0.0, 0.0)
+        pos_ecef, vel_ecef, geo = propagate_keplerian(elements, EPOCH, 0.0)
+        _, vel_eci = propagate_eci(elements, 0.0)
+
+        # Velocities should differ (ECEF != ECI)
+        diff = math.sqrt(
+            (vel_ecef.x - vel_eci.x)**2 +
+            (vel_ecef.y - vel_eci.y)**2 +
+            (vel_ecef.z - vel_eci.z)**2,
+        )
+        assert diff > 0.1  # Non-trivial difference
+
+    def test_velocity_predicts_next_position(self):
+        """pos(t+dt) ≈ pos(t) + vel(t)*dt for small dt."""
+        elements = elements_from_params(550.0, 53.0, 30.0, 45.0)
+        dt_step = 1.0  # 1 second
+
+        pos0, vel0, _ = propagate_keplerian(elements, EPOCH, 0.0)
+        pos1, _, _ = propagate_keplerian(elements, EPOCH, dt_step)
+
+        # Linear prediction
+        pred = Vec3(
+            pos0.x + vel0.x * dt_step,
+            pos0.y + vel0.y * dt_step,
+            pos0.z + vel0.z * dt_step,
+        )
+
+        # Prediction error should be small for 1s step
+        err = distance_km(pred, pos1)
+        assert err < 0.1  # Less than 100m error for 1s step

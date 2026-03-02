@@ -8,3 +8,16 @@
 .topology-view:active {
   cursor: grabbing;
 }
+
+.topo-tooltip {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--text-dim);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: monospace;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 100;
+}

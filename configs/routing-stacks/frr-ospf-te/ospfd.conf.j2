@@ -2,13 +2,13 @@ hostname {{ hostname }}
 log file /var/log/frr/ospfd.log informational
 
 router ospf
- ospf router-id {{ loopback_ipv4 }}
+ ospf router-id {{ ipv4_loopback }}
  mpls-te on
- mpls-te router-address {{ loopback_ipv4 }}
+ mpls-te router-address {{ ipv4_loopback }}
 {% set hello_interval = [1, 10 // compression_factor] | max %}
 {% set dead_interval = hello_interval * 4 %}
  timers throttle spf {{ [50, 200 // compression_factor] | max }} {{ [50, 200 // compression_factor] | max }} {{ [1000, 5000 // compression_factor] | max }}
- network {{ loopback_ipv4 }}/32 area {{ area_id }}
+ network {{ ipv4_loopback }}/32 area {{ area_id }}
 {% for iface_name, info in interface_info.items() %}
 {% if info.cross_area %}
  network 0.0.0.0/0 area 0.0.0.0

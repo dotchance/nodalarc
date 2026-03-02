@@ -33,6 +33,30 @@ class ConvergenceResult(BaseModel):
     packets_sent: int
     sim_time_start: datetime
     sim_time_end: datetime
+    wall_time_start: datetime
+    wall_time_end: datetime
+    triggering_link_event_id: int | None = None
+
+
+class TraceRequest(BaseModel):
+    """VS-API → MI: request a forwarding path trace between two nodes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    src_node: str
+    dst_node: str
+
+
+class TraceResponse(BaseModel):
+    """MI → VS-API: forwarding path trace result."""
+
+    model_config = ConfigDict(frozen=True)
+
+    src_node: str
+    dst_node: str
+    hops: list[str]
+    success: bool
+    error: str | None = None
 
 
 class ProbeResult(BaseModel):

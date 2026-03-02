@@ -237,8 +237,8 @@ def build_template_vars(
         node_neighbors = by_node.get(node_id, [])
         result["plane"] = plane
         result["slot"] = slot
-        result["loopback_ipv4"] = addressing.sat_ipv4(plane, slot)
-        result["loopback_ipv6"] = addressing.sat_ipv6(plane, slot)
+        result["ipv4_loopback"] = addressing.sat_ipv4(plane, slot)
+        result["ipv6_loopback"] = addressing.sat_ipv6(plane, slot)
         result["interface_info"] = _build_interface_info(
             node_neighbors, area_assignments, node_id, bandwidth,
             loopback_map=loopback_map,
@@ -253,8 +253,8 @@ def build_template_vars(
     elif node_type == "ground_station":
         result["gs_name"] = gs_name
         result["gs_index"] = gs_index
-        result["loopback_ipv4"] = addressing.gs_ipv4(gs_index)
-        result["loopback_ipv6"] = addressing.gs_ipv6(gs_index)
+        result["ipv4_loopback"] = addressing.gs_ipv4(gs_index)
+        result["ipv6_loopback"] = addressing.gs_ipv6(gs_index)
         result["gnd_interfaces"] = addressing.gnd_interfaces(gnd_count)
         result["isl_interfaces"] = []
         result["isl_count"] = 0

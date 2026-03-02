@@ -59,8 +59,8 @@ class TestFourNodeAssignment:
         by_node = neighbors_by_node(result)
         for node_id, assignments in by_node.items():
             link_types = {na.interface: na.link_type for na in assignments}
-            assert link_types["isl0"] == "intra"
-            assert link_types["isl1"] == "cross"
+            assert link_types["isl0"] == "intra_plane_isl"
+            assert link_types["isl1"] == "cross_plane_isl"
 
     def test_four_node_priority_ordering(self, four_node_config, addressing):
         result = assign_isl_neighbors(four_node_config, addressing)
@@ -90,7 +90,7 @@ class TestFourNodeAssignment:
         result = assign_isl_neighbors(four_node_config, addressing)
         by_node = neighbors_by_node(result)
         p00s00 = by_node["sat-P00S00"]
-        cross = next(na for na in p00s00 if na.link_type == "cross")
+        cross = next(na for na in p00s00 if na.link_type == "cross_plane_isl")
         assert cross.peer_node_id == "sat-P01S00"
 
 
@@ -230,14 +230,14 @@ class TestIslOverrides:
         p00s01 = by_node["sat-P00S01"]
         # 1 plane only → 1 unique intra peer, so only 1 assignment
         assert len(p00s01) == 1
-        assert p00s01[0].link_type == "intra"
+        assert p00s01[0].link_type == "intra_plane_isl"
 
 
 class TestFrozenResult:
     def test_frozenset_is_immutable(self, four_node_config, addressing):
         result = assign_isl_neighbors(four_node_config, addressing)
         with pytest.raises(AttributeError):
-            result.add(("fake", NeighborAssignment("isl0", "sat-P99S99", "intra", 0)))
+            result.add(("fake", NeighborAssignment("isl0", "sat-P99S99", "intra_plane_isl", 0)))
 
     def test_neighbor_assignment_is_namedtuple(self, four_node_config, addressing):
         result = assign_isl_neighbors(four_node_config, addressing)

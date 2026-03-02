@@ -199,7 +199,7 @@ def precompute_timeline(
 
                 pos_b, vel_b, geo_b = sat_positions[peer_id]
 
-                is_cross = na.link_type == "cross"
+                is_cross = na.link_type == "cross_plane_isl"
                 result = check_isl_visibility(
                     pos_a, vel_a, pos_b, vel_b,
                     max_range_km=max_range_km,

@@ -1,9 +1,9 @@
-/** TopologyView — HTML5 Canvas 2D topology diagram. */
+/** TopologyView — HTML5 Canvas 2D topology diagram with hover tooltips. */
 
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { computeLayout } from "./layout";
 import { drawNode, hitTestNode } from "./nodes";
-import { drawLinks } from "./topoLinks";
+import { drawLinks, hitTestLink } from "./topoLinks";
 import { setupInteraction, type ViewTransform } from "./interaction";
 import type { StateSnapshot, Selection } from "../types";
 
@@ -17,6 +17,9 @@ export function TopologyView({ snapshot, selection, onSelect }: TopologyViewProp
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const transformRef = useRef<ViewTransform>({ offsetX: 0, offsetY: 0, scale: 1 });
   const animFrameRef = useRef<number>(0);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [tooltipContent, setTooltipContent] = useState<string | null>(null);
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -86,7 +89,7 @@ export function TopologyView({ snapshot, selection, onSelect }: TopologyViewProp
     return () => cancelAnimationFrame(animFrameRef.current);
   }, [draw]);
 
-  // Setup pan/zoom interaction
+  // Setup pan/zoom/click/hover interaction
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -98,15 +101,79 @@ export function TopologyView({ snapshot, selection, onSelect }: TopologyViewProp
       (worldX, worldY) => {
         if (!snapshot) return;
         const layout = computeLayout(snapshot.nodes, snapshot.links);
-        const hit = hitTestNode(worldX, worldY, layout.nodes);
-        if (hit) {
+        const nodeMap = new Map(layout.nodes.map((n) => [n.id, n]));
+
+        // Test nodes first, then links
+        const hitNode = hitTestNode(worldX, worldY, layout.nodes);
+        if (hitNode) {
           onSelect({
-            type: hit.type === "ground_station" ? "ground_station" : "satellite",
-            id: hit.id,
+            type: hitNode.type === "ground_station" ? "ground_station" : "satellite",
+            id: hitNode.id,
           });
-        } else {
-          onSelect(null);
+          return;
         }
+
+        const hitLink = hitTestLink(worldX, worldY, layout.links, nodeMap);
+        if (hitLink) {
+          const key = `${hitLink.nodeA}:${hitLink.nodeB}`;
+          onSelect({ type: "link", id: key });
+          return;
+        }
+
+        onSelect(null);
+      },
+      // Hover callback
+      (worldX, worldY) => {
+        if (!snapshot) {
+          setTooltipContent(null);
+          return;
+        }
+        const layout = computeLayout(snapshot.nodes, snapshot.links);
+        const nodeMap = new Map(layout.nodes.map((n) => [n.id, n]));
+
+        const hitNode = hitTestNode(worldX, worldY, layout.nodes);
+        if (hitNode) {
+          const t = transformRef.current;
+          const rect = canvas.getBoundingClientRect();
+          setTooltipPos({
+            x: worldX * t.scale + t.offsetX + rect.left + 12,
+            y: worldY * t.scale + t.offsetY + rect.top - 8,
+          });
+          const nodeState = snapshot.nodes.find((n) => n.node_id === hitNode.id);
+          if (nodeState && nodeState.node_type === "satellite") {
+            setTooltipContent(
+              `${hitNode.id}: ${nodeState.isl_count} ISLs, ${nodeState.gnd_count} GND, Area ${nodeState.routing_area ?? "?"}`,
+            );
+          } else if (nodeState) {
+            setTooltipContent(
+              `${hitNode.id}: ${nodeState.lat_deg.toFixed(1)}, ${nodeState.lon_deg.toFixed(1)}`,
+            );
+          }
+          return;
+        }
+
+        const hitLink = hitTestLink(worldX, worldY, layout.links, nodeMap);
+        if (hitLink) {
+          const t = transformRef.current;
+          const rect = canvas.getBoundingClientRect();
+          setTooltipPos({
+            x: worldX * t.scale + t.offsetX + rect.left + 12,
+            y: worldY * t.scale + t.offsetY + rect.top - 8,
+          });
+          const linkState = snapshot.links.find(
+            (l) =>
+              (l.node_a === hitLink.nodeA && l.node_b === hitLink.nodeB) ||
+              (l.node_a === hitLink.nodeB && l.node_b === hitLink.nodeA),
+          );
+          if (linkState) {
+            setTooltipContent(
+              `${linkState.node_a} \u2194 ${linkState.node_b}: ${linkState.latency_ms.toFixed(1)}ms, ${linkState.state}`,
+            );
+          }
+          return;
+        }
+
+        setTooltipContent(null);
       },
     );
 
@@ -114,9 +181,24 @@ export function TopologyView({ snapshot, selection, onSelect }: TopologyViewProp
   }, [snapshot, onSelect]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="topology-view"
-    />
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <canvas
+        ref={canvasRef}
+        className="topology-view"
+      />
+      {tooltipContent && (
+        <div
+          ref={tooltipRef}
+          className="topo-tooltip"
+          style={{
+            position: "fixed",
+            left: tooltipPos.x,
+            top: tooltipPos.y,
+          }}
+        >
+          {tooltipContent}
+        </div>
+      )}
+    </div>
   );
 }

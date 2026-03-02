@@ -145,7 +145,7 @@ class NeighborAssignment(NamedTuple):
     """Immutable ISL neighbor assignment for one terminal."""
     interface: str       # "isl0", "isl1", etc.
     peer_node_id: str    # "sat-P03S08"
-    link_type: str       # "intra" or "cross"
+    link_type: str       # "intra_plane_isl", "cross_plane_isl", "ground_uplink", "ground_downlink"
     priority: int        # 0=intra-fwd, 1=intra-aft, 2=cross-right, 3=cross-left
 
 
@@ -237,7 +237,7 @@ def assign_isl_neighbors(
             candidates.append(NeighborAssignment(
                 interface="",  # filled below
                 peer_node_id=addressing.sat_id(p, fwd_slot),
-                link_type="intra",
+                link_type="intra_plane_isl",
                 priority=0,
             ))
 
@@ -246,7 +246,7 @@ def assign_isl_neighbors(
             candidates.append(NeighborAssignment(
                 interface="",
                 peer_node_id=addressing.sat_id(p, aft_slot),
-                link_type="intra",
+                link_type="intra_plane_isl",
                 priority=1,
             ))
 
@@ -256,7 +256,7 @@ def assign_isl_neighbors(
                 candidates.append(NeighborAssignment(
                     interface="",
                     peer_node_id=addressing.sat_id(right_plane, s),
-                    link_type="cross",
+                    link_type="cross_plane_isl",
                     priority=2,
                 ))
             elif wraps:
@@ -264,7 +264,7 @@ def assign_isl_neighbors(
                 candidates.append(NeighborAssignment(
                     interface="",
                     peer_node_id=addressing.sat_id(0, s),
-                    link_type="cross",
+                    link_type="cross_plane_isl",
                     priority=2,
                 ))
 
@@ -274,7 +274,7 @@ def assign_isl_neighbors(
                 candidates.append(NeighborAssignment(
                     interface="",
                     peer_node_id=addressing.sat_id(left_plane, s),
-                    link_type="cross",
+                    link_type="cross_plane_isl",
                     priority=3,
                 ))
             elif wraps:
@@ -282,7 +282,7 @@ def assign_isl_neighbors(
                 candidates.append(NeighborAssignment(
                     interface="",
                     peer_node_id=addressing.sat_id(plane_count - 1, s),
-                    link_type="cross",
+                    link_type="cross_plane_isl",
                     priority=3,
                 ))
 

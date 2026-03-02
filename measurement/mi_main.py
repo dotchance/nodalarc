@@ -35,9 +35,11 @@ from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.metrics import AdapterEvent, ConvergenceResult, ProbeResult
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
+from nodalarc.models.metrics import TraceRequest, TraceResponse
 from nodalarc.zmq_channels import (
     MI_CONVERGENCE_GATE_BIND,
     MI_EVENTS_BIND,
+    MI_TRACE_BIND,
     OME_EVENTS_CONNECT,
     TO_EVENTS_CONNECT,
     TOPIC_ADAPTER_EVENT,
@@ -136,7 +138,7 @@ class MIService:
             if pod["node_id"] and pod["role"] in ("satellite", "ground_station"):
                 try:
                     self._adapter.start(
-                        pod["node_id"], pod["pod_name"], self._namespace,
+                        pod["node_id"], pod["pod_ip"],
                     )
                 except Exception as exc:
                     log.warning(
@@ -267,6 +269,57 @@ class MIService:
             sock.close()
             ctx.term()
 
+    def _trace_loop(self) -> None:
+        """Run the trace REP socket — resolves forwarding paths."""
+        ctx = zmq.Context()
+        sock = ctx.socket(zmq.REP)
+        sock.bind(MI_TRACE_BIND)
+        log.info(f"Trace endpoint bound on {MI_TRACE_BIND}")
+
+        poller = zmq.Poller()
+        poller.register(sock, zmq.POLLIN)
+
+        try:
+            while self._running:
+                socks = dict(poller.poll(timeout=1000))
+                if sock in socks:
+                    raw = sock.recv()
+                    try:
+                        req = TraceRequest.model_validate_json(raw)
+                        resp = self._resolve_trace(req)
+                    except Exception as exc:
+                        log.warning(f"Trace request error: {exc}")
+                        resp = TraceResponse(
+                            src_node=req.src_node if 'req' in dir() else "",
+                            dst_node=req.dst_node if 'req' in dir() else "",
+                            hops=[], success=False,
+                            error=str(exc),
+                        )
+                    sock.send(resp.model_dump_json().encode())
+        except Exception as exc:
+            log.error(f"Trace loop error: {exc}")
+        finally:
+            sock.close()
+            ctx.term()
+
+    def _resolve_trace(self, req: TraceRequest) -> TraceResponse:
+        """Resolve a forwarding path trace between two nodes."""
+        try:
+            hops = self._adapter.trace_path(req.src_node, req.dst_node)
+            return TraceResponse(
+                src_node=req.src_node,
+                dst_node=req.dst_node,
+                hops=hops if hops else [],
+                success=bool(hops),
+            )
+        except Exception as exc:
+            return TraceResponse(
+                src_node=req.src_node,
+                dst_node=req.dst_node,
+                hops=[], success=False,
+                error=str(exc),
+            )
+
     def run(self) -> None:
         """Run the MI service — blocks until interrupted."""
         self._running = True
@@ -285,6 +338,14 @@ class MIService:
             name="mi-collector",
         )
         collector.start()
+
+        # Start trace thread
+        tracer = threading.Thread(
+            target=self._trace_loop,
+            daemon=True,
+            name="mi-trace",
+        )
+        tracer.start()
 
         # Run convergence gate on main thread
         try:

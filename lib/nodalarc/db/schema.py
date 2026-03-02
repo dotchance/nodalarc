@@ -14,27 +14,28 @@ CREATE TABLE IF NOT EXISTS link_events (
     event_type TEXT NOT NULL,
     node_a TEXT NOT NULL,
     node_b TEXT NOT NULL,
-    interface_a TEXT NOT NULL,
-    interface_b TEXT NOT NULL,
+    interface_a TEXT,
+    interface_b TEXT,
     latency_ms REAL,
     bandwidth_mbps REAL,
     range_km REAL,
-    reason TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    reason TEXT
 );
 """
 
 DDL_CONVERGENCE_EVENTS = """
 CREATE TABLE IF NOT EXISTS convergence_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id TEXT NOT NULL,
+    event_id TEXT NOT NULL UNIQUE,
+    sim_time_start TEXT NOT NULL,
+    sim_time_end TEXT NOT NULL,
+    wall_time_start TEXT NOT NULL,
+    wall_time_end TEXT NOT NULL,
     converged INTEGER NOT NULL,
     duration_ms REAL NOT NULL,
     packets_lost INTEGER NOT NULL,
     packets_sent INTEGER NOT NULL,
-    sim_time_start TEXT NOT NULL,
-    sim_time_end TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    triggering_link_event_id INTEGER REFERENCES link_events(id)
 );
 """
 
@@ -51,8 +52,7 @@ CREATE TABLE IF NOT EXISTS probe_results (
     latency_min_ms REAL NOT NULL,
     latency_max_ms REAL NOT NULL,
     latency_avg_ms REAL NOT NULL,
-    jitter_ms REAL NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    jitter_ms REAL NOT NULL
 );
 """
 
@@ -63,28 +63,25 @@ CREATE TABLE IF NOT EXISTS adapter_events (
     wall_time TEXT NOT NULL,
     node_id TEXT NOT NULL,
     event_type TEXT NOT NULL,
-    event_data TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    event_data TEXT NOT NULL
 );
 """
 
 DDL_SESSION_METADATA = """
 CREATE TABLE IF NOT EXISTS session_metadata (
     key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    value TEXT NOT NULL
 );
 """
 
 DDL_CONFIG_CHANGES = """
 CREATE TABLE IF NOT EXISTS config_changes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp_s REAL NOT NULL,
-    node_id TEXT NOT NULL,
-    config_type TEXT NOT NULL,
-    old_hash TEXT,
-    new_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    sim_time TEXT NOT NULL,
+    wall_time TEXT NOT NULL,
+    change_type TEXT NOT NULL,
+    description TEXT NOT NULL,
+    config_snapshot TEXT
 );
 """
 
@@ -93,21 +90,18 @@ CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sim_time TEXT NOT NULL,
     wall_time TEXT NOT NULL,
-    snapshot_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    snapshot_json TEXT NOT NULL
 );
 """
 
 INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_link_events_sim_time ON link_events(sim_time);",
     "CREATE INDEX IF NOT EXISTS idx_link_events_nodes ON link_events(node_a, node_b);",
-    "CREATE INDEX IF NOT EXISTS idx_convergence_event_id ON convergence_events(event_id);",
+    "CREATE INDEX IF NOT EXISTS idx_convergence_sim_time ON convergence_events(sim_time_start);",
     "CREATE INDEX IF NOT EXISTS idx_probe_results_sim_time ON probe_results(sim_time);",
     "CREATE INDEX IF NOT EXISTS idx_probe_results_flow ON probe_results(flow_id);",
     "CREATE INDEX IF NOT EXISTS idx_adapter_events_sim_time ON adapter_events(sim_time);",
     "CREATE INDEX IF NOT EXISTS idx_adapter_events_node ON adapter_events(node_id);",
-    "CREATE INDEX IF NOT EXISTS idx_config_changes_timestamp ON config_changes(timestamp_s);",
-    "CREATE INDEX IF NOT EXISTS idx_config_changes_node ON config_changes(node_id);",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_sim_time ON snapshots(sim_time);",
 ]
 

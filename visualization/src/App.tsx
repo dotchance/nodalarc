@@ -1,6 +1,6 @@
 /** Nodal Arc Visualization Frontend — main application component. */
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { GlobeView } from "./globe/GlobeView";
 import { TopologyView } from "./topology/TopologyView";
 import { InfoPanel } from "./panels/InfoPanel";
@@ -11,6 +11,7 @@ import { TimeControls } from "./bars/TimeControls";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useSelection } from "./hooks/useSelection";
 import { useKeyboard } from "./hooks/useKeyboard";
+import { WS_URL } from "./config";
 import type { ViewMode, ColorMode } from "./types";
 
 import "./styles/variables.css";
@@ -22,7 +23,7 @@ import "./styles/topology.css";
 import "./styles/time-controls.css";
 
 export function App() {
-  const { snapshot, connected, historicalMode, setHistoricalMode, fetchHistorical } =
+  const { snapshot, connected, hasEverConnected, historicalMode, setHistoricalMode, fetchHistorical } =
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
 
@@ -31,6 +32,15 @@ export function App() {
   const [showGroundTracks, setShowGroundTracks] = useState(false);
   const [showAllLinks, setShowAllLinks] = useState(true);
   const [followNode, setFollowNode] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  // Track window width for split view gate
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const canSplit = windowWidth >= 1920;
 
   // Ref for GlobeView imperative actions (top view, follow, screenshot)
   const globeActionsRef = useRef<{
@@ -93,7 +103,16 @@ export function App() {
       />
 
       <div className={`area-viewport ${viewMode === "split" ? "area-viewport--split" : ""}`}>
-        {!connected && (
+        {!connected && !hasEverConnected && (
+          <div className="connection-startup-error">
+            <div className="startup-error-box">
+              <h2>Cannot connect to VS-API</h2>
+              <p>Endpoint: {snapshot ? "" : WS_URL}</p>
+              <button onClick={() => window.location.reload()}>Retry</button>
+            </div>
+          </div>
+        )}
+        {!connected && hasEverConnected && (
           <div className="connection-banner">
             Connection lost. Reconnecting...
           </div>
@@ -127,6 +146,7 @@ export function App() {
           showGroundTracks={showGroundTracks}
           showAllLinks={showAllLinks}
           followNode={followNode}
+          canSplit={canSplit}
           onViewMode={setViewMode}
           onColorMode={setColorMode}
           onToggleGroundTracks={() => setShowGroundTracks((v) => !v)}
@@ -146,6 +166,7 @@ export function App() {
           onSeek={fetchHistorical}
           startTime={snapshot?.sim_time ?? new Date().toISOString()}
           endTime={new Date().toISOString()}
+          events={snapshot?.recent_events}
         />
       )}
 

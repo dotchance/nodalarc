@@ -8,7 +8,7 @@ Supports three modes via discriminated union on the `mode` field:
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Tag, field_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Tag, field_validator, model_validator
 
 
 class OrbitalElements(BaseModel):
@@ -180,6 +180,13 @@ class ExplicitConstellation(BaseModel):
     satellites: list[SatelliteConfig]
     default_terminals: TerminalConfig
     isl_overrides: list[IslOverride] | None = None
+
+    @model_validator(mode="after")
+    def _no_duplicate_slots(self):
+        pairs = [(s.plane, s.slot) for s in self.satellites]
+        if len(pairs) != len(set(pairs)):
+            raise ValueError("Duplicate plane/slot pairs")
+        return self
 
 
 class TLEConstellation(BaseModel):

@@ -69,6 +69,7 @@ class TestSchemaCreation:
         index_names = {i[0] for i in indexes}
         assert "idx_link_events_sim_time" in index_names
         assert "idx_link_events_nodes" in index_names
+        assert "idx_convergence_sim_time" in index_names
         assert "idx_probe_results_flow" in index_names
         assert "idx_adapter_events_node" in index_names
 
@@ -145,6 +146,7 @@ class TestConvergenceQueries:
             converged=True, duration_ms=1500.0,
             packets_lost=0, packets_sent=15,
             sim_time_start=T0, sim_time_end=T1,
+            wall_time_start=WALL, wall_time_end=WALL,
         )
         row_id = insert_convergence_result(db, result)
         assert row_id > 0
@@ -153,21 +155,52 @@ class TestConvergenceQueries:
         assert len(rows) == 1
         assert rows[0]["converged"] == 1
         assert rows[0]["duration_ms"] == 1500.0
+        assert rows[0]["wall_time_start"] == WALL.isoformat()
+        assert rows[0]["wall_time_end"] == WALL.isoformat()
 
     def test_query_by_event_id(self, db):
         insert_convergence_result(db, ConvergenceResult(
             event_id="evt-001", converged=True, duration_ms=100.0,
             packets_lost=0, packets_sent=10,
             sim_time_start=T0, sim_time_end=T1,
+            wall_time_start=WALL, wall_time_end=WALL,
         ))
         insert_convergence_result(db, ConvergenceResult(
             event_id="evt-002", converged=False, duration_ms=30000.0,
             packets_lost=5, packets_sent=100,
             sim_time_start=T1, sim_time_end=T2,
+            wall_time_start=WALL, wall_time_end=WALL,
         ))
         rows = query_convergence_events(db, event_id="evt-002")
         assert len(rows) == 1
         assert rows[0]["converged"] == 0
+
+    def test_event_id_unique_constraint(self, db):
+        result = ConvergenceResult(
+            event_id="evt-dup",
+            converged=True, duration_ms=100.0,
+            packets_lost=0, packets_sent=10,
+            sim_time_start=T0, sim_time_end=T1,
+            wall_time_start=WALL, wall_time_end=WALL,
+        )
+        insert_convergence_result(db, result)
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_convergence_result(db, result)
+
+    def test_triggering_link_event_id(self, db):
+        link_id = insert_link_up(db, _link_up())
+        result = ConvergenceResult(
+            event_id="evt-linked",
+            converged=True, duration_ms=200.0,
+            packets_lost=0, packets_sent=5,
+            sim_time_start=T0, sim_time_end=T1,
+            wall_time_start=WALL, wall_time_end=WALL,
+            triggering_link_event_id=link_id,
+        )
+        row_id = insert_convergence_result(db, result)
+        assert row_id > 0
+        rows = query_convergence_events(db, event_id="evt-linked")
+        assert rows[0]["triggering_link_event_id"] == link_id
 
 
 class TestProbeQueries:
@@ -220,8 +253,20 @@ class TestMetadata:
 class TestConfigChanges:
     def test_insert(self, db):
         row_id = insert_config_change(
-            db, timestamp_s=100.0, node_id="sat-P00S00",
-            config_type="frr", new_hash="abc123", old_hash=None,
+            db, sim_time="2025-01-01T00:00:00+00:00",
+            wall_time="2025-06-01T12:00:00+00:00",
+            change_type="flow_add",
+            description="Added flow ashburn-to-frankfurt",
+        )
+        assert row_id > 0
+
+    def test_insert_with_snapshot(self, db):
+        row_id = insert_config_change(
+            db, sim_time="2025-01-01T00:00:00+00:00",
+            wall_time="2025-06-01T12:00:00+00:00",
+            change_type="reconfig",
+            description="Reconfigured IS-IS metrics",
+            config_snapshot='{"isis": {"metric": 100}}',
         )
         assert row_id > 0
 

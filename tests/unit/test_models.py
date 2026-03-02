@@ -22,6 +22,8 @@ from nodalarc.models.metrics import (
     ConvergenceRequest,
     ConvergenceResult,
     ProbeResult,
+    TraceRequest,
+    TraceResponse,
 )
 from nodalarc.models.vs_api import (
     ActiveFlow,
@@ -230,8 +232,20 @@ class TestConvergenceResult:
             event_id="evt-001", converged=True, duration_ms=1500.0,
             packets_lost=0, packets_sent=50,
             sim_time_start=NOW, sim_time_end=LATER,
+            wall_time_start=NOW, wall_time_end=LATER,
         )
         _round_trip(res)
+
+    def test_round_trip_with_triggering_link(self):
+        res = ConvergenceResult(
+            event_id="evt-002", converged=False, duration_ms=30000.0,
+            packets_lost=5, packets_sent=100,
+            sim_time_start=NOW, sim_time_end=LATER,
+            wall_time_start=NOW, wall_time_end=LATER,
+            triggering_link_event_id=42,
+        )
+        restored = _round_trip(res)
+        assert restored.triggering_link_event_id == 42
 
 
 class TestProbeResult:
@@ -264,6 +278,34 @@ class TestAdapterEvent:
         )
         restored = _round_trip(evt)
         assert restored.event_data["duration_us"] == 1234
+
+
+class TestTraceRequest:
+    def test_round_trip(self):
+        req = TraceRequest(src_node="gs-hawthorne", dst_node="gs-ashburn")
+        _round_trip(req)
+
+
+class TestTraceResponse:
+    def test_round_trip_success(self):
+        resp = TraceResponse(
+            src_node="gs-hawthorne", dst_node="gs-ashburn",
+            hops=["sat-P00S00", "sat-P01S00", "sat-P01S05"],
+            success=True,
+        )
+        restored = _round_trip(resp)
+        assert restored.hops == ["sat-P00S00", "sat-P01S00", "sat-P01S05"]
+        assert restored.success is True
+        assert restored.error is None
+
+    def test_round_trip_failure(self):
+        resp = TraceResponse(
+            src_node="gs-hawthorne", dst_node="gs-ashburn",
+            hops=[], success=False, error="no route",
+        )
+        restored = _round_trip(resp)
+        assert restored.success is False
+        assert restored.error == "no route"
 
 
 # --- vs_api.py ---

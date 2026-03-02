@@ -10,7 +10,7 @@ import {
   CAMERA_MAX_DISTANCE,
   EARTH_RADIUS,
 } from "../config";
-import { createEarth, createAtmosphere, createStarfield, createLights } from "./earth";
+import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition } from "./earth";
 import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites } from "./satellites";
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
@@ -157,6 +157,7 @@ export function GlobeView({
         updateGroundStations(snap.nodes, scene, labelContainer);
         updateLinks(snap.links, scene, showAllLinksRef.current);
         updateFlowPaths(snap.traced_paths, scene);
+        updateSunPosition(snap.sim_time);
         if (showGroundTracksRef.current) {
           updateGroundTracks(snap.nodes, scene);
         }

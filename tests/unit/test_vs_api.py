@@ -270,6 +270,7 @@ class TestSQLiteQueries:
             event_id="test-001", converged=True, duration_ms=100.0,
             packets_lost=0, packets_sent=10,
             sim_time_start=now, sim_time_end=now,
+            wall_time_start=now, wall_time_end=now,
         )
         insert_convergence_result(conn, result)
 

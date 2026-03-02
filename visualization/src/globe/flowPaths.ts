@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
-import { LINK_FLOW_COLOR, LINK_FLOW_WIDTH } from "../config";
+import { LINK_FLOW_COLOR, LINK_FLOW_SECONDARY_COLOR, LINK_FLOW_WIDTH } from "../config";
 import { getSatellites } from "./satellites";
 import { getGroundStations } from "./groundStations";
 import type { TracedPath } from "../types";
@@ -29,11 +29,13 @@ window.addEventListener("resize", () => {
 export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
   const active = new Set<string>();
 
+  let flowIndex = 0;
   for (const path of paths) {
     active.add(path.flow_id);
 
     if (flowPaths.has(path.flow_id)) {
       flowPaths.get(path.flow_id)!.hops = path.hops;
+      flowIndex++;
       continue;
     }
 
@@ -42,7 +44,7 @@ export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
     geometry.setPositions(positions);
 
     const material = new LineMaterial({
-      color: LINK_FLOW_COLOR,
+      color: flowIndex === 0 ? LINK_FLOW_COLOR : LINK_FLOW_SECONDARY_COLOR,
       linewidth: LINK_FLOW_WIDTH,
       resolution,
       dashed: true,
@@ -56,6 +58,7 @@ export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
     scene.add(line);
 
     flowPaths.set(path.flow_id, { line, geometry, material, hops: path.hops });
+    flowIndex++;
   }
 
   // Remove old flow paths

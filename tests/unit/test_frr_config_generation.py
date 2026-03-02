@@ -271,7 +271,7 @@ class TestZebraConfig:
         vars = _get_vars(flat_session, four_node_config, gs_file, addressing, isis_stack,
                          node_type="satellite", plane=0, slot=0)
         rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        loopback_ip = vars["loopback_ipv4"]
+        loopback_ip = vars["ipv4_loopback"]
         assert f"ip address {loopback_ip}/32" in rendered
 
     def test_gs_terrestrial_interface(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
@@ -442,7 +442,7 @@ class TestOspfGroundStation:
         vars = _get_ospf_vars(flat_session, four_node_config, gs_file, addressing, ospf_stack,
                               node_type="ground_station", gs_name="hawthorne", gs_index=0)
         rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert f"ospf router-id {vars['loopback_ipv4']}" in rendered
+        assert f"ospf router-id {vars['ipv4_loopback']}" in rendered
 
     def test_gs_terrestrial_passive(self, flat_session, four_node_config, gs_file, addressing, ospf_stack):
         vars = _get_ospf_vars(flat_session, four_node_config, gs_file, addressing, ospf_stack,
@@ -563,7 +563,7 @@ class TestStaticSrSatellite:
         vars = _get_static_vars(flat_session, four_node_config, gs_file, addressing, static_stack,
                                 node_type="satellite", plane=0, slot=0)
         rendered = _render_template("frr-static-sr", "zebra.conf.j2", vars)
-        loopback = vars["loopback_ipv4"]
+        loopback = vars["ipv4_loopback"]
         # Every ISL interface should use the loopback IP
         for iface in vars["isl_interfaces"]:
             # Find the interface block and check its IP

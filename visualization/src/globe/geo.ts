@@ -5,8 +5,8 @@ import { EARTH_RADIUS, KM_PER_UNIT } from "../config";
 
 /**
  * Convert geographic coordinates to Three.js world position.
- * Three.js: Y-up, Z-toward-viewer at (0,0).
- * Geographic: lat=0,lon=0 → positive Z axis (prime meridian, equator).
+ * Must match Three.js SphereGeometry UV mapping so markers align with texture.
+ * Three.js sphere: lat=0,lon=0 → positive X axis (prime meridian, equator).
  */
 export function geoToWorld(lat_deg: number, lon_deg: number, alt_km: number): THREE.Vector3 {
   const lat = (lat_deg * Math.PI) / 180;
@@ -14,22 +14,22 @@ export function geoToWorld(lat_deg: number, lon_deg: number, alt_km: number): TH
   const r = EARTH_RADIUS + alt_km / KM_PER_UNIT;
 
   return new THREE.Vector3(
-    -r * Math.cos(lat) * Math.sin(lon), // X: negative for right-hand rule
-    r * Math.sin(lat),                   // Y: up
-    r * Math.cos(lat) * Math.cos(lon),   // Z: toward viewer at equator/prime meridian
+    r * Math.cos(lat) * Math.cos(lon),   // X: prime meridian at equator
+    r * Math.sin(lat),                    // Y: north pole
+    -r * Math.cos(lat) * Math.sin(lon),  // Z: 90°W at equator (negative = 90°E)
   );
 }
 
 /**
  * Convert ECEF velocity (km/s) to scene-unit delta per second.
- * ECEF: X=prime meridian equator, Y=north pole, Z=90E equator.
- * Three.js: X=-lon direction, Y=north, Z=prime meridian.
+ * ECEF: X=prime meridian equator, Y=90°E equator, Z=north pole.
+ * Three.js: X=prime meridian, Y=north, Z=negative 90°E.
  */
 export function velocityToScene(vel_x: number, vel_y: number, vel_z: number): THREE.Vector3 {
   const scale = 1 / KM_PER_UNIT;
   return new THREE.Vector3(
-    -vel_z * scale, // ECEF Z (90E) → -Three.js X
-    vel_y * scale,  // ECEF Y (north) → Three.js Y
-    vel_x * scale,  // ECEF X (prime meridian) → Three.js Z
+    vel_x * scale,   // ECEF X (PM equator) → Three.js X
+    vel_z * scale,   // ECEF Z (north pole) → Three.js Y
+    -vel_y * scale,  // ECEF Y (90°E equator) → -Three.js Z
   );
 }

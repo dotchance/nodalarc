@@ -161,8 +161,11 @@ export function GlobeView({
           const gs = getGroundStations().get(nodeId);
           const pos = sat?.mesh.position ?? gs?.sprite.position;
           if (pos) {
-            // Smoothly move orbit controls target to the node
-            controls.target.copy(pos);
+            // Move camera so the node faces the viewer, keeping orbit pivot at Earth center
+            controls.target.set(0, 0, 0);
+            const dist = camera.position.length();
+            const dir = pos.clone().normalize();
+            camera.position.copy(dir.multiplyScalar(dist));
             controls.update();
           }
         },
@@ -195,13 +198,19 @@ export function GlobeView({
         }
       }
 
-      // Follow selected node
+      // Follow selected node — rotate camera toward it, keep orbit pivot at origin
       if (followTargetRef.current) {
         const sat = getSatellites().get(followTargetRef.current);
         const gs = getGroundStations().get(followTargetRef.current);
         const targetPos = sat?.mesh.position ?? gs?.sprite.position;
         if (targetPos) {
-          controls.target.lerp(targetPos, 0.05);
+          const dist = camera.position.length();
+          const desiredDir = targetPos.clone().normalize();
+          const currentDir = camera.position.clone().normalize();
+          currentDir.lerp(desiredDir, 0.05);
+          currentDir.normalize();
+          camera.position.copy(currentDir.multiplyScalar(dist));
+          controls.target.set(0, 0, 0);
         }
       }
 

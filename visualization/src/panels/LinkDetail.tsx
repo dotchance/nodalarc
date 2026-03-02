@@ -1,7 +1,7 @@
 /** Link detail panel — state, metrics, flow paths, history. */
 
 import { useEffect, useState } from "react";
-import { translateReason } from "../translate";
+import { translateReason, translateLinkType } from "../translate";
 import { REST_URL } from "../config";
 import type { LinkState, StateSnapshot } from "../types";
 
@@ -75,7 +75,7 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
       </div>
       <div className="detail-row">
         <span className="detail-label">Type</span>
-        <span className="detail-value">{link.link_type ?? "unknown"}</span>
+        <span className="detail-value">{translateLinkType(link.link_type)}</span>
       </div>
 
       <h3>Metrics</h3>
@@ -119,7 +119,7 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
                 {h.sim_time?.substring(11, 19) ?? ""}
               </span>
               <span className="detail-value" style={{ fontSize: 10 }}>
-                {h.event_type} — {h.reason}
+                {h.event_type} — {translateReason(h.reason)}
               </span>
             </div>
           ))}

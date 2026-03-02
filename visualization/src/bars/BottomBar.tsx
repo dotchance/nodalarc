@@ -6,17 +6,36 @@ import type { StateSnapshot } from "../types";
 interface BottomBarProps {
   snapshot: StateSnapshot | null;
   connected: boolean;
+  historicalMode?: boolean;
 }
 
-export function BottomBar({ snapshot, connected }: BottomBarProps) {
+export function BottomBar({ snapshot, connected, historicalMode }: BottomBarProps) {
   const activeLinks = snapshot?.links.filter((l) => l.state === "active").length ?? 0;
   const totalLinks = snapshot?.links.length ?? 0;
   const nodeCount = snapshot?.nodes.length ?? 0;
   const flowCount = snapshot?.active_flows.length ?? 0;
   const convergence = snapshot?.network_health.status ?? "unknown";
+  const unreachableFlows = snapshot?.network_health.unreachable_flows ?? 0;
 
-  const wsColor = connected ? "var(--ws-connected)" : "var(--ws-disconnected)";
-  const wsLabel = connected ? "Connected" : "Disconnected";
+  const convColor =
+    convergence === "converged"
+      ? "var(--ws-connected)"
+      : convergence === "converging"
+        ? "var(--ws-reconnecting)"
+        : convergence === "degraded"
+          ? "var(--ws-disconnected)"
+          : "var(--text-secondary)";
+
+  const wsColor = historicalMode
+    ? "var(--ws-reconnecting)"
+    : connected
+      ? "var(--ws-connected)"
+      : "var(--ws-disconnected)";
+  const wsLabel = historicalMode
+    ? "Historical"
+    : connected
+      ? "Connected"
+      : "Disconnected";
 
   return (
     <div
@@ -34,7 +53,10 @@ export function BottomBar({ snapshot, connected }: BottomBarProps) {
     >
       <span>Links {activeLinks}/{totalLinks}</span>
       <span>Nodes {nodeCount}</span>
-      <span>Conv: {convergence}</span>
+      <span style={{ color: convColor }}>
+        Conv: {convergence}
+        {convergence === "degraded" && unreachableFlows > 0 ? ` (${unreachableFlows} flows)` : ""}
+      </span>
       <span>Flows {flowCount}</span>
       <div style={{ flex: 1 }} />
       <span

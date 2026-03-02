@@ -11,9 +11,10 @@ interface InfoPanelProps {
   snapshot: StateSnapshot | null;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
+  onFlyTo?: (nodeId: string) => void;
 }
 
-export function InfoPanel({ snapshot, selection, onSelect }: InfoPanelProps) {
+export function InfoPanel({ snapshot, selection, onSelect, onFlyTo }: InfoPanelProps) {
   if (!snapshot) {
     return (
       <div className="info-panel">
@@ -29,14 +30,14 @@ export function InfoPanel({ snapshot, selection, onSelect }: InfoPanelProps) {
   } else if (selection.type === "satellite") {
     const node = snapshot.nodes.find((n) => n.node_id === selection.id);
     detailSection = node ? (
-      <SatelliteDetail node={node} snapshot={snapshot} />
+      <SatelliteDetail node={node} snapshot={snapshot} onSelect={onSelect} />
     ) : (
       <NetworkSummary snapshot={snapshot} onSelect={onSelect} />
     );
   } else if (selection.type === "ground_station") {
     const node = snapshot.nodes.find((n) => n.node_id === selection.id);
     detailSection = node ? (
-      <GroundStationDetail node={node} snapshot={snapshot} />
+      <GroundStationDetail node={node} snapshot={snapshot} onSelect={onSelect} />
     ) : (
       <NetworkSummary snapshot={snapshot} onSelect={onSelect} />
     );
@@ -57,7 +58,7 @@ export function InfoPanel({ snapshot, selection, onSelect }: InfoPanelProps) {
     <div className="info-panel">
       {detailSection}
       <hr className="section-divider" />
-      <EventLog events={snapshot.recent_events} onSelect={onSelect} />
+      <EventLog events={snapshot.recent_events} onSelect={onSelect} onFlyTo={onFlyTo} />
     </div>
   );
 }

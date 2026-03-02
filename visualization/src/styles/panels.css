@@ -177,6 +177,58 @@
   opacity: 0.9;
 }
 
+/* Clickable adjacency rows */
+.detail-row--clickable {
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.detail-row--clickable:hover {
+  background: var(--bg-panel-hover);
+}
+
+.detail-label--link {
+  cursor: pointer;
+  color: var(--accent-blue);
+}
+
+.detail-label--link:hover {
+  text-decoration: underline;
+}
+
+/* Link state indicators */
+.link-state--up {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.link-state--down {
+  color: var(--accent-red);
+  font-weight: 600;
+}
+
+/* Inline trace button */
+.trace-btn {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  border-radius: 3px;
+  border: 1px solid var(--accent-blue);
+  color: var(--accent-blue);
+  background: transparent;
+  cursor: pointer;
+}
+
+.trace-btn:hover {
+  background: var(--accent-blue);
+  color: var(--bg-main);
+}
+
+.trace-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .section-divider {
   border: none;
   border-top: 1px solid var(--border);

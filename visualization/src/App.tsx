@@ -42,11 +42,12 @@ export function App() {
   }, []);
   const canSplit = windowWidth >= 1920;
 
-  // Ref for GlobeView imperative actions (top view, follow, screenshot)
+  // Ref for GlobeView imperative actions (top view, follow, screenshot, flyTo)
   const globeActionsRef = useRef<{
     flyToTopView: () => void;
     setFollowTarget: (nodeId: string | null) => void;
     captureScreenshot: () => void;
+    flyToNode: (nodeId: string) => void;
   } | null>(null);
 
   const toggleHistorical = useCallback(() => {
@@ -72,6 +73,10 @@ export function App() {
 
   const handleScreenshot = useCallback(() => {
     globeActionsRef.current?.captureScreenshot();
+  }, []);
+
+  const handleFlyToNode = useCallback((nodeId: string) => {
+    globeActionsRef.current?.flyToNode(nodeId);
   }, []);
 
   const keyboardActions = useMemo(
@@ -158,7 +163,7 @@ export function App() {
       </div>
 
       <div className="area-panel">
-        <InfoPanel snapshot={snapshot} selection={selection} onSelect={select} />
+        <InfoPanel snapshot={snapshot} selection={selection} onSelect={select} onFlyTo={handleFlyToNode} />
       </div>
 
       {historicalMode && (
@@ -170,7 +175,7 @@ export function App() {
         />
       )}
 
-      <BottomBar snapshot={snapshot} connected={connected} />
+      <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} />
     </div>
   );
 }

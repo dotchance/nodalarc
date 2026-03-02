@@ -108,3 +108,5 @@ class StateSnapshot(BaseModel):
     active_flows: list[ActiveFlow]
     recent_events: list[RecentEvent]
     network_health: NetworkHealth
+    routing_stack: str | None = None
+    constellation_name: str | None = None

@@ -28,6 +28,7 @@ from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.template_vars import build_template_vars
 from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
+from nodalarc.zmq_channels import VS_API_HTTP_PORT
 from ome.main import run as ome_run
 
 log = logging.getLogger(__name__)
@@ -315,7 +316,7 @@ def deploy(session_path: str, dwell: float = 0.05) -> None:
         [sys.executable, "-m", "vs_api.main",
          "--session", session_path,
          "--db", mi_db,
-         "--port", "8080"],
+         "--port", str(VS_API_HTTP_PORT)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -352,13 +353,13 @@ def deploy(session_path: str, dwell: float = 0.05) -> None:
     state_file = data_dir / "session-state.json"
     state_file.write_text(json.dumps(session_state, indent=2))
 
-    print(f"\nSession: {session_id}")
-    print(f"Data directory: {data_dir}")
-    print(f"Timeline: {timeline_path}")
-    print(f"MI service PID: {mi_proc.pid}")
-    print(f"VS-API PID: {vsapi_proc.pid}")
-    print(f"Orchestrator PID: {to_proc.pid}")
-    print(f"Session state: {state_file}")
+    log.info(f"Session: {session_id}")
+    log.info(f"Data directory: {data_dir}")
+    log.info(f"Timeline: {timeline_path}")
+    log.info(f"MI service PID: {mi_proc.pid}")
+    log.info(f"VS-API PID: {vsapi_proc.pid}")
+    log.info(f"Orchestrator PID: {to_proc.pid}")
+    log.info(f"Session state: {state_file}")
 
 
 def main() -> None:

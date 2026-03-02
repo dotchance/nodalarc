@@ -7,11 +7,13 @@ import type { StateSnapshot } from "../types";
 interface WebSocketState {
   snapshot: StateSnapshot | null;
   connected: boolean;
+  hasEverConnected: boolean;
 }
 
 export function useWebSocket(): WebSocketState {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
   const [connected, setConnected] = useState(false);
+  const [hasEverConnected, setHasEverConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const retriesRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -24,6 +26,7 @@ export function useWebSocket(): WebSocketState {
 
     ws.onopen = () => {
       setConnected(true);
+      setHasEverConnected(true);
       retriesRef.current = 0;
     };
 
@@ -61,5 +64,5 @@ export function useWebSocket(): WebSocketState {
     };
   }, [connect]);
 
-  return { snapshot, connected };
+  return { snapshot, connected, hasEverConnected };
 }

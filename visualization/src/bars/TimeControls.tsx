@@ -1,20 +1,23 @@
 /** Time controls for historical playback mode. */
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import type { RecentEvent } from "../types";
 
 interface TimeControlsProps {
   onSeek: (simTime: string) => void;
   startTime: string;
   endTime: string;
+  events?: RecentEvent[];
 }
 
 const SPEEDS = [0.25, 0.5, 1, 2, 5, 10];
 
-export function TimeControls({ onSeek, startTime, endTime }: TimeControlsProps) {
+export function TimeControls({ onSeek, startTime, endTime, events }: TimeControlsProps) {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [progress, setProgress] = useState(0); // 0-1
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const heatmapCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const start = new Date(startTime).getTime();
   const end = new Date(endTime).getTime();
@@ -52,6 +55,48 @@ export function TimeControls({ onSeek, startTime, endTime }: TimeControlsProps) 
     };
   }, [playing, speed, start, duration, onSeek]);
 
+  // Draw event density heatmap behind the scrubber
+  useEffect(() => {
+    const canvas = heatmapCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const rect = canvas.parentElement?.getBoundingClientRect();
+    if (!rect) return;
+
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!events || events.length === 0) return;
+
+    // Bin events into buckets across the timeline
+    const bucketCount = Math.max(1, Math.floor(canvas.width / 4));
+    const buckets = new Array<number>(bucketCount).fill(0);
+
+    for (const event of events) {
+      const t = new Date(event.sim_time).getTime();
+      const p = (t - start) / duration;
+      if (p >= 0 && p <= 1) {
+        const bucket = Math.min(bucketCount - 1, Math.floor(p * bucketCount));
+        buckets[bucket] = (buckets[bucket] ?? 0) + 1;
+      }
+    }
+
+    const maxCount = Math.max(1, ...buckets);
+    const barWidth = canvas.width / bucketCount;
+
+    for (let i = 0; i < bucketCount; i++) {
+      const intensity = buckets[i]! / maxCount;
+      if (intensity <= 0) continue;
+      const alpha = 0.1 + intensity * 0.4;
+      ctx.fillStyle = `rgba(68, 136, 255, ${alpha})`;
+      const barHeight = intensity * canvas.height;
+      ctx.fillRect(i * barWidth, canvas.height - barHeight, barWidth, barHeight);
+    }
+  }, [events, start, duration]);
+
   const handleScrubberClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const p = (e.clientX - rect.left) / rect.width;
@@ -86,6 +131,7 @@ export function TimeControls({ onSeek, startTime, endTime }: TimeControlsProps) 
         ⏭
       </button>
       <div className="time-scrubber" onClick={handleScrubberClick}>
+        <canvas ref={heatmapCanvasRef} className="time-scrubber-heatmap" />
         <div className="time-scrubber-track" />
         <div className="time-scrubber-fill" style={{ width: `${progress * 100}%` }} />
         <div className="time-scrubber-thumb" style={{ left: `${progress * 100}%` }} />

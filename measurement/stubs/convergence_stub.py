@@ -41,6 +41,8 @@ def run_stub() -> None:
                 packets_sent=0,
                 sim_time_start=now,
                 sim_time_end=now,
+                wall_time_start=now,
+                wall_time_end=now,
             )
             sock.send(result.model_dump_json().encode())
     except KeyboardInterrupt:

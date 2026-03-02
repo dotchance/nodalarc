@@ -84,15 +84,14 @@ class FrrOspfAdapter:
         self._nodes: dict[str, _NodeState] = {}
         self._lock = threading.Lock()
 
-    def start(self, node_id: str, pod_name: str, namespace: str) -> None:
+    def start(self, node_id: str, management_ip: str) -> None:
         """Start collecting OSPF events from a node."""
         with self._lock:
             if node_id in self._nodes:
                 return
             state = _NodeState(
                 node_id=node_id,
-                pod_name=pod_name,
-                namespace=namespace,
+                management_ip=management_ip,
             )
             self._nodes[node_id] = state
 
@@ -294,16 +293,52 @@ class _NodeState:
     """Per-node tracking state for the OSPF adapter."""
 
     __slots__ = (
-        "node_id", "pod_name", "namespace",
+        "node_id", "management_ip", "_pod_name", "_namespace",
         "last_neighbors", "events",
         "log_thread", "tail_proc",
     )
 
-    def __init__(self, node_id: str, pod_name: str, namespace: str) -> None:
+    def __init__(self, node_id: str, management_ip: str) -> None:
         self.node_id = node_id
-        self.pod_name = pod_name
-        self.namespace = namespace
+        self.management_ip = management_ip
+        self._pod_name: str | None = None
+        self._namespace: str | None = None
         self.last_neighbors: dict[str, dict[str, str]] = {}
         self.events: list[AdapterEvent] = []
         self.log_thread: threading.Thread | None = None
         self.tail_proc: subprocess.Popen | None = None
+
+    @property
+    def pod_name(self) -> str:
+        if self._pod_name is None:
+            self._resolve_pod()
+        return self._pod_name
+
+    @property
+    def namespace(self) -> str:
+        if self._namespace is None:
+            self._resolve_pod()
+        return self._namespace
+
+    def _resolve_pod(self) -> None:
+        """Resolve pod_name and namespace from management_ip via kubectl."""
+        try:
+            result = subprocess.run(
+                [
+                    "kubectl", "get", "pods", "--all-namespaces",
+                    "--field-selector", f"status.podIP={self.management_ip}",
+                    "-o", "jsonpath={.items[0].metadata.namespace} {.items[0].metadata.name}",
+                ],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts = result.stdout.strip().split()
+                if len(parts) == 2:
+                    self._namespace = parts[0]
+                    self._pod_name = parts[1]
+                    return
+        except Exception as exc:
+            log.warning(f"Pod resolution failed for {self.management_ip}: {exc}")
+        # Fallback
+        self._namespace = "nodalarc"
+        self._pod_name = self.node_id

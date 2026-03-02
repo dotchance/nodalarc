@@ -89,8 +89,8 @@ class TestSatelliteVars:
         assert result["node_type"] == "satellite"
         assert result["plane"] == 0
         assert result["slot"] == 0
-        assert result["loopback_ipv4"] == "10.0.0.1"
-        assert result["loopback_ipv6"] == "fd00::0:0:1"
+        assert result["ipv4_loopback"] == "10.0.0.1"
+        assert result["ipv6_loopback"] == "fd00::0:0:1"
         assert result["area_id"] == "49.0001"
 
     def test_hostname_equals_node_id(self, flat_session, four_node_config, gs_file, addressing):
@@ -269,8 +269,8 @@ class TestGroundStationVars:
         assert result["node_type"] == "ground_station"
         assert result["gs_name"] == "hawthorne"
         assert result["gs_index"] == 0
-        assert result["loopback_ipv4"] == "10.255.0.1"
-        assert result["loopback_ipv6"] == "fd00::ff:0:1"
+        assert result["ipv4_loopback"] == "10.255.0.1"
+        assert result["ipv6_loopback"] == "fd00::ff:0:1"
         assert result["area_id"] == "49.0000"
         assert result["hostname"] == "gs-hawthorne"
         assert result["mgmt_interface"] == "eth0"

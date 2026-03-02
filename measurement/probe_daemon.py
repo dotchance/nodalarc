@@ -404,5 +404,6 @@ def burst(flow_id: str, req: BurstRequest) -> ProbeResults:
 
 if __name__ == "__main__":
     import uvicorn
+    from nodalarc.zmq_channels import PROBE_DAEMON_PORT
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(app, host="0.0.0.0", port=9100)
+    uvicorn.run(app, host="0.0.0.0", port=PROBE_DAEMON_PORT)

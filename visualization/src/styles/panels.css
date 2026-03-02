@@ -79,10 +79,28 @@
 
 .event-type {
   flex-shrink: 0;
-  width: 64px;
+  width: 72px;
   font-weight: 600;
 }
 
+/* Event type color classes */
+.event-type--up {
+  color: var(--accent-green);
+}
+
+.event-type--down {
+  color: var(--accent-red);
+}
+
+.event-type--computation {
+  color: var(--accent-amber);
+}
+
+.event-type--info {
+  color: var(--text-dim);
+}
+
+/* Legacy event type classes (kept for backwards compatibility) */
 .event-type--link_up {
   color: var(--accent-green);
 }
@@ -97,6 +115,14 @@
 
 .event-type--adjacency {
   color: var(--accent-blue);
+}
+
+.event-node {
+  flex-shrink: 0;
+  width: 56px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .event-summary {

@@ -226,6 +226,28 @@ def geodetic_to_ecef(pos: GeoPosition) -> Vec3:
     return Vec3(x, y, z)
 
 
+def eci_to_ecef_velocity(pos_eci: Vec3, vel_eci: Vec3, unix_timestamp: float) -> Vec3:
+    """Convert ECI velocity to ECEF velocity.
+
+    v_ecef = R_z(-θ) · v_eci - ω×r_ecef
+    where θ = GMST, ω = (0, 0, Ω_earth)
+    """
+    theta = gmst(unix_timestamp)
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+
+    # Rotate velocity vector ECI → ECEF
+    vx = cos_t * vel_eci.x + sin_t * vel_eci.y
+    vy = -sin_t * vel_eci.x + cos_t * vel_eci.y
+    vz = vel_eci.z
+
+    # Subtract Earth rotation: ω × r_ecef
+    pos_ecef = eci_to_ecef(pos_eci, unix_timestamp)
+    vx -= -EARTH_ROTATION_RATE * pos_ecef.y
+    vy -= EARTH_ROTATION_RATE * pos_ecef.x
+
+    return Vec3(vx, vy, vz)
+
+
 def propagate_keplerian(
     elements: OrbitalElements,
     epoch_unix: float,
@@ -241,13 +263,14 @@ def propagate_keplerian(
         dt: Time delta in seconds from epoch
 
     Returns:
-        (ecef_position_km, eci_velocity_km_s, geodetic_position)
+        (ecef_position_km, ecef_velocity_km_s, geodetic_position)
     """
     pos_eci, vel_eci = propagate_eci(elements, dt)
     current_time = epoch_unix + dt
     pos_ecef = eci_to_ecef(pos_eci, current_time)
+    vel_ecef = eci_to_ecef_velocity(pos_eci, vel_eci, current_time)
     geo = ecef_to_geodetic(pos_ecef)
-    return pos_ecef, vel_eci, geo
+    return pos_ecef, vel_ecef, geo
 
 
 def distance_km(a: Vec3, b: Vec3) -> float:

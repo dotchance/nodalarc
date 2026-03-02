@@ -10,6 +10,7 @@ using the same encode_message format (topic\\x00payload in a single frame).
 
 import argparse
 import json
+import logging
 import sys
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, "/home/chance/nodal")
 
 import zmq
+log = logging.getLogger(__name__)
+
 from lib.nodalarc.zmq_channels import (
     OME_EVENTS_BIND,
     TO_EVENTS_BIND,
@@ -49,23 +52,23 @@ def main() -> None:
             if line:
                 events.append(json.loads(line))
 
-    print(f"Loaded {len(events)} events from {args.timeline}")
+    log.info(f"Loaded {len(events)} events from {args.timeline}")
 
     ctx = zmq.Context()
 
     # OME PUB socket (port 5560) - PositionEvents
     ome_pub = ctx.socket(zmq.PUB)
     ome_pub.bind(OME_EVENTS_BIND)
-    print(f"OME PUB bound to {OME_EVENTS_BIND}")
+    log.info(f"OME PUB bound to {OME_EVENTS_BIND}")
 
     # TO PUB socket (port 5561) - LinkUp/LinkDown
     to_pub = ctx.socket(zmq.PUB)
     to_pub.bind(TO_EVENTS_BIND)
-    print(f"TO PUB bound to {TO_EVENTS_BIND}")
+    log.info(f"TO PUB bound to {TO_EVENTS_BIND}")
 
     # Let subscribers connect
     time.sleep(1.0)
-    print("Starting replay loop...")
+    log.info("Starting replay loop...")
 
     # Track active links for proper link up/down events
     active_links: set[tuple[str, str]] = set()
@@ -73,7 +76,7 @@ def main() -> None:
     loop_count = 0
     while True:
         loop_count += 1
-        print(f"\n--- Loop {loop_count} ---")
+        log.info(f"--- Loop {loop_count} ---")
         active_links.clear()
 
         # Group events by timestamp
@@ -167,7 +170,7 @@ def main() -> None:
 
             time.sleep(args.delay)
 
-        print(f"Loop {loop_count} complete ({len(events)} events)")
+        log.info(f"Loop {loop_count} complete ({len(events)} events)")
         time.sleep(1.0)
 
 

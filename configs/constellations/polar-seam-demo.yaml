@@ -1,7 +1,7 @@
 mode: parametric
 name: polar-seam-demo
 orbit:
-  altitude_km: 550
+  altitude_km: 780
   inclination_deg: 97.4
   pattern: walker-star
 planes:

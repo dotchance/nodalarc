@@ -9,6 +9,36 @@
 import { AREA_COLORS } from "../config";
 import type { LayoutLink, LayoutNode } from "./layout";
 
+/** Point-to-line-segment distance for link hit testing. */
+function pointToSegmentDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/** Hit test links — returns matching link key ("nodeA:nodeB") or null. */
+export function hitTestLink(
+  x: number,
+  y: number,
+  links: LayoutLink[],
+  nodeMap: Map<string, LayoutNode>,
+  threshold: number = 8,
+): LayoutLink | null {
+  for (const link of links) {
+    const a = nodeMap.get(link.nodeA);
+    const b = nodeMap.get(link.nodeB);
+    if (!a || !b) continue;
+    if (pointToSegmentDist(x, y, a.x, a.y, b.x, b.y) <= threshold) {
+      return link;
+    }
+  }
+  return null;
+}
+
 function areaColorCSS(area: string | null, opacity: number): string {
   const hex = AREA_COLORS[area ?? ""] ?? 0x888888;
   const r = (hex >> 16) & 0xff;

@@ -4,19 +4,19 @@ ip forwarding
 ipv6 forwarding
 
 interface lo
- ip address {{ loopback_ipv4 }}/32
- ipv6 address {{ loopback_ipv6 }}/128
+ ip address {{ ipv4_loopback }}/32
+ ipv6 address {{ ipv6_loopback }}/128
 exit
 
 {% for iface in isl_interfaces %}
 interface {{ iface }}
- ip address {{ loopback_ipv4 }}/32
+ ip address {{ ipv4_loopback }}/32
 exit
 {% endfor %}
 
 {% for iface in gnd_interfaces %}
 interface {{ iface }}
- ip address {{ loopback_ipv4 }}/32
+ ip address {{ ipv4_loopback }}/32
 exit
 {% endfor %}
 

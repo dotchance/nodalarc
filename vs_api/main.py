@@ -49,8 +49,10 @@ from nodalarc.models.vs_api import (
     StateSnapshot,
     TracedPath,
 )
+from nodalarc.models.metrics import TraceRequest, TraceResponse
 from nodalarc.zmq_channels import (
     MI_EVENTS_CONNECT,
+    MI_TRACE_CONNECT,
     OME_EVENTS_CONNECT,
     TO_EVENTS_CONNECT,
     decode_message,
@@ -81,6 +83,8 @@ _state = {
 }
 _state_lock = threading.Lock()
 _db_path: str = ""
+_routing_stack: str | None = None
+_constellation_name: str | None = None
 _ws_clients: list[WebSocket] = []
 _ws_lock = asyncio.Lock()
 
@@ -196,6 +200,8 @@ def _build_snapshot() -> dict:
             active_flows=[],
             recent_events=recent,
             network_health=health,
+            routing_stack=_routing_stack,
+            constellation_name=_constellation_name,
         )
         return json.loads(snapshot.model_dump_json())
 
@@ -426,8 +432,34 @@ def get_flow_metrics(
 
 @app.post("/api/v1/trace")
 def trace_path(body: dict) -> dict:
-    """Request path trace (placeholder — requires MI adapter access)."""
-    return {"hops": [], "note": "Path tracing requires MI adapter access"}
+    """Request path trace via ZMQ REQ to MI trace endpoint."""
+    src = body.get("src_node", "")
+    dst = body.get("dst_node", "")
+    if not src or not dst:
+        return {"hops": [], "error": "src_node and dst_node required"}
+
+    ctx = zmq.Context()
+    sock = ctx.socket(zmq.REQ)
+    sock.setsockopt(zmq.RCVTIMEO, 10000)  # 10s timeout
+    sock.setsockopt(zmq.LINGER, 0)
+    sock.connect(MI_TRACE_CONNECT)
+
+    try:
+        req = TraceRequest(src_node=src, dst_node=dst)
+        sock.send(req.model_dump_json().encode())
+        raw = sock.recv()
+        resp = TraceResponse.model_validate_json(raw)
+        result = {"hops": resp.hops, "success": resp.success}
+        if resp.error:
+            result["error"] = resp.error
+        return result
+    except zmq.Again:
+        return {"hops": [], "error": "MI trace endpoint timeout"}
+    except Exception as exc:
+        return {"hops": [], "error": str(exc)}
+    finally:
+        sock.close()
+        ctx.term()
 
 
 def main() -> None:
@@ -437,11 +469,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="VS-API server")
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument("--db", required=True, help="Path to SQLite database")
-    parser.add_argument("--port", type=int, default=8080, help="HTTP port")
+    from nodalarc.zmq_channels import VS_API_HTTP_PORT
+    parser.add_argument("--port", type=int, default=VS_API_HTTP_PORT, help="HTTP port")
     args = parser.parse_args()
 
-    global _db_path
+    global _db_path, _routing_stack, _constellation_name
     _db_path = args.db
+
+    # Load session metadata for snapshot enrichment
+    session_data = yaml.safe_load(Path(args.session).read_text())
+    session = SessionConfig.model_validate(session_data)
+    _routing_stack = Path(session.routing.stack).name
+    _constellation_name = Path(session.constellation).stem
 
     # Ensure tables exist
     conn = sqlite3.connect(args.db)

@@ -1,10 +1,11 @@
-/** Earth globe mesh with Blue Marble texture and atmosphere glow.
- *  Uses MeshBasicMaterial (unlit) so the globe is uniformly bright —
- *  no day/night shading.
+/** Earth globe mesh with Blue Marble texture, day/night terminator,
+ *  atmosphere glow, and starfield.
  */
 
 import * as THREE from "three";
 import { EARTH_RADIUS } from "../config";
+
+let _sunLight: THREE.DirectionalLight | null = null;
 
 export function createEarth(scene: THREE.Scene): THREE.Mesh {
   const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
@@ -12,8 +13,9 @@ export function createEarth(scene: THREE.Scene): THREE.Mesh {
   const texture = textureLoader.load("/earth-blue-marble.jpg");
   texture.colorSpace = THREE.SRGBColorSpace;
 
-  const material = new THREE.MeshBasicMaterial({
+  const material = new THREE.MeshPhongMaterial({
     map: texture,
+    shininess: 5,
   });
 
   const earth = new THREE.Mesh(geometry, material);
@@ -87,7 +89,53 @@ export function createStarfield(scene: THREE.Scene): void {
 }
 
 export function createLights(scene: THREE.Scene): void {
-  // Only ambient light needed — earth uses MeshBasicMaterial (unlit).
-  const ambient = new THREE.AmbientLight(0xffffff, 1.0);
+  // Ambient light for night side visibility
+  const ambient = new THREE.AmbientLight(0xffffff, 0.3);
   scene.add(ambient);
+
+  // Directional light simulating sun — positioned based on sim time
+  const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
+  sunLight.position.set(1000, 0, 0);
+  scene.add(sunLight);
+  _sunLight = sunLight;
+}
+
+/** Compute approximate sun position from sim time and update directional light.
+ *  Uses simple solar declination + hour angle model.
+ */
+export function updateSunPosition(simTime: string): void {
+  if (!_sunLight) return;
+
+  let date: Date;
+  try {
+    date = new Date(simTime);
+    if (isNaN(date.getTime())) return;
+  } catch {
+    return;
+  }
+
+  // Day of year
+  const startOfYear = new Date(date.getFullYear(), 0, 0);
+  const dayOfYear = (date.getTime() - startOfYear.getTime()) / (1000 * 60 * 60 * 24);
+
+  // Solar declination (approximate): δ = -23.44° × cos(360/365 × (dayOfYear + 10))
+  const declRad = (-23.44 * Math.PI / 180) *
+    Math.cos((2 * Math.PI / 365) * (dayOfYear + 10));
+
+  // Hour angle from UTC time (solar noon at 0° longitude = 12:00 UTC)
+  const hourUTC = date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
+  const hourAngle = ((hourUTC - 12) / 24) * 2 * Math.PI;
+
+  // Sun direction in Three.js coords (right-hand, Y-up)
+  // Longitude corresponds to rotation around Y axis
+  // Latitude (declination) corresponds to elevation above equatorial plane
+  const dist = EARTH_RADIUS * 50;
+  const cosDecl = Math.cos(declRad);
+  const sinDecl = Math.sin(declRad);
+
+  _sunLight.position.set(
+    -dist * cosDecl * Math.sin(hourAngle),
+    dist * sinDecl,
+    dist * cosDecl * Math.cos(hourAngle),
+  );
 }

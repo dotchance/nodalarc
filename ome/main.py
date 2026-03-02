@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import time
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -73,7 +75,11 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
-        epoch_unix=1735689600.0,  # 2025-01-01T00:00:00 UTC
+        epoch_unix=(
+            datetime.fromisoformat(session.time.start_time).timestamp()
+            if session.time.start_time
+            else time.time()
+        ),
         duration_s=period,
         step_seconds=session.time.step_seconds,
         max_range_km=max_range_km,

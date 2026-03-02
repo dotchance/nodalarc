@@ -105,7 +105,7 @@ class TestExplicitConstellation:
 
 class TestValidationRejections:
     def test_altitude_below_160(self):
-        data = yaml.safe_load((FIXTURES_DIR / "invalid-altitude.yaml").read_text())
+        data = yaml.safe_load((FIXTURES_DIR / "invalid/bad-altitude.yaml").read_text())
         with pytest.raises(ValidationError, match="altitude_km must be >= 160"):
             adapter.validate_python(data)
 
@@ -143,18 +143,13 @@ class TestInvalidFixtures:
         with pytest.raises(ValidationError, match="default_terminals"):
             adapter.validate_python(data)
 
-    def test_duplicate_slots_loads(self):
-        """Duplicate plane/slot in explicit mode loads but produces duplicate node_ids.
+    def test_duplicate_slots_rejected(self):
+        """Duplicate plane/slot in explicit mode now raises ValidationError."""
+        from pydantic import ValidationError
 
-        Model doesn't validate uniqueness, but expansion produces ambiguous identity.
-        This is a data quality issue, not a schema validation issue.
-        """
         data = yaml.safe_load((FIXTURES_DIR / "invalid/duplicate-slots.yaml").read_text())
-        config = adapter.validate_python(data)
-        assert isinstance(config, ExplicitConstellation)
-        # Both satellites have plane=0, slot=0
-        assert config.satellites[0].plane == config.satellites[1].plane
-        assert config.satellites[0].slot == config.satellites[1].slot
+        with pytest.raises(ValidationError, match="Duplicate plane/slot"):
+            adapter.validate_python(data)
 
 
 class TestIslOverride:

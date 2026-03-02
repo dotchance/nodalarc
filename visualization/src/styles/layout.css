@@ -57,6 +57,54 @@
   pointer-events: none;
 }
 
+/* VS-API startup error — full-screen overlay */
+.connection-startup-error {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(13, 13, 26, 0.95);
+}
+
+.startup-error-box {
+  text-align: center;
+  padding: 32px 48px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.startup-error-box h2 {
+  color: var(--accent-red);
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.startup-error-box p {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 16px;
+  font-family: monospace;
+}
+
+.startup-error-box button {
+  background: var(--accent-blue);
+  color: var(--bg-main);
+  padding: 8px 24px;
+  border-radius: 4px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.startup-error-box button:hover {
+  opacity: 0.9;
+}
+
 /* Split view: side by side globe + topology */
 .area-viewport--split {
   display: flex;

@@ -10,6 +10,45 @@ interface EventLogProps {
   onSelect: (sel: Selection | null) => void;
 }
 
+const TYPE_ABBREV: Record<string, string> = {
+  link_up: "LINK UP",
+  link_down: "LINK DN",
+  adjacency_up: "ADJ UP",
+  adjacency_down: "ADJ DOWN",
+  spf_start: "SPF",
+  spf_end: "SPF END",
+  convergence: "CONV",
+  scenario_inject: "INJECT",
+  scenario_reconciliation: "RECON",
+  adapter: "ADAPT",
+};
+
+function abbreviateType(eventType: string): string {
+  return TYPE_ABBREV[eventType] ?? eventType.toUpperCase().replace(/_/g, " ");
+}
+
+/** Abbreviate node ID: P03S07 for satellites, station name for GS */
+function abbreviateNodeId(nodeId: string): string {
+  if (nodeId.startsWith("gs-")) return nodeId.replace("gs-", "");
+  const match = nodeId.match(/P(\d+)S(\d+)/);
+  if (match) return `P${match[1]}S${match[2]}`;
+  return nodeId;
+}
+
+/** Color class for event type */
+function eventColorClass(eventType: string): string {
+  if (eventType.includes("up") || eventType === "link_up" || eventType === "adjacency_up") {
+    return "event-type--up";
+  }
+  if (eventType.includes("down") || eventType === "link_down" || eventType === "adjacency_down") {
+    return "event-type--down";
+  }
+  if (eventType.includes("spf") || eventType === "convergence") {
+    return "event-type--computation";
+  }
+  return "event-type--info";
+}
+
 const DEFAULT_FILTERS: Record<string, boolean> = {
   link_up: true,
   link_down: true,
@@ -79,9 +118,10 @@ export function EventLog({ events, onSelect }: EventLogProps) {
             onClick={() => handleEventClick(e)}
           >
             <span className="event-time">{formatTime(e.sim_time)}</span>
-            <span className={`event-type event-type--${e.event_type}`}>
-              {e.event_type}
+            <span className={`event-type ${eventColorClass(e.event_type)}`}>
+              {abbreviateType(e.event_type)}
             </span>
+            <span className="event-node">{abbreviateNodeId(e.node_id)}</span>
             <span className="event-summary">{e.summary}</span>
           </div>
         ))}

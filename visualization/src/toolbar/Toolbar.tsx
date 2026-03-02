@@ -8,6 +8,7 @@ interface ToolbarProps {
   showGroundTracks: boolean;
   showAllLinks: boolean;
   followNode: boolean;
+  canSplit: boolean;
   onViewMode: (mode: ViewMode) => void;
   onColorMode: (mode: ColorMode) => void;
   onToggleGroundTracks: () => void;
@@ -46,6 +47,7 @@ export function Toolbar({
   showGroundTracks,
   showAllLinks,
   followNode,
+  canSplit,
   onViewMode,
   onColorMode,
   onToggleGroundTracks,
@@ -58,7 +60,9 @@ export function Toolbar({
     <div className="toolbar">
       <ToolBtn label="Globe (Tab)" icon="🌐" active={viewMode === "globe"} onClick={() => onViewMode("globe")} />
       <ToolBtn label="Topology (Tab)" icon="◎" active={viewMode === "topology"} onClick={() => onViewMode("topology")} />
-      <ToolBtn label="Split" icon="⬒" active={viewMode === "split"} onClick={() => onViewMode("split")} />
+      {canSplit && (
+        <ToolBtn label="Split" icon="⬒" active={viewMode === "split"} onClick={() => onViewMode("split")} />
+      )}
       <div className="toolbar-separator" />
       <ToolBtn
         label={`Color: ${colorMode === "area" ? "Area (1)" : "Plane (2)"}`}

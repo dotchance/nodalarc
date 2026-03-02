@@ -48,7 +48,7 @@ def insert_latency_update(conn: sqlite3.Connection, event: LatencyUpdate) -> int
     cur = conn.execute(
         """INSERT INTO link_events (sim_time, wall_time, event_type, node_a, node_b,
            interface_a, interface_b, latency_ms, range_km)
-           VALUES (?, ?, 'LatencyUpdate', ?, ?, '', '', ?, ?)""",
+           VALUES (?, ?, 'LatencyUpdate', ?, ?, NULL, NULL, ?, ?)""",
         (event.sim_time.isoformat(), event.wall_time.isoformat(),
          event.node_a, event.node_b,
          event.latency_ms, event.range_km),
@@ -94,12 +94,16 @@ def query_link_events(
 
 def insert_convergence_result(conn: sqlite3.Connection, result: ConvergenceResult) -> int:
     cur = conn.execute(
-        """INSERT INTO convergence_events (event_id, converged, duration_ms,
-           packets_lost, packets_sent, sim_time_start, sim_time_end)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (result.event_id, 1 if result.converged else 0,
-         result.duration_ms, result.packets_lost, result.packets_sent,
-         result.sim_time_start.isoformat(), result.sim_time_end.isoformat()),
+        """INSERT INTO convergence_events (event_id, sim_time_start, sim_time_end,
+           wall_time_start, wall_time_end, converged, duration_ms,
+           packets_lost, packets_sent, triggering_link_event_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (result.event_id,
+         result.sim_time_start.isoformat(), result.sim_time_end.isoformat(),
+         result.wall_time_start.isoformat(), result.wall_time_end.isoformat(),
+         1 if result.converged else 0, result.duration_ms,
+         result.packets_lost, result.packets_sent,
+         result.triggering_link_event_id),
     )
     conn.commit()
     return cur.lastrowid
@@ -238,17 +242,17 @@ def get_metadata(conn: sqlite3.Connection, key: str) -> str | None:
 
 def insert_config_change(
     conn: sqlite3.Connection,
-    timestamp_s: float,
-    node_id: str,
-    config_type: str,
-    new_hash: str,
-    old_hash: str | None = None,
+    sim_time: str,
+    wall_time: str,
+    change_type: str,
+    description: str,
+    config_snapshot: str | None = None,
 ) -> int:
     cur = conn.execute(
-        """INSERT INTO config_changes (timestamp_s, node_id, config_type,
-           old_hash, new_hash)
+        """INSERT INTO config_changes (sim_time, wall_time, change_type,
+           description, config_snapshot)
            VALUES (?, ?, ?, ?, ?)""",
-        (timestamp_s, node_id, config_type, old_hash, new_hash),
+        (sim_time, wall_time, change_type, description, config_snapshot),
     )
     conn.commit()
     return cur.lastrowid

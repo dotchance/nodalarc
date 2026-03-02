@@ -10,6 +10,7 @@ When run as non-root with passwordless sudo, tests auto-delegate to a
 root subprocess.
 """
 
+import logging
 import os
 import signal
 import subprocess
@@ -17,6 +18,8 @@ import sys
 import time
 
 import pytest
+
+log = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.requires_root
 
@@ -303,12 +306,12 @@ else:
             capture_output=True, text=True,
             timeout=120,
         )
-        # Print subprocess output so individual test results are visible
+        # Log subprocess output so individual test results are visible
         for line in result.stdout.splitlines():
-            print(line)
+            log.debug(line)
         if result.stderr:
             for line in result.stderr.splitlines():
-                print(line, file=sys.stderr)
+                log.debug(line)
         assert result.returncode == 0, (
             f"Link manager tests failed under sudo (exit {result.returncode})"
         )

@@ -70,6 +70,8 @@ export interface StateSnapshot {
   active_flows: ActiveFlow[];
   recent_events: RecentEvent[];
   network_health: NetworkHealth;
+  routing_stack: string | null;
+  constellation_name: string | null;
 }
 
 /** App-level selection state */

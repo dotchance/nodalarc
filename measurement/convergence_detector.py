@@ -59,6 +59,8 @@ def measure_convergence(
             packets_sent=0,
             sim_time_start=start_time,
             sim_time_end=end_time,
+            wall_time_start=start_time,
+            wall_time_end=end_time,
         )
 
     # Determine which flows might be affected
@@ -77,6 +79,8 @@ def measure_convergence(
             packets_sent=0,
             sim_time_start=start_time,
             sim_time_end=end_time,
+            wall_time_start=start_time,
+            wall_time_end=end_time,
         )
 
     # Probe affected flows until stability or timeout
@@ -105,6 +109,8 @@ def measure_convergence(
                 packets_sent=total_sent,
                 sim_time_start=start_time,
                 sim_time_end=end_time,
+                wall_time_start=start_time,
+                wall_time_end=end_time,
             )
 
         # Run probe burst on each affected flow
@@ -147,6 +153,8 @@ def measure_convergence(
                     packets_sent=total_sent,
                     sim_time_start=start_time,
                     sim_time_end=end_time,
+                    wall_time_start=start_time,
+                    wall_time_end=end_time,
                 )
         else:
             stable_since = None

@@ -1,4 +1,4 @@
-/** Canvas interaction — pan, zoom, click detection. */
+/** Canvas interaction — pan, zoom, click, hover detection. */
 
 export interface ViewTransform {
   offsetX: number;
@@ -11,31 +11,42 @@ export function setupInteraction(
   getTransform: () => ViewTransform,
   setTransform: (t: ViewTransform) => void,
   onCanvasClick: (worldX: number, worldY: number) => void,
+  onCanvasHover?: (worldX: number, worldY: number) => void,
 ): () => void {
   let isPanning = false;
   let lastX = 0;
   let lastY = 0;
+  let didDrag = false;
 
   const onMouseDown = (e: MouseEvent) => {
     isPanning = true;
+    didDrag = false;
     lastX = e.clientX;
     lastY = e.clientY;
     canvas.style = "grabbing";
   };
 
   const onMouseMove = (e: MouseEvent) => {
-    if (!isPanning) return;
-    const dx = e.clientX - lastX;
-    const dy = e.clientY - lastY;
-    lastX = e.clientX;
-    lastY = e.clientY;
+    if (isPanning) {
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDrag = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
 
-    const t = getTransform();
-    setTransform({
-      ...t,
-      offsetX: t.offsetX + dx,
-      offsetY: t.offsetY + dy,
-    });
+      const t = getTransform();
+      setTransform({
+        ...t,
+        offsetX: t.offsetX + dx,
+        offsetY: t.offsetY + dy,
+      });
+    } else if (onCanvasHover) {
+      const rect = canvas.getBoundingClientRect();
+      const t = getTransform();
+      const worldX = (e.clientX - rect.left - t.offsetX) / t.scale;
+      const worldY = (e.clientY - rect.top - t.offsetY) / t.scale;
+      onCanvasHover(worldX, worldY);
+    }
   };
 
   const onMouseUp = () => {
@@ -62,6 +73,7 @@ export function setupInteraction(
   };
 
   const onClick = (e: MouseEvent) => {
+    if (didDrag) return; // Don't fire click after drag
     const rect = canvas.getBoundingClientRect();
     const t = getTransform();
     const worldX = (e.clientX - rect.left - t.offsetX) / t.scale;

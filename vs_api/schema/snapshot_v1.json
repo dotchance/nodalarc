@@ -1,0 +1,443 @@
+{
+  "$defs": {
+    "ActiveFlow": {
+      "description": "Active traffic flow configuration.",
+      "properties": {
+        "flow_id": {
+          "title": "Flow Id",
+          "type": "string"
+        },
+        "src_node": {
+          "title": "Src Node",
+          "type": "string"
+        },
+        "dst_node": {
+          "title": "Dst Node",
+          "type": "string"
+        },
+        "protocol": {
+          "title": "Protocol",
+          "type": "string"
+        },
+        "probe_type": {
+          "title": "Probe Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "flow_id",
+        "src_node",
+        "dst_node",
+        "protocol",
+        "probe_type"
+      ],
+      "title": "ActiveFlow",
+      "type": "object"
+    },
+    "LinkState": {
+      "description": "State of a single link between two nodes.",
+      "properties": {
+        "node_a": {
+          "title": "Node A",
+          "type": "string"
+        },
+        "node_b": {
+          "title": "Node B",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "link_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Link Type"
+        },
+        "link_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Link Reason"
+        },
+        "latency_ms": {
+          "title": "Latency Ms",
+          "type": "number"
+        },
+        "bandwidth_mbps": {
+          "title": "Bandwidth Mbps",
+          "type": "number"
+        },
+        "range_km": {
+          "title": "Range Km",
+          "type": "number"
+        },
+        "traffic_load_pct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Traffic Load Pct"
+        }
+      },
+      "required": [
+        "node_a",
+        "node_b",
+        "state",
+        "link_type",
+        "link_reason",
+        "latency_ms",
+        "bandwidth_mbps",
+        "range_km",
+        "traffic_load_pct"
+      ],
+      "title": "LinkState",
+      "type": "object"
+    },
+    "NetworkHealth": {
+      "description": "Overall network health status.",
+      "properties": {
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "converging_since_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Converging Since Ms"
+        },
+        "unreachable_flows": {
+          "title": "Unreachable Flows",
+          "type": "integer"
+        },
+        "last_convergence_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Convergence Ms"
+        }
+      },
+      "required": [
+        "status",
+        "converging_since_ms",
+        "unreachable_flows",
+        "last_convergence_ms"
+      ],
+      "title": "NetworkHealth",
+      "type": "object"
+    },
+    "NodeState": {
+      "description": "State of a single node in the constellation.",
+      "properties": {
+        "node_id": {
+          "title": "Node Id",
+          "type": "string"
+        },
+        "node_type": {
+          "title": "Node Type",
+          "type": "string"
+        },
+        "lat_deg": {
+          "title": "Lat Deg",
+          "type": "number"
+        },
+        "lon_deg": {
+          "title": "Lon Deg",
+          "type": "number"
+        },
+        "alt_km": {
+          "title": "Alt Km",
+          "type": "number"
+        },
+        "vel_x_km_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Vel X Km S"
+        },
+        "vel_y_km_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Vel Y Km S"
+        },
+        "vel_z_km_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Vel Z Km S"
+        },
+        "plane": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Plane"
+        },
+        "slot": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Slot"
+        },
+        "routing_area": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Routing Area"
+        },
+        "neighbor_count": {
+          "title": "Neighbor Count",
+          "type": "integer"
+        },
+        "isl_count": {
+          "title": "Isl Count",
+          "type": "integer"
+        },
+        "gnd_count": {
+          "title": "Gnd Count",
+          "type": "integer"
+        },
+        "prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prefix"
+        }
+      },
+      "required": [
+        "node_id",
+        "node_type",
+        "lat_deg",
+        "lon_deg",
+        "alt_km",
+        "vel_x_km_s",
+        "vel_y_km_s",
+        "vel_z_km_s",
+        "plane",
+        "slot",
+        "routing_area",
+        "neighbor_count",
+        "isl_count",
+        "gnd_count"
+      ],
+      "title": "NodeState",
+      "type": "object"
+    },
+    "RecentEvent": {
+      "description": "Recent event for the VF event log.",
+      "properties": {
+        "sim_time": {
+          "format": "date-time",
+          "title": "Sim Time",
+          "type": "string"
+        },
+        "node_id": {
+          "title": "Node Id",
+          "type": "string"
+        },
+        "event_type": {
+          "title": "Event Type",
+          "type": "string"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sim_time",
+        "node_id",
+        "event_type",
+        "summary"
+      ],
+      "title": "RecentEvent",
+      "type": "object"
+    },
+    "TracedPath": {
+      "description": "Forwarding path trace for a traffic flow.",
+      "properties": {
+        "flow_id": {
+          "title": "Flow Id",
+          "type": "string"
+        },
+        "src_node": {
+          "title": "Src Node",
+          "type": "string"
+        },
+        "dst_node": {
+          "title": "Dst Node",
+          "type": "string"
+        },
+        "hops": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Hops",
+          "type": "array"
+        }
+      },
+      "required": [
+        "flow_id",
+        "src_node",
+        "dst_node",
+        "hops"
+      ],
+      "title": "TracedPath",
+      "type": "object"
+    }
+  },
+  "description": "Complete constellation state sent via WebSocket at ~1Hz.\n\nFull snapshots only \u2014 no deltas. Drop intermediate frames\nif behind, never queue.",
+  "properties": {
+    "sim_time": {
+      "format": "date-time",
+      "title": "Sim Time",
+      "type": "string"
+    },
+    "wall_time": {
+      "format": "date-time",
+      "title": "Wall Time",
+      "type": "string"
+    },
+    "schema_version": {
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/NodeState"
+      },
+      "title": "Nodes",
+      "type": "array"
+    },
+    "links": {
+      "items": {
+        "$ref": "#/$defs/LinkState"
+      },
+      "title": "Links",
+      "type": "array"
+    },
+    "traced_paths": {
+      "items": {
+        "$ref": "#/$defs/TracedPath"
+      },
+      "title": "Traced Paths",
+      "type": "array"
+    },
+    "active_flows": {
+      "items": {
+        "$ref": "#/$defs/ActiveFlow"
+      },
+      "title": "Active Flows",
+      "type": "array"
+    },
+    "recent_events": {
+      "items": {
+        "$ref": "#/$defs/RecentEvent"
+      },
+      "title": "Recent Events",
+      "type": "array"
+    },
+    "network_health": {
+      "$ref": "#/$defs/NetworkHealth"
+    },
+    "routing_stack": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Routing Stack"
+    },
+    "constellation_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Constellation Name"
+    }
+  },
+  "required": [
+    "sim_time",
+    "wall_time",
+    "schema_version",
+    "nodes",
+    "links",
+    "traced_paths",
+    "active_flows",
+    "recent_events",
+    "network_health"
+  ],
+  "title": "StateSnapshot",
+  "type": "object"
+}

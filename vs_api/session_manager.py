@@ -106,6 +106,7 @@ class SessionManager:
                     session_id = state.get("session_id", "")
 
                     # Kill MI and TO processes
+                    self._status_detail = "Stopping MI and orchestrator"
                     for key in ("mi_pid", "orchestrator_pid"):
                         pid = state.get(key, 0)
                         if pid:
@@ -140,17 +141,43 @@ class SessionManager:
             clear_state_fn()
 
             # === Deploy new session ===
-            self._status_detail = f"Deploying new session"
+            self._status_detail = "Starting deployment"
             kubeconfig = "KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 ["sudo", "env", kubeconfig,
-                 sys.executable, "-m", "tools.na_deploy",
+                 sys.executable, "-u", "-m", "tools.na_deploy",
                  "--session", session_path,
                  "--skip-vsapi"],
-                capture_output=True, text=True, timeout=300,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
             )
-            if result.returncode != 0:
-                raise RuntimeError(f"Deploy failed: {result.stderr[-500:]}")
+            # Stream output and update status_detail from "Step N:" log lines
+            last_lines: list[str] = []
+            for line in proc.stdout:
+                line = line.rstrip()
+                if line:
+                    last_lines.append(line)
+                    if len(last_lines) > 20:
+                        last_lines.pop(0)
+                    # Extract step info from log lines like "... Step 5: Deploy K3s pods"
+                    if " Step " in line:
+                        # Pull everything after "Step "
+                        idx = line.index(" Step ")
+                        self._status_detail = line[idx + 1:]
+                    elif "Waiting for" in line:
+                        idx = line.index("Waiting for")
+                        self._status_detail = line[idx:]
+                    elif "Helm install" in line:
+                        self._status_detail = "Helm install running"
+                    elif "All " in line and " pods Running" in line:
+                        self._status_detail = line[line.index("All "):]
+                    elif "Created " in line and " veth" in line:
+                        self._status_detail = line[line.index("Created "):]
+            proc.wait()
+            if proc.returncode != 0:
+                tail = "\n".join(last_lines[-5:])
+                raise RuntimeError(f"Deploy failed (rc={proc.returncode}):\n{tail}")
 
             # === Find new session-state.json ===
             self._status_detail = "Locating new session data"

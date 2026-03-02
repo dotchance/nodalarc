@@ -133,9 +133,10 @@ export function updateSunPosition(simTime: string): void {
   const cosDecl = Math.cos(declRad);
   const sinDecl = Math.sin(declRad);
 
+  // Sun geographic longitude = -(hourAngle) → geoToWorld z = +r*cos(lat)*sin(hourAngle)
   _sunLight.position.set(
-    -dist * cosDecl * Math.sin(hourAngle),
-    dist * sinDecl,
     dist * cosDecl * Math.cos(hourAngle),
+    dist * sinDecl,
+    dist * cosDecl * Math.sin(hourAngle),
   );
 }

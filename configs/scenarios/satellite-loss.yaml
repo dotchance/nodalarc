@@ -1,0 +1,33 @@
+scenario:
+  name: satellite-loss
+  description: "Inject complete satellite loss and observe cascade reconvergence"
+
+  traffic_flows:
+    - flow_id: sat-loss-flow
+      src: gs-hawthorne
+      dst: gs-ashburn
+      protocol: udp
+      bandwidth_kbps: 1000
+      probe_type: continuous
+
+  steps:
+    - action: wait
+      duration_s: 30
+
+    - action: measure
+      duration_s: 30
+
+    - action: inject_satellite_loss
+      node: sat-P01S05
+
+    - action: wait_converge
+      timeout_s: 60
+
+    - action: measure
+      duration_s: 30
+
+    - action: wait
+      duration_s: 60
+
+    - action: measure
+      duration_s: 30

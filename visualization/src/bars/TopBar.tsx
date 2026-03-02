@@ -2,13 +2,16 @@
 
 import { useRef } from "react";
 import { formatTime, formatDuration } from "../translate";
-import type { StateSnapshot } from "../types";
+import type { StateSnapshot, SessionInfo } from "../types";
 
 interface TopBarProps {
   snapshot: StateSnapshot | null;
   connected: boolean;
   historicalMode: boolean;
   onToggleHistorical: () => void;
+  sessions: SessionInfo[];
+  switching: boolean;
+  onSwitchSession: (file: string) => void;
 }
 
 /** Compute compression factor from recent snapshots. */
@@ -36,7 +39,7 @@ function useCompressionFactor(snapshot: StateSnapshot | null): string {
   return "--";
 }
 
-export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical }: TopBarProps) {
+export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical, sessions, switching, onSwitchSession }: TopBarProps) {
   const compressionFactor = useCompressionFactor(snapshot);
   const healthStatus = snapshot?.network_health.status ?? "unknown";
   const healthColor =
@@ -59,12 +62,36 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
         fontSize: 12,
       }}
     >
-      <span
-        style={{ fontWeight: 600, color: "var(--accent-blue)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-        title={snapshot ? `${snapshot.constellation_name ?? ""}  |  ${snapshot.routing_stack ?? ""}` : "Nodal Arc"}
-      >
-        {snapshot?.constellation_name ?? "Nodal Arc"}
-      </span>
+      {sessions.length > 0 ? (
+        <select
+          value={sessions.find((s) => s.active)?.file ?? ""}
+          onChange={(e) => onSwitchSession(e.target.value)}
+          disabled={switching}
+          style={{
+            fontWeight: 600,
+            color: "var(--accent-blue)",
+            background: "transparent",
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            padding: "2px 6px",
+            fontSize: 12,
+            maxWidth: 200,
+            cursor: switching ? "wait" : "pointer",
+          }}
+          title="Switch session"
+        >
+          {sessions.map((s) => (
+            <option key={s.file} value={s.file}>{s.name}</option>
+          ))}
+        </select>
+      ) : (
+        <span
+          style={{ fontWeight: 600, color: "var(--accent-blue)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          title="Nodal Arc"
+        >
+          {snapshot?.constellation_name ?? "Nodal Arc"}
+        </span>
+      )}
       {snapshot?.routing_stack && (
         <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
           {snapshot.routing_stack}

@@ -73,6 +73,16 @@ export interface StateSnapshot {
   network_health: NetworkHealth;
   routing_stack: string | null;
   constellation_name: string | null;
+  session_status: string | null;
+  session_status_detail: string | null;
+}
+
+export interface SessionInfo {
+  name: string;
+  file: string;
+  constellation: string;
+  routing_stack: string;
+  active: boolean;
 }
 
 /** App-level selection state */

@@ -23,6 +23,7 @@ import yaml
 import zmq
 import zmq.asyncio
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
@@ -64,6 +65,7 @@ from nodalarc.zmq_channels import (
     TOPIC_POSITION_EVENT,
     TOPIC_PROBE_RESULT,
 )
+from vs_api.session_manager import SessionManager
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +89,7 @@ _routing_stack: str | None = None
 _constellation_name: str | None = None
 _ws_clients: list[WebSocket] = []
 _ws_lock = asyncio.Lock()
+_session_manager: SessionManager | None = None
 
 
 def _update_position(event_data: dict) -> None:
@@ -203,6 +206,8 @@ def _build_snapshot() -> dict:
             network_health=health,
             routing_stack=_routing_stack,
             constellation_name=_constellation_name,
+            session_status=_session_manager.status if _session_manager else None,
+            session_status_detail=_session_manager.status_detail if _session_manager else None,
         )
         return json.loads(snapshot.model_dump_json())
 
@@ -299,6 +304,44 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Nodal Arc VS-API", version="1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _clear_state() -> None:
+    """Reset in-memory state during session switch."""
+    with _state_lock:
+        _state["nodes"].clear()
+        _state["links"].clear()
+        _state["recent_events"].clear()
+        _state["active_flows"].clear()
+        _state["network_health"] = {
+            "status": "converged",
+            "converging_since_ms": None,
+            "unreachable_flows": 0,
+            "last_convergence_ms": None,
+        }
+        _state["sim_time"] = datetime.now(timezone.utc).isoformat()
+
+
+def _update_session_globals(session_path: str, new_db_path: str) -> None:
+    """Reload routing_stack, constellation_name, and db_path from new session."""
+    global _routing_stack, _constellation_name, _db_path
+    session_data = yaml.safe_load(Path(session_path).read_text())
+    session = SessionConfig.model_validate(session_data)
+    _routing_stack = Path(session.routing.stack).name
+    _constellation_name = Path(session.constellation).stem
+    _db_path = new_db_path
+
+    # Ensure tables exist in new DB
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(new_db_path)
+    create_tables(conn)
+    conn.close()
 
 
 async def _ws_broadcaster() -> None:
@@ -463,30 +506,72 @@ def trace_path(body: dict) -> dict:
         ctx.term()
 
 
+@app.get("/api/v1/sessions")
+def list_sessions() -> list[dict]:
+    """List available sessions with active flag."""
+    if _session_manager is None:
+        return []
+    return _session_manager.list_sessions()
+
+
+@app.post("/api/v1/sessions/switch", response_model=None)
+async def switch_session(body: dict):
+    """Trigger async session switch. Returns immediately."""
+    if _session_manager is None:
+        return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
+    if _session_manager.status == "switching":
+        return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
+    session_path = body.get("session", "")
+    if not session_path:
+        return JSONResponse(status_code=400, content={"error": "session field required"})
+    asyncio.create_task(_run_switch(session_path))
+    return {"status": "switching"}
+
+
+async def _run_switch(session_path: str) -> None:
+    """Run session switch in thread executor (blocking subprocess calls)."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None,
+        _session_manager.switch,
+        session_path,
+        _clear_state,
+        _update_session_globals,
+    )
+
+
 def main() -> None:
     import uvicorn
 
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="VS-API server")
-    parser.add_argument("--session", required=True, help="Path to session YAML")
-    parser.add_argument("--db", required=True, help="Path to SQLite database")
+    parser.add_argument("--session", default=None, help="Path to session YAML (optional)")
+    parser.add_argument("--db", default=None, help="Path to SQLite database (optional)")
     from nodalarc.zmq_channels import VS_API_HTTP_PORT
     parser.add_argument("--port", type=int, default=VS_API_HTTP_PORT, help="HTTP port")
+    parser.add_argument("--sessions-dir", default="configs/sessions", help="Directory with session YAMLs")
     args = parser.parse_args()
 
-    global _db_path, _routing_stack, _constellation_name
-    _db_path = args.db
+    global _db_path, _routing_stack, _constellation_name, _session_manager
 
-    # Load session metadata for snapshot enrichment
-    session_data = yaml.safe_load(Path(args.session).read_text())
-    session = SessionConfig.model_validate(session_data)
-    _routing_stack = Path(session.routing.stack).name
-    _constellation_name = Path(session.constellation).stem
+    # Initialize SessionManager
+    _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
 
-    # Ensure tables exist
-    conn = sqlite3.connect(args.db)
-    create_tables(conn)
-    conn.close()
+    if args.session and args.db:
+        _db_path = args.db
+
+        # Load session metadata for snapshot enrichment
+        session_data = yaml.safe_load(Path(args.session).read_text())
+        session = SessionConfig.model_validate(session_data)
+        _routing_stack = Path(session.routing.stack).name
+        _constellation_name = Path(session.constellation).stem
+        _session_manager.set_active(args.session)
+        _session_manager._status = "ready"
+
+        # Ensure tables exist
+        conn = sqlite3.connect(args.db)
+        create_tables(conn)
+        conn.close()
 
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
 

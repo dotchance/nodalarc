@@ -11,6 +11,7 @@ import { TimeControls } from "./bars/TimeControls";
 import { useSnapshot } from "./hooks/useSnapshot";
 import { useSelection } from "./hooks/useSelection";
 import { useKeyboard } from "./hooks/useKeyboard";
+import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { WS_URL } from "./config";
 import type { ViewMode, ColorMode } from "./types";
 
@@ -26,6 +27,7 @@ export function App() {
   const { snapshot, connected, hasEverConnected, historicalMode, setHistoricalMode, fetchHistorical } =
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
+  const { sessions, switching, switchSession } = useSessionSwitcher(snapshot?.session_status ?? null);
 
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
   const [colorMode, setColorMode] = useState<ColorMode>("area");
@@ -124,6 +126,9 @@ export function App() {
         connected={connected}
         historicalMode={historicalMode}
         onToggleHistorical={toggleHistorical}
+        sessions={sessions}
+        switching={switching}
+        onSwitchSession={switchSession}
       />
 
       <div className={`area-viewport ${viewMode === "split" ? "area-viewport--split" : ""}`}>
@@ -139,6 +144,16 @@ export function App() {
         {!connected && hasEverConnected && (
           <div className="connection-banner">
             Connection lost. Reconnecting...
+          </div>
+        )}
+        {switching && (
+          <div className="session-switching-overlay">
+            <div className="switching-box">
+              <p>Switching session...</p>
+              <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
+                {snapshot?.session_status_detail ?? ""}
+              </p>
+            </div>
           </div>
         )}
         <div

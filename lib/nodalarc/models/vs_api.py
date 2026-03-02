@@ -111,3 +111,5 @@ class StateSnapshot(BaseModel):
     network_health: NetworkHealth
     routing_stack: str | None = None
     constellation_name: str | None = None
+    session_status: str | None = None  # "ready", "switching", "error", "idle"
+    session_status_detail: str | None = None

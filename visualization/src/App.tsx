@@ -105,6 +105,16 @@ export function App() {
 
   useKeyboard(keyboardActions);
 
+  // When switching back to globe with an active selection, fly to that node
+  const prevViewModeRef = useRef(viewMode);
+  useEffect(() => {
+    const prev = prevViewModeRef.current;
+    prevViewModeRef.current = viewMode;
+    if (viewMode !== prev && (viewMode === "globe" || viewMode === "split") && selection) {
+      globeActionsRef.current?.flyToNode(selection.id);
+    }
+  }, [viewMode, selection]);
+
   const layoutClass = `app-layout ${historicalMode ? "app-layout--historical" : ""}`;
 
   return (
@@ -131,30 +141,32 @@ export function App() {
             Connection lost. Reconnecting...
           </div>
         )}
-        {(viewMode === "globe" || viewMode === "split") && (
-          <div className={viewMode === "split" ? "split-pane" : "full-pane"}>
-            <GlobeView
-              snapshot={snapshot}
-              selection={selection}
-              onSelect={select}
-              colorMode={colorMode}
-              showGroundTracks={showGroundTracks}
-              showAllLinks={showAllLinks}
-              actionsRef={globeActionsRef}
-              followNode={followNode}
-            />
-          </div>
-        )}
-        {(viewMode === "topology" || viewMode === "split") && (
-          <div className={viewMode === "split" ? "split-pane" : "full-pane"}>
-            <TopologyView
-              snapshot={snapshot}
-              selection={selection}
-              onSelect={select}
-              onFlyTo={handleFlyToNode}
-            />
-          </div>
-        )}
+        <div
+          className={viewMode === "split" ? "split-pane" : "full-pane"}
+          style={{ display: viewMode === "topology" ? "none" : undefined }}
+        >
+          <GlobeView
+            snapshot={snapshot}
+            selection={selection}
+            onSelect={select}
+            colorMode={colorMode}
+            showGroundTracks={showGroundTracks}
+            showAllLinks={showAllLinks}
+            actionsRef={globeActionsRef}
+            followNode={followNode}
+          />
+        </div>
+        <div
+          className={viewMode === "split" ? "split-pane" : "full-pane"}
+          style={{ display: viewMode === "globe" ? "none" : undefined }}
+        >
+          <TopologyView
+            snapshot={snapshot}
+            selection={selection}
+            onSelect={select}
+            onFlyTo={handleFlyToNode}
+          />
+        </div>
         <Toolbar
           viewMode={viewMode}
           colorMode={colorMode}

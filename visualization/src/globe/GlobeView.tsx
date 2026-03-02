@@ -216,18 +216,19 @@ export function GlobeView({
       renderer.render(scene, camera);
     });
 
-    // Handle resize
-    const onResize = () => {
+    // Handle resize — use ResizeObserver so split/full layout changes are detected
+    const resizeObs = new ResizeObserver(() => {
       const w = container.clientWidth;
       const h = container.clientHeight;
+      if (w === 0 || h === 0) return; // hidden via display:none
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
-    };
-    window.addEventListener("resize", onResize);
+    });
+    resizeObs.observe(container);
 
     return () => {
-      window.removeEventListener("resize", onResize);
+      resizeObs.disconnect();
       renderer.setAnimationLoop(null);
       renderer.dispose();
       container.removeChild(renderer.domElement);

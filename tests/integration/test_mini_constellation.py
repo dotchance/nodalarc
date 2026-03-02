@@ -30,6 +30,20 @@ from tests.integration.conftest import (
 pytestmark = pytest.mark.integration
 
 
+def _parse_session_id(stdout: str, stderr: str) -> str | None:
+    """Extract session_id from na-deploy output (stdout or stderr).
+
+    na-deploy logs 'Session: <id>' via logging, which goes to stderr
+    with a timestamp/module prefix.  Search both streams for the key.
+    """
+    for stream in (stdout, stderr):
+        for line in stream.split("\n"):
+            idx = line.find("Session:")
+            if idx != -1:
+                return line[idx:].split(":", 1)[1].strip()
+    return None
+
+
 SESSION_2X3_PATH = str(PROJECT_ROOT / "configs/sessions/2x3-test.yaml")
 SESSION_4NODE_PATH = str(PROJECT_ROOT / "configs/sessions/4-node-test.yaml")
 SESSION_STARLINK_ISIS_PATH = str(PROJECT_ROOT / "configs/sessions/starlink-isis-de.yaml")
@@ -117,29 +131,27 @@ class TestMiniConstellation:
         if result.returncode != 0 or "nodalarc/frr" not in result.stdout:
             pytest.skip("Container images not available for deployment test")
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def deployed_2x3(self, nodalarc_namespace):
-        """Deploy 2x3 constellation and clean up after test.
+        """Deploy 2x3 constellation and clean up after all tests in class.
 
         Uses na-deploy to run the full 11-step startup sequence.
+        Runs with sudo because na-deploy needs root for crictl, nsenter,
+        and pyroute2 netlink operations.
         """
         import sys
 
         result = subprocess.run(
-            [sys.executable, "-m", "tools.na_deploy", "--session", SESSION_2X3_PATH],
+            ["sudo", "-E", sys.executable, "-m", "tools.na_deploy",
+             "--session", SESSION_2X3_PATH],
             capture_output=True, text=True,
             timeout=300,
         )
         if result.returncode != 0:
             pytest.fail(f"na-deploy failed: {result.stderr}")
 
-        # Parse session_id from output
-        session_id = None
-        for line in result.stdout.split("\n"):
-            if line.startswith("Session:"):
-                session_id = line.split(":", 1)[1].strip()
-                break
-
+        # Parse session_id from combined stdout+stderr (logging goes to stderr)
+        session_id = _parse_session_id(result.stdout, result.stderr)
         if not session_id:
             pytest.fail("Could not parse session_id from na-deploy output")
 
@@ -236,13 +248,13 @@ class TestStarlinkMini:
         if result.returncode != 0 or "nodalarc/frr" not in result.stdout:
             pytest.skip("Container images not available for deployment test")
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def deployed_starlink(self, nodalarc_namespace):
         """Deploy starlink-mini 6x10 constellation."""
         import sys
 
         result = subprocess.run(
-            [sys.executable, "-m", "tools.na_deploy",
+            ["sudo", "-E", sys.executable, "-m", "tools.na_deploy",
              "--session", SESSION_STARLINK_ISIS_PATH],
             capture_output=True, text=True,
             timeout=600,
@@ -250,12 +262,7 @@ class TestStarlinkMini:
         if result.returncode != 0:
             pytest.fail(f"na-deploy failed: {result.stderr}")
 
-        session_id = None
-        for line in result.stdout.split("\n"):
-            if line.startswith("Session:"):
-                session_id = line.split(":", 1)[1].strip()
-                break
-
+        session_id = _parse_session_id(result.stdout, result.stderr)
         if not session_id:
             pytest.fail("Could not parse session_id from na-deploy output")
 
@@ -345,13 +352,13 @@ class TestOspfDeployment:
         if result.returncode != 0 or "nodalarc/frr" not in result.stdout:
             pytest.skip("Container images not available for deployment test")
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def deployed_ospf(self, nodalarc_namespace):
         """Deploy starlink-mini with OSPF profile."""
         import sys
 
         result = subprocess.run(
-            [sys.executable, "-m", "tools.na_deploy",
+            ["sudo", "-E", sys.executable, "-m", "tools.na_deploy",
              "--session", SESSION_STARLINK_OSPF_PATH],
             capture_output=True, text=True,
             timeout=600,
@@ -359,12 +366,7 @@ class TestOspfDeployment:
         if result.returncode != 0:
             pytest.fail(f"na-deploy failed: {result.stderr}")
 
-        session_id = None
-        for line in result.stdout.split("\n"):
-            if line.startswith("Session:"):
-                session_id = line.split(":", 1)[1].strip()
-                break
-
+        session_id = _parse_session_id(result.stdout, result.stderr)
         if not session_id:
             pytest.fail("Could not parse session_id from na-deploy output")
 

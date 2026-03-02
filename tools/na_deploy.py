@@ -55,7 +55,7 @@ def deploy(session_path: str, dwell: float = 0.05) -> None:
     session_id = f"{session.session.name}-{ts}".lower()
     data_dir = Path(session.session.data_dir) / session_id
     data_dir.mkdir(parents=True, exist_ok=True)
-    log.info(f"Session: {session_id}, data_dir: {data_dir}")
+    log.info(f"Deploying {session_id} to {data_dir}")
 
     addressing = AddressingScheme(session.addressing)
     satellites = expand_constellation(constellation)

@@ -3,6 +3,7 @@
 import * as THREE from "three";
 import { getSatellites } from "./satellites";
 import { getGroundStations } from "./groundStations";
+import { getLinks } from "./links";
 import type { Selection } from "../types";
 
 let tooltip: HTMLDivElement | null = null;
@@ -59,6 +60,61 @@ function clearHover(): void {
   }
 }
 
+const _v3a = new THREE.Vector3();
+const _v3b = new THREE.Vector3();
+
+/**
+ * Screen-space hit test for Line2 links.
+ * Line2 doesn't work with the standard Three.js raycaster, so we project
+ * both endpoints to screen space and check distance from the mouse point
+ * to the resulting 2D line segment.
+ */
+function hitTestLinks(
+  ndcX: number,
+  ndcY: number,
+  camera: THREE.PerspectiveCamera,
+  threshold: number = 0.02,
+): { key: string; nodeA: string; nodeB: string; tooltipText: string } | null {
+  const sats = getSatellites();
+  const gss = getGroundStations();
+  let bestDist = threshold;
+  let bestHit: { key: string; nodeA: string; nodeB: string; tooltipText: string } | null = null;
+
+  for (const [key, entry] of getLinks()) {
+    if (!entry.line.visible) continue;
+    const posA = sats.get(entry.nodeA)?.mesh.position ?? gss.get(entry.nodeA)?.sprite.position;
+    const posB = sats.get(entry.nodeB)?.mesh.position ?? gss.get(entry.nodeB)?.sprite.position;
+    if (!posA || !posB) continue;
+
+    // Project endpoints to NDC (-1..1)
+    _v3a.copy(posA).project(camera);
+    _v3b.copy(posB).project(camera);
+
+    const dist = pointToSegment2D(ndcX, ndcY, _v3a.x, _v3a.y, _v3b.x, _v3b.y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      const state = entry.state === "active" ? "UP" : "DOWN";
+      bestHit = {
+        key,
+        nodeA: entry.nodeA,
+        nodeB: entry.nodeB,
+        tooltipText: `${entry.nodeA} ↔ ${entry.nodeB}: ${state}`,
+      };
+    }
+  }
+  return bestHit;
+}
+
+function pointToSegment2D(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
 export function setupRaycaster(
   canvas: HTMLCanvasElement,
   camera: THREE.PerspectiveCamera,
@@ -66,7 +122,6 @@ export function setupRaycaster(
   onSelect: (sel: Selection | null) => void,
 ): void {
   const raycaster = new THREE.Raycaster();
-  raycaster.params.Line = { threshold: 5 };
   const mouse = new THREE.Vector2();
   const tip = getTooltip();
 
@@ -76,35 +131,36 @@ export function setupRaycaster(
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
     raycaster.setFromCamera(mouse, camera);
+    // Only test nodes (meshes/sprites), not Line2
     const intersects = raycaster.intersectObjects(scene.children, false);
 
-    const hit = intersects.find(
-      (i) => i.object.userData["nodeId"] || i.object.userData["linkKey"],
-    );
+    const nodeHit = intersects.find((i) => i.object.userData["nodeId"]);
 
     clearHover();
 
-    if (hit) {
-      const nodeId = hit.object.userData["nodeId"] as string | undefined;
-      const nodeType = hit.object.userData["nodeType"] as string | undefined;
-      const linkKey = hit.object.userData["linkKey"] as string | undefined;
-
-      if (nodeId && nodeType) {
-        tip.innerHTML = buildTooltipContent(nodeId, nodeType).replace("\n", "<br>");
-        // Hover highlight: scale up
-        hit.object.scale.set(HOVER_SCALE, HOVER_SCALE, HOVER_SCALE);
-        hoveredObject = hit.object;
-      } else {
-        tip.textContent = linkKey ?? "";
-      }
-
+    if (nodeHit) {
+      const nodeId = nodeHit.object.userData["nodeId"] as string;
+      const nodeType = nodeHit.object.userData["nodeType"] as string;
+      tip.innerHTML = buildTooltipContent(nodeId, nodeType).replace("\n", "<br>");
+      nodeHit.object.scale.set(HOVER_SCALE, HOVER_SCALE, HOVER_SCALE);
+      hoveredObject = nodeHit.object;
       tip.style.display = "block";
       tip.style.left = `${event.clientX + 12}px`;
       tip.style.top = `${event.clientY - 8}px`;
       canvas.style = "pointer";
     } else {
-      tip.style.display = "none";
-      canvas.style = "grab";
+      // Check links via screen-space distance
+      const linkHit = hitTestLinks(mouse.x, mouse.y, camera);
+      if (linkHit) {
+        tip.textContent = linkHit.tooltipText;
+        tip.style.display = "block";
+        tip.style.left = `${event.clientX + 12}px`;
+        tip.style.top = `${event.clientY - 8}px`;
+        canvas.style = "pointer";
+      } else {
+        tip.style.display = "none";
+        canvas.style = "grab";
+      }
     }
   });
 
@@ -116,25 +172,25 @@ export function setupRaycaster(
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObjects(scene.children, false);
 
-    const hit = intersects.find(
-      (i) => i.object.userData["nodeId"] || i.object.userData["linkKey"],
-    );
+    const nodeHit = intersects.find((i) => i.object.userData["nodeId"]);
 
-    if (hit) {
-      const nodeId = hit.object.userData["nodeId"] as string | undefined;
-      const nodeType = hit.object.userData["nodeType"] as string | undefined;
-      const linkKey = hit.object.userData["linkKey"] as string | undefined;
-
-      if (nodeId && nodeType) {
-        onSelect({
-          type: nodeType === "satellite" ? "satellite" : "ground_station",
-          id: nodeId,
-        });
-      } else if (linkKey) {
-        onSelect({ type: "link", id: linkKey });
-      }
-    } else {
-      onSelect(null);
+    if (nodeHit) {
+      const nodeId = nodeHit.object.userData["nodeId"] as string;
+      const nodeType = nodeHit.object.userData["nodeType"] as string;
+      onSelect({
+        type: nodeType === "satellite" ? "satellite" : "ground_station",
+        id: nodeId,
+      });
+      return;
     }
+
+    // Check links
+    const linkHit = hitTestLinks(mouse.x, mouse.y, camera);
+    if (linkHit) {
+      onSelect({ type: "link", id: linkHit.key });
+      return;
+    }
+
+    onSelect(null);
   });
 }

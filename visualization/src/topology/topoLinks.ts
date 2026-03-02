@@ -63,7 +63,12 @@ export function drawLinks(
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
 
-    if (link.isGround) {
+    if (link.state !== "active") {
+      // Failed link: red, 2px
+      ctx.strokeStyle = "rgba(255, 51, 51, 0.6)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+    } else if (link.isGround) {
       ctx.strokeStyle = "#00d4aa";
       ctx.lineWidth = 2;
       ctx.setLineDash([]);

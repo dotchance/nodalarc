@@ -59,7 +59,17 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
         fontSize: 12,
       }}
     >
-      <span style={{ fontWeight: 600, color: "var(--accent-blue)" }}>Nodal Arc</span>
+      <span
+        style={{ fontWeight: 600, color: "var(--accent-blue)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        title={snapshot ? `${snapshot.constellation_name ?? ""}  |  ${snapshot.routing_stack ?? ""}` : "Nodal Arc"}
+      >
+        {snapshot?.constellation_name ?? "Nodal Arc"}
+      </span>
+      {snapshot?.routing_stack && (
+        <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
+          {snapshot.routing_stack}
+        </span>
+      )}
       <span style={{ color: "var(--text-secondary)" }}>
         Sim: {snapshot ? formatTime(snapshot.sim_time) : "--:--:--"}
       </span>

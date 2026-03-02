@@ -151,6 +151,9 @@ export function updateLinks(
       });
 
       const line = new Line2(geometry, material);
+      line.userData["linkKey"] = key;
+      line.userData["nodeA"] = ls.node_a;
+      line.userData["nodeB"] = ls.node_b;
       if (dashed) line.computeLineDistances();
       scene.add(line);
 

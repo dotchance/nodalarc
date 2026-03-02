@@ -8,6 +8,7 @@ import type { RecentEvent, Selection } from "../types";
 interface EventLogProps {
   events: RecentEvent[];
   onSelect: (sel: Selection | null) => void;
+  onFlyTo?: (nodeId: string) => void;
 }
 
 const TYPE_ABBREV: Record<string, string> = {
@@ -58,7 +59,7 @@ const DEFAULT_FILTERS: Record<string, boolean> = {
   inject: true,
 };
 
-export function EventLog({ events, onSelect }: EventLogProps) {
+export function EventLog({ events, onSelect, onFlyTo }: EventLogProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -91,6 +92,7 @@ export function EventLog({ events, onSelect }: EventLogProps) {
     if (event.node_id) {
       const type = event.node_id.startsWith("gs-") ? "ground_station" : "satellite";
       onSelect({ type, id: event.node_id });
+      onFlyTo?.(event.node_id);
     }
   };
 

@@ -2,11 +2,12 @@
 
 import { translateReason } from "../translate";
 import { areaCSSColor } from "../globe/colors";
-import type { NodeState, StateSnapshot } from "../types";
+import type { NodeState, StateSnapshot, Selection } from "../types";
 
 interface SatelliteDetailProps {
   node: NodeState;
   snapshot: StateSnapshot;
+  onSelect: (sel: Selection | null) => void;
 }
 
 function linkTypeLabel(linkType: string | null): string {
@@ -19,7 +20,7 @@ function linkTypeLabel(linkType: string | null): string {
   }
 }
 
-export function SatelliteDetail({ node, snapshot }: SatelliteDetailProps) {
+export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailProps) {
   // Find connected links
   const connectedLinks = snapshot.links.filter(
     (l) => l.node_a === node.node_id || l.node_b === node.node_id,
@@ -41,6 +42,16 @@ export function SatelliteDetail({ node, snapshot }: SatelliteDetailProps) {
   }
   if (node.routing_area) linkedAreas.add(node.routing_area);
   const role = linkedAreas.size > 1 ? "Router (ABR)" : "Router";
+
+  const selectPeer = (peerId: string) => {
+    const type = peerId.startsWith("gs-") ? "ground_station" : "satellite";
+    onSelect({ type, id: peerId });
+  };
+
+  const selectLink = (nodeA: string, nodeB: string) => {
+    const key = nodeA < nodeB ? `${nodeA}:${nodeB}` : `${nodeB}:${nodeA}`;
+    onSelect({ type: "link", id: key });
+  };
 
   return (
     <div>
@@ -75,11 +86,26 @@ export function SatelliteDetail({ node, snapshot }: SatelliteDetailProps) {
           <h3>ISL Links</h3>
           {islLinks.map((l) => {
             const peer = l.node_a === node.node_id ? l.node_b : l.node_a;
+            const stateUp = l.state === "active";
             return (
-              <div className="detail-row" key={`${l.node_a}:${l.node_b}`}>
-                <span className="detail-label">{peer}</span>
-                <span className="detail-value">
-                  {l.state === "active" ? "UP" : "DOWN"} {l.latency_ms.toFixed(1)}ms {linkTypeLabel(l.link_type)}
+              <div className="detail-row detail-row--clickable" key={`${l.node_a}:${l.node_b}`}>
+                <span
+                  className="detail-label detail-label--link"
+                  onClick={() => selectPeer(peer)}
+                  title={`Select ${peer}`}
+                >
+                  {peer}
+                </span>
+                <span
+                  className="detail-value"
+                  onClick={() => selectLink(l.node_a, l.node_b)}
+                  title="Select link"
+                >
+                  <span className={stateUp ? "link-state--up" : "link-state--down"}>
+                    {stateUp ? "UP" : "DOWN"}
+                  </span>
+                  {" "}{l.latency_ms.toFixed(1)}ms {linkTypeLabel(l.link_type)}
+                  {!stateUp && l.link_reason ? ` — ${translateReason(l.link_reason)}` : ""}
                 </span>
               </div>
             );
@@ -93,9 +119,19 @@ export function SatelliteDetail({ node, snapshot }: SatelliteDetailProps) {
           {gndLinks.map((l) => {
             const peer = l.node_a === node.node_id ? l.node_b : l.node_a;
             return (
-              <div className="detail-row" key={`${l.node_a}:${l.node_b}`}>
-                <span className="detail-label">{peer}</span>
-                <span className="detail-value">
+              <div className="detail-row detail-row--clickable" key={`${l.node_a}:${l.node_b}`}>
+                <span
+                  className="detail-label detail-label--link"
+                  onClick={() => selectPeer(peer)}
+                  title={`Select ${peer}`}
+                >
+                  {peer}
+                </span>
+                <span
+                  className="detail-value"
+                  onClick={() => selectLink(l.node_a, l.node_b)}
+                  title="Select link"
+                >
                   {l.latency_ms.toFixed(1)}ms — {translateReason(l.link_reason)}
                 </span>
               </div>

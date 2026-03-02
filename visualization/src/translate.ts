@@ -19,6 +19,19 @@ export function translateReason(reason: string | null): string {
   return REASON_MAP[reason] ?? reason;
 }
 
+/** VF spec Section 8.4 — link type translation */
+const LINK_TYPE_MAP: Record<string, string> = {
+  intra_plane_isl: "Intra-area ISL",
+  cross_plane_isl: "Cross-area ISL (ABR link)",
+  ground_uplink: "Ground Uplink",
+  ground_downlink: "Ground Downlink",
+};
+
+export function translateLinkType(linkType: string | null): string {
+  if (!linkType) return "unknown";
+  return LINK_TYPE_MAP[linkType] ?? linkType;
+}
+
 /** Format milliseconds as human-readable duration. */
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms.toFixed(0)}ms`;

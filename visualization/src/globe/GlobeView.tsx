@@ -25,6 +25,7 @@ export interface GlobeActions {
   flyToTopView: () => void;
   setFollowTarget: (nodeId: string | null) => void;
   captureScreenshot: () => void;
+  flyToNode: (nodeId: string) => void;
 }
 
 interface GlobeViewProps {
@@ -139,6 +140,16 @@ export function GlobeView({
           link.download = `nodalarc-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
           link.href = dataUrl;
           link.click();
+        },
+        flyToNode: (nodeId: string) => {
+          const sat = getSatellites().get(nodeId);
+          const gs = getGroundStations().get(nodeId);
+          const pos = sat?.mesh.position ?? gs?.sprite.position;
+          if (pos) {
+            // Smoothly move orbit controls target to the node
+            controls.target.copy(pos);
+            controls.update();
+          }
         },
       };
     }

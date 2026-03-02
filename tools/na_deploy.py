@@ -40,7 +40,7 @@ def _fail(msg: str) -> None:
     sys.exit(1)
 
 
-def deploy(session_path: str, dwell: float = 0.05) -> None:
+def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> None:
     """Execute the 11-step startup sequence."""
     # === Step 1: Load and validate ===
     log.info("Step 1: Load and validate session config")
@@ -311,16 +311,20 @@ def deploy(session_path: str, dwell: float = 0.05) -> None:
     log.info("Step 9: Configure probe flows (skipped in Phase 1B)")
 
     # === Step 10: Start VS-API ===
-    log.info("Step 10: Start VS-API")
-    vsapi_proc = subprocess.Popen(
-        [sys.executable, "-m", "vs_api.main",
-         "--session", session_path,
-         "--db", mi_db,
-         "--port", str(VS_API_HTTP_PORT)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    log.info(f"VS-API PID: {vsapi_proc.pid}")
+    if not skip_vsapi:
+        log.info("Step 10: Start VS-API")
+        vsapi_proc = subprocess.Popen(
+            [sys.executable, "-m", "vs_api.main",
+             "--session", session_path,
+             "--db", mi_db,
+             "--port", str(VS_API_HTTP_PORT)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log.info(f"VS-API PID: {vsapi_proc.pid}")
+    else:
+        log.info("Step 10: Skipping VS-API (--skip-vsapi)")
+        vsapi_proc = None
 
     # === Step 11: Begin event dispatch ===
     log.info("Step 11: Begin event dispatch")
@@ -340,12 +344,13 @@ def deploy(session_path: str, dwell: float = 0.05) -> None:
     log.info(f"Orchestrator PID: {to_proc.pid}")
 
     # === Complete — save session state and print summary ===
+    vsapi_pid = vsapi_proc.pid if vsapi_proc else 0
     session_state = {
         "session_id": session_id,
         "data_dir": str(data_dir),
         "timeline": str(timeline_path),
         "mi_pid": mi_proc.pid,
-        "vsapi_pid": vsapi_proc.pid,
+        "vsapi_pid": vsapi_pid,
         "orchestrator_pid": to_proc.pid,
         "session_config": session_path,
         "db_path": mi_db,
@@ -357,7 +362,7 @@ def deploy(session_path: str, dwell: float = 0.05) -> None:
     log.info(f"Data directory: {data_dir}")
     log.info(f"Timeline: {timeline_path}")
     log.info(f"MI service PID: {mi_proc.pid}")
-    log.info(f"VS-API PID: {vsapi_proc.pid}")
+    log.info(f"VS-API PID: {vsapi_pid}")
     log.info(f"Orchestrator PID: {to_proc.pid}")
     log.info(f"Session state: {state_file}")
 
@@ -367,8 +372,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Nodal Arc deployment tool")
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument("--dwell", type=float, default=0.05, help="DE mode dwell between event batches (seconds)")
+    parser.add_argument("--skip-vsapi", action="store_true", help="Skip VS-API start (step 10)")
     args = parser.parse_args()
-    deploy(args.session, dwell=args.dwell)
+    deploy(args.session, dwell=args.dwell, skip_vsapi=args.skip_vsapi)
 
 
 if __name__ == "__main__":

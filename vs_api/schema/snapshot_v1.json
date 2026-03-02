@@ -425,6 +425,30 @@
       ],
       "default": null,
       "title": "Constellation Name"
+    },
+    "session_status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Session Status"
+    },
+    "session_status_detail": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Session Status Detail"
     }
   },
   "required": [

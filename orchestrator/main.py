@@ -197,12 +197,14 @@ def main() -> None:
         dispatcher.run()
     else:
         dispatcher = RealtimeDispatcher(
+            timeline_path=Path(args.timeline),
             interface_map=interface_map,
             bandwidth_map=bandwidth_map,
             override_set=override_set,
             override_lock=override_lock,
             pid_map=pid_map,
             latency_update_interval_s=session.time.latency_update_interval_seconds,
+            compression_factor=session.time.compression,
         )
         dispatcher.run()
 

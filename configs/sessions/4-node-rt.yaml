@@ -18,7 +18,7 @@ routing:
 time:
   mode: real-time
   step_seconds: 1
-  compression_factor: 100
+  compression: 100
   latency_update_interval_seconds: 10
 
 convergence:

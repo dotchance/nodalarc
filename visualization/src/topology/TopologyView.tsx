@@ -20,6 +20,7 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: Topolog
   const animFrameRef = useRef<number>(0);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const dashOffsetRef = useRef(0);
+  const lastCanvasSizeRef = useRef({ w: 0, h: 0 });
   const [tooltipContent, setTooltipContent] = useState<string | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
@@ -38,6 +39,23 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: Topolog
     }
 
     const layout = computeLayout(snapshot.nodes, snapshot.links);
+
+    // Auto-center layout when canvas becomes visible or resizes significantly
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const prev = lastCanvasSizeRef.current;
+    if (layout.nodes.length > 0 && cw > 0 && ch > 0 &&
+        (prev.w === 0 || prev.h === 0 || Math.abs(cw - prev.w) > 50 || Math.abs(ch - prev.h) > 50)) {
+      lastCanvasSizeRef.current = { w: cw, h: ch };
+      const toolbarWidth = 60; // toolbar ~48px + margin
+      const availW = cw - toolbarWidth;
+      const availH = ch;
+      const scale = Math.min(availW / layout.width, availH / layout.height, 4);
+      const offsetX = toolbarWidth + (availW - layout.width * scale) / 2;
+      const offsetY = (availH - layout.height * scale) / 2;
+      transformRef.current = { offsetX, offsetY, scale };
+    }
+
     const t = transformRef.current;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);

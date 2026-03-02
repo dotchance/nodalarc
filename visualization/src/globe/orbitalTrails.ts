@@ -67,6 +67,15 @@ function createTrail(scene: THREE.Scene): TrailEntry {
   };
 }
 
+/** Flush all trail history (call after tab-resume to avoid ghost lines). */
+export function flushTrails(): void {
+  for (const trail of trails.values()) {
+    trail.count = 0;
+    trail.head = 0;
+    trail.geometry.setDrawRange(0, 0);
+  }
+}
+
 export function updateOrbitalTrails(scene: THREE.Scene): void {
   if (!trailsVisible) return;
 

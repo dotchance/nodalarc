@@ -154,20 +154,27 @@ class DiscreteEventDispatcher:
         time.sleep(0.5)
 
         try:
-            for batch_idx, batch in enumerate(batches):
-                self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)
-                self._steps_since_latency_update += 1
+            orbit = 0
+            while True:
+                orbit += 1
+                for batch_idx, batch in enumerate(batches):
+                    self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)
+                    self._steps_since_latency_update += 1
 
-                if batch_idx < len(batches) - 1:
-                    time.sleep(self._dwell_s)
+                    if batch_idx < len(batches) - 1:
+                        time.sleep(self._dwell_s)
+                log.info(
+                    f"Timeline orbit {orbit} complete: "
+                    f"{len(self._active_links)} active links, looping"
+                )
+        except KeyboardInterrupt:
+            log.info("Dispatcher interrupted")
         finally:
             pub_sock.close()
             ome_pub_sock.close()
             if conv_sock:
                 conv_sock.close()
             ctx.term()
-
-        log.info(f"Timeline complete: {len(self._active_links)} active links at end")
 
     def _process_batch(
         self,

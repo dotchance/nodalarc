@@ -1,0 +1,10 @@
+scenario:
+  name: steady-state
+  description: "Baseline observation — full orbital period with all links healthy"
+
+  steps:
+    - action: wait
+      duration_s: 5700    # ~95 minutes (one orbital period at 550km)
+
+    - action: measure
+      duration_s: 60

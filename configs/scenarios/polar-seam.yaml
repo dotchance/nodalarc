@@ -1,0 +1,10 @@
+scenario:
+  name: polar-seam
+  description: "Observe polar seam ISL dropout and routing protocol behavior"
+
+  steps:
+    - action: wait
+      duration_s: 5700    # full orbital period to observe polar crossings
+
+    - action: measure
+      duration_s: 60

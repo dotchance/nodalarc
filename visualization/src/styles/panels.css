@@ -49,6 +49,43 @@
   color: var(--accent-red);
 }
 
+.event-log-header {
+  display: flex;
+  gap: 8px;
+  padding: 3px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+  flex-shrink: 0;
+}
+
+.event-log-header span {
+  cursor: grab;
+  user-select: none;
+}
+
+.event-log-header span:hover {
+  color: var(--text-primary);
+}
+
+.event-log-header span:active {
+  cursor: grabbing;
+}
+
+.event-col--drag-over {
+  border-left: 2px solid var(--accent-blue);
+}
+
+/* Column widths — shared between header and data rows */
+.event-col-time { width: 72px; flex-shrink: 0; }
+.event-col-type { width: 72px; flex-shrink: 0; }
+.event-col-node { width: 56px; flex-shrink: 0; }
+.event-col-summary { flex: 1; min-width: 0; }
+
 .event-log {
   flex: 1;
   overflow-y: auto;
@@ -73,13 +110,9 @@
 
 .event-time {
   color: var(--text-dim);
-  flex-shrink: 0;
-  width: 72px;
 }
 
 .event-type {
-  flex-shrink: 0;
-  width: 72px;
   font-weight: 600;
 }
 
@@ -118,8 +151,6 @@
 }
 
 .event-node {
-  flex-shrink: 0;
-  width: 56px;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;

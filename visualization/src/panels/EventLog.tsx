@@ -1,6 +1,6 @@
-/** Event log — scrolling list of recent events with auto-scroll. */
+/** Event log — scrolling list with sortable, draggable columns. */
 
-import { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useMemo, useCallback } from "react";
 import { EventFilter } from "./EventFilter";
 import { formatTimeShort } from "../translate";
 import type { RecentEvent, Selection } from "../types";
@@ -28,7 +28,6 @@ function abbreviateType(eventType: string): string {
   return TYPE_ABBREV[eventType] ?? eventType.toUpperCase().replace(/_/g, " ");
 }
 
-/** Abbreviate node ID: P03S07 for satellites, station name for GS */
 function abbreviateNodeId(nodeId: string): string {
   if (nodeId.startsWith("gs-")) return nodeId.replace("gs-", "");
   const match = nodeId.match(/P(\d+)S(\d+)/);
@@ -36,7 +35,6 @@ function abbreviateNodeId(nodeId: string): string {
   return nodeId;
 }
 
-/** Color class for event type */
 function eventColorClass(eventType: string): string {
   if (eventType.includes("up") || eventType === "link_up" || eventType === "adjacency_up") {
     return "event-type--up";
@@ -59,25 +57,105 @@ const DEFAULT_FILTERS: Record<string, boolean> = {
   inject: true,
 };
 
+type ColKey = "time" | "node" | "type" | "summary";
+type SortDir = "asc" | "desc";
+
+interface ColDef {
+  key: ColKey;
+  label: string;
+  cssClass: string;
+}
+
+const COLUMN_DEFS: Record<ColKey, ColDef> = {
+  time: { key: "time", label: "Time", cssClass: "event-col-time" },
+  node: { key: "node", label: "Node", cssClass: "event-col-node" },
+  type: { key: "type", label: "Type", cssClass: "event-col-type" },
+  summary: { key: "summary", label: "Detail", cssClass: "event-col-summary" },
+};
+
+const DEFAULT_COL_ORDER: ColKey[] = ["time", "node", "type", "summary"];
+
+function renderCell(e: RecentEvent, col: ColKey): React.ReactNode {
+  switch (col) {
+    case "time":
+      return <span className="event-time">{formatTimeShort(e.sim_time)}</span>;
+    case "type":
+      return (
+        <span className={`event-type ${eventColorClass(e.event_type)}`}>
+          {abbreviateType(e.event_type)}
+        </span>
+      );
+    case "node":
+      return <span className="event-node">{abbreviateNodeId(e.node_id)}</span>;
+    case "summary":
+      return <span className="event-summary">{e.summary}</span>;
+  }
+}
+
+function sortValue(e: RecentEvent, col: ColKey): string {
+  switch (col) {
+    case "time": return e.sim_time;
+    case "type": return abbreviateType(e.event_type);
+    case "node": return e.node_id;
+    case "summary": return e.summary;
+  }
+}
+
 export function EventLog({ events, onSelect, onFlyTo }: EventLogProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [sortKey, setSortKey] = useState<ColKey>("time");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [colOrder, setColOrder] = useState<ColKey[]>(DEFAULT_COL_ORDER);
+  const dragColRef = useRef<ColKey | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<ColKey | null>(null);
 
-  useEffect(() => {
-    if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  const handleColumnClick = useCallback((key: ColKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "time" ? "desc" : "asc");
     }
-  }, [events, autoScroll]);
+  }, [sortKey]);
 
-  const handleScroll = () => {
-    if (!scrollRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    setAutoScroll(scrollHeight - scrollTop - clientHeight < 30);
-  };
+  const handleDragStart = useCallback((key: ColKey, e: React.DragEvent) => {
+    dragColRef.current = key;
+    e.dataTransfer.effectAllowed = "move";
+  }, []);
+
+  const handleDragOver = useCallback((key: ColKey, e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverCol(key);
+  }, []);
+
+  const handleDrop = useCallback((targetKey: ColKey) => {
+    const srcKey = dragColRef.current;
+    if (!srcKey || srcKey === targetKey) {
+      dragColRef.current = null;
+      setDragOverCol(null);
+      return;
+    }
+    setColOrder((prev) => {
+      const next = [...prev];
+      const srcIdx = next.indexOf(srcKey);
+      const tgtIdx = next.indexOf(targetKey);
+      next.splice(srcIdx, 1);
+      next.splice(tgtIdx, 0, srcKey);
+      return next;
+    });
+    dragColRef.current = null;
+    setDragOverCol(null);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    dragColRef.current = null;
+    setDragOverCol(null);
+  }, []);
 
   const filteredEvents = events.filter((e) => {
-    // Map event types to filter categories
     if (e.event_type === "link_up" || e.event_type === "link_down") {
       return filters[e.event_type] ?? true;
     }
@@ -88,12 +166,35 @@ export function EventLog({ events, onSelect, onFlyTo }: EventLogProps) {
     return true;
   });
 
+  const sortedEvents = useMemo(() => {
+    const sorted = [...filteredEvents];
+    const dir = sortDir === "asc" ? 1 : -1;
+    sorted.sort((a, b) => dir * sortValue(a, sortKey).localeCompare(sortValue(b, sortKey)));
+    return sorted;
+  }, [filteredEvents, sortKey, sortDir]);
+
+  useEffect(() => {
+    if (autoScroll && scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
+  }, [events, autoScroll]);
+
+  const handleScroll = () => {
+    if (!scrollRef.current) return;
+    setAutoScroll(scrollRef.current.scrollTop < 30);
+  };
+
   const handleEventClick = (event: RecentEvent) => {
     if (event.node_id) {
       const type = event.node_id.startsWith("gs-") ? "ground_station" : "satellite";
       onSelect({ type, id: event.node_id });
       onFlyTo?.(event.node_id);
     }
+  };
+
+  const sortIndicator = (key: ColKey) => {
+    if (sortKey !== key) return "";
+    return sortDir === "asc" ? " \u25B4" : " \u25BE";
   };
 
   return (
@@ -112,19 +213,33 @@ export function EventLog({ events, onSelect, onFlyTo }: EventLogProps) {
       <EventFilter filters={filters} onToggle={(key) => {
         setFilters((prev) => ({ ...prev, [key]: !prev[key] }));
       }} />
-      <div className="event-log" ref={scrollRef} onScroll={handleScroll}>
-        {filteredEvents.map((e, i) => (
-          <div
-            className="event-entry"
-            key={i}
-            onClick={() => handleEventClick(e)}
-          >
-            <span className="event-time">{formatTimeShort(e.sim_time)}</span>
-            <span className={`event-type ${eventColorClass(e.event_type)}`}>
-              {abbreviateType(e.event_type)}
+      <div className="event-log-header">
+        {colOrder.map((key) => {
+          const def = COLUMN_DEFS[key];
+          return (
+            <span
+              key={key}
+              className={`${def.cssClass}${dragOverCol === key ? " event-col--drag-over" : ""}`}
+              draggable
+              onClick={() => handleColumnClick(key)}
+              onDragStart={(e) => handleDragStart(key, e)}
+              onDragOver={(e) => handleDragOver(key, e)}
+              onDrop={() => handleDrop(key)}
+              onDragEnd={handleDragEnd}
+            >
+              {def.label}{sortIndicator(key)}
             </span>
-            <span className="event-node">{abbreviateNodeId(e.node_id)}</span>
-            <span className="event-summary">{e.summary}</span>
+          );
+        })}
+      </div>
+      <div className="event-log" ref={scrollRef} onScroll={handleScroll}>
+        {sortedEvents.map((e, i) => (
+          <div className="event-entry" key={i} onClick={() => handleEventClick(e)}>
+            {colOrder.map((col) => (
+              <span key={col} className={COLUMN_DEFS[col].cssClass}>
+                {renderCell(e, col)}
+              </span>
+            ))}
           </div>
         ))}
       </div>

@@ -113,6 +113,7 @@ class DiscreteEventDispatcher:
         dwell_s: float = 1.0,
         latency_update_interval_s: int = 10,
         use_convergence_gate: bool = True,
+        max_orbits: int | None = None,
     ) -> None:
         self._timeline_path = timeline_path
         self._interface_map = interface_map
@@ -124,6 +125,7 @@ class DiscreteEventDispatcher:
         self._dwell_s = dwell_s
         self._latency_update_interval_s = latency_update_interval_s
         self._use_convergence_gate = use_convergence_gate
+        self._max_orbits = max_orbits
 
         self._position_table = PositionTable()
         self._active_links: dict[tuple[str, str], ActiveLinkInfo] = {}
@@ -155,7 +157,7 @@ class DiscreteEventDispatcher:
 
         try:
             orbit = 0
-            while True:
+            while self._max_orbits is None or orbit < self._max_orbits:
                 orbit += 1
                 for batch_idx, batch in enumerate(batches):
                     self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)

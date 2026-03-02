@@ -157,6 +157,7 @@ class TestDispatcherOverrideIntegration:
             override_lock=lock,
             use_convergence_gate=False,
             dwell_s=0.0,
+            max_orbits=1,
         )
         dispatcher.run()
 
@@ -188,6 +189,7 @@ class TestDispatcherOverrideIntegration:
             override_lock=lock,
             use_convergence_gate=False,
             dwell_s=0.0,
+            max_orbits=1,
         )
         dispatcher.run()
 
@@ -216,6 +218,7 @@ class TestDispatcherOverrideIntegration:
             override_lock=lock,
             use_convergence_gate=False,
             dwell_s=0.0,
+            max_orbits=1,
         )
 
         # Remove override before second event processes
@@ -256,6 +259,7 @@ class TestDispatcherOverrideIntegration:
             override_lock=lock,
             use_convergence_gate=False,
             dwell_s=0.0,
+            max_orbits=1,
         )
 
         # Clear all overrides before running

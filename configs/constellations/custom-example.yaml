@@ -1,0 +1,65 @@
+# Custom constellation example — explicit mode
+#
+# Explicit mode defines each satellite individually with orbital elements.
+# This is the simplest mode to hand-author for small constellations.
+#
+# For larger constellations (tens or hundreds of satellites), use parametric
+# mode with walker-delta or walker-star patterns. See starlink-mini.yaml
+# for an example of parametric mode.
+
+# Mode: "explicit" (per-satellite), "parametric" (Walker pattern), or "tle"
+mode: explicit
+
+# Human-readable constellation name (used in session metadata and reports)
+name: my-custom-constellation
+
+# Default terminal configuration applied to all satellites unless overridden.
+# ISL terminals define inter-satellite optical links.
+# Ground terminals define satellite-to-ground-station links.
+default_terminals:
+  isl:
+    - type: optical         # Terminal type: "optical" or "rf"
+      count: 2              # Number of ISL terminals per satellite (0-8)
+      max_range_km: 5000    # Maximum link distance in km
+      bandwidth_mbps: 1000  # Link bandwidth in Mbps
+      max_tracking_rate_deg_s: 3.0  # Antenna tracking rate (deg/s)
+  ground:
+    - type: optical         # Terminal type for ground links
+      count: 1              # Number of ground terminals per satellite
+      bandwidth_mbps: 1000  # Ground link bandwidth
+
+# Satellite definitions — one entry per satellite.
+# Each satellite is identified by (plane, slot) which determines its node_id
+# as sat-P{plane:02d}S{slot:02d} (e.g., sat-P00S00, sat-P01S02).
+satellites:
+  - plane: 0               # Orbital plane index (0-based)
+    slot: 0                 # Slot within the plane (0-based)
+    orbit:
+      altitude_km: 550     # Orbital altitude above Earth surface (>= 160 km)
+      inclination_deg: 53   # Orbital inclination (0-180 degrees)
+      raan_deg: 0           # Right Ascension of Ascending Node (0-360 degrees)
+      true_anomaly_deg: 0   # True anomaly at epoch (0-360 degrees)
+
+  - plane: 0
+    slot: 1
+    orbit:
+      altitude_km: 550
+      inclination_deg: 53
+      raan_deg: 0
+      true_anomaly_deg: 90  # 90 degrees apart from slot 0 in same plane
+
+  - plane: 1
+    slot: 0
+    orbit:
+      altitude_km: 550
+      inclination_deg: 53
+      raan_deg: 45          # Different orbital plane (45 deg RAAN offset)
+      true_anomaly_deg: 0
+
+  - plane: 1
+    slot: 1
+    orbit:
+      altitude_km: 550
+      inclination_deg: 53
+      raan_deg: 45
+      true_anomaly_deg: 90

@@ -209,10 +209,8 @@ export function GlobeView({
     renderer.setAnimationLoop(() => {
       const dt = clockRef.current.getDelta();
 
-      // Tab was backgrounded — flush trail history to avoid ghost lines
-      if (dt > 1.0) {
-        flushTrails();
-      }
+      // Tab was backgrounded — skip this frame for trails (don't flush history)
+      const skipTrails = dt > 1.0;
 
       const snap = snapshotRef.current;
 
@@ -256,7 +254,7 @@ export function GlobeView({
       animateSatellites(dt);
       animateLinks();
       animateFlowPaths();
-      updateOrbitalTrails(scene);
+      if (!skipTrails) updateOrbitalTrails(scene);
       updateSelection(selectionRef.current, scene, camera);
       animateSelection(camera);
       controls.update();

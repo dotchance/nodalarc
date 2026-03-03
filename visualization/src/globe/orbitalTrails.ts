@@ -8,8 +8,8 @@ import * as THREE from "three";
 import { getSatellites } from "./satellites";
 
 /** Max trail points per satellite. At 60fps sampling every 3rd frame,
- *  450 points ≈ 22 seconds of visible trail. */
-const TRAIL_LENGTH = 450;
+ *  150 points ≈ 7.5 seconds of visible trail. */
+const TRAIL_LENGTH = 150;
 
 /** Sample every Nth frame. */
 const SAMPLE_EVERY = 3;

@@ -72,6 +72,7 @@ interface LinkEntry {
   /** Timestamp when link came up (for brightness pulse). */
   upTime: number | null;
   baseColor: THREE.Color;
+  baseOpacity: number;
 }
 
 const links = new Map<string, LinkEntry>();
@@ -168,6 +169,7 @@ export function updateLinks(
         failTime: null,
         upTime: now,
         baseColor: new THREE.Color(color),
+        baseOpacity: opacity,
       });
     }
   }
@@ -201,19 +203,21 @@ export function animateLinks(): void {
     entry.geometry.setPositions(bowedPositions(posA, posB));
     if (entry.isGround) entry.line.computeLineDistances();
 
-    // Fail-flash animation
+    // Fail-flash animation — boost opacity so it's visible on all link types
     if (entry.failTime !== null) {
       const elapsed = now - entry.failTime;
       if (elapsed < FAIL_HOLD_MS) {
-        // Hold red
+        // Hold red at full opacity
         entry.material.color.setHex(LINK_FAIL_COLOR);
+        entry.material.opacity = 0.7;
         entry.line.visible = true;
       } else if (elapsed < FAIL_HOLD_MS + FAIL_FADE_MS) {
-        // Fade to dark
+        // Fade color to dark AND opacity to zero
         const t = (elapsed - FAIL_HOLD_MS) / FAIL_FADE_MS;
         const failColor = new THREE.Color(LINK_FAIL_COLOR);
         const darkColor = new THREE.Color(LINK_INACTIVE_COLOR);
         entry.material.color.copy(failColor).lerp(darkColor, t);
+        entry.material.opacity = 0.7 * (1 - t);
         entry.line.visible = true;
       } else {
         // Hidden
@@ -222,19 +226,28 @@ export function animateLinks(): void {
         continue;
       }
     } else if (entry.upTime !== null) {
-      // Brightness pulse on link up (0.5s)
+      // Link-up pulse: bright base color → normal (0.75s), opacity boost
       const elapsed = now - entry.upTime;
-      if (elapsed < 500) {
-        const t = elapsed / 500;
-        const bright = new THREE.Color(0xffffff);
+      const UP_DURATION = 750;
+      if (elapsed < UP_DURATION) {
+        const t = elapsed / UP_DURATION;
+        // Start from a brighter version of the base color, not white
+        const bright = entry.baseColor.clone().multiplyScalar(2.5);
+        bright.r = Math.min(bright.r, 1);
+        bright.g = Math.min(bright.g, 1);
+        bright.b = Math.min(bright.b, 1);
         entry.material.color.copy(bright).lerp(entry.baseColor, t);
+        // Ease opacity from boosted down to base
+        entry.material.opacity = 0.8 + (entry.baseOpacity - 0.8) * t;
       } else {
         entry.material.color.copy(entry.baseColor);
+        entry.material.opacity = entry.baseOpacity;
         entry.upTime = null;
       }
       entry.line.visible = true;
     } else {
       entry.material.color.copy(entry.baseColor);
+      entry.material.opacity = entry.baseOpacity;
       entry.line.visible = true;
     }
   }

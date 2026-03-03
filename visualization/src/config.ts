@@ -75,8 +75,8 @@ export const GS_COLOR = 0x00d4aa;
 export const SELECTION_COLOR = 0xffffff;
 
 /** Fail-flash timing */
-export const FAIL_HOLD_MS = 5000;
-export const FAIL_FADE_MS = 2000;
+export const FAIL_HOLD_MS = 1500;
+export const FAIL_FADE_MS = 1000;
 
 /** Snapshot recording interval */
 export const SNAPSHOT_INTERVAL_S = 10;

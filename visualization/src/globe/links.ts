@@ -134,7 +134,7 @@ export function updateLinks(
         // VF spec 7.3, 10.2: solid, muted green, 1.5px
         color = LINK_ISL_COLOR;
         width = LINK_ISL_WIDTH;
-        opacity = 0.35;
+        opacity = 0.55;
       }
 
       const material = new LineMaterial({

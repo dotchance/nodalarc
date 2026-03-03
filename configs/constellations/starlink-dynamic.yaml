@@ -7,8 +7,8 @@ orbit:
 planes:
   count: 6
   raan_spacing_deg: 30
-  sats_per_plane: 10
-  phase_offset_deg: 6
+  sats_per_plane: 14
+  phase_offset_deg: 4.286
 default_terminals:
   isl:
     - type: optical

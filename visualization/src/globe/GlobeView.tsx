@@ -210,7 +210,7 @@ export function GlobeView({
       const dt = clockRef.current.getDelta();
 
       // Tab was backgrounded — skip this frame for trails (don't flush history)
-      const skipTrails = dt > 1.0;
+      const skipTrails = dt > 0.15;
 
       const snap = snapshotRef.current;
 

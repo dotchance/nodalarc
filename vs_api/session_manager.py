@@ -172,6 +172,8 @@ class SessionManager:
             )
             # Stream output and update status_detail from "Step N:" log lines
             last_lines: list[str] = []
+            veth_count = 0
+            veth_total = 0
             for line in proc.stdout:
                 line = line.rstrip()
                 if line:
@@ -183,6 +185,8 @@ class SessionManager:
                         # Pull everything after "Step "
                         idx = line.index(" Step ")
                         self._status_detail = line[idx + 1:]
+                        veth_count = 0
+                        veth_total = 0
                     elif "Waiting for" in line:
                         idx = line.index("Waiting for")
                         self._status_detail = line[idx:]
@@ -190,8 +194,18 @@ class SessionManager:
                         self._status_detail = "Helm install running"
                     elif "All " in line and " pods Running" in line:
                         self._status_detail = line[line.index("All "):]
+                    elif "veth pairs to create" in line:
+                        # Parse total from "N veth pairs to create"
+                        try:
+                            veth_total = int(line.split("veth pairs")[0].strip().split()[-1])
+                        except (ValueError, IndexError):
+                            pass
                     elif "Created " in line and " veth" in line:
-                        self._status_detail = line[line.index("Created "):]
+                        veth_count += 1
+                        if veth_total > 0:
+                            self._status_detail = f"Creating connections {veth_count} of {veth_total}"
+                        else:
+                            self._status_detail = f"Creating connections ({veth_count})"
             proc.wait()
             if proc.returncode != 0:
                 tail = "\n".join(last_lines[-5:])

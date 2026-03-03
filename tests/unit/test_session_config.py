@@ -15,7 +15,7 @@ class TestSessionConfigLoading:
     def test_sample_session_loads(self):
         data = yaml.safe_load((CONFIGS_DIR / "sessions/sample-session.yaml").read_text())
         config = SessionConfig.model_validate(data)
-        assert config.session.name == "isis-baseline"
+        assert config.session.name == "sample-session"
         assert config.constellation == "configs/constellations/starlink-mini.yaml"
         assert config.routing.area_assignment.strategy == "stripe"
         assert config.routing.area_assignment.planes_per_stripe == 2

@@ -29,9 +29,9 @@ export function useSessionSwitcher(sessionStatus: string | null) {
     }
   }, [switching, sessionStatus]);
 
-  // Only clear overlay once we've seen "switching" then "ready"
+  // Only clear overlay once we've seen "switching" then "ready" (or "error")
   useEffect(() => {
-    if (switching && sawSwitchingRef.current && sessionStatus === "ready") {
+    if (switching && sawSwitchingRef.current && (sessionStatus === "ready" || sessionStatus === "error")) {
       setSwitching(false);
       sawSwitchingRef.current = false;
       fetchSessions();

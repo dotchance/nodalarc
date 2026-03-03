@@ -1,5 +1,5 @@
 session:
-  name: isis-baseline
+  name: sample-session
   data_dir: /tmp/nodalarc/sessions
 
 constellation: configs/constellations/starlink-mini.yaml

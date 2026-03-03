@@ -298,20 +298,23 @@ class DiscreteEventDispatcher:
         # Apply kernel changes if we have PIDs
         info = self._active_links[pair]
         if info.pid_a and info.pid_b:
-            from orchestrator import link_manager
-            # GS links need dynamic veth creation (no pre-wired pairs)
-            is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
-            if is_gs_link:
-                link_manager.create_veth_pair(
-                    info.pid_a, info.pid_b, ifaces[0], ifaces[1],
-                    node_id_a=vis.node_a, node_id_b=vis.node_b,
-                )
-                link_manager.enable_mpls_input(info.pid_a, ifaces[0])
-                link_manager.enable_mpls_input(info.pid_b, ifaces[1])
-            link_manager.set_interface_up(info.pid_a, ifaces[0])
-            link_manager.set_interface_up(info.pid_b, ifaces[1])
-            link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
-            link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
+            try:
+                from orchestrator import link_manager
+                # GS links need dynamic veth creation (no pre-wired pairs)
+                is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                if is_gs_link:
+                    link_manager.create_veth_pair(
+                        info.pid_a, info.pid_b, ifaces[0], ifaces[1],
+                        node_id_a=vis.node_a, node_id_b=vis.node_b,
+                    )
+                    link_manager.enable_mpls_input(info.pid_a, ifaces[0])
+                    link_manager.enable_mpls_input(info.pid_b, ifaces[1])
+                link_manager.set_interface_up(info.pid_a, ifaces[0])
+                link_manager.set_interface_up(info.pid_b, ifaces[1])
+                link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
+                link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
+            except Exception as exc:
+                log.warning(f"Link kernel setup failed for {pair}: {exc}")
 
         now = datetime.now(timezone.utc)
         event = LinkUp(
@@ -342,14 +345,17 @@ class DiscreteEventDispatcher:
 
         # Apply kernel changes if we have PIDs
         if info.pid_a and info.pid_b:
-            from orchestrator import link_manager
-            is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
-            if is_gs_link:
-                # Destroy dynamic veth — deleting one end removes both + qdiscs
-                link_manager.destroy_veth_pair(info.pid_a, info.interface_a)
-            else:
-                link_manager.set_interface_down(info.pid_a, info.interface_a)
-                link_manager.set_interface_down(info.pid_b, info.interface_b)
+            try:
+                from orchestrator import link_manager
+                is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                if is_gs_link:
+                    # Destroy dynamic veth — deleting one end removes both + qdiscs
+                    link_manager.destroy_veth_pair(info.pid_a, info.interface_a)
+                else:
+                    link_manager.set_interface_down(info.pid_a, info.interface_a)
+                    link_manager.set_interface_down(info.pid_b, info.interface_b)
+            except Exception as exc:
+                log.warning(f"Link kernel teardown failed for {pair}: {exc}")
 
         self._last_latencies.pop(pair, None)
 
@@ -382,9 +388,12 @@ class DiscreteEventDispatcher:
 
             # Apply kernel change
             if info.pid_a and info.pid_b:
-                from orchestrator import link_manager
-                link_manager.update_delay(info.pid_a, info.interface_a, new_lat)
-                link_manager.update_delay(info.pid_b, info.interface_b, new_lat)
+                try:
+                    from orchestrator import link_manager
+                    link_manager.update_delay(info.pid_a, info.interface_a, new_lat)
+                    link_manager.update_delay(info.pid_b, info.interface_b, new_lat)
+                except Exception as exc:
+                    log.warning(f"Latency update failed for {pair}: {exc}")
 
             info.latency_ms = new_lat
             self._last_latencies[pair] = new_lat

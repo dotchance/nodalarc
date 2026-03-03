@@ -65,6 +65,7 @@ from nodalarc.zmq_channels import (
     TOPIC_POSITION_EVENT,
     TOPIC_PROBE_RESULT,
 )
+from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 from vs_api.session_manager import SessionManager
 
 log = logging.getLogger(__name__)
@@ -344,6 +345,61 @@ def _update_session_globals(session_path: str, new_db_path: str) -> None:
     conn.close()
 
 
+def _restore_state_from_db(db_path: str) -> bool:
+    """Load the most recent snapshot from SQLite and pre-populate in-memory state.
+
+    Returns True if state was restored, False otherwise. This is called during
+    session recovery so VS-API doesn't start with empty nodes/links after a restart.
+    """
+    if not db_path or not Path(db_path).exists():
+        return False
+
+    try:
+        conn = sqlite3.connect(db_path)
+        row = conn.execute(
+            "SELECT snapshot_json FROM snapshots ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+
+        if not row:
+            log.info("No snapshots in DB to restore from")
+            return False
+
+        snapshot = json.loads(row[0])
+
+        with _state_lock:
+            # Restore nodes
+            for node in snapshot.get("nodes", []):
+                node_id = node.get("node_id", "")
+                if node_id:
+                    _state["nodes"][node_id] = node
+
+            # Restore links
+            for link in snapshot.get("links", []):
+                key = _link_key(link.get("node_a", ""), link.get("node_b", ""))
+                _state["links"][key] = link
+
+            # Restore recent events
+            _state["recent_events"] = snapshot.get("recent_events", [])
+
+            # Restore network health
+            if "network_health" in snapshot:
+                _state["network_health"] = snapshot["network_health"]
+
+            # Restore sim time
+            if "sim_time" in snapshot:
+                _state["sim_time"] = snapshot["sim_time"]
+
+        node_count = len(snapshot.get("nodes", []))
+        link_count = len(snapshot.get("links", []))
+        log.info(f"Restored state from DB: {node_count} nodes, {link_count} links")
+        return True
+
+    except Exception as exc:
+        log.warning(f"Failed to restore state from DB: {exc}")
+        return False
+
+
 async def _ws_broadcaster() -> None:
     """Broadcast StateSnapshot to all WebSocket clients at ~1Hz.
 
@@ -531,6 +587,30 @@ async def switch_session(body: dict):
     return {"status": "switching"}
 
 
+@app.get("/api/v1/introspect/commands")
+def introspect_commands() -> list[str]:
+    """Return sorted list of whitelisted vtysh commands."""
+    return sorted(VTYSH_COMMANDS)
+
+
+@app.post("/api/v1/introspect")
+def introspect(body: dict) -> dict:
+    """Run a whitelisted vtysh command on a node's FRR container."""
+    node_id = body.get("node_id", "")
+    command = body.get("command", "")
+    if not node_id:
+        return JSONResponse(status_code=400, content={"error": "node_id is required"})
+    if command not in VTYSH_COMMANDS:
+        return JSONResponse(status_code=400, content={"error": f"Command not allowed: {command}"})
+    try:
+        result = run_vtysh(node_id, command)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+    if result.get("error") == "Command timed out":
+        return JSONResponse(status_code=504, content=result)
+    return result
+
+
 async def _run_switch(session_path: str) -> None:
     """Run session switch in thread executor (blocking subprocess calls)."""
     loop = asyncio.get_event_loop()
@@ -575,6 +655,28 @@ def main() -> None:
         conn = sqlite3.connect(args.db)
         create_tables(conn)
         conn.close()
+        log.info(f"Started with explicit session: {args.session}")
+    else:
+        # No explicit session — try to recover a running session
+        recovered = _session_manager.recover_session()
+        if recovered:
+            new_db_path = recovered.get("db_path", "")
+            session_config = recovered.get("session_config", "")
+            if new_db_path and session_config and Path(session_config).exists():
+                _update_session_globals(session_config, new_db_path)
+                # Pre-populate in-memory state from last DB snapshot
+                _restore_state_from_db(new_db_path)
+                log.info(
+                    f"Recovered session: {recovered.get('session_id')} "
+                    f"(db={new_db_path})"
+                )
+            else:
+                log.warning(
+                    f"Found live session {recovered.get('session_id')} "
+                    f"but session config or db missing"
+                )
+        else:
+            log.info("No running session found — starting idle")
 
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="info")
 

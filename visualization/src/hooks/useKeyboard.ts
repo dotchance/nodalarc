@@ -13,6 +13,7 @@ interface KeyboardActions {
   onPlayPause: () => void;
   onFollowNode: () => void;
   onTopView: () => void;
+  onToggleCli?: () => void;
 }
 
 export function useKeyboard(actions: KeyboardActions): void {

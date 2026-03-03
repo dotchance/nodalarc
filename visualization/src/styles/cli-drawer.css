@@ -1,0 +1,120 @@
+.cli-drawer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 15;
+  background: rgba(26, 26, 46, 0.96);
+  backdrop-filter: blur(4px);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  transition: height 0.15s ease;
+}
+
+.cli-drawer--closed {
+  height: 0 !important;
+  overflow: hidden;
+  border-top: none;
+}
+
+.cli-drawer__drag-handle {
+  flex-shrink: 0;
+  height: 5px;
+  cursor: ns-resize;
+  background: var(--border);
+  transition: background 0.15s;
+}
+
+.cli-drawer__drag-handle:hover {
+  background: var(--accent-blue);
+}
+
+.cli-drawer__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cli-drawer__toolbar select {
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  max-width: 200px;
+}
+
+.cli-drawer__toolbar label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.cli-drawer__run-btn {
+  background: var(--accent-blue);
+  color: var(--bg-main);
+  border: none;
+  border-radius: 4px;
+  padding: 4px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cli-drawer__run-btn:hover {
+  opacity: 0.9;
+}
+
+.cli-drawer__run-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.cli-drawer__close-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+}
+
+.cli-drawer__close-btn:hover {
+  color: var(--text-primary);
+}
+
+.cli-drawer__output {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+  min-height: 0;
+}
+
+.cli-drawer__output pre {
+  margin: 0;
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+.cli-drawer__output .cli-error {
+  color: var(--accent-red);
+}
+
+.cli-drawer__output .cli-placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.cli-drawer__output .cli-loading {
+  color: var(--accent-amber);
+}

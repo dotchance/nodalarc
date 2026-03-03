@@ -98,12 +98,11 @@ class SessionManager:
             self._status_detail = "Tearing down current session"
             log.info(f"Session switch: tearing down, deploying {session_path}")
 
-            # === Teardown ===
+            # === Teardown: kill processes from known session state ===
             if self._current_data_dir and self._current_data_dir.exists():
                 state_file = self._current_data_dir / "session-state.json"
                 if state_file.exists():
                     state = json.loads(state_file.read_text())
-                    session_id = state.get("session_id", "")
 
                     # Kill MI and TO processes
                     self._status_detail = "Stopping MI and orchestrator"
@@ -116,25 +115,33 @@ class SessionManager:
                             except ProcessLookupError:
                                 log.info(f"Process {key}={pid} already gone")
 
-                    # Helm uninstall
-                    if session_id:
-                        self._status_detail = f"Uninstalling helm release {session_id}"
-                        kubeconfig = "KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
-                        subprocess.run(
-                            ["sudo", "env", kubeconfig,
-                             "helm", "uninstall", session_id,
-                             "-n", "nodalarc"],
-                            capture_output=True, text=True, timeout=60,
-                        )
-                        # Wait for pods to terminate
-                        self._status_detail = "Waiting for pods to terminate"
-                        subprocess.run(
-                            ["sudo", "env", kubeconfig,
-                             "kubectl", "wait", "--for=delete", "pod",
-                             "-l", "nodalarc.io/node-id",
-                             "-n", "nodalarc", "--timeout=60s"],
-                            capture_output=True, text=True, timeout=90,
-                        )
+            # === Teardown: uninstall ANY existing helm releases in namespace ===
+            kubeconfig = "KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
+            self._status_detail = "Checking for existing helm releases"
+            result = subprocess.run(
+                ["sudo", "env", kubeconfig,
+                 "helm", "list", "-n", "nodalarc", "-q"],
+                capture_output=True, text=True, timeout=30,
+            )
+            releases = [r.strip() for r in result.stdout.strip().split("\n") if r.strip()]
+            for release in releases:
+                self._status_detail = f"Uninstalling helm release {release}"
+                log.info(f"Uninstalling stale helm release: {release}")
+                subprocess.run(
+                    ["sudo", "env", kubeconfig,
+                     "helm", "uninstall", release, "-n", "nodalarc"],
+                    capture_output=True, text=True, timeout=60,
+                )
+
+            if releases:
+                self._status_detail = "Waiting for pods to terminate"
+                subprocess.run(
+                    ["sudo", "env", kubeconfig,
+                     "kubectl", "wait", "--for=delete", "pod",
+                     "-l", "nodalarc.io/node-id",
+                     "-n", "nodalarc", "--timeout=60s"],
+                    capture_output=True, text=True, timeout=90,
+                )
 
             # === Clear VS-API state ===
             self._status_detail = "Clearing in-memory state"

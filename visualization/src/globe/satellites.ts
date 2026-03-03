@@ -79,6 +79,13 @@ export function updateSatellites(
       existing.velocity = vel;
       existing.nodeState = node;
       updateSatColor(existing, colorMode);
+
+      // If target drifted far from truth (tab switch, reconnect), snap immediately
+      if (existing.targetPosition.distanceTo(pos) > SAT_RADIUS * 4) {
+        existing.targetPosition.copy(pos);
+        existing.mesh.position.copy(pos);
+        existing.glow.position.copy(pos);
+      }
     } else {
       const color = getSatColor(node, colorMode);
       const material = new THREE.MeshBasicMaterial({ color });
@@ -129,9 +136,9 @@ const MAX_DT = 0.1; // seconds
 export function animateSatellites(dt: number): void {
   const clamped = Math.min(dt, MAX_DT);
 
-  // If tab was backgrounded (large gap), snap everything to snapshot truth
-  // and return immediately — no lerp, no velocity, no drift on this frame.
-  if (dt > 1.0) {
+  // If tab was backgrounded (any gap beyond normal frame time), snap everything
+  // to snapshot truth — no lerp, no velocity, no drift on this frame.
+  if (dt > 0.15) {
     for (const entry of satellites.values()) {
       entry.targetPosition.copy(entry.snapshotPosition);
       entry.mesh.position.copy(entry.snapshotPosition);

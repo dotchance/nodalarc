@@ -143,45 +143,65 @@ def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> 
         _fail(f"Helm install failed: {result.stderr}")
     log.info("Helm install complete")
 
-    # Wait for pods
-    log.info("Waiting for pods to be Running...")
-    for _ in range(120):  # 2 minute timeout
+    # === Step 5+6: Wait for pods and deliver configs progressively ===
+    # Deliver configs to pods as they become Running, rather than waiting
+    # for all pods first. This prevents early pods from timing out on the
+    # config sentinel while late pods are still starting.
+    log.info("Waiting for pods and delivering configs progressively...")
+    expected_pods = {nid.lower() for nid in node_vars}
+    configured_pods: set[str] = set()
+    for tick in range(600):  # 10 minute timeout
         result = subprocess.run(
             ["kubectl", "get", "pods", "-n", "nodalarc",
              "-l", "nodalarc.io/node-id",
-             "-o", "jsonpath={.items[*].status.phase}"],
+             "-o", "jsonpath={range .items[*]}{.metadata.name} {.status.phase}{\"\\n\"}{end}"],
             capture_output=True, text=True,
         )
-        phases = result.stdout.strip().split()
-        if phases and all(p == "Running" for p in phases):
+        running_pods: set[str] = set()
+        for line in result.stdout.strip().splitlines():
+            parts = line.strip().split()
+            if len(parts) == 2 and parts[1] == "Running":
+                running_pods.add(parts[0])
+
+        # Deliver configs to newly-Running pods
+        newly_ready = running_pods - configured_pods
+        for pod_name in sorted(newly_ready):
+            # Find the node_id (original case) for this pod
+            node_id = None
+            for nid in node_vars:
+                if nid.lower() == pod_name:
+                    node_id = nid
+                    break
+            if node_id is None:
+                continue
+            node_dir = configs_dir / node_id
+            cp_result = subprocess.run(
+                ["kubectl", "cp", str(node_dir) + "/.", f"nodalarc/{pod_name}:/etc/frr/",
+                 "-c", "frr"],
+                capture_output=True, text=True,
+            )
+            if cp_result.returncode != 0:
+                log.warning(f"Config copy failed for {node_id}, will retry: {cp_result.stderr}")
+                continue
+            touch_result = subprocess.run(
+                ["kubectl", "exec", "-n", "nodalarc", pod_name, "-c", "frr",
+                 "--", "touch", "/etc/frr/.config-ready"],
+                capture_output=True, text=True,
+            )
+            if touch_result.returncode != 0:
+                log.warning(f"Config signal failed for {node_id}, will retry: {touch_result.stderr}")
+                continue
+            configured_pods.add(pod_name)
+            if len(configured_pods) % 20 == 0 or len(configured_pods) == len(expected_pods):
+                log.info(f"  Configured {len(configured_pods)}/{len(expected_pods)} pods")
+
+        if configured_pods >= expected_pods:
             break
         time.sleep(1)
     else:
-        _fail("Timeout waiting for pods to be Running")
-    log.info(f"All {len(phases)} pods Running")
-
-    # === Step 6: Copy configs into pods, signal readiness ===
-    log.info("Step 6: Copy configs into pods")
-    for node_id in node_vars:
-        pod_name = node_id.lower()
-        node_dir = configs_dir / node_id
-        # Copy rendered configs
-        result = subprocess.run(
-            ["kubectl", "cp", str(node_dir) + "/.", f"nodalarc/{pod_name}:/etc/frr/",
-             "-c", "frr"],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            _fail(f"Config copy failed for {node_id}: {result.stderr}")
-        # Touch sentinel so entrypoint starts FRR daemons
-        result = subprocess.run(
-            ["kubectl", "exec", "-n", "nodalarc", pod_name, "-c", "frr",
-             "--", "touch", "/etc/frr/.config-ready"],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            _fail(f"Config ready signal failed for {node_id}: {result.stderr}")
-    log.info("Configs copied and daemons signaled for all pods")
+        missing = expected_pods - configured_pods
+        _fail(f"Timeout: {len(missing)} pods never became ready: {sorted(missing)[:10]}...")
+    log.info(f"All {len(configured_pods)} pods configured")
 
     # Wait for FRR daemons to start (entrypoint waits for sentinel, then launches)
     log.info("Waiting 5s for FRR daemons to start...")

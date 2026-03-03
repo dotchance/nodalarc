@@ -4,7 +4,7 @@ set -e
 # Wait for configs to be copied by na-deploy.
 # na-deploy touches /etc/frr/.config-ready after kubectl cp completes.
 READY_FILE="/etc/frr/.config-ready"
-TIMEOUT=120
+TIMEOUT=900
 WAITED=0
 
 echo "Waiting for config (sentinel: $READY_FILE)..."

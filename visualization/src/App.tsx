@@ -4,6 +4,8 @@ import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { GlobeView } from "./globe/GlobeView";
 import { TopologyView } from "./topology/TopologyView";
 import { InfoPanel } from "./panels/InfoPanel";
+import { CliDrawer } from "./panels/CliDrawer";
+import { NodePopover } from "./panels/NodePopover";
 import { Toolbar } from "./toolbar/Toolbar";
 import { TopBar } from "./bars/TopBar";
 import { BottomBar } from "./bars/BottomBar";
@@ -46,12 +48,15 @@ export function App() {
   }, []);
   const canSplit = windowWidth >= 1920;
 
-  // Ref for GlobeView imperative actions (top view, follow, screenshot, flyTo)
+  const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
+
+  // Ref for GlobeView imperative actions (top view, follow, screenshot, flyTo, screen position)
   const globeActionsRef = useRef<{
     flyToTopView: () => void;
     setFollowTarget: (nodeId: string | null) => void;
     captureScreenshot: () => void;
     flyToNode: (nodeId: string) => void;
+    getNodeScreenPosition: (nodeId: string) => { x: number; y: number; visible: boolean } | null;
   } | null>(null);
 
   const toggleHistorical = useCallback(() => {
@@ -101,6 +106,7 @@ export function App() {
       },
       onFollowNode: handleFollowNode,
       onTopView: handleTopView,
+      onToggleCli: () => setCliDrawerOpen((v) => !v),
     }),
     [clearSelection, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode],
   );
@@ -197,6 +203,23 @@ export function App() {
           onFollowNode={handleFollowNode}
           onScreenshot={handleScreenshot}
         />
+        {viewMode !== "topology" && selection?.type !== "link" && selection != null && !cliDrawerOpen && (
+          <NodePopover
+            snapshot={snapshot}
+            selection={selection}
+            onClose={clearSelection}
+            onOpenCli={() => setCliDrawerOpen(true)}
+            globeActionsRef={globeActionsRef}
+          />
+        )}
+        {cliDrawerOpen && (
+          <CliDrawer
+            open={cliDrawerOpen}
+            onClose={() => setCliDrawerOpen(false)}
+            snapshot={snapshot}
+            selection={selection}
+          />
+        )}
       </div>
 
       <div className="area-panel">

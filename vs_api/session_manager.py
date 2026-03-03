@@ -2,6 +2,10 @@
 
 Scans configs/sessions/ for YAML files, provides list with active flag,
 and runs teardown + deploy in a thread executor during switch.
+
+Session recovery: on startup without explicit --session/--db, scans known
+data directories for session-state.json files with live PIDs and recovers
+the newest one automatically.
 """
 
 from __future__ import annotations
@@ -20,6 +24,23 @@ import yaml
 from nodalarc.models.session import SessionConfig
 
 log = logging.getLogger(__name__)
+
+# Maximum number of old session directories to keep
+_MAX_KEPT_SESSIONS = 5
+
+
+def _pid_alive(pid: int) -> bool:
+    """Check if a process with the given PID is still running."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)  # Signal 0 = just check, don't actually signal
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we don't have permission to signal it
+        return True
 
 
 class SessionManager:
@@ -84,6 +105,165 @@ class SessionManager:
         """Return the set of known session file paths from the initial scan."""
         return {s["file"] for s in self._available}
 
+    def _collect_data_dirs(self) -> list[Path]:
+        """Collect all unique data_dir paths from scanned session configs."""
+        dirs: set[str] = set()
+        for s in self._available:
+            try:
+                raw = yaml.safe_load(Path(s["file"]).read_text())
+                cfg = SessionConfig.model_validate(raw)
+                dirs.add(cfg.session.data_dir)
+            except Exception:
+                pass
+        return [Path(d) for d in dirs]
+
+    def recover_session(self) -> dict | None:
+        """Scan data directories for the newest session-state.json with live PIDs.
+
+        Returns the session state dict if a live session is found, None otherwise.
+        The dict includes: session_id, data_dir, session_config, db_path,
+        mi_pid, orchestrator_pid, vsapi_pid.
+        """
+        data_dirs = self._collect_data_dirs()
+        if not data_dirs:
+            return None
+
+        # Collect all session-state.json files across all data dirs
+        candidates: list[tuple[Path, float]] = []
+        for base in data_dirs:
+            if not base.is_dir():
+                continue
+            for subdir in base.iterdir():
+                if not subdir.is_dir():
+                    continue
+                state_file = subdir / "session-state.json"
+                if state_file.exists():
+                    candidates.append((state_file, state_file.stat().st_mtime))
+
+        # Sort newest first
+        candidates.sort(key=lambda x: x[1], reverse=True)
+
+        for state_file, _mtime in candidates:
+            try:
+                state = json.loads(state_file.read_text())
+            except Exception:
+                continue
+
+            mi_pid = state.get("mi_pid", 0)
+            orch_pid = state.get("orchestrator_pid", 0)
+
+            # A session is "live" if either MI or orchestrator is running
+            if _pid_alive(mi_pid) or _pid_alive(orch_pid):
+                log.info(
+                    f"Recovered live session: {state.get('session_id')} "
+                    f"(mi={mi_pid} alive={_pid_alive(mi_pid)}, "
+                    f"orch={orch_pid} alive={_pid_alive(orch_pid)})"
+                )
+                # Update internal state
+                self._current_data_dir = state_file.parent
+                session_config = state.get("session_config", "")
+                if session_config:
+                    self._current_session_file = session_config
+                self._status = "ready"
+                self._status_detail = ""
+                return state
+
+        log.info("No live session found during recovery scan")
+        return None
+
+    def kill_all_session_processes(self) -> int:
+        """Find and kill ALL session processes across all data directories.
+
+        Returns the number of processes killed. Used during teardown to ensure
+        no orphan MI/orchestrator processes survive.
+        """
+        killed = 0
+        data_dirs = self._collect_data_dirs()
+
+        for base in data_dirs:
+            if not base.is_dir():
+                continue
+            for subdir in base.iterdir():
+                if not subdir.is_dir():
+                    continue
+                state_file = subdir / "session-state.json"
+                if not state_file.exists():
+                    continue
+                try:
+                    state = json.loads(state_file.read_text())
+                except Exception:
+                    continue
+
+                for key in ("mi_pid", "orchestrator_pid"):
+                    pid = state.get(key, 0)
+                    if pid and _pid_alive(pid):
+                        try:
+                            os.kill(pid, signal.SIGTERM)
+                            log.info(f"Killed orphan {key}={pid} from {subdir.name}")
+                            killed += 1
+                        except (ProcessLookupError, PermissionError):
+                            pass
+        return killed
+
+    def cleanup_old_sessions(self, keep: int = _MAX_KEPT_SESSIONS) -> int:
+        """Remove old session directories, keeping the newest `keep` per data_dir.
+
+        Only removes directories where all PIDs are dead. Also removes orphan
+        directories that lack session-state.json (partial/failed deploys).
+        Returns count removed.
+        """
+        import shutil
+
+        removed = 0
+        data_dirs = self._collect_data_dirs()
+
+        for base in data_dirs:
+            if not base.is_dir():
+                continue
+
+            # Separate complete (has session-state.json) from orphan dirs
+            complete = []
+            orphan = []
+            for d in base.iterdir():
+                if not d.is_dir():
+                    continue
+                if (d / "session-state.json").exists():
+                    complete.append(d)
+                else:
+                    orphan.append(d)
+
+            # Sort complete dirs by mtime (newest first), keep newest `keep`
+            complete.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+            for subdir in complete[keep:]:
+                state_file = subdir / "session-state.json"
+                try:
+                    state = json.loads(state_file.read_text())
+                    mi_pid = state.get("mi_pid", 0)
+                    orch_pid = state.get("orchestrator_pid", 0)
+                    if _pid_alive(mi_pid) or _pid_alive(orch_pid):
+                        log.info(f"Skipping cleanup of {subdir.name} — processes still live")
+                        continue
+                except Exception:
+                    pass
+
+                try:
+                    shutil.rmtree(subdir)
+                    log.info(f"Cleaned up old session directory: {subdir.name}")
+                    removed += 1
+                except Exception as exc:
+                    log.warning(f"Failed to remove {subdir}: {exc}")
+
+            # Remove orphan directories (no session-state.json = failed/partial deploy)
+            for subdir in orphan:
+                try:
+                    shutil.rmtree(subdir)
+                    log.info(f"Cleaned up orphan directory: {subdir.name}")
+                    removed += 1
+                except Exception as exc:
+                    log.warning(f"Failed to remove orphan {subdir}: {exc}")
+
+        return removed
+
     def switch(
         self,
         session_path: str,
@@ -109,22 +289,11 @@ class SessionManager:
             self._status_detail = "Tearing down current session"
             log.info(f"Session switch: tearing down, deploying {session_path}")
 
-            # === Teardown: kill processes from known session state ===
-            if self._current_data_dir and self._current_data_dir.exists():
-                state_file = self._current_data_dir / "session-state.json"
-                if state_file.exists():
-                    state = json.loads(state_file.read_text())
-
-                    # Kill MI and TO processes
-                    self._status_detail = "Stopping MI and orchestrator"
-                    for key in ("mi_pid", "orchestrator_pid"):
-                        pid = state.get(key, 0)
-                        if pid:
-                            try:
-                                os.kill(pid, signal.SIGTERM)
-                                log.info(f"Sent SIGTERM to {key}={pid}")
-                            except ProcessLookupError:
-                                log.info(f"Process {key}={pid} already gone")
+            # === Teardown: kill ALL session processes (not just current) ===
+            self._status_detail = "Stopping all session processes"
+            killed = self.kill_all_session_processes()
+            if killed:
+                log.info(f"Killed {killed} session process(es) during teardown")
 
             # === Teardown: uninstall ANY existing helm releases in namespace ===
             kubeconfig = "KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
@@ -248,6 +417,14 @@ class SessionManager:
             self._status = "ready"
             self._status_detail = ""
             log.info(f"Session switch complete: {session_path}")
+
+            # === Cleanup old session directories (non-blocking, best-effort) ===
+            try:
+                cleaned = self.cleanup_old_sessions()
+                if cleaned:
+                    log.info(f"Cleaned up {cleaned} old session directory(ies)")
+            except Exception as exc:
+                log.warning(f"Session cleanup failed (non-fatal): {exc}")
 
         except Exception as exc:
             self._status = "error"

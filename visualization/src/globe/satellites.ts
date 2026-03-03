@@ -129,15 +129,15 @@ const MAX_DT = 0.1; // seconds
 export function animateSatellites(dt: number): void {
   const clamped = Math.min(dt, MAX_DT);
 
-  // If tab was backgrounded (large gap), snap to snapshot truth
-  // then continue normal animation from there.
+  // If tab was backgrounded (large gap), snap everything to snapshot truth
+  // and return immediately — no lerp, no velocity, no drift on this frame.
   if (dt > 1.0) {
     for (const entry of satellites.values()) {
       entry.targetPosition.copy(entry.snapshotPosition);
       entry.mesh.position.copy(entry.snapshotPosition);
       entry.glow.position.copy(entry.snapshotPosition);
     }
-    // Don't return — fall through so velocity still applies on this frame
+    return;
   }
 
   for (const entry of satellites.values()) {

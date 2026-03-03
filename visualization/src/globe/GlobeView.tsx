@@ -26,6 +26,7 @@ export interface GlobeActions {
   setFollowTarget: (nodeId: string | null) => void;
   captureScreenshot: () => void;
   flyToNode: (nodeId: string) => void;
+  getNodeScreenPosition: (nodeId: string) => { x: number; y: number; visible: boolean } | null;
 }
 
 interface GlobeViewProps {
@@ -168,6 +169,35 @@ export function GlobeView({
             camera.position.copy(dir.multiplyScalar(dist));
             controls.update();
           }
+        },
+        getNodeScreenPosition: (nodeId: string) => {
+          const sat = getSatellites().get(nodeId);
+          const gs = getGroundStations().get(nodeId);
+          const worldPos = sat?.mesh.position ?? gs?.sprite.position;
+          if (!worldPos) return null;
+
+          const vec = worldPos.clone().project(camera);
+
+          // Behind camera or behind Earth
+          if (vec.z > 1) return { x: 0, y: 0, visible: false };
+
+          // Earth occlusion check (same as updateGSLabels)
+          const cameraPos = camera.position;
+          const dirToNode = worldPos.clone().sub(cameraPos).normalize();
+          const dirToCenter = new THREE.Vector3(0, 0, 0).sub(cameraPos).normalize();
+          const dot = dirToNode.dot(dirToCenter);
+          const distToCenter = cameraPos.length();
+          const sinAngle = EARTH_RADIUS / distToCenter;
+          if (dot > Math.sqrt(1 - sinAngle * sinAngle) && worldPos.length() < distToCenter) {
+            return { x: 0, y: 0, visible: false };
+          }
+
+          // Convert NDC to pixel coords relative to the container
+          const w = container.clientWidth;
+          const h = container.clientHeight;
+          const x = (vec.x * 0.5 + 0.5) * w;
+          const y = (-vec.y * 0.5 + 0.5) * h;
+          return { x, y, visible: true };
         },
       };
     }

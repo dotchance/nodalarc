@@ -231,6 +231,13 @@ def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> 
     neighbors = assign_isl_neighbors(constellation, addressing)
     by_node = neighbors_by_node(neighbors)
 
+    # Count total unique ISL links
+    total_pairs: set[tuple[str, str]] = set()
+    for node_id, assignments in by_node.items():
+        for na in assignments:
+            total_pairs.add((min(node_id, na.peer_node_id), max(node_id, na.peer_node_id)))
+    log.info(f"{len(total_pairs)} veth pairs to create")
+
     # Create veth pair for each unique ISL link (deduplicate A→B and B→A)
     created_links: set[tuple[str, str]] = set()
     for node_id, assignments in by_node.items():

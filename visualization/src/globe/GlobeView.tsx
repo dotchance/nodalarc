@@ -174,6 +174,7 @@ export function GlobeView({
 
     // Animation loop
     let lastSnapshotRef: StateSnapshot | null = null;
+    let lastConstellationName: string | null = null;
 
     renderer.setAnimationLoop(() => {
       const dt = clockRef.current.getDelta();
@@ -184,6 +185,14 @@ export function GlobeView({
       }
 
       const snap = snapshotRef.current;
+
+      // Flush trails when constellation changes (session switch)
+      if (snap && snap.constellation_name !== lastConstellationName) {
+        if (lastConstellationName !== null) {
+          flushTrails();
+        }
+        lastConstellationName = snap.constellation_name;
+      }
 
       // Update entities when snapshot changes
       if (snap && snap !== lastSnapshotRef) {

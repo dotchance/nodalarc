@@ -12,11 +12,11 @@ imagePullPolicy: Never
 
 satellite:
   memoryLimit: 128Mi
-  cpuLimit: 200m
+  cpuLimit: 100m
 
 groundStation:
   memoryLimit: 128Mi
-  cpuLimit: 200m
+  cpuLimit: 100m
 
 orchestrator:
   memoryLimit: 512Mi

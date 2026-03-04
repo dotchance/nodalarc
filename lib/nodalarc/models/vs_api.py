@@ -28,6 +28,7 @@ class NodeState(BaseModel):
     isl_count: int
     gnd_count: int
     prefix: str | None = None  # Ground station advertised prefix
+    min_elevation_deg: float | None = None  # Ground stations only
 
 
 class LinkState(BaseModel):

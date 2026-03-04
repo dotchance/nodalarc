@@ -37,6 +37,7 @@ from nodalarc.zmq_channels import (
     TOPIC_POSITION_EVENT,
 )
 from orchestrator.latency_model import PositionTable
+from orchestrator.timeline_reader import TimelineReader
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +115,7 @@ class DiscreteEventDispatcher:
         latency_update_interval_s: int = 10,
         use_convergence_gate: bool = True,
         max_orbits: int | None = None,
+        max_idle_timeouts: int | None = None,
     ) -> None:
         self._timeline_path = timeline_path
         self._interface_map = interface_map
@@ -126,6 +128,9 @@ class DiscreteEventDispatcher:
         self._latency_update_interval_s = latency_update_interval_s
         self._use_convergence_gate = use_convergence_gate
         self._max_orbits = max_orbits
+        # max_idle_timeouts: exit after N consecutive reader timeouts (None=wait forever)
+        # Use max_idle_timeouts=1 in tests to process a finite file then exit.
+        self._max_idle_timeouts = max_idle_timeouts
 
         self._position_table = PositionTable()
         self._active_links: dict[tuple[str, str], ActiveLinkInfo] = {}
@@ -133,11 +138,7 @@ class DiscreteEventDispatcher:
         self._steps_since_latency_update = 0
 
     def run(self) -> None:
-        """Execute the full timeline."""
-        events = _load_timeline(self._timeline_path)
-        batches = _group_by_timestamp(events)
-        log.info(f"Loaded timeline: {len(events)} events in {len(batches)} batches")
-
+        """Stream events from growing timeline file."""
         # Set up ZeroMQ
         ctx = zmq.Context()
         pub_sock = ctx.socket(zmq.PUB)
@@ -156,23 +157,33 @@ class DiscreteEventDispatcher:
         # VS-API (uvicorn) can take 2-3s to start its ZMQ subscriber.
         time.sleep(3.0)
 
-        try:
-            orbit = 0
-            while self._max_orbits is None or orbit < self._max_orbits:
-                orbit += 1
-                for batch_idx, batch in enumerate(batches):
-                    self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)
-                    self._steps_since_latency_update += 1
+        reader = TimelineReader(self._timeline_path)
+        batch_count = 0
+        idle_timeouts = 0
 
-                    if batch_idx < len(batches) - 1:
-                        time.sleep(self._dwell_s)
-                log.info(
-                    f"Timeline orbit {orbit} complete: "
-                    f"{len(self._active_links)} active links, looping"
-                )
+        try:
+            while True:
+                batch = reader.next_batch(timeout_s=10.0)
+                if batch is None:
+                    idle_timeouts += 1
+                    if self._max_idle_timeouts is not None and idle_timeouts >= self._max_idle_timeouts:
+                        log.info("Max idle timeouts reached, exiting")
+                        break
+                    log.debug("No new events, waiting for OME...")
+                    continue
+                idle_timeouts = 0
+
+                self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)
+                self._steps_since_latency_update += 1
+                batch_count += 1
+
+                if self._dwell_s > 0:
+                    time.sleep(self._dwell_s)
         except KeyboardInterrupt:
             log.info("Dispatcher interrupted")
         finally:
+            log.info(f"Processed {batch_count} batches, {len(self._active_links)} active links")
+            reader.close()
             self._teardown_remaining_links(pub_sock)
             pub_sock.close()
             ome_pub_sock.close()

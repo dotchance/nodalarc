@@ -99,7 +99,7 @@ def _build_snapshot(
     return positions
 
 
-def precompute_timeline(
+def precompute_timeline_window(
     satellites: list[SatelliteNode],
     addressing: AddressingScheme,
     gs_file: GroundStationFile | None,
@@ -112,13 +112,19 @@ def precompute_timeline(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
-) -> list[TimelineEvent]:
-    """Precompute the full timeline for one orbital period.
+    initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
+    initial_gs_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
+    timestamp_offset: float = 0.0,
+) -> tuple[list[TimelineEvent], dict[tuple[str, str], tuple[bool, bool]], dict[tuple[str, str], tuple[bool, bool]]]:
+    """Precompute a single window of the timeline.
 
     Emits:
     - ClockTick every step_seconds with TimelinePositionSnapshot
     - VisibilityEvent on ISL state changes
     - VisibilityEvent on ground link state changes
+
+    Returns (events, isl_state, gs_state) so the caller can carry boundary
+    state into the next window for continuous operation.
     """
     events: list[TimelineEvent] = []
     by_node = neighbors_by_node(neighbors)
@@ -149,14 +155,14 @@ def precompute_timeline(
             gs_policies[node_id] = station.scheduling_policy or default_gs_policy
 
     # Track ISL state: (node_a, node_b) -> (visible, scheduled)
-    isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    isl_state: dict[tuple[str, str], tuple[bool, bool]] = dict(initial_isl_state) if initial_isl_state else {}
     # Track GS state: (gs_id, sat_id) -> (visible, scheduled)
-    gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    gs_state: dict[tuple[str, str], tuple[bool, bool]] = dict(initial_gs_state) if initial_gs_state else {}
 
     steps = int(duration_s / step_seconds)
     for step in range(steps + 1):
         dt = step * step_seconds
-        timestamp_s = dt
+        timestamp_s = dt + timestamp_offset
         sim_time = datetime.fromtimestamp(epoch_unix + dt, tz=timezone.utc)
 
         # 1. Compute all satellite positions
@@ -319,6 +325,41 @@ def precompute_timeline(
                 )
                 events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
 
+    return events, isl_state, gs_state
+
+
+def precompute_timeline(
+    satellites: list[SatelliteNode],
+    addressing: AddressingScheme,
+    gs_file: GroundStationFile | None,
+    neighbors: frozenset[tuple[str, NeighborAssignment]],
+    epoch_unix: float,
+    duration_s: float,
+    step_seconds: int = 1,
+    max_range_km: float = 5016.0,
+    max_tracking_rate_deg_s: float = 3.0,
+    polar_seam_enabled: bool = False,
+    latitude_threshold_deg: float = 70.0,
+    default_min_elevation_deg: float = 25.0,
+) -> list[TimelineEvent]:
+    """Single-window convenience wrapper (backward compat).
+
+    Returns only events, discarding boundary state.
+    """
+    events, _, _ = precompute_timeline_window(
+        satellites=satellites,
+        addressing=addressing,
+        gs_file=gs_file,
+        neighbors=neighbors,
+        epoch_unix=epoch_unix,
+        duration_s=duration_s,
+        step_seconds=step_seconds,
+        max_range_km=max_range_km,
+        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
+        polar_seam_enabled=polar_seam_enabled,
+        latitude_threshold_deg=latitude_threshold_deg,
+        default_min_elevation_deg=default_min_elevation_deg,
+    )
     return events
 
 
@@ -334,6 +375,25 @@ def write_timeline_jsonl(events: list[TimelineEvent], output_path: Path) -> None
             }
             f.write(json.dumps(record) + "\n")
     logger.info(f"Wrote {len(events)} events to {output_path}")
+
+
+def append_timeline_jsonl(events: list[TimelineEvent], output_path: Path) -> None:
+    """Append events to an existing JSONL file (or create it).
+
+    Uses fsync to ensure the dispatcher's tail-reader sees complete lines.
+    """
+    import os
+    with open(output_path, "a") as f:
+        for event in events:
+            record = {
+                "timestamp_s": event.timestamp_s,
+                "event_type": event.event_type,
+                "data": event.data.model_dump(mode="json"),
+            }
+            f.write(json.dumps(record) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    logger.info(f"Appended {len(events)} events to {output_path}")
 
 
 def read_timeline_jsonl(path: Path) -> list[dict]:

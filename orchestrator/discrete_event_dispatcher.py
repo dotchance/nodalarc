@@ -152,8 +152,9 @@ class DiscreteEventDispatcher:
             conv_sock = ctx.socket(zmq.REQ)
             conv_sock.connect(MI_CONVERGENCE_GATE_CONNECT)
 
-        # Allow subscribers time to connect (ZMQ slow joiner)
-        time.sleep(0.5)
+        # Allow subscribers time to connect (ZMQ slow joiner).
+        # VS-API (uvicorn) can take 2-3s to start its ZMQ subscriber.
+        time.sleep(3.0)
 
         try:
             orbit = 0
@@ -172,11 +173,38 @@ class DiscreteEventDispatcher:
         except KeyboardInterrupt:
             log.info("Dispatcher interrupted")
         finally:
+            self._teardown_remaining_links(pub_sock)
             pub_sock.close()
             ome_pub_sock.close()
             if conv_sock:
                 conv_sock.close()
             ctx.term()
+
+    def _teardown_remaining_links(self, pub_sock: zmq.Socket) -> None:
+        """Tear down active GS links when the dispatcher exits.
+
+        GS links have dynamic veths and must be explicitly torn down.
+        ISL links use pre-wired veths and are left as-is.
+        """
+        gs_pairs = [
+            pair for pair in self._active_links
+            if pair[0].startswith("gs-") or pair[1].startswith("gs-")
+        ]
+        if not gs_pairs:
+            return
+        log.info(f"Tearing down {len(gs_pairs)} remaining GS links")
+        for pair in gs_pairs:
+            fake_vis = VisibilityEvent(
+                sim_time=datetime.now(timezone.utc),
+                node_a=pair[0],
+                node_b=pair[1],
+                visible=False,
+                scheduled=False,
+                range_km=0.0,
+                elevation_deg=None,
+                terminal_type="optical",
+            )
+            self._handle_link_down(fake_vis, pub_sock)
 
     def _process_batch(
         self,

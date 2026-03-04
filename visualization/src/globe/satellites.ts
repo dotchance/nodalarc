@@ -94,8 +94,9 @@ export function updateSatellites(
       _tmpExtrapolated.copy(existing.snapshotPosition)
         .addScaledVector(existing.snapshotVelocity, elapsedS);
 
-      // Correction = ground truth − extrapolated position
-      const correction = new THREE.Vector3().subVectors(newPos, _tmpExtrapolated);
+      // Correction = where we ARE (old extrapolation) minus where we SHOULD BE (new truth).
+      // This keeps the mesh at its current position at blend start, then decays to zero.
+      const correction = new THREE.Vector3().subVectors(_tmpExtrapolated, newPos);
 
       // If correction is huge (tab switch / reconnect), snap immediately
       if (correction.length() > SAT_RADIUS * 4) {

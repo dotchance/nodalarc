@@ -11,16 +11,12 @@ using the same encode_message format (topic\\x00payload in a single frame).
 import argparse
 import json
 import logging
-import sys
 import time
 from datetime import datetime, timezone
 
-sys.path.insert(0, "/home/chance/nodal")
-
 import zmq
-log = logging.getLogger(__name__)
 
-from lib.nodalarc.zmq_channels import (
+from nodalarc.zmq_channels import (
     OME_EVENTS_BIND,
     TO_EVENTS_BIND,
     encode_message,
@@ -28,6 +24,8 @@ from lib.nodalarc.zmq_channels import (
     TOPIC_LINK_UP,
     TOPIC_LINK_DOWN,
 )
+
+log = logging.getLogger(__name__)
 
 
 def compute_area(plane: int | None, planes_per_stripe: int = 2) -> str | None:

@@ -28,7 +28,15 @@ from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.template_vars import build_template_vars
 from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
-from nodalarc.zmq_channels import VS_API_HTTP_PORT
+from nodalarc.zmq_channels import (
+    MI_CONVERGENCE_GATE_PORT,
+    MI_EVENTS_PORT,
+    MI_TRACE_PORT,
+    OME_EVENTS_PORT,
+    TO_EVENTS_PORT,
+    TO_SCENARIO_INJECT_PORT,
+    VS_API_HTTP_PORT,
+)
 from ome.main import run as ome_run
 
 log = logging.getLogger(__name__)
@@ -38,6 +46,21 @@ adapter = TypeAdapter(ConstellationConfig)
 def _fail(msg: str) -> None:
     log.error(msg)
     sys.exit(1)
+
+
+def _kill_port_holder(port: int) -> None:
+    """Kill any process listening on the given TCP port."""
+    result = subprocess.run(
+        ["ss", "-tlnpH", f"sport = :{port}"],
+        capture_output=True, text=True,
+    )
+    import re
+    for match in re.finditer(r"pid=(\d+)", result.stdout):
+        pid = int(match.group(1))
+        log.info(f"Killing stale process {pid} on port {port}")
+        subprocess.run(["kill", "-9", str(pid)], capture_output=True)
+    if result.stdout.strip():
+        time.sleep(0.5)
 
 
 def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> None:
@@ -324,6 +347,10 @@ def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> 
 
     # === Step 8: Start MI ===
     log.info("Step 8: Start MI service")
+    # Kill stale processes on ZMQ ports from previous sessions
+    for port in (OME_EVENTS_PORT, TO_EVENTS_PORT, MI_EVENTS_PORT,
+                 MI_CONVERGENCE_GATE_PORT, TO_SCENARIO_INJECT_PORT, MI_TRACE_PORT):
+        _kill_port_holder(port)
     mi_db = str(data_dir / "session.db")
     mi_proc = subprocess.Popen(
         [sys.executable, "-m", "measurement.mi_main",
@@ -340,6 +367,8 @@ def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> 
     # === Step 10: Start VS-API ===
     if not skip_vsapi:
         log.info("Step 10: Start VS-API")
+        # Kill any stale VS-API on the target port
+        _kill_port_holder(VS_API_HTTP_PORT)
         vsapi_proc = subprocess.Popen(
             [sys.executable, "-m", "vs_api.main",
              "--session", session_path,
@@ -349,6 +378,19 @@ def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> 
             stderr=subprocess.DEVNULL,
         )
         log.info(f"VS-API PID: {vsapi_proc.pid}")
+        # Wait for VS-API to be healthy before starting orchestrator
+        import urllib.request
+        for attempt in range(30):
+            try:
+                urllib.request.urlopen(
+                    f"http://localhost:{VS_API_HTTP_PORT}/api/v1/state", timeout=1,
+                )
+                log.info("VS-API healthy")
+                break
+            except Exception:
+                time.sleep(0.5)
+        else:
+            log.warning("VS-API did not become healthy in 15s, proceeding anyway")
     else:
         log.info("Step 10: Skipping VS-API (--skip-vsapi)")
         vsapi_proc = None

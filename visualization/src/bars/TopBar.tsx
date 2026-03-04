@@ -12,6 +12,12 @@ interface TopBarProps {
   sessions: SessionInfo[];
   switching: boolean;
   onSwitchSession: (file: string) => void;
+  playbackPaused: boolean;
+  playbackSpeed: number;
+  playbackLoading: boolean;
+  onPlaybackPause: () => void;
+  onPlaybackResume: () => void;
+  onPlaybackSetSpeed: (factor: number) => void;
 }
 
 /** Compute compression factor from recent snapshots. */
@@ -39,7 +45,7 @@ function useCompressionFactor(snapshot: StateSnapshot | null): string {
   return "--";
 }
 
-export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical, sessions, switching, onSwitchSession }: TopBarProps) {
+export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical, sessions, switching, onSwitchSession, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed }: TopBarProps) {
   const compressionFactor = useCompressionFactor(snapshot);
   const healthStatus = snapshot?.network_health.status ?? "unknown";
   const healthColor =
@@ -129,6 +135,45 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
           </span>
         )}
       </span>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: 8 }}>
+        <button
+          onClick={playbackPaused ? onPlaybackResume : onPlaybackPause}
+          disabled={playbackLoading}
+          style={{
+            padding: "2px 8px",
+            borderRadius: 4,
+            border: "1px solid var(--border)",
+            background: playbackPaused ? "var(--ws-reconnecting)" : "transparent",
+            color: "var(--text-secondary)",
+            fontSize: 11,
+            cursor: playbackLoading ? "wait" : "pointer",
+          }}
+          title={playbackPaused ? "Resume" : "Pause"}
+        >
+          {playbackPaused ? "Play" : "Pause"}
+        </button>
+        <select
+          value={playbackSpeed}
+          onChange={(e) => onPlaybackSetSpeed(Number(e.target.value))}
+          disabled={playbackLoading}
+          style={{
+            padding: "2px 4px",
+            borderRadius: 4,
+            border: "1px solid var(--border)",
+            background: "transparent",
+            color: "var(--text-secondary)",
+            fontSize: 11,
+          }}
+          title="Playback speed"
+        >
+          <option value={0.25}>0.25x</option>
+          <option value={0.5}>0.5x</option>
+          <option value={1}>1x</option>
+          <option value={2}>2x</option>
+          <option value={5}>5x</option>
+          <option value={10}>10x</option>
+        </select>
+      </div>
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <span

@@ -26,6 +26,7 @@ from nodalarc.models.events import (
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.zmq_channels import (
     OME_EVENTS_BIND,
+    PLAYBACK_CONTROL_BIND,
     TO_EVENTS_BIND,
     TOPIC_LATENCY_UPDATE,
     TOPIC_LINK_DOWN,
@@ -67,6 +68,8 @@ class RealtimeDispatcher:
         self._active_links: dict[tuple[str, str], ActiveLinkInfo] = {}
         self._last_latencies: dict[tuple[str, str], float] = {}
         self._steps_since_latency_update = 0
+        self._paused: bool = False
+        self._speed_factor: float = 1.0
 
     def run(self) -> None:
         """Stream events paced at wall-clock x compression from growing timeline."""
@@ -85,6 +88,13 @@ class RealtimeDispatcher:
         ome_pub_sock = ctx.socket(zmq.PUB)
         ome_pub_sock.bind(OME_EVENTS_BIND)
 
+        # Playback control REP socket
+        playback_sock = ctx.socket(zmq.REP)
+        playback_sock.bind(PLAYBACK_CONTROL_BIND)
+
+        poller = zmq.Poller()
+        poller.register(playback_sock, zmq.POLLIN)
+
         # Allow subscribers time to connect (ZMQ slow joiner)
         time.sleep(0.5)
 
@@ -93,6 +103,13 @@ class RealtimeDispatcher:
 
         try:
             while True:
+                # Poll for playback commands (non-blocking)
+                self._handle_playback_commands(poller, playback_sock)
+
+                if self._paused:
+                    time.sleep(0.1)
+                    continue
+
                 batch = reader.next_batch(timeout_s=10.0)
                 if batch is None:
                     log.debug("Waiting for OME window...")
@@ -100,7 +117,8 @@ class RealtimeDispatcher:
 
                 # Pace: wall_target relative to session start
                 batch_ts = batch[0]["timestamp_s"]
-                wall_target = session_start_wall + (batch_ts / self._compression_factor)
+                effective_compression = self._compression_factor * self._speed_factor
+                wall_target = session_start_wall + (batch_ts / effective_compression)
                 wall_now = time.monotonic()
                 if wall_target > wall_now:
                     time.sleep(wall_target - wall_now)
@@ -114,7 +132,40 @@ class RealtimeDispatcher:
             self._teardown_remaining_links(pub_sock)
             pub_sock.close()
             ome_pub_sock.close()
+            playback_sock.close()
             ctx.term()
+
+    def _handle_playback_commands(
+        self, poller: zmq.Poller, playback_sock: zmq.Socket,
+    ) -> None:
+        """Poll for and handle playback control commands."""
+        socks = dict(poller.poll(timeout=0))
+        if playback_sock not in socks:
+            return
+        raw = playback_sock.recv()
+        try:
+            cmd = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            playback_sock.send(json.dumps({"error": "invalid json"}).encode())
+            return
+
+        action = cmd.get("action", "")
+        if action == "pause":
+            self._paused = True
+            playback_sock.send(json.dumps({"status": "ok", "paused": True}).encode())
+        elif action == "resume":
+            self._paused = False
+            playback_sock.send(json.dumps({"status": "ok", "paused": False}).encode())
+        elif action == "set_speed":
+            factor = max(0.1, min(100.0, float(cmd.get("factor", 1.0))))
+            self._speed_factor = factor
+            playback_sock.send(json.dumps({"status": "ok", "speed": factor}).encode())
+        elif action == "get_status":
+            playback_sock.send(json.dumps({
+                "paused": self._paused, "speed": self._speed_factor,
+            }).encode())
+        else:
+            playback_sock.send(json.dumps({"error": "unknown action"}).encode())
 
     def _process_batch(
         self,

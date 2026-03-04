@@ -1,12 +1,8 @@
 /** Draw topology links on Canvas 2D.
- *  Per VF spec Section 6A.3:
- *   - Intra-area ISL: solid, area color at 60% opacity, 1.5px
- *   - Cross-area ISL: dashed, white at 50% opacity, 1.5px
- *   - Ground: solid, teal #00d4aa, 2px
- *   - Flow path: orange #ff8800, 3px, animated dash
+ *  Link colors match the globe view (config.ts constants).
  */
 
-import { AREA_COLORS } from "../config";
+import { LINK_ISL_COLOR, LINK_GROUND_COLOR } from "../config";
 import type { LayoutLink, LayoutNode } from "./layout";
 
 /** Point-to-line-segment distance for link hit testing. */
@@ -39,8 +35,7 @@ export function hitTestLink(
   return null;
 }
 
-function areaColorCSS(area: string | null, opacity: number): string {
-  const hex = AREA_COLORS[area ?? ""] ?? 0x888888;
+function hexToCSS(hex: number, opacity: number): string {
   const r = (hex >> 16) & 0xff;
   const g = (hex >> 8) & 0xff;
   const b = hex & 0xff;
@@ -65,21 +60,19 @@ export function drawLinks(
     ctx.lineTo(b.x, b.y);
 
     if (link.state !== "active") {
-      // Failed link: red, 2px
       ctx.strokeStyle = "rgba(255, 51, 51, 0.6)";
       ctx.lineWidth = 2;
       ctx.setLineDash([]);
     } else if (link.isGround) {
-      ctx.strokeStyle = "#00d4aa";
+      ctx.strokeStyle = hexToCSS(LINK_GROUND_COLOR, 0.6);
       ctx.lineWidth = 2;
       ctx.setLineDash([]);
     } else if (link.isCrossArea) {
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+      ctx.strokeStyle = hexToCSS(LINK_ISL_COLOR, 0.4);
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 3]);
     } else {
-      // Intra-area: area color at 60% opacity
-      ctx.strokeStyle = areaColorCSS(a.area, 0.6);
+      ctx.strokeStyle = hexToCSS(LINK_ISL_COLOR, 0.55);
       ctx.lineWidth = 1.5;
       ctx.setLineDash([]);
     }

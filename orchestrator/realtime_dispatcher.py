@@ -33,8 +33,9 @@ from nodalarc.zmq_channels import (
     TOPIC_POSITION_EVENT,
     encode_message,
 )
-from orchestrator.discrete_event_dispatcher import ActiveLinkInfo, _group_by_timestamp, _load_timeline
+from orchestrator.discrete_event_dispatcher import ActiveLinkInfo
 from orchestrator.latency_model import PositionTable
+from orchestrator.timeline_reader import TimelineReader
 
 log = logging.getLogger(__name__)
 
@@ -68,15 +69,11 @@ class RealtimeDispatcher:
         self._steps_since_latency_update = 0
 
     def run(self) -> None:
-        """Load timeline and dispatch batches paced at wall-clock speed."""
+        """Stream events paced at wall-clock x compression from growing timeline."""
         if self._timeline_path is None:
             raise ValueError("timeline_path is required for run()")
-        events = _load_timeline(self._timeline_path)
-        batches = _group_by_timestamp(events)
-        log.info(
-            f"RT dispatcher loaded: {len(events)} events in {len(batches)} batches, "
-            f"compression={self._compression_factor}x"
-        )
+
+        log.info(f"RT dispatcher starting, compression={self._compression_factor}x")
 
         ctx = zmq.Context()
 
@@ -91,32 +88,30 @@ class RealtimeDispatcher:
         # Allow subscribers time to connect (ZMQ slow joiner)
         time.sleep(0.5)
 
+        reader = TimelineReader(self._timeline_path)
+        session_start_wall = time.monotonic()
+
         try:
-            orbit = 0
             while True:
-                orbit += 1
-                wall_start = time.monotonic()
-                sim_start_s = batches[0][0]["timestamp_s"] if batches else 0.0
+                batch = reader.next_batch(timeout_s=10.0)
+                if batch is None:
+                    log.debug("Waiting for OME window...")
+                    continue
 
-                for batch_idx, batch in enumerate(batches):
-                    # Pace: compute wall-clock time this batch should fire
-                    batch_sim_s = batch[0]["timestamp_s"]
-                    sim_elapsed_s = batch_sim_s - sim_start_s
-                    wall_target = wall_start + (sim_elapsed_s / self._compression_factor)
-                    wall_now = time.monotonic()
-                    if wall_target > wall_now:
-                        time.sleep(wall_target - wall_now)
+                # Pace: wall_target relative to session start
+                batch_ts = batch[0]["timestamp_s"]
+                wall_target = session_start_wall + (batch_ts / self._compression_factor)
+                wall_now = time.monotonic()
+                if wall_target > wall_now:
+                    time.sleep(wall_target - wall_now)
 
-                    self._process_batch(batch, pub_sock, ome_pub_sock)
-                    self._steps_since_latency_update += 1
-
-                log.info(
-                    f"RT timeline orbit {orbit} complete: "
-                    f"{len(self._active_links)} active links, looping"
-                )
+                self._process_batch(batch, pub_sock, ome_pub_sock)
+                self._steps_since_latency_update += 1
         except KeyboardInterrupt:
             log.info("RT dispatcher shutting down")
         finally:
+            reader.close()
+            self._teardown_remaining_links(pub_sock)
             pub_sock.close()
             ome_pub_sock.close()
             ctx.term()
@@ -184,6 +179,11 @@ class RealtimeDispatcher:
                 self._link_up(vis, pub_sock)
             elif not vis.visible:
                 self._link_down(vis, pub_sock)
+            elif vis.visible and not vis.scheduled:
+                # Terminal deallocated (GS handoff) — tear down GS links
+                is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                if is_gs:
+                    self._link_down(vis, pub_sock)
 
         # Phase 3: Latency updates
         if self._steps_since_latency_update >= self._latency_update_interval_s:
@@ -279,6 +279,28 @@ class RealtimeDispatcher:
             reason="vis_lost",
         )
         pub_sock.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
+
+    def _teardown_remaining_links(self, pub_sock: zmq.Socket) -> None:
+        """Tear down active GS links when the dispatcher exits."""
+        gs_pairs = [
+            pair for pair in self._active_links
+            if pair[0].startswith("gs-") or pair[1].startswith("gs-")
+        ]
+        if not gs_pairs:
+            return
+        log.info(f"Tearing down {len(gs_pairs)} remaining GS links")
+        for pair in gs_pairs:
+            fake_vis = VisibilityEvent(
+                sim_time=datetime.now(timezone.utc),
+                node_a=pair[0],
+                node_b=pair[1],
+                visible=False,
+                scheduled=False,
+                range_km=0.0,
+                elevation_deg=None,
+                terminal_type="optical",
+            )
+            self._link_down(fake_vis, pub_sock)
 
     def _update_latencies(self, pub_sock: zmq.Socket) -> None:
         """Recompute and apply latency updates for all active links."""

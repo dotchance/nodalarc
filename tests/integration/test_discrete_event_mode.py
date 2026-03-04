@@ -143,6 +143,7 @@ class TestDiscreteEventProcessing:
             db_conn=db_conn,
             use_convergence_gate=False,  # No convergence gate for this test
             dwell_s=0.0,  # No dwell — process as fast as possible
+            max_idle_timeouts=1,  # Exit after processing finite file
         )
         dispatcher.run()
 
@@ -228,6 +229,7 @@ class TestDiscreteEventProcessing:
                 db_conn=db_conn,
                 use_convergence_gate=True,
                 dwell_s=0.0,
+                max_idle_timeouts=1,
             )
             dispatcher.run()
 

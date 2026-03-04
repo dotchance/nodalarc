@@ -37,7 +37,6 @@ from nodalarc.zmq_channels import (
     TO_SCENARIO_INJECT_PORT,
     VS_API_HTTP_PORT,
 )
-from ome.main import run as ome_run
 
 log = logging.getLogger(__name__)
 adapter = TypeAdapter(ConstellationConfig)
@@ -88,9 +87,25 @@ def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> 
     stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
     stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
 
-    # === Step 2: Pre-compute timeline ===
-    log.info("Step 2: Pre-compute timeline")
-    timeline_path = ome_run(session_path, str(data_dir))
+    # === Step 2: Start OME (continuous mode) ===
+    log.info("Step 2: Start OME (continuous mode)")
+    ome_proc = subprocess.Popen(
+        [sys.executable, "-m", "ome.main", "--continuous",
+         session_path, "-o", str(data_dir)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    log.info(f"OME PID: {ome_proc.pid}")
+
+    # Wait for first window sentinel
+    sentinel = data_dir / f"{session.session.name}-timeline.ready"
+    for _ in range(300):  # 5 minute timeout
+        if sentinel.exists():
+            timeline_path = Path(sentinel.read_text().strip())
+            break
+        time.sleep(1)
+    else:
+        _fail("OME did not produce first window in 5 minutes")
     log.info(f"Timeline: {timeline_path}")
 
     # === Step 3: Build template variables ===
@@ -418,6 +433,7 @@ def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> 
         "session_id": session_id,
         "data_dir": str(data_dir),
         "timeline": str(timeline_path),
+        "ome_pid": ome_proc.pid,
         "mi_pid": mi_proc.pid,
         "vsapi_pid": vsapi_pid,
         "orchestrator_pid": to_proc.pid,
@@ -430,6 +446,7 @@ def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> 
     log.info(f"Session: {session_id}")
     log.info(f"Data directory: {data_dir}")
     log.info(f"Timeline: {timeline_path}")
+    log.info(f"OME PID: {ome_proc.pid}")
     log.info(f"MI service PID: {mi_proc.pid}")
     log.info(f"VS-API PID: {vsapi_pid}")
     log.info(f"Orchestrator PID: {to_proc.pid}")

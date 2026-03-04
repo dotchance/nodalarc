@@ -64,7 +64,7 @@ def _make_dispatcher(interface_map, bandwidth_map):
         override_lock=threading.Lock(),
         use_convergence_gate=False,
         dwell_s=0.0,
-        max_orbits=1,
+        max_idle_timeouts=1,
     )
 
 

@@ -14,6 +14,7 @@ import { useSnapshot } from "./hooks/useSnapshot";
 import { useSelection } from "./hooks/useSelection";
 import { useKeyboard } from "./hooks/useKeyboard";
 import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
+import { usePlayback } from "./hooks/usePlayback";
 import { WS_URL } from "./config";
 import type { ViewMode, ColorMode } from "./types";
 
@@ -30,6 +31,7 @@ export function App() {
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
   const { sessions, switching, switchSession } = useSessionSwitcher(snapshot?.session_status ?? null);
+  const playback = usePlayback();
 
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
   const [colorMode, setColorMode] = useState<ColorMode>("area");
@@ -135,6 +137,12 @@ export function App() {
         sessions={sessions}
         switching={switching}
         onSwitchSession={switchSession}
+        playbackPaused={playback.paused}
+        playbackSpeed={playback.speed}
+        playbackLoading={playback.loading}
+        onPlaybackPause={playback.pause}
+        onPlaybackResume={playback.resume}
+        onPlaybackSetSpeed={playback.setSpeed}
       />
 
       <div className={`area-viewport ${viewMode === "split" ? "area-viewport--split" : ""}`}>

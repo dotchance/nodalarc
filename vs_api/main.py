@@ -55,6 +55,7 @@ from nodalarc.zmq_channels import (
     MI_EVENTS_CONNECT,
     MI_TRACE_CONNECT,
     OME_EVENTS_CONNECT,
+    PLAYBACK_CONTROL_CONNECT,
     TO_EVENTS_CONNECT,
     decode_message,
     TOPIC_ADAPTER_EVENT,
@@ -578,6 +579,30 @@ def trace_path(body: dict) -> dict:
         return {"hops": [], "error": "MI trace endpoint timeout"}
     except Exception as exc:
         return {"hops": [], "error": str(exc)}
+    finally:
+        sock.close()
+        ctx.term()
+
+
+@app.post("/api/v1/playback")
+def playback_control(body: dict) -> Any:
+    """Relay playback command to dispatcher via ZMQ."""
+    action = body.get("action", "")
+    if action not in ("pause", "resume", "set_speed", "get_status"):
+        return JSONResponse(status_code=400, content={"error": "Unknown action"})
+
+    ctx = zmq.Context()
+    sock = ctx.socket(zmq.REQ)
+    sock.setsockopt(zmq.RCVTIMEO, 5000)
+    sock.setsockopt(zmq.LINGER, 0)
+    sock.connect(PLAYBACK_CONTROL_CONNECT)
+
+    try:
+        sock.send(json.dumps(body).encode())
+        raw = sock.recv()
+        return json.loads(raw)
+    except zmq.Again:
+        return JSONResponse(status_code=504, content={"error": "Dispatcher timeout"})
     finally:
         sock.close()
         ctx.term()

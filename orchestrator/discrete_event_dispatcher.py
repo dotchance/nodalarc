@@ -29,6 +29,7 @@ from nodalarc.models.metrics import ConvergenceRequest, ConvergenceResult
 from nodalarc.zmq_channels import (
     MI_CONVERGENCE_GATE_CONNECT,
     OME_EVENTS_BIND,
+    PLAYBACK_CONTROL_BIND,
     TO_EVENTS_BIND,
     encode_message,
     TOPIC_LATENCY_UPDATE,
@@ -136,6 +137,8 @@ class DiscreteEventDispatcher:
         self._active_links: dict[tuple[str, str], ActiveLinkInfo] = {}
         self._last_latencies: dict[tuple[str, str], float] = {}
         self._steps_since_latency_update = 0
+        self._paused: bool = False
+        self._speed_factor: float = 1.0
 
     def run(self) -> None:
         """Stream events from growing timeline file."""
@@ -153,6 +156,13 @@ class DiscreteEventDispatcher:
             conv_sock = ctx.socket(zmq.REQ)
             conv_sock.connect(MI_CONVERGENCE_GATE_CONNECT)
 
+        # Playback control REP socket
+        playback_sock = ctx.socket(zmq.REP)
+        playback_sock.bind(PLAYBACK_CONTROL_BIND)
+
+        poller = zmq.Poller()
+        poller.register(playback_sock, zmq.POLLIN)
+
         # Allow subscribers time to connect (ZMQ slow joiner).
         # VS-API (uvicorn) can take 2-3s to start its ZMQ subscriber.
         time.sleep(3.0)
@@ -163,6 +173,13 @@ class DiscreteEventDispatcher:
 
         try:
             while True:
+                # Poll for playback commands (non-blocking)
+                self._handle_playback_commands(poller, playback_sock)
+
+                if self._paused:
+                    time.sleep(0.1)
+                    continue
+
                 batch = reader.next_batch(timeout_s=10.0)
                 if batch is None:
                     idle_timeouts += 1
@@ -178,7 +195,8 @@ class DiscreteEventDispatcher:
                 batch_count += 1
 
                 if self._dwell_s > 0:
-                    time.sleep(self._dwell_s)
+                    effective_dwell = self._dwell_s / self._speed_factor
+                    time.sleep(effective_dwell)
         except KeyboardInterrupt:
             log.info("Dispatcher interrupted")
         finally:
@@ -187,9 +205,42 @@ class DiscreteEventDispatcher:
             self._teardown_remaining_links(pub_sock)
             pub_sock.close()
             ome_pub_sock.close()
+            playback_sock.close()
             if conv_sock:
                 conv_sock.close()
             ctx.term()
+
+    def _handle_playback_commands(
+        self, poller: zmq.Poller, playback_sock: zmq.Socket,
+    ) -> None:
+        """Poll for and handle playback control commands."""
+        socks = dict(poller.poll(timeout=0))
+        if playback_sock not in socks:
+            return
+        raw = playback_sock.recv()
+        try:
+            cmd = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            playback_sock.send(json.dumps({"error": "invalid json"}).encode())
+            return
+
+        action = cmd.get("action", "")
+        if action == "pause":
+            self._paused = True
+            playback_sock.send(json.dumps({"status": "ok", "paused": True}).encode())
+        elif action == "resume":
+            self._paused = False
+            playback_sock.send(json.dumps({"status": "ok", "paused": False}).encode())
+        elif action == "set_speed":
+            factor = max(0.1, min(100.0, float(cmd.get("factor", 1.0))))
+            self._speed_factor = factor
+            playback_sock.send(json.dumps({"status": "ok", "speed": factor}).encode())
+        elif action == "get_status":
+            playback_sock.send(json.dumps({
+                "paused": self._paused, "speed": self._speed_factor,
+            }).encode())
+        else:
+            playback_sock.send(json.dumps({"error": "unknown action"}).encode())
 
     def _teardown_remaining_links(self, pub_sock: zmq.Socket) -> None:
         """Tear down active GS links when the dispatcher exits.

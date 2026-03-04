@@ -11,6 +11,7 @@ MI_EVENTS_PORT: int = 5562
 MI_CONVERGENCE_GATE_PORT: int = 5563
 TO_SCENARIO_INJECT_PORT: int = 5564
 MI_TRACE_PORT: int = 5565
+PLAYBACK_CONTROL_PORT: int = 5566
 VS_API_HTTP_PORT: int = 8080
 VF_STATIC_PORT: int = 8081
 PROBE_DAEMON_PORT: int = 9100
@@ -33,6 +34,9 @@ TO_SCENARIO_INJECT_CONNECT: str = f"tcp://localhost:{TO_SCENARIO_INJECT_PORT}"
 
 MI_TRACE_BIND: str = f"tcp://*:{MI_TRACE_PORT}"
 MI_TRACE_CONNECT: str = f"tcp://localhost:{MI_TRACE_PORT}"
+
+PLAYBACK_CONTROL_BIND: str = f"tcp://*:{PLAYBACK_CONTROL_PORT}"
+PLAYBACK_CONTROL_CONNECT: str = f"tcp://localhost:{PLAYBACK_CONTROL_PORT}"
 
 # Topic prefixes (UTF-8 encoded, separated from payload by null byte)
 TOPIC_POSITION_EVENT: bytes = b"PositionEvent"

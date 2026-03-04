@@ -1,19 +1,22 @@
 /** Satellite mesh management — shared geometry, per-sat mesh + smooth motion.
  *
- *  Motion model: snapshots arrive at ~1Hz with ground-truth positions.
- *  Between snapshots, mesh.position linearly interpolates from prevPosition
- *  (where the mesh was when the snapshot arrived) to snapshotPosition
- *  (the new ground-truth). This gives constant-speed motion with no
- *  stop-and-jump artifacts.
+ *  Motion model: velocity-based dead-reckoning with correction blending.
+ *
+ *  Each snapshot delivers a ground-truth position AND an ECEF velocity from
+ *  the OME propagator.  Between snapshots the mesh advances at that velocity.
+ *  When a new snapshot arrives, any positional error is blended out over
+ *  CORRECTION_DURATION seconds so the transition is invisible.
+ *
+ *  This model does not depend on snapshot timing — it works at any cadence.
  */
 
 import * as THREE from "three";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../config";
-import { geoToWorld } from "./geo";
+import { geoToWorld, velocityToScene } from "./geo";
 import type { NodeState, ColorMode } from "../types";
 
-/** Expected seconds between snapshots (VS-API broadcasts at ~1Hz). */
-export const SNAPSHOT_INTERVAL = 1.0;
+/** Duration over which position corrections are blended out (seconds). */
+const CORRECTION_DURATION = 0.3;
 
 /** Shared geometry for all satellites. */
 const sharedGeo = new THREE.SphereGeometry(SAT_RADIUS, SAT_SEGMENTS, SAT_SEGMENTS);
@@ -42,12 +45,16 @@ function getGlowTexture(): THREE.Texture {
 export interface SatelliteEntry {
   mesh: THREE.Mesh;
   glow: THREE.Sprite;
-  /** Position at the moment the latest snapshot arrived (interpolation start). */
-  prevPosition: THREE.Vector3;
-  /** Latest ground-truth position from snapshot (interpolation end). */
+  /** Latest ground-truth position (scene coords). */
   snapshotPosition: THREE.Vector3;
-  /** Seconds elapsed since the last snapshot update. */
-  snapshotAge: number;
+  /** Velocity in scene units/second. */
+  snapshotVelocity: THREE.Vector3;
+  /** performance.now() when snapshot arrived. */
+  snapshotWallTime: number;
+  /** Error to blend out (starts non-zero, decays to zero). */
+  correctionOffset: THREE.Vector3;
+  /** Seconds of correction remaining. */
+  correctionRemaining: number;
   nodeState: NodeState;
 }
 
@@ -57,15 +64,9 @@ export function getSatellites(): Map<string, SatelliteEntry> {
   return satellites;
 }
 
-/**
- * Compute linear interpolation parameter for satellite animation.
- * Returns t in [0, 1]: 0 = at prevPosition, 1 = at snapshotPosition.
- * Clamps at 1.0 so the satellite holds at the target if the next snapshot is late.
- */
-export function interpParam(snapshotAge: number, interval: number): number {
-  if (interval <= 0) return 1;
-  return Math.min(snapshotAge / interval, 1.0);
-}
+// Reusable temporaries (avoid per-frame allocation)
+const _tmpExtrapolated = new THREE.Vector3();
+const _tmpPos = new THREE.Vector3();
 
 export function updateSatellites(
   nodes: NodeState[],
@@ -73,38 +74,53 @@ export function updateSatellites(
   colorMode: ColorMode,
 ): void {
   const seen = new Set<string>();
+  const now = performance.now();
 
   for (const node of nodes) {
     if (node.node_type !== "satellite") continue;
     seen.add(node.node_id);
 
-    const pos = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
+    const newPos = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
+    const newVel = velocityToScene(
+      node.vel_x_km_s ?? 0,
+      node.vel_y_km_s ?? 0,
+      node.vel_z_km_s ?? 0,
+    );
 
     const existing = satellites.get(node.node_id);
     if (existing) {
-      // Save current mesh position as interpolation start
-      existing.prevPosition.copy(existing.mesh.position);
-      existing.snapshotPosition.copy(pos);
-      existing.snapshotAge = 0;
+      // Where the mesh WOULD be right now by extrapolating from the old snapshot
+      const elapsedS = (now - existing.snapshotWallTime) / 1000;
+      _tmpExtrapolated.copy(existing.snapshotPosition)
+        .addScaledVector(existing.snapshotVelocity, elapsedS);
+
+      // Correction = ground truth − extrapolated position
+      const correction = new THREE.Vector3().subVectors(newPos, _tmpExtrapolated);
+
+      // If correction is huge (tab switch / reconnect), snap immediately
+      if (correction.length() > SAT_RADIUS * 4) {
+        existing.correctionOffset.set(0, 0, 0);
+        existing.correctionRemaining = 0;
+      } else {
+        existing.correctionOffset.copy(correction);
+        existing.correctionRemaining = CORRECTION_DURATION;
+      }
+
+      existing.snapshotPosition.copy(newPos);
+      existing.snapshotVelocity.copy(newVel);
+      existing.snapshotWallTime = now;
       existing.nodeState = node;
       updateSatColor(existing, colorMode);
-
-      // If mesh drifted far from truth (tab switch, reconnect), snap immediately
-      if (existing.prevPosition.distanceTo(pos) > SAT_RADIUS * 4) {
-        existing.prevPosition.copy(pos);
-        existing.mesh.position.copy(pos);
-        existing.glow.position.copy(pos);
-      }
     } else {
+      // New satellite — place directly, no correction needed
       const color = getSatColor(node, colorMode);
       const material = new THREE.MeshBasicMaterial({ color });
       const mesh = new THREE.Mesh(sharedGeo, material);
-      mesh.position.copy(pos);
+      mesh.position.copy(newPos);
       mesh.userData["nodeId"] = node.node_id;
       mesh.userData["nodeType"] = "satellite";
       scene.add(mesh);
 
-      // Glow sprite for far-distance visibility
       const glowMat = new THREE.SpriteMaterial({
         map: getGlowTexture(),
         color,
@@ -114,15 +130,17 @@ export function updateSatellites(
       });
       const glow = new THREE.Sprite(glowMat);
       glow.scale.set(SAT_RADIUS * 5, SAT_RADIUS * 5, 1);
-      glow.position.copy(pos);
+      glow.position.copy(newPos);
       scene.add(glow);
 
       satellites.set(node.node_id, {
         mesh,
         glow,
-        prevPosition: pos.clone(),
-        snapshotPosition: pos.clone(),
-        snapshotAge: 0,
+        snapshotPosition: newPos.clone(),
+        snapshotVelocity: newVel.clone(),
+        snapshotWallTime: now,
+        correctionOffset: new THREE.Vector3(0, 0, 0),
+        correctionRemaining: 0,
         nodeState: node,
       });
     }
@@ -138,28 +156,32 @@ export function updateSatellites(
   }
 }
 
-const _tmpVec = new THREE.Vector3();
-
 export function animateSatellites(dt: number): void {
-  // Tab was backgrounded — snap everything to snapshot truth.
-  if (dt > 0.15) {
-    for (const entry of satellites.values()) {
-      entry.prevPosition.copy(entry.snapshotPosition);
-      entry.snapshotAge = SNAPSHOT_INTERVAL;
-      entry.mesh.position.copy(entry.snapshotPosition);
-      entry.glow.position.copy(entry.snapshotPosition);
-    }
-    return;
-  }
+  const now = performance.now();
 
-  // Linear interpolation from prevPosition to snapshotPosition over ~1 second.
-  // Constant speed — no stop-and-jump at snapshot boundaries.
   for (const entry of satellites.values()) {
-    entry.snapshotAge += dt;
-    const t = interpParam(entry.snapshotAge, SNAPSHOT_INTERVAL);
-    _tmpVec.copy(entry.prevPosition).lerp(entry.snapshotPosition, t);
-    entry.mesh.position.copy(_tmpVec);
-    entry.glow.position.copy(_tmpVec);
+    const elapsed = (now - entry.snapshotWallTime) / 1000;
+
+    // Extrapolate from snapshot truth using velocity
+    _tmpExtrapolated.copy(entry.snapshotPosition)
+      .addScaledVector(entry.snapshotVelocity, elapsed);
+
+    if (entry.correctionRemaining > 0) {
+      // Blend out the correction offset over CORRECTION_DURATION
+      const blend = 1.0 - (entry.correctionRemaining / CORRECTION_DURATION);
+      _tmpPos.copy(_tmpExtrapolated)
+        .addScaledVector(entry.correctionOffset, 1.0 - blend);
+      entry.correctionRemaining -= dt;
+      if (entry.correctionRemaining <= 0) {
+        entry.correctionRemaining = 0;
+        entry.correctionOffset.set(0, 0, 0);
+      }
+      entry.mesh.position.copy(_tmpPos);
+    } else {
+      entry.mesh.position.copy(_tmpExtrapolated);
+    }
+
+    entry.glow.position.copy(entry.mesh.position);
   }
 }
 

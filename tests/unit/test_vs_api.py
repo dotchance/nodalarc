@@ -557,6 +557,28 @@ class TestSnapshotStorage:
         assert parsed["id"] == "snap2"
         conn.close()
 
+    def test_query_before_all_snapshots(self):
+        """Query time before all snapshots returns the earliest one."""
+        conn = sqlite3.connect(":memory:")
+        create_tables(conn)
+        insert_snapshot(conn, "2025-01-01T00:01:00", "2025-01-01T00:01:00",
+                        json.dumps({"id": "only"}))
+        result = query_nearest_snapshot(conn, "2025-01-01T00:00:00")
+        assert result is not None
+        assert json.loads(result["snapshot_json"])["id"] == "only"
+        conn.close()
+
+    def test_query_after_all_snapshots(self):
+        """Query time after all snapshots returns the latest one."""
+        conn = sqlite3.connect(":memory:")
+        create_tables(conn)
+        insert_snapshot(conn, "2025-01-01T00:00:00", "2025-01-01T00:00:00",
+                        json.dumps({"id": "only"}))
+        result = query_nearest_snapshot(conn, "2025-01-01T00:05:00")
+        assert result is not None
+        assert json.loads(result["snapshot_json"])["id"] == "only"
+        conn.close()
+
     def test_no_snapshots_returns_none(self):
         conn = sqlite3.connect(":memory:")
         create_tables(conn)

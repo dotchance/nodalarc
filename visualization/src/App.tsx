@@ -162,6 +162,11 @@ export function App() {
             </div>
           </div>
         )}
+        {connected && !switching && (!snapshot || snapshot.nodes.length === 0) && (
+          <div className="connection-banner">
+            Initializing constellation...
+          </div>
+        )}
         <div
           className={viewMode === "split" ? "split-pane" : "full-pane"}
           style={{ display: viewMode === "topology" ? "none" : undefined }}

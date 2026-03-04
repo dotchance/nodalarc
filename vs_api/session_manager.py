@@ -194,7 +194,7 @@ class SessionManager:
                 except Exception:
                     continue
 
-                for key in ("mi_pid", "orchestrator_pid"):
+                for key in ("ome_pid", "mi_pid", "orchestrator_pid"):
                     pid = state.get(key, 0)
                     if pid and _pid_alive(pid):
                         try:

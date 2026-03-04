@@ -182,13 +182,8 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
 
     try:
         while True:
-            # Sleep until next window is needed.
-            # Wake up 80% through the current window (scaled by compression).
-            sleep_s = period * 0.8 / compression
-            logging.info(f"OME sleeping {sleep_s:.1f}s before computing window {window + 1}")
-            time.sleep(sleep_s)
-
             window += 1
+            compute_start = time.monotonic()
             events, isl_state, gs_state = precompute_timeline_window(
                 satellites=satellites,
                 addressing=addressing,
@@ -212,6 +207,13 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                 f"OME window {window} appended: {len(events)} events, "
                 f"t={period * (window - 1):.0f}s – {period * window:.0f}s"
             )
+
+            # Sleep until dispatcher is ~50% through current window.
+            consumed_wall_s = period * 0.5 / compression
+            compute_elapsed = time.monotonic() - compute_start
+            sleep_s = max(0, consumed_wall_s - compute_elapsed)
+            logging.info(f"OME sleeping {sleep_s:.1f}s before next window")
+            time.sleep(sleep_s)
     except KeyboardInterrupt:
         logging.info("OME continuous mode interrupted, exiting")
 

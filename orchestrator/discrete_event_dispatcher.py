@@ -253,6 +253,15 @@ class DiscreteEventDispatcher:
                 link_event = self._handle_link_down(vis, pub_sock)
                 if link_event:
                     link_events.append(link_event)
+            elif vis.visible and not vis.scheduled:
+                # Terminal deallocated (GS handoff) — tear down the link
+                # Only applies to GS links where scheduling determines connectivity.
+                # ISL links don't go through terminal scheduling.
+                is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                if is_gs:
+                    link_event = self._handle_link_down(vis, pub_sock)
+                    if link_event:
+                        link_events.append(link_event)
 
         # Phase 3: Latency updates on active links
         if self._steps_since_latency_update >= self._latency_update_interval_s:
@@ -313,6 +322,13 @@ class DiscreteEventDispatcher:
                 link_manager.set_interface_up(info.pid_b, ifaces[1])
                 link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
                 link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
+                if is_gs_link and vis.elevation_deg is not None:
+                    metric = max(10, int(100 * (1 - vis.elevation_deg / 90)))
+                    gs_pod = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
+                    sat_pod = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                    link_manager.set_isis_metric(gs_pod, ifaces[0], metric)
+                    link_manager.set_isis_metric(sat_pod, ifaces[1], metric)
+                    log.info(f"GS link {pair} elevation={vis.elevation_deg:.1f}° → isis metric {metric}")
             except Exception as exc:
                 log.warning(f"Link kernel setup failed for {pair}: {exc}")
 

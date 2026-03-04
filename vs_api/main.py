@@ -91,6 +91,7 @@ _constellation_name: str | None = None
 _ws_clients: list[WebSocket] = []
 _ws_lock = asyncio.Lock()
 _session_manager: SessionManager | None = None
+_gs_elevation_map: dict[str, float] = {}  # node_id -> min_elevation_deg
 
 
 def _update_position(event_data: dict) -> None:
@@ -101,7 +102,7 @@ def _update_position(event_data: dict) -> None:
             node_id = node.get("node_id", "")
             if not node_id:
                 continue
-            _state["nodes"][node_id] = {
+            node_dict = {
                 "node_id": node_id,
                 "node_type": node.get("node_type", "satellite"),
                 "lat_deg": node.get("lat_deg", 0.0),
@@ -118,6 +119,9 @@ def _update_position(event_data: dict) -> None:
                 "gnd_count": node.get("gnd_count", 0),
                 "prefix": node.get("prefix"),
             }
+            if node_id in _gs_elevation_map:
+                node_dict["min_elevation_deg"] = _gs_elevation_map[node_id]
+            _state["nodes"][node_id] = node_dict
 
 
 def _update_link_up(event_data: dict) -> None:
@@ -329,14 +333,31 @@ def _clear_state() -> None:
         _state["sim_time"] = datetime.now(timezone.utc).isoformat()
 
 
+def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
+    """Load per-station min_elevation_deg from ground station config."""
+    from nodalarc.models.ground_station import GroundStationFile
+    gs_path = Path(session.ground_stations)
+    if not gs_path.exists():
+        return {}
+    gs_file = GroundStationFile.model_validate(yaml.safe_load(gs_path.read_text()))
+    gs_id_tpl = session.addressing.gs_id_template
+    result: dict[str, float] = {}
+    for station in gs_file.stations:
+        node_id = gs_id_tpl.format(name=station.name)
+        elev = station.min_elevation_deg if station.min_elevation_deg is not None else gs_file.default_min_elevation_deg
+        result[node_id] = elev
+    return result
+
+
 def _update_session_globals(session_path: str, new_db_path: str) -> None:
     """Reload routing_stack, constellation_name, and db_path from new session."""
-    global _routing_stack, _constellation_name, _db_path
+    global _routing_stack, _constellation_name, _db_path, _gs_elevation_map
     session_data = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(session_data)
     _routing_stack = Path(session.routing.stack).name
     _constellation_name = Path(session.constellation).stem
     _db_path = new_db_path
+    _gs_elevation_map = _load_gs_elevation_map(session)
 
     # Ensure tables exist in new DB
     import sqlite3 as _sqlite3
@@ -635,7 +656,7 @@ def main() -> None:
     parser.add_argument("--sessions-dir", default="configs/sessions", help="Directory with session YAMLs")
     args = parser.parse_args()
 
-    global _db_path, _routing_stack, _constellation_name, _session_manager
+    global _db_path, _routing_stack, _constellation_name, _session_manager, _gs_elevation_map
 
     # Initialize SessionManager
     _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
@@ -648,6 +669,7 @@ def main() -> None:
         session = SessionConfig.model_validate(session_data)
         _routing_stack = Path(session.routing.stack).name
         _constellation_name = Path(session.constellation).stem
+        _gs_elevation_map = _load_gs_elevation_map(session)
         _session_manager.set_active(args.session)
         _session_manager._status = "ready"
 

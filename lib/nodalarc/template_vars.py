@@ -265,9 +265,14 @@ def build_template_vars(
             (s for s in ground_stations.stations if s.name == gs_name), None,
         )
         if station:
-            result["terrestrial_prefixes"] = _resolve_terrestrial_prefixes(
+            terrestrial_prefixes = _resolve_terrestrial_prefixes(
                 station, ground_stations, gs_index,
             )
+            result["terrestrial_prefixes"] = terrestrial_prefixes
+            if terrestrial_prefixes:
+                result["terr0_metric"] = max(
+                    tp["metric"] for tp in terrestrial_prefixes
+                )
         else:
             result["terrestrial_prefixes"] = []
 

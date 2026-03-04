@@ -18,6 +18,7 @@ export interface NodeState {
   isl_count: number;
   gnd_count: number;
   prefix: string | null;
+  min_elevation_deg: number | null;
 }
 
 export interface LinkState {

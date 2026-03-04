@@ -1,15 +1,19 @@
 /** Satellite mesh management — shared geometry, per-sat mesh + smooth motion.
  *
- *  Motion model: dead-reckoning via velocity vectors provides frame-to-frame
- *  continuity. When a new snapshot arrives (1Hz), the "true" position is
- *  stored separately and the dead-reckoned target is gently steered toward
- *  it, avoiding visible jumps.
+ *  Motion model: snapshots arrive at ~1Hz with ground-truth positions.
+ *  Between snapshots, mesh.position linearly interpolates from prevPosition
+ *  (where the mesh was when the snapshot arrived) to snapshotPosition
+ *  (the new ground-truth). This gives constant-speed motion with no
+ *  stop-and-jump artifacts.
  */
 
 import * as THREE from "three";
-import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor, EARTH_RADIUS, KM_PER_UNIT } from "../config";
-import { geoToWorld, velocityToScene } from "./geo";
+import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../config";
+import { geoToWorld } from "./geo";
 import type { NodeState, ColorMode } from "../types";
+
+/** Expected seconds between snapshots (VS-API broadcasts at ~1Hz). */
+export const SNAPSHOT_INTERVAL = 1.0;
 
 /** Shared geometry for all satellites. */
 const sharedGeo = new THREE.SphereGeometry(SAT_RADIUS, SAT_SEGMENTS, SAT_SEGMENTS);
@@ -35,18 +39,15 @@ function getGlowTexture(): THREE.Texture {
   return glowTexture;
 }
 
-/** Correction blend per frame: how fast dead-reckoning steers toward snapshot truth.
- *  0.03 at 60fps → ~83% corrected after 1 second (before next snapshot). */
-const CORRECTION_RATE = 0.03;
-
 export interface SatelliteEntry {
   mesh: THREE.Mesh;
   glow: THREE.Sprite;
-  /** Dead-reckoned position (updated every frame by velocity). */
-  targetPosition: THREE.Vector3;
-  /** Latest ground-truth position from snapshot (updated at 1Hz). */
+  /** Position at the moment the latest snapshot arrived (interpolation start). */
+  prevPosition: THREE.Vector3;
+  /** Latest ground-truth position from snapshot (interpolation end). */
   snapshotPosition: THREE.Vector3;
-  velocity: THREE.Vector3 | null;
+  /** Seconds elapsed since the last snapshot update. */
+  snapshotAge: number;
   nodeState: NodeState;
 }
 
@@ -54,6 +55,16 @@ const satellites = new Map<string, SatelliteEntry>();
 
 export function getSatellites(): Map<string, SatelliteEntry> {
   return satellites;
+}
+
+/**
+ * Compute linear interpolation parameter for satellite animation.
+ * Returns t in [0, 1]: 0 = at prevPosition, 1 = at snapshotPosition.
+ * Clamps at 1.0 so the satellite holds at the target if the next snapshot is late.
+ */
+export function interpParam(snapshotAge: number, interval: number): number {
+  if (interval <= 0) return 1;
+  return Math.min(snapshotAge / interval, 1.0);
 }
 
 export function updateSatellites(
@@ -68,21 +79,19 @@ export function updateSatellites(
     seen.add(node.node_id);
 
     const pos = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
-    const vel = node.vel_x_km_s != null && node.vel_y_km_s != null && node.vel_z_km_s != null
-      ? velocityToScene(node.vel_x_km_s, node.vel_y_km_s, node.vel_z_km_s)
-      : null;
 
     const existing = satellites.get(node.node_id);
     if (existing) {
-      // Update snapshot truth — dead-reckoning will steer toward it
+      // Save current mesh position as interpolation start
+      existing.prevPosition.copy(existing.mesh.position);
       existing.snapshotPosition.copy(pos);
-      existing.velocity = vel;
+      existing.snapshotAge = 0;
       existing.nodeState = node;
       updateSatColor(existing, colorMode);
 
-      // If target drifted far from truth (tab switch, reconnect), snap immediately
-      if (existing.targetPosition.distanceTo(pos) > SAT_RADIUS * 4) {
-        existing.targetPosition.copy(pos);
+      // If mesh drifted far from truth (tab switch, reconnect), snap immediately
+      if (existing.prevPosition.distanceTo(pos) > SAT_RADIUS * 4) {
+        existing.prevPosition.copy(pos);
         existing.mesh.position.copy(pos);
         existing.glow.position.copy(pos);
       }
@@ -111,9 +120,9 @@ export function updateSatellites(
       satellites.set(node.node_id, {
         mesh,
         glow,
-        targetPosition: pos.clone(),
+        prevPosition: pos.clone(),
         snapshotPosition: pos.clone(),
-        velocity: vel,
+        snapshotAge: 0,
         nodeState: node,
       });
     }
@@ -129,40 +138,28 @@ export function updateSatellites(
   }
 }
 
-/** Max dt for dead-reckoning. Clamp so a background-tab gap doesn't
- *  cause wild extrapolation — the next snapshot corrects position. */
-const MAX_DT = 0.1; // seconds
+const _tmpVec = new THREE.Vector3();
 
 export function animateSatellites(dt: number): void {
-  const clamped = Math.min(dt, MAX_DT);
-
-  // If tab was backgrounded (any gap beyond normal frame time), snap everything
-  // to snapshot truth — no lerp, no velocity, no drift on this frame.
+  // Tab was backgrounded — snap everything to snapshot truth.
   if (dt > 0.15) {
     for (const entry of satellites.values()) {
-      entry.targetPosition.copy(entry.snapshotPosition);
+      entry.prevPosition.copy(entry.snapshotPosition);
+      entry.snapshotAge = SNAPSHOT_INTERVAL;
       entry.mesh.position.copy(entry.snapshotPosition);
       entry.glow.position.copy(entry.snapshotPosition);
     }
     return;
   }
 
+  // Linear interpolation from prevPosition to snapshotPosition over ~1 second.
+  // Constant speed — no stop-and-jump at snapshot boundaries.
   for (const entry of satellites.values()) {
-    if (entry.velocity) {
-      // Dead-reckoning: advance target by velocity
-      entry.targetPosition.addScaledVector(entry.velocity, clamped);
-    }
-
-    // Gently steer dead-reckoned target toward snapshot truth
-    entry.targetPosition.lerp(entry.snapshotPosition, CORRECTION_RATE);
-
-    // Re-project onto orbital shell so satellites don't drift inward/outward
-    const alt = EARTH_RADIUS + entry.nodeState.alt_km / KM_PER_UNIT;
-    entry.targetPosition.normalize().multiplyScalar(alt);
-
-    // Smooth mesh toward target
-    entry.mesh.position.lerp(entry.targetPosition, 0.15);
-    entry.glow.position.copy(entry.mesh.position);
+    entry.snapshotAge += dt;
+    const t = interpParam(entry.snapshotAge, SNAPSHOT_INTERVAL);
+    _tmpVec.copy(entry.prevPosition).lerp(entry.snapshotPosition, t);
+    entry.mesh.position.copy(_tmpVec);
+    entry.glow.position.copy(_tmpVec);
   }
 }
 

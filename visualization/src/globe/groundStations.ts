@@ -64,13 +64,8 @@ function getSharedTexture(): THREE.Texture {
   return gsTexture;
 }
 
-/** Compute elevation cone radius on the globe surface.
- *  For a minimum elevation angle of ~5°, at LEO altitude ~550km,
- *  the ground footprint radius is roughly 2400km.
- */
-function computeConeRadius(): number {
-  const minElevDeg = 5;
-  const orbitalAltKm = 550;
+/** Compute elevation cone radius on the globe surface for given parameters. */
+function computeConeRadius(minElevDeg: number, orbitalAltKm: number): number {
   const earthRadiusKm = 6371;
 
   // Slant angle from zenith to horizon at min elevation
@@ -85,14 +80,13 @@ function computeConeRadius(): number {
   return arcKm / KM_PER_UNIT;
 }
 
-const coneRadius = computeConeRadius();
-
 /** Create the elevation cone ring (coverage area indicator) positioned on the surface. */
 function createElevationCone(
   pos: THREE.Vector3,
+  radius: number,
 ): { cone: THREE.Mesh; outline: THREE.LineLoop } {
   // Ring on the surface plane
-  const ringGeo = new THREE.RingGeometry(0, coneRadius, 48);
+  const ringGeo = new THREE.RingGeometry(0, radius, 48);
   const ringMat = new THREE.MeshBasicMaterial({
     color: GS_COLOR,
     transparent: true,
@@ -108,8 +102,8 @@ function createElevationCone(
   for (let i = 0; i <= 48; i++) {
     const angle = (i / 48) * Math.PI * 2;
     outlinePoints.push(
-      Math.cos(angle) * coneRadius,
-      Math.sin(angle) * coneRadius,
+      Math.cos(angle) * radius,
+      Math.sin(angle) * radius,
       0,
     );
   }
@@ -146,6 +140,10 @@ export function updateGroundStations(
 ): void {
   const seen = new Set<string>();
 
+  // Derive orbital altitude from first satellite node (fallback 550km)
+  const firstSat = nodes.find((n) => n.node_type === "satellite");
+  const orbitalAltKm = firstSat ? firstSat.alt_km : 550;
+
   for (const node of nodes) {
     if (node.node_type !== "ground_station") continue;
     seen.add(node.node_id);
@@ -166,8 +164,10 @@ export function updateGroundStations(
       sprite.userData["nodeType"] = "ground_station";
       scene.add(sprite);
 
-      // Elevation cone
-      const { cone, outline: coneOutline } = createElevationCone(pos);
+      // Elevation cone — per-station radius from actual min_elevation_deg
+      const minElev = node.min_elevation_deg ?? 25;
+      const coneRadius = computeConeRadius(minElev, orbitalAltKm);
+      const { cone, outline: coneOutline } = createElevationCone(pos, coneRadius);
       scene.add(cone);
       scene.add(coneOutline);
 

@@ -274,13 +274,49 @@ def insert_snapshot(conn: sqlite3.Connection, sim_time: str, wall_time: str, sna
 
 
 def query_nearest_snapshot(conn: sqlite3.Connection, sim_time: str) -> dict | None:
-    """Return the snapshot closest to the given sim_time, or None."""
+    """Return the snapshot closest to the given sim_time, or None.
+
+    Uses two bounded queries to leverage the idx_snapshots_sim_time index
+    instead of a full table scan with ABS().
+    """
     conn.row_factory = sqlite3.Row
-    row = conn.execute(
+
+    # Closest at-or-before
+    before = conn.execute(
         """SELECT sim_time, wall_time, snapshot_json FROM snapshots
-           ORDER BY ABS(julianday(sim_time) - julianday(?)) LIMIT 1""",
+           WHERE sim_time <= ? ORDER BY sim_time DESC LIMIT 1""",
         (sim_time,),
     ).fetchone()
-    if row is None:
+
+    # Closest at-or-after
+    after = conn.execute(
+        """SELECT sim_time, wall_time, snapshot_json FROM snapshots
+           WHERE sim_time >= ? ORDER BY sim_time ASC LIMIT 1""",
+        (sim_time,),
+    ).fetchone()
+
+    if before is None and after is None:
         return None
-    return {"sim_time": row["sim_time"], "wall_time": row["wall_time"], "snapshot_json": row["snapshot_json"]}
+
+    def _to_dict(row):
+        return {"sim_time": row["sim_time"], "wall_time": row["wall_time"],
+                "snapshot_json": row["snapshot_json"]}
+
+    if before is None:
+        return _to_dict(after)
+    if after is None:
+        return _to_dict(before)
+    if before["sim_time"] == after["sim_time"]:
+        return _to_dict(before)
+
+    # Compare distances using julianday for precision
+    dist_before = conn.execute(
+        "SELECT ABS(julianday(?) - julianday(?)) AS d",
+        (sim_time, before["sim_time"]),
+    ).fetchone()["d"]
+    dist_after = conn.execute(
+        "SELECT ABS(julianday(?) - julianday(?)) AS d",
+        (sim_time, after["sim_time"]),
+    ).fetchone()["d"]
+
+    return _to_dict(before) if dist_before <= dist_after else _to_dict(after)

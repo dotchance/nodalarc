@@ -70,7 +70,7 @@ export function NetworkSummary({ snapshot, onSelect: _onSelect }: NetworkSummary
         <span className="detail-value">{sats.length}</span>
       </div>
       <div className="detail-row">
-        <span className="detail-label">Gateways</span>
+        <span className="detail-label">Ground Stations</span>
         <span className="detail-value">{gss.length}</span>
       </div>
       <div className="detail-row">

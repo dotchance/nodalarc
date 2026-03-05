@@ -5,7 +5,14 @@ import { computeLayout } from "./layout";
 import { drawNode, hitTestNode } from "./nodes";
 import { drawLinks, hitTestLink } from "./topoLinks";
 import { setupInteraction, type ViewTransform } from "./interaction";
-import type { StateSnapshot, Selection } from "../types";
+import { FAIL_HOLD_MS, FAIL_FADE_MS } from "../config";
+import type { StateSnapshot, Selection, LinkState } from "../types";
+
+/** Recently-removed link kept for fail-flash animation. */
+interface FailedLink {
+  link: LinkState;
+  failTime: number;
+}
 
 interface TopologyViewProps {
   snapshot: StateSnapshot | null;
@@ -24,6 +31,11 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: Topolog
   const [tooltipContent, setTooltipContent] = useState<string | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
+  // Fail-flash: track links that disappeared from the snapshot
+  const prevLinkKeysRef = useRef<Set<string>>(new Set());
+  const prevLinksRef = useRef<Map<string, LinkState>>(new Map());
+  const failedLinksRef = useRef<Map<string, FailedLink>>(new Map());
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !snapshot) return;
@@ -38,7 +50,38 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: Topolog
       canvas.height = rect.height;
     }
 
-    const layout = computeLayout(snapshot.nodes, snapshot.links);
+    // Detect removed links and add to fail-flash set
+    const now = performance.now();
+    const currentKeys = new Set(
+      snapshot.links.map((l) => [l.node_a, l.node_b].sort().join(":")),
+    );
+    const currentLinksMap = new Map(
+      snapshot.links.map((l) => [[l.node_a, l.node_b].sort().join(":"), l] as const),
+    );
+    for (const key of prevLinkKeysRef.current) {
+      if (!currentKeys.has(key)) {
+        const oldLink = prevLinksRef.current.get(key);
+        if (oldLink) {
+          failedLinksRef.current.set(key, { link: oldLink, failTime: now });
+        }
+      }
+    }
+    prevLinkKeysRef.current = currentKeys;
+    prevLinksRef.current = new Map(currentLinksMap);
+
+    // Expire old failed links
+    const expiry = FAIL_HOLD_MS + FAIL_FADE_MS;
+    for (const [key, fl] of failedLinksRef.current) {
+      if (now - fl.failTime > expiry) failedLinksRef.current.delete(key);
+    }
+
+    // Merge active + failed links for layout
+    const mergedLinks: LinkState[] = [...snapshot.links];
+    for (const [, fl] of failedLinksRef.current) {
+      mergedLinks.push({ ...fl.link, state: "failed" });
+    }
+
+    const layout = computeLayout(snapshot.nodes, mergedLinks);
 
     // Auto-center layout when canvas becomes visible or resizes significantly
     const cw = canvas.width;
@@ -73,7 +116,12 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: Topolog
     const flowPath = snapshot.traced_paths.length > 0
       ? snapshot.traced_paths[0]!.hops
       : null;
-    drawLinks(ctx, layout.links, nodeMap, flowPath, dashOffsetRef.current);
+    // Build failTimes map for drawLinks fade animation
+    const failTimes = new Map<string, number>();
+    for (const [key, fl] of failedLinksRef.current) {
+      failTimes.set(key, fl.failTime);
+    }
+    drawLinks(ctx, layout.links, nodeMap, flowPath, dashOffsetRef.current, failTimes);
 
     // Determine isolated nodes (no active links) and ABR nodes (links in multiple areas)
     const connectedNodes = new Set<string>();

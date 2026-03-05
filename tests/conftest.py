@@ -19,4 +19,4 @@ def zmq_context():
     """Provide a ZeroMQ context, cleaned up after use."""
     ctx = zmq.Context()
     yield ctx
-    ctx.term()
+    ctx.destroy(linger=0)

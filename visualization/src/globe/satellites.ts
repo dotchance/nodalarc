@@ -93,15 +93,14 @@ export function updateSatellites(
     const wallDelta = now - _lastSimWallTime!;
     if (wallDelta > 10) {
       const instantRate = wallDelta / simDeltaMs;
-      // Reject stall outliers: if this delivery took > 3x the expected
-      // interval, the dispatcher was blocked — not representative of the
-      // steady-state rate.
-      const expectedWall = simDeltaMs * _wallMsPerSimMs;
       if (!_rateSeeded) {
         _wallMsPerSimMs = instantRate;
         _rateSeeded = true;
-      } else if (wallDelta < expectedWall * 3) {
-        _wallMsPerSimMs = _wallMsPerSimMs * (1 - RATE_EMA_ALPHA) + instantRate * RATE_EMA_ALPHA;
+      } else {
+        const ratio = instantRate / _wallMsPerSimMs;
+        if (ratio > 0.2 && ratio < 5.0) {
+          _wallMsPerSimMs = _wallMsPerSimMs * (1 - RATE_EMA_ALPHA) + instantRate * RATE_EMA_ALPHA;
+        }
       }
     }
     _lastSimWallTime = now;
@@ -195,11 +194,7 @@ export function animateSatellites(dt: number): void {
       continue;
     }
 
-    // Lerp from prevPosition to currPosition.  Allow extrapolation to 3.0
-    // so the satellite coasts during delivery gaps rather than freezing.
-    // The direction is along the orbital track so short extrapolation is
-    // accurate; the cap limits overshoot if the dispatcher stalls.
-    const t = Math.min((now - entry.snapshotTime) / entry.interval, 3.0);
+    const t = Math.min((now - entry.snapshotTime) / entry.interval, 1.5);
     _tmpPos.lerpVectors(entry.prevPosition, entry.currPosition, t);
     entry.mesh.position.copy(_tmpPos);
     entry.glow.position.copy(_tmpPos);

@@ -331,18 +331,27 @@ class DiscreteEventDispatcher:
             elif record["event_type"] == "ClockTick":
                 pass  # Clock ticks are informational
 
-        # Phase 2: Process visibility events
+        # Phase 2: Process visibility events — link_downs first, then link_ups.
+        # Processing downs before ups prevents transient states where a ground
+        # station appears connected to multiple satellites simultaneously during
+        # a terminal handoff (both events land in the same batch).
+        vis_events: list[VisibilityEvent] = []
         for record in batch:
             if record["event_type"] != "VisibilityEvent":
                 continue
             vis = VisibilityEvent.model_validate(record["data"])
             pair = (vis.node_a, vis.node_b)
-
-            # Check override set
             with self._override_lock:
                 if pair in self._override_set:
                     continue
+            vis_events.append(vis)
 
+        # Sort: link_downs (not visible, or visible+unscheduled GS) before link_ups
+        def _is_link_up(v: VisibilityEvent) -> bool:
+            return v.visible and v.scheduled
+        vis_events.sort(key=_is_link_up)
+
+        for vis in vis_events:
             if vis.visible and vis.scheduled:
                 link_event = self._handle_link_up(vis, pub_sock)
                 if link_event:
@@ -354,7 +363,6 @@ class DiscreteEventDispatcher:
             elif vis.visible and not vis.scheduled:
                 # Terminal deallocated (GS handoff) — tear down the link
                 # Only applies to GS links where scheduling determines connectivity.
-                # ISL links don't go through terminal scheduling.
                 is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
                 if is_gs:
                     link_event = self._handle_link_down(vis, pub_sock)

@@ -215,17 +215,23 @@ class RealtimeDispatcher:
                     json.dumps(position_data).encode(),
                 ))
 
-        # Phase 2: Visibility events
+        # Phase 2: Visibility events — link_downs first, then link_ups.
+        # Processing downs before ups prevents transient states where a ground
+        # station appears connected to multiple satellites during a handoff.
+        vis_events: list[VisibilityEvent] = []
         for record in batch:
             if record["event_type"] != "VisibilityEvent":
                 continue
             vis = VisibilityEvent.model_validate(record["data"])
             pair = (vis.node_a, vis.node_b)
-
             with self._override_lock:
                 if pair in self._override_set:
                     continue
+            vis_events.append(vis)
 
+        vis_events.sort(key=lambda v: v.visible and v.scheduled)
+
+        for vis in vis_events:
             if vis.visible and vis.scheduled:
                 self._link_up(vis, pub_sock)
             elif not vis.visible:

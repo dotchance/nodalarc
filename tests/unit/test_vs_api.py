@@ -264,19 +264,26 @@ class TestSatelliteMovementSmoke:
                     "slot": 0,
                     "routing_area": "49.0001",
                     "neighbor_count": 4,
-                    "isl_count": 4,
-                    "gnd_count": 1,
+                    "isl_count": 0,
+                    "gnd_count": 0,
                 },
             ],
         })
+        # Add links so _build_snapshot computes isl_count=4, gnd_count=1
+        for i in range(4):
+            _update_link_up({"node_a": "sat-P00S00", "node_b": f"sat-P00S0{i+1}",
+                             "reason": "vis_gained", "latency_ms": 5.0, "bandwidth_mbps": 1000.0})
+        _update_link_up({"node_a": "gs-newyork", "node_b": "sat-P00S00",
+                         "reason": "gs_access", "latency_ms": 3.0, "bandwidth_mbps": 1000.0})
         snap = _build_snapshot()
-        node = snap["nodes"][0]
+        node = [n for n in snap["nodes"] if n["node_id"] == "sat-P00S00"][0]
         # All fields must survive the pipeline (no KeyError, no None for required)
         assert node["node_id"] == "sat-P00S00"
         assert node["lat_deg"] == 10.0
         assert node["vel_x_km_s"] == 1.0
         assert node["plane"] == 0
         assert node["isl_count"] == 4
+        assert node["gnd_count"] == 1
         assert node["min_elevation_deg"] is None  # satellite, not GS
 
 

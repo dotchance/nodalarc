@@ -41,7 +41,19 @@ function buildTooltipContent(nodeId: string, nodeType: string): string {
       const area = ns.routing_area ?? "none";
       const isl = ns.isl_count;
       const gnd = ns.gnd_count;
-      return `${nodeId}\n${isl} ISLs, ${gnd} GND, Area ${area}`;
+      // Check ABR: links to nodes in different areas
+      const linkedAreas = new Set<string>();
+      if (ns.routing_area) linkedAreas.add(ns.routing_area);
+      const links = getLinks();
+      for (const [, entry] of links) {
+        if (entry.nodeA === nodeId || entry.nodeB === nodeId) {
+          const peerId = entry.nodeA === nodeId ? entry.nodeB : entry.nodeA;
+          const peerSat = getSatellites().get(peerId);
+          if (peerSat?.nodeState.routing_area) linkedAreas.add(peerSat.nodeState.routing_area);
+        }
+      }
+      const abrTag = linkedAreas.size > 1 ? " [ABR]" : "";
+      return `${nodeId}\n${isl} ISLs, ${gnd} GND, Area ${area}${abrTag}`;
     }
   } else if (nodeType === "ground_station") {
     const gs = getGroundStations().get(nodeId);

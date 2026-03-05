@@ -23,9 +23,18 @@ export interface LayoutLink {
   isCrossArea: boolean;
 }
 
+export interface AreaBounds {
+  id: string;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
 export interface TopologyLayout {
   nodes: LayoutNode[];
   links: LayoutLink[];
+  areas: AreaBounds[];
   width: number;
   height: number;
 }
@@ -58,6 +67,7 @@ export function computeLayout(
   const sortedAreas = [...areaMap.keys()].sort();
 
   const layoutNodes: LayoutNode[] = [];
+  const areaBoundsMap = new Map<string, { minX: number; minY: number; maxX: number; maxY: number }>();
   let bandY = MARGIN;
 
   for (const area of sortedAreas) {
@@ -71,15 +81,28 @@ export function computeLayout(
 
       for (let i = 0; i < planeSats.length; i++) {
         const sat = planeSats[i]!;
+        const x = MARGIN + i * NODE_SPACING_X;
+        const y = bandY;
         layoutNodes.push({
           id: sat.node_id,
-          x: MARGIN + i * NODE_SPACING_X,
-          y: bandY,
+          x,
+          y,
           type: "satellite",
           area: sat.routing_area,
           plane: sat.plane,
           slot: sat.slot,
         });
+
+        // Track area bounds
+        const bounds = areaBoundsMap.get(area);
+        if (bounds) {
+          bounds.minX = Math.min(bounds.minX, x);
+          bounds.minY = Math.min(bounds.minY, y);
+          bounds.maxX = Math.max(bounds.maxX, x);
+          bounds.maxY = Math.max(bounds.maxY, y);
+        } else {
+          areaBoundsMap.set(area, { minX: x, minY: y, maxX: x, maxY: y });
+        }
       }
 
       bandY += NODE_SPACING_Y + PLANE_GAP;
@@ -89,20 +112,45 @@ export function computeLayout(
     bandY += BAND_GAP - PLANE_GAP;
   }
 
-  // GS row below
+  // GS row below — group by area so each GS extends its area's bounding box
   const gsY = bandY;
   for (let i = 0; i < gss.length; i++) {
     const gs = gss[i]!;
+    const x = MARGIN + i * NODE_SPACING_X;
+    const y = gsY;
     layoutNodes.push({
       id: gs.node_id,
-      x: MARGIN + i * NODE_SPACING_X,
-      y: gsY,
+      x,
+      y,
       type: "ground_station",
-      area: null,
+      area: gs.routing_area,
       plane: null,
       slot: null,
     });
+
+    // Extend area bounds to include this ground station
+    const gsArea = gs.routing_area;
+    if (gsArea) {
+      const bounds = areaBoundsMap.get(gsArea);
+      if (bounds) {
+        bounds.minX = Math.min(bounds.minX, x);
+        bounds.minY = Math.min(bounds.minY, y);
+        bounds.maxX = Math.max(bounds.maxX, x);
+        bounds.maxY = Math.max(bounds.maxY, y);
+      } else {
+        areaBoundsMap.set(gsArea, { minX: x, minY: y, maxX: x, maxY: y });
+      }
+    }
   }
+
+  const AREA_PAD = 16;
+  const areaBounds: AreaBounds[] = [...areaBoundsMap.entries()].map(([id, b]) => ({
+    id,
+    minX: b.minX - AREA_PAD,
+    minY: b.minY - AREA_PAD,
+    maxX: b.maxX + AREA_PAD,
+    maxY: b.maxY + AREA_PAD,
+  }));
 
   // Build layout links — include both active and recently-failed
   const nodeAreaMap = new Map<string, string | null>();
@@ -121,5 +169,5 @@ export function computeLayout(
   const maxX = Math.max(...layoutNodes.map((n) => n.x), 0) + MARGIN;
   const maxY = gsY + NODE_SPACING_Y + MARGIN;
 
-  return { nodes: layoutNodes, links: layoutLinks, width: maxX, height: maxY };
+  return { nodes: layoutNodes, links: layoutLinks, areas: areaBounds, width: maxX, height: maxY };
 }

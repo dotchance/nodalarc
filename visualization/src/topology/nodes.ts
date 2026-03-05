@@ -1,7 +1,7 @@
 /** Draw topology nodes on Canvas 2D. */
 
 import { AREA_COLORS, GS_COLOR } from "../config";
-import type { LayoutNode } from "./layout";
+import type { LayoutNode, AreaBounds } from "./layout";
 
 const SAT_RADIUS = 8;
 const GS_RADIUS = 10;
@@ -57,6 +57,42 @@ export function drawNode(
     ? node.id.replace("gs-", "")
     : `P${node.plane ?? "?"}S${node.slot ?? "?"}`;
   ctx.fillText(label, node.x, node.y + radius + 12);
+}
+
+function hexToRgb(hex: number): [number, number, number] {
+  return [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
+}
+
+export function drawAreaBounds(
+  ctx: CanvasRenderingContext2D,
+  areas: AreaBounds[],
+): void {
+  const radius = 6;
+  for (const area of areas) {
+    const color = AREA_COLORS[area.id] ?? 0x888888;
+    const [r, g, b] = hexToRgb(color);
+    const w = area.maxX - area.minX;
+    const h = area.maxY - area.minY;
+
+    // Fill
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.06)`;
+    ctx.beginPath();
+    ctx.roundRect(area.minX, area.minY, w, h, radius);
+    ctx.fill();
+
+    // Stroke
+    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.35)`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(area.minX, area.minY, w, h, radius);
+    ctx.stroke();
+
+    // Label above box
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
+    ctx.font = "9px monospace";
+    ctx.textAlign = "left";
+    ctx.fillText(`Area ${area.id}`, area.minX, area.minY - 4);
+  }
 }
 
 export function hitTestNode(

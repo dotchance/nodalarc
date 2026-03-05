@@ -8,18 +8,31 @@ interface NetworkSummaryProps {
   onSelect: (sel: Selection | null) => void;
 }
 
+/** Classify a link by its endpoint node IDs. */
+function classifyLink(nodeA: string, nodeB: string): "ground" | "intra_plane" | "cross_plane" {
+  if (nodeA.startsWith("gs-") || nodeB.startsWith("gs-")) return "ground";
+  // Parse plane from sat-P00S05 format
+  const planeA = nodeA.match(/sat-P(\d+)/)?.[1];
+  const planeB = nodeB.match(/sat-P(\d+)/)?.[1];
+  if (planeA != null && planeB != null && planeA === planeB) return "intra_plane";
+  return "cross_plane";
+}
+
 export function NetworkSummary({ snapshot, onSelect: _onSelect }: NetworkSummaryProps) {
   const sats = snapshot.nodes.filter((n) => n.node_type === "satellite");
   const gss = snapshot.nodes.filter((n) => n.node_type === "ground_station");
   const activeLinks = snapshot.links.filter((l) => l.state === "active");
 
-  // Link breakdown by type
-  const intraAreaLinks = activeLinks.filter((l) => l.link_type === "intra_plane_isl");
-  const crossAreaLinks = activeLinks.filter((l) => l.link_type === "cross_plane_isl");
-  const groundLinks = activeLinks.filter(
-    (l) => l.link_type === "ground_uplink" || l.link_type === "ground_downlink"
-      || l.node_a.startsWith("gs-") || l.node_b.startsWith("gs-"),
-  );
+  // Link breakdown by type (derived from node IDs)
+  let intraCount = 0;
+  let crossCount = 0;
+  let groundCount = 0;
+  for (const l of activeLinks) {
+    const cls = classifyLink(l.node_a, l.node_b);
+    if (cls === "intra_plane") intraCount++;
+    else if (cls === "cross_plane") crossCount++;
+    else groundCount++;
+  }
 
   // Area breakdown: count nodes and links per area
   const areaNodes = new Map<string, number>();
@@ -29,7 +42,6 @@ export function NetworkSummary({ snapshot, onSelect: _onSelect }: NetworkSummary
     areaNodes.set(area, (areaNodes.get(area) ?? 0) + 1);
   }
   for (const link of activeLinks) {
-    // Count link in the area of node_a (for intra-area) or both areas
     const nodeA = snapshot.nodes.find((n) => n.node_id === link.node_a);
     if (nodeA?.routing_area) {
       areaLinks.set(nodeA.routing_area, (areaLinks.get(nodeA.routing_area) ?? 0) + 1);
@@ -63,21 +75,21 @@ export function NetworkSummary({ snapshot, onSelect: _onSelect }: NetworkSummary
       </div>
       <div className="detail-row">
         <span className="detail-label">Active Links</span>
-        <span className="detail-value">{activeLinks.length} / {snapshot.links.length}</span>
+        <span className="detail-value">{activeLinks.length}</span>
       </div>
 
       <h3>Link Breakdown</h3>
       <div className="detail-row">
-        <span className="detail-label">Intra-area</span>
-        <span className="detail-value">{intraAreaLinks.length}</span>
+        <span className="detail-label">Intra-plane ISL</span>
+        <span className="detail-value">{intraCount}</span>
       </div>
       <div className="detail-row">
-        <span className="detail-label">Cross-area</span>
-        <span className="detail-value">{crossAreaLinks.length}</span>
+        <span className="detail-label">Cross-plane ISL</span>
+        <span className="detail-value">{crossCount}</span>
       </div>
       <div className="detail-row">
         <span className="detail-label">Ground</span>
-        <span className="detail-value">{groundLinks.length}</span>
+        <span className="detail-value">{groundCount}</span>
       </div>
 
       <h3>Routing Areas</h3>

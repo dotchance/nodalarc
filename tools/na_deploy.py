@@ -62,7 +62,7 @@ def _kill_port_holder(port: int) -> None:
         time.sleep(0.5)
 
 
-def deploy(session_path: str, dwell: float = 0.05, skip_vsapi: bool = False) -> None:
+def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False) -> None:
     """Execute the 11-step startup sequence."""
     # === Step 1: Load and validate ===
     log.info("Step 1: Load and validate session config")
@@ -457,7 +457,7 @@ def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc deployment tool")
     parser.add_argument("--session", required=True, help="Path to session YAML")
-    parser.add_argument("--dwell", type=float, default=0.05, help="DE mode dwell between event batches (seconds)")
+    parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell between event batches (seconds)")
     parser.add_argument("--skip-vsapi", action="store_true", help="Skip VS-API start (step 10)")
     args = parser.parse_args()
     deploy(args.session, dwell=args.dwell, skip_vsapi=args.skip_vsapi)

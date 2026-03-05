@@ -11,7 +11,7 @@ import {
   EARTH_RADIUS,
 } from "../config";
 import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition } from "./earth";
-import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites } from "./satellites";
+import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites, resetDeliveryRate } from "./satellites";
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
@@ -214,10 +214,11 @@ export function GlobeView({
 
       const snap = snapshotRef.current;
 
-      // Flush trails when constellation changes (session switch)
+      // Flush trails and reset EMA when constellation changes (session switch)
       if (snap && snap.constellation_name !== lastConstellationName) {
         if (lastConstellationName !== null) {
           flushTrails();
+          resetDeliveryRate();
         }
         lastConstellationName = snap.constellation_name;
       }

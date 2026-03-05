@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from "react";
 import { computeLayout } from "./layout";
-import { drawNode, hitTestNode } from "./nodes";
+import { drawNode, drawAreaBounds, hitTestNode } from "./nodes";
 import { drawLinks, hitTestLink } from "./topoLinks";
 import { setupInteraction, type ViewTransform } from "./interaction";
 import { FAIL_HOLD_MS, FAIL_FADE_MS } from "../config";
@@ -111,6 +111,9 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: Topolog
 
     // Animate flow path dash
     dashOffsetRef.current = (dashOffsetRef.current + 0.5) % 18;
+
+    // Draw area bounding boxes (behind everything)
+    drawAreaBounds(ctx, layout.areas);
 
     // Draw links first (below nodes)
     const flowPath = snapshot.traced_paths.length > 0

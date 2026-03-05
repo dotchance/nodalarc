@@ -165,8 +165,19 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: Topolog
           });
           const nodeState = snapshot.nodes.find((n) => n.node_id === hitNode.id);
           if (nodeState && nodeState.node_type === "satellite") {
+            const connectedLinks = snapshot.links.filter(
+              (l) => l.node_a === hitNode.id || l.node_b === hitNode.id,
+            );
+            const linkedAreas = new Set<string>();
+            if (nodeState.routing_area) linkedAreas.add(nodeState.routing_area);
+            for (const l of connectedLinks) {
+              const peerId = l.node_a === hitNode.id ? l.node_b : l.node_a;
+              const peer = snapshot.nodes.find((n) => n.node_id === peerId);
+              if (peer?.routing_area) linkedAreas.add(peer.routing_area);
+            }
+            const abrTag = linkedAreas.size > 1 ? " [ABR]" : "";
             setTooltipContent(
-              `${hitNode.id}: ${nodeState.isl_count} ISLs, ${nodeState.gnd_count} GND, Area ${nodeState.routing_area ?? "?"}`,
+              `${hitNode.id}: ${nodeState.isl_count} ISLs, ${nodeState.gnd_count} GND, Area ${nodeState.routing_area ?? "?"}${abrTag}`,
             );
           } else if (nodeState) {
             const prefix = nodeState.prefix ? `, ${nodeState.prefix}` : "";

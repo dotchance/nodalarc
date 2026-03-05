@@ -190,8 +190,24 @@ def _build_snapshot() -> dict:
     """Build a StateSnapshot dict from current state."""
     with _state_lock:
         now = datetime.now(timezone.utc)
-        nodes = [NodeState(**n) for n in _state["nodes"].values()]
         links = [LinkState(**l) for l in _state["links"].values()]
+
+        # Compute isl_count / gnd_count from active links
+        _isl_counts: dict[str, int] = {}
+        _gnd_counts: dict[str, int] = {}
+        for ldata in _state["links"].values():
+            a, b = ldata["node_a"], ldata["node_b"]
+            is_gnd = a.startswith("gs-") or b.startswith("gs-")
+            for nid in (a, b):
+                if is_gnd:
+                    _gnd_counts[nid] = _gnd_counts.get(nid, 0) + 1
+                else:
+                    _isl_counts[nid] = _isl_counts.get(nid, 0) + 1
+        nodes = []
+        for n in _state["nodes"].values():
+            patched = {**n, "isl_count": _isl_counts.get(n["node_id"], 0),
+                       "gnd_count": _gnd_counts.get(n["node_id"], 0)}
+            nodes.append(NodeState(**patched))
         recent = [RecentEvent(
             sim_time=datetime.fromisoformat(e["sim_time"]) if isinstance(e["sim_time"], str) else e["sim_time"],
             node_id=e["node_id"],

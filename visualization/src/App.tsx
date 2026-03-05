@@ -104,13 +104,19 @@ export function App() {
             playingRef.current = !prev;
             return !prev;
           });
+        } else {
+          if (playback.paused) {
+            playback.resume();
+          } else {
+            playback.pause();
+          }
         }
       },
       onFollowNode: handleFollowNode,
       onTopView: handleTopView,
       onToggleCli: () => setCliDrawerOpen((v) => !v),
     }),
-    [clearSelection, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode],
+    [clearSelection, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback],
   );
 
   useKeyboard(keyboardActions);
@@ -216,7 +222,7 @@ export function App() {
           onFollowNode={handleFollowNode}
           onScreenshot={handleScreenshot}
         />
-        {viewMode !== "topology" && selection?.type !== "link" && selection != null && !cliDrawerOpen && (
+        {selection?.type !== "link" && selection != null && !cliDrawerOpen && (
           <NodePopover
             snapshot={snapshot}
             selection={selection}

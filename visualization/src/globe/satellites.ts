@@ -1,22 +1,19 @@
 /** Satellite mesh management — shared geometry, per-sat mesh + smooth motion.
  *
- *  Motion model: velocity-based dead-reckoning with correction blending.
+ *  Motion model: linear interpolation between consecutive snapshot positions.
  *
- *  Each snapshot delivers a ground-truth position AND an ECEF velocity from
- *  the OME propagator.  Between snapshots the mesh advances at that velocity.
- *  When a new snapshot arrives, any positional error is blended out over
- *  CORRECTION_DURATION seconds so the transition is invisible.
+ *  Distance comes from sim_time (deterministic orbital mechanics).
+ *  Duration comes from an EMA-smoothed wall-clock delivery rate.
+ *  This decouples visual speed from packet delivery jitter.
  *
- *  This model does not depend on snapshot timing — it works at any cadence.
+ *  The delivery rate EMA is module-level because all satellites arrive in the
+ *  same snapshot at the same wall-clock instant.
  */
 
 import * as THREE from "three";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../config";
-import { geoToWorld, velocityToScene } from "./geo";
+import { geoToWorld } from "./geo";
 import type { NodeState, ColorMode } from "../types";
-
-/** Duration over which position corrections are blended out (seconds). */
-const CORRECTION_DURATION = 0.3;
 
 /** Shared geometry for all satellites. */
 const sharedGeo = new THREE.SphereGeometry(SAT_RADIUS, SAT_SEGMENTS, SAT_SEGMENTS);
@@ -45,16 +42,14 @@ function getGlowTexture(): THREE.Texture {
 export interface SatelliteEntry {
   mesh: THREE.Mesh;
   glow: THREE.Sprite;
-  /** Latest ground-truth position (scene coords). */
-  snapshotPosition: THREE.Vector3;
-  /** Velocity in scene units/second. */
-  snapshotVelocity: THREE.Vector3;
-  /** performance.now() when snapshot arrived. */
-  snapshotWallTime: number;
-  /** Error to blend out (starts non-zero, decays to zero). */
-  correctionOffset: THREE.Vector3;
-  /** Seconds of correction remaining. */
-  correctionRemaining: number;
+  /** Start of current lerp (set from mesh.position to avoid discontinuity). */
+  prevPosition: THREE.Vector3;
+  /** End of current lerp (ground-truth snapshot position). */
+  currPosition: THREE.Vector3;
+  /** performance.now() when this lerp segment started. */
+  snapshotTime: number;
+  /** Duration of current lerp segment in wall-ms (from sim_time × EMA rate). */
+  interval: number;
   nodeState: NodeState;
 }
 
@@ -64,56 +59,87 @@ export function getSatellites(): Map<string, SatelliteEntry> {
   return satellites;
 }
 
-// Reusable temporaries (avoid per-frame allocation)
-const _tmpExtrapolated = new THREE.Vector3();
+// --- Module-level delivery rate EMA ---
+
+/** EMA of wall-ms per sim-ms.  Shared across all satellites. */
+let _wallMsPerSimMs = 1.0;
+/** Whether the EMA has been seeded with a real measurement. */
+let _rateSeeded = false;
+/** sim_time (ms since epoch) of the last snapshot that advanced sim_time. */
+let _lastSimTimeMs: number | null = null;
+/** performance.now() when that snapshot arrived. */
+let _lastSimWallTime: number | null = null;
+
+const RATE_EMA_ALPHA = 0.15;
+
+// Reusable temporary
 const _tmpPos = new THREE.Vector3();
 
 export function updateSatellites(
   nodes: NodeState[],
   scene: THREE.Scene,
   colorMode: ColorMode,
+  simTime: string,
 ): void {
   const seen = new Set<string>();
   const now = performance.now();
 
+  // --- Update delivery rate EMA (once per snapshot, not per satellite) ---
+  const simTimeMs = new Date(simTime).getTime();
+  let simDeltaMs = 0;
+
+  if (_lastSimTimeMs !== null && simTimeMs > _lastSimTimeMs) {
+    simDeltaMs = simTimeMs - _lastSimTimeMs;
+    const wallDelta = now - _lastSimWallTime!;
+    if (wallDelta > 10) {
+      const instantRate = wallDelta / simDeltaMs;
+      // Reject stall outliers: if this delivery took > 3x the expected
+      // interval, the dispatcher was blocked — not representative of the
+      // steady-state rate.
+      const expectedWall = simDeltaMs * _wallMsPerSimMs;
+      if (!_rateSeeded) {
+        _wallMsPerSimMs = instantRate;
+        _rateSeeded = true;
+      } else if (wallDelta < expectedWall * 3) {
+        _wallMsPerSimMs = _wallMsPerSimMs * (1 - RATE_EMA_ALPHA) + instantRate * RATE_EMA_ALPHA;
+      }
+    }
+    _lastSimWallTime = now;
+    _lastSimTimeMs = simTimeMs;
+  } else if (_lastSimTimeMs === null) {
+    _lastSimTimeMs = simTimeMs;
+    _lastSimWallTime = now;
+  }
+
+  // --- Per-satellite updates ---
   for (const node of nodes) {
     if (node.node_type !== "satellite") continue;
     seen.add(node.node_id);
 
     const newPos = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
-    const newVel = velocityToScene(
-      node.vel_x_km_s ?? 0,
-      node.vel_y_km_s ?? 0,
-      node.vel_z_km_s ?? 0,
-    );
 
     const existing = satellites.get(node.node_id);
     if (existing) {
-      // Where the mesh WOULD be right now by extrapolating from the old snapshot
-      const elapsedS = (now - existing.snapshotWallTime) / 1000;
-      _tmpExtrapolated.copy(existing.snapshotPosition)
-        .addScaledVector(existing.snapshotVelocity, elapsedS);
-
-      // Correction = where we ARE (old extrapolation) minus where we SHOULD BE (new truth).
-      // This keeps the mesh at its current position at blend start, then decays to zero.
-      const correction = new THREE.Vector3().subVectors(_tmpExtrapolated, newPos);
-
-      // If correction is huge (tab switch / reconnect), snap immediately
-      if (correction.length() > SAT_RADIUS * 4) {
-        existing.correctionOffset.set(0, 0, 0);
-        existing.correctionRemaining = 0;
-      } else {
-        existing.correctionOffset.copy(correction);
-        existing.correctionRemaining = CORRECTION_DURATION;
+      // Skip duplicate positions (WS pushes faster than dispatcher)
+      if (newPos.distanceTo(existing.currPosition) < 0.0001) {
+        existing.nodeState = node;
+        updateSatColor(existing, colorMode);
+        continue;
       }
 
-      existing.snapshotPosition.copy(newPos);
-      existing.snapshotVelocity.copy(newVel);
-      existing.snapshotWallTime = now;
+      // Start new lerp from current visual position (no snap-back).
+      existing.prevPosition.copy(existing.mesh.position);
+      existing.currPosition.copy(newPos);
+      // Duration from sim_time delta × smoothed delivery rate.
+      // Falls back to previous interval if sim_time didn't advance (shouldn't
+      // happen since we already skip duplicate positions, but defensive).
+      if (simDeltaMs > 0) {
+        existing.interval = simDeltaMs * _wallMsPerSimMs;
+      }
+      existing.snapshotTime = now;
       existing.nodeState = node;
       updateSatColor(existing, colorMode);
     } else {
-      // New satellite — place directly, no correction needed
       const color = getSatColor(node, colorMode);
       const material = new THREE.MeshBasicMaterial({ color });
       const mesh = new THREE.Mesh(sharedGeo, material);
@@ -137,17 +163,15 @@ export function updateSatellites(
       satellites.set(node.node_id, {
         mesh,
         glow,
-        snapshotPosition: newPos.clone(),
-        snapshotVelocity: newVel.clone(),
-        snapshotWallTime: now,
-        correctionOffset: new THREE.Vector3(0, 0, 0),
-        correctionRemaining: 0,
+        prevPosition: newPos.clone(),
+        currPosition: newPos.clone(),
+        snapshotTime: now,
+        interval: 1000,
         nodeState: node,
       });
     }
   }
 
-  // Remove satellites no longer in snapshot
   for (const [id, entry] of satellites) {
     if (!seen.has(id)) {
       scene.remove(entry.mesh);
@@ -159,30 +183,26 @@ export function updateSatellites(
 
 export function animateSatellites(dt: number): void {
   const now = performance.now();
+  const tabResumed = dt > 0.2;
 
   for (const entry of satellites.values()) {
-    const elapsed = (now - entry.snapshotWallTime) / 1000;
-
-    // Extrapolate from snapshot truth using velocity
-    _tmpExtrapolated.copy(entry.snapshotPosition)
-      .addScaledVector(entry.snapshotVelocity, elapsed);
-
-    if (entry.correctionRemaining > 0) {
-      // Blend out the correction offset over CORRECTION_DURATION
-      const blend = 1.0 - (entry.correctionRemaining / CORRECTION_DURATION);
-      _tmpPos.copy(_tmpExtrapolated)
-        .addScaledVector(entry.correctionOffset, 1.0 - blend);
-      entry.correctionRemaining -= dt;
-      if (entry.correctionRemaining <= 0) {
-        entry.correctionRemaining = 0;
-        entry.correctionOffset.set(0, 0, 0);
-      }
-      entry.mesh.position.copy(_tmpPos);
-    } else {
-      entry.mesh.position.copy(_tmpExtrapolated);
+    if (tabResumed) {
+      // Tab was backgrounded — snap to ground truth, reset lerp.
+      entry.mesh.position.copy(entry.currPosition);
+      entry.glow.position.copy(entry.currPosition);
+      entry.prevPosition.copy(entry.currPosition);
+      entry.snapshotTime = now;
+      continue;
     }
 
-    entry.glow.position.copy(entry.mesh.position);
+    // Lerp from prevPosition to currPosition.  Allow extrapolation to 3.0
+    // so the satellite coasts during delivery gaps rather than freezing.
+    // The direction is along the orbital track so short extrapolation is
+    // accurate; the cap limits overshoot if the dispatcher stalls.
+    const t = Math.min((now - entry.snapshotTime) / entry.interval, 3.0);
+    _tmpPos.lerpVectors(entry.prevPosition, entry.currPosition, t);
+    entry.mesh.position.copy(_tmpPos);
+    entry.glow.position.copy(_tmpPos);
   }
 }
 

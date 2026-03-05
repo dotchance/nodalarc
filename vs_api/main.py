@@ -423,18 +423,18 @@ def _restore_state_from_db(db_path: str) -> bool:
 
 
 async def _ws_broadcaster() -> None:
-    """Broadcast StateSnapshot to all WebSocket clients at ~1Hz.
+    """Broadcast StateSnapshot to WebSocket clients at ~10Hz.
 
-    Also records snapshots to SQLite every 10 seconds for historical playback.
+    Also records snapshots to SQLite every ~10 seconds for historical playback.
     """
     tick = 0
     while True:
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.1)
         snapshot = _build_snapshot()
 
-        # Store snapshot every 10 ticks (~10 seconds) for historical playback
+        # Store snapshot every 100 ticks (~10 seconds) for historical playback
         tick += 1
-        if tick % 10 == 0 and _db_path:
+        if tick % 100 == 0 and _db_path:
             try:
                 conn = sqlite3.connect(_db_path)
                 insert_snapshot(

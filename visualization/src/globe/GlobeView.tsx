@@ -225,7 +225,7 @@ export function GlobeView({
       // Update entities when snapshot changes
       if (snap && snap !== lastSnapshotRef) {
         lastSnapshotRef = snap;
-        updateSatellites(snap.nodes, scene, colorModeRef.current);
+        updateSatellites(snap.nodes, scene, colorModeRef.current, snap.sim_time);
         updateGroundStations(snap.nodes, scene, labelContainer);
         updateLinks(snap.links, scene, showAllLinksRef.current);
         updateFlowPaths(snap.traced_paths, scene);

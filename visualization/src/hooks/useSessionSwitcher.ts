@@ -38,6 +38,16 @@ export function useSessionSwitcher(sessionStatus: string | null) {
     }
   }, [switching, sessionStatus, fetchSessions]);
 
+  // Re-fetch session list whenever session status becomes "ready" (covers
+  // backend-initiated switches where the UI never set switching=true).
+  const prevStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (sessionStatus === "ready" && prevStatusRef.current !== "ready") {
+      fetchSessions();
+    }
+    prevStatusRef.current = sessionStatus;
+  }, [sessionStatus, fetchSessions]);
+
   const switchSession = useCallback(
     async (file: string) => {
       if (switching) return;

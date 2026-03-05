@@ -12,6 +12,8 @@ import argparse
 import asyncio
 import json
 import logging
+import os
+import secrets
 import sqlite3
 import threading
 from contextlib import asynccontextmanager
@@ -22,7 +24,7 @@ from typing import Any
 import yaml
 import zmq
 import zmq.asyncio
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
@@ -70,6 +72,90 @@ from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 from vs_api.session_manager import SessionManager
 
 log = logging.getLogger(__name__)
+
+# --- Authentication ---
+
+_API_KEY: str = os.environ.get("NODAL_API_KEY", "")
+
+
+def _require_api_key(request: Request) -> None:
+    """FastAPI dependency: reject requests without a valid Bearer token.
+
+    Skipped when NODAL_API_KEY is empty (local development).
+    """
+    if not _API_KEY:
+        return
+    auth = request.headers.get("Authorization", "")
+    if auth == f"Bearer {_API_KEY}":
+        return
+    raise_unauthorized()
+
+
+def raise_unauthorized() -> None:
+    from fastapi import HTTPException
+    raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+# --- Rate Limiting (in-memory token bucket per IP) ---
+
+import time as _time
+
+_MAX_WS_CONNECTIONS = 50
+
+
+class _TokenBucket:
+    """Simple per-IP token bucket rate limiter."""
+
+    def __init__(self, rate: float, burst: int) -> None:
+        self._rate = rate  # tokens per second
+        self._burst = burst
+        self._buckets: dict[str, tuple[float, float]] = {}  # ip -> (tokens, last_time)
+
+    def allow(self, ip: str) -> bool:
+        now = _time.monotonic()
+        tokens, last = self._buckets.get(ip, (float(self._burst), now))
+        elapsed = now - last
+        tokens = min(self._burst, tokens + elapsed * self._rate)
+        if tokens >= 1.0:
+            self._buckets[ip] = (tokens - 1.0, now)
+            return True
+        self._buckets[ip] = (tokens, now)
+        return False
+
+
+# Rate limiters: rate = tokens/sec, burst = max tokens
+_rate_introspect = _TokenBucket(rate=10 / 60, burst=10)     # 10 req/min
+_rate_playback = _TokenBucket(rate=30 / 60, burst=30)       # 30 req/min
+_rate_session_switch = _TokenBucket(rate=5 / 60, burst=5)   # 5 req/min
+
+
+def _client_ip(request: Request) -> str:
+    """Extract client IP, respecting X-Forwarded-For behind a reverse proxy."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _check_rate(bucket: _TokenBucket, request: Request) -> None:
+    """FastAPI dependency: reject if rate limit exceeded."""
+    ip = _client_ip(request)
+    if not bucket.allow(ip):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+
+def _rate_limit_introspect(request: Request) -> None:
+    _check_rate(_rate_introspect, request)
+
+
+def _rate_limit_playback(request: Request) -> None:
+    _check_rate(_rate_playback, request)
+
+
+def _rate_limit_session_switch(request: Request) -> None:
+    _check_rate(_rate_session_switch, request)
+
 
 # Module-level state (populated before app starts)
 _state = {
@@ -332,10 +418,70 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Nodal Arc VS-API", version="1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # NODAL_CORS_ORIGIN restricts origins in production (e.g. "https://nodal.example.com").
+    # When unset, allow all origins — API key auth (C2) is the primary protection.
+    allow_origins=[os.environ.get("NODAL_CORS_ORIGIN", "*")],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_audit_log = logging.getLogger("nodal.audit")
+_MAX_BODY_BYTES = 1_048_576  # 1 MB
+
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response as StarletteResponse
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        if request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        return response
+
+
+class BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests with bodies larger than _MAX_BODY_BYTES."""
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > _MAX_BODY_BYTES:
+            return JSONResponse(status_code=413, content={"error": "Request body too large"})
+        return await call_next(request)
+
+
+class AuditLogMiddleware(BaseHTTPMiddleware):
+    """Log all REST requests and failed auth attempts."""
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        ip = _client_ip(request)
+        response = await call_next(request)
+        path = request.url.path
+        method = request.method
+        status = response.status_code
+        if status == 401:
+            _audit_log.warning(f"AUTH_FAIL ip={ip} method={method} path={path}")
+        elif path != "/api/v1/health":
+            _audit_log.info(f"REQUEST ip={ip} method={method} path={path} status={status}")
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(BodySizeLimitMiddleware)
+app.add_middleware(AuditLogMiddleware)
+
+
+@app.get("/api/v1/health")
+def health_check() -> dict:
+    """Unauthenticated health check for load balancers."""
+    return {"status": "ok"}
 
 
 def _clear_state() -> None:
@@ -481,10 +627,24 @@ async def _ws_broadcaster() -> None:
 @app.websocket("/ws/v1/state")
 async def ws_state(websocket: WebSocket) -> None:
     """WebSocket endpoint — full state snapshots at ~1Hz."""
+    # Authenticate via ?token= query parameter when API key is set
+    ws_ip = websocket.client.host if websocket.client else "unknown"
+    if _API_KEY:
+        token = websocket.query_params.get("token", "")
+        if token != _API_KEY:
+            _audit_log.warning(f"WS_AUTH_FAIL ip={ws_ip}")
+            await websocket.close(code=4401, reason="Unauthorized")
+            return
+    # Enforce connection limit
+    async with _ws_lock:
+        if len(_ws_clients) >= _MAX_WS_CONNECTIONS:
+            await websocket.close(code=1013, reason="Too many connections")
+            log.warning(f"WebSocket rejected: {len(_ws_clients)} connections at limit")
+            return
     await websocket.accept()
     async with _ws_lock:
         _ws_clients.append(websocket)
-    log.info("WebSocket client connected")
+    _audit_log.info(f"WS_CONNECT ip={ws_ip} active={len(_ws_clients)}")
 
     # Send initial snapshot immediately
     try:
@@ -498,20 +658,21 @@ async def ws_state(websocket: WebSocket) -> None:
             # Keep connection alive — client sends nothing
             await websocket.receive_text()
     except WebSocketDisconnect:
-        log.info("WebSocket client disconnected")
+        pass
     finally:
         async with _ws_lock:
             if websocket in _ws_clients:
                 _ws_clients.remove(websocket)
+        _audit_log.info(f"WS_DISCONNECT ip={ws_ip} active={len(_ws_clients)}")
 
 
-@app.get("/api/v1/state")
+@app.get("/api/v1/state", dependencies=[Depends(_require_api_key)])
 def get_state() -> dict:
     """Current state snapshot."""
     return _build_snapshot()
 
 
-@app.get("/api/v1/state/{sim_time}")
+@app.get("/api/v1/state/{sim_time}", dependencies=[Depends(_require_api_key)])
 def get_historical_state(sim_time: str) -> dict:
     """Historical state at a specific sim_time (nearest snapshot from SQLite)."""
     if not _db_path:
@@ -526,7 +687,7 @@ def get_historical_state(sim_time: str) -> dict:
         conn.close()
 
 
-@app.get("/api/v1/links")
+@app.get("/api/v1/links", dependencies=[Depends(_require_api_key)])
 def get_link_events(
     start: str = Query(None),
     end: str = Query(None),
@@ -541,7 +702,7 @@ def get_link_events(
         conn.close()
 
 
-@app.get("/api/v1/metrics/convergence")
+@app.get("/api/v1/metrics/convergence", dependencies=[Depends(_require_api_key)])
 def get_convergence_events(
     start: str = Query(None),
     end: str = Query(None),
@@ -556,7 +717,7 @@ def get_convergence_events(
         conn.close()
 
 
-@app.get("/api/v1/metrics/flows/{flow_id}")
+@app.get("/api/v1/metrics/flows/{flow_id}", dependencies=[Depends(_require_api_key)])
 def get_flow_metrics(
     flow_id: str,
     start: str = Query(None),
@@ -572,7 +733,7 @@ def get_flow_metrics(
         conn.close()
 
 
-@app.post("/api/v1/trace")
+@app.post("/api/v1/trace", dependencies=[Depends(_require_api_key)])
 def trace_path(body: dict) -> dict:
     """Request path trace via ZMQ REQ to MI trace endpoint."""
     src = body.get("src_node", "")
@@ -604,7 +765,7 @@ def trace_path(body: dict) -> dict:
         ctx.term()
 
 
-@app.post("/api/v1/playback")
+@app.post("/api/v1/playback", dependencies=[Depends(_require_api_key), Depends(_rate_limit_playback)])
 def playback_control(body: dict) -> Any:
     """Relay playback command to dispatcher via ZMQ."""
     action = body.get("action", "")
@@ -635,7 +796,7 @@ def playback_control(body: dict) -> Any:
         ctx.term()
 
 
-@app.get("/api/v1/sessions")
+@app.get("/api/v1/sessions", dependencies=[Depends(_require_api_key)])
 def list_sessions() -> list[dict]:
     """List available sessions with active flag."""
     if _session_manager is None:
@@ -643,7 +804,7 @@ def list_sessions() -> list[dict]:
     return _session_manager.list_sessions()
 
 
-@app.post("/api/v1/sessions/switch", response_model=None)
+@app.post("/api/v1/sessions/switch", response_model=None, dependencies=[Depends(_require_api_key), Depends(_rate_limit_session_switch)])
 async def switch_session(body: dict):
     """Trigger async session switch. Returns immediately."""
     if _session_manager is None:
@@ -660,13 +821,13 @@ async def switch_session(body: dict):
     return {"status": "switching"}
 
 
-@app.get("/api/v1/introspect/commands")
+@app.get("/api/v1/introspect/commands", dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)])
 def introspect_commands() -> list[str]:
     """Return sorted list of whitelisted vtysh commands."""
     return sorted(VTYSH_COMMANDS)
 
 
-@app.post("/api/v1/introspect")
+@app.post("/api/v1/introspect", dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)])
 def introspect(body: dict) -> dict:
     """Run a whitelisted vtysh command on a node's FRR container."""
     node_id = body.get("node_id", "")
@@ -700,6 +861,15 @@ def main() -> None:
     import uvicorn
 
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+
+    # Generate API key if not set in environment
+    global _API_KEY
+    if not _API_KEY:
+        _API_KEY = secrets.token_urlsafe(32)
+        log.info(f"Generated API key (set NODAL_API_KEY to use a fixed key): {_API_KEY}")
+    else:
+        log.info("Using API key from NODAL_API_KEY environment variable")
+
     parser = argparse.ArgumentParser(description="VS-API server")
     parser.add_argument("--session", default=None, help="Path to session YAML (optional)")
     parser.add_argument("--db", default=None, help="Path to SQLite database (optional)")

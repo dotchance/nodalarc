@@ -1,0 +1,42 @@
+# Nodal Arc reverse proxy — TLS termination + static file serving.
+#
+# Usage:
+#   1. Set NODAL_DOMAIN to your public domain (e.g., nodal.example.com)
+#   2. Run: caddy run --config deploy/Caddyfile --adapter caddyfile
+#
+# Caddy auto-provisions Let's Encrypt certificates for the domain.
+# For local development without TLS, use localhost:443 or :80 instead.
+
+{$NODAL_DOMAIN:localhost} {
+	# Serve VF static files
+	handle /assets/* {
+		root * visualization/dist
+		file_server
+	}
+	handle /index.html {
+		root * visualization/dist
+		file_server
+	}
+	handle / {
+		root * visualization/dist
+		file_server
+	}
+
+	# Proxy WebSocket to VS-API
+	handle /ws/* {
+		reverse_proxy localhost:8080
+	}
+
+	# Proxy REST API to VS-API
+	handle /api/* {
+		reverse_proxy localhost:8080
+	}
+
+	# Security headers (supplementing FastAPI middleware)
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

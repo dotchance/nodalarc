@@ -1,7 +1,7 @@
 /** Hook for listing available sessions and triggering session switches. */
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { REST_URL } from "../config";
+import { REST_URL, authHeaders } from "../config";
 import type { SessionInfo } from "../types";
 
 export function useSessionSwitcher(sessionStatus: string | null) {
@@ -11,7 +11,7 @@ export function useSessionSwitcher(sessionStatus: string | null) {
   const sawSwitchingRef = useRef(false);
 
   const fetchSessions = useCallback(() => {
-    fetch(`${REST_URL}/api/v1/sessions`)
+    fetch(`${REST_URL}/api/v1/sessions`, { headers: authHeaders() })
       .then((r) => r.json())
       .then((data: SessionInfo[]) => setSessions(data))
       .catch(() => {});
@@ -56,7 +56,7 @@ export function useSessionSwitcher(sessionStatus: string | null) {
       try {
         const resp = await fetch(`${REST_URL}/api/v1/sessions/switch`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ session: file }),
         });
         if (!resp.ok) {

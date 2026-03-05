@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,105 @@ import yaml
 from nodalarc.models.session import SessionConfig
 
 log = logging.getLogger(__name__)
+
+DEPLOY_SOCKET_PATH = os.environ.get("NODAL_DEPLOY_SOCKET", "/tmp/nodal-deploy.sock")
+
+
+def _daemon_request(req: dict, timeout: float = 120) -> dict:
+    """Send a request to the deploy daemon and receive the response."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect(DEPLOY_SOCKET_PATH)
+        data = json.dumps(req) + "\n"
+        sock.sendall(data.encode())
+        buf = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            if b"\n" in buf:
+                line = buf[:buf.index(b"\n")]
+                return json.loads(line)
+        return {"ok": False, "error": "No response from deploy daemon"}
+    except FileNotFoundError:
+        return {"ok": False, "error": f"Deploy daemon not running (socket {DEPLOY_SOCKET_PATH} not found)"}
+    except ConnectionRefusedError:
+        return {"ok": False, "error": "Deploy daemon connection refused"}
+    except socket.timeout:
+        return {"ok": False, "error": "Deploy daemon request timed out"}
+    finally:
+        sock.close()
+
+
+def _daemon_deploy_streaming(session_path: str, status_callback: Callable[[str], None] | None = None) -> dict:
+    """Run deploy via daemon with streaming progress updates."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(660)  # 11 min to cover 600s deploy timeout
+    try:
+        sock.connect(DEPLOY_SOCKET_PATH)
+        req = json.dumps({"action": "deploy_streaming", "session": session_path}) + "\n"
+        sock.sendall(req.encode())
+
+        buf = b""
+        last_lines: list[str] = []
+        veth_count = 0
+        veth_total = 0
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                idx = buf.index(b"\n")
+                line_bytes = buf[:idx]
+                buf = buf[idx + 1:]
+                msg = json.loads(line_bytes)
+
+                if msg.get("type") == "progress":
+                    line = msg.get("line", "")
+                    if line:
+                        last_lines.append(line)
+                        if len(last_lines) > 20:
+                            last_lines.pop(0)
+                        # Extract status from log lines
+                        if status_callback:
+                            if " Step " in line:
+                                i = line.index(" Step ")
+                                status_callback(line[i + 1:])
+                                veth_count = 0
+                                veth_total = 0
+                            elif "Waiting for" in line:
+                                i = line.index("Waiting for")
+                                status_callback(line[i:])
+                            elif "Helm install" in line:
+                                status_callback("Helm install running")
+                            elif "All " in line and " pods Running" in line:
+                                status_callback(line[line.index("All "):])
+                            elif "veth pairs to create" in line:
+                                try:
+                                    veth_total = int(line.split("veth pairs")[0].strip().split()[-1])
+                                except (ValueError, IndexError):
+                                    pass
+                            elif "Created " in line and " veth" in line:
+                                veth_count += 1
+                                if veth_total > 0:
+                                    status_callback(f"Creating connections {veth_count} of {veth_total}")
+                                else:
+                                    status_callback(f"Creating connections ({veth_count})")
+                elif "ok" in msg:
+                    return msg
+
+        return {"ok": False, "error": "Connection closed without final response"}
+    except FileNotFoundError:
+        return {"ok": False, "error": f"Deploy daemon not running (socket {DEPLOY_SOCKET_PATH} not found)"}
+    except ConnectionRefusedError:
+        return {"ok": False, "error": "Deploy daemon connection refused"}
+    except socket.timeout:
+        return {"ok": False, "error": "Deploy daemon request timed out"}
+    finally:
+        sock.close()
 
 # Maximum number of old session directories to keep
 _MAX_KEPT_SESSIONS = 5
@@ -295,90 +395,36 @@ class SessionManager:
             if killed:
                 log.info(f"Killed {killed} session process(es) during teardown")
 
-            # === Teardown: uninstall ANY existing helm releases in namespace ===
-            kubeconfig = "KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
+            # === Teardown: uninstall ANY existing helm releases via deploy daemon ===
             self._status_detail = "Checking for existing helm releases"
-            result = subprocess.run(
-                ["sudo", "env", kubeconfig,
-                 "helm", "list", "-n", "nodalarc", "-q"],
-                capture_output=True, text=True, timeout=30,
-            )
-            releases = [r.strip() for r in result.stdout.strip().split("\n") if r.strip()]
+            resp = _daemon_request({"action": "helm_list"})
+            if resp.get("ok"):
+                releases = resp.get("releases", [])
+            else:
+                log.warning(f"helm_list via daemon failed: {resp.get('error')}")
+                releases = []
+
             for release in releases:
                 self._status_detail = f"Uninstalling helm release {release}"
                 log.info(f"Uninstalling stale helm release: {release}")
-                subprocess.run(
-                    ["sudo", "env", kubeconfig,
-                     "helm", "uninstall", release, "-n", "nodalarc"],
-                    capture_output=True, text=True, timeout=60,
-                )
+                _daemon_request({"action": "helm_uninstall", "release": release}, timeout=60)
 
             if releases:
                 self._status_detail = "Waiting for pods to terminate"
-                subprocess.run(
-                    ["sudo", "env", kubeconfig,
-                     "kubectl", "wait", "--for=delete", "pod",
-                     "-l", "nodalarc.io/node-id",
-                     "-n", "nodalarc", "--timeout=60s"],
-                    capture_output=True, text=True, timeout=90,
-                )
+                _daemon_request({"action": "kubectl_wait"}, timeout=90)
 
             # === Clear VS-API state ===
             self._status_detail = "Clearing in-memory state"
             clear_state_fn()
 
-            # === Deploy new session ===
+            # === Deploy new session via deploy daemon (streaming) ===
             self._status_detail = "Starting deployment"
-            kubeconfig = "KUBECONFIG=/etc/rancher/k3s/k3s.yaml"
-            proc = subprocess.Popen(
-                ["sudo", "env", kubeconfig,
-                 sys.executable, "-u", "-m", "tools.na_deploy",
-                 "--session", session_path,
-                 "--skip-vsapi"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
+            deploy_result = _daemon_deploy_streaming(
+                session_path,
+                status_callback=lambda s: setattr(self, "_status_detail", s),
             )
-            # Stream output and update status_detail from "Step N:" log lines
-            last_lines: list[str] = []
-            veth_count = 0
-            veth_total = 0
-            for line in proc.stdout:
-                line = line.rstrip()
-                if line:
-                    last_lines.append(line)
-                    if len(last_lines) > 20:
-                        last_lines.pop(0)
-                    # Extract step info from log lines like "... Step 5: Deploy K3s pods"
-                    if " Step " in line:
-                        # Pull everything after "Step "
-                        idx = line.index(" Step ")
-                        self._status_detail = line[idx + 1:]
-                        veth_count = 0
-                        veth_total = 0
-                    elif "Waiting for" in line:
-                        idx = line.index("Waiting for")
-                        self._status_detail = line[idx:]
-                    elif "Helm install" in line:
-                        self._status_detail = "Helm install running"
-                    elif "All " in line and " pods Running" in line:
-                        self._status_detail = line[line.index("All "):]
-                    elif "veth pairs to create" in line:
-                        # Parse total from "N veth pairs to create"
-                        try:
-                            veth_total = int(line.split("veth pairs")[0].strip().split()[-1])
-                        except (ValueError, IndexError):
-                            pass
-                    elif "Created " in line and " veth" in line:
-                        veth_count += 1
-                        if veth_total > 0:
-                            self._status_detail = f"Creating connections {veth_count} of {veth_total}"
-                        else:
-                            self._status_detail = f"Creating connections ({veth_count})"
-            proc.wait()
-            if proc.returncode != 0:
-                tail = "\n".join(last_lines[-5:])
-                raise RuntimeError(f"Deploy failed (rc={proc.returncode}):\n{tail}")
+            if not deploy_result.get("ok"):
+                raise RuntimeError(deploy_result.get("error", "Deploy failed"))
 
             # === Find new session-state.json ===
             self._status_detail = "Locating new session data"

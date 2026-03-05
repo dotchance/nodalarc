@@ -4,8 +4,45 @@ export const EARTH_RADIUS = 100;
 export const KM_PER_UNIT = 6371 / EARTH_RADIUS;
 
 const _host = typeof window !== "undefined" ? window.location.hostname : "localhost";
-export const WS_URL = import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
 export const REST_URL = import.meta.env.VITE_VSAPI_REST_URL as string || `http://${_host}:8080`;
+
+/** API key for authentication. Read from env at build time or sessionStorage at runtime. */
+function _getApiKey(): string {
+  const envKey = import.meta.env.VITE_API_KEY as string | undefined;
+  if (envKey) return envKey;
+  if (typeof sessionStorage !== "undefined") {
+    return sessionStorage.getItem("nodal_api_key") ?? "";
+  }
+  return "";
+}
+
+export function getApiKey(): string {
+  return _getApiKey();
+}
+
+export function setApiKey(key: string): void {
+  if (typeof sessionStorage !== "undefined") {
+    sessionStorage.setItem("nodal_api_key", key);
+  }
+}
+
+/** Build WebSocket URL with auth token as query parameter. */
+export function getWsUrl(): string {
+  const base = import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
+  const key = getApiKey();
+  return key ? `${base}?token=${encodeURIComponent(key)}` : base;
+}
+
+/** WS_URL kept for backwards compatibility (diagnostics display). */
+export const WS_URL = import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
+
+/** Return headers object with Authorization if API key is set. */
+export function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  const key = getApiKey();
+  if (key) headers["Authorization"] = `Bearer ${key}`;
+  return headers;
+}
 
 /** Satellite sphere radius in scene units */
 export const SAT_RADIUS = 0.6;

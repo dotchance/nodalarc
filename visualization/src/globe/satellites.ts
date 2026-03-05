@@ -222,3 +222,11 @@ export function recolorAllSatellites(colorMode: ColorMode): void {
     updateSatColor(entry, colorMode);
   }
 }
+
+/** Reset delivery rate EMA — call on session switch. */
+export function resetDeliveryRate(): void {
+  _wallMsPerSimMs = 1.0;
+  _rateSeeded = false;
+  _lastSimTimeMs = null;
+  _lastSimWallTime = null;
+}

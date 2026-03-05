@@ -2,7 +2,7 @@
  *  Link colors match the globe view (config.ts constants).
  */
 
-import { LINK_ISL_COLOR, LINK_GROUND_COLOR } from "../config";
+import { LINK_ISL_COLOR, LINK_GROUND_COLOR, FAIL_HOLD_MS, FAIL_FADE_MS } from "../config";
 import type { LayoutLink, LayoutNode } from "./layout";
 
 /** Point-to-line-segment distance for link hit testing. */
@@ -48,7 +48,10 @@ export function drawLinks(
   nodeMap: Map<string, LayoutNode>,
   flowPath: string[] | null,
   dashOffset: number = 0,
+  failTimes?: Map<string, number>,
 ): void {
+  const now = performance.now();
+
   // Draw regular links
   for (const link of links) {
     const a = nodeMap.get(link.nodeA);
@@ -59,8 +62,16 @@ export function drawLinks(
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
 
-    if (link.state !== "active") {
-      ctx.strokeStyle = "rgba(255, 51, 51, 0.6)";
+    if (link.state === "failed") {
+      // Fail-flash: red hold then fade
+      const key = [link.nodeA, link.nodeB].sort().join(":");
+      const ft = failTimes?.get(key) ?? now;
+      const elapsed = now - ft;
+      let opacity = 0.7;
+      if (elapsed > FAIL_HOLD_MS) {
+        opacity = 0.7 * (1 - (elapsed - FAIL_HOLD_MS) / FAIL_FADE_MS);
+      }
+      ctx.strokeStyle = `rgba(255, 51, 51, ${Math.max(0, opacity).toFixed(2)})`;
       ctx.lineWidth = 2;
       ctx.setLineDash([]);
     } else if (link.isGround) {

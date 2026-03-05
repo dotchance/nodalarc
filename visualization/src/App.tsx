@@ -31,7 +31,7 @@ export function App() {
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
   const { sessions, switching, switchSession } = useSessionSwitcher(snapshot?.session_status ?? null);
-  const playback = usePlayback();
+  const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
 
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
   const [colorMode, setColorMode] = useState<ColorMode>("area");

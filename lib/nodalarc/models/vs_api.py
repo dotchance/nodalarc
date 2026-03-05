@@ -114,3 +114,5 @@ class StateSnapshot(BaseModel):
     constellation_name: str | None = None
     session_status: str | None = None  # "ready", "switching", "error", "idle"
     session_status_detail: str | None = None
+    playback_paused: bool = False
+    playback_speed: float = 1.0

@@ -76,6 +76,8 @@ export interface StateSnapshot {
   constellation_name: string | null;
   session_status: string | null;
   session_status_detail: string | null;
+  playback_paused: boolean;
+  playback_speed: number;
 }
 
 export interface SessionInfo {

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { REST_URL } from "../config";
 
 interface PlaybackState {
@@ -10,10 +10,23 @@ interface PlaybackState {
   setSpeed: (factor: number) => Promise<void>;
 }
 
-export function usePlayback(): PlaybackState {
+/**
+ * Playback hook.  Accepts snapshot-driven paused/speed so the UI always
+ * reflects backend state (pushed via WebSocket), not just local guesses.
+ */
+export function usePlayback(snapshotPaused?: boolean, snapshotSpeed?: number): PlaybackState {
   const [paused, setPaused] = useState(false);
   const [speed, setSpeedState] = useState(1.0);
   const [loading, setLoading] = useState(false);
+
+  // Sync from snapshot whenever it changes
+  useEffect(() => {
+    if (snapshotPaused !== undefined) setPaused(snapshotPaused);
+  }, [snapshotPaused]);
+
+  useEffect(() => {
+    if (snapshotSpeed !== undefined && snapshotSpeed > 0) setSpeedState(snapshotSpeed);
+  }, [snapshotSpeed]);
 
   const sendCommand = useCallback(async (body: Record<string, unknown>) => {
     setLoading(true);

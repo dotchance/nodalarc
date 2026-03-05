@@ -19,7 +19,7 @@ import yaml
 import zmq
 
 from nodalarc.constants import LOG_FORMAT
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
+from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, compute_area_assignments, neighbors_by_node
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.session import SessionConfig
 from nodalarc.zmq_channels import TO_SCENARIO_INJECT_BIND, encode_message, TOPIC_LINK_DOWN, TOPIC_LINK_UP
@@ -167,6 +167,26 @@ def main() -> None:
     addressing = AddressingScheme(session.addressing)
     interface_map, bandwidth_map = _build_interface_map(session, addressing)
 
+    # Compute area assignments for routing_area metadata
+    from pydantic import TypeAdapter
+    from nodalarc.models.constellation import ConstellationConfig
+    from nodalarc.models.ground_station import GroundStationFile
+    from ome.constellation_loader import expand_constellation
+    adapter = TypeAdapter(ConstellationConfig)
+    constellation = adapter.validate_python(
+        yaml.safe_load(Path(session.constellation).read_text()),
+    )
+    expanded = expand_constellation(constellation)
+    plane_count = max((s.plane for s in expanded), default=0) + 1
+    sats_per_plane = max((s.slot for s in expanded), default=0) + 1
+    gs_data = yaml.safe_load(Path(session.ground_stations).read_text())
+    gs_file = GroundStationFile.model_validate(gs_data)
+    gs_names = [s.name for s in gs_file.stations]
+    area_map = compute_area_assignments(
+        session.routing.area_assignment, plane_count, sats_per_plane, addressing, gs_names,
+    )
+    log.info(f"Area assignments: {len(area_map)} nodes, areas={set(area_map.values())}")
+
     # Load pid_map if provided (from na-deploy step 7)
     pid_map: dict[str, int] = {}
     if args.pid_map:
@@ -193,6 +213,7 @@ def main() -> None:
             pid_map=pid_map,
             latency_update_interval_s=session.time.latency_update_interval_seconds,
             dwell_s=args.dwell,
+            area_map=area_map,
         )
         dispatcher.run()
     else:

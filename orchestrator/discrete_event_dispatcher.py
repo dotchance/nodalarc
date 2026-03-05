@@ -117,6 +117,7 @@ class DiscreteEventDispatcher:
         use_convergence_gate: bool = True,
         max_orbits: int | None = None,
         max_idle_timeouts: int | None = None,
+        area_map: dict[str, str] | None = None,
     ) -> None:
         self._timeline_path = timeline_path
         self._interface_map = interface_map
@@ -132,6 +133,7 @@ class DiscreteEventDispatcher:
         # max_idle_timeouts: exit after N consecutive reader timeouts (None=wait forever)
         # Use max_idle_timeouts=1 in tests to process a finite file then exit.
         self._max_idle_timeouts = max_idle_timeouts
+        self._area_map = area_map or {}
 
         self._position_table = PositionTable()
         self._active_links: dict[tuple[str, str], ActiveLinkInfo] = {}
@@ -313,7 +315,7 @@ class DiscreteEventDispatcher:
                             "vel_z_km_s": pos.vel_z_km_s,
                             "plane": plane,
                             "slot": slot,
-                            "routing_area": None,
+                            "routing_area": self._area_map.get(node_id),
                             "neighbor_count": 0,
                             "isl_count": 0,
                             "gnd_count": 0,

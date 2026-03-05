@@ -92,7 +92,7 @@ export function updateOrbitalTrails(scene: THREE.Scene): void {
     if (trail.frame % SAMPLE_EVERY !== 0) continue;
 
     // Record ground-truth snapshot position (not mesh, which is mid-lerp)
-    const pos = sat.snapshotPosition;
+    const pos = sat.currPosition;
     const i3 = trail.head * 3;
     trail.buf[i3] = pos.x;
     trail.buf[i3 + 1] = pos.y;

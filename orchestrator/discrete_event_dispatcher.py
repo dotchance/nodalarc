@@ -144,34 +144,38 @@ class DiscreteEventDispatcher:
         """Stream events from growing timeline file."""
         # Set up ZeroMQ
         ctx = zmq.Context()
-        pub_sock = ctx.socket(zmq.PUB)
-        pub_sock.bind(TO_EVENTS_BIND)
-
-        # OME PUB socket for position events (VS-API subscribes to this)
-        ome_pub_sock = ctx.socket(zmq.PUB)
-        ome_pub_sock.bind(OME_EVENTS_BIND)
-
-        conv_sock = None
-        if self._use_convergence_gate:
-            conv_sock = ctx.socket(zmq.REQ)
-            conv_sock.connect(MI_CONVERGENCE_GATE_CONNECT)
-
-        # Playback control REP socket
-        playback_sock = ctx.socket(zmq.REP)
-        playback_sock.bind(PLAYBACK_CONTROL_BIND)
-
-        poller = zmq.Poller()
-        poller.register(playback_sock, zmq.POLLIN)
-
-        # Allow subscribers time to connect (ZMQ slow joiner).
-        # VS-API (uvicorn) can take 2-3s to start its ZMQ subscriber.
-        time.sleep(3.0)
-
-        reader = TimelineReader(self._timeline_path)
-        batch_count = 0
-        idle_timeouts = 0
 
         try:
+            pub_sock = ctx.socket(zmq.PUB)
+            pub_sock.setsockopt(zmq.LINGER, 0)
+            pub_sock.bind(TO_EVENTS_BIND)
+
+            # OME PUB socket for position events (VS-API subscribes to this)
+            ome_pub_sock = ctx.socket(zmq.PUB)
+            ome_pub_sock.setsockopt(zmq.LINGER, 0)
+            ome_pub_sock.bind(OME_EVENTS_BIND)
+
+            conv_sock = None
+            if self._use_convergence_gate:
+                conv_sock = ctx.socket(zmq.REQ)
+                conv_sock.setsockopt(zmq.LINGER, 0)
+                conv_sock.connect(MI_CONVERGENCE_GATE_CONNECT)
+
+            # Playback control REP socket
+            playback_sock = ctx.socket(zmq.REP)
+            playback_sock.setsockopt(zmq.LINGER, 0)
+            playback_sock.bind(PLAYBACK_CONTROL_BIND)
+
+            poller = zmq.Poller()
+            poller.register(playback_sock, zmq.POLLIN)
+
+            # Allow subscribers time to connect (ZMQ slow joiner).
+            # VS-API (uvicorn) can take 2-3s to start its ZMQ subscriber.
+            time.sleep(3.0)
+
+            reader = TimelineReader(self._timeline_path)
+            batch_count = 0
+            idle_timeouts = 0
             while True:
                 # Poll for playback commands (non-blocking)
                 self._handle_playback_commands(poller, playback_sock)
@@ -190,25 +194,27 @@ class DiscreteEventDispatcher:
                     continue
                 idle_timeouts = 0
 
+                batch_start = time.monotonic()
                 self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)
                 self._steps_since_latency_update += 1
                 batch_count += 1
 
                 if self._dwell_s > 0:
                     effective_dwell = self._dwell_s / self._speed_factor
-                    time.sleep(effective_dwell)
+                    elapsed = time.monotonic() - batch_start
+                    remaining = effective_dwell - elapsed
+                    if remaining > 0:
+                        time.sleep(remaining)
         except KeyboardInterrupt:
             log.info("Dispatcher interrupted")
         finally:
-            log.info(f"Processed {batch_count} batches, {len(self._active_links)} active links")
-            reader.close()
-            self._teardown_remaining_links(pub_sock)
-            pub_sock.close()
-            ome_pub_sock.close()
-            playback_sock.close()
-            if conv_sock:
-                conv_sock.close()
-            ctx.term()
+            try:
+                log.info(f"Processed {batch_count} batches, {len(self._active_links)} active links")
+                reader.close()
+                self._teardown_remaining_links(pub_sock)
+            except NameError:
+                pass  # Socket setup failed before these were defined
+            ctx.destroy(linger=0)
 
     def _handle_playback_commands(
         self, poller: zmq.Poller, playback_sock: zmq.Socket,

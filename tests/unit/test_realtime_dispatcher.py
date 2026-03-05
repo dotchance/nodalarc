@@ -31,7 +31,7 @@ from orchestrator.realtime_dispatcher import RealtimeDispatcher
 def zmq_context():
     ctx = zmq.Context()
     yield ctx
-    ctx.term()
+    ctx.destroy(linger=0)
 
 
 @pytest.fixture

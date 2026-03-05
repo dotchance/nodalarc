@@ -1,7 +1,7 @@
 /** WebSocket hook — connects to VS-API, parses StateSnapshot, drops intermediate frames. */
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { WS_URL } from "../config";
+import { getWsUrl } from "../config";
 import type { StateSnapshot } from "../types";
 
 interface WebSocketState {
@@ -22,7 +22,7 @@ export function useWebSocket(): WebSocketState {
   const connect = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
 
     ws.onopen = () => {

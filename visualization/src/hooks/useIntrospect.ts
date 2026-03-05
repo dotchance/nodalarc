@@ -1,7 +1,7 @@
 /** Hook for running whitelisted vtysh commands via VS-API introspect endpoint. */
 
 import { useState, useEffect, useCallback } from "react";
-import { REST_URL } from "../config";
+import { REST_URL, authHeaders } from "../config";
 
 interface UseIntrospectResult {
   loading: boolean;
@@ -20,7 +20,7 @@ export function useIntrospect(): UseIntrospectResult {
   // Fetch available commands on mount
   useEffect(() => {
     let cancelled = false;
-    fetch(`${REST_URL}/api/v1/introspect/commands`)
+    fetch(`${REST_URL}/api/v1/introspect/commands`, { headers: authHeaders() })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -41,7 +41,7 @@ export function useIntrospect(): UseIntrospectResult {
     try {
       const res = await fetch(`${REST_URL}/api/v1/introspect`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ node_id: nodeId, command }),
       });
       const data = await res.json();

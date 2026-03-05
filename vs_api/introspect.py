@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 
 log = logging.getLogger(__name__)
+
+# Defense-in-depth: validate pod names even though subprocess uses shell=False
+VALID_POD_NAME = re.compile(r"^[a-z0-9][a-z0-9\-]{0,62}$")
 
 _KUBECONFIG = os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")
 
@@ -38,6 +42,8 @@ def run_vtysh(node_id: str, command: str) -> dict:
         raise ValueError(f"Command not in whitelist: {command}")
 
     pod_name = node_id.lower()
+    if not VALID_POD_NAME.match(pod_name):
+        raise ValueError(f"Invalid pod name: {pod_name}")
 
     env = {**os.environ, "KUBECONFIG": _KUBECONFIG}
 

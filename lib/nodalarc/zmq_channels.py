@@ -17,26 +17,28 @@ VF_STATIC_PORT: int = 8081
 PROBE_DAEMON_PORT: int = 9100
 
 # Socket addresses (for binding/connecting)
-OME_EVENTS_BIND: str = f"tcp://*:{OME_EVENTS_PORT}"
-OME_EVENTS_CONNECT: str = f"tcp://localhost:{OME_EVENTS_PORT}"
+# All sockets bind to 127.0.0.1 — components run on the same host.
+# Never bind to 0.0.0.0 (tcp://*) as ZMQ has no authentication layer.
+OME_EVENTS_BIND: str = f"tcp://127.0.0.1:{OME_EVENTS_PORT}"
+OME_EVENTS_CONNECT: str = f"tcp://127.0.0.1:{OME_EVENTS_PORT}"
 
-TO_EVENTS_BIND: str = f"tcp://*:{TO_EVENTS_PORT}"
-TO_EVENTS_CONNECT: str = f"tcp://localhost:{TO_EVENTS_PORT}"
+TO_EVENTS_BIND: str = f"tcp://127.0.0.1:{TO_EVENTS_PORT}"
+TO_EVENTS_CONNECT: str = f"tcp://127.0.0.1:{TO_EVENTS_PORT}"
 
-MI_EVENTS_BIND: str = f"tcp://*:{MI_EVENTS_PORT}"
-MI_EVENTS_CONNECT: str = f"tcp://localhost:{MI_EVENTS_PORT}"
+MI_EVENTS_BIND: str = f"tcp://127.0.0.1:{MI_EVENTS_PORT}"
+MI_EVENTS_CONNECT: str = f"tcp://127.0.0.1:{MI_EVENTS_PORT}"
 
-MI_CONVERGENCE_GATE_BIND: str = f"tcp://*:{MI_CONVERGENCE_GATE_PORT}"
-MI_CONVERGENCE_GATE_CONNECT: str = f"tcp://localhost:{MI_CONVERGENCE_GATE_PORT}"
+MI_CONVERGENCE_GATE_BIND: str = f"tcp://127.0.0.1:{MI_CONVERGENCE_GATE_PORT}"
+MI_CONVERGENCE_GATE_CONNECT: str = f"tcp://127.0.0.1:{MI_CONVERGENCE_GATE_PORT}"
 
-TO_SCENARIO_INJECT_BIND: str = f"tcp://*:{TO_SCENARIO_INJECT_PORT}"
-TO_SCENARIO_INJECT_CONNECT: str = f"tcp://localhost:{TO_SCENARIO_INJECT_PORT}"
+TO_SCENARIO_INJECT_BIND: str = f"tcp://127.0.0.1:{TO_SCENARIO_INJECT_PORT}"
+TO_SCENARIO_INJECT_CONNECT: str = f"tcp://127.0.0.1:{TO_SCENARIO_INJECT_PORT}"
 
-MI_TRACE_BIND: str = f"tcp://*:{MI_TRACE_PORT}"
-MI_TRACE_CONNECT: str = f"tcp://localhost:{MI_TRACE_PORT}"
+MI_TRACE_BIND: str = f"tcp://127.0.0.1:{MI_TRACE_PORT}"
+MI_TRACE_CONNECT: str = f"tcp://127.0.0.1:{MI_TRACE_PORT}"
 
-PLAYBACK_CONTROL_BIND: str = f"tcp://*:{PLAYBACK_CONTROL_PORT}"
-PLAYBACK_CONTROL_CONNECT: str = f"tcp://localhost:{PLAYBACK_CONTROL_PORT}"
+PLAYBACK_CONTROL_BIND: str = f"tcp://127.0.0.1:{PLAYBACK_CONTROL_PORT}"
+PLAYBACK_CONTROL_CONNECT: str = f"tcp://127.0.0.1:{PLAYBACK_CONTROL_PORT}"
 
 # Topic prefixes (UTF-8 encoded, separated from payload by null byte)
 TOPIC_POSITION_EVENT: bytes = b"PositionEvent"

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { REST_URL } from "../config";
+import { REST_URL, authHeaders } from "../config";
 
 interface PlaybackState {
   paused: boolean;
@@ -33,7 +33,7 @@ export function usePlayback(snapshotPaused?: boolean, snapshotSpeed?: number): P
     try {
       const res = await fetch(`${REST_URL}/api/v1/playback`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
       const data = await res.json();

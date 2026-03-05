@@ -1,7 +1,7 @@
 /** Snapshot state management — wraps useWebSocket + historical mode. */
 
 import { useState, useCallback } from "react";
-import { REST_URL } from "../config";
+import { REST_URL, authHeaders } from "../config";
 import { useWebSocket } from "./useWebSocket";
 import type { StateSnapshot } from "../types";
 
@@ -21,7 +21,9 @@ export function useSnapshot(): SnapshotState {
 
   const fetchHistorical = useCallback(async (simTime: string) => {
     try {
-      const res = await fetch(`${REST_URL}/api/v1/state/${encodeURIComponent(simTime)}`);
+      const res = await fetch(`${REST_URL}/api/v1/state/${encodeURIComponent(simTime)}`, {
+        headers: authHeaders(),
+      });
       if (res.ok) {
         const data = (await res.json()) as StateSnapshot;
         setHistoricalSnapshot(data);

@@ -93,6 +93,8 @@ _ws_clients: list[WebSocket] = []
 _ws_lock = asyncio.Lock()
 _session_manager: SessionManager | None = None
 _gs_elevation_map: dict[str, float] = {}  # node_id -> min_elevation_deg
+_playback_paused: bool = False
+_playback_speed: float = 1.0
 
 
 def _update_position(event_data: dict) -> None:
@@ -230,6 +232,8 @@ def _build_snapshot() -> dict:
             constellation_name=_constellation_name,
             session_status=_session_manager.status if _session_manager else None,
             session_status_detail=_session_manager.status_detail if _session_manager else None,
+            playback_paused=_playback_paused,
+            playback_speed=_playback_speed,
         )
         return json.loads(snapshot.model_dump_json())
 
@@ -616,7 +620,14 @@ def playback_control(body: dict) -> Any:
     try:
         sock.send(json.dumps(body).encode())
         raw = sock.recv()
-        return json.loads(raw)
+        result = json.loads(raw)
+        # Track playback state for inclusion in snapshots
+        global _playback_paused, _playback_speed
+        if "paused" in result:
+            _playback_paused = result["paused"]
+        if "speed" in result:
+            _playback_speed = result["speed"]
+        return result
     except zmq.Again:
         return JSONResponse(status_code=504, content={"error": "Dispatcher timeout"})
     finally:

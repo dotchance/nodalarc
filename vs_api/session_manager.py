@@ -389,11 +389,19 @@ class SessionManager:
             self._status_detail = "Tearing down current session"
             log.info(f"Session switch: tearing down, deploying {session_path}")
 
-            # === Teardown: kill ALL session processes (not just current) ===
+            # === Teardown: kill ALL session processes via deploy daemon (has root) ===
             self._status_detail = "Stopping all session processes"
-            killed = self.kill_all_session_processes()
-            if killed:
-                log.info(f"Killed {killed} session process(es) during teardown")
+            kill_resp = _daemon_request({"action": "kill_processes", "exclude_vsapi": True})
+            if kill_resp.get("ok"):
+                killed = kill_resp.get("killed", 0)
+                if killed:
+                    log.info(f"Killed {killed} session process(es) via deploy daemon")
+            else:
+                log.warning(f"kill_processes via daemon failed: {kill_resp.get('error')}")
+                # Fallback to direct kill (works if processes are same user)
+                killed = self.kill_all_session_processes()
+                if killed:
+                    log.info(f"Killed {killed} session process(es) via direct signal")
 
             # === Teardown: uninstall ANY existing helm releases via deploy daemon ===
             self._status_detail = "Checking for existing helm releases"

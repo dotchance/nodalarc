@@ -38,6 +38,39 @@ def _env_with_kubeconfig() -> dict[str, str]:
     return {**os.environ, "KUBECONFIG": _KUBECONFIG}
 
 
+def _chown_session_data(session_path: str) -> None:
+    """chown the newest session data directory so non-root VS-API can write the DB."""
+    try:
+        import yaml
+        from nodalarc.models.session import SessionConfig
+        raw = yaml.safe_load(Path(session_path).read_text())
+        cfg = SessionConfig.model_validate(raw)
+        data_base = Path(cfg.session.data_dir)
+        if not data_base.is_dir():
+            return
+        # Find newest subdirectory
+        subdirs = sorted(
+            [d for d in data_base.iterdir() if d.is_dir()],
+            key=lambda d: d.stat().st_mtime, reverse=True,
+        )
+        if not subdirs:
+            return
+        newest = subdirs[0]
+        # Get the real user (SUDO_UID) or fall back to owner of the project dir
+        uid = os.environ.get("SUDO_UID")
+        gid = os.environ.get("SUDO_GID")
+        if not uid:
+            stat = os.stat(Path(__file__).resolve().parent.parent)
+            uid, gid = str(stat.st_uid), str(stat.st_gid)
+        subprocess.run(
+            ["chown", "-R", f"{uid}:{gid}", str(newest)],
+            capture_output=True, timeout=30,
+        )
+        log.info(f"chown {newest.name} to {uid}:{gid}")
+    except Exception as exc:
+        log.warning(f"chown session data failed: {exc}")
+
+
 def _handle_deploy(req: dict) -> dict:
     """Run na_deploy for a session."""
     session_path = req.get("session", "")
@@ -47,12 +80,15 @@ def _handle_deploy(req: dict) -> dict:
     try:
         proc = subprocess.run(
             [sys.executable, "-u", "-m", "tools.na_deploy",
-             "--session", session_path, "--skip-vsapi"],
+             "--session", session_path, "--skip-vsapi", "--skip-teardown"],
             capture_output=True, text=True, timeout=600,
             env=_env_with_kubeconfig(),
         )
+        ok = proc.returncode == 0
+        if ok:
+            _chown_session_data(session_path)
         return {
-            "ok": proc.returncode == 0,
+            "ok": ok,
             "returncode": proc.returncode,
             "stdout": proc.stdout[-4096:] if len(proc.stdout) > 4096 else proc.stdout,
             "stderr": proc.stderr[-2048:] if len(proc.stderr) > 2048 else proc.stderr,
@@ -73,7 +109,7 @@ def _handle_deploy_streaming(req: dict, conn: socket.socket) -> None:
     try:
         proc = subprocess.Popen(
             [sys.executable, "-u", "-m", "tools.na_deploy",
-             "--session", session_path, "--skip-vsapi"],
+             "--session", session_path, "--skip-vsapi", "--skip-teardown"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env=_env_with_kubeconfig(),
         )
@@ -91,9 +127,32 @@ def _handle_deploy_streaming(req: dict, conn: socket.socket) -> None:
             tail = "\n".join(last_lines[-5:])
             _send(conn, {"ok": False, "error": f"Deploy failed (rc={proc.returncode}):\n{tail}"})
         else:
+            # chown the data directory so the VS-API (non-root) can write to the DB
+            _chown_session_data(session_path)
             _send(conn, {"ok": True})
     except Exception as exc:
         _send(conn, {"ok": False, "error": str(exc)})
+
+
+def _handle_kill_processes(req: dict) -> dict:
+    """Kill backend processes by matching known module names."""
+    killed = 0
+    for module in ("ome.main", "orchestrator.main", "vs_api.main", "measurement.mi_main"):
+        result = subprocess.run(
+            ["pgrep", "-f", f"python.*-m {module}"],
+            capture_output=True, text=True,
+        )
+        for line in result.stdout.strip().splitlines():
+            pid = line.strip()
+            if not pid:
+                continue
+            # Don't kill the deploy daemon's own parent VS-API
+            if req.get("exclude_vsapi") and module == "vs_api.main":
+                continue
+            subprocess.run(["kill", pid], capture_output=True)
+            log.info(f"Killed {module} PID {pid}")
+            killed += 1
+    return {"ok": True, "killed": killed}
 
 
 def _handle_helm_list(req: dict) -> dict:
@@ -174,6 +233,8 @@ def _handle_client(conn: socket.socket, addr: str) -> None:
             return
         elif action == "deploy":
             resp = _handle_deploy(req)
+        elif action == "kill_processes":
+            resp = _handle_kill_processes(req)
         elif action == "helm_list":
             resp = _handle_helm_list(req)
         elif action == "helm_uninstall":
@@ -220,7 +281,7 @@ def main() -> None:
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(sock_path)
     # Allow VS-API (non-root) to connect
-    os.chmod(sock_path, 0o660)
+    os.chmod(sock_path, 0o666)
     server.listen(2)
     server.settimeout(1.0)
 

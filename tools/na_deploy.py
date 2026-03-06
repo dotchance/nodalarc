@@ -28,15 +28,7 @@ from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.template_vars import build_template_vars
 from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
-from nodalarc.zmq_channels import (
-    MI_CONVERGENCE_GATE_PORT,
-    MI_EVENTS_PORT,
-    MI_TRACE_PORT,
-    OME_EVENTS_PORT,
-    TO_EVENTS_PORT,
-    TO_SCENARIO_INJECT_PORT,
-    VS_API_HTTP_PORT,
-)
+from nodalarc.zmq_channels import VS_API_HTTP_PORT
 
 log = logging.getLogger(__name__)
 adapter = TypeAdapter(ConstellationConfig)
@@ -47,23 +39,63 @@ def _fail(msg: str) -> None:
     sys.exit(1)
 
 
-def _kill_port_holder(port: int) -> None:
-    """Kill any process listening on the given TCP port."""
+
+def _teardown_previous() -> None:
+    """Kill stale backend processes and remove any existing Helm release + pods."""
+    # Kill known backend modules from any previous session
+    for module in ("ome.main", "orchestrator.main", "vs_api.main", "measurement.mi_main"):
+        result = subprocess.run(
+            ["pgrep", "-f", f"python.*-m {module}"],
+            capture_output=True, text=True,
+        )
+        for line in result.stdout.strip().splitlines():
+            pid = line.strip()
+            if pid:
+                log.info(f"Killing stale {module} (PID {pid})")
+                subprocess.run(["kill", pid], capture_output=True)
+    # Brief pause to let processes exit
+    time.sleep(1)
+
+    # Uninstall any Helm releases in the nodalarc namespace
     result = subprocess.run(
-        ["ss", "-tlnpH", f"sport = :{port}"],
+        ["helm", "list", "-n", "nodalarc", "--short"],
         capture_output=True, text=True,
     )
-    import re
-    for match in re.finditer(r"pid=(\d+)", result.stdout):
-        pid = int(match.group(1))
-        log.info(f"Killing stale process {pid} on port {port}")
-        subprocess.run(["kill", "-9", str(pid)], capture_output=True)
-    if result.stdout.strip():
-        time.sleep(0.5)
+    for release in result.stdout.strip().splitlines():
+        release = release.strip()
+        if not release:
+            continue
+        log.info(f"Uninstalling Helm release: {release}")
+        subprocess.run(
+            ["helm", "uninstall", release, "-n", "nodalarc"],
+            capture_output=True, text=True,
+        )
+
+    # Wait for all pods to terminate (up to 2 minutes)
+    for tick in range(120):
+        result = subprocess.run(
+            ["kubectl", "get", "pods", "-n", "nodalarc", "--no-headers"],
+            capture_output=True, text=True,
+        )
+        pod_lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
+        if not pod_lines:
+            break
+        if tick % 10 == 0:
+            log.info(f"Waiting for {len(pod_lines)} pods to terminate...")
+        time.sleep(1)
+    else:
+        log.warning("Some pods did not terminate in 2 minutes, proceeding anyway")
+
+    log.info("Previous session cleaned up")
 
 
-def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False) -> None:
+def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip_teardown: bool = False) -> None:
     """Execute the 11-step startup sequence."""
+    # === Step 0: Teardown previous session ===
+    if not skip_teardown:
+        log.info("Step 0: Teardown previous session")
+        _teardown_previous()
+
     # === Step 1: Load and validate ===
     log.info("Step 1: Load and validate session config")
     raw = yaml.safe_load(Path(session_path).read_text())
@@ -362,10 +394,6 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False) -> N
 
     # === Step 8: Start MI ===
     log.info("Step 8: Start MI service")
-    # Kill stale processes on ZMQ ports from previous sessions
-    for port in (OME_EVENTS_PORT, TO_EVENTS_PORT, MI_EVENTS_PORT,
-                 MI_CONVERGENCE_GATE_PORT, TO_SCENARIO_INJECT_PORT, MI_TRACE_PORT):
-        _kill_port_holder(port)
     mi_db = str(data_dir / "session.db")
     mi_proc = subprocess.Popen(
         [sys.executable, "-m", "measurement.mi_main",
@@ -382,8 +410,6 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False) -> N
     # === Step 10: Start VS-API ===
     if not skip_vsapi:
         log.info("Step 10: Start VS-API")
-        # Kill any stale VS-API on the target port
-        _kill_port_holder(VS_API_HTTP_PORT)
         vsapi_proc = subprocess.Popen(
             [sys.executable, "-m", "vs_api.main",
              "--session", session_path,
@@ -459,8 +485,9 @@ def main() -> None:
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell between event batches (seconds)")
     parser.add_argument("--skip-vsapi", action="store_true", help="Skip VS-API start (step 10)")
+    parser.add_argument("--skip-teardown", action="store_true", help="Skip Step 0 teardown (caller already cleaned up)")
     args = parser.parse_args()
-    deploy(args.session, dwell=args.dwell, skip_vsapi=args.skip_vsapi)
+    deploy(args.session, dwell=args.dwell, skip_vsapi=args.skip_vsapi, skip_teardown=args.skip_teardown)
 
 
 if __name__ == "__main__":

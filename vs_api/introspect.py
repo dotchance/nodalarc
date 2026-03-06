@@ -1,18 +1,23 @@
-"""Networking introspection — run whitelisted vtysh commands inside FRR containers."""
+"""Networking introspection — run whitelisted vtysh commands inside FRR containers.
+
+Routes kubectl exec through the deploy daemon which holds the privileged
+KUBECONFIG. The VS-API never reads /etc/rancher/k3s/k3s.yaml directly.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
-import subprocess
+import socket
 
 log = logging.getLogger(__name__)
 
-# Defense-in-depth: validate pod names even though subprocess uses shell=False
+# Defense-in-depth: validate pod names even though deploy daemon also validates
 VALID_POD_NAME = re.compile(r"^[a-z0-9][a-z0-9\-]{0,62}$")
 
-_KUBECONFIG = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+DEPLOY_SOCKET_PATH = os.environ.get("NODAL_DEPLOY_SOCKET", "/tmp/nodal-deploy.sock")
 
 VTYSH_COMMANDS = {
     "show isis neighbor",
@@ -26,8 +31,35 @@ VTYSH_COMMANDS = {
 }
 
 _MAX_OUTPUT_BYTES = 64 * 1024  # 64 KB
-_NAMESPACE = "nodalarc"
 _TIMEOUT_S = 15
+
+
+def _daemon_request(req: dict, timeout: float = _TIMEOUT_S) -> dict:
+    """Send a request to the deploy daemon and receive the response."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect(DEPLOY_SOCKET_PATH)
+        data = json.dumps(req) + "\n"
+        sock.sendall(data.encode())
+        buf = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            if b"\n" in buf:
+                line = buf[:buf.index(b"\n")]
+                return json.loads(line)
+        return {"ok": False, "error": "No response from deploy daemon"}
+    except FileNotFoundError:
+        return {"ok": False, "error": "Deploy daemon not running"}
+    except ConnectionRefusedError:
+        return {"ok": False, "error": "Deploy daemon connection refused"}
+    except socket.timeout:
+        return {"ok": False, "error": "Command timed out"}
+    finally:
+        sock.close()
 
 
 def run_vtysh(node_id: str, command: str) -> dict:
@@ -45,37 +77,33 @@ def run_vtysh(node_id: str, command: str) -> dict:
     if not VALID_POD_NAME.match(pod_name):
         raise ValueError(f"Invalid pod name: {pod_name}")
 
-    env = {**os.environ, "KUBECONFIG": _KUBECONFIG}
+    resp = _daemon_request({
+        "action": "kubectl_exec",
+        "pod": pod_name,
+        "container": "frr",
+        "command": ["vtysh", "-c", command],
+    })
 
-    try:
-        result = subprocess.run(
-            [
-                "kubectl", "exec", "-n", _NAMESPACE, pod_name,
-                "-c", "frr", "--",
-                "vtysh", "-c", command,
-            ],
-            capture_output=True, text=True, timeout=_TIMEOUT_S, env=env,
-        )
-    except subprocess.TimeoutExpired:
-        log.warning(f"vtysh timeout for {node_id}: {command}")
+    if "error" in resp and not resp.get("ok"):
         return {
             "node_id": node_id,
             "command": command,
             "output": "",
             "exit_code": -1,
-            "error": "Command timed out",
+            "error": resp["error"],
         }
 
-    output = result.stdout
+    output = resp.get("stdout", "")
     if len(output) > _MAX_OUTPUT_BYTES:
         output = output[:_MAX_OUTPUT_BYTES] + "\n... (truncated at 64KB)"
 
-    error = result.stderr.strip() if result.returncode != 0 else None
+    exit_code = resp.get("exit_code", -1)
+    error = resp.get("stderr", "").strip() if exit_code != 0 else None
 
     return {
         "node_id": node_id,
         "command": command,
         "output": output,
-        "exit_code": result.returncode,
+        "exit_code": exit_code,
         "error": error,
     }

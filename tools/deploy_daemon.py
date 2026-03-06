@@ -155,6 +155,31 @@ def _handle_kill_processes(req: dict) -> dict:
     return {"ok": True, "killed": killed}
 
 
+def _handle_kubectl_exec(req: dict) -> dict:
+    """Run a command inside a pod container via kubectl exec."""
+    pod = req.get("pod", "")
+    container = req.get("container", "frr")
+    command = req.get("command", [])
+    if not pod or not command:
+        return {"ok": False, "error": "pod and command required"}
+    try:
+        result = subprocess.run(
+            ["kubectl", "exec", "-n", _NAMESPACE, pod, "-c", container, "--"] + command,
+            capture_output=True, text=True, timeout=15,
+            env=_env_with_kubeconfig(),
+        )
+        return {
+            "ok": result.returncode == 0,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.returncode,
+        }
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Command timed out"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def _handle_helm_list(req: dict) -> dict:
     """List helm releases in nodalarc namespace."""
     try:
@@ -235,6 +260,8 @@ def _handle_client(conn: socket.socket, addr: str) -> None:
             resp = _handle_deploy(req)
         elif action == "kill_processes":
             resp = _handle_kill_processes(req)
+        elif action == "kubectl_exec":
+            resp = _handle_kubectl_exec(req)
         elif action == "helm_list":
             resp = _handle_helm_list(req)
         elif action == "helm_uninstall":

@@ -12,7 +12,7 @@ log = logging.getLogger(__name__)
 # Defense-in-depth: validate pod names even though subprocess uses shell=False
 VALID_POD_NAME = re.compile(r"^[a-z0-9][a-z0-9\-]{0,62}$")
 
-_KUBECONFIG = os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")
+_KUBECONFIG = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
 
 VTYSH_COMMANDS = {
     "show isis neighbor",

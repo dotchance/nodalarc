@@ -50,6 +50,26 @@ export function App() {
   }, []);
   const canSplit = windowWidth >= 1920;
 
+  // Track whether sim_time has advanced since nodes appeared — detect "frozen" globe
+  const firstSimTimeRef = useRef<string | null>(null);
+  const [simTimeAdvanced, setSimTimeAdvanced] = useState(false);
+
+  useEffect(() => {
+    if (switching || !snapshot || snapshot.nodes.length === 0) {
+      // Reset when constellation clears or session switch starts
+      firstSimTimeRef.current = null;
+      setSimTimeAdvanced(false);
+      return;
+    }
+    if (firstSimTimeRef.current === null) {
+      firstSimTimeRef.current = snapshot.sim_time;
+      return;
+    }
+    if (!simTimeAdvanced && snapshot.sim_time !== firstSimTimeRef.current) {
+      setSimTimeAdvanced(true);
+    }
+  }, [snapshot, switching, simTimeAdvanced]);
+
   const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
 
   // Ref for GlobeView imperative actions (top view, follow, screenshot, flyTo, screen position)
@@ -179,6 +199,11 @@ export function App() {
         {connected && !switching && (!snapshot || snapshot.nodes.length === 0) && (
           <div className="connection-banner">
             Initializing constellation...
+          </div>
+        )}
+        {connected && !switching && snapshot && snapshot.nodes.length > 0 && !simTimeAdvanced && (
+          <div className="connection-banner">
+            Waiting for orbital propagation — satellites will begin moving shortly
           </div>
         )}
         <div

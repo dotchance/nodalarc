@@ -2,17 +2,23 @@
  *
  *  Uses brightness fade (RGB → black) with additive blending rather than
  *  alpha, since Three.js LineBasicMaterial ignores per-vertex alpha.
+ *
+ *  Trail length is capped by arc distance (not time), so it stays a
+ *  consistent visual size regardless of playback speed.
  */
 
 import * as THREE from "three";
 import { getSatellites } from "./satellites";
 
-/** Max trail points per satellite. At 60fps sampling every 3rd frame,
- *  150 points ≈ 7.5 seconds of visible trail. */
-const TRAIL_LENGTH = 150;
+/** Max trail points in the ring buffer (upper bound for memory). */
+const TRAIL_LENGTH = 600;
 
 /** Sample every Nth frame. */
-const SAMPLE_EVERY = 3;
+const SAMPLE_EVERY = 2;
+
+/** Max trail arc length in scene units. Tuned so the trail is a short
+ *  directional indicator, not a full orbit trace. */
+const MAX_ARC_LENGTH = 1.8;
 
 interface TrailEntry {
   /** Ring buffer of recorded positions (x,y,z triples). */
@@ -101,21 +107,50 @@ export function updateOrbitalTrails(scene: THREE.Scene): void {
     trail.head = (trail.head + 1) % TRAIL_LENGTH;
     if (trail.count < TRAIL_LENGTH) trail.count++;
 
-    // Write draw-order positions and brightness-faded colors into attributes
-    const oldest = trail.count < TRAIL_LENGTH ? 0 : trail.head;
+    // Walk backward from newest point, accumulating arc length,
+    // and only draw points within MAX_ARC_LENGTH.
     const pa = trail.posAttr.array as Float32Array;
     const ca = trail.colAttr.array as Float32Array;
 
-    for (let j = 0; j < trail.count; j++) {
-      const srcIdx = (oldest + j) % TRAIL_LENGTH;
-      const s3 = srcIdx * 3;
+    // Newest point index in ring buffer
+    const newestRing = (trail.head - 1 + TRAIL_LENGTH) % TRAIL_LENGTH;
+
+    // Collect points newest-first, stop when arc budget is exhausted
+    let drawCount = 1;
+    let arcLen = 0;
+    let prevX = trail.buf[newestRing * 3]!;
+    let prevY = trail.buf[newestRing * 3 + 1]!;
+    let prevZ = trail.buf[newestRing * 3 + 2]!;
+
+    for (let k = 1; k < trail.count; k++) {
+      const ringIdx = (newestRing - k + TRAIL_LENGTH) % TRAIL_LENGTH;
+      const rx = trail.buf[ringIdx * 3]!;
+      const ry = trail.buf[ringIdx * 3 + 1]!;
+      const rz = trail.buf[ringIdx * 3 + 2]!;
+      const dx = rx - prevX;
+      const dy = ry - prevY;
+      const dz = rz - prevZ;
+      arcLen += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (arcLen > MAX_ARC_LENGTH) break;
+      drawCount++;
+      prevX = rx;
+      prevY = ry;
+      prevZ = rz;
+    }
+
+    // Write draw-order: oldest (index 0) to newest (index drawCount-1)
+    for (let j = 0; j < drawCount; j++) {
+      // j=0 is the oldest drawn point, j=drawCount-1 is newest
+      const k = drawCount - 1 - j; // offset from newest
+      const ringIdx = (newestRing - k + TRAIL_LENGTH) % TRAIL_LENGTH;
+      const s3 = ringIdx * 3;
       const d3 = j * 3;
       pa[d3] = trail.buf[s3]!;
       pa[d3 + 1] = trail.buf[s3 + 1]!;
       pa[d3 + 2] = trail.buf[s3 + 2]!;
 
-      // Linear fade: full brightness at head, zero at tail.
-      const t = j / trail.count;
+      // Linear fade: zero at oldest drawn point, full brightness at newest.
+      const t = j / drawCount;
       const brightness = t * 0.8;
       ca[d3] = TRAIL_COLOR.r * brightness;
       ca[d3 + 1] = TRAIL_COLOR.g * brightness;
@@ -124,7 +159,7 @@ export function updateOrbitalTrails(scene: THREE.Scene): void {
 
     trail.posAttr.needsUpdate = true;
     trail.colAttr.needsUpdate = true;
-    trail.geometry.setDrawRange(0, trail.count);
+    trail.geometry.setDrawRange(0, drawCount);
   }
 
   // Remove trails for satellites that no longer exist

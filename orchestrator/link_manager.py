@@ -304,7 +304,7 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
 
 def set_isis_metric(pod_name: str, ifname: str, metric: int) -> None:
     """Set IS-IS metric on an interface via vtysh."""
-    env = {**os.environ, "KUBECONFIG": "/etc/rancher/k3s/k3s.yaml"}
+    env = {**os.environ, "KUBECONFIG": os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")}
     subprocess.run(
         ["kubectl", "exec", "-n", "nodalarc", pod_name, "-c", "frr", "--",
          "vtysh", "-c", "configure terminal",

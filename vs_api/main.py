@@ -866,7 +866,9 @@ def main() -> None:
     global _API_KEY
     if not _API_KEY:
         _API_KEY = secrets.token_urlsafe(32)
-        log.info(f"Generated API key (set NODAL_API_KEY to use a fixed key): {_API_KEY}")
+        # Print to stderr once, never to the persistent log
+        print(f"Generated API key: {_API_KEY}", file=sys.stderr)
+        log.info("Auto-generated API key (set NODAL_API_KEY to use a fixed key)")
     else:
         log.info("Using API key from NODAL_API_KEY environment variable")
 

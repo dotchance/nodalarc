@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -155,13 +156,41 @@ def _handle_kill_processes(req: dict) -> dict:
     return {"ok": True, "killed": killed}
 
 
+_VALID_POD_NAME = re.compile(r"^[a-z0-9][a-z0-9\-]{0,62}$")
+_VALID_CONTAINERS = {"frr"}
+_ALLOWED_COMMANDS = {
+    ("vtysh", "-c", "show isis neighbor"),
+    ("vtysh", "-c", "show ip route"),
+    ("vtysh", "-c", "show isis database"),
+    ("vtysh", "-c", "show interface brief"),
+    ("vtysh", "-c", "show ip ospf neighbor"),
+    ("vtysh", "-c", "show ip ospf route"),
+    ("vtysh", "-c", "show mpls table"),
+    ("vtysh", "-c", "show running-config"),
+}
+
+
 def _handle_kubectl_exec(req: dict) -> dict:
-    """Run a command inside a pod container via kubectl exec."""
+    """Run a whitelisted command inside a pod container via kubectl exec."""
     pod = req.get("pod", "")
     container = req.get("container", "frr")
     command = req.get("command", [])
     if not pod or not command:
         return {"ok": False, "error": "pod and command required"}
+
+    # Validate pod name
+    if not _VALID_POD_NAME.match(pod):
+        return {"ok": False, "error": f"Invalid pod name: {pod}"}
+
+    # Validate container
+    if container not in _VALID_CONTAINERS:
+        return {"ok": False, "error": f"Container not allowed: {container}"}
+
+    # Validate command against whitelist
+    cmd_tuple = tuple(command)
+    if cmd_tuple not in _ALLOWED_COMMANDS:
+        return {"ok": False, "error": f"Command not in whitelist: {command}"}
+
     try:
         result = subprocess.run(
             ["kubectl", "exec", "-n", _NAMESPACE, pod, "-c", container, "--"] + command,
@@ -307,8 +336,13 @@ def main() -> None:
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(sock_path)
-    # Allow VS-API (non-root) to connect
-    os.chmod(sock_path, 0o666)
+    # Allow VS-API (non-root) to connect via group ownership.
+    # Set socket group to the real user's group (SUDO_GID) so only the
+    # deploying user and root can connect — not every user on the system.
+    gid = os.environ.get("SUDO_GID")
+    if gid:
+        os.chown(sock_path, 0, int(gid))
+    os.chmod(sock_path, 0o660)
     server.listen(2)
     server.settimeout(1.0)
 

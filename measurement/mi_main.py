@@ -173,13 +173,14 @@ class MIService:
                     self._adapter.poll(node_id)
                 except AttributeError:
                     pass  # Not all adapters have poll()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug(f"Poll failed for {node_id}: {exc}")
 
                 # Drain events
                 try:
                     events = self._adapter.get_events(node_id)
-                except Exception:
+                except Exception as exc:
+                    log.debug(f"get_events failed for {node_id}: {exc}")
                     continue
 
                 for event in events:
@@ -196,8 +197,8 @@ class MIService:
                             TOPIC_ADAPTER_EVENT,
                             event.model_dump_json().encode(),
                         ))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug(f"ZMQ publish failed: {exc}")
 
             # Collect probe results
             if self._flow_manager:

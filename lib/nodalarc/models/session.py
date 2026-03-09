@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, model_validator
 
+from nodalarc.models.ground_station import TerrestrialPrefixTemplate
+
 
 class SessionMeta(BaseModel):
     """Session metadata."""
@@ -92,7 +94,8 @@ class SessionConfig(BaseModel):
 
     session: SessionMeta
     constellation: str  # Path to constellation file
-    ground_stations: str  # Path to GS file
+    ground_stations: str | list[str]  # Set name, path to GS file, or list of station names
+    default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None  # For direct station lists
     addressing: AddressingConfig = AddressingConfig()
     routing: RoutingConfig
     time: TimeConfig = TimeConfig()

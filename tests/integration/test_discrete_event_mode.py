@@ -89,6 +89,7 @@ class TestDiscreteEventProcessing:
             neighbors_by_node,
         )
         from nodalarc.models.constellation import ConstellationConfig
+        from ome.constellation_loader import resolve_constellation_terminals
         from pydantic import TypeAdapter
         import yaml
 
@@ -97,6 +98,7 @@ class TestDiscreteEventProcessing:
         )
         adapter = TypeAdapter(ConstellationConfig)
         constellation = adapter.validate_python(constellation_data)
+        resolve_constellation_terminals(constellation)
         addressing = AddressingScheme()
 
         neighbors = assign_isl_neighbors(constellation, addressing)
@@ -177,7 +179,7 @@ class TestDiscreteEventProcessing:
             )
             from nodalarc.models.constellation import ConstellationConfig
             from nodalarc.models.ground_station import GroundStationFile
-            from ome.constellation_loader import expand_constellation
+            from ome.constellation_loader import expand_constellation, resolve_constellation_terminals
             from pydantic import TypeAdapter
             import yaml
 
@@ -186,6 +188,7 @@ class TestDiscreteEventProcessing:
             )
             adapter = TypeAdapter(ConstellationConfig)
             constellation = adapter.validate_python(constellation_data)
+            resolve_constellation_terminals(constellation)
             addressing = AddressingScheme()
 
             neighbors = assign_isl_neighbors(constellation, addressing)

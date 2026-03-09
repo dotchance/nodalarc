@@ -1,0 +1,18 @@
+ground_station:
+  name: mcmurdo
+  lat_deg: -77.85
+  lon_deg: 166.67
+  alt_m: 10
+  min_elevation_deg: 10
+  scheduling_policy: longest-pass
+  terminals:
+    - type: rf
+      band: Ka
+      count: 1
+      bandwidth_mbps: 500
+      tracking_capacity: 1
+  terrestrial_prefixes:
+    - prefix: "172.16.100.0/24"
+      metric: 50
+    - prefix: "fd10::100:0/112"
+      metric: 50

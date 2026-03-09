@@ -1,0 +1,14 @@
+ground_station_set:
+  name: polar-emphasis
+  description: "Optimized for polar and near-polar constellations"
+  stations:
+    - svalbard
+    - mcmurdo
+    - fairbanks
+    - punta-arenas
+    - frankfurt
+    - hawthorne
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10

@@ -1,0 +1,10 @@
+ground_station:
+  name: hawthorne
+  lat_deg: 33.92
+  lon_deg: -118.33
+  alt_m: 20
+  terminals:
+    - type: optical
+      count: 2
+      bandwidth_mbps: 1000
+      tracking_capacity: 1

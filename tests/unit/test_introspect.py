@@ -1,7 +1,7 @@
 """Unit tests for vs_api.introspect — whitelist validation and vtysh execution."""
 
-import subprocess
-from unittest.mock import patch, MagicMock
+import socket
+from unittest.mock import patch
 
 import pytest
 
@@ -13,11 +13,13 @@ class TestWhitelist:
 
     def test_valid_commands_accepted(self):
         for cmd in VTYSH_COMMANDS:
-            # Should not raise
-            with patch("vs_api.introspect.subprocess.run") as mock_run:
-                mock_run.return_value = MagicMock(
-                    stdout="ok", stderr="", returncode=0,
-                )
+            with patch("vs_api.introspect._daemon_request") as mock_req:
+                mock_req.return_value = {
+                    "ok": True,
+                    "stdout": "ok",
+                    "stderr": "",
+                    "exit_code": 0,
+                }
                 result = run_vtysh("sat-p00s00", cmd)
                 assert result["exit_code"] == 0
 
@@ -37,19 +39,19 @@ class TestWhitelist:
 class TestPodNameDerivation:
     """Pod name is node_id lowercased."""
 
-    @patch("vs_api.introspect.subprocess.run")
-    def test_uppercase_node_id_lowered(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+    @patch("vs_api.introspect._daemon_request")
+    def test_uppercase_node_id_lowered(self, mock_req):
+        mock_req.return_value = {"ok": True, "stdout": "", "stderr": "", "exit_code": 0}
         run_vtysh("sat-P00S00", "show isis neighbor")
-        args = mock_run.call_args[0][0]
-        assert args[4] == "sat-p00s00"  # pod_name position in kubectl exec args
+        req_dict = mock_req.call_args[0][0]
+        assert req_dict["pod"] == "sat-p00s00"
 
-    @patch("vs_api.introspect.subprocess.run")
-    def test_already_lowercase_unchanged(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="", stderr="", returncode=0)
+    @patch("vs_api.introspect._daemon_request")
+    def test_already_lowercase_unchanged(self, mock_req):
+        mock_req.return_value = {"ok": True, "stdout": "", "stderr": "", "exit_code": 0}
         run_vtysh("sat-p01s02", "show ip route")
-        args = mock_run.call_args[0][0]
-        assert args[4] == "sat-p01s02"
+        req_dict = mock_req.call_args[0][0]
+        assert req_dict["pod"] == "sat-p01s02"
 
 
 class TestNodeIdRequired:
@@ -63,9 +65,9 @@ class TestNodeIdRequired:
 class TestTimeout:
     """Timeout returns error dict."""
 
-    @patch("vs_api.introspect.subprocess.run")
-    def test_timeout_returns_error(self, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="kubectl", timeout=15)
+    @patch("vs_api.introspect._daemon_request")
+    def test_timeout_returns_error(self, mock_req):
+        mock_req.return_value = {"ok": False, "error": "Command timed out"}
         result = run_vtysh("sat-p00s00", "show isis neighbor")
         assert result["exit_code"] == -1
         assert result["error"] == "Command timed out"
@@ -76,24 +78,26 @@ class TestTimeout:
 class TestNonZeroExit:
     """Non-zero exit code returns stderr as error."""
 
-    @patch("vs_api.introspect.subprocess.run")
-    def test_pod_not_found(self, mock_run):
-        mock_run.return_value = MagicMock(
-            stdout="",
-            stderr="error: pod sat-p99s99 not found",
-            returncode=1,
-        )
+    @patch("vs_api.introspect._daemon_request")
+    def test_pod_not_found(self, mock_req):
+        mock_req.return_value = {
+            "ok": True,
+            "stdout": "",
+            "stderr": "error: pod sat-p99s99 not found",
+            "exit_code": 1,
+        }
         result = run_vtysh("sat-p99s99", "show isis neighbor")
         assert result["exit_code"] == 1
         assert "not found" in result["error"]
 
-    @patch("vs_api.introspect.subprocess.run")
-    def test_success_has_no_error(self, mock_run):
-        mock_run.return_value = MagicMock(
-            stdout="neighbor data",
-            stderr="",
-            returncode=0,
-        )
+    @patch("vs_api.introspect._daemon_request")
+    def test_success_has_no_error(self, mock_req):
+        mock_req.return_value = {
+            "ok": True,
+            "stdout": "neighbor data",
+            "stderr": "",
+            "exit_code": 0,
+        }
         result = run_vtysh("sat-p00s00", "show isis neighbor")
         assert result["exit_code"] == 0
         assert result["error"] is None
@@ -103,21 +107,27 @@ class TestNonZeroExit:
 class TestOutputTruncation:
     """Output truncated at 64KB."""
 
-    @patch("vs_api.introspect.subprocess.run")
-    def test_large_output_truncated(self, mock_run):
+    @patch("vs_api.introspect._daemon_request")
+    def test_large_output_truncated(self, mock_req):
         large_output = "x" * (_MAX_OUTPUT_BYTES + 1000)
-        mock_run.return_value = MagicMock(
-            stdout=large_output, stderr="", returncode=0,
-        )
+        mock_req.return_value = {
+            "ok": True,
+            "stdout": large_output,
+            "stderr": "",
+            "exit_code": 0,
+        }
         result = run_vtysh("sat-p00s00", "show running-config")
         assert len(result["output"]) < len(large_output)
         assert result["output"].endswith("... (truncated at 64KB)")
 
-    @patch("vs_api.introspect.subprocess.run")
-    def test_small_output_not_truncated(self, mock_run):
+    @patch("vs_api.introspect._daemon_request")
+    def test_small_output_not_truncated(self, mock_req):
         small_output = "some output"
-        mock_run.return_value = MagicMock(
-            stdout=small_output, stderr="", returncode=0,
-        )
+        mock_req.return_value = {
+            "ok": True,
+            "stdout": small_output,
+            "stderr": "",
+            "exit_code": 0,
+        }
         result = run_vtysh("sat-p00s00", "show isis neighbor")
         assert result["output"] == small_output

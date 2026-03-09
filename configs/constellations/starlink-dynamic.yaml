@@ -1,5 +1,6 @@
 mode: parametric
 name: starlink-dynamic
+satellite_type: starlink-dynamic
 orbit:
   altitude_km: 550
   inclination_deg: 53
@@ -9,14 +10,3 @@ planes:
   raan_spacing_deg: 30
   sats_per_plane: 14
   phase_offset_deg: 4.286
-default_terminals:
-  isl:
-    - type: optical
-      count: 4
-      max_range_km: 3200
-      bandwidth_mbps: 10000
-      max_tracking_rate_deg_s: 2.0
-  ground:
-    - type: optical
-      count: 1
-      bandwidth_mbps: 1000

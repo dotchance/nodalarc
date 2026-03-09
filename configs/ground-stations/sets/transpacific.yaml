@@ -1,0 +1,11 @@
+ground_station_set:
+  name: transpacific
+  description: "For studying cross-Pacific forwarding paths"
+  stations:
+    - hawthorne
+    - tokyo
+    - sydney
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10

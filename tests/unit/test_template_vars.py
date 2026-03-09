@@ -2,11 +2,10 @@
 
 import yaml
 import pytest
-from pydantic import TypeAdapter
 
 from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.constellation import ConstellationConfig
 from nodalarc.models.ground_station import GroundStationFile
+from ome.constellation_loader import load_constellation
 from nodalarc.models.session import (
     AreaAssignmentConfig,
     RoutingConfig,
@@ -17,8 +16,6 @@ from nodalarc.models.session import (
 from nodalarc.template_vars import build_template_vars
 from tests.conftest import CONFIGS_DIR
 
-adapter = TypeAdapter(ConstellationConfig)
-
 
 @pytest.fixture
 def addressing():
@@ -27,14 +24,12 @@ def addressing():
 
 @pytest.fixture
 def four_node_config():
-    data = yaml.safe_load((CONFIGS_DIR / "constellations/4-node-test.yaml").read_text())
-    return adapter.validate_python(data)
+    return load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
 
 
 @pytest.fixture
 def starlink_config():
-    data = yaml.safe_load((CONFIGS_DIR / "constellations/starlink-mini.yaml").read_text())
-    return adapter.validate_python(data)
+    return load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
 
 
 @pytest.fixture

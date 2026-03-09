@@ -13,20 +13,9 @@ mode: explicit
 # Human-readable constellation name (used in session metadata and reports)
 name: my-custom-constellation
 
-# Default terminal configuration applied to all satellites unless overridden.
-# ISL terminals define inter-satellite optical links.
-# Ground terminals define satellite-to-ground-station links.
-default_terminals:
-  isl:
-    - type: optical         # Terminal type: "optical" or "rf"
-      count: 2              # Number of ISL terminals per satellite (0-8)
-      max_range_km: 5000    # Maximum link distance in km
-      bandwidth_mbps: 1000  # Link bandwidth in Mbps
-      max_tracking_rate_deg_s: 3.0  # Antenna tracking rate (deg/s)
-  ground:
-    - type: optical         # Terminal type for ground links
-      count: 1              # Number of ground terminals per satellite
-      bandwidth_mbps: 1000  # Ground link bandwidth
+# Reference to a satellite type file in configs/satellite-types/
+# Defines ISL and ground terminal hardware for all satellites
+satellite_type: generic-2isl
 
 # Satellite definitions — one entry per satellite.
 # Each satellite is identified by (plane, slot) which determines its node_id

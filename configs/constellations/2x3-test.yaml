@@ -1,16 +1,6 @@
 mode: explicit
 name: 2x3-test
-default_terminals:
-  isl:
-    - type: optical
-      count: 2
-      max_range_km: 5000
-      bandwidth_mbps: 1000
-      max_tracking_rate_deg_s: 3.0
-  ground:
-    - type: optical
-      count: 1
-      bandwidth_mbps: 1000
+satellite_type: generic-2isl
 satellites:
   - plane: 0
     slot: 0

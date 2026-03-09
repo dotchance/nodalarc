@@ -80,18 +80,14 @@ class TestTrackingRateCalibration:
         PRD R-OME-003: calibration task to verify tracking rate covers actual peak.
         Starlink-mini: 6 planes, 30° RAAN spacing, 53° inclination, 550 km.
         """
-        import yaml
         from pathlib import Path
-        from pydantic import TypeAdapter
-        from nodalarc.models.constellation import ConstellationConfig
+        from ome.constellation_loader import load_constellation
 
         config_path = Path(__file__).parent.parent.parent / "configs/constellations/starlink-mini.yaml"
         if not config_path.exists():
             pytest.skip("starlink-mini config not available")
 
-        data = yaml.safe_load(config_path.read_text())
-        adapter = TypeAdapter(ConstellationConfig)
-        config = adapter.validate_python(data)
+        config = load_constellation(config_path)
         tracking_rate = config.default_terminals.isl[0].max_tracking_rate_deg_s
 
         # Compute peak cross-plane angular velocity across all RAAN pairings
@@ -119,15 +115,11 @@ class TestTrackingRateCalibration:
 
     def test_tracking_rate_read_from_config(self):
         """OME reads tracking rate from constellation config, not hardcoded."""
-        import yaml
         from pathlib import Path
-        from pydantic import TypeAdapter
-        from nodalarc.models.constellation import ConstellationConfig
+        from ome.constellation_loader import load_constellation
 
         config_path = Path(__file__).parent.parent.parent / "configs/constellations/starlink-mini.yaml"
-        data = yaml.safe_load(config_path.read_text())
-        adapter = TypeAdapter(ConstellationConfig)
-        config = adapter.validate_python(data)
+        config = load_constellation(config_path)
 
         # Config has an explicit tracking rate
         assert config.default_terminals.isl[0].max_tracking_rate_deg_s > 0

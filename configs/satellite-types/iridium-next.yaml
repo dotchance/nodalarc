@@ -1,0 +1,34 @@
+# Iridium NEXT — Ka-band crosslinks with dedicated intra/cross-plane terminals.
+#
+# The lower tracking rate on cross-plane terminals reflects mechanical pointing
+# constraints that produce the Iridium polar seam. Cross-plane ISLs drop at
+# high latitudes where counter-rotating planes produce angular rates exceeding
+# the 2.5 deg/s cross-plane tracking limit.
+
+satellite_type:
+  name: iridium-next
+  description: "Iridium NEXT Ka-band ISL platform"
+
+  isl_terminals:
+    - type: rf
+      band: Ka
+      count: 2
+      role: intra-plane
+      max_range_km: 4400
+      bandwidth_mbps: 10
+      max_tracking_rate_deg_s: 4.0
+      field_of_regard_deg: 120
+    - type: rf
+      band: Ka
+      count: 2
+      role: cross-plane
+      max_range_km: 4400
+      bandwidth_mbps: 10
+      max_tracking_rate_deg_s: 2.5
+      field_of_regard_deg: 120
+
+  ground_terminals:
+    - type: rf
+      band: Ka
+      count: 1
+      bandwidth_mbps: 200

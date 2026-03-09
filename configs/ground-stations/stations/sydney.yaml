@@ -1,0 +1,10 @@
+ground_station:
+  name: sydney
+  lat_deg: -33.87
+  lon_deg: 151.21
+  alt_m: 58
+  terminals:
+    - type: optical
+      count: 2
+      bandwidth_mbps: 1000
+      tracking_capacity: 1

@@ -28,8 +28,8 @@ for pat in "${PYTHON_PATTERNS[@]}"; do
 done
 
 echo "Sending SIGTERM to Vite dev server..."
-pkill -f "vite.*nodal" 2>/dev/null || true
-sudo pkill -f "vite.*nodal" 2>/dev/null || true
+pkill -f "node_modules/.bin/vite" 2>/dev/null || true
+sudo pkill -f "node_modules/.bin/vite" 2>/dev/null || true
 
 echo "Sending SIGTERM to stale uv run wrappers..."
 # Only kill uv wrappers for known nodal-arc modules, NOT na_deploy or integration test
@@ -54,8 +54,8 @@ for pat in "${PYTHON_PATTERNS[@]}"; do
         sudo kill -9 $pids 2>/dev/null || true
     fi
 done
-pkill -9 -f "vite.*nodal" 2>/dev/null || true
-sudo pkill -9 -f "vite.*nodal" 2>/dev/null || true
+pkill -9 -f "node_modules/.bin/vite" 2>/dev/null || true
+sudo pkill -9 -f "node_modules/.bin/vite" 2>/dev/null || true
 for upat in "uv run python -m ome" "uv run python -m orchestrator" "uv run python -m vs_api" "uv run python -m measurement"; do
     pids=$(pgrep -f "$upat" 2>/dev/null || true)
     if [ -n "$pids" ]; then
@@ -109,7 +109,7 @@ for pat in "${PYTHON_PATTERNS[@]}"; do
         remaining_procs="$remaining_procs  $pat (PIDs: $pids)\n"
     fi
 done
-vite_pids=$(pgrep -f "vite.*nodal" 2>/dev/null || true)
+vite_pids=$(pgrep -f "node_modules/.bin/vite" 2>/dev/null || true)
 if [ -n "$vite_pids" ]; then
     remaining_procs="$remaining_procs  vite (PIDs: $vite_pids)\n"
 fi

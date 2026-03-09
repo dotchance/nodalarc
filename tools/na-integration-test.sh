@@ -137,7 +137,7 @@ TOTAL_CYCLES=0
 TOTAL_DEPLOYS=0
 declare -A PASS_COUNT
 declare -A FAIL_COUNT
-declare -a FAILURES
+FAILURES=()
 
 for s in "${SESSION_NAMES[@]}"; do
     PASS_COUNT["$s"]=0

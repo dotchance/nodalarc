@@ -94,6 +94,11 @@ def measure_convergence(
     total_sent = 0
     total_lost = 0
     stable_since: float | None = None
+    consecutive_zero_received = 0
+    # Fast-fail after N consecutive rounds with zero packets received across
+    # all flows.  This avoids blocking 30s when routing is completely down
+    # (e.g. initial bringup before IS-IS converges).
+    max_zero_rounds = 3
 
     while True:
         elapsed = time.monotonic() - start_wall
@@ -115,6 +120,7 @@ def measure_convergence(
 
         # Run probe burst on each affected flow
         all_success = True
+        round_received = 0
         for flow_id, flow_info in affected_flows.items():
             try:
                 result = probe_client_mod.burst(
@@ -127,6 +133,7 @@ def measure_convergence(
                 received = result.get("packets_received", 0) if isinstance(result, dict) else 0
                 total_sent += sent
                 total_lost += sent - received
+                round_received += received
                 if received < sent:
                     all_success = False
             except Exception as exc:
@@ -134,6 +141,32 @@ def measure_convergence(
                 all_success = False
                 total_sent += 5
                 total_lost += 5
+
+        # Fast-fail: if zero packets received across all flows for N
+        # consecutive rounds, routing is completely non-functional.
+        if round_received == 0:
+            consecutive_zero_received += 1
+            if consecutive_zero_received >= max_zero_rounds:
+                duration = time.monotonic() - start_wall
+                log.info(
+                    f"Convergence {event_id}: no connectivity after "
+                    f"{consecutive_zero_received} rounds, fast-fail "
+                    f"after {duration:.1f}s"
+                )
+                end_time = datetime.now(timezone.utc)
+                return ConvergenceResult(
+                    event_id=event_id,
+                    converged=False,
+                    duration_ms=duration * 1000,
+                    packets_lost=total_lost,
+                    packets_sent=total_sent,
+                    sim_time_start=start_time,
+                    sim_time_end=end_time,
+                    wall_time_start=start_time,
+                    wall_time_end=end_time,
+                )
+        else:
+            consecutive_zero_received = 0
 
         now = time.monotonic()
         if all_success:

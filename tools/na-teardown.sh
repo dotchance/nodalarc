@@ -28,10 +28,18 @@ for pat in "${PYTHON_PATTERNS[@]}"; do
 done
 
 echo "Sending SIGTERM to Vite dev server..."
+pkill -f "vite.*nodal" 2>/dev/null || true
 sudo pkill -f "vite.*nodal" 2>/dev/null || true
 
 echo "Sending SIGTERM to stale uv run wrappers..."
-sudo pkill -f "uv run python" 2>/dev/null || true
+# Only kill uv wrappers for known nodal-arc modules, NOT na_deploy or integration test
+for upat in "uv run python -m ome" "uv run python -m orchestrator" "uv run python -m vs_api" "uv run python -m measurement"; do
+    pids=$(pgrep -f "$upat" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "  SIGTERM '$upat' (PIDs: $pids)"
+        sudo kill $pids 2>/dev/null || true
+    fi
+done
 
 # --- Step 4: Grace period for clean shutdown ---
 echo "Waiting 3s for graceful shutdown..."
@@ -46,13 +54,20 @@ for pat in "${PYTHON_PATTERNS[@]}"; do
         sudo kill -9 $pids 2>/dev/null || true
     fi
 done
+pkill -9 -f "vite.*nodal" 2>/dev/null || true
 sudo pkill -9 -f "vite.*nodal" 2>/dev/null || true
-sudo pkill -9 -f "uv run python" 2>/dev/null || true
+for upat in "uv run python -m ome" "uv run python -m orchestrator" "uv run python -m vs_api" "uv run python -m measurement"; do
+    pids=$(pgrep -f "$upat" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "  SIGKILL '$upat' (PIDs: $pids)"
+        sudo kill -9 $pids 2>/dev/null || true
+    fi
+done
 sleep 1
 
 # --- Step 7: Uninstall ALL Helm releases in nodalarc namespace ---
 echo "Uninstalling Helm releases in nodalarc namespace..."
-releases=$(sudo KUBECONFIG="$KUBECONFIG" helm list -n nodalarc -q 2>/dev/null || true)
+releases=$(sudo KUBECONFIG="$KUBECONFIG" helm list -n nodalarc -q --all 2>/dev/null || true)
 if [ -n "$releases" ]; then
     for rel in $releases; do
         echo "  Uninstalling: $rel"
@@ -61,6 +76,11 @@ if [ -n "$releases" ]; then
 else
     echo "  (no releases found)"
 fi
+
+# Clean up any stale K8s resources (ServiceAccounts, ConfigMaps, etc.)
+sudo KUBECONFIG="$KUBECONFIG" kubectl delete all --all -n nodalarc 2>/dev/null || true
+sudo KUBECONFIG="$KUBECONFIG" kubectl delete serviceaccount --all -n nodalarc 2>/dev/null || true
+sudo KUBECONFIG="$KUBECONFIG" kubectl delete configmap --all -n nodalarc 2>/dev/null || true
 
 # --- Step 8: Wait for pods to terminate ---
 echo "Waiting for pods to terminate (up to 60s)..."

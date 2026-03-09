@@ -171,9 +171,14 @@ class DiscreteEventDispatcher:
             poller = zmq.Poller()
             poller.register(playback_sock, zmq.POLLIN)
 
+            log.info(
+                f"ZMQ PUB sockets bound: TO={TO_EVENTS_BIND} OME={OME_EVENTS_BIND} "
+                f"Playback={PLAYBACK_CONTROL_BIND}"
+            )
             # Allow subscribers time to connect (ZMQ slow joiner).
             # VS-API (uvicorn) can take 2-3s to start its ZMQ subscriber.
             time.sleep(3.0)
+            log.info("Slow joiner delay complete, starting event processing")
 
             reader = TimelineReader(self._timeline_path)
             batch_count = 0
@@ -209,9 +214,16 @@ class DiscreteEventDispatcher:
                         time.sleep(remaining)
         except KeyboardInterrupt:
             log.info("Dispatcher interrupted")
+        except Exception as exc:
+            log.error(f"Dispatcher crashed: {exc}", exc_info=True)
         finally:
             try:
-                log.info(f"Processed {batch_count} batches, {len(self._active_links)} active links")
+                pos_count = getattr(self, '_pos_pub_count', 0)
+                log.info(
+                    f"Dispatcher exiting: {batch_count} batches, "
+                    f"{pos_count} position events published, "
+                    f"{len(self._active_links)} active links"
+                )
                 reader.close()
                 self._teardown_remaining_links(pub_sock)
             except NameError:
@@ -293,6 +305,8 @@ class DiscreteEventDispatcher:
                 self._position_table.update_from_snapshot(snap)
                 # Publish position event for VS-API
                 if ome_pub_sock is not None:
+                    if not hasattr(self, '_pos_pub_count'):
+                        self._pos_pub_count = 0
                     positions_list = []
                     for node_id, pos in snap.positions.items():
                         node_type = "ground_station" if node_id.startswith("gs-") else "satellite"
@@ -324,10 +338,18 @@ class DiscreteEventDispatcher:
                         "sim_time": snap.sim_time.isoformat(),
                         "positions": positions_list,
                     }
-                    ome_pub_sock.send(encode_message(
+                    encoded = encode_message(
                         TOPIC_POSITION_EVENT,
                         json.dumps(position_data).encode(),
-                    ))
+                    )
+                    ome_pub_sock.send(encoded)
+                    self._pos_pub_count += 1
+                    if self._pos_pub_count <= 5 or self._pos_pub_count % 50 == 0:
+                        log.info(
+                            f"Published PositionEvent #{self._pos_pub_count} "
+                            f"sim_time={position_data['sim_time']} "
+                            f"nodes={len(positions_list)} bytes={len(encoded)}"
+                        )
             elif record["event_type"] == "ClockTick":
                 pass  # Clock ticks are informational
 
@@ -374,10 +396,10 @@ class DiscreteEventDispatcher:
             self._update_latencies(pub_sock)
             self._steps_since_latency_update = 0
 
-        # Phase 4: Convergence gate for each link event
+        # Phase 4: Convergence gate once per batch (all link events at the same
+        # sim_time, so a single convergence check after all changes suffices).
         if conv_sock and link_events:
-            for le in link_events:
-                self._call_convergence_gate(conv_sock, le)
+            self._call_convergence_gate(conv_sock, link_events[-1])
 
     def _handle_link_up(
         self,

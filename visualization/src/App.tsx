@@ -15,7 +15,7 @@ import { useSelection } from "./hooks/useSelection";
 import { useKeyboard } from "./hooks/useKeyboard";
 import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
-import { WS_URL } from "./config";
+import { WS_URL, fetchApiKey } from "./config";
 import type { ViewMode, ColorMode } from "./types";
 
 import "./styles/variables.css";
@@ -27,6 +27,13 @@ import "./styles/topology.css";
 import "./styles/time-controls.css";
 
 export function App() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => { fetchApiKey().finally(() => setReady(true)); }, []);
+  if (!ready) return null;
+  return <AppInner />;
+}
+
+function AppInner() {
   const { snapshot, connected, hasEverConnected, historicalMode, setHistoricalMode, fetchHistorical } =
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();

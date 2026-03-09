@@ -1,7 +1,7 @@
 /** WebSocket hook — connects to VS-API, parses StateSnapshot, drops intermediate frames. */
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getWsUrl } from "../config";
+import { getWsUrl, fetchApiKey } from "../config";
 import type { StateSnapshot } from "../types";
 
 interface WebSocketState {
@@ -47,7 +47,7 @@ export function useWebSocket(): WebSocketState {
       // Only auto-retry after having connected at least once (VF spec Section 14).
       // On initial startup failure, show error screen with manual Retry button.
       if (everConnectedRef.current) {
-        scheduleReconnect();
+        fetchApiKey().finally(() => scheduleReconnect());
       }
     };
 

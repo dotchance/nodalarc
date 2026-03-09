@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import secrets
 import subprocess
 import sys
 import time
@@ -49,6 +51,8 @@ def _teardown_previous() -> None:
             if pid:
                 log.info(f"Killing stale {module} (PID {pid})")
                 subprocess.run(["kill", pid], capture_output=True)
+    # Kill stale Vite dev server
+    subprocess.run(["pkill", "-f", "vite.*visualization"], capture_output=True)
     # Brief pause to let processes exit
     time.sleep(1)
 
@@ -115,11 +119,12 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
 
     # === Step 2: Start OME (continuous mode) ===
     log.info("Step 2: Start OME (continuous mode)")
+    ome_log = open(data_dir / "ome.log", "w")
     ome_proc = subprocess.Popen(
         [sys.executable, "-m", "ome.main", "--continuous",
          session_path, "-o", str(data_dir)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=ome_log,
+        stderr=ome_log,
     )
     log.info(f"OME PID: {ome_proc.pid}")
 
@@ -389,37 +394,60 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     # === Step 8: Start MI ===
     log.info("Step 8: Start MI service")
     mi_db = str(data_dir / "session.db")
+    mi_log = open(data_dir / "mi.log", "w")
     mi_proc = subprocess.Popen(
         [sys.executable, "-m", "measurement.mi_main",
          "--session", session_path,
          "--db", mi_db],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=mi_log,
+        stderr=mi_log,
     )
     log.info(f"MI service PID: {mi_proc.pid}")
 
     # === Step 9: Configure probe flows ===
     log.info("Step 9: Configure probe flows (skipped in Phase 1B)")
 
+    # === Start deploy daemon (needed by VS-API introspect) ===
+    log.info("Starting deploy daemon...")
+    daemon_proc = subprocess.Popen(
+        [sys.executable, "-m", "tools.deploy_daemon"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    log.info(f"Deploy daemon PID: {daemon_proc.pid}")
+    # Wait for socket to appear
+    for _wait in range(20):
+        if Path("/tmp/nodal-deploy.sock").exists():
+            break
+        time.sleep(0.5)
+    else:
+        log.warning("Deploy daemon socket did not appear in 10s")
+
     # === Step 10: Start VS-API ===
+    api_key = os.environ.get("NODAL_API_KEY", "") or secrets.token_urlsafe(32)
     if not skip_vsapi:
         log.info("Step 10: Start VS-API")
+        vsapi_env = {**os.environ, "NODAL_API_KEY": api_key}
+        vsapi_log = open(data_dir / "vsapi.log", "w")
         vsapi_proc = subprocess.Popen(
             [sys.executable, "-m", "vs_api.main",
              "--session", session_path,
              "--db", mi_db,
              "--port", str(VS_API_HTTP_PORT)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=vsapi_log,
+            stderr=vsapi_log,
+            env=vsapi_env,
         )
         log.info(f"VS-API PID: {vsapi_proc.pid}")
         # Wait for VS-API to be healthy before starting orchestrator
         import urllib.request
         for attempt in range(30):
             try:
-                urllib.request.urlopen(
-                    f"http://localhost:{VS_API_HTTP_PORT}/api/v1/state", timeout=1,
+                req = urllib.request.Request(
+                    f"http://localhost:{VS_API_HTTP_PORT}/api/v1/state",
+                    headers={"Authorization": f"Bearer {api_key}"},
                 )
+                urllib.request.urlopen(req, timeout=1)
                 log.info("VS-API healthy")
                 break
             except Exception:
@@ -430,9 +458,36 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         log.info("Step 10: Skipping VS-API (--skip-vsapi)")
         vsapi_proc = None
 
+    # === Step 10b: Start Vite dev server ===
+    log.info("Step 10b: Start Vite dev server")
+    # Kill any existing Vite on port 3000
+    subprocess.run(["pkill", "-f", "vite.*visualization"], capture_output=True)
+    time.sleep(1)
+    vite_env = {**os.environ, "VITE_API_KEY": api_key}
+    vite_log = open(data_dir / "vite.log", "w")
+    vite_proc = subprocess.Popen(
+        ["npx", "vite", "--host", "0.0.0.0", "--port", "3000"],
+        cwd=str(Path("visualization").resolve()),
+        stdout=vite_log,
+        stderr=vite_log,
+        env=vite_env,
+    )
+    log.info(f"Vite dev server PID: {vite_proc.pid}")
+    # Wait for port 3000 to be listening (up to 15s)
+    import socket
+    for _vite_wait in range(30):
+        try:
+            with socket.create_connection(("127.0.0.1", 3000), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.5)
+    else:
+        log.warning("Vite dev server did not start listening on port 3000 in 15s")
+
     # === Step 11: Begin event dispatch ===
     log.info("Step 11: Begin event dispatch")
     mode_flag = "de" if session.time.mode == "discrete-event" else "rt"
+    to_log = open(data_dir / "orchestrator.log", "w")
     to_proc = subprocess.Popen(
         [
             sys.executable, "-m", "orchestrator.main",
@@ -442,8 +497,8 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             "--pid-map", str(pid_map_file),
             "--dwell", str(dwell),
         ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=to_log,
+        stderr=to_log,
     )
     log.info(f"Orchestrator PID: {to_proc.pid}")
 
@@ -457,8 +512,11 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         "mi_pid": mi_proc.pid,
         "vsapi_pid": vsapi_pid,
         "orchestrator_pid": to_proc.pid,
+        "daemon_pid": daemon_proc.pid,
+        "vite_pid": vite_proc.pid,
         "session_config": session_path,
         "db_path": mi_db,
+        "api_key": api_key,
     }
     state_file = data_dir / "session-state.json"
     state_file.write_text(json.dumps(session_state, indent=2))

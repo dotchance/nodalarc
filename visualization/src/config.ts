@@ -26,6 +26,21 @@ export function setApiKey(key: string): void {
   }
 }
 
+/** Fetch API key from VS-API token endpoint and store it. */
+export async function fetchApiKey(): Promise<string> {
+  try {
+    const resp = await fetch(`${REST_URL}/api/v1/auth/token`);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.token) {
+        setApiKey(data.token);
+        return data.token;
+      }
+    }
+  } catch { /* VS-API not reachable yet */ }
+  return getApiKey();
+}
+
 /** Build WebSocket URL with auth token as query parameter. */
 export function getWsUrl(): string {
   const base = import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;

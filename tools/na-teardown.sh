@@ -1,48 +1,114 @@
 #!/bin/bash
-# Tear down a Nodal Arc deployment.
-# Usage: na-teardown.sh [session-id] [data-dir]
-set -euo pipefail
+# Comprehensive Nodal Arc teardown — no arguments needed.
+# Kills ALL nodal-arc processes, uninstalls ALL Helm releases, cleans up sockets.
+# Idempotent: exits 0 even if nothing was running.
+set -u
 
-SESSION_ID="${1:-}"
-DATA_DIR="${2:-}"
+export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
-if [ -z "$SESSION_ID" ]; then
-    echo "Usage: na-teardown.sh <session-id> [data-dir]"
-    echo ""
-    echo "Active releases:"
-    helm list -n nodalarc 2>/dev/null || echo "  (none)"
-    exit 1
-fi
+echo "=== Nodal Arc Teardown ==="
 
-echo "Tearing down session: $SESSION_ID"
+# --- Step 1-3: SIGTERM all nodal-arc processes ---
+PYTHON_PATTERNS=(
+    "ome.main"
+    "orchestrator.main"
+    "vs_api.main"
+    "measurement.mi_main"
+    "tools.deploy_daemon"
+    "tools.na_deploy"
+)
 
-# Kill local processes if session-state.json exists
-STATE_FILE=""
-if [ -n "$DATA_DIR" ] && [ -f "$DATA_DIR/session-state.json" ]; then
-    STATE_FILE="$DATA_DIR/session-state.json"
-elif [ -f "/tmp/nodalarc/sessions/$SESSION_ID/session-state.json" ]; then
-    STATE_FILE="/tmp/nodalarc/sessions/$SESSION_ID/session-state.json"
-fi
-
-if [ -n "$STATE_FILE" ]; then
-    echo "Found session state: $STATE_FILE"
-    MI_PID=$(jq -r '.mi_pid // empty' "$STATE_FILE" 2>/dev/null || true)
-    TO_PID=$(jq -r '.orchestrator_pid // empty' "$STATE_FILE" 2>/dev/null || true)
-    if [ -n "$MI_PID" ]; then
-        echo "Killing MI stub (PID $MI_PID)..."
-        kill "$MI_PID" 2>/dev/null || true
+echo "Sending SIGTERM to Python backends..."
+for pat in "${PYTHON_PATTERNS[@]}"; do
+    pids=$(pgrep -f "$pat" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "  SIGTERM $pat (PIDs: $pids)"
+        sudo kill $pids 2>/dev/null || true
     fi
-    if [ -n "$TO_PID" ]; then
-        echo "Killing orchestrator (PID $TO_PID)..."
-        kill "$TO_PID" 2>/dev/null || true
+done
+
+echo "Sending SIGTERM to Vite dev server..."
+sudo pkill -f "vite.*nodal" 2>/dev/null || true
+
+echo "Sending SIGTERM to stale uv run wrappers..."
+sudo pkill -f "uv run python" 2>/dev/null || true
+
+# --- Step 4: Grace period for clean shutdown ---
+echo "Waiting 3s for graceful shutdown..."
+sleep 3
+
+# --- Step 5-6: SIGKILL survivors ---
+echo "SIGKILL any survivors..."
+for pat in "${PYTHON_PATTERNS[@]}"; do
+    pids=$(pgrep -f "$pat" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "  SIGKILL $pat (PIDs: $pids)"
+        sudo kill -9 $pids 2>/dev/null || true
     fi
+done
+sudo pkill -9 -f "vite.*nodal" 2>/dev/null || true
+sudo pkill -9 -f "uv run python" 2>/dev/null || true
+sleep 1
+
+# --- Step 7: Uninstall ALL Helm releases in nodalarc namespace ---
+echo "Uninstalling Helm releases in nodalarc namespace..."
+releases=$(sudo KUBECONFIG="$KUBECONFIG" helm list -n nodalarc -q 2>/dev/null || true)
+if [ -n "$releases" ]; then
+    for rel in $releases; do
+        echo "  Uninstalling: $rel"
+        sudo KUBECONFIG="$KUBECONFIG" helm uninstall "$rel" -n nodalarc 2>/dev/null || true
+    done
+else
+    echo "  (no releases found)"
 fi
 
-# Uninstall Helm release
-helm uninstall "$SESSION_ID" -n nodalarc 2>/dev/null || true
+# --- Step 8: Wait for pods to terminate ---
+echo "Waiting for pods to terminate (up to 60s)..."
+elapsed=0
+while [ $elapsed -lt 60 ]; do
+    pod_output=$(sudo KUBECONFIG="$KUBECONFIG" kubectl get pods -n nodalarc --no-headers 2>/dev/null || true)
+    if [ -z "$pod_output" ]; then pod_count=0; else pod_count=$(echo "$pod_output" | wc -l); fi
+    if [ "$pod_count" -eq 0 ]; then
+        break
+    fi
+    echo "  $pod_count pods remaining..."
+    sleep 2
+    elapsed=$((elapsed + 2))
+done
 
-# Wait for pods to terminate
-echo "Waiting for pods to terminate..."
-kubectl wait --for=delete pod -l nodalarc.io/node-id -n nodalarc --timeout=60s 2>/dev/null || true
+# --- Step 9: Clean up sockets ---
+rm -f /tmp/nodal-deploy.sock
 
-echo "Teardown complete"
+# --- Step 10: Final verification ---
+echo ""
+echo "=== Verification ==="
+remaining_procs=""
+for pat in "${PYTHON_PATTERNS[@]}"; do
+    pids=$(pgrep -f "$pat" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        remaining_procs="$remaining_procs  $pat (PIDs: $pids)\n"
+    fi
+done
+vite_pids=$(pgrep -f "vite.*nodal" 2>/dev/null || true)
+if [ -n "$vite_pids" ]; then
+    remaining_procs="$remaining_procs  vite (PIDs: $vite_pids)\n"
+fi
+
+if [ -n "$remaining_procs" ]; then
+    echo "WARNING: Stale processes remain:"
+    echo -e "$remaining_procs"
+else
+    echo "Processes: clean"
+fi
+
+pod_output=$(sudo KUBECONFIG="$KUBECONFIG" kubectl get pods -n nodalarc --no-headers 2>/dev/null || true)
+if [ -z "$pod_output" ]; then pod_count=0; else pod_count=$(echo "$pod_output" | wc -l); fi
+if [ "$pod_count" -gt 0 ]; then
+    echo "WARNING: $pod_count pods still in nodalarc namespace"
+    sudo KUBECONFIG="$KUBECONFIG" kubectl get pods -n nodalarc 2>/dev/null || true
+else
+    echo "Pods: clean"
+fi
+
+echo ""
+echo "=== Teardown complete ==="

@@ -15,6 +15,7 @@ import logging
 import os
 import secrets
 import sqlite3
+import sys
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -502,11 +503,11 @@ def _clear_state() -> None:
 
 def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
     """Load per-station min_elevation_deg from ground station config."""
-    from nodalarc.models.ground_station import GroundStationFile
+    from ome.constellation_loader import load_ground_stations
     gs_path = Path(session.ground_stations)
     if not gs_path.exists():
         return {}
-    gs_file = GroundStationFile.model_validate(yaml.safe_load(gs_path.read_text()))
+    gs_file = load_ground_stations(gs_path)
     gs_id_tpl = session.addressing.gs_id_template
     result: dict[str, float] = {}
     for station in gs_file.stations:

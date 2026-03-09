@@ -1,16 +1,16 @@
 /** Top bar — session info, sim time, health indicator, mode selector. */
 
 import { formatTime, formatDuration } from "../translate";
-import type { StateSnapshot, SessionInfo } from "../types";
+import type { StateSnapshot } from "../types";
 
 interface TopBarProps {
   snapshot: StateSnapshot | null;
   connected: boolean;
   historicalMode: boolean;
   onToggleHistorical: () => void;
-  sessions: SessionInfo[];
+  activeSessionName: string | null;
   switching: boolean;
-  onSwitchSession: (file: string) => void;
+  onOpenCatalog: () => void;
   playbackPaused: boolean;
   playbackSpeed: number;
   playbackLoading: boolean;
@@ -19,7 +19,7 @@ interface TopBarProps {
   onPlaybackSetSpeed: (factor: number) => void;
 }
 
-export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical, sessions, switching, onSwitchSession, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed }: TopBarProps) {
+export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical, activeSessionName, switching, onOpenCatalog, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed }: TopBarProps) {
   const healthStatus = snapshot?.network_health.status ?? "unknown";
   const healthColor =
     healthStatus === "converged"
@@ -41,36 +41,27 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
         fontSize: 12,
       }}
     >
-      {sessions.length > 0 ? (
-        <select
-          value={sessions.find((s) => s.active)?.file ?? ""}
-          onChange={(e) => onSwitchSession(e.target.value)}
-          disabled={switching}
-          style={{
-            fontWeight: 600,
-            color: "var(--accent-blue)",
-            background: "transparent",
-            border: "1px solid var(--border)",
-            borderRadius: 4,
-            padding: "2px 6px",
-            fontSize: 12,
-            maxWidth: 200,
-            cursor: switching ? "wait" : "pointer",
-          }}
-          title="Switch session"
-        >
-          {sessions.map((s) => (
-            <option key={s.file} value={s.file}>{s.name}</option>
-          ))}
-        </select>
-      ) : (
-        <span
-          style={{ fontWeight: 600, color: "var(--accent-blue)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-          title="Nodal Arc"
-        >
-          {snapshot?.constellation_name ?? "Nodal Arc"}
-        </span>
-      )}
+      <button
+        onClick={onOpenCatalog}
+        disabled={switching}
+        style={{
+          fontWeight: 600,
+          color: "var(--accent-blue)",
+          background: "transparent",
+          border: "1px solid var(--border)",
+          borderRadius: 4,
+          padding: "2px 8px",
+          fontSize: 12,
+          maxWidth: 200,
+          cursor: switching ? "wait" : "pointer",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+        title="Open session catalog"
+      >
+        {activeSessionName ?? snapshot?.constellation_name ?? "Nodal Arc"}
+      </button>
       {snapshot?.routing_stack && (
         <span style={{ color: "var(--text-dim)", fontSize: 10 }}>
           {snapshot.routing_stack}

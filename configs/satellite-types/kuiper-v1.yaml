@@ -17,6 +17,8 @@ satellite_type:
       field_of_regard_deg: 140
 
   ground_terminals:
-    - type: optical
+    - type: rf
       count: 1
       bandwidth_mbps: 1000
+      band: Ka
+      beam_falloff_exponent: 2.2

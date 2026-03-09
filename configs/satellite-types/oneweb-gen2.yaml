@@ -21,3 +21,4 @@ satellite_type:
       band: Ka
       count: 1
       bandwidth_mbps: 500
+      beam_falloff_exponent: 2.8

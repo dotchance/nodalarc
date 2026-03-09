@@ -15,6 +15,8 @@ import { useSelection } from "./hooks/useSelection";
 import { useKeyboard } from "./hooks/useKeyboard";
 import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
+import { useManifest } from "./hooks/useManifest";
+import { SessionCatalog } from "./catalog/SessionCatalog";
 import { WS_URL, fetchApiKey } from "./config";
 import type { ViewMode, ColorMode } from "./types";
 
@@ -25,6 +27,7 @@ import "./styles/panels.css";
 import "./styles/toolbar.css";
 import "./styles/topology.css";
 import "./styles/time-controls.css";
+import "./styles/catalog.css";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -39,6 +42,34 @@ function AppInner() {
   const { selection, select, clearSelection } = useSelection();
   const { sessions, switching, switchSession } = useSessionSwitcher(snapshot?.session_status ?? null);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
+  const { manifest } = useManifest();
+
+  const [showCatalog, setShowCatalog] = useState(true);
+  const [hasEverDeployed, setHasEverDeployed] = useState(false);
+
+  const activeSession = sessions.find((s) => s.active);
+  const activeSessionId = activeSession
+    ? activeSession.file.replace("configs/sessions/", "").replace(".yaml", "")
+    : null;
+  const activeSessionName = activeSession?.name ?? null;
+
+  // If VS-API already has an active session (e.g. after HMR reload), allow closing catalog
+  useEffect(() => {
+    if (activeSessionId && !hasEverDeployed) {
+      setHasEverDeployed(true);
+    }
+  }, [activeSessionId, hasEverDeployed]);
+
+  const handleDeploy = useCallback((sessionId: string) => {
+    // If clicking the already-running session, just close the catalog
+    if (sessionId === activeSessionId) {
+      setShowCatalog(false);
+      return;
+    }
+    switchSession(`configs/sessions/${sessionId}.yaml`);
+    setShowCatalog(false);
+    setHasEverDeployed(true);
+  }, [switchSession, activeSessionId]);
 
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
   const [colorMode, setColorMode] = useState<ColorMode>("area");
@@ -117,9 +148,16 @@ function AppInner() {
     globeActionsRef.current?.flyToNode(nodeId);
   }, []);
 
+  const handleCloseCatalog = useCallback(() => {
+    if (showCatalog && hasEverDeployed) {
+      setShowCatalog(false);
+    }
+  }, [showCatalog, hasEverDeployed]);
+
   const keyboardActions = useMemo(
     () => ({
       onEscape: clearSelection,
+      onCloseCatalog: showCatalog && hasEverDeployed ? handleCloseCatalog : undefined,
       onToggleView: toggleView,
       onSetColorMode: setColorMode,
       onToggleGroundTracks: () => setShowGroundTracks((v) => !v),
@@ -143,7 +181,7 @@ function AppInner() {
       onTopView: handleTopView,
       onToggleCli: () => setCliDrawerOpen((v) => !v),
     }),
-    [clearSelection, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback],
+    [clearSelection, handleCloseCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback],
   );
 
   useKeyboard(keyboardActions);
@@ -167,9 +205,9 @@ function AppInner() {
         connected={connected}
         historicalMode={historicalMode}
         onToggleHistorical={toggleHistorical}
-        sessions={sessions}
+        activeSessionName={activeSessionName}
         switching={switching}
-        onSwitchSession={switchSession}
+        onOpenCatalog={() => setShowCatalog(true)}
         playbackPaused={playback.paused}
         playbackSpeed={playback.speed}
         playbackLoading={playback.loading}
@@ -177,6 +215,17 @@ function AppInner() {
         onPlaybackResume={playback.resume}
         onPlaybackSetSpeed={playback.setSpeed}
       />
+
+      {showCatalog && (
+        <SessionCatalog
+          manifest={manifest}
+          activeSessionId={activeSessionId}
+          onDeploy={handleDeploy}
+          onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
+          deploying={switching}
+          fallbackSessions={sessions}
+        />
+      )}
 
       <div className={`area-viewport ${viewMode === "split" ? "area-viewport--split" : ""}`}>
         {!connected && !hasEverConnected && (

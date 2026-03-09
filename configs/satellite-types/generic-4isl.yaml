@@ -20,3 +20,4 @@ satellite_type:
     - type: optical
       count: 1
       bandwidth_mbps: 1000
+      beam_falloff_exponent: 2.0

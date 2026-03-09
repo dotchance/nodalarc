@@ -19,6 +19,7 @@ export interface NodeState {
   gnd_count: number;
   prefix: string | null;
   min_elevation_deg: number | null;
+  beam_falloff_exponent: number | null;
 }
 
 export interface LinkState {

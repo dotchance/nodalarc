@@ -180,6 +180,7 @@ _ws_clients: list[WebSocket] = []
 _ws_lock = asyncio.Lock()
 _session_manager: SessionManager | None = None
 _gs_elevation_map: dict[str, float] = {}  # node_id -> min_elevation_deg
+_beam_falloff_exponent: float = 2.0
 _playback_paused: bool = False
 _playback_speed: float = 1.0
 
@@ -211,6 +212,8 @@ def _update_position(event_data: dict) -> None:
             }
             if node_id in _gs_elevation_map:
                 node_dict["min_elevation_deg"] = _gs_elevation_map[node_id]
+            if node_dict.get("node_type") == "satellite":
+                node_dict["beam_falloff_exponent"] = _beam_falloff_exponent
             _state["nodes"][node_id] = node_dict
 
 
@@ -593,15 +596,32 @@ def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
     return result
 
 
+def _load_beam_falloff_exponent(session: SessionConfig) -> float:
+    """Load beam_falloff_exponent from the constellation's satellite type."""
+    from ome.constellation_loader import load_constellation, load_satellite_type
+    constellation_path = Path(session.constellation)
+    if not constellation_path.exists():
+        return 2.0
+    config = load_constellation(constellation_path)
+    sat_type_name = getattr(config, "satellite_type", None)
+    if not sat_type_name:
+        return 2.0
+    sat_type = load_satellite_type(sat_type_name)
+    if not sat_type.ground_terminals:
+        return 2.0
+    return sat_type.ground_terminals[0].beam_falloff_exponent
+
+
 def _update_session_globals(session_path: str, new_db_path: str) -> None:
     """Reload routing_stack, constellation_name, and db_path from new session."""
-    global _routing_stack, _constellation_name, _db_path, _gs_elevation_map
+    global _routing_stack, _constellation_name, _db_path, _gs_elevation_map, _beam_falloff_exponent
     session_data = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(session_data)
     _routing_stack = Path(session.routing.stack).name
     _constellation_name = Path(session.constellation).stem
     _db_path = new_db_path
     _gs_elevation_map = _load_gs_elevation_map(session)
+    _beam_falloff_exponent = _load_beam_falloff_exponent(session)
 
     # Ensure tables exist in new DB
     import sqlite3 as _sqlite3
@@ -956,7 +976,7 @@ def main() -> None:
     parser.add_argument("--sessions-dir", default="configs/sessions", help="Directory with session YAMLs")
     args = parser.parse_args()
 
-    global _db_path, _routing_stack, _constellation_name, _session_manager, _gs_elevation_map
+    global _db_path, _routing_stack, _constellation_name, _session_manager, _gs_elevation_map, _beam_falloff_exponent
 
     # Initialize SessionManager
     _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
@@ -970,6 +990,7 @@ def main() -> None:
         _routing_stack = Path(session.routing.stack).name
         _constellation_name = Path(session.constellation).stem
         _gs_elevation_map = _load_gs_elevation_map(session)
+        _beam_falloff_exponent = _load_beam_falloff_exponent(session)
         _session_manager.set_active(args.session)
         _session_manager._status = "ready"
 

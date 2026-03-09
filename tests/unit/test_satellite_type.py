@@ -246,6 +246,24 @@ class TestGeneric4Isl:
         assert sat_type.isl_terminals[0].type == "optical"
 
 
+class TestBeamFalloffExponent:
+    def test_beam_falloff_default(self):
+        t = GroundTerminalDef(type="rf", count=1, bandwidth_mbps=100)
+        assert t.beam_falloff_exponent == 2.0
+
+    def test_beam_falloff_explicit(self):
+        t = GroundTerminalDef(type="rf", count=1, bandwidth_mbps=100, beam_falloff_exponent=3.5)
+        assert t.beam_falloff_exponent == 3.5
+
+    def test_beam_falloff_below_minimum_rejected(self):
+        with pytest.raises(ValidationError, match="beam_falloff_exponent must be 1.0-8.0"):
+            GroundTerminalDef(type="rf", count=1, bandwidth_mbps=100, beam_falloff_exponent=0.5)
+
+    def test_beam_falloff_above_maximum_rejected(self):
+        with pytest.raises(ValidationError, match="beam_falloff_exponent must be 1.0-8.0"):
+            GroundTerminalDef(type="rf", count=1, bandwidth_mbps=100, beam_falloff_exponent=9.0)
+
+
 class TestSatelliteTypeLoaderErrors:
     def test_nonexistent_type(self):
         with pytest.raises(FileNotFoundError, match="Satellite type file not found"):

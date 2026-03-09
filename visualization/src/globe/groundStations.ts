@@ -65,7 +65,7 @@ function getSharedTexture(): THREE.Texture {
 }
 
 /** Compute elevation cone radius on the globe surface for given parameters. */
-function computeConeRadius(minElevDeg: number, orbitalAltKm: number): number {
+export function computeConeRadius(minElevDeg: number, orbitalAltKm: number): number {
   const earthRadiusKm = 6371;
 
   // Slant angle from zenith to horizon at min elevation

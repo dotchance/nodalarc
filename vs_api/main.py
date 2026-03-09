@@ -352,14 +352,26 @@ async def _zmq_subscriber() -> None:
     poller.register(to_sub, zmq.POLLIN)
     poller.register(mi_sub, zmq.POLLIN)
 
-    log.info("VS-API ZMQ subscriber started (asyncio)")
+    log.info(
+        "VS-API ZMQ subscriber started (asyncio) — connecting to "
+        f"OME={OME_EVENTS_CONNECT} TO={TO_EVENTS_CONNECT} MI={MI_EVENTS_CONNECT}"
+    )
 
+    msg_count = 0
+    last_status_time = _time.monotonic()
     try:
         while True:
             try:
                 socks = dict(await poller.poll(timeout=100))
-            except zmq.ZMQError:
+            except zmq.ZMQError as e:
+                log.error(f"ZMQ poller error: {e}")
                 break
+
+            # Periodic status log (every 30s)
+            now_mono = _time.monotonic()
+            if now_mono - last_status_time >= 30:
+                log.info(f"ZMQ subscriber status: {msg_count} messages received so far")
+                last_status_time = now_mono
 
             for sock in [ome_sub, to_sub, mi_sub]:
                 if sock not in socks:
@@ -368,6 +380,13 @@ async def _zmq_subscriber() -> None:
                 try:
                     topic, payload = decode_message(raw)
                     data = json.loads(payload)
+                    msg_count += 1
+
+                    if msg_count <= 5 or msg_count % 100 == 0:
+                        log.info(
+                            f"ZMQ message #{msg_count}: topic={topic} "
+                            f"payload_bytes={len(payload)}"
+                        )
 
                     if topic == TOPIC_POSITION_EVENT:
                         _update_position(data)
@@ -390,8 +409,11 @@ async def _zmq_subscriber() -> None:
                 except Exception as exc:
                     log.warning(f"ZMQ message processing error: {exc}")
     except asyncio.CancelledError:
-        pass
+        log.info(f"ZMQ subscriber cancelled after {msg_count} messages")
+    except Exception as exc:
+        log.error(f"ZMQ subscriber crashed: {exc}", exc_info=True)
     finally:
+        log.info(f"ZMQ subscriber exiting (total messages: {msg_count})")
         ome_sub.close()
         to_sub.close()
         mi_sub.close()
@@ -404,6 +426,17 @@ async def lifespan(app: FastAPI):
     """Start ZMQ subscriber and WebSocket broadcaster on startup."""
     # Start ZMQ subscriber as asyncio task (PRD 13.2)
     sub_task = asyncio.create_task(_zmq_subscriber())
+
+    def _on_subscriber_done(task: asyncio.Task) -> None:
+        exc = task.exception() if not task.cancelled() else None
+        if exc:
+            log.error(f"ZMQ subscriber task DIED with exception: {exc}", exc_info=exc)
+        elif task.cancelled():
+            log.info("ZMQ subscriber task cancelled")
+        else:
+            log.warning("ZMQ subscriber task exited unexpectedly")
+
+    sub_task.add_done_callback(_on_subscriber_done)
 
     # Start WebSocket broadcaster
     broadcast_task = asyncio.create_task(_ws_broadcaster())
@@ -430,48 +463,82 @@ _audit_log = logging.getLogger("nodal.audit")
 _MAX_BODY_BYTES = 1_048_576  # 1 MB
 
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as StarletteRequest
-from starlette.responses import Response as StarletteResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add security headers to all responses."""
+class SecurityHeadersMiddleware:
+    """Add security headers to all HTTP responses. Passes WebSocket through."""
 
-    async def dispatch(self, request: StarletteRequest, call_next):
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Content-Security-Policy"] = "default-src 'self'"
-        if request.url.scheme == "https":
-            response.headers["Strict-Transport-Security"] = "max-age=31536000"
-        return response
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = dict(message.get("headers", []))
+                extra = [
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"x-frame-options", b"DENY"),
+                    (b"content-security-policy", b"default-src 'self'"),
+                ]
+                message["headers"] = list(message.get("headers", [])) + extra
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
-class BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Reject requests with bodies larger than _MAX_BODY_BYTES."""
+class BodySizeLimitMiddleware:
+    """Reject HTTP requests with bodies larger than _MAX_BODY_BYTES. Passes WebSocket through."""
 
-    async def dispatch(self, request: StarletteRequest, call_next):
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        from starlette.requests import Request as StarletteRequest
+        request = StarletteRequest(scope)
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > _MAX_BODY_BYTES:
-            return JSONResponse(status_code=413, content={"error": "Request body too large"})
-        return await call_next(request)
+            response = JSONResponse(status_code=413, content={"error": "Request body too large"})
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
-class AuditLogMiddleware(BaseHTTPMiddleware):
-    """Log all REST requests and failed auth attempts."""
+class AuditLogMiddleware:
+    """Log all REST requests and failed auth attempts. Passes WebSocket through."""
 
-    async def dispatch(self, request: StarletteRequest, call_next):
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        from starlette.requests import Request as StarletteRequest
+        request = StarletteRequest(scope)
         ip = _client_ip(request)
-        response = await call_next(request)
+        status_code = 0
+
+        async def capture_send(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        await self.app(scope, receive, capture_send)
         path = request.url.path
         method = request.method
-        status = response.status_code
-        if status == 401:
+        if status_code == 401:
             _audit_log.warning(f"AUTH_FAIL ip={ip} method={method} path={path}")
         elif path != "/api/v1/health":
-            _audit_log.info(f"REQUEST ip={ip} method={method} path={path} status={status}")
-        return response
+            _audit_log.info(f"REQUEST ip={ip} method={method} path={path} status={status_code}")
 
 
 app.add_middleware(SecurityHeadersMiddleware)
@@ -481,8 +548,17 @@ app.add_middleware(AuditLogMiddleware)
 
 @app.get("/api/v1/health")
 def health_check() -> dict:
-    """Unauthenticated health check for load balancers."""
-    return {"status": "ok"}
+    """Unauthenticated health check for load balancers and integration tests."""
+    return {
+        "status": "ok",
+        "session_status": _session_manager.status if _session_manager else "idle",
+    }
+
+
+@app.get("/api/v1/auth/token")
+def get_auth_token() -> dict:
+    """Return the current API key. Unauthenticated — dev-mode only."""
+    return {"token": _API_KEY}
 
 
 def _clear_state() -> None:
@@ -863,11 +939,10 @@ def main() -> None:
 
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
 
-    # Generate API key if not set in environment
+    # Use API key from environment if set; otherwise auto-generate one
     global _API_KEY
     if not _API_KEY:
         _API_KEY = secrets.token_urlsafe(32)
-        # Print to stderr once, never to the persistent log
         print(f"Generated API key: {_API_KEY}", file=sys.stderr)
         log.info("Auto-generated API key (set NODAL_API_KEY to use a fixed key)")
     else:

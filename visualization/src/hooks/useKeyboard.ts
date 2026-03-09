@@ -14,6 +14,7 @@ interface KeyboardActions {
   onPlayPause: () => void;
   onFollowNode: () => void;
   onTopView: () => void;
+  onToggleGlobeMode?: () => void;
   onToggleCli?: () => void;
 }
 
@@ -69,6 +70,10 @@ export function useKeyboard(actions: KeyboardActions): void {
         case "h":
         case "H":
           actions.onToggleHistorical();
+          break;
+        case "n":
+        case "N":
+          actions.onToggleGlobeMode?.();
           break;
         case "/":
           e.preventDefault();

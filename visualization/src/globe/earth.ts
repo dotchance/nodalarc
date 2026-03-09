@@ -4,8 +4,74 @@
 
 import * as THREE from "three";
 import { EARTH_RADIUS } from "../config";
+import type { GlobeMode } from "../types";
 
 let _sunLight: THREE.DirectionalLight | null = null;
+let _earthBlueMarble: THREE.Mesh | null = null;
+let _earthDayNight: THREE.Mesh | null = null;
+let _dayNightMaterial: THREE.ShaderMaterial | null = null;
+
+const DAY_NIGHT_VERTEX = `
+  varying vec2 vUv;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPosition;
+  void main() {
+    vUv = uv;
+    vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+    vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const DAY_NIGHT_FRAGMENT = `
+  uniform sampler2D u_dayMap;
+  uniform sampler2D u_nightMap;
+  uniform vec3 u_sunDirection;
+  varying vec2 vUv;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPosition;
+  void main() {
+    vec3 N = normalize(vWorldNormal);
+    float NdotL = dot(N, u_sunDirection);
+    float blend = smoothstep(-0.15, 0.15, NdotL);
+    vec3 dayColor = texture2D(u_dayMap, vUv).rgb;
+    vec3 nightColor = texture2D(u_nightMap, vUv).rgb;
+    // Day side: modulate by sun angle for shading
+    float dayShading = 0.3 + 0.7 * max(0.0, NdotL);
+    dayColor *= dayShading;
+    // Night side: show city lights at fixed brightness
+    nightColor *= 0.8;
+    vec3 color = mix(nightColor, dayColor, blend);
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+function createDayNightEarth(scene: THREE.Scene): void {
+  const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
+  const textureLoader = new THREE.TextureLoader();
+
+  const dayTexture = textureLoader.load("/earth-blue-marble.jpg");
+  dayTexture.colorSpace = THREE.SRGBColorSpace;
+
+  const nightTexture = textureLoader.load("/earth-night.jpg");
+  nightTexture.colorSpace = THREE.SRGBColorSpace;
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      u_dayMap: { value: dayTexture },
+      u_nightMap: { value: nightTexture },
+      u_sunDirection: { value: new THREE.Vector3(1, 0, 0) },
+    },
+    vertexShader: DAY_NIGHT_VERTEX,
+    fragmentShader: DAY_NIGHT_FRAGMENT,
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.visible = false;
+  scene.add(mesh);
+  _earthDayNight = mesh;
+  _dayNightMaterial = material;
+}
 
 export function createEarth(scene: THREE.Scene): THREE.Mesh {
   const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
@@ -20,6 +86,10 @@ export function createEarth(scene: THREE.Scene): THREE.Mesh {
 
   const earth = new THREE.Mesh(geometry, material);
   scene.add(earth);
+  _earthBlueMarble = earth;
+
+  createDayNightEarth(scene);
+
   return earth;
 }
 
@@ -90,7 +160,7 @@ export function createStarfield(scene: THREE.Scene): void {
 
 export function createLights(scene: THREE.Scene): void {
   // Ambient light for night side visibility
-  const ambient = new THREE.AmbientLight(0xffffff, 0.3);
+  const ambient = new THREE.AmbientLight(0xffffff, 0.5);
   scene.add(ambient);
 
   // Directional light simulating sun — positioned based on sim time
@@ -133,10 +203,26 @@ export function updateSunPosition(simTime: string): void {
   const cosDecl = Math.cos(declRad);
   const sinDecl = Math.sin(declRad);
 
-  // Sun geographic longitude = -(hourAngle) → geoToWorld z = +r*cos(lat)*sin(hourAngle)
-  _sunLight.position.set(
-    dist * cosDecl * Math.cos(hourAngle),
-    dist * sinDecl,
-    dist * cosDecl * Math.sin(hourAngle),
-  );
+  const sunX = dist * cosDecl * Math.cos(hourAngle);
+  const sunY = dist * sinDecl;
+  const sunZ = dist * cosDecl * Math.sin(hourAngle);
+
+  _sunLight.position.set(sunX, sunY, sunZ);
+
+  if (_dayNightMaterial) {
+    const sunDir = new THREE.Vector3(sunX, sunY, sunZ).normalize();
+    _dayNightMaterial.uniforms.u_sunDirection!.value.copy(sunDir);
+  }
+}
+
+export function setGlobeMode(mode: GlobeMode): void {
+  if (_earthBlueMarble) {
+    _earthBlueMarble.visible = mode === "blue-marble";
+  }
+  if (_earthDayNight) {
+    _earthDayNight.visible = mode === "day-night";
+  }
+  if (_sunLight) {
+    _sunLight.intensity = mode === "day-night" ? 0.0 : 1.0;
+  }
 }

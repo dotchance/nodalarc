@@ -10,7 +10,7 @@ import {
   CAMERA_MAX_DISTANCE,
   EARTH_RADIUS,
 } from "../config";
-import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition } from "./earth";
+import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, setGlobeMode } from "./earth";
 import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites, resetDeliveryRate } from "./satellites";
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
@@ -21,7 +21,7 @@ import { updateOrbitPins, clearOrbitPins } from "./orbitPins";
 import { setupRaycaster } from "./raycaster";
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
-import type { StateSnapshot, Selection, ColorMode } from "../types";
+import type { StateSnapshot, Selection, ColorMode, GlobeMode } from "../types";
 
 export interface GlobeActions {
   flyToTopView: () => void;
@@ -36,6 +36,7 @@ interface GlobeViewProps {
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
   colorMode: ColorMode;
+  globeMode: GlobeMode;
   showGroundTracks: boolean;
   showAllLinks: boolean;
   actionsRef?: MutableRefObject<GlobeActions | null>;
@@ -47,6 +48,7 @@ export function GlobeView({
   selection,
   onSelect,
   colorMode,
+  globeMode,
   showGroundTracks,
   showAllLinks,
   actionsRef,
@@ -292,6 +294,11 @@ export function GlobeView({
   useEffect(() => {
     recolorAllSatellites(colorMode);
   }, [colorMode]);
+
+  // Switch globe rendering mode
+  useEffect(() => {
+    setGlobeMode(globeMode);
+  }, [globeMode]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>

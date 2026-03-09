@@ -2,10 +2,10 @@
 
 Verifies:
 - 360° FoR (omnidirectional) always passes regardless of geometry
-- 120° FoR blocks links when angle from velocity axis exceeds 60°
-- Same-plane adjacent satellites pass the check with 120° FoR
-- 180° separation fails the check with 120° FoR
-- Iridium-next (120° FoR) blocks more cross-plane links than generic-4isl (160° FoR)
+- Same-altitude LEO ISL links are near-horizontal (pass FoR for any reasonable value)
+- 180° separation in same plane: LOS goes through Earth (steep elevation, blocked)
+- Targets far above/below local horizontal are blocked
+- FoR measured from local horizontal plane (not velocity axis)
 """
 
 import math
@@ -63,52 +63,58 @@ class TestCheckFieldOfRegard:
     def test_same_plane_adjacent_feasible(self):
         """Two satellites in the same plane, adjacent slots (~32.7° apart).
 
-        With 120° FoR, the angle from the velocity axis is small (~16°),
-        so the link should be feasible.
+        LOS is nearly horizontal for same-altitude sats → passes easily.
         """
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 32.7)  # Next slot in same plane
         assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
 
     def test_same_plane_adjacent_aft_also_feasible(self):
-        """The aft neighbor (looking backward) should also be feasible.
-
-        With the min(angle, 180-angle) symmetry, both forward and aft
-        neighbors have the same effective angle.
-        """
+        """The aft neighbor (looking backward) should also be feasible."""
         pos_a, vel_a = _polar_orbit_state(0, 32.7)
         pos_b, vel_b = _polar_orbit_state(0, 0)  # Previous slot (behind A)
         assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
 
     def test_180_separation_infeasible(self):
-        """Two satellites 180° apart: angle from velocity axis is 90°,
-        which exceeds 60° (half of 120° FoR)."""
+        """Two satellites 180° apart in the same plane: LOS points through
+        Earth center, so the elevation from local horizontal is ~90° → blocked."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 180)  # Opposite side of orbit
         assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is False
 
     def test_180_separation_feasible_with_large_for(self):
-        """With 200° FoR (100° half-angle), 90° angle passes."""
+        """With 200° FoR (100° half-angle), even 90° elevation passes."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 180)
         assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 200.0) is True
 
-    def test_cross_plane_equator_blocked_for_narrow_for(self):
-        """Cross-plane peer at the equator with large RAAN offset.
+    def test_cross_plane_equator_feasible(self):
+        """Cross-plane peer at the equator with 31.6° RAAN offset.
 
-        At the equator for polar orbits, cross-plane LOS is perpendicular
-        to velocity (90° from velocity axis). Blocked for FoR < 180°.
+        Both satellites at the same altitude → LOS is nearly horizontal.
+        The elevation from local horizontal is only ~16°, well within
+        120° FoR (60° half-angle). This is the correct physics — real
+        ISL terminals (Iridium NEXT, Starlink) DO have cross-plane links.
         """
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(31.6, 0)  # Adjacent plane at equator
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is False
+        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
 
-    def test_cross_plane_equator_also_blocked_for_160(self):
-        """31.6° RAAN offset at equator gives ~90° from velocity axis.
-        Still blocked even with 160° FoR (80° half-angle)."""
+    def test_cross_plane_large_raan_offset_still_feasible(self):
+        """Even with 90° RAAN offset, same-altitude LOS stays near-horizontal."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
-        pos_b, vel_b = _polar_orbit_state(31.6, 0)
-        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 160.0) is False
+        pos_b, vel_b = _polar_orbit_state(90, 0)
+        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 120.0) is True
+
+    def test_target_far_below_horizontal_blocked(self):
+        """A target far below the local horizontal (e.g., much lower orbit)
+        should be blocked by narrow FoR."""
+        # Satellite A at 780 km, target B very close to Earth surface (100 km)
+        pos_a, vel_a = _polar_orbit_state(0, 0, altitude_km=780)
+        pos_b, vel_b = _polar_orbit_state(0, 10, altitude_km=100)
+        # The LOS points steeply downward — large elevation angle from horizontal
+        # With narrow FoR (e.g., 20° = 10° half-angle), this should fail
+        assert check_field_of_regard(pos_a, vel_a, pos_b, vel_b, 20.0) is False
 
     def test_zero_velocity_passes(self):
         """Edge case: zero velocity should not crash, returns True."""
@@ -129,7 +135,8 @@ class TestFieldOfRegardInPipeline:
     """FoR check integrated into check_isl_visibility()."""
 
     def test_for_blocks_in_full_pipeline(self):
-        """180° separation should be blocked by FoR in the full pipeline."""
+        """180° separation should be blocked in the full pipeline
+        (by LOS or FoR — both Earth occlusion and steep elevation)."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 180)
         result = check_isl_visibility(
@@ -137,12 +144,10 @@ class TestFieldOfRegardInPipeline:
             max_range_km=50000.0,  # Very large to not trigger range check
             field_of_regard_deg=120.0,
         )
-        # This will actually be blocked by LOS (goes through Earth), not FoR
-        # So the reason might be "los_blocked" rather than "field_of_regard"
         assert result.visible is False
 
-    def test_for_blocks_cross_plane_in_pipeline(self):
-        """Cross-plane at equator blocked by FoR (90° from velocity axis)."""
+    def test_cross_plane_equator_passes_in_pipeline(self):
+        """Cross-plane at equator passes FoR (near-horizontal LOS)."""
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(31.6, 0)
         result = check_isl_visibility(
@@ -150,8 +155,8 @@ class TestFieldOfRegardInPipeline:
             max_range_km=50000.0,
             field_of_regard_deg=120.0,
         )
-        assert result.visible is False
-        assert result.reason == "field_of_regard"
+        assert result.visible is True
+        assert result.reason == "ok"
 
     def test_adjacent_passes_in_pipeline(self):
         """Same-plane adjacent passes FoR check in the full pipeline."""
@@ -173,14 +178,15 @@ class TestFieldOfRegardInPipeline:
             max_range_km=50000.0,
             # field_of_regard_deg defaults to 360.0
         )
-        # Should pass FoR (360°), might fail on other checks
         assert result.reason != "field_of_regard"
 
 
 class TestFieldOfRegardComparison:
     """Compare visibility counts between different FoR values.
 
-    Verifies that narrower FoR blocks more cross-plane links at high latitudes.
+    Verifies that narrower FoR blocks at least as many as wider FoR.
+    For same-altitude LEO sats, LOS is always near-horizontal, so
+    FoR primarily constrains links between different altitude shells.
     """
 
     def _count_feasible_cross_plane_links(self, field_of_regard_deg: float, latitude_deg: float):
@@ -207,16 +213,6 @@ class TestFieldOfRegardComparison:
 
         return feasible
 
-    def test_120_blocks_more_than_160_at_high_latitude(self):
-        """At 60° latitude, 120° FoR should produce fewer feasible cross-plane
-        links than 160° FoR."""
-        feasible_120 = self._count_feasible_cross_plane_links(120.0, 60.0)
-        feasible_160 = self._count_feasible_cross_plane_links(160.0, 60.0)
-        assert feasible_120 < feasible_160, (
-            f"120° FoR ({feasible_120} links) should block more than "
-            f"160° FoR ({feasible_160} links) at 60° latitude"
-        )
-
     def test_360_passes_all_at_any_latitude(self):
         """360° FoR should pass all cross-plane links at any latitude."""
         for lat in [0, 30, 60, 80]:
@@ -224,11 +220,18 @@ class TestFieldOfRegardComparison:
             # 6 planes, all pairs = 6*5/2 = 15
             assert feasible == 15, f"360° FoR should pass all 15 pairs at {lat}° lat"
 
-    def test_120_blocks_all_at_equator(self):
-        """At the equator, all cross-plane LOS is perpendicular to velocity.
-        120° FoR (60° half-angle) should block all cross-plane links."""
-        feasible = self._count_feasible_cross_plane_links(120.0, 0.0)
-        assert feasible == 0, f"120° FoR at equator: expected 0 feasible, got {feasible}"
+    def test_120_for_passes_adjacent_cross_plane(self):
+        """With 120° FoR, adjacent cross-plane links (RAAN ≤ ~95°) pass.
+
+        For 6 planes at 31.6° spacing, pairs separated by ≤3 planes pass
+        (elevation from horizontal = RAAN_diff/2, ≤ 47.4° < 60° half-angle).
+        Pairs 4+ planes apart (RAAN > 120°) are blocked (steep LOS angle).
+        """
+        feasible_equator = self._count_feasible_cross_plane_links(120.0, 0.0)
+        # 6+6+3 = 15 total pairs; 3 pairs with RAAN > 120° blocked → 12
+        assert feasible_equator >= 12, (
+            f"Expected ≥12 feasible at equator with 120° FoR, got {feasible_equator}"
+        )
 
     def test_narrower_for_always_blocks_at_least_as_many(self):
         """120° FoR should block at least as many links as 160° at every latitude."""

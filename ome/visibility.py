@@ -194,18 +194,19 @@ def check_field_of_regard(
 ) -> bool:
     """Check if both satellites can see each other within their field of regard.
 
-    The boresight direction for each satellite is its velocity direction.
-    The FoR defines the maximum angular deviation from the velocity axis
-    (considering both forward and aft directions symmetrically).
+    The FoR defines the maximum angular deviation from the local horizontal
+    plane that the ISL terminal can steer.  For LEO ISL terminals the physical
+    constraint is how far above or below the orbital plane the beam can point;
+    all same-altitude ISL targets are near-horizontal.
 
-    Returns True if the link is feasible (within FoR/2 for both terminals).
+    Returns True if the link is within FoR/2 of local horizontal for both ends.
     """
     if field_of_regard_deg >= 360.0:
         return True
 
     half_angle_rad = math.radians(field_of_regard_deg / 2.0)
 
-    # LOS from A to B
+    # LOS from A to B (unit vector)
     los_x = pos_b.x - pos_a.x
     los_y = pos_b.y - pos_a.y
     los_z = pos_b.z - pos_a.z
@@ -216,32 +217,34 @@ def check_field_of_regard(
     los_y /= los_mag
     los_z /= los_mag
 
-    # Check from A's perspective
-    vel_a_mag = math.sqrt(vel_a.x**2 + vel_a.y**2 + vel_a.z**2)
-    if vel_a_mag < 1e-10:
+    # Check from A's perspective: elevation angle of LOS above local horizontal
+    r_a_mag = math.sqrt(pos_a.x**2 + pos_a.y**2 + pos_a.z**2)
+    if r_a_mag < 1e-10:
         return True
-    ba_x = vel_a.x / vel_a_mag
-    ba_y = vel_a.y / vel_a_mag
-    ba_z = vel_a.z / vel_a_mag
+    zenith_a_x = pos_a.x / r_a_mag
+    zenith_a_y = pos_a.y / r_a_mag
+    zenith_a_z = pos_a.z / r_a_mag
 
-    cos_a = max(-1.0, min(1.0, los_x * ba_x + los_y * ba_y + los_z * ba_z))
-    angle_a = math.acos(cos_a)
-    min_angle_a = min(angle_a, math.pi - angle_a)
-    if min_angle_a > half_angle_rad:
+    cos_zenith_a = max(-1.0, min(1.0,
+        los_x * zenith_a_x + los_y * zenith_a_y + los_z * zenith_a_z))
+    zenith_angle_a = math.acos(cos_zenith_a)
+    elevation_a = abs(zenith_angle_a - math.pi / 2.0)  # deviation from horizontal
+    if elevation_a > half_angle_rad:
         return False
 
-    # Check from B's perspective (LOS reversed)
-    vel_b_mag = math.sqrt(vel_b.x**2 + vel_b.y**2 + vel_b.z**2)
-    if vel_b_mag < 1e-10:
+    # Check from B's perspective (reversed LOS)
+    r_b_mag = math.sqrt(pos_b.x**2 + pos_b.y**2 + pos_b.z**2)
+    if r_b_mag < 1e-10:
         return True
-    bb_x = vel_b.x / vel_b_mag
-    bb_y = vel_b.y / vel_b_mag
-    bb_z = vel_b.z / vel_b_mag
+    zenith_b_x = pos_b.x / r_b_mag
+    zenith_b_y = pos_b.y / r_b_mag
+    zenith_b_z = pos_b.z / r_b_mag
 
-    cos_b = max(-1.0, min(1.0, -los_x * bb_x - los_y * bb_y - los_z * bb_z))
-    angle_b = math.acos(cos_b)
-    min_angle_b = min(angle_b, math.pi - angle_b)
-    if min_angle_b > half_angle_rad:
+    cos_zenith_b = max(-1.0, min(1.0,
+        -los_x * zenith_b_x - los_y * zenith_b_y - los_z * zenith_b_z))
+    zenith_angle_b = math.acos(cos_zenith_b)
+    elevation_b = abs(zenith_angle_b - math.pi / 2.0)
+    if elevation_b > half_angle_rad:
         return False
 
     return True

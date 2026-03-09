@@ -25,19 +25,15 @@ from pathlib import Path
 
 import yaml
 from jinja2 import Environment, FileSystemLoader
-from pydantic import TypeAdapter
 
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
-from nodalarc.models.constellation import ConstellationConfig
-from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.template_vars import build_template_vars, _constellation_dims
-from ome.constellation_loader import expand_constellation
+from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
 
 log = logging.getLogger(__name__)
-adapter = TypeAdapter(ConstellationConfig)
 
 
 def _parse_set_args(set_args: list[str] | None) -> dict:
@@ -85,12 +81,8 @@ def reconfig(session_path: str, target: str, set_args: list[str] | None = None, 
     """Re-render and push configs to targeted nodes."""
     raw = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(raw)
-    constellation = adapter.validate_python(
-        yaml.safe_load(Path(session.constellation).read_text()),
-    )
-    gs_file = GroundStationFile.model_validate(
-        yaml.safe_load(Path(session.ground_stations).read_text()),
-    )
+    constellation = load_constellation(session.constellation)
+    gs_file = load_ground_stations(session.ground_stations)
     addressing = AddressingScheme(session.addressing)
     satellites = expand_constellation(constellation)
 
@@ -225,9 +217,7 @@ def add_flow(session_path: str, flow_spec: str) -> None:
     """
     raw = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(raw)
-    gs_file = GroundStationFile.model_validate(
-        yaml.safe_load(Path(session.ground_stations).read_text()),
-    )
+    gs_file = load_ground_stations(session.ground_stations)
 
     spec = _parse_flow_spec(flow_spec)
     from measurement.flow_manager import resolve_dst_ip, resolve_src_pod_ip
@@ -254,9 +244,7 @@ def remove_flow(session_path: str, flow_id: str) -> None:
     """Remove a probe flow from a running session."""
     raw = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(raw)
-    gs_file = GroundStationFile.model_validate(
-        yaml.safe_load(Path(session.ground_stations).read_text()),
-    )
+    gs_file = load_ground_stations(session.ground_stations)
 
     # We need to find which GS pod this flow runs on.
     # Check all GS pods for the flow.

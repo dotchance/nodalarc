@@ -38,14 +38,8 @@ def _build_interface_map(
     addressing: AddressingScheme,
 ) -> tuple[dict[tuple[str, str], tuple[str, str]], dict[tuple[str, str], float]]:
     """Build interface and bandwidth maps from ISL + GS neighbor assignments."""
-    from pydantic import TypeAdapter
-    from nodalarc.models.constellation import ConstellationConfig
-    from nodalarc.models.ground_station import GroundStationFile
-    from ome.constellation_loader import expand_constellation
-    adapter = TypeAdapter(ConstellationConfig)
-    constellation = adapter.validate_python(
-        yaml.safe_load(Path(session.constellation).read_text()),
-    )
+    from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
+    constellation = load_constellation(session.constellation)
     neighbors = assign_isl_neighbors(constellation, addressing)
     by_node = neighbors_by_node(neighbors)
 
@@ -65,8 +59,7 @@ def _build_interface_map(
                     interface_map[pair] = (existing[0], na.interface)
 
     # GS-satellite links (all use gnd0 on both sides)
-    gs_data = yaml.safe_load(Path(session.ground_stations).read_text())
-    gs_file = GroundStationFile.model_validate(gs_data)
+    gs_file = load_ground_stations(session.ground_stations)
     satellites = expand_constellation(constellation)
     for station in gs_file.stations:
         gs_id = addressing.gs_id(station.name)
@@ -168,19 +161,12 @@ def main() -> None:
     interface_map, bandwidth_map = _build_interface_map(session, addressing)
 
     # Compute area assignments for routing_area metadata
-    from pydantic import TypeAdapter
-    from nodalarc.models.constellation import ConstellationConfig
-    from nodalarc.models.ground_station import GroundStationFile
-    from ome.constellation_loader import expand_constellation
-    adapter = TypeAdapter(ConstellationConfig)
-    constellation = adapter.validate_python(
-        yaml.safe_load(Path(session.constellation).read_text()),
-    )
+    from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
+    constellation = load_constellation(session.constellation)
     expanded = expand_constellation(constellation)
     plane_count = max((s.plane for s in expanded), default=0) + 1
     sats_per_plane = max((s.slot for s in expanded), default=0) + 1
-    gs_data = yaml.safe_load(Path(session.ground_stations).read_text())
-    gs_file = GroundStationFile.model_validate(gs_data)
+    gs_file = load_ground_stations(session.ground_stations)
     gs_names = [s.name for s in gs_file.stations]
     area_map = compute_area_assignments(
         session.routing.area_assignment, plane_count, sats_per_plane, addressing, gs_names,

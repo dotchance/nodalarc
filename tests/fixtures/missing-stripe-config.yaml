@@ -1,7 +1,7 @@
 session:
   name: bad-session
-constellation: configs/constellations/starlink-mini.yaml
-ground_stations: configs/ground-stations/global-default.yaml
+constellation: configs/constellations/starlink-early-44.yaml
+ground_stations: configs/ground-stations/sets/global.yaml
 routing:
   stack: configs/routing-stacks/frr-isis-sr
   area_assignment:

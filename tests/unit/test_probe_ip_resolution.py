@@ -27,8 +27,8 @@ from nodalarc.models.session import (
 def _make_session() -> SessionConfig:
     return SessionConfig(
         session=SessionMeta(name="test"),
-        constellation="configs/constellations/2x3-test.yaml",
-        ground_stations="configs/ground-stations/two-station.yaml",
+        constellation="configs/constellations/custom-example.yaml",
+        ground_stations="configs/ground-stations/sets/us-conus.yaml",
         addressing=AddressingConfig(),
         routing=RoutingConfig(
             stack="configs/routing-stacks/frr-isis-sr",

@@ -82,6 +82,16 @@ export function flushTrails(): void {
   }
 }
 
+/** Remove all trail objects from their scenes and clear the map. */
+export function clearTrails(): void {
+  for (const trail of trails.values()) {
+    trail.line.geometry.dispose();
+    (trail.line.material as THREE.Material).dispose();
+    trail.line.parent?.remove(trail.line);
+  }
+  trails.clear();
+}
+
 export function updateOrbitalTrails(scene: THREE.Scene): void {
   if (!trailsVisible) return;
 
@@ -97,8 +107,9 @@ export function updateOrbitalTrails(scene: THREE.Scene): void {
     trail.frame++;
     if (trail.frame % SAMPLE_EVERY !== 0) continue;
 
-    // Record ground-truth snapshot position (not mesh, which is mid-lerp)
-    const pos = sat.currPosition;
+    // Record the mesh's actual rendered position (post-lerp), not the
+    // snapshot target — otherwise the trail leads the satellite.
+    const pos = sat.mesh.position;
     const i3 = trail.head * 3;
     trail.buf[i3] = pos.x;
     trail.buf[i3 + 1] = pos.y;

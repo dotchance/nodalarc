@@ -25,58 +25,59 @@ adapter = TypeAdapter(ConstellationConfig)
 
 
 class TestParametricExpansion:
-    def test_starlink_mini_count(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+    def test_starlink_early_count(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         sats = expand_constellation(config)
-        assert len(sats) == 60  # 6 planes × 10 sats
+        assert len(sats) == 44  # 4 planes × 11 sats
 
-    def test_starlink_mini_planes_and_slots(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+    def test_starlink_early_planes_and_slots(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         sats = expand_constellation(config)
         planes = {s.plane for s in sats}
-        assert planes == {0, 1, 2, 3, 4, 5}
-        for p in range(6):
+        assert planes == {0, 1, 2, 3}
+        for p in range(4):
             slots = {s.slot for s in sats if s.plane == p}
-            assert slots == set(range(10))
+            assert slots == set(range(11))
 
-    def test_starlink_mini_altitude(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+    def test_starlink_early_altitude(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         sats = expand_constellation(config)
         for sat in sats:
             alt = sat.elements.semi_major_axis_km - 6371.0
             assert abs(alt - 550.0) < 0.01
 
-    def test_starlink_mini_raan_spacing(self):
-        """RAAN increases by 30° per plane."""
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+    def test_starlink_early_raan_spacing(self):
+        """RAAN increases by 45° per plane."""
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         sats = expand_constellation(config)
-        for p in range(6):
+        for p in range(4):
             sat = next(s for s in sats if s.plane == p and s.slot == 0)
-            expected_raan = math.radians(p * 30.0)
+            expected_raan = math.radians(p * 45.0)
             assert abs(sat.elements.raan_rad - expected_raan) < 1e-10
 
-    def test_starlink_mini_raan_spread(self):
-        """Walker-delta: RAAN spread = 30° × 6 = 180° < 360°."""
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+    def test_starlink_early_raan_spread(self):
+        """Walker-delta: RAAN spread = 45° × 4 = 180° < 360°."""
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         assert isinstance(config, ParametricConstellation)
         raan_spread = config.planes.raan_spacing_deg * config.planes.count
         assert raan_spread == 180.0
         assert raan_spread < 360.0
 
-    def test_polar_seam_demo_count(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/polar-seam-demo.yaml")
+    def test_iridium_66_count(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/iridium-66.yaml")
         sats = expand_constellation(config)
-        assert len(sats) == 32  # 4 planes × 8 sats
+        assert len(sats) == 66  # 6 planes × 11 sats
 
-    def test_polar_seam_raan_spread(self):
-        """Walker-star: RAAN spread = 90° × 4 = 360°."""
-        config = load_constellation(CONFIGS_DIR / "constellations/polar-seam-demo.yaml")
+    def test_iridium_66_raan_spread(self):
+        """Walker-star: RAAN spread = 31.6° × 6 = 189.6° < 360°."""
+        config = load_constellation(CONFIGS_DIR / "constellations/iridium-66.yaml")
         assert isinstance(config, ParametricConstellation)
         raan_spread = config.planes.raan_spacing_deg * config.planes.count
-        assert raan_spread == 360.0
+        assert abs(raan_spread - 189.6) < 0.1
+        assert raan_spread < 360.0
 
     def test_terminal_counts(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         sats = expand_constellation(config)
         for sat in sats:
             assert sat.isl_terminal_count == 4
@@ -84,19 +85,19 @@ class TestParametricExpansion:
 
 
 class TestExplicitExpansion:
-    def test_four_node_count(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+    def test_custom_example_count(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         sats = expand_constellation(config)
         assert len(sats) == 4
 
-    def test_four_node_planes(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+    def test_custom_example_planes(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         sats = expand_constellation(config)
         planes = {s.plane for s in sats}
         assert planes == {0, 1}
 
-    def test_four_node_orbital_elements(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+    def test_custom_example_orbital_elements(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         sats = expand_constellation(config)
         p0s0 = next(s for s in sats if s.plane == 0 and s.slot == 0)
         assert abs(p0s0.elements.semi_major_axis_km - (6371.0 + 550.0)) < 0.01
@@ -104,8 +105,8 @@ class TestExplicitExpansion:
         assert abs(p0s0.elements.raan_rad) < 1e-10
         assert abs(p0s0.elements.true_anomaly_rad) < 1e-10
 
-    def test_four_node_terminal_counts(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+    def test_custom_example_terminal_counts(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         sats = expand_constellation(config)
         for sat in sats:
             assert sat.isl_terminal_count == 2
@@ -128,7 +129,6 @@ class TestTLEStub:
 
 
 class TestGroundStationLoading:
-    def test_load_global_default(self):
-        gs = load_ground_stations(CONFIGS_DIR / "ground-stations/global-default.yaml")
+    def test_load_global_set(self):
+        gs = load_ground_stations(CONFIGS_DIR / "ground-stations/sets/global.yaml")
         assert len(gs.stations) == 7
-        assert gs.default_min_elevation_deg == 25

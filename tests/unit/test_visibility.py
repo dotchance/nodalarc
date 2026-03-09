@@ -79,7 +79,7 @@ class TestRange:
         pos1, _, _ = propagate_keplerian(e1, EPOCH, 0.0)
         pos2, _, _ = propagate_keplerian(e2, EPOCH, 0.0)
         r = compute_range(pos1, pos2)
-        assert r < 5016.0  # starlink-mini max range
+        assert r < 5016.0  # starlink-early-44 max range
 
 
 class TestElevationAngle:

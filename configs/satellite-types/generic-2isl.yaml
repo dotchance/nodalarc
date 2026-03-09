@@ -1,7 +1,7 @@
 # Generic 2-ISL — terminal config for small test constellations.
 #
-# 2 optical ISLs at 5000 km range. Used by 4-node-test, 2x3-test,
-# and custom-example constellations.
+# 2 optical ISLs at 5000 km range. Used by custom-example and other
+# small test constellations.
 
 satellite_type:
   name: generic-2isl

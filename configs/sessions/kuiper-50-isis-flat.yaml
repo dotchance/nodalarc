@@ -1,6 +1,5 @@
 session:
   name: kuiper-50-isis-flat
-  data_dir: /tmp/nodalarc/sessions
 
 constellation: configs/constellations/kuiper-50.yaml
 ground_stations: configs/ground-stations/sets/global.yaml

@@ -31,18 +31,24 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 def _load_session_fixtures():
-    """Load 4-node-test session fixtures for testing."""
+    """Load custom-example constellation fixtures for testing."""
     import yaml
     from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
     from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
     from nodalarc.models.session import SessionConfig
 
-    session_path = PROJECT_ROOT / "configs/sessions/4-node-test.yaml"
-    if not session_path.exists():
-        pytest.skip("4-node-test session not available")
-
-    data = yaml.safe_load(session_path.read_text())
-    session = SessionConfig.model_validate(data)
+    # Build an inline session config referencing custom-example + us-conus
+    session_data = {
+        "session": {"name": "rolling-window-test"},
+        "constellation": "configs/constellations/custom-example.yaml",
+        "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
+        "routing": {
+            "stack": "configs/routing-stacks/frr-isis-sr",
+            "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
+        },
+        "time": {"mode": "discrete-event", "step_seconds": 10},
+    }
+    session = SessionConfig.model_validate(session_data)
     constellation_config = load_constellation(session.constellation)
     gs_file = load_ground_stations(session.ground_stations)
     satellites = expand_constellation(constellation_config)

@@ -17,13 +17,13 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # Session configs that should fully validate
 VALIDATABLE_SESSIONS = [
-    "isis-baseline.yaml",
-    "ospf-comparison.yaml",
-    "sdn-centralized.yaml",
-    "protocol-shootout.yaml",
-    "starlink-isis-de.yaml",
-    "starlink-ospf-de.yaml",
-    "4-node-test.yaml",
+    "iridium-small-36-isis-flat.yaml",
+    "starlink-early-44-isis-flat.yaml",
+    "starlink-early-44-isis-striped.yaml",
+    "starlink-early-44-ospf-flat.yaml",
+    "kuiper-50-isis-flat.yaml",
+    "kuiper-50-isis-striped.yaml",
+    "kuiper-50-ospf-flat.yaml",
 ]
 
 
@@ -74,13 +74,16 @@ class TestSessionConfigValidation:
 
 
 class TestNewSessionFiles:
-    """Verify the Phase 1E session config files exist."""
+    """Verify the component-model session config files exist."""
 
     NEW_FILES = [
-        "isis-baseline.yaml",
-        "ospf-comparison.yaml",
-        "sdn-centralized.yaml",
-        "protocol-shootout.yaml",
+        "iridium-small-36-isis-flat.yaml",
+        "starlink-early-44-isis-flat.yaml",
+        "starlink-early-44-isis-striped.yaml",
+        "starlink-early-44-ospf-flat.yaml",
+        "kuiper-50-isis-flat.yaml",
+        "kuiper-50-isis-striped.yaml",
+        "kuiper-50-ospf-flat.yaml",
     ]
 
     @pytest.mark.parametrize("filename", NEW_FILES)
@@ -89,35 +92,35 @@ class TestNewSessionFiles:
         assert path.exists(), f"Missing session config: {filename}"
 
 
-class TestISISBaselineConfig:
-    """Specific checks for the isis-baseline reference session."""
+class TestISISStripedConfig:
+    """Specific checks for the starlink-early-44-isis-striped reference session."""
 
     def test_uses_isis_sr_stack(self):
-        raw = yaml.safe_load((SESSIONS_DIR / "isis-baseline.yaml").read_text())
+        raw = yaml.safe_load((SESSIONS_DIR / "starlink-early-44-isis-striped.yaml").read_text())
         config = SessionConfig.model_validate(raw)
         assert "isis" in config.routing.stack.lower()
 
     def test_uses_stripe_area_assignment(self):
-        raw = yaml.safe_load((SESSIONS_DIR / "isis-baseline.yaml").read_text())
+        raw = yaml.safe_load((SESSIONS_DIR / "starlink-early-44-isis-striped.yaml").read_text())
         config = SessionConfig.model_validate(raw)
         assert config.routing.area_assignment.strategy == "stripe"
         assert config.routing.area_assignment.planes_per_stripe == 2
 
     def test_uses_discrete_event_mode(self):
-        raw = yaml.safe_load((SESSIONS_DIR / "isis-baseline.yaml").read_text())
+        raw = yaml.safe_load((SESSIONS_DIR / "starlink-early-44-isis-striped.yaml").read_text())
         config = SessionConfig.model_validate(raw)
         assert config.time.mode == "discrete-event"
 
 
-class TestOSPFComparisonConfig:
-    """Specific checks for the ospf-comparison session."""
+class TestOSPFFlatConfig:
+    """Specific checks for the starlink-early-44-ospf-flat session."""
 
     def test_uses_ospf_stack(self):
-        raw = yaml.safe_load((SESSIONS_DIR / "ospf-comparison.yaml").read_text())
+        raw = yaml.safe_load((SESSIONS_DIR / "starlink-early-44-ospf-flat.yaml").read_text())
         config = SessionConfig.model_validate(raw)
         assert "ospf" in config.routing.stack.lower()
 
     def test_uses_flat_area_assignment(self):
-        raw = yaml.safe_load((SESSIONS_DIR / "ospf-comparison.yaml").read_text())
+        raw = yaml.safe_load((SESSIONS_DIR / "starlink-early-44-ospf-flat.yaml").read_text())
         config = SessionConfig.model_validate(raw)
         assert config.routing.area_assignment.strategy == "flat"

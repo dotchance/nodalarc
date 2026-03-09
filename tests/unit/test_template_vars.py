@@ -1,10 +1,8 @@
 """Test build_template_vars() — the single Jinja2 namespace builder."""
 
-import yaml
 import pytest
 
 from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.ground_station import GroundStationFile
 from ome.constellation_loader import load_constellation
 from nodalarc.models.session import (
     AreaAssignmentConfig,
@@ -24,27 +22,27 @@ def addressing():
 
 @pytest.fixture
 def four_node_config():
-    return load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+    return load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
 
 
 @pytest.fixture
 def starlink_config():
-    return load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+    return load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
 
 
 @pytest.fixture
 def gs_file():
-    data = yaml.safe_load((CONFIGS_DIR / "ground-stations/global-default.yaml").read_text())
-    return GroundStationFile.model_validate(data)
+    from ome.constellation_loader import load_ground_stations
+    return load_ground_stations(CONFIGS_DIR / "ground-stations/sets/global.yaml")
 
 
 @pytest.fixture
 def flat_session():
-    """Session with flat area assignment (for 4-node-test)."""
+    """Session with flat area assignment (for custom-example)."""
     return SessionConfig(
         session=SessionMeta(name="test-flat"),
-        constellation="configs/constellations/4-node-test.yaml",
-        ground_stations="configs/ground-stations/global-default.yaml",
+        constellation="configs/constellations/custom-example.yaml",
+        ground_stations="configs/ground-stations/sets/global.yaml",
         routing=RoutingConfig(
             stack="configs/routing-stacks/frr-isis-sr",
             area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
@@ -55,11 +53,11 @@ def flat_session():
 
 @pytest.fixture
 def stripe_session():
-    """Session with stripe area assignment (for starlink-mini)."""
+    """Session with stripe area assignment (for starlink-early-44)."""
     return SessionConfig(
         session=SessionMeta(name="test-stripe"),
-        constellation="configs/constellations/starlink-mini.yaml",
-        ground_stations="configs/ground-stations/global-default.yaml",
+        constellation="configs/constellations/starlink-early-44.yaml",
+        ground_stations="configs/ground-stations/sets/global.yaml",
         routing=RoutingConfig(
             stack="configs/routing-stacks/frr-isis-sr",
             area_assignment=AreaAssignmentConfig(

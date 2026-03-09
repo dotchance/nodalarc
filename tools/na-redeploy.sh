@@ -24,10 +24,10 @@ done
 
 # Auto-detect session from most recent session-state.json
 if [ -z "$SESSION" ]; then
-    STATE_FILE=$(find /tmp/nodalarc/sessions -name session-state.json -printf '%T@ %p\n' 2>/dev/null \
+    STATE_FILE=$(find /var/nodalarc/sessions -name session-state.json -printf '%T@ %p\n' 2>/dev/null \
         | sort -rn | head -1 | awk '{print $2}')
     if [ -z "$STATE_FILE" ]; then
-        echo "ERROR: No --session provided and no session-state.json found under /tmp/nodalarc/sessions/"
+        echo "ERROR: No --session provided and no session-state.json found under /var/nodalarc/sessions/"
         exit 1
     fi
     SESSION=$(jq -r '.session_config' "$STATE_FILE")

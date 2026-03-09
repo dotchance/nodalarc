@@ -2,7 +2,7 @@
 
 Each step is fail-hard: any failure aborts the entire deployment.
 
-Usage: python -m tools.na_deploy --session configs/sessions/sample-session.yaml
+Usage: python -m tools.na_deploy --session configs/sessions/starlink-early-44-isis-flat.yaml
 """
 
 from __future__ import annotations

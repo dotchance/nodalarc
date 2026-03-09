@@ -1,6 +1,5 @@
 session:
   name: starlink-early-44-isis-flat
-  data_dir: /tmp/nodalarc/sessions
 
 constellation: configs/constellations/starlink-early-44.yaml
 ground_stations: configs/ground-stations/sets/global.yaml

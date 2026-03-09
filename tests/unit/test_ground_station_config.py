@@ -14,21 +14,21 @@ from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
 
 
 class TestGroundStationFileLoading:
-    def test_global_default_loads(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/global-default.yaml").read_text())
+    def test_custom_example_loads(self):
+        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
         gs = GroundStationFile.model_validate(data)
-        assert len(gs.stations) == 7
+        assert len(gs.stations) == 4
         assert gs.default_min_elevation_deg == 25
         assert gs.default_scheduling_policy == "highest-elevation"
 
     def test_station_names_unique(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/global-default.yaml").read_text())
+        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
         gs = GroundStationFile.model_validate(data)
         names = [s.name for s in gs.stations]
         assert len(names) == len(set(names))
 
     def test_round_trip(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/global-default.yaml").read_text())
+        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
         gs = GroundStationFile.model_validate(data)
         json_str = gs.model_dump_json()
         restored = GroundStationFile.model_validate_json(json_str)
@@ -37,7 +37,7 @@ class TestGroundStationFileLoading:
 
 class TestDefaultPrefixTemplate:
     def test_template_present(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/global-default.yaml").read_text())
+        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
         gs = GroundStationFile.model_validate(data)
         assert gs.default_terrestrial_prefixes is not None
         tpl = gs.default_terrestrial_prefixes
@@ -54,28 +54,28 @@ class TestDefaultPrefixTemplate:
         assert ipv6 == "fd10::3:0/112"
 
 
-class TestMcmurdoOverrides:
-    def test_mcmurdo_station(self):
-        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/global-default.yaml").read_text())
+class TestPolarStationOverrides:
+    def test_polar_station(self):
+        data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
         gs = GroundStationFile.model_validate(data)
-        mcmurdo = next(s for s in gs.stations if s.name == "mcmurdo")
+        polar = next(s for s in gs.stations if s.name == "polar-station")
 
         # Per-station overrides
-        assert mcmurdo.min_elevation_deg == 10
-        assert mcmurdo.scheduling_policy == "longest-pass"
+        assert polar.min_elevation_deg == 10
+        assert polar.scheduling_policy == "longest-pass"
 
         # RF terminal override
-        assert mcmurdo.terminals is not None
-        assert len(mcmurdo.terminals) == 1
-        assert mcmurdo.terminals[0].type == "rf"
-        assert mcmurdo.terminals[0].bandwidth_mbps == 500
-        assert mcmurdo.terminals[0].frequency_band == "Ka"
+        assert polar.terminals is not None
+        assert len(polar.terminals) == 1
+        assert polar.terminals[0].type == "rf"
+        assert polar.terminals[0].bandwidth_mbps == 500
+        assert polar.terminals[0].frequency_band == "Ka"
 
         # Per-station prefix override
-        assert mcmurdo.terrestrial_prefixes is not None
-        assert len(mcmurdo.terrestrial_prefixes) == 2
-        assert mcmurdo.terrestrial_prefixes[0].prefix == "172.16.100.0/24"
-        assert mcmurdo.terrestrial_prefixes[0].metric == 50
+        assert polar.terrestrial_prefixes is not None
+        assert len(polar.terrestrial_prefixes) == 2
+        assert polar.terrestrial_prefixes[0].prefix == "172.16.100.0/24"
+        assert polar.terrestrial_prefixes[0].metric == 50
 
 
 class TestValidationRejections:

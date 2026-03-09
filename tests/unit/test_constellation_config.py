@@ -27,13 +27,13 @@ adapter = TypeAdapter(ConstellationConfig)
 
 class TestDiscriminatedUnion:
     def test_parametric_dispatch(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         assert isinstance(config, ParametricConstellation)
         assert config.mode == "parametric"
-        assert config.name == "starlink-mini"
+        assert config.name == "starlink-early-44"
 
     def test_explicit_dispatch(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         assert isinstance(config, ExplicitConstellation)
         assert config.mode == "explicit"
         assert len(config.satellites) == 4
@@ -51,39 +51,39 @@ class TestDiscriminatedUnion:
             adapter.validate_python(data)
 
     def test_round_trip_parametric(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         json_str = config.model_dump_json()
         restored = adapter.validate_json(json_str)
         assert restored == config
 
     def test_round_trip_explicit(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         json_str = config.model_dump_json()
         restored = adapter.validate_json(json_str)
         assert restored == config
 
 
 class TestParametricConstellation:
-    def test_starlink_mini_loads(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+    def test_starlink_early_loads(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         assert config.orbit.altitude_km == 550
         assert config.orbit.inclination_deg == 53
         assert config.orbit.pattern == "walker-delta"
-        assert config.planes.count == 6
-        assert config.planes.sats_per_plane == 10
+        assert config.planes.count == 4
+        assert config.planes.sats_per_plane == 11
 
-    def test_polar_seam_demo_loads(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/polar-seam-demo.yaml")
+    def test_iridium_66_loads(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/iridium-66.yaml")
         assert config.orbit.pattern == "walker-star"
-        assert config.orbit.inclination_deg == 97.4
+        assert config.orbit.inclination_deg == 86.4
         assert config.polar_seam is not None
         assert config.polar_seam.enabled is True
-        assert config.polar_seam.latitude_threshold_deg == 75
+        assert config.polar_seam.latitude_threshold_deg == 70
 
 
 class TestExplicitConstellation:
-    def test_four_node_loads(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+    def test_custom_example_loads(self):
+        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         assert len(config.satellites) == 4
         planes = {s.plane for s in config.satellites}
         assert planes == {0, 1}
@@ -92,7 +92,7 @@ class TestExplicitConstellation:
             assert sat.orbit.altitude_km == 550
 
     def test_terminal_count_from_default(self):
-        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         assert config.default_terminals.isl[0].count == 2
 
 

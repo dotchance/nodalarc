@@ -12,16 +12,15 @@ from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
 
 
 class TestSessionConfigLoading:
-    def test_sample_session_loads(self):
-        data = yaml.safe_load((CONFIGS_DIR / "sessions/sample-session.yaml").read_text())
+    def test_iridium_small_session_loads(self):
+        data = yaml.safe_load((CONFIGS_DIR / "sessions/iridium-small-36-isis-flat.yaml").read_text())
         config = SessionConfig.model_validate(data)
-        assert config.session.name == "sample-session"
-        assert config.constellation == "configs/constellations/starlink-mini.yaml"
-        assert config.routing.area_assignment.strategy == "stripe"
-        assert config.routing.area_assignment.planes_per_stripe == 2
+        assert config.session.name == "iridium-small-36-isis-flat"
+        assert config.constellation == "configs/constellations/iridium-small-36.yaml"
+        assert config.routing.area_assignment.strategy == "flat"
 
     def test_defaults_applied(self):
-        data = yaml.safe_load((CONFIGS_DIR / "sessions/sample-session.yaml").read_text())
+        data = yaml.safe_load((CONFIGS_DIR / "sessions/iridium-small-36-isis-flat.yaml").read_text())
         config = SessionConfig.model_validate(data)
         # Addressing defaults
         assert config.addressing.sat_id_template == "sat-P{plane:02d}S{slot:02d}"
@@ -34,16 +33,17 @@ class TestSessionConfigLoading:
         assert config.convergence.probe_interval_ms == 100
 
     def test_round_trip(self):
-        data = yaml.safe_load((CONFIGS_DIR / "sessions/sample-session.yaml").read_text())
+        data = yaml.safe_load((CONFIGS_DIR / "sessions/iridium-small-36-isis-flat.yaml").read_text())
         config = SessionConfig.model_validate(data)
         json_str = config.model_dump_json()
         restored = SessionConfig.model_validate_json(json_str)
         assert restored == config
 
-    def test_no_traffic_flows_default(self):
-        data = yaml.safe_load((CONFIGS_DIR / "sessions/sample-session.yaml").read_text())
+    def test_traffic_flows_present(self):
+        data = yaml.safe_load((CONFIGS_DIR / "sessions/iridium-small-36-isis-flat.yaml").read_text())
         config = SessionConfig.model_validate(data)
-        assert config.traffic_flows is None
+        assert config.traffic_flows is not None
+        assert len(config.traffic_flows) == 1
 
 
 class TestAreaAssignmentValidation:

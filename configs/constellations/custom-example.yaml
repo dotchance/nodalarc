@@ -4,7 +4,7 @@
 # This is the simplest mode to hand-author for small constellations.
 #
 # For larger constellations (tens or hundreds of satellites), use parametric
-# mode with walker-delta or walker-star patterns. See starlink-mini.yaml
+# mode with walker-delta or walker-star patterns. See starlink-early-44.yaml
 # for an example of parametric mode.
 
 # Mode: "explicit" (per-satellite), "parametric" (Walker pattern), or "tle"

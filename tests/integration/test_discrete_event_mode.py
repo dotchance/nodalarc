@@ -1,6 +1,6 @@
 """Integration test: DE dispatcher processes timeline correctly.
 
-PRD Appendix B: loads a pre-computed timeline for the 4-node-test
+PRD Appendix B: loads a pre-computed timeline for the custom-example
 constellation, runs the discrete-event dispatcher through all events,
 verifies that the convergence gate is called for each link state change,
 and checks that the SQLite database contains the expected records.
@@ -40,16 +40,32 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 @pytest.fixture
 def four_node_session_path():
-    """Path to 4-node-test session config."""
-    path = PROJECT_ROOT / "configs/sessions/4-node-test.yaml"
-    if not path.exists():
-        pytest.skip("4-node-test session not available")
-    return str(path)
+    """Create temp session config for custom-example constellation."""
+    import tempfile
+    import yaml
+
+    session = {
+        "session": {"name": "custom-example-de-test"},
+        "constellation": "configs/constellations/custom-example.yaml",
+        "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
+        "routing": {
+            "stack": "configs/routing-stacks/frr-isis-sr",
+            "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
+        },
+        "time": {"mode": "discrete-event", "step_seconds": 10},
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,
+    ) as f:
+        yaml.dump(session, f)
+        path = f.name
+    yield path
+    Path(path).unlink(missing_ok=True)
 
 
 @pytest.fixture
 def timeline_path(four_node_session_path, tmp_path):
-    """Generate timeline for 4-node-test constellation."""
+    """Generate timeline for custom-example constellation."""
     from ome.main import run as ome_run
     return ome_run(four_node_session_path, str(tmp_path))
 
@@ -82,7 +98,7 @@ class TestDiscreteEventProcessing:
         from orchestrator.discrete_event_dispatcher import DiscreteEventDispatcher
 
         # Build a minimal interface map for the 4-node constellation
-        # 4-node-test: 2 planes × 2 sats, ISLs: intra-plane + cross-plane
+        # custom-example: 2 planes × 2 sats, ISLs: intra-plane + cross-plane
         from nodalarc.models.addressing import (
             AddressingScheme,
             assign_isl_neighbors,
@@ -94,7 +110,7 @@ class TestDiscreteEventProcessing:
         import yaml
 
         constellation_data = yaml.safe_load(
-            (PROJECT_ROOT / "configs/constellations/4-node-test.yaml").read_text(),
+            (PROJECT_ROOT / "configs/constellations/custom-example.yaml").read_text(),
         )
         adapter = TypeAdapter(ConstellationConfig)
         constellation = adapter.validate_python(constellation_data)
@@ -120,7 +136,7 @@ class TestDiscreteEventProcessing:
         # Add GS-satellite pairs
         from ome.constellation_loader import expand_constellation, load_ground_stations
         gs_file = load_ground_stations(
-            PROJECT_ROOT / "configs/ground-stations/two-station.yaml",
+            PROJECT_ROOT / "configs/ground-stations/sets/us-conus.yaml",
         )
         satellites = expand_constellation(constellation)
         for station in gs_file.stations:
@@ -181,7 +197,7 @@ class TestDiscreteEventProcessing:
             import yaml
 
             constellation_data = yaml.safe_load(
-                (PROJECT_ROOT / "configs/constellations/4-node-test.yaml").read_text(),
+                (PROJECT_ROOT / "configs/constellations/custom-example.yaml").read_text(),
             )
             adapter = TypeAdapter(ConstellationConfig)
             constellation = adapter.validate_python(constellation_data)
@@ -206,7 +222,7 @@ class TestDiscreteEventProcessing:
 
             from ome.constellation_loader import load_ground_stations as load_gs
             gs_file = load_gs(
-                PROJECT_ROOT / "configs/ground-stations/two-station.yaml",
+                PROJECT_ROOT / "configs/ground-stations/sets/us-conus.yaml",
             )
             satellites = expand_constellation(constellation)
             for station in gs_file.stations:

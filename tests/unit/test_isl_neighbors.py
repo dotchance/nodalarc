@@ -24,17 +24,17 @@ def addressing():
 
 @pytest.fixture
 def four_node_config():
-    return load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+    return load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
 
 
 @pytest.fixture
 def starlink_config():
-    return load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
+    return load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
 
 
 @pytest.fixture
-def polar_seam_config():
-    return load_constellation(CONFIGS_DIR / "constellations/polar-seam-demo.yaml")
+def iridium_config():
+    return load_constellation(CONFIGS_DIR / "constellations/iridium-66.yaml")
 
 
 class TestFourNodeAssignment:
@@ -43,7 +43,7 @@ class TestFourNodeAssignment:
         assert isinstance(result, frozenset)
 
     def test_four_node_assignments_count(self, four_node_config, addressing):
-        """4-node-test: 2 OCTs per sat → intra-fwd + intra-aft only."""
+        """custom-example: 2 OCTs per sat → intra-fwd + intra-aft only."""
         result = assign_isl_neighbors(four_node_config, addressing)
         by_node = neighbors_by_node(result)
         # Each of 4 satellites gets exactly 2 assignments
@@ -92,18 +92,18 @@ class TestFourNodeAssignment:
         assert cross.peer_node_id == "sat-P01S00"
 
 
-class TestStarlinkMiniAssignment:
+class TestStarlinkEarlyAssignment:
     def test_starlink_four_terminals(self, starlink_config, addressing):
-        """starlink-mini: 4 OCTs → intra-fwd, intra-aft, cross-right, cross-left."""
+        """starlink-early-44: 4 OCTs → intra-fwd, intra-aft, cross-right, cross-left."""
         result = assign_isl_neighbors(starlink_config, addressing)
         by_node = neighbors_by_node(result)
         # Interior node gets all 4 assignments
-        interior = by_node["sat-P03S05"]
+        interior = by_node["sat-P02S05"]
         assert len(interior) == 4
 
     def test_starlink_no_cross_wrap(self, starlink_config, addressing):
-        """Walker-delta (RAAN spread 30°×6=180° < 360°): no cross-plane wrap.
-        Plane 0 has no cross-left neighbor. Plane 5 has no cross-right neighbor."""
+        """Walker-delta (RAAN spread 45°×4=180° < 360°): no cross-plane wrap.
+        Plane 0 has no cross-left neighbor. Plane 3 has no cross-right neighbor."""
         result = assign_isl_neighbors(starlink_config, addressing)
         by_node = neighbors_by_node(result)
         # Plane 0: should only have 3 assignments (no cross-left)
@@ -117,8 +117,51 @@ class TestStarlinkMiniAssignment:
         assert 3 not in priorities  # NO cross-left
 
     def test_starlink_last_plane_no_cross_right(self, starlink_config, addressing):
-        """Plane 5 (last): no cross-right because no wrap in walker-delta."""
+        """Plane 3 (last): no cross-right because no wrap in walker-delta."""
         result = assign_isl_neighbors(starlink_config, addressing)
+        by_node = neighbors_by_node(result)
+        p3s0 = by_node["sat-P03S00"]
+        assert len(p3s0) == 3
+        priorities = [na.priority for na in p3s0]
+        assert 0 in priorities  # intra-fwd
+        assert 1 in priorities  # intra-aft
+        assert 3 in priorities  # cross-left
+        assert 2 not in priorities  # NO cross-right
+
+    def test_starlink_total_satellites(self, starlink_config, addressing):
+        result = assign_isl_neighbors(starlink_config, addressing)
+        by_node = neighbors_by_node(result)
+        assert len(by_node) == 44  # 4 × 11
+
+    def test_starlink_cross_plane_peers(self, starlink_config, addressing):
+        """Interior node: cross-right goes to next plane, cross-left to prev plane."""
+        result = assign_isl_neighbors(starlink_config, addressing)
+        by_node = neighbors_by_node(result)
+        p02s05 = by_node["sat-P02S05"]
+        cross_right = next(na for na in p02s05 if na.priority == 2)
+        cross_left = next(na for na in p02s05 if na.priority == 3)
+        assert cross_right.peer_node_id == "sat-P03S05"
+        assert cross_left.peer_node_id == "sat-P01S05"
+
+
+class TestIridium66Assignment:
+    def test_iridium_no_cross_wrap_at_edges(self, iridium_config, addressing):
+        """Walker-star (RAAN spacing 31.6° × 6 planes = 189.6° < 360°): NO cross-plane wrap.
+        Plane 0 has no cross-left. Plane 5 has no cross-right."""
+        result = assign_isl_neighbors(iridium_config, addressing)
+        by_node = neighbors_by_node(result)
+        # Plane 0: no cross-left
+        p0s0 = by_node["sat-P00S00"]
+        assert len(p0s0) == 3
+        priorities = [na.priority for na in p0s0]
+        assert 0 in priorities  # intra-fwd
+        assert 1 in priorities  # intra-aft
+        assert 2 in priorities  # cross-right
+        assert 3 not in priorities  # NO cross-left
+
+    def test_iridium_last_plane_no_cross_right(self, iridium_config, addressing):
+        """Plane 5 (last): no cross-right because RAAN spread < 360°."""
+        result = assign_isl_neighbors(iridium_config, addressing)
         by_node = neighbors_by_node(result)
         p5s0 = by_node["sat-P05S00"]
         assert len(p5s0) == 3
@@ -128,52 +171,17 @@ class TestStarlinkMiniAssignment:
         assert 3 in priorities  # cross-left
         assert 2 not in priorities  # NO cross-right
 
-    def test_starlink_total_satellites(self, starlink_config, addressing):
-        result = assign_isl_neighbors(starlink_config, addressing)
+    def test_iridium_interior_4_terminals(self, iridium_config, addressing):
+        """Interior planes (1-4) get all 4 assignments."""
+        result = assign_isl_neighbors(iridium_config, addressing)
         by_node = neighbors_by_node(result)
-        assert len(by_node) == 60  # 6 × 10
+        interior = by_node["sat-P03S05"]
+        assert len(interior) == 4
 
-    def test_starlink_cross_plane_peers(self, starlink_config, addressing):
-        """Interior node: cross-right goes to next plane, cross-left to prev plane."""
-        result = assign_isl_neighbors(starlink_config, addressing)
+    def test_iridium_total_satellites(self, iridium_config, addressing):
+        result = assign_isl_neighbors(iridium_config, addressing)
         by_node = neighbors_by_node(result)
-        p03s05 = by_node["sat-P03S05"]
-        cross_right = next(na for na in p03s05 if na.priority == 2)
-        cross_left = next(na for na in p03s05 if na.priority == 3)
-        assert cross_right.peer_node_id == "sat-P04S05"
-        assert cross_left.peer_node_id == "sat-P02S05"
-
-
-class TestPolarSeamAssignment:
-    def test_polar_seam_cross_plane_wraps(self, polar_seam_config, addressing):
-        """Walker-star (RAAN spacing 90° × 4 planes = 360°): cross-plane DOES wrap."""
-        result = assign_isl_neighbors(polar_seam_config, addressing)
-        by_node = neighbors_by_node(result)
-        # Plane 0 should have cross-left wrapping to plane 3
-        p0s0 = by_node["sat-P00S00"]
-        assert len(p0s0) == 4
-        cross_left = next(na for na in p0s0 if na.priority == 3)
-        assert cross_left.peer_node_id == "sat-P03S00"
-
-    def test_polar_seam_last_plane_wraps_right(self, polar_seam_config, addressing):
-        """Plane 3 (last): cross-right wraps to plane 0."""
-        result = assign_isl_neighbors(polar_seam_config, addressing)
-        by_node = neighbors_by_node(result)
-        p3s0 = by_node["sat-P03S00"]
-        cross_right = next(na for na in p3s0 if na.priority == 2)
-        assert cross_right.peer_node_id == "sat-P00S00"
-
-    def test_polar_seam_all_4_terminals(self, polar_seam_config, addressing):
-        """All nodes get 4 assignments (4 OCTs, all cross-plane links wrap)."""
-        result = assign_isl_neighbors(polar_seam_config, addressing)
-        by_node = neighbors_by_node(result)
-        for node_id, assignments in by_node.items():
-            assert len(assignments) == 4, f"{node_id} has {len(assignments)} assignments"
-
-    def test_polar_seam_total_satellites(self, polar_seam_config, addressing):
-        result = assign_isl_neighbors(polar_seam_config, addressing)
-        by_node = neighbors_by_node(result)
-        assert len(by_node) == 32  # 4 × 8
+        assert len(by_node) == 66  # 6 × 11
 
 
 class TestIslOverrides:

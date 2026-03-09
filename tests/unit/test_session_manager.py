@@ -26,7 +26,7 @@ def tmp_sessions(tmp_path):
 session:
   name: Test Session
   data_dir: {data_dir}
-constellation: configs/constellations/4-node-test.yaml
+constellation: configs/constellations/custom-example.yaml
 ground_stations: configs/ground-stations/default.yaml
 routing:
   stack: configs/routing-stacks/isis
@@ -290,7 +290,7 @@ class TestCollectDataDirs:
 session:
   name: Test Session 2
   data_dir: {tmp_sessions["data_dir"]}
-constellation: configs/constellations/4-node-test.yaml
+constellation: configs/constellations/custom-example.yaml
 ground_stations: configs/ground-stations/default.yaml
 routing:
   stack: configs/routing-stacks/isis

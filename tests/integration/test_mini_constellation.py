@@ -6,9 +6,9 @@ the expected neighbors, pings between ground stations through the
 constellation, and tears down.
 
 Tests:
-  - 2x3 constellation (quick smoke test)
-  - 6x10 starlink-mini with IS-IS (PRD exit criteria)
-  - 6x10 starlink-mini with OSPF (PRD exit criteria: equivalent forwarding)
+  - custom-example 2x2 constellation (quick smoke test)
+  - 4x11 starlink-early-44 with IS-IS (PRD exit criteria)
+  - 4x11 starlink-early-44 with OSPF (PRD exit criteria: equivalent forwarding)
 
 Requires K3s running and container images built.
 """
@@ -44,22 +44,42 @@ def _parse_session_id(stdout: str, stderr: str) -> str | None:
     return None
 
 
-SESSION_2X3_PATH = str(PROJECT_ROOT / "configs/sessions/2x3-test.yaml")
-SESSION_4NODE_PATH = str(PROJECT_ROOT / "configs/sessions/4-node-test.yaml")
-SESSION_STARLINK_ISIS_PATH = str(PROJECT_ROOT / "configs/sessions/starlink-isis-de.yaml")
-SESSION_STARLINK_OSPF_PATH = str(PROJECT_ROOT / "configs/sessions/starlink-ospf-de.yaml")
+SESSION_STARLINK_ISIS_PATH = str(PROJECT_ROOT / "configs/sessions/starlink-early-44-isis-flat.yaml")
+SESSION_STARLINK_OSPF_PATH = str(PROJECT_ROOT / "configs/sessions/starlink-early-44-ospf-flat.yaml")
 
-# Expected satellites in 2x3: sat-P00S00, P00S01, P00S02, P01S00, P01S01, P01S02
-EXPECTED_SATS_2X3 = [
-    "sat-P00S00", "sat-P00S01", "sat-P00S02",
-    "sat-P01S00", "sat-P01S01", "sat-P01S02",
+# Expected satellites in custom-example: 2 planes × 2 sats
+EXPECTED_SATS_CUSTOM = [
+    "sat-P00S00", "sat-P00S01",
+    "sat-P01S00", "sat-P01S01",
 ]
-EXPECTED_GS_2X3 = ["gs-hawthorne", "gs-ashburn"]
+EXPECTED_GS_CUSTOM = ["gs-hawthorne", "gs-ashburn"]
 
-# Expected node counts for starlink-mini: 6 planes × 10 sats + 7 ground stations
-STARLINK_SAT_COUNT = 60
+# Expected node counts for starlink-early-44: 4 planes × 11 sats + 7 ground stations
+STARLINK_SAT_COUNT = 44
 STARLINK_GS_COUNT = 7
 STARLINK_TOTAL_PODS = STARLINK_SAT_COUNT + STARLINK_GS_COUNT
+
+
+def _create_custom_session() -> str:
+    """Create temp session config for custom-example constellation."""
+    import tempfile
+    import yaml
+
+    session = {
+        "session": {"name": "custom-example-k3s-test"},
+        "constellation": "configs/constellations/custom-example.yaml",
+        "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
+        "routing": {
+            "stack": "configs/routing-stacks/frr-isis-sr",
+            "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
+        },
+        "time": {"mode": "discrete-event", "step_seconds": 10},
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,
+    ) as f:
+        yaml.dump(session, f)
+        return f.name
 
 
 class TestPrerequisites:
@@ -111,7 +131,7 @@ class TestPrerequisites:
 
 
 class TestMiniConstellation:
-    """Full end-to-end deployment test (2x3 constellation on K3s).
+    """Full end-to-end deployment test (custom-example 2x2 constellation on K3s).
 
     This test class requires:
     - K3s running with KUBECONFIG set
@@ -132,25 +152,31 @@ class TestMiniConstellation:
             pytest.skip("Container images not available for deployment test")
 
     @pytest.fixture(scope="class")
-    def deployed_2x3(self, nodalarc_namespace):
-        """Deploy 2x3 constellation and clean up after all tests in class.
+    def deployed_custom(self, nodalarc_namespace):
+        """Deploy custom-example constellation and clean up after all tests.
 
         Uses na-deploy to run the full 11-step startup sequence.
         Runs with sudo because na-deploy needs root for crictl, nsenter,
         and pyroute2 netlink operations.
         """
         import sys
+        from pathlib import Path
 
-        result = subprocess.run(
-            ["sudo", "-E", sys.executable, "-m", "tools.na_deploy",
-             "--session", SESSION_2X3_PATH],
-            capture_output=True, text=True,
-            timeout=300,
-        )
+        session_path = _create_custom_session()
+
+        try:
+            result = subprocess.run(
+                ["sudo", "-E", sys.executable, "-m", "tools.na_deploy",
+                 "--session", session_path],
+                capture_output=True, text=True,
+                timeout=300,
+            )
+        finally:
+            Path(session_path).unlink(missing_ok=True)
+
         if result.returncode != 0:
             pytest.fail(f"na-deploy failed: {result.stderr}")
 
-        # Parse session_id from combined stdout+stderr (logging goes to stderr)
         session_id = _parse_session_id(result.stdout, result.stderr)
         if not session_id:
             pytest.fail("Could not parse session_id from na-deploy output")
@@ -160,7 +186,7 @@ class TestMiniConstellation:
         # Teardown
         cleanup_deployment(session_id, nodalarc_namespace)
 
-    def test_all_pods_running(self, deployed_2x3, nodalarc_namespace):
+    def test_all_pods_running(self, deployed_custom, nodalarc_namespace):
         """All satellite and ground station pods are running."""
         assert wait_for_pods_running(nodalarc_namespace, timeout=60)
 
@@ -171,17 +197,16 @@ class TestMiniConstellation:
             capture_output=True, text=True,
         )
         node_ids = set(result.stdout.strip().split())
-        # 2x3 = 6 satellites + 2 ground stations = 8 pods
-        assert len(node_ids) == 8
+        # custom-example = 4 satellites + 2 ground stations = 6 pods
+        assert len(node_ids) == 6
 
-    def test_isis_adjacencies_form(self, deployed_2x3, nodalarc_namespace):
+    def test_isis_adjacencies_form(self, deployed_custom, nodalarc_namespace):
         """IS-IS adjacencies form on satellite nodes within 60s.
 
         Each satellite with ISL neighbors should see at least one IS-IS
         neighbor in 'Up' state.
         """
-        # Verify each satellite sees at least one neighbor (retry per-sat)
-        for sat in EXPECTED_SATS_2X3:
+        for sat in EXPECTED_SATS_CUSTOM:
             for attempt in range(60):
                 result = subprocess.run(
                     ["kubectl", "exec", "-n", nodalarc_namespace,
@@ -195,18 +220,17 @@ class TestMiniConstellation:
             else:
                 pytest.fail(f"{sat} has no IS-IS neighbor Up after 60s.\n{result.stdout}")
 
-    def test_sat_to_sat_ping(self, deployed_2x3, nodalarc_namespace):
+    def test_sat_to_sat_ping(self, deployed_custom, nodalarc_namespace):
         """Satellite-to-satellite ping within the same plane.
 
-        Pings from sat-P00S00 to sat-P00S02's loopback (10.0.2.1) via
+        Pings from sat-P00S00 to sat-P00S01's loopback (10.0.1.1) via
         the ISL mesh. Requires IS-IS to have converged and IP forwarding.
         """
-        # Wait for IS-IS to install routes (retry ping for up to 30s)
         for _ in range(30):
             result = subprocess.run(
                 ["kubectl", "exec", "-n", nodalarc_namespace,
                  "sat-p00s00", "--",
-                 "ping", "-c", "1", "-W", "2", "10.0.2.1"],
+                 "ping", "-c", "1", "-W", "2", "10.0.1.1"],
                 capture_output=True, text=True,
             )
             if result.returncode == 0:
@@ -216,9 +240,9 @@ class TestMiniConstellation:
             f"Sat-to-sat ping failed: {result.stdout}\n{result.stderr}"
         )
 
-    def test_teardown_removes_all_pods(self, deployed_2x3, nodalarc_namespace):
+    def test_teardown_removes_all_pods(self, deployed_custom, nodalarc_namespace):
         """Teardown removes all pods from the namespace."""
-        cleanup_deployment(deployed_2x3, nodalarc_namespace)
+        cleanup_deployment(deployed_custom, nodalarc_namespace)
 
         result = subprocess.run(
             ["kubectl", "get", "pods", "-n", nodalarc_namespace,
@@ -229,12 +253,12 @@ class TestMiniConstellation:
         assert result.stdout.strip() == "", f"Pods remain after teardown: {result.stdout}"
 
 
-class TestStarlinkMini:
-    """PRD exit criteria: 6x10 constellation on K3s with IS-IS + SR-MPLS.
+class TestStarlinkEarly:
+    """PRD exit criteria: 4x11 constellation on K3s with IS-IS + SR-MPLS.
 
-    Deploys the full starlink-mini (60 sats, 7 ground stations) using
-    the starlink-isis-de session config. Verifies:
-    - All 67 pods reach Running state
+    Deploys the full starlink-early-44 (44 sats, 7 ground stations) using
+    the starlink-early-44-isis-flat session config. Verifies:
+    - All 51 pods reach Running state
     - IS-IS adjacencies form on representative satellites
     - GS-to-GS ping works through the constellation
     """
@@ -250,7 +274,7 @@ class TestStarlinkMini:
 
     @pytest.fixture(scope="class")
     def deployed_starlink(self, nodalarc_namespace):
-        """Deploy starlink-mini 6x10 constellation."""
+        """Deploy starlink-early-44 4x11 constellation."""
         import sys
 
         result = subprocess.run(
@@ -270,8 +294,8 @@ class TestStarlinkMini:
 
         cleanup_deployment(session_id, nodalarc_namespace)
 
-    def test_all_67_pods_running(self, deployed_starlink, nodalarc_namespace):
-        """All 67 pods (60 sats + 7 GS) are running."""
+    def test_all_51_pods_running(self, deployed_starlink, nodalarc_namespace):
+        """All 51 pods (44 sats + 7 GS) are running."""
         assert wait_for_pods_running(nodalarc_namespace, timeout=180)
 
         result = subprocess.run(
@@ -304,7 +328,7 @@ class TestStarlinkMini:
             )
 
         # Spot-check a few satellites across different planes
-        for sat_pod in ["sat-p00s00", "sat-p02s05", "sat-p05s09"]:
+        for sat_pod in ["sat-p00s00", "sat-p02s05", "sat-p03s10"]:
             result = subprocess.run(
                 ["kubectl", "exec", "-n", nodalarc_namespace,
                  sat_pod, "-c", "frr", "--",
@@ -339,7 +363,7 @@ class TestStarlinkMini:
 class TestOspfDeployment:
     """PRD exit criteria: OSPF session demonstrates equivalent forwarding.
 
-    Deploys the starlink-mini with OSPF profile to confirm the routing
+    Deploys the starlink-early-44 with OSPF profile to confirm the routing
     stack abstraction works across profiles.
     """
 
@@ -354,7 +378,7 @@ class TestOspfDeployment:
 
     @pytest.fixture(scope="class")
     def deployed_ospf(self, nodalarc_namespace):
-        """Deploy starlink-mini with OSPF profile."""
+        """Deploy starlink-early-44 with OSPF profile."""
         import sys
 
         result = subprocess.run(

@@ -26,12 +26,12 @@ EPOCH = 1735689600.0
 
 @pytest.fixture
 def four_node_timeline():
-    """Precompute a short timeline for the 4-node-test constellation."""
-    config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+    """Precompute a short timeline for the custom-example constellation."""
+    config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
     sats = expand_constellation(config)
     addressing = AddressingScheme()
     neighbors = assign_isl_neighbors(config, addressing)
-    gs_file = load_ground_stations(CONFIGS_DIR / "ground-stations/global-default.yaml")
+    gs_file = load_ground_stations(CONFIGS_DIR / "ground-stations/sets/global.yaml")
 
     events = precompute_timeline(
         satellites=sats,
@@ -164,7 +164,7 @@ class TestJsonLinesIO:
 class TestNoGroundStations:
     def test_timeline_without_gs(self):
         """Timeline works without ground stations."""
-        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
+        config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         sats = expand_constellation(config)
         addressing = AddressingScheme()
         neighbors = assign_isl_neighbors(config, addressing)

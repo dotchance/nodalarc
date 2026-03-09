@@ -238,8 +238,8 @@ class TestAdapterQueries:
 
 class TestMetadata:
     def test_set_and_get(self, db):
-        set_metadata(db, "session_name", "isis-baseline")
-        assert get_metadata(db, "session_name") == "isis-baseline"
+        set_metadata(db, "session_name", "iridium-small-36-isis-flat")
+        assert get_metadata(db, "session_name") == "iridium-small-36-isis-flat"
 
     def test_get_missing_key(self, db):
         assert get_metadata(db, "nonexistent") is None

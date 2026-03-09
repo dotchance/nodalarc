@@ -23,13 +23,30 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 @pytest.fixture
 def four_node_timeline(tmp_path):
-    """Generate 4-node-test timeline."""
+    """Generate custom-example timeline."""
+    import tempfile
+    import yaml
     from ome.main import run as ome_run
 
-    session_path = PROJECT_ROOT / "configs/sessions/4-node-test.yaml"
-    if not session_path.exists():
-        pytest.skip("4-node-test session not available")
-    return ome_run(str(session_path), str(tmp_path))
+    session = {
+        "session": {"name": "rolling-window-test"},
+        "constellation": "configs/constellations/custom-example.yaml",
+        "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
+        "routing": {
+            "stack": "configs/routing-stacks/frr-isis-sr",
+            "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
+        },
+        "time": {"mode": "discrete-event", "step_seconds": 1},
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,
+    ) as f:
+        yaml.dump(session, f)
+        session_path = f.name
+
+    path = ome_run(session_path, str(tmp_path))
+    Path(session_path).unlink(missing_ok=True)
+    return path
 
 
 def _load_events(path):
@@ -52,7 +69,7 @@ class TestSingleWindowCoverage:
         events = _load_events(four_node_timeline)
         expected_period = orbital_period(550.0)
         last_timestamp = max(e["timestamp_s"] for e in events)
-        # Allow ±1 step tolerance (step_seconds=1 for 4-node-test)
+        # Allow ±1 step tolerance (step_seconds=1 for custom-example)
         assert abs(last_timestamp - expected_period) < 2.0, (
             f"Last timestamp {last_timestamp:.1f}s should match "
             f"orbital period {expected_period:.1f}s"

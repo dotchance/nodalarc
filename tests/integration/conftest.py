@@ -58,7 +58,7 @@ def cleanup_deployment(session_id: str, namespace: str = "nodalarc") -> None:
     """Clean up a Helm deployment and kill MI/VS-API processes."""
     # Kill MI and VS-API processes from session state.
     # Processes were started by sudo, so use sudo kill.
-    session_dirs = glob.glob(f"/tmp/nodalarc/sessions/{session_id}*")
+    session_dirs = glob.glob(f"/var/nodalarc/sessions/{session_id}*")
     for sdir in session_dirs:
         state_file = Path(sdir) / "session-state.json"
         if state_file.exists():

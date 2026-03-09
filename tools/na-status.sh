@@ -26,4 +26,4 @@ pgrep -af "convergence_stub" 2>/dev/null || echo "(no MI stub running)"
 echo ""
 
 echo "--- Session State Files ---"
-find /tmp/nodalarc/sessions -name session-state.json 2>/dev/null || echo "(none)"
+find /var/nodalarc/sessions -name session-state.json 2>/dev/null || echo "(none)"

@@ -40,7 +40,7 @@ def session_db(tmp_path: Path) -> str:
 
     # Metadata
     set_metadata(conn, "session_name", "isis-test-run")
-    set_metadata(conn, "constellation", "4-node-test")
+    set_metadata(conn, "constellation", "custom-example")
     set_metadata(conn, "routing_stack", "frr-isis")
 
     now = datetime.now(timezone.utc)
@@ -128,7 +128,7 @@ class TestReportSummary:
         output = report_summary(conn)
         conn.close()
         assert "isis-test-run" in output
-        assert "4-node-test" in output
+        assert "custom-example" in output
         assert "frr-isis" in output
 
     def test_contains_table_counts(self, session_db: str):

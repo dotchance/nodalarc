@@ -3,7 +3,7 @@
 Tests:
 - Co-rotating same-plane neighbors: near-zero angular velocity
 - Cross-plane neighbors at increasing latitudes: increasing angular velocity
-- Tracking rate feasibility check against starlink-mini calibrated rate
+- Tracking rate feasibility check against starlink-early-44 calibrated rate
 - Counter-rotating (walker-star) high angular velocity
 """
 
@@ -58,7 +58,7 @@ class TestCrossPlaneIncreasingLatitude:
     def test_angular_velocity_varies_with_orbital_position(self):
         """Cross-plane angular velocity varies as satellites move along orbit."""
         e1 = elements_from_params(550.0, 53.0, 0.0, 0.0)
-        e2 = elements_from_params(550.0, 53.0, 30.0, 6.0)  # starlink-mini RAAN + phase
+        e2 = elements_from_params(550.0, 53.0, 30.0, 6.0)  # starlink-early-44 RAAN + phase
         period = orbital_period(550.0)
 
         angular_velocities = []
@@ -74,18 +74,18 @@ class TestCrossPlaneIncreasingLatitude:
 
 
 class TestTrackingRateCalibration:
-    def test_starlink_mini_peak_below_config_rate(self):
-        """Peak cross-plane angular velocity for starlink-mini is below configured 3.0 deg/s.
+    def test_starlink_early_peak_below_config_rate(self):
+        """Peak cross-plane angular velocity for starlink-early-44 is below configured 3.0 deg/s.
 
         PRD R-OME-003: calibration task to verify tracking rate covers actual peak.
-        Starlink-mini: 6 planes, 30° RAAN spacing, 53° inclination, 550 km.
+        Starlink-early-44: 4 planes, 45° RAAN spacing, 53° inclination, 550 km.
         """
         from pathlib import Path
         from ome.constellation_loader import load_constellation
 
-        config_path = Path(__file__).parent.parent.parent / "configs/constellations/starlink-mini.yaml"
+        config_path = Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"
         if not config_path.exists():
-            pytest.skip("starlink-mini config not available")
+            pytest.skip("starlink-early-44 config not available")
 
         config = load_constellation(config_path)
         tracking_rate = config.default_terminals.isl[0].max_tracking_rate_deg_s
@@ -93,8 +93,8 @@ class TestTrackingRateCalibration:
         # Compute peak cross-plane angular velocity across all RAAN pairings
         period = orbital_period(550.0)
         max_ang_vel = 0.0
-        raan_spacing = 30.0
-        phase_offset = 6.0
+        raan_spacing = 45.0
+        phase_offset = 8.2
 
         for plane_delta in [1, 2, 3]:  # Adjacent, 2-away, 3-away planes
             raan_diff = plane_delta * raan_spacing
@@ -118,7 +118,7 @@ class TestTrackingRateCalibration:
         from pathlib import Path
         from ome.constellation_loader import load_constellation
 
-        config_path = Path(__file__).parent.parent.parent / "configs/constellations/starlink-mini.yaml"
+        config_path = Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"
         config = load_constellation(config_path)
 
         # Config has an explicit tracking rate

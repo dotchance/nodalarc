@@ -25,34 +25,45 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 @pytest.fixture
 def four_node_session_path():
-    path = PROJECT_ROOT / "configs/sessions/4-node-test.yaml"
-    if not path.exists():
-        pytest.skip("4-node-test session not available")
-    return str(path)
+    """Create a temporary session config for custom-example constellation."""
+    import tempfile
+    import yaml
+
+    session = {
+        "session": {"name": "custom-example-test"},
+        "constellation": "configs/constellations/custom-example.yaml",
+        "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
+        "routing": {
+            "stack": "configs/routing-stacks/frr-isis-sr",
+            "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
+        },
+        "time": {"mode": "discrete-event", "step_seconds": 10},
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,
+    ) as f:
+        yaml.dump(session, f)
+        return f.name
 
 
 @pytest.fixture
 def sample_session_path():
-    path = PROJECT_ROOT / "configs/sessions/sample-session.yaml"
+    path = PROJECT_ROOT / "configs/sessions/iridium-small-36-isis-flat.yaml"
     if not path.exists():
-        pytest.skip("sample-session not available")
+        pytest.skip("iridium-small-36-isis-flat not available")
     return str(path)
 
 
 @pytest.fixture
 def polar_seam_session_path():
-    """Create a temporary session config for polar-seam-demo."""
+    """Create a temporary session config for iridium-66."""
     import tempfile
     import yaml
 
     session = {
-        "session": {"name": "polar-seam-test"},
-        "constellation": "configs/constellations/polar-seam-demo.yaml",
-        "ground_stations": "configs/ground-stations/two-station.yaml",
-        "addressing": {
-            "sat_id_template": "sat-P{plane:02d}S{slot:02d}",
-            "gs_id_template": "gs-{name}",
-        },
+        "session": {"name": "iridium-66-test"},
+        "constellation": "configs/constellations/iridium-66.yaml",
+        "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
         "routing": {
             "stack": "configs/routing-stacks/frr-isis-sr",
             "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
@@ -69,7 +80,9 @@ def polar_seam_session_path():
 @pytest.fixture
 def four_node_timeline(four_node_session_path, tmp_path):
     from ome.main import run as ome_run
-    return ome_run(four_node_session_path, str(tmp_path))
+    path = ome_run(four_node_session_path, str(tmp_path))
+    Path(four_node_session_path).unlink(missing_ok=True)
+    return path
 
 
 @pytest.fixture
@@ -123,7 +136,7 @@ class TestFourNodePipeline:
                 VisibilityEvent.model_validate(e["data"])
 
     def test_isl_visibility_events_present(self, four_node_timeline):
-        """4-node-test has ISL visibility events (4 sats, 2 planes)."""
+        """custom-example has ISL visibility events (4 sats, 2 planes)."""
         events = _load_events(four_node_timeline)
         isl_vis = [
             e for e in events

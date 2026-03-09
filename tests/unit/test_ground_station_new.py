@@ -148,21 +148,18 @@ class TestSetResolution:
         assert "hawthorne" in names
         assert "mcmurdo" in names
 
-    def test_global_set_matches_monolithic(self):
-        """Loading set 'global' produces stations with same names and coords as old monolithic file."""
+    def test_global_set_station_names_and_coords(self):
+        """Loading set 'global' produces 7 stations with expected names and coords."""
         gs_file = load_ground_stations_from_set("global")
-        legacy = load_ground_stations(CONFIGS_DIR / "ground-stations" / "global-default.yaml")
 
-        # Same stations by name
-        new_names = sorted(s.name for s in gs_file.stations)
-        old_names = sorted(s.name for s in legacy.stations)
-        assert new_names == old_names
+        names = sorted(s.name for s in gs_file.stations)
+        assert names == ["ashburn", "frankfurt", "hawthorne", "mcmurdo",
+                         "sao-paulo", "singapore", "sydney"]
 
-        # Same coordinates for each station
-        for new_station in gs_file.stations:
-            old_station = next(s for s in legacy.stations if s.name == new_station.name)
-            assert new_station.lat_deg == old_station.lat_deg
-            assert new_station.lon_deg == old_station.lon_deg
+        # Spot-check coordinates
+        hawthorne = next(s for s in gs_file.stations if s.name == "hawthorne")
+        assert hawthorne.lat_deg == 33.92
+        assert hawthorne.lon_deg == -118.33
 
     def test_mcmurdo_explicit_prefixes_preserved(self):
         """Stations with explicit prefixes keep them even when set has a template."""
@@ -193,9 +190,9 @@ class TestLoadFromList:
 
 class TestFormatDetection:
     def test_monolithic_format(self):
-        """Legacy monolithic file loads correctly."""
-        gs_file = load_ground_stations(CONFIGS_DIR / "ground-stations" / "global-default.yaml")
-        assert len(gs_file.stations) == 7
+        """Monolithic file loads correctly."""
+        gs_file = load_ground_stations(CONFIGS_DIR / "ground-stations" / "custom-example.yaml")
+        assert len(gs_file.stations) == 4
 
     def test_individual_format(self):
         """Individual station file loads as single-station GroundStationFile."""

@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { getSatellites } from "./satellites";
 import { getGroundStations } from "./groundStations";
 import { getLinks } from "./links";
+import { toggleOrbitPin, isOrbitPinned } from "./orbitPins";
 import type { Selection } from "../types";
 
 let tooltip: HTMLDivElement | null = null;
@@ -53,7 +54,8 @@ function buildTooltipContent(nodeId: string, nodeType: string): string {
         }
       }
       const abrTag = linkedAreas.size > 1 ? " [ABR]" : "";
-      return `${nodeId}\n${isl} ISLs, ${gnd} GND, Area ${area}${abrTag}`;
+      const pinHint = isOrbitPinned(nodeId) ? "\n[Ctrl+click to unpin orbit]" : "";
+      return `${nodeId}\n${isl} ISLs, ${gnd} GND, Area ${area}${abrTag}${pinHint}`;
     }
   } else if (nodeType === "ground_station") {
     const gs = getGroundStations().get(nodeId);
@@ -153,7 +155,7 @@ export function setupRaycaster(
     if (nodeHit) {
       const nodeId = nodeHit.object.userData["nodeId"] as string;
       const nodeType = nodeHit.object.userData["nodeType"] as string;
-      tip.innerHTML = buildTooltipContent(nodeId, nodeType).replace("\n", "<br>");
+      tip.innerHTML = buildTooltipContent(nodeId, nodeType).replace(/\n/g, "<br>");
       nodeHit.object.scale.set(HOVER_SCALE, HOVER_SCALE, HOVER_SCALE);
       hoveredObject = nodeHit.object;
       tip.style.display = "block";
@@ -183,6 +185,19 @@ export function setupRaycaster(
 
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObjects(scene.children, false);
+
+    // Ctrl+click (or Cmd+click on macOS): toggle orbit pin for satellites
+    if (event.ctrlKey || event.metaKey) {
+      const nodeHit = intersects.find((i) => i.object.userData["nodeId"]);
+      if (nodeHit) {
+        const nodeId = nodeHit.object.userData["nodeId"] as string;
+        const nodeType = nodeHit.object.userData["nodeType"] as string;
+        if (nodeType === "satellite") {
+          toggleOrbitPin(nodeId, scene);
+        }
+      }
+      return;
+    }
 
     const nodeHit = intersects.find((i) => i.object.userData["nodeId"]);
 

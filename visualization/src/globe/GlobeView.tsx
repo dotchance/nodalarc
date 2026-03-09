@@ -17,6 +17,7 @@ import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
 import { updateGroundTracks, clearGroundTracks } from "./groundTracks";
 import { updateOrbitalTrails, flushTrails } from "./orbitalTrails";
+import { updateOrbitPins, clearOrbitPins } from "./orbitPins";
 import { setupRaycaster } from "./raycaster";
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
@@ -219,6 +220,7 @@ export function GlobeView({
       if (snap && snap.constellation_name !== lastConstellationName) {
         if (lastConstellationName !== null) {
           flushTrails();
+          clearOrbitPins(scene);
           resetDeliveryRate();
         }
         lastConstellationName = snap.constellation_name;
@@ -257,6 +259,7 @@ export function GlobeView({
       animateLinks();
       animateFlowPaths();
       if (!skipTrails) updateOrbitalTrails(scene);
+      updateOrbitPins(scene);
       updateSelection(selectionRef.current, scene, camera);
       animateSelection(camera);
       updateCoverageFootprint(selectionRef.current, scene, camera);
@@ -279,6 +282,7 @@ export function GlobeView({
     return () => {
       resizeObs.disconnect();
       renderer.setAnimationLoop(null);
+      clearOrbitPins(scene);
       renderer.dispose();
       container.removeChild(renderer.domElement);
     };

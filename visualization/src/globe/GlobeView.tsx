@@ -19,6 +19,7 @@ import { updateGroundTracks, clearGroundTracks } from "./groundTracks";
 import { updateOrbitalTrails, flushTrails } from "./orbitalTrails";
 import { setupRaycaster } from "./raycaster";
 import { updateSelection, animateSelection } from "./selection";
+import { updateCoverageFootprint } from "./coverageFootprint";
 import type { StateSnapshot, Selection, ColorMode } from "../types";
 
 export interface GlobeActions {
@@ -258,6 +259,7 @@ export function GlobeView({
       if (!skipTrails) updateOrbitalTrails(scene);
       updateSelection(selectionRef.current, scene, camera);
       animateSelection(camera);
+      updateCoverageFootprint(selectionRef.current, scene, camera);
       controls.update();
       updateGSLabels(camera, labelContainer);
       renderer.render(scene, camera);

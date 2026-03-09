@@ -5,6 +5,7 @@ import type { ViewMode, ColorMode } from "../types";
 
 interface KeyboardActions {
   onEscape: () => void;
+  onCloseCatalog?: () => void;
   onToggleView: (mode: ViewMode) => void;
   onSetColorMode: (mode: ColorMode) => void;
   onToggleGroundTracks: () => void;
@@ -29,7 +30,11 @@ export function useKeyboard(actions: KeyboardActions): void {
 
       switch (e.key) {
         case "Escape":
-          actions.onEscape();
+          if (actions.onCloseCatalog) {
+            actions.onCloseCatalog();
+          } else {
+            actions.onEscape();
+          }
           break;
         case " ":
           e.preventDefault();

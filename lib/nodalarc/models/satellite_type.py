@@ -77,6 +77,7 @@ class GroundTerminalDef(BaseModel):
     band: str | None = None  # Frequency band for RF terminals
     count: int
     bandwidth_mbps: float
+    beam_falloff_exponent: float = 2.0
 
     @field_validator("type")
     @classmethod
@@ -97,6 +98,13 @@ class GroundTerminalDef(BaseModel):
     def _positive_bandwidth(cls, v: float) -> float:
         if v <= 0:
             raise ValueError(f"bandwidth_mbps must be positive, got {v}")
+        return v
+
+    @field_validator("beam_falloff_exponent")
+    @classmethod
+    def _falloff_range(cls, v: float) -> float:
+        if not 1.0 <= v <= 8.0:
+            raise ValueError(f"beam_falloff_exponent must be 1.0-8.0, got {v}")
         return v
 
 

@@ -29,6 +29,7 @@ class NodeState(BaseModel):
     gnd_count: int
     prefix: str | None = None  # Ground station advertised prefix
     min_elevation_deg: float | None = None  # Ground stations only
+    beam_falloff_exponent: float | None = None  # Satellites only, from satellite type
 
 
 class LinkState(BaseModel):

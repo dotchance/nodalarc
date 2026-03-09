@@ -1,0 +1,15 @@
+ground_station_set:
+  name: global
+  description: "General-purpose global coverage"
+  stations:
+    - hawthorne
+    - ashburn
+    - frankfurt
+    - singapore
+    - sao-paulo
+    - sydney
+    - mcmurdo
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10

@@ -1,0 +1,22 @@
+# Iridium-Small-36 — thinner version of iridium-66 for fast iteration.
+#
+# 6 planes × 6 satellites = 36 total. Same geometry as iridium-66 but with
+# wider satellite spacing. Coverage gaps appear at lower latitudes. Intended
+# for quick iteration on polar seam phenomena without the deployment overhead
+# of 66 nodes.
+
+mode: parametric
+name: iridium-small-36
+satellite_type: iridium-next
+orbit:
+  altitude_km: 780
+  inclination_deg: 86.4
+  pattern: walker-star
+planes:
+  count: 6
+  raan_spacing_deg: 31.6
+  sats_per_plane: 6
+  phase_offset_deg: 10
+polar_seam:
+  enabled: true
+  latitude_threshold_deg: 70

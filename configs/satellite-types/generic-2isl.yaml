@@ -1,0 +1,20 @@
+# Generic 2-ISL — terminal config for small test constellations.
+#
+# 2 optical ISLs at 5000 km range. Used by 4-node-test, 2x3-test,
+# and custom-example constellations.
+
+satellite_type:
+  name: generic-2isl
+  description: "Generic 2-ISL config for small test constellations"
+
+  isl_terminals:
+    - type: optical
+      count: 2
+      max_range_km: 5000
+      bandwidth_mbps: 1000
+      max_tracking_rate_deg_s: 3.0
+
+  ground_terminals:
+    - type: optical
+      count: 1
+      bandwidth_mbps: 1000

@@ -1,0 +1,33 @@
+# Cross-plane ISL failure near equator — where polar seam dynamics are strongest.
+# P02↔P03 at slot 05 (mid-orbit) produces the most routing disruption because
+# counter-rotating planes have maximum relative velocity at equatorial crossings.
+scenario:
+  name: iridium-66-link-failure
+  description: "ISL failure on iridium-66 cross-plane link near equator"
+
+  steps:
+    - action: wait
+      duration_s: 300
+
+    - action: inject_link_down
+      node_a: sat-P02S05
+      node_b: sat-P03S05
+
+    - action: wait_converge
+      timeout_s: 60
+
+    - action: measure
+      duration_s: 30
+
+    - action: wait
+      duration_s: 300
+
+    - action: inject_link_up
+      node_a: sat-P02S05
+      node_b: sat-P03S05
+
+    - action: wait_converge
+      timeout_s: 60
+
+    - action: measure
+      duration_s: 30

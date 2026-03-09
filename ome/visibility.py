@@ -29,7 +29,7 @@ class VisibilityResult(NamedTuple):
     """Result of a visibility check between two nodes."""
     visible: bool
     range_km: float
-    reason: str  # "ok", "los_blocked", "range_exceeded", "elevation_below_min", "tracking_exceeded"
+    reason: str  # "ok", "los_blocked", "range_exceeded", "field_of_regard", "elevation_below_min", "tracking_exceeded"
 
 
 class GroundVisibility(NamedTuple):
@@ -184,6 +184,70 @@ def compute_angular_velocity(
 
 
 # ---------------------------------------------------------------------------
+# Field of regard
+# ---------------------------------------------------------------------------
+
+def check_field_of_regard(
+    pos_a: Vec3, vel_a: Vec3,
+    pos_b: Vec3, vel_b: Vec3,
+    field_of_regard_deg: float,
+) -> bool:
+    """Check if both satellites can see each other within their field of regard.
+
+    The boresight direction for each satellite is its velocity direction.
+    The FoR defines the maximum angular deviation from the velocity axis
+    (considering both forward and aft directions symmetrically).
+
+    Returns True if the link is feasible (within FoR/2 for both terminals).
+    """
+    if field_of_regard_deg >= 360.0:
+        return True
+
+    half_angle_rad = math.radians(field_of_regard_deg / 2.0)
+
+    # LOS from A to B
+    los_x = pos_b.x - pos_a.x
+    los_y = pos_b.y - pos_a.y
+    los_z = pos_b.z - pos_a.z
+    los_mag = math.sqrt(los_x**2 + los_y**2 + los_z**2)
+    if los_mag < 1e-10:
+        return True
+    los_x /= los_mag
+    los_y /= los_mag
+    los_z /= los_mag
+
+    # Check from A's perspective
+    vel_a_mag = math.sqrt(vel_a.x**2 + vel_a.y**2 + vel_a.z**2)
+    if vel_a_mag < 1e-10:
+        return True
+    ba_x = vel_a.x / vel_a_mag
+    ba_y = vel_a.y / vel_a_mag
+    ba_z = vel_a.z / vel_a_mag
+
+    cos_a = max(-1.0, min(1.0, los_x * ba_x + los_y * ba_y + los_z * ba_z))
+    angle_a = math.acos(cos_a)
+    min_angle_a = min(angle_a, math.pi - angle_a)
+    if min_angle_a > half_angle_rad:
+        return False
+
+    # Check from B's perspective (LOS reversed)
+    vel_b_mag = math.sqrt(vel_b.x**2 + vel_b.y**2 + vel_b.z**2)
+    if vel_b_mag < 1e-10:
+        return True
+    bb_x = vel_b.x / vel_b_mag
+    bb_y = vel_b.y / vel_b_mag
+    bb_z = vel_b.z / vel_b_mag
+
+    cos_b = max(-1.0, min(1.0, -los_x * bb_x - los_y * bb_y - los_z * bb_z))
+    angle_b = math.acos(cos_b)
+    min_angle_b = min(angle_b, math.pi - angle_b)
+    if min_angle_b > half_angle_rad:
+        return False
+
+    return True
+
+
+# ---------------------------------------------------------------------------
 # High-level visibility checks
 # ---------------------------------------------------------------------------
 
@@ -192,12 +256,13 @@ def check_isl_visibility(
     pos_b: Vec3, vel_b: Vec3,
     max_range_km: float,
     max_tracking_rate_deg_s: float | None = None,
+    field_of_regard_deg: float = 360.0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     geo_a: GeoPosition | None = None,
     geo_b: GeoPosition | None = None,
 ) -> IslVisibility:
-    """Full ISL visibility check: LOS → range → tracking rate → polar seam.
+    """Full ISL visibility check: LOS → range → FoR → tracking rate → polar seam.
 
     Returns IslVisibility with reason for failure if not visible.
     """
@@ -211,12 +276,17 @@ def check_isl_visibility(
     if range_km > max_range_km:
         return IslVisibility("", "", False, range_km, 0.0, "range_exceeded")
 
-    # 3. Angular velocity / tracking rate
+    # 3. Field of regard
+    if field_of_regard_deg < 360.0:
+        if not check_field_of_regard(pos_a, vel_a, pos_b, vel_b, field_of_regard_deg):
+            return IslVisibility("", "", False, range_km, 0.0, "field_of_regard")
+
+    # 4. Angular velocity / tracking rate
     ang_vel = compute_angular_velocity(pos_a, vel_a, pos_b, vel_b)
     if max_tracking_rate_deg_s is not None and ang_vel > max_tracking_rate_deg_s:
         return IslVisibility("", "", False, range_km, ang_vel, "tracking_exceeded")
 
-    # 4. Polar seam hard latitude cutoff
+    # 5. Polar seam hard latitude cutoff
     if polar_seam_enabled and geo_a is not None and geo_b is not None:
         if abs(geo_a.lat_deg) > latitude_threshold_deg or abs(geo_b.lat_deg) > latitude_threshold_deg:
             # Only applies to cross-plane ISLs — caller handles this

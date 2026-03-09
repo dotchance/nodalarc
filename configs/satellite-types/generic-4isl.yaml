@@ -1,0 +1,22 @@
+# Generic 4-ISL — permissive configuration for routing behavior studies.
+#
+# High tracking rate, long range, wide field of regard. Designed for
+# engineers who want to focus on routing protocol behavior without
+# worrying about hardware fidelity constraints.
+
+satellite_type:
+  name: generic-4isl
+  description: "Permissive generic 4-ISL configuration for routing studies"
+
+  isl_terminals:
+    - type: optical
+      count: 4
+      max_range_km: 6000
+      bandwidth_mbps: 100
+      max_tracking_rate_deg_s: 5.0
+      field_of_regard_deg: 160
+
+  ground_terminals:
+    - type: optical
+      count: 1
+      bandwidth_mbps: 1000

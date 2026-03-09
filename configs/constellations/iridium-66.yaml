@@ -1,0 +1,23 @@
+# Iridium-66 — canonical polar seam constellation.
+#
+# 6 planes × 11 satellites = 66 total, 780 km altitude, 86.4° inclination.
+# Walker-star pattern with no cross-plane ISL wrap between plane 0 and plane 5
+# (the operational Iridium seam). Cross-plane ISLs cycle as counter-rotating
+# planes converge at high latitudes, producing a dramatic and measurable polar
+# seam effect.
+
+mode: parametric
+name: iridium-66
+satellite_type: iridium-next
+orbit:
+  altitude_km: 780
+  inclination_deg: 86.4
+  pattern: walker-star
+planes:
+  count: 6
+  raan_spacing_deg: 31.6
+  sats_per_plane: 11
+  phase_offset_deg: 5.45
+polar_seam:
+  enabled: true
+  latitude_threshold_deg: 70

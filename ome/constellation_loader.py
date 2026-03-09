@@ -6,8 +6,8 @@ YAML loading happens here (component responsibility, not shared lib).
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
 
 import yaml
 from pydantic import TypeAdapter
@@ -16,12 +16,156 @@ from ome.propagator import OrbitalElements, elements_from_params
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ExplicitConstellation,
+    GroundTerminal,
+    IslTerminal,
     ParametricConstellation,
     TLEConstellation,
+    TerminalConfig,
 )
-from nodalarc.models.ground_station import GroundStationFile
+from nodalarc.models.ground_station import (
+    GroundStationConfig,
+    GroundStationFile,
+    GroundStationIndividualFile,
+    GroundStationSetConfig,
+    GroundStationSetFile,
+    GroundTerminalDef,
+    TerrestrialPrefixTemplate,
+)
+from nodalarc.models.satellite_type import SatelliteTypeConfig
 
 adapter = TypeAdapter(ConstellationConfig)
+
+# Default search paths for config directories
+_SAT_TYPE_DIR: Path | None = None
+_GS_STATIONS_DIR: Path | None = None
+_GS_SETS_DIR: Path | None = None
+
+
+def set_satellite_type_dir(path: str | Path) -> None:
+    """Set the directory to search for satellite type YAML files."""
+    global _SAT_TYPE_DIR
+    _SAT_TYPE_DIR = Path(path)
+
+
+def set_ground_station_dirs(
+    stations_dir: str | Path | None = None,
+    sets_dir: str | Path | None = None,
+) -> None:
+    """Set directories for ground station files."""
+    global _GS_STATIONS_DIR, _GS_SETS_DIR
+    if stations_dir is not None:
+        _GS_STATIONS_DIR = Path(stations_dir)
+    if sets_dir is not None:
+        _GS_SETS_DIR = Path(sets_dir)
+
+
+def _resolve_sat_type_dir() -> Path:
+    """Resolve the satellite type directory, defaulting to configs/satellite-types/."""
+    if _SAT_TYPE_DIR is not None:
+        return _SAT_TYPE_DIR
+    candidate = Path(__file__).parent.parent / "configs" / "satellite-types"
+    if candidate.is_dir():
+        return candidate
+    raise FileNotFoundError(
+        "Cannot find configs/satellite-types/ directory. "
+        "Call set_satellite_type_dir() to configure explicitly."
+    )
+
+
+def _resolve_gs_stations_dir() -> Path:
+    if _GS_STATIONS_DIR is not None:
+        return _GS_STATIONS_DIR
+    candidate = Path(__file__).parent.parent / "configs" / "ground-stations" / "stations"
+    if candidate.is_dir():
+        return candidate
+    raise FileNotFoundError("Cannot find configs/ground-stations/stations/ directory.")
+
+
+def _resolve_gs_sets_dir() -> Path:
+    if _GS_SETS_DIR is not None:
+        return _GS_SETS_DIR
+    candidate = Path(__file__).parent.parent / "configs" / "ground-stations" / "sets"
+    if candidate.is_dir():
+        return candidate
+    raise FileNotFoundError("Cannot find configs/ground-stations/sets/ directory.")
+
+
+@lru_cache(maxsize=32)
+def load_satellite_type(name: str) -> SatelliteTypeConfig:
+    """Load and validate a satellite type YAML file by name.
+
+    The name resolves to configs/satellite-types/{name}.yaml.
+    Results are cached since the same type may be referenced multiple times.
+    """
+    sat_type_dir = _resolve_sat_type_dir()
+    path = sat_type_dir / f"{name}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"Satellite type file not found: {path}")
+    data = yaml.safe_load(path.read_text())
+    # Handle top-level 'satellite_type' key
+    if isinstance(data, dict) and "satellite_type" in data:
+        data = data["satellite_type"]
+    return SatelliteTypeConfig.model_validate(data)
+
+
+def _sat_type_to_terminal_config(sat_type: SatelliteTypeConfig) -> TerminalConfig:
+    """Convert a SatelliteTypeConfig to the legacy TerminalConfig format.
+
+    Bridges the new satellite type model to the inline terminal format
+    that downstream code (template_vars, addressing, ome/main) expects.
+    """
+    isl_terminals = []
+    for td in sat_type.isl_terminals:
+        isl_terminals.append(IslTerminal(
+            type=td.type,
+            count=td.count,
+            max_range_km=td.max_range_km,
+            bandwidth_mbps=td.bandwidth_mbps,
+            max_tracking_rate_deg_s=td.max_tracking_rate_deg_s,
+            field_of_regard_deg=td.field_of_regard_deg,
+        ))
+    ground_terminals = []
+    for td in sat_type.ground_terminals:
+        ground_terminals.append(GroundTerminal(
+            type=td.type,
+            count=td.count,
+            bandwidth_mbps=td.bandwidth_mbps,
+        ))
+    return TerminalConfig(isl=isl_terminals, ground=ground_terminals)
+
+
+def resolve_constellation_terminals(config: ConstellationConfig) -> ConstellationConfig:
+    """Resolve satellite_type references and populate default_terminals.
+
+    If the constellation uses satellite_type instead of inline
+    default_terminals, loads the satellite type and fills in
+    default_terminals so downstream code works unchanged.
+
+    Returns the config (possibly mutated) for convenience.
+    """
+    if not isinstance(config, (ParametricConstellation, ExplicitConstellation, TLEConstellation)):
+        return config
+    if config.default_terminals is not None:
+        return config
+    if config.satellite_type is None:
+        raise ValueError("Constellation must specify satellite_type or default_terminals")
+    sat_type = load_satellite_type(config.satellite_type)
+    config.default_terminals = _sat_type_to_terminal_config(sat_type)
+    return config
+
+
+def _terminal_counts_from_sat_type(sat_type: SatelliteTypeConfig) -> tuple[int, int]:
+    """Extract (isl_terminal_count, ground_terminal_count) from a satellite type."""
+    isl_count = sum(t.count for t in sat_type.isl_terminals)
+    gnd_count = sum(t.count for t in sat_type.ground_terminals)
+    return isl_count, gnd_count
+
+
+def _terminal_counts_from_inline(terminals) -> tuple[int, int]:
+    """Extract terminal counts from inline TerminalConfig."""
+    isl_count = sum(t.count for t in terminals.isl)
+    gnd_count = sum(t.count for t in terminals.ground)
+    return isl_count, gnd_count
 
 
 class SatelliteNode:
@@ -45,15 +189,139 @@ class SatelliteNode:
 
 
 def load_constellation(path: str | Path) -> ConstellationConfig:
-    """Load and validate constellation YAML."""
+    """Load and validate constellation YAML.
+
+    If the constellation references a satellite_type, resolves it and
+    populates default_terminals so downstream code works unchanged.
+    """
     data = yaml.safe_load(Path(path).read_text())
-    return adapter.validate_python(data)
+    config = adapter.validate_python(data)
+    resolve_constellation_terminals(config)
+    return config
+
+
+def load_ground_station_individual(name: str) -> GroundStationConfig:
+    """Load an individual ground station YAML file by name."""
+    stations_dir = _resolve_gs_stations_dir()
+    path = stations_dir / f"{name}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"Ground station file not found: {path}")
+    data = yaml.safe_load(path.read_text())
+    if isinstance(data, dict) and "ground_station" in data:
+        return GroundStationConfig.model_validate(data["ground_station"])
+    return GroundStationConfig.model_validate(data)
+
+
+def load_ground_station_set(name: str) -> GroundStationSetConfig:
+    """Load a ground station set YAML file by name."""
+    sets_dir = _resolve_gs_sets_dir()
+    path = sets_dir / f"{name}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"Ground station set file not found: {path}")
+    data = yaml.safe_load(path.read_text())
+    if isinstance(data, dict) and "ground_station_set" in data:
+        return GroundStationSetConfig.model_validate(data["ground_station_set"])
+    return GroundStationSetConfig.model_validate(data)
+
+
+# Default terminal/elevation/policy values for individual station files
+# (stations in sets use the set's defaults; individual stations need sensible fallbacks)
+_DEFAULT_GS_TERMINALS = [
+    GroundTerminalDef(type="optical", count=1, bandwidth_mbps=1000, tracking_capacity=1)
+]
+_DEFAULT_MIN_ELEVATION_DEG = 25.0
+_DEFAULT_SCHEDULING_POLICY = "highest-elevation"
+
+
+def _build_gs_file_from_stations(
+    stations: list[GroundStationConfig],
+    default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None,
+) -> GroundStationFile:
+    """Build a GroundStationFile from a list of individual station configs.
+
+    Bridges the new individual/set formats to the monolithic format that
+    the rest of the system expects.
+    """
+    return GroundStationFile(
+        default_terminals=_DEFAULT_GS_TERMINALS,
+        default_min_elevation_deg=_DEFAULT_MIN_ELEVATION_DEG,
+        default_scheduling_policy=_DEFAULT_SCHEDULING_POLICY,
+        default_terrestrial_prefixes=default_terrestrial_prefixes,
+        stations=stations,
+    )
+
+
+def load_ground_stations_from_set(
+    set_name: str,
+) -> GroundStationFile:
+    """Load a ground station set and resolve all station references.
+
+    Returns a GroundStationFile for backward compatibility with downstream code.
+    """
+    gs_set = load_ground_station_set(set_name)
+    stations: list[GroundStationConfig] = []
+    for station_name in gs_set.stations:
+        station = load_ground_station_individual(station_name)
+        stations.append(station)
+    return _build_gs_file_from_stations(stations, gs_set.default_terrestrial_prefixes)
+
+
+def load_ground_stations_from_list(
+    station_names: list[str],
+    default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None,
+) -> GroundStationFile:
+    """Load a list of individual station files by name.
+
+    Returns a GroundStationFile for backward compatibility with downstream code.
+    """
+    stations: list[GroundStationConfig] = []
+    for name in station_names:
+        station = load_ground_station_individual(name)
+        stations.append(station)
+    return _build_gs_file_from_stations(stations, default_terrestrial_prefixes)
 
 
 def load_ground_stations(path: str | Path) -> GroundStationFile:
-    """Load and validate ground station YAML."""
+    """Load and validate ground station YAML (any format).
+
+    Detects format by top-level keys:
+    - 'ground_station': individual station file
+    - 'ground_station_set': set file (resolves all station references)
+    - Otherwise: monolithic legacy format
+    """
     data = yaml.safe_load(Path(path).read_text())
+
+    if isinstance(data, dict):
+        if "ground_station" in data:
+            station = GroundStationConfig.model_validate(data["ground_station"])
+            return _build_gs_file_from_stations([station])
+        if "ground_station_set" in data:
+            gs_set = GroundStationSetConfig.model_validate(data["ground_station_set"])
+            stations = [load_ground_station_individual(n) for n in gs_set.stations]
+            return _build_gs_file_from_stations(stations, gs_set.default_terrestrial_prefixes)
+
+    # Legacy monolithic format
     return GroundStationFile.model_validate(data)
+
+
+def _resolve_default_terminals(config) -> tuple[int, int]:
+    """Resolve default terminal counts from satellite_type or inline default_terminals."""
+    if config.satellite_type is not None:
+        sat_type = load_satellite_type(config.satellite_type)
+        return _terminal_counts_from_sat_type(sat_type)
+    if config.default_terminals is not None:
+        return _terminal_counts_from_inline(config.default_terminals)
+    raise ValueError("Constellation must specify satellite_type or default_terminals")
+
+
+def _resolve_plane_override(ovr) -> tuple[int, int]:
+    """Resolve terminal counts from a plane override."""
+    if ovr.satellite_type is not None:
+        sat_type = load_satellite_type(ovr.satellite_type)
+        return _terminal_counts_from_sat_type(sat_type)
+    if ovr.terminals is not None:
+        return _terminal_counts_from_inline(ovr.terminals)
+    raise ValueError("PlaneOverride must specify satellite_type or terminals")
 
 
 def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
@@ -75,15 +343,13 @@ def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
     phase_offset = config.planes.phase_offset_deg
     anomaly_spacing = 360.0 / sats_per_plane
 
-    default_isl_count = sum(t.count for t in config.default_terminals.isl)
-    default_gnd_count = sum(t.count for t in config.default_terminals.ground)
+    default_isl_count, default_gnd_count = _resolve_default_terminals(config)
 
     # Build plane override lookup
     plane_terminal_overrides: dict[int, tuple[int, int]] = {}
     if config.plane_overrides:
         for ovr in config.plane_overrides:
-            isl_count = sum(t.count for t in ovr.terminals.isl)
-            gnd_count = sum(t.count for t in ovr.terminals.ground)
+            isl_count, gnd_count = _resolve_plane_override(ovr)
             for p in ovr.planes:
                 plane_terminal_overrides[p] = (isl_count, gnd_count)
 
@@ -115,13 +381,15 @@ def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
     """Expand explicit constellation — each satellite has its own orbital elements."""
     satellites: list[SatelliteNode] = []
 
-    default_isl_count = sum(t.count for t in config.default_terminals.isl)
-    default_gnd_count = sum(t.count for t in config.default_terminals.ground)
+    default_isl_count, default_gnd_count = _resolve_default_terminals(config)
 
     for sat_cfg in config.satellites:
-        if sat_cfg.terminals:
-            isl_count = sum(t.count for t in sat_cfg.terminals.isl)
-            gnd_count = sum(t.count for t in sat_cfg.terminals.ground)
+        # Priority: per-node satellite_type > per-node inline terminals > constellation default
+        if sat_cfg.satellite_type is not None:
+            sat_type = load_satellite_type(sat_cfg.satellite_type)
+            isl_count, gnd_count = _terminal_counts_from_sat_type(sat_type)
+        elif sat_cfg.terminals:
+            isl_count, gnd_count = _terminal_counts_from_inline(sat_cfg.terminals)
         else:
             isl_count = default_isl_count
             gnd_count = default_gnd_count

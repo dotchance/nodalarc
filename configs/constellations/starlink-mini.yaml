@@ -1,5 +1,6 @@
 mode: parametric
 name: starlink-mini
+satellite_type: starlink-mini
 orbit:
   altitude_km: 550
   inclination_deg: 53
@@ -9,14 +10,3 @@ planes:
   raan_spacing_deg: 30
   sats_per_plane: 10
   phase_offset_deg: 6
-default_terminals:
-  isl:
-    - type: optical
-      count: 4
-      max_range_km: 5016
-      bandwidth_mbps: 10000
-      max_tracking_rate_deg_s: 3.0
-  ground:
-    - type: optical
-      count: 1
-      bandwidth_mbps: 1000

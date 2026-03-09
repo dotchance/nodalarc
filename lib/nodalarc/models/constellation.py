@@ -35,6 +35,7 @@ class IslTerminal(BaseModel):
     max_range_km: float
     bandwidth_mbps: float
     max_tracking_rate_deg_s: float
+    field_of_regard_deg: float = 360.0
     allocation: str = "auto"
 
     @field_validator("count")
@@ -134,10 +135,20 @@ class IslOverride(BaseModel):
 
 
 class PlaneOverride(BaseModel):
-    """Override terminal config for specific orbital planes."""
+    """Override terminal config for specific orbital planes.
+
+    Can reference a satellite type by name or provide inline terminals.
+    """
 
     planes: list[int]
-    terminals: TerminalConfig
+    satellite_type: str | None = None  # Reference to satellite type file
+    terminals: TerminalConfig | None = None  # Deprecated: inline terminals
+
+    @model_validator(mode="after")
+    def _require_one_source(self):
+        if self.satellite_type is None and self.terminals is None:
+            raise ValueError("PlaneOverride must specify satellite_type or terminals")
+        return self
 
 
 class SatelliteConfig(BaseModel):
@@ -149,7 +160,8 @@ class SatelliteConfig(BaseModel):
     plane: int
     slot: int
     orbit: OrbitalElements
-    terminals: TerminalConfig | None = None  # None = use default_terminals
+    satellite_type: str | None = None  # Override satellite type for this node
+    terminals: TerminalConfig | None = None  # Deprecated: inline terminals
 
 
 class TLEFilter(BaseModel):
@@ -166,10 +178,17 @@ class ParametricConstellation(BaseModel):
     name: str
     orbit: OrbitParams
     planes: PlaneParams
-    default_terminals: TerminalConfig
+    satellite_type: str | None = None  # Reference to satellite type file
+    default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     polar_seam: PolarSeamConfig | None = None
     plane_overrides: list[PlaneOverride] | None = None
     isl_overrides: list[IslOverride] | None = None
+
+    @model_validator(mode="after")
+    def _require_terminal_source(self):
+        if self.satellite_type is None and self.default_terminals is None:
+            raise ValueError("Must specify satellite_type or default_terminals")
+        return self
 
 
 class ExplicitConstellation(BaseModel):
@@ -178,14 +197,17 @@ class ExplicitConstellation(BaseModel):
     mode: Literal["explicit"]
     name: str
     satellites: list[SatelliteConfig]
-    default_terminals: TerminalConfig
+    satellite_type: str | None = None  # Reference to satellite type file
+    default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     isl_overrides: list[IslOverride] | None = None
 
     @model_validator(mode="after")
-    def _no_duplicate_slots(self):
+    def _validate(self):
         pairs = [(s.plane, s.slot) for s in self.satellites]
         if len(pairs) != len(set(pairs)):
             raise ValueError("Duplicate plane/slot pairs")
+        if self.satellite_type is None and self.default_terminals is None:
+            raise ValueError("Must specify satellite_type or default_terminals")
         return self
 
 
@@ -196,8 +218,15 @@ class TLEConstellation(BaseModel):
     name: str
     tle_file: str
     filter: TLEFilter | None = None
-    default_terminals: TerminalConfig
+    satellite_type: str | None = None  # Reference to satellite type file
+    default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     isl_overrides: list[IslOverride] | None = None
+
+    @model_validator(mode="after")
+    def _require_terminal_source(self):
+        if self.satellite_type is None and self.default_terminals is None:
+            raise ValueError("Must specify satellite_type or default_terminals")
+        return self
 
 
 # Section 13.26: Discriminated union on `mode` field (non-negotiable)

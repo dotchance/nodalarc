@@ -1,0 +1,53 @@
+# Two cross-plane ISL failures on adjacent plane boundaries.
+# First failure: P02↔P03 (slot 05). Second failure: P03↔P04 (slot 05).
+# Isolates plane 03 from both neighbors, forcing long-path rerouting.
+scenario:
+  name: iridium-66-compound-failure
+  description: "Sequential cross-plane ISL failures isolating plane 03 on iridium-66"
+
+  steps:
+    - action: wait
+      duration_s: 300
+
+    - action: measure
+      duration_s: 30
+
+    - action: inject_link_down
+      node_a: sat-P02S05
+      node_b: sat-P03S05
+
+    - action: wait_converge
+      timeout_s: 60
+
+    - action: measure
+      duration_s: 30
+
+    - action: wait
+      duration_s: 120
+
+    - action: inject_link_down
+      node_a: sat-P03S05
+      node_b: sat-P04S05
+
+    - action: wait_converge
+      timeout_s: 60
+
+    - action: measure
+      duration_s: 30
+
+    - action: wait
+      duration_s: 300
+
+    - action: inject_link_up
+      node_a: sat-P02S05
+      node_b: sat-P03S05
+
+    - action: inject_link_up
+      node_a: sat-P03S05
+      node_b: sat-P04S05
+
+    - action: wait_converge
+      timeout_s: 60
+
+    - action: measure
+      duration_s: 30

@@ -1,0 +1,10 @@
+ground_station:
+  name: singapore
+  lat_deg: 1.35
+  lon_deg: 103.82
+  alt_m: 15
+  terminals:
+    - type: optical
+      count: 2
+      bandwidth_mbps: 1000
+      tracking_capacity: 1

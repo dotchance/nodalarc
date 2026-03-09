@@ -11,6 +11,7 @@ from nodalarc.models.addressing import (
     neighbors_by_node,
 )
 from nodalarc.models.constellation import ConstellationConfig
+from ome.constellation_loader import load_constellation
 from tests.conftest import CONFIGS_DIR
 
 adapter = TypeAdapter(ConstellationConfig)
@@ -23,20 +24,17 @@ def addressing():
 
 @pytest.fixture
 def four_node_config():
-    data = yaml.safe_load((CONFIGS_DIR / "constellations/4-node-test.yaml").read_text())
-    return adapter.validate_python(data)
+    return load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
 
 
 @pytest.fixture
 def starlink_config():
-    data = yaml.safe_load((CONFIGS_DIR / "constellations/starlink-mini.yaml").read_text())
-    return adapter.validate_python(data)
+    return load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
 
 
 @pytest.fixture
 def polar_seam_config():
-    data = yaml.safe_load((CONFIGS_DIR / "constellations/polar-seam-demo.yaml").read_text())
-    return adapter.validate_python(data)
+    return load_constellation(CONFIGS_DIR / "constellations/polar-seam-demo.yaml")
 
 
 class TestFourNodeAssignment:

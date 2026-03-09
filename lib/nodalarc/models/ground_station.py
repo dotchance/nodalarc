@@ -1,4 +1,10 @@
-"""Ground station configuration models."""
+"""Ground station configuration models.
+
+Three formats are supported:
+- Individual station file (top-level key: 'ground_station')
+- Station set file (top-level key: 'ground_station_set')
+- Monolithic legacy file (top-level keys: 'default_terminals', 'stations', etc.)
+"""
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -107,3 +113,35 @@ class GroundStationFile(BaseModel):
         if not 0 <= v <= 90:
             raise ValueError(f"default_min_elevation_deg must be 0-90, got {v}")
         return v
+
+
+class GroundStationIndividualFile(BaseModel):
+    """Individual ground station file (top-level key: 'ground_station')."""
+
+    ground_station: GroundStationConfig
+
+
+class GroundStationSetConfig(BaseModel):
+    """Ground station set — a named collection of station references.
+
+    Station names resolve to configs/ground-stations/stations/{name}.yaml.
+    """
+
+    name: str
+    description: str | None = None
+    stations: list[str]
+    default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None
+
+    @model_validator(mode="after")
+    def _validate_set(self):
+        if len(self.stations) == 0:
+            raise ValueError("at least one station must be in the set")
+        if len(self.stations) != len(set(self.stations)):
+            raise ValueError("duplicate station references in set")
+        return self
+
+
+class GroundStationSetFile(BaseModel):
+    """Ground station set file (top-level key: 'ground_station_set')."""
+
+    ground_station_set: GroundStationSetConfig

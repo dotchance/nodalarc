@@ -1,0 +1,10 @@
+ground_station:
+  name: sao-paulo
+  lat_deg: -23.55
+  lon_deg: -46.63
+  alt_m: 760
+  terminals:
+    - type: optical
+      count: 2
+      bandwidth_mbps: 1000
+      tracking_capacity: 1

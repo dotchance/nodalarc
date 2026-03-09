@@ -58,6 +58,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
     # Extract visibility parameters from constellation config
     max_range_km = 5016.0
     max_tracking_rate_deg_s = 3.0
+    field_of_regard_deg = 360.0
     polar_seam_enabled = False
     latitude_threshold_deg = 70.0
 
@@ -67,6 +68,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
             isl = constellation_config.default_terminals.isl[0]
             max_range_km = isl.max_range_km
             max_tracking_rate_deg_s = isl.max_tracking_rate_deg_s
+            field_of_regard_deg = isl.field_of_regard_deg
         if constellation_config.polar_seam:
             polar_seam_enabled = constellation_config.polar_seam.enabled
             latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
@@ -89,6 +91,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         step_seconds=session.time.step_seconds,
         max_range_km=max_range_km,
         max_tracking_rate_deg_s=max_tracking_rate_deg_s,
+        field_of_regard_deg=field_of_regard_deg,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation,
@@ -129,6 +132,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
     # Extract visibility parameters
     max_range_km = 5016.0
     max_tracking_rate_deg_s = 3.0
+    field_of_regard_deg = 360.0
     polar_seam_enabled = False
     latitude_threshold_deg = 70.0
 
@@ -138,6 +142,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
             isl = constellation_config.default_terminals.isl[0]
             max_range_km = isl.max_range_km
             max_tracking_rate_deg_s = isl.max_tracking_rate_deg_s
+            field_of_regard_deg = isl.field_of_regard_deg
         if constellation_config.polar_seam:
             polar_seam_enabled = constellation_config.polar_seam.enabled
             latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
@@ -169,6 +174,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
         step_seconds=session.time.step_seconds,
         max_range_km=max_range_km,
         max_tracking_rate_deg_s=max_tracking_rate_deg_s,
+        field_of_regard_deg=field_of_regard_deg,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation,
@@ -194,6 +200,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                 step_seconds=session.time.step_seconds,
                 max_range_km=max_range_km,
                 max_tracking_rate_deg_s=max_tracking_rate_deg_s,
+                field_of_regard_deg=field_of_regard_deg,
                 polar_seam_enabled=polar_seam_enabled,
                 latitude_threshold_deg=latitude_threshold_deg,
                 default_min_elevation_deg=default_min_elevation,

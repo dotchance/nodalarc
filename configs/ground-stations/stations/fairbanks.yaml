@@ -1,0 +1,10 @@
+ground_station:
+  name: fairbanks
+  lat_deg: 64.84
+  lon_deg: -147.72
+  alt_m: 130
+  terminals:
+    - type: optical
+      count: 2
+      bandwidth_mbps: 1000
+      tracking_capacity: 1

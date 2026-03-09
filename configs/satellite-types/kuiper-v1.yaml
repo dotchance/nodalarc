@@ -1,0 +1,22 @@
+# Amazon Kuiper v1 — optical ISLs.
+#
+# Based on Amazon's published Kuiper specifications. Similar to Starlink
+# in orbital regime but at different altitude and inclination, useful for
+# comparative analysis of area design tradeoffs.
+
+satellite_type:
+  name: kuiper-v1
+  description: "Amazon Kuiper v1 optical ISL platform"
+
+  isl_terminals:
+    - type: optical
+      count: 4
+      max_range_km: 5000
+      bandwidth_mbps: 100
+      max_tracking_rate_deg_s: 2.8
+      field_of_regard_deg: 140
+
+  ground_terminals:
+    - type: optical
+      count: 1
+      bandwidth_mbps: 1000

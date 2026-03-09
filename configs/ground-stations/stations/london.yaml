@@ -1,0 +1,10 @@
+ground_station:
+  name: london
+  lat_deg: 51.51
+  lon_deg: -0.13
+  alt_m: 11
+  terminals:
+    - type: optical
+      count: 2
+      bandwidth_mbps: 1000
+      tracking_capacity: 1

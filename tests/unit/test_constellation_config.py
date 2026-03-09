@@ -19,6 +19,7 @@ from nodalarc.models.constellation import (
 )
 from pydantic import TypeAdapter, ValidationError
 
+from ome.constellation_loader import load_constellation
 from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
 
 adapter = TypeAdapter(ConstellationConfig)
@@ -26,15 +27,13 @@ adapter = TypeAdapter(ConstellationConfig)
 
 class TestDiscriminatedUnion:
     def test_parametric_dispatch(self):
-        data = yaml.safe_load((CONFIGS_DIR / "constellations/starlink-mini.yaml").read_text())
-        config = adapter.validate_python(data)
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
         assert isinstance(config, ParametricConstellation)
         assert config.mode == "parametric"
         assert config.name == "starlink-mini"
 
     def test_explicit_dispatch(self):
-        data = yaml.safe_load((CONFIGS_DIR / "constellations/4-node-test.yaml").read_text())
-        config = adapter.validate_python(data)
+        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
         assert isinstance(config, ExplicitConstellation)
         assert config.mode == "explicit"
         assert len(config.satellites) == 4
@@ -52,15 +51,13 @@ class TestDiscriminatedUnion:
             adapter.validate_python(data)
 
     def test_round_trip_parametric(self):
-        data = yaml.safe_load((CONFIGS_DIR / "constellations/starlink-mini.yaml").read_text())
-        config = adapter.validate_python(data)
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
         json_str = config.model_dump_json()
         restored = adapter.validate_json(json_str)
         assert restored == config
 
     def test_round_trip_explicit(self):
-        data = yaml.safe_load((CONFIGS_DIR / "constellations/4-node-test.yaml").read_text())
-        config = adapter.validate_python(data)
+        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
         json_str = config.model_dump_json()
         restored = adapter.validate_json(json_str)
         assert restored == config
@@ -68,8 +65,7 @@ class TestDiscriminatedUnion:
 
 class TestParametricConstellation:
     def test_starlink_mini_loads(self):
-        data = yaml.safe_load((CONFIGS_DIR / "constellations/starlink-mini.yaml").read_text())
-        config = adapter.validate_python(data)
+        config = load_constellation(CONFIGS_DIR / "constellations/starlink-mini.yaml")
         assert config.orbit.altitude_km == 550
         assert config.orbit.inclination_deg == 53
         assert config.orbit.pattern == "walker-delta"
@@ -77,8 +73,7 @@ class TestParametricConstellation:
         assert config.planes.sats_per_plane == 10
 
     def test_polar_seam_demo_loads(self):
-        data = yaml.safe_load((CONFIGS_DIR / "constellations/polar-seam-demo.yaml").read_text())
-        config = adapter.validate_python(data)
+        config = load_constellation(CONFIGS_DIR / "constellations/polar-seam-demo.yaml")
         assert config.orbit.pattern == "walker-star"
         assert config.orbit.inclination_deg == 97.4
         assert config.polar_seam is not None
@@ -88,8 +83,7 @@ class TestParametricConstellation:
 
 class TestExplicitConstellation:
     def test_four_node_loads(self):
-        data = yaml.safe_load((CONFIGS_DIR / "constellations/4-node-test.yaml").read_text())
-        config = adapter.validate_python(data)
+        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
         assert len(config.satellites) == 4
         planes = {s.plane for s in config.satellites}
         assert planes == {0, 1}
@@ -98,8 +92,7 @@ class TestExplicitConstellation:
             assert sat.orbit.altitude_km == 550
 
     def test_terminal_count_from_default(self):
-        data = yaml.safe_load((CONFIGS_DIR / "constellations/4-node-test.yaml").read_text())
-        config = adapter.validate_python(data)
+        config = load_constellation(CONFIGS_DIR / "constellations/4-node-test.yaml")
         assert config.default_terminals.isl[0].count == 2
 
 

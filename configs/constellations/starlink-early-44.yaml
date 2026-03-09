@@ -1,0 +1,20 @@
+# Starlink-Early-44 — inclined constellation with stable ISLs.
+#
+# 4 planes × 11 satellites = 44 total, 550 km altitude, 53° inclination.
+# Walker-delta pattern. No polar seam (co-rotating planes at moderate
+# inclination produce stable ISLs). The primary topology disruption is
+# ground station handover as satellites pass overhead. Coverage limited
+# to approximately 53° latitude.
+
+mode: parametric
+name: starlink-early-44
+satellite_type: starlink-v2
+orbit:
+  altitude_km: 550
+  inclination_deg: 53
+  pattern: walker-delta
+planes:
+  count: 4
+  raan_spacing_deg: 45
+  sats_per_plane: 11
+  phase_offset_deg: 8.2

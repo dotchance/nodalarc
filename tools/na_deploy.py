@@ -458,36 +458,40 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         log.info("Step 10: Skipping VS-API (--skip-vsapi)")
         vsapi_proc = None
 
-    # === Step 10b: Start Vite dev server ===
-    log.info("Step 10b: Start Vite dev server")
-    # Kill any existing Vite on port 3000
-    subprocess.run(["pkill", "-f", "node_modules/.bin/vite"], capture_output=True)
-    time.sleep(1)
-    # Ensure inotify instance limit is high enough for Vite's file watchers
-    subprocess.run(
-        ["sysctl", "-w", "fs.inotify.max_user_instances=512"],
-        capture_output=True,
-    )
-    vite_env = {**os.environ, "VITE_API_KEY": api_key}
-    vite_log = open(data_dir / "vite.log", "w")
-    vite_proc = subprocess.Popen(
-        ["bash", "-c", "ulimit -n 65536; exec npx vite --host 0.0.0.0 --port 3000"],
-        cwd=str(Path("visualization").resolve()),
-        stdout=vite_log,
-        stderr=vite_log,
-        env=vite_env,
-    )
-    log.info(f"Vite dev server PID: {vite_proc.pid}")
-    # Wait for port 3000 to be listening (up to 15s)
-    import socket
-    for _vite_wait in range(30):
-        try:
-            with socket.create_connection(("127.0.0.1", 3000), timeout=0.5):
-                break
-        except OSError:
-            time.sleep(0.5)
+    # === Step 10b: Start Vite dev server (skip during session switches) ===
+    if not skip_vsapi:
+        log.info("Step 10b: Start Vite dev server")
+        # Kill any existing Vite on port 3000
+        subprocess.run(["pkill", "-f", "node_modules/.bin/vite"], capture_output=True)
+        time.sleep(1)
+        # Ensure inotify instance limit is high enough for Vite's file watchers
+        subprocess.run(
+            ["sysctl", "-w", "fs.inotify.max_user_instances=512"],
+            capture_output=True,
+        )
+        vite_env = {**os.environ, "VITE_API_KEY": api_key}
+        vite_log = open(data_dir / "vite.log", "w")
+        vite_proc = subprocess.Popen(
+            ["bash", "-c", "ulimit -n 65536; exec npx vite --host 0.0.0.0 --port 3000"],
+            cwd=str(Path("visualization").resolve()),
+            stdout=vite_log,
+            stderr=vite_log,
+            env=vite_env,
+        )
+        log.info(f"Vite dev server PID: {vite_proc.pid}")
+        # Wait for port 3000 to be listening (up to 15s)
+        import socket
+        for _vite_wait in range(30):
+            try:
+                with socket.create_connection(("127.0.0.1", 3000), timeout=0.5):
+                    break
+            except OSError:
+                time.sleep(0.5)
+        else:
+            log.warning("Vite dev server did not start listening on port 3000 in 15s")
     else:
-        log.warning("Vite dev server did not start listening on port 3000 in 15s")
+        log.info("Step 10b: Skipping Vite (session switch — VF fetches new key at runtime)")
+        vite_proc = None
 
     # === Step 11: Begin event dispatch ===
     log.info("Step 11: Begin event dispatch")
@@ -518,7 +522,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         "vsapi_pid": vsapi_pid,
         "orchestrator_pid": to_proc.pid,
         "daemon_pid": daemon_proc.pid,
-        "vite_pid": vite_proc.pid,
+        "vite_pid": vite_proc.pid if vite_proc else 0,
         "session_config": session_path,
         "db_path": mi_db,
         "api_key": api_key,

@@ -18,7 +18,7 @@ import { usePlayback } from "./hooks/usePlayback";
 import { useManifest } from "./hooks/useManifest";
 import { SessionCatalog } from "./catalog/SessionCatalog";
 import { WS_URL, fetchApiKey } from "./config";
-import type { ViewMode, ColorMode } from "./types";
+import type { ViewMode, ColorMode, GlobeMode } from "./types";
 
 import "./styles/variables.css";
 import "./styles/reset.css";
@@ -75,6 +75,7 @@ function AppInner() {
   const [colorMode, setColorMode] = useState<ColorMode>("area");
   const [showGroundTracks, setShowGroundTracks] = useState(false);
   const [showAllLinks, setShowAllLinks] = useState(true);
+  const [globeMode, setGlobeMode] = useState<GlobeMode>("blue-marble");
   const [followNode, setFollowNode] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
@@ -177,6 +178,7 @@ function AppInner() {
           }
         }
       },
+      onToggleGlobeMode: () => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble"),
       onFollowNode: handleFollowNode,
       onTopView: handleTopView,
       onToggleCli: () => setCliDrawerOpen((v) => !v),
@@ -271,6 +273,7 @@ function AppInner() {
             selection={selection}
             onSelect={select}
             colorMode={colorMode}
+            globeMode={globeMode}
             showGroundTracks={showGroundTracks}
             showAllLinks={showAllLinks}
             actionsRef={globeActionsRef}
@@ -299,6 +302,8 @@ function AppInner() {
           onColorMode={setColorMode}
           onToggleGroundTracks={() => setShowGroundTracks((v) => !v)}
           onToggleAllLinks={() => setShowAllLinks((v) => !v)}
+          globeMode={globeMode}
+          onToggleGlobeMode={() => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble")}
           onTopView={handleTopView}
           onFollowNode={handleFollowNode}
           onScreenshot={handleScreenshot}

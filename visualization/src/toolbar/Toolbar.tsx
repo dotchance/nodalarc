@@ -1,6 +1,6 @@
 /** Left-edge vertical toolbar with icon buttons (VF spec Section 11). */
 
-import type { ViewMode, ColorMode } from "../types";
+import type { ViewMode, ColorMode, GlobeMode } from "../types";
 
 interface ToolbarProps {
   viewMode: ViewMode;
@@ -13,6 +13,8 @@ interface ToolbarProps {
   onColorMode: (mode: ColorMode) => void;
   onToggleGroundTracks: () => void;
   onToggleAllLinks: () => void;
+  globeMode: GlobeMode;
+  onToggleGlobeMode: () => void;
   onTopView: () => void;
   onFollowNode: () => void;
   onScreenshot: () => void;
@@ -52,6 +54,8 @@ export function Toolbar({
   onColorMode,
   onToggleGroundTracks,
   onToggleAllLinks,
+  globeMode,
+  onToggleGlobeMode,
   onTopView,
   onFollowNode,
   onScreenshot,
@@ -80,6 +84,12 @@ export function Toolbar({
         icon="⟷"
         active={showAllLinks}
         onClick={onToggleAllLinks}
+      />
+      <ToolBtn
+        label={`Globe: ${globeMode === "day-night" ? "Day/Night (N)" : "Blue Marble (N)"}`}
+        icon="🌗"
+        active={globeMode === "day-night"}
+        onClick={onToggleGlobeMode}
       />
       <div className="toolbar-separator" />
       <ToolBtn label="Top View (T)" icon="⊙" onClick={onTopView} />

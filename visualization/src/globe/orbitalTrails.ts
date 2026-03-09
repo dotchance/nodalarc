@@ -9,6 +9,12 @@
 
 import * as THREE from "three";
 import { getSatellites } from "./satellites";
+import {
+  createTrailBuffer,
+  pushSample,
+  extractDrawPoints,
+  type TrailBufferState,
+} from "./trailBuffer";
 
 /** Max trail points in the ring buffer (upper bound for memory). */
 const TRAIL_LENGTH = 600;
@@ -21,10 +27,7 @@ const SAMPLE_EVERY = 2;
 const MAX_ARC_LENGTH = 1.8;
 
 interface TrailEntry {
-  /** Ring buffer of recorded positions (x,y,z triples). */
-  buf: Float32Array;
-  head: number;
-  count: number;
+  buffer: TrailBufferState;
   line: THREE.Line;
   geometry: THREE.BufferGeometry;
   posAttr: THREE.BufferAttribute;
@@ -62,9 +65,7 @@ function createTrail(scene: THREE.Scene): TrailEntry {
   scene.add(line);
 
   return {
-    buf: new Float32Array(TRAIL_LENGTH * 3),
-    head: 0,
-    count: 0,
+    buffer: createTrailBuffer(TRAIL_LENGTH),
     line,
     geometry,
     posAttr,
@@ -76,8 +77,8 @@ function createTrail(scene: THREE.Scene): TrailEntry {
 /** Flush all trail history (call after tab-resume to avoid ghost lines). */
 export function flushTrails(): void {
   for (const trail of trails.values()) {
-    trail.count = 0;
-    trail.head = 0;
+    trail.buffer.count = 0;
+    trail.buffer.head = 0;
     trail.geometry.setDrawRange(0, 0);
   }
 }
@@ -110,55 +111,20 @@ export function updateOrbitalTrails(scene: THREE.Scene): void {
     // Record the mesh's actual rendered position (post-lerp), not the
     // snapshot target — otherwise the trail leads the satellite.
     const pos = sat.mesh.position;
-    const i3 = trail.head * 3;
-    trail.buf[i3] = pos.x;
-    trail.buf[i3 + 1] = pos.y;
-    trail.buf[i3 + 2] = pos.z;
+    pushSample(trail.buffer, pos.x, pos.y, pos.z);
 
-    trail.head = (trail.head + 1) % TRAIL_LENGTH;
-    if (trail.count < TRAIL_LENGTH) trail.count++;
+    // Extract draw-order points capped by arc length
+    const points = extractDrawPoints(trail.buffer, MAX_ARC_LENGTH);
+    const drawCount = points.length;
 
-    // Walk backward from newest point, accumulating arc length,
-    // and only draw points within MAX_ARC_LENGTH.
     const pa = trail.posAttr.array as Float32Array;
     const ca = trail.colAttr.array as Float32Array;
 
-    // Newest point index in ring buffer
-    const newestRing = (trail.head - 1 + TRAIL_LENGTH) % TRAIL_LENGTH;
-
-    // Collect points newest-first, stop when arc budget is exhausted
-    let drawCount = 1;
-    let arcLen = 0;
-    let prevX = trail.buf[newestRing * 3]!;
-    let prevY = trail.buf[newestRing * 3 + 1]!;
-    let prevZ = trail.buf[newestRing * 3 + 2]!;
-
-    for (let k = 1; k < trail.count; k++) {
-      const ringIdx = (newestRing - k + TRAIL_LENGTH) % TRAIL_LENGTH;
-      const rx = trail.buf[ringIdx * 3]!;
-      const ry = trail.buf[ringIdx * 3 + 1]!;
-      const rz = trail.buf[ringIdx * 3 + 2]!;
-      const dx = rx - prevX;
-      const dy = ry - prevY;
-      const dz = rz - prevZ;
-      arcLen += Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (arcLen > MAX_ARC_LENGTH) break;
-      drawCount++;
-      prevX = rx;
-      prevY = ry;
-      prevZ = rz;
-    }
-
-    // Write draw-order: oldest (index 0) to newest (index drawCount-1)
     for (let j = 0; j < drawCount; j++) {
-      // j=0 is the oldest drawn point, j=drawCount-1 is newest
-      const k = drawCount - 1 - j; // offset from newest
-      const ringIdx = (newestRing - k + TRAIL_LENGTH) % TRAIL_LENGTH;
-      const s3 = ringIdx * 3;
       const d3 = j * 3;
-      pa[d3] = trail.buf[s3]!;
-      pa[d3 + 1] = trail.buf[s3 + 1]!;
-      pa[d3 + 2] = trail.buf[s3 + 2]!;
+      pa[d3] = points[j]!.x;
+      pa[d3 + 1] = points[j]!.y;
+      pa[d3 + 2] = points[j]!.z;
 
       // Linear fade: zero at oldest drawn point, full brightness at newest.
       const t = j / drawCount;
@@ -191,8 +157,8 @@ export function setTrailsVisible(visible: boolean): void {
   }
   if (!visible) {
     for (const trail of trails.values()) {
-      trail.count = 0;
-      trail.head = 0;
+      trail.buffer.count = 0;
+      trail.buffer.head = 0;
     }
   }
 }

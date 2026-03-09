@@ -52,7 +52,7 @@ def _teardown_previous() -> None:
                 log.info(f"Killing stale {module} (PID {pid})")
                 subprocess.run(["kill", pid], capture_output=True)
     # Kill stale Vite dev server
-    subprocess.run(["pkill", "-f", "vite.*visualization"], capture_output=True)
+    subprocess.run(["pkill", "-f", "node_modules/.bin/vite"], capture_output=True)
     # Brief pause to let processes exit
     time.sleep(1)
 
@@ -461,12 +461,17 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     # === Step 10b: Start Vite dev server ===
     log.info("Step 10b: Start Vite dev server")
     # Kill any existing Vite on port 3000
-    subprocess.run(["pkill", "-f", "vite.*visualization"], capture_output=True)
+    subprocess.run(["pkill", "-f", "node_modules/.bin/vite"], capture_output=True)
     time.sleep(1)
+    # Ensure inotify instance limit is high enough for Vite's file watchers
+    subprocess.run(
+        ["sysctl", "-w", "fs.inotify.max_user_instances=512"],
+        capture_output=True,
+    )
     vite_env = {**os.environ, "VITE_API_KEY": api_key}
     vite_log = open(data_dir / "vite.log", "w")
     vite_proc = subprocess.Popen(
-        ["npx", "vite", "--host", "0.0.0.0", "--port", "3000"],
+        ["bash", "-c", "ulimit -n 65536; exec npx vite --host 0.0.0.0 --port 3000"],
         cwd=str(Path("visualization").resolve()),
         stdout=vite_log,
         stderr=vite_log,

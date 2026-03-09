@@ -18,8 +18,15 @@ DEPLOY_LOG="/tmp/na-integration-deploy.log"
 # Clean up temp files from prior runs
 rm -f "$DEPLOY_LOG" "$WS_TMP"
 
-# Kill any stale integration test instances
-stale_pids=$(pgrep -f "na-integration-test" 2>/dev/null | grep -v "^$$\$" || true)
+# Kill any stale integration test instances (exclude own process tree)
+MY_PID=$$
+MY_PPID=$PPID
+MY_PPPPID=$(ps -o ppid= -p "$MY_PPID" 2>/dev/null | tr -d ' ')
+stale_pids=$(pgrep -f "na-integration-test" 2>/dev/null \
+    | grep -v "^${MY_PID}$" \
+    | grep -v "^${MY_PPID}$" \
+    | grep -v "^${MY_PPPPID}$" \
+    || true)
 if [ -n "$stale_pids" ]; then
     echo "Killing stale integration test processes: $stale_pids"
     kill -9 $stale_pids 2>/dev/null || true
@@ -695,7 +702,7 @@ for i in "${!SESSIONS[@]}"; do
     log "  $sname: ${PASS_COUNT[$sname]} pass, ${FAIL_COUNT[$sname]} fail"
 done
 log ""
-if [ "${#FAILURES[@]:-0}" -gt 0 ]; then
+if [ "${#FAILURES[@]}" -gt 0 ]; then
     log "Failures:"
     for f in "${FAILURES[@]}"; do
         log "  $f"

@@ -18,12 +18,9 @@ from pathlib import Path
 
 import yaml
 from jinja2 import Environment, FileSystemLoader
-from pydantic import TypeAdapter
 
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.constellation import ConstellationConfig
-from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.template_vars import build_template_vars
@@ -31,7 +28,6 @@ from ome.constellation_loader import expand_constellation, load_constellation, l
 from nodalarc.zmq_channels import VS_API_HTTP_PORT
 
 log = logging.getLogger(__name__)
-adapter = TypeAdapter(ConstellationConfig)
 
 
 def _fail(msg: str) -> None:
@@ -100,10 +96,8 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info("Step 1: Load and validate session config")
     raw = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(raw)
-    constellation_data = yaml.safe_load(Path(session.constellation).read_text())
-    constellation = adapter.validate_python(constellation_data)
-    gs_data = yaml.safe_load(Path(session.ground_stations).read_text())
-    gs_file = GroundStationFile.model_validate(gs_data)
+    constellation = load_constellation(session.constellation)
+    gs_file = load_ground_stations(session.ground_stations)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%Sz")
     session_id = f"{session.session.name}-{ts}".lower()

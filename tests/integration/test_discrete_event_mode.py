@@ -118,12 +118,10 @@ class TestDiscreteEventProcessing:
                         interface_map[pair] = (existing[0], na.interface)
 
         # Add GS-satellite pairs
-        gs_data = yaml.safe_load(
-            (PROJECT_ROOT / "configs/ground-stations/two-station.yaml").read_text(),
+        from ome.constellation_loader import expand_constellation, load_ground_stations
+        gs_file = load_ground_stations(
+            PROJECT_ROOT / "configs/ground-stations/two-station.yaml",
         )
-        from nodalarc.models.ground_station import GroundStationFile
-        from ome.constellation_loader import expand_constellation
-        gs_file = GroundStationFile.model_validate(gs_data)
         satellites = expand_constellation(constellation)
         for station in gs_file.stations:
             gs_id = addressing.gs_id(station.name)
@@ -178,7 +176,6 @@ class TestDiscreteEventProcessing:
                 neighbors_by_node,
             )
             from nodalarc.models.constellation import ConstellationConfig
-            from nodalarc.models.ground_station import GroundStationFile
             from ome.constellation_loader import expand_constellation, resolve_constellation_terminals
             from pydantic import TypeAdapter
             import yaml
@@ -207,10 +204,10 @@ class TestDiscreteEventProcessing:
                         if existing[0] and not existing[1]:
                             interface_map[pair] = (existing[0], na.interface)
 
-            gs_data = yaml.safe_load(
-                (PROJECT_ROOT / "configs/ground-stations/two-station.yaml").read_text(),
+            from ome.constellation_loader import load_ground_stations as load_gs
+            gs_file = load_gs(
+                PROJECT_ROOT / "configs/ground-stations/two-station.yaml",
             )
-            gs_file = GroundStationFile.model_validate(gs_data)
             satellites = expand_constellation(constellation)
             for station in gs_file.stations:
                 gs_id = addressing.gs_id(station.name)

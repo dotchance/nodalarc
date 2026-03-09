@@ -21,7 +21,6 @@ from pathlib import Path
 
 import yaml
 import zmq
-from pydantic import TypeAdapter
 
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.db.queries import (
@@ -30,8 +29,6 @@ from nodalarc.db.queries import (
     insert_probe_result,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.constellation import ConstellationConfig
-from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.metrics import AdapterEvent, ConvergenceResult, ProbeResult
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
@@ -51,7 +48,6 @@ from measurement.adapters import create_adapter
 from measurement.convergence_gate import ConvergenceGate
 
 log = logging.getLogger(__name__)
-constellation_adapter = TypeAdapter(ConstellationConfig)
 
 
 def _discover_pods(namespace: str = "nodalarc") -> list[dict[str, str]]:
@@ -371,8 +367,8 @@ def main() -> None:
     raw = yaml.safe_load(Path(args.session).read_text())
     session = SessionConfig.model_validate(raw)
 
-    gs_data = yaml.safe_load(Path(session.ground_stations).read_text())
-    gs_file = GroundStationFile.model_validate(gs_data)
+    from ome.constellation_loader import load_ground_stations
+    gs_file = load_ground_stations(session.ground_stations)
 
     stack_dir = Path(session.routing.stack)
     stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())

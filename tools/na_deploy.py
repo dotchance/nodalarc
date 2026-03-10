@@ -534,11 +534,13 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     )
     log.info(f"Orchestrator PID: {to_proc.pid}")
 
-    # === Step 11b: Start NodalPath (for nodalpath-fwd sessions) ===
-    nodalpath_proc = None
+    # === Step 11b: Start NodalPath ===
+    # Always start NodalPath console. For nodalpath-fwd sessions, run in live
+    # mode (ZMQ + push). For all other sessions, run in console-only mode
+    # so the operator UI is always accessible on port 3100.
+    np_log = open(data_dir / "nodalpath.log", "w")
     if stack_dir.name == "nodalpath-fwd":
         log.info("Step 11b: Start NodalPath (live mode)")
-        np_log = open(data_dir / "nodalpath.log", "w")
         nodalpath_proc = subprocess.Popen(
             [
                 sys.executable, "-m", "nodalpath",
@@ -550,7 +552,14 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             stdout=np_log,
             stderr=np_log,
         )
-        log.info(f"NodalPath PID: {nodalpath_proc.pid}")
+    else:
+        log.info("Step 11b: Start NodalPath (console-only mode)")
+        nodalpath_proc = subprocess.Popen(
+            [sys.executable, "-m", "nodalpath", "--mode", "console"],
+            stdout=np_log,
+            stderr=np_log,
+        )
+    log.info(f"NodalPath PID: {nodalpath_proc.pid}")
 
     # === Complete — save session state and print summary ===
     vsapi_pid = vsapi_proc.pid if vsapi_proc else 0
@@ -564,7 +573,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         "orchestrator_pid": to_proc.pid,
         "daemon_pid": daemon_proc.pid,
         "vite_pid": vite_proc.pid if vite_proc else 0,
-        "nodalpath_pid": nodalpath_proc.pid if nodalpath_proc else 0,
+        "nodalpath_pid": nodalpath_proc.pid,
         "session_config": session_path,
         "db_path": mi_db,
         "api_key": api_key,
@@ -581,9 +590,8 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info(f"Orchestrator PID: {to_proc.pid}")
     log.info(f"Session state: {state_file}")
 
-    if nodalpath_proc is not None:
-        from nodalarc.zmq_channels import NODALPATH_CONSOLE_PORT
-        log.info(f"NodalPath console: http://0.0.0.0:{NODALPATH_CONSOLE_PORT}")
+    from nodalarc.zmq_channels import NODALPATH_CONSOLE_PORT
+    log.info(f"NodalPath console: http://0.0.0.0:{NODALPATH_CONSOLE_PORT}")
 
 
 def main() -> None:

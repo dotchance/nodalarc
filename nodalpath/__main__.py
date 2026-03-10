@@ -101,6 +101,38 @@ async def _run_live(config: NodalPathConfig) -> None:
         )
 
 
+async def _run_console() -> None:
+    """Console-only mode — serve the web UI without ZMQ or session context.
+
+    Used when NodalPath is started alongside a non-nodalpath-fwd session.
+    The console is accessible and ready; it just shows idle state until
+    a live session connects.
+    """
+    import uvicorn
+    from nodalpath.console.server import build_app
+    from nodalpath.console.state import ConsoleState
+    from nodalarc.zmq_channels import NODALPATH_CONSOLE_PORT
+
+    console_state = ConsoleState(
+        session_path="(no session)",
+        transport="none",
+        dry_run=False,
+    )
+
+    console_app = build_app(console_state)
+    uvicorn_config = uvicorn.Config(
+        console_app,
+        host="0.0.0.0",
+        port=NODALPATH_CONSOLE_PORT,
+        log_level="warning",
+        access_log=False,
+    )
+    console_server = uvicorn.Server(uvicorn_config)
+
+    log.info("NodalPath console-only mode on http://0.0.0.0:%d", NODALPATH_CONSOLE_PORT)
+    await console_server.serve()
+
+
 def _run_batch(config: NodalPathConfig) -> None:
     """Batch mode — unchanged SlidingWindow.process() path."""
     from nodalpath.orchestrator.window import SlidingWindow
@@ -127,8 +159,8 @@ def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="NodalPath forwarding almanac controller")
-    parser.add_argument("--session", required=True, help="Path to session YAML")
-    parser.add_argument("--mode", choices=["live", "batch"], default="live")
+    parser.add_argument("--session", help="Path to session YAML (required for live/batch)")
+    parser.add_argument("--mode", choices=["live", "batch", "console"], default="live")
     parser.add_argument("--timeline", help="Timeline JSONL path (batch mode only)")
     parser.add_argument("--output", help="Almanac JSONL output path")
     parser.add_argument("--transport", choices=["grpc", "vtysh"], default="grpc")
@@ -136,6 +168,13 @@ def main() -> None:
     parser.add_argument("--namespace", default="nodalarc")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    if args.mode == "console":
+        asyncio.run(_run_console())
+        return
+
+    if args.session is None:
+        parser.error("--session is required for live and batch modes")
 
     config = NodalPathConfig(
         session_path=Path(args.session),

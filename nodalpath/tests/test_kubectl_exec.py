@@ -1,20 +1,28 @@
-"""Tests for nodalpath.push.kubectl_exec — subprocess kubectl exec wrapper."""
+"""Tests for nodalpath.push.kubectl_exec — deploy daemon Unix socket client."""
 
 from __future__ import annotations
 
-import subprocess
+import json
+import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from nodalpath.push.kubectl_exec import (
     DEFAULT_NAMESPACE,
-    KUBECONFIG,
     ExecResult,
     exec_vtysh,
     node_id_to_pod_name,
     push_to_nodes,
 )
+
+
+def _make_mock_socket(response: dict) -> MagicMock:
+    """Create a mock socket that returns a JSON response."""
+    mock_sock = MagicMock()
+    response_bytes = (json.dumps(response) + "\n").encode()
+    mock_sock.recv.side_effect = [response_bytes, b""]
+    return mock_sock
 
 
 # ---------------------------------------------------------------------------
@@ -36,81 +44,74 @@ class TestNodeIdToPodName:
 
 
 class TestExecVtysh:
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_success(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="ok\n", stderr="",
-        )
+    @patch("nodalpath.push.kubectl_exec.socket.socket")
+    def test_success(self, mock_socket_cls):
+        mock_sock = _make_mock_socket({"ok": True, "stdout": "ok\n", "stderr": "", "exit_code": 0})
+        mock_socket_cls.return_value = mock_sock
         result = exec_vtysh("sat-P00S00", "show ip route")
         assert result.success is True
         assert result.returncode == 0
         assert result.stdout == "ok\n"
 
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_failure(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=1, stdout="", stderr="error\n",
-        )
+    @patch("nodalpath.push.kubectl_exec.socket.socket")
+    def test_failure(self, mock_socket_cls):
+        mock_sock = _make_mock_socket({"ok": False, "stdout": "", "stderr": "error\n", "exit_code": 1})
+        mock_socket_cls.return_value = mock_sock
         result = exec_vtysh("sat-P00S00", "bad command")
         assert result.success is False
         assert result.returncode == 1
         assert "error" in result.stderr
 
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_timeout(self, mock_run):
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="kubectl", timeout=10)
-        result = exec_vtysh("sat-P00S00", "slow command")
-        assert result.success is False
-        assert result.returncode == -1
-        assert "timeout" in result.stderr
-
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_file_not_found(self, mock_run):
-        mock_run.side_effect = FileNotFoundError("kubectl not found")
+    @patch("nodalpath.push.kubectl_exec.socket.socket")
+    def test_socket_not_found(self, mock_socket_cls):
+        mock_sock = MagicMock()
+        mock_sock.connect.side_effect = FileNotFoundError("No such file")
+        mock_socket_cls.return_value = mock_sock
         result = exec_vtysh("sat-P00S00", "show ip route")
         assert result.success is False
         assert result.returncode == -1
-        assert "kubectl not found" in result.stderr
+        assert "socket not found" in result.stderr
 
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_command_structure(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        exec_vtysh("sat-P00S00", "show ip route", namespace="test-ns")
-        args = mock_run.call_args
-        cmd = args[0][0]
-        assert cmd[0] == "kubectl"
-        assert cmd[1] == "exec"
-        assert "-n" in cmd
-        ns_idx = cmd.index("-n")
-        assert cmd[ns_idx + 1] == "test-ns"
-        assert "sat-p00s00" in cmd  # pod name
-        assert "-c" in cmd
-        c_idx = cmd.index("-c", ns_idx + 2)  # -c after pod name
-        assert cmd[c_idx + 1] == "frr"
-        assert "--" in cmd
-        assert "vtysh" in cmd
-        # vtysh -c <commands>
-        vtysh_idx = cmd.index("vtysh")
-        assert cmd[vtysh_idx + 1] == "-c"
-        assert cmd[vtysh_idx + 2] == "show ip route"
+    @patch("nodalpath.push.kubectl_exec.socket.socket")
+    def test_connection_refused(self, mock_socket_cls):
+        mock_sock = MagicMock()
+        mock_sock.connect.side_effect = ConnectionRefusedError("Connection refused")
+        mock_socket_cls.return_value = mock_sock
+        result = exec_vtysh("sat-P00S00", "show ip route")
+        assert result.success is False
+        assert result.returncode == -1
+        assert "connection refused" in result.stderr
 
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_env_has_kubeconfig(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    @patch("nodalpath.push.kubectl_exec.socket.socket")
+    def test_timeout(self, mock_socket_cls):
+        mock_sock = MagicMock()
+        mock_sock.connect.side_effect = socket.timeout("timed out")
+        mock_socket_cls.return_value = mock_sock
+        result = exec_vtysh("sat-P00S00", "slow command")
+        assert result.success is False
+        assert result.returncode == -1
+        assert "Timeout" in result.stderr
+
+    @patch("nodalpath.push.kubectl_exec.socket.socket")
+    def test_request_contains_kubectl_exec_action(self, mock_socket_cls):
+        mock_sock = _make_mock_socket({"ok": True, "stdout": "", "stderr": "", "exit_code": 0})
+        mock_socket_cls.return_value = mock_sock
         exec_vtysh("sat-P00S00", "show ip route")
-        args = mock_run.call_args
-        env = args[1].get("env") or args.kwargs.get("env")
-        assert env["KUBECONFIG"] == KUBECONFIG
+        sent_data = mock_sock.sendall.call_args[0][0].decode()
+        req = json.loads(sent_data.strip())
+        assert req["action"] == "kubectl_exec"
+        assert req["pod"] == "sat-p00s00"
+        assert req["container"] == "frr"
+        assert req["command"] == ["vtysh", "-c", "show ip route"]
 
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_commands_as_single_arg(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-        commands = "configure terminal\n mpls lsp 16001 10.0.0.2 16002\nend\nwrite memory"
-        exec_vtysh("sat-P00S00", commands)
-        cmd = mock_run.call_args[0][0]
-        # The commands string should appear as a single argument after vtysh -c
-        vtysh_idx = cmd.index("vtysh")
-        assert cmd[vtysh_idx + 2] == commands
+    @patch("nodalpath.push.kubectl_exec.socket.socket")
+    def test_no_response_returns_failure(self, mock_socket_cls):
+        mock_sock = MagicMock()
+        mock_sock.recv.return_value = b""  # EOF immediately
+        mock_socket_cls.return_value = mock_sock
+        result = exec_vtysh("sat-P00S00", "show ip route")
+        assert result.success is False
+        assert "No response" in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -119,9 +120,11 @@ class TestExecVtysh:
 
 
 class TestPushToNodes:
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_all_tasks_submitted(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    @patch("nodalpath.push.kubectl_exec.exec_vtysh")
+    def test_all_tasks_submitted(self, mock_exec):
+        mock_exec.return_value = ExecResult(
+            node_id="x", pod_name="x", success=True, stdout="", stderr="", returncode=0,
+        )
         tasks = [
             ("sat-P00S00", "cmd1"),
             ("sat-P00S01", "cmd2"),
@@ -129,11 +132,16 @@ class TestPushToNodes:
         ]
         results = push_to_nodes(tasks)
         assert len(results) == 3
-        assert mock_run.call_count == 3
+        assert mock_exec.call_count == 3
 
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_results_in_input_order(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    @patch("nodalpath.push.kubectl_exec.exec_vtysh")
+    def test_results_in_input_order(self, mock_exec):
+        def side_effect(node_id, commands, namespace=None, timeout=None):
+            return ExecResult(
+                node_id=node_id, pod_name=node_id.lower(),
+                success=True, stdout="", stderr="", returncode=0,
+            )
+        mock_exec.side_effect = side_effect
         tasks = [
             ("sat-P00S00", "cmd1"),
             ("sat-P01S01", "cmd2"),
@@ -142,16 +150,19 @@ class TestPushToNodes:
         assert results[0].node_id == "sat-P00S00"
         assert results[1].node_id == "sat-P01S01"
 
-    @patch("nodalpath.push.kubectl_exec.subprocess.run")
-    def test_one_failure_doesnt_prevent_others(self, mock_run):
-        def side_effect(*args, **kwargs):
-            cmd = args[0]
-            pod = cmd[4]  # pod name is after -n namespace
-            if pod == "sat-p00s00":
-                return MagicMock(returncode=1, stdout="", stderr="fail")
-            return MagicMock(returncode=0, stdout="ok", stderr="")
-
-        mock_run.side_effect = side_effect
+    @patch("nodalpath.push.kubectl_exec.exec_vtysh")
+    def test_one_failure_doesnt_prevent_others(self, mock_exec):
+        def side_effect(node_id, commands, namespace=None, timeout=None):
+            if node_id == "sat-P00S00":
+                return ExecResult(
+                    node_id=node_id, pod_name="sat-p00s00",
+                    success=False, stdout="", stderr="fail", returncode=1,
+                )
+            return ExecResult(
+                node_id=node_id, pod_name=node_id.lower(),
+                success=True, stdout="ok", stderr="", returncode=0,
+            )
+        mock_exec.side_effect = side_effect
         tasks = [
             ("sat-P00S00", "cmd1"),
             ("sat-P00S01", "cmd2"),

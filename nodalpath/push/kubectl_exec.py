@@ -1,16 +1,21 @@
-"""kubectl exec wrapper for pushing vtysh commands to FRR pods."""
+"""Deploy daemon client for pushing vtysh commands to FRR pods.
+
+Routes all kubectl exec operations through the deploy daemon Unix socket.
+NodalPath never holds the kubeconfig or calls kubectl directly.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import subprocess
+import socket
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
-KUBECONFIG: str = "/etc/rancher/k3s/k3s.yaml"
+DEPLOY_SOCKET_PATH: str = os.environ.get("NODAL_DEPLOY_SOCKET", "/tmp/nodal-deploy.sock")
 DEFAULT_NAMESPACE: str = "nodalarc"
 DEFAULT_TIMEOUT: int = 10
 MAX_WORKERS: int = 20
@@ -38,49 +43,70 @@ def exec_vtysh(
     namespace: str = DEFAULT_NAMESPACE,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> ExecResult:
-    """Execute vtysh commands on a satellite pod via kubectl exec.
+    """Execute vtysh commands on a satellite pod via the deploy daemon.
 
     Never raises — all errors are captured in ExecResult.
     """
     pod_name = node_id_to_pod_name(node_id)
-    cmd = [
-        "kubectl", "exec", "-n", namespace, pod_name,
-        "-c", "frr", "--", "vtysh", "-c", commands,
-    ]
-    env = {**os.environ, "KUBECONFIG": KUBECONFIG}
-
+    req = {
+        "action": "kubectl_exec",
+        "pod": pod_name,
+        "container": "frr",
+        "command": ["vtysh", "-c", commands],
+    }
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, env=env,
-        )
+        sock.connect(DEPLOY_SOCKET_PATH)
+        sock.sendall((json.dumps(req) + "\n").encode())
+        buf = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            if b"\n" in buf:
+                line = buf[:buf.index(b"\n")]
+                resp = json.loads(line)
+                success = resp.get("ok", False)
+                return ExecResult(
+                    node_id=node_id,
+                    pod_name=pod_name,
+                    success=success,
+                    stdout=resp.get("stdout", ""),
+                    stderr=resp.get("stderr", resp.get("error", "")),
+                    returncode=resp.get("exit_code", 0 if success else 1),
+                )
         return ExecResult(
-            node_id=node_id,
-            pod_name=pod_name,
-            success=result.returncode == 0,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            returncode=result.returncode,
-        )
-    except subprocess.TimeoutExpired:
-        log.error("kubectl exec timed out for %s after %ds", pod_name, timeout)
-        return ExecResult(
-            node_id=node_id,
-            pod_name=pod_name,
-            success=False,
-            stdout="",
-            stderr=f"timeout after {timeout}s",
-            returncode=-1,
+            node_id=node_id, pod_name=pod_name, success=False,
+            stdout="", stderr="No response from deploy daemon", returncode=-1,
         )
     except FileNotFoundError:
-        log.error("kubectl not found")
+        log.error("Deploy daemon socket not found at %s", DEPLOY_SOCKET_PATH)
         return ExecResult(
-            node_id=node_id,
-            pod_name=pod_name,
-            success=False,
-            stdout="",
-            stderr="kubectl not found",
-            returncode=-1,
+            node_id=node_id, pod_name=pod_name, success=False,
+            stdout="", stderr="Deploy daemon socket not found", returncode=-1,
         )
+    except ConnectionRefusedError:
+        log.error("Deploy daemon connection refused at %s", DEPLOY_SOCKET_PATH)
+        return ExecResult(
+            node_id=node_id, pod_name=pod_name, success=False,
+            stdout="", stderr="Deploy daemon connection refused", returncode=-1,
+        )
+    except socket.timeout:
+        log.error("Deploy daemon timed out for %s after %ds", pod_name, timeout)
+        return ExecResult(
+            node_id=node_id, pod_name=pod_name, success=False,
+            stdout="", stderr=f"Timeout after {timeout}s", returncode=-1,
+        )
+    except Exception as exc:
+        log.error("Deploy daemon error for %s: %s", pod_name, exc)
+        return ExecResult(
+            node_id=node_id, pod_name=pod_name, success=False,
+            stdout="", stderr=str(exc), returncode=-1,
+        )
+    finally:
+        sock.close()
 
 
 def push_to_nodes(

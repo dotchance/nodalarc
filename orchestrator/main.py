@@ -153,6 +153,8 @@ def main() -> None:
     parser.add_argument("--mode", choices=["de", "rt"], default="de")
     parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell (seconds)")
+    parser.add_argument("--no-convergence-gate", action="store_true",
+                        help="Disable MI convergence gate (for stacks without MI)")
     args = parser.parse_args()
 
     data = yaml.safe_load(Path(args.session).read_text())
@@ -200,6 +202,7 @@ def main() -> None:
             latency_update_interval_s=session.time.latency_update_interval_seconds,
             dwell_s=args.dwell,
             area_map=area_map,
+            use_convergence_gate=not args.no_convergence_gate,
         )
         dispatcher.run()
     else:

@@ -86,6 +86,8 @@ class LiveOrchestrator:
         to_sub.connect(self._to_connect)
         to_sub.setsockopt(zmq.SUBSCRIBE, b"LinkDown")
         to_sub.setsockopt(zmq.SUBSCRIBE, b"LinkUp")
+        to_sub.setsockopt(zmq.SUBSCRIBE, b"VisibilityEvent")
+        to_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
 
         poller = zmq.asyncio.Poller()
         poller.register(ome_sub, zmq.POLLIN)
@@ -148,15 +150,24 @@ class LiveOrchestrator:
             elif topic == b"Snapshot":
                 snapshot = TimelinePositionSnapshot.model_validate(data)
                 self._builder.apply_position_record(snapshot)
+                # Trigger transition check on sim_time change from Snapshots too
+                if self._current_sim_time is not None and snapshot.sim_time != self._current_sim_time:
+                    await self._check_transition(self._current_sim_time.isoformat())
+                self._current_sim_time = snapshot.sim_time
 
         except Exception as exc:
             log.warning("OME message processing error: %s", exc)
 
     async def _handle_to_message(self, raw: bytes) -> None:
-        """Process one TO message — deviation detection only."""
+        """Process one TO message — deviations + re-published OME events."""
         try:
             topic, payload = decode_message(raw)
             data = json.loads(payload)
+
+            # Handle VisibilityEvent and Snapshot re-published by orchestrator
+            if topic == b"VisibilityEvent" or topic == b"Snapshot":
+                await self._handle_ome_message(raw)
+                return
 
             if topic == b"LinkDown":
                 event = LinkDown.model_validate(data)

@@ -28,7 +28,6 @@ from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.metrics import ConvergenceRequest, ConvergenceResult
 from nodalarc.zmq_channels import (
     MI_CONVERGENCE_GATE_CONNECT,
-    OME_EVENTS_BIND,
     PLAYBACK_CONTROL_BIND,
     TO_EVENTS_BIND,
     encode_message,
@@ -36,6 +35,7 @@ from nodalarc.zmq_channels import (
     TOPIC_LINK_DOWN,
     TOPIC_LINK_UP,
     TOPIC_POSITION_EVENT,
+    TOPIC_VISIBILITY_EVENT,
 )
 from orchestrator.latency_model import PositionTable
 from orchestrator.timeline_reader import TimelineReader
@@ -152,10 +152,9 @@ class DiscreteEventDispatcher:
             pub_sock.setsockopt(zmq.LINGER, 0)
             pub_sock.bind(TO_EVENTS_BIND)
 
-            # OME PUB socket for position events (VS-API subscribes to this)
-            ome_pub_sock = ctx.socket(zmq.PUB)
-            ome_pub_sock.setsockopt(zmq.LINGER, 0)
-            ome_pub_sock.bind(OME_EVENTS_BIND)
+            # Reuse TO PUB socket for position events — OME already owns
+            # OME_EVENTS_BIND (port 5560) and binding there causes conflicts.
+            ome_pub_sock = pub_sock
 
             conv_sock = None
             if self._use_convergence_gate:
@@ -172,7 +171,7 @@ class DiscreteEventDispatcher:
             poller.register(playback_sock, zmq.POLLIN)
 
             log.info(
-                f"ZMQ PUB sockets bound: TO={TO_EVENTS_BIND} OME={OME_EVENTS_BIND} "
+                f"ZMQ PUB sockets bound: TO={TO_EVENTS_BIND} (positions on TO) "
                 f"Playback={PLAYBACK_CONTROL_BIND}"
             )
             # Allow subscribers time to connect (ZMQ slow joiner).
@@ -303,6 +302,10 @@ class DiscreteEventDispatcher:
             if record["event_type"] == "Snapshot":
                 snap = TimelinePositionSnapshot.model_validate(record["data"])
                 self._position_table.update_from_snapshot(snap)
+                # Re-publish raw Snapshot on TO port for NodalPath
+                pub_sock.send(encode_message(
+                    b"Snapshot", json.dumps(record["data"]).encode(),
+                ))
                 # Publish position event for VS-API
                 if ome_pub_sock is not None:
                     if not hasattr(self, '_pos_pub_count'):
@@ -374,6 +377,11 @@ class DiscreteEventDispatcher:
         vis_events.sort(key=_is_link_up)
 
         for vis in vis_events:
+            # Re-publish VisibilityEvent on TO port so NodalPath can track topology
+            pub_sock.send(encode_message(
+                TOPIC_VISIBILITY_EVENT, vis.model_dump_json().encode(),
+            ))
+
             if vis.visible and vis.scheduled:
                 link_event = self._handle_link_up(vis, pub_sock)
                 if link_event:

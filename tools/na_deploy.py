@@ -415,17 +415,21 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info(f"PID map saved to {pid_map_file}")
 
     # === Step 8: Start MI ===
-    log.info("Step 8: Start MI service")
     mi_db = str(data_dir / "session.db")
-    mi_log = open(data_dir / "mi.log", "w")
-    mi_proc = subprocess.Popen(
-        [sys.executable, "-m", "measurement.mi_main",
-         "--session", session_path,
-         "--db", mi_db],
-        stdout=mi_log,
-        stderr=mi_log,
-    )
-    log.info(f"MI service PID: {mi_proc.pid}")
+    mi_proc = None
+    if stack_config.mi_adapter is not None:
+        log.info("Step 8: Start MI service")
+        mi_log = open(data_dir / "mi.log", "w")
+        mi_proc = subprocess.Popen(
+            [sys.executable, "-m", "measurement.mi_main",
+             "--session", session_path,
+             "--db", mi_db],
+            stdout=mi_log,
+            stderr=mi_log,
+        )
+        log.info(f"MI service PID: {mi_proc.pid}")
+    else:
+        log.info("Step 8: Skip MI service (no mi_adapter for this stack)")
 
     # === Step 9: Configure probe flows ===
     log.info("Step 9: Configure probe flows (skipped in Phase 1B)")
@@ -520,15 +524,18 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info("Step 11: Begin event dispatch")
     mode_flag = "de" if session.time.mode == "discrete-event" else "rt"
     to_log = open(data_dir / "orchestrator.log", "w")
+    orchestrator_cmd = [
+        sys.executable, "-m", "orchestrator.main",
+        "--session", session_path,
+        "--timeline", str(timeline_path),
+        "--mode", mode_flag,
+        "--pid-map", str(pid_map_file),
+        "--dwell", str(dwell),
+    ]
+    if stack_config.mi_adapter is None:
+        orchestrator_cmd.append("--no-convergence-gate")
     to_proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "orchestrator.main",
-            "--session", session_path,
-            "--timeline", str(timeline_path),
-            "--mode", mode_flag,
-            "--pid-map", str(pid_map_file),
-            "--dwell", str(dwell),
-        ],
+        orchestrator_cmd,
         stdout=to_log,
         stderr=to_log,
     )
@@ -568,7 +575,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         "data_dir": str(data_dir),
         "timeline": str(timeline_path),
         "ome_pid": ome_proc.pid,
-        "mi_pid": mi_proc.pid,
+        "mi_pid": mi_proc.pid if mi_proc else 0,
         "vsapi_pid": vsapi_pid,
         "orchestrator_pid": to_proc.pid,
         "daemon_pid": daemon_proc.pid,
@@ -585,7 +592,8 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info(f"Data directory: {data_dir}")
     log.info(f"Timeline: {timeline_path}")
     log.info(f"OME PID: {ome_proc.pid}")
-    log.info(f"MI service PID: {mi_proc.pid}")
+    if mi_proc:
+        log.info(f"MI service PID: {mi_proc.pid}")
     log.info(f"VS-API PID: {vsapi_pid}")
     log.info(f"Orchestrator PID: {to_proc.pid}")
     log.info(f"Session state: {state_file}")

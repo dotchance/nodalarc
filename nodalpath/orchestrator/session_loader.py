@@ -195,7 +195,7 @@ def load_session_context(
     orchestrator/, vs_api/, or measurement/.
     """
     if project_root is None:
-        project_root = session_path.parent
+        project_root = Path.cwd()
 
     # 1. Load session
     session = SessionConfig.model_validate(yaml.safe_load(session_path.read_text()))

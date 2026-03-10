@@ -90,6 +90,34 @@ export interface NodeStateDetail {
     reason?: string;
 }
 
+// ── Timeline (from GET /api/v1/timeline) ────────────────────────────────────
+
+export interface TimelineTick {
+    sim_time: string;
+    topology_state_id: string;
+    node_count: number;
+    is_future: boolean;
+    push_succeeded: boolean | null;
+    push_failed_count: number;
+    had_deviation: boolean;
+    node_count_delta: number | null;
+}
+
+export interface TimelineResponse {
+    available: boolean;
+    tick_count: number;
+    lookahead_status: "disabled" | "starting" | "computing" | "waiting" | "complete";
+    ticks: TimelineTick[];
+}
+
+// ── Historical topology (from GET /api/v1/topology/at/{sim_time}) ────────────
+
+export interface HistoricalTopologyResponse extends TopologySnapshot {
+    is_historical: boolean;
+    is_future: boolean;
+    links_available: boolean;
+}
+
 // ── D3 graph nodes (ConsoleNode extended with computed layout position) ──────
 
 export interface GraphNode extends ConsoleNode {

@@ -54,6 +54,9 @@ class ConsoleState:
     # Current topology snapshot — written by async loop, read by FastAPI handlers
     _current_topology: dict | None = field(default=None)
 
+    # ── Lookahead worker status ─────────────────────────────────────────────
+    _lookahead_status: str = "disabled"
+
     # ── Synchronisation ─────────────────────────────────────────────────────
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -200,6 +203,28 @@ class ConsoleState:
             return False
 
     # ────────────────────────────────────────────────────────────────────────
+    # Lookahead status API
+    # ────────────────────────────────────────────────────────────────────────
+
+    def record_lookahead_status(self, status: str) -> None:
+        """Record the current lookahead worker status.
+
+        Called by LookaheadWorker to communicate state to the frontend.
+        Status values: disabled, starting, computing, waiting, complete.
+        """
+        with self._lock:
+            self._lookahead_status = status
+            self._append_event(
+                event_type="LOOKAHEAD",
+                summary=f"Lookahead status: {status}",
+                details={"status": status},
+            )
+
+    def get_lookahead_status(self) -> str:
+        with self._lock:
+            return self._lookahead_status
+
+    # ────────────────────────────────────────────────────────────────────────
     # Read API (called from FastAPI handlers)
     # ────────────────────────────────────────────────────────────────────────
 
@@ -217,6 +242,7 @@ class ConsoleState:
                 "recomputation_count": self.recomputation_count,
                 "last_topology_state_id": self.last_topology_state_id,
                 "last_sim_time": self.last_sim_time,
+                "lookahead_status": self._lookahead_status,
                 # Lists: newest-last in storage, returned newest-first for display
                 "push_history": list(reversed(self._push_history)),
                 "almanac_history": list(reversed(self._almanac_history)),

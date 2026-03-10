@@ -32,8 +32,22 @@ body {
   width: 360px;
   flex-shrink: 0;
   border-left: 1px solid var(--divider);
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg-panel);
+}
+
+/* Node detail takes available space; timeline is fixed height or collapsed */
+.detail-area > .detail-panel,
+.detail-area > .detail-panel--empty {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.detail-area > .timeline-panel {
+  flex-shrink: 0;
 }
 
 .event-log-area {

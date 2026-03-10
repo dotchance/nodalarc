@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { useConsoleState } from "./hooks/useConsoleState";
 import { useTopology } from "./hooks/useTopology";
+import { useTimeline } from "./hooks/useTimeline";
+import { useHistoricalTopology } from "./hooks/useHistoricalTopology";
 import { TopBar } from "./bars/TopBar";
 import { StatsBar } from "./bars/StatsBar";
 import { TopologyGraph } from "./graph/TopologyGraph";
 import { NodeDetailPanel } from "./panels/NodeDetailPanel";
+import { TimelinePanel } from "./panels/TimelinePanel";
 import { EventLog } from "./panels/EventLog";
 import { API_BASE } from "./config";
 import "./styles/reset.css";
@@ -17,6 +20,22 @@ export default function App() {
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
     const [recomputing, setRecomputing] = useState(false);
 
+    // Historical mode state
+    const [selectedSimTime, setSelectedSimTime] = useState<string | null>(null);
+    const [windowMinutes, setWindowMinutes] = useState(60);
+
+    // Timeline data
+    const timeline = useTimeline();
+
+    // Historical topology — fetched when scrubbing, null in live mode
+    const historicalTopology = useHistoricalTopology(selectedSimTime);
+
+    // Active topology: historical when scrubbing, live otherwise
+    const activeTopology = selectedSimTime ? historicalTopology : topology;
+
+    // Current sim time for the timeline now cursor
+    const currentSimTime = consoleState?.last_sim_time ?? null;
+
     const handleRecompute = async () => {
         setRecomputing(true);
         try {
@@ -26,7 +45,15 @@ export default function App() {
         }
     };
 
-    const topologyNodes = topology?.nodes ?? [];
+    const handleTickSelect = (simTime: string) => {
+        setSelectedSimTime(simTime);
+    };
+
+    const handleReturnToLive = () => {
+        setSelectedSimTime(null);
+    };
+
+    const topologyNodes = activeTopology?.nodes ?? [];
     const lastPushResult = consoleState?.push_history?.[0] ?? null;
 
     return (
@@ -40,17 +67,33 @@ export default function App() {
             <div className="main-area">
                 <div className="graph-area">
                     <TopologyGraph
-                        topology={topology}
+                        topology={activeTopology}
                         selectedNodeId={selectedNodeId}
                         onNodeSelect={setSelectedNodeId}
                         lastPushResult={lastPushResult}
                     />
                 </div>
                 <aside className="detail-area">
+                    {selectedSimTime && (
+                        <div className="historical-banner">
+                            <span>&#x23EA; Viewing {selectedSimTime.substring(11, 19)} sim_time</span>
+                            <button onClick={handleReturnToLive}>Return to Live</button>
+                        </div>
+                    )}
                     <NodeDetailPanel
                         nodeId={selectedNodeId}
                         topology_nodes={topologyNodes}
                         consoleState={consoleState}
+                        selectedSimTime={selectedSimTime}
+                    />
+                    <TimelinePanel
+                        timeline={timeline}
+                        selectedSimTime={selectedSimTime}
+                        currentSimTime={currentSimTime}
+                        onTickSelect={handleTickSelect}
+                        onReturnToLive={handleReturnToLive}
+                        windowMinutes={windowMinutes}
+                        onWindowChange={setWindowMinutes}
                     />
                 </aside>
             </div>

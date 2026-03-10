@@ -73,7 +73,18 @@ async def _run_live(config: NodalPathConfig) -> None:
         console_state=console_state,
     )
 
-    console_app = build_app(console_state, almanac_store=orchestrator.almanac_store)
+    almanac_store = orchestrator.almanac_store
+
+    # Load almanac history from previous run if output path is configured
+    if config.almanac_output_path is not None:
+        loaded = almanac_store.load_from_jsonl(config.almanac_output_path)
+        log.info("Loaded %d almanac entries from %s", loaded, config.almanac_output_path)
+
+    console_app = build_app(
+        console_state,
+        almanac_store=almanac_store,
+        prefix_map=prefix_map,
+    )
     uvicorn_config = uvicorn.Config(
         console_app,
         host="0.0.0.0",
@@ -88,11 +99,30 @@ async def _run_live(config: NodalPathConfig) -> None:
         config.transport, config.dry_run, NODALPATH_CONSOLE_PORT,
     )
 
-    try:
-        await asyncio.gather(
-            orchestrator.run(),
-            console_server.serve(),
+    tasks = [orchestrator.run(), console_server.serve()]
+
+    if config.lookahead_enabled and config.timeline_path is not None:
+        from nodalpath.integration.lookahead_worker import LookaheadWorker
+        lookahead = LookaheadWorker(
+            timeline_path=config.timeline_path,
+            node_registry=node_registry,
+            interface_map=interface_map,
+            prefix_map=prefix_map,
+            bandwidth_map=bandwidth_map,
+            almanac_store=almanac_store,
+            lookahead_horizon_s=config.lookahead_horizon_s,
+            console_state=console_state,
         )
+        tasks.append(lookahead.run())
+        log.info(
+            "LookaheadWorker enabled (horizon=%ds, file=%s)",
+            config.lookahead_horizon_s, config.timeline_path,
+        )
+    else:
+        log.info("LookaheadWorker disabled (pass --timeline to enable)")
+
+    try:
+        await asyncio.gather(*tasks)
     finally:
         publisher.close()
         log.info(
@@ -161,8 +191,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="NodalPath forwarding almanac controller")
     parser.add_argument("--session", help="Path to session YAML (required for live/batch)")
     parser.add_argument("--mode", choices=["live", "batch", "console"], default="live")
-    parser.add_argument("--timeline", help="Timeline JSONL path (batch mode only)")
+    parser.add_argument("--timeline", help="OME timeline JSONL path (batch mode / enables lookahead)")
     parser.add_argument("--output", help="Almanac JSONL output path")
+    parser.add_argument("--lookahead-horizon", type=int, default=5700,
+                        help="Lookahead horizon in seconds (default: 5700)")
+    parser.add_argument("--almanac-output", help="Almanac JSONL output path (enables persistence)")
+    parser.add_argument("--no-lookahead", action="store_true", help="Disable lookahead worker")
     parser.add_argument("--transport", choices=["grpc", "vtysh"], default="grpc")
     parser.add_argument("--grpc-port", type=int, default=50051)
     parser.add_argument("--namespace", default="nodalarc")
@@ -185,6 +219,9 @@ def main() -> None:
         grpc_port=args.grpc_port,
         namespace=args.namespace,
         dry_run=args.dry_run,
+        lookahead_enabled=not args.no_lookahead,
+        lookahead_horizon_s=args.lookahead_horizon,
+        almanac_output_path=Path(args.almanac_output) if args.almanac_output else None,
     )
 
     if config.mode == "batch":

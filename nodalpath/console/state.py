@@ -51,6 +51,9 @@ class ConsoleState:
     # _event_log: unified chronological log shown in the dashboard.
     _event_log: list[dict] = field(default_factory=list)
 
+    # Current topology snapshot — written by async loop, read by FastAPI handlers
+    _current_topology: dict | None = field(default=None)
+
     # ── Synchronisation ─────────────────────────────────────────────────────
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -164,6 +167,20 @@ class ConsoleState:
                 f"Recomputation #{self.recomputation_count} triggered",
                 {"recomputation_count": self.recomputation_count},
             )
+
+    def record_topology_snapshot(self, snapshot: dict) -> None:
+        """Record the current topology for serving to the console frontend.
+
+        Called from _check_transition() in LiveOrchestrator after each topology
+        state change. snapshot must already be serialized to a plain dict.
+        """
+        with self._lock:
+            self._current_topology = snapshot
+
+    def get_topology(self) -> dict | None:
+        """Return the current topology snapshot, or None if no transition has been processed yet."""
+        with self._lock:
+            return self._current_topology
 
     # ────────────────────────────────────────────────────────────────────────
     # Manual recompute flag

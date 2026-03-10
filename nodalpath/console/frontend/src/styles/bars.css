@@ -1,0 +1,125 @@
+/* ── Top bar ── */
+.top-bar {
+  background: var(--bg-topbar);
+  border-bottom: 1px solid var(--divider);
+  padding: 0 20px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.brand {
+  color: var(--text-acc);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.top-bar-meta {
+  color: var(--text-sec);
+  font-size: 12px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* Status pill */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.status-pill .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-live {
+  background: #00d4aa22;
+  color: var(--teal);
+}
+
+.status-live .dot {
+  background: var(--teal);
+}
+
+/* Recompute button */
+.recompute-btn {
+  background: #2a2a4e;
+  color: var(--text-acc);
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+  padding: 5px 14px;
+  font-family: var(--font);
+  font-size: 12px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+
+.recompute-btn:hover {
+  background: #3a3a5e;
+  border-color: var(--text-acc);
+}
+
+.recompute-btn:active {
+  transform: scale(0.97);
+}
+
+.recompute-btn.working {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+/* ── Stats bar ── */
+.stats-bar {
+  display: flex;
+  gap: 1px;
+  background: var(--divider);
+  border-bottom: 1px solid var(--divider);
+}
+
+.stat-cell {
+  background: var(--bg-panel);
+  padding: 14px 20px;
+  flex: 1;
+}
+
+.stat-label {
+  color: var(--text-sec);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  color: var(--text-pri);
+  font-size: 22px;
+}
+
+.stat-value.accent {
+  color: var(--text-acc);
+}
+
+.stat-value.warn {
+  color: var(--amber);
+}
+
+.stat-value.danger {
+  color: var(--red);
+}
+
+.stat-value.stat-small {
+  font-size: 14px;
+}

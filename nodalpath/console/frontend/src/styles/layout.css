@@ -1,0 +1,42 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg-body);
+  color: var(--text-pri);
+  font-family: var(--font);
+  font-size: 13px;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.app-root {
+  display: grid;
+  grid-template-rows: 48px 56px 1fr 200px;
+  grid-template-columns: 1fr;
+  height: 100vh;
+}
+
+.main-area {
+  display: flex;
+  overflow: hidden;
+  border-bottom: 1px solid var(--divider);
+}
+
+.graph-area {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.detail-area {
+  width: 360px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--divider);
+  overflow-y: auto;
+  background: var(--bg-panel);
+}
+
+.event-log-area {
+  overflow: hidden;
+  border-top: 1px solid var(--divider);
+}

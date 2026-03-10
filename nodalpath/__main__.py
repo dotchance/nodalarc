@@ -73,7 +73,7 @@ async def _run_live(config: NodalPathConfig) -> None:
         console_state=console_state,
     )
 
-    console_app = build_app(console_state)
+    console_app = build_app(console_state, almanac_store=orchestrator.almanac_store)
     uvicorn_config = uvicorn.Config(
         console_app,
         host="0.0.0.0",

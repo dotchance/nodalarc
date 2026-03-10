@@ -423,6 +423,32 @@ def _build_synthetic_records() -> list[dict]:
     return records
 
 
+# ---------------------------------------------------------------------------
+# Chunk 3: Push fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def push_sid_to_loopback(simple_node_registry: dict[str, TopologyNode]) -> dict[int, str]:
+    """SID → loopback IP mapping built from simple_node_registry."""
+    return {node.sid: node.loopback_ipv4 for node in simple_node_registry.values()}
+
+
+@pytest.fixture
+def push_iface_to_peer_loopback(
+    simple_interface_map: dict[tuple[str, str], tuple[str, str]],
+    simple_node_registry: dict[str, TopologyNode],
+) -> dict[tuple[str, str], str]:
+    """(node_id, interface) → peer loopback IP mapping."""
+    result: dict[tuple[str, str], str] = {}
+    for (src, dst), (src_iface, dst_iface) in simple_interface_map.items():
+        src_lo = simple_node_registry[src].loopback_ipv4
+        dst_lo = simple_node_registry[dst].loopback_ipv4
+        result[(src, src_iface)] = dst_lo
+        result[(dst, dst_iface)] = src_lo
+    return result
+
+
 @pytest.fixture
 def synthetic_timeline_path(tmp_path: Path) -> Path:
     """Write a synthetic timeline JSONL file and return its path.

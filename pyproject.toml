@@ -16,6 +16,8 @@ dependencies = [
     "pyroute2",
     "kubernetes",
     "websockets>=16.0",
+    "grpcio>=1.74",
+    "protobuf>=6.31.1,<7",
 ]
 
 [project.optional-dependencies]
@@ -35,5 +37,6 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "grpcio-tools>=1.74",
     "pytest-timeout>=2.4.0",
 ]

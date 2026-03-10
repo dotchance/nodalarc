@@ -253,6 +253,54 @@ def _handle_kubectl_wait(req: dict) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+def _handle_modprobe_mpls(req: dict) -> dict:
+    """Load MPLS kernel modules via modprobe."""
+    modules = req.get("modules", ["mpls_router", "mpls_iptunnel"])
+    loaded = []
+    for mod in modules:
+        # Validate module name (alphanumeric + underscore only)
+        if not re.match(r"^[a-z0-9_]+$", mod):
+            return {"ok": False, "error": f"Invalid module name: {mod}"}
+        try:
+            subprocess.run(
+                ["modprobe", mod],
+                capture_output=True, text=True, timeout=15, check=True,
+            )
+            loaded.append(mod)
+        except subprocess.CalledProcessError as exc:
+            return {"ok": False, "error": f"modprobe {mod} failed: {exc.stderr}"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+    return {"ok": True, "modules": loaded}
+
+
+def _handle_get_pod_ip(req: dict) -> dict:
+    """Get the IP address of a pod."""
+    pod = req.get("pod", "")
+    namespace = req.get("namespace", _NAMESPACE)
+    if not pod:
+        return {"ok": False, "error": "pod required"}
+    if not _VALID_POD_NAME.match(pod):
+        return {"ok": False, "error": f"Invalid pod name: {pod}"}
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "pod", pod, "-n", namespace,
+             "-o", "jsonpath={.status.podIP}"],
+            capture_output=True, text=True, timeout=15,
+            env=_env_with_kubeconfig(),
+        )
+        if result.returncode != 0:
+            return {"ok": False, "error": result.stderr}
+        pod_ip = result.stdout.strip()
+        if not pod_ip:
+            return {"ok": False, "error": f"Pod {pod} has no IP"}
+        return {"ok": True, "pod_ip": pod_ip}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "kubectl timed out"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def _send(conn: socket.socket, msg: dict) -> None:
     """Send a JSON message terminated by newline."""
     data = json.dumps(msg) + "\n"
@@ -297,6 +345,10 @@ def _handle_client(conn: socket.socket, addr: str) -> None:
             resp = _handle_helm_uninstall(req)
         elif action == "kubectl_wait":
             resp = _handle_kubectl_wait(req)
+        elif action == "modprobe_mpls":
+            resp = _handle_modprobe_mpls(req)
+        elif action == "get_pod_ip":
+            resp = _handle_get_pod_ip(req)
         elif action == "ping":
             resp = {"ok": True, "pong": True}
         else:

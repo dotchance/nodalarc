@@ -1,0 +1,18 @@
+:root {
+  --bg-body:    #0d0d1a;
+  --bg-panel:   #1a1a2e;
+  --bg-topbar:  #16162a;
+  --text-pri:   #e0e0e0;
+  --text-sec:   #888899;
+  --text-acc:   #00d4aa;
+  --divider:    #2a2a4e;
+  --hover:      #2a2a4e;
+  --selected:   #333366;
+  --green:      #44cc66;
+  --amber:      #ccaa33;
+  --red:        #ff3333;
+  --blue:       #4a9eff;
+  --teal:       #00d4aa;
+  --font:       "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+  --font-sans:  system-ui, -apple-system, sans-serif;
+}

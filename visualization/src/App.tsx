@@ -40,6 +40,17 @@ function AppInner() {
   const { snapshot, connected, hasEverConnected, historicalMode, setHistoricalMode, fetchHistorical } =
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
+
+  // On initial mount, check for ?selected=<node_id> deep-link from NodalPath console
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const preselected = params.get("selected");
+    if (preselected) {
+      const type = preselected.startsWith("gs-") ? "ground_station" as const : "satellite" as const;
+      select({ type, id: preselected });
+    }
+  }, [select]);
+
   const { sessions, switching, switchSession } = useSessionSwitcher(snapshot?.session_status ?? null);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
   const { manifest } = useManifest();

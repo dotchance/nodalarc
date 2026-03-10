@@ -42,6 +42,18 @@ class AlmanacStore:
             return None
         return self._entries[idx - 1]
 
+    def get_forwarding_entries_for_node(
+        self, node_id: str, topology_state_id: str,
+    ) -> ForwardingTable | None:
+        """Return the forwarding table for a node at a given topology state."""
+        for entry in reversed(self._entries):
+            if entry.topology_state_id == topology_state_id:
+                for ft in entry.forwarding_tables:
+                    if ft.node_id == node_id:
+                        return ft
+                return None
+        return None
+
     def get_forwarding_table(
         self, sim_time: str, node_id: str,
     ) -> ForwardingTable | None:

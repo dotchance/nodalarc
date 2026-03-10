@@ -236,6 +236,49 @@ class LiveOrchestrator:
             )
             self._console_state.record_push_result(push_result)
 
+            # Build console-format topology dict for the frontend graph
+            isl_counts: dict[str, int] = {}
+            gnd_counts: dict[str, int] = {}
+            for edge in snapshot.edges:
+                for nid in (edge.src_node_id, edge.dst_node_id):
+                    if edge.link_type == "isl":
+                        isl_counts[nid] = isl_counts.get(nid, 0) + 1
+                    else:
+                        gnd_counts[nid] = gnd_counts.get(nid, 0) + 1
+
+            nodes_payload = []
+            for node in snapshot.nodes:
+                ic = isl_counts.get(node.node_id, 0)
+                gc = gnd_counts.get(node.node_id, 0)
+                nodes_payload.append({
+                    "node_id": node.node_id,
+                    "node_type": node.node_type,
+                    "plane": node.plane,
+                    "slot": node.slot,
+                    "routing_area": None,
+                    "neighbor_count": ic + gc,
+                    "isl_count": ic,
+                    "gnd_count": gc,
+                    "prefix": self._prefix_map.get(node.node_id),
+                })
+
+            links_payload = [
+                {
+                    "node_a": edge.src_node_id,
+                    "node_b": edge.dst_node_id,
+                    "state": "active",
+                    "link_type": edge.link_type,
+                }
+                for edge in snapshot.edges
+            ]
+
+            self._console_state.record_topology_snapshot({
+                "topology_state_id": entry.topology_state_id,
+                "sim_time": sim_time_iso,
+                "nodes": nodes_payload,
+                "links": links_payload,
+            })
+
     async def _recompute(self, sim_time_iso: str) -> None:
         """Force recomputation at current topology state (used after deviation)."""
         snapshot = self._builder.build_snapshot(sim_time_iso)

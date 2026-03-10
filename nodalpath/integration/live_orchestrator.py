@@ -6,6 +6,10 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from nodalpath.console.state import ConsoleState
 
 import zmq
 import zmq.asyncio
@@ -44,6 +48,7 @@ class LiveOrchestrator:
         publisher: AlmanacPublisher,
         ome_connect: str,
         to_connect: str,
+        console_state: ConsoleState | None = None,
     ) -> None:
         self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
         self._store = AlmanacStore()
@@ -57,6 +62,7 @@ class LiveOrchestrator:
         self._current_sim_time: datetime | None = None
         self._transition_count = 0
         self._running = False
+        self._console_state = console_state
 
     @property
     def transition_count(self) -> int:
@@ -105,6 +111,12 @@ class LiveOrchestrator:
                 if to_sub in socks:
                     raw = await to_sub.recv(zmq.NOBLOCK)
                     await self._handle_to_message(raw)
+
+                # Check for manual recompute request from console
+                if self._console_state is not None and self._console_state.consume_recompute_request():
+                    if self._current_sim_time is not None:
+                        log.info("Manual recompute requested via console")
+                        await self._recompute(self._current_sim_time.isoformat())
 
         except asyncio.CancelledError:
             log.info("LiveOrchestrator cancelled")
@@ -159,6 +171,14 @@ class LiveOrchestrator:
                         node_b=event.node_b,
                         reason=event.reason,
                     )
+                    if self._console_state is not None:
+                        self._console_state.record_deviation(
+                            sim_time=event.sim_time.isoformat(),
+                            topology_state_id=entry.topology_state_id if entry else "unknown",
+                            node_a=event.node_a,
+                            node_b=event.node_b,
+                            reason=event.reason,
+                        )
                     await self._recompute(event.sim_time.isoformat())
 
             elif topic == b"LinkUp":
@@ -207,11 +227,23 @@ class LiveOrchestrator:
 
         self._prev_link_set = curr
 
+        if self._console_state is not None:
+            self._console_state.record_transition(
+                sim_time=sim_time_iso,
+                topology_state_id=entry.topology_state_id,
+                active_link_count=len(curr),
+                forwarding_table_count=len(entry.forwarding_tables),
+            )
+            self._console_state.record_push_result(push_result)
+
     async def _recompute(self, sim_time_iso: str) -> None:
         """Force recomputation at current topology state (used after deviation)."""
         snapshot = self._builder.build_snapshot(sim_time_iso)
         entry = compute_almanac_entry(snapshot, self._prefix_map)
         self._store.store(entry)
+
+        if self._console_state is not None:
+            self._console_state.record_recomputation()
 
         log.info(
             "Recomputation at %s after deviation: %d forwarding tables",
@@ -229,6 +261,9 @@ class LiveOrchestrator:
         push_result = await loop.run_in_executor(
             None, self._push_scheduler.push_entry, entry, None,
         )
+
+        if self._console_state is not None:
+            self._console_state.record_push_result(push_result)
 
         self._publisher.publish_table_pushed(
             sim_time=datetime.fromisoformat(sim_time_iso),

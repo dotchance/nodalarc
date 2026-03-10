@@ -38,5 +38,6 @@ markers = [
 [dependency-groups]
 dev = [
     "grpcio-tools>=1.74",
+    "httpx>=0.28.1",
     "pytest-timeout>=2.4.0",
 ]

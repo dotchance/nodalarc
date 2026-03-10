@@ -72,17 +72,13 @@ export function computeViewBox(nodeMap: Map<string, GraphNode>): {
     return { width: maxX + MARGIN * 2, height: maxY + MARGIN * 2 };
 }
 
-/** Routing area -> color, matching VF Section 10.1 */
-const AREA_COLORS: Record<string, string> = {
-    "49.0001": "#cc4444",
-    "49.0002": "#44aa44",
-    "49.0003": "#4477bb",
-    "49.0004": "#cc8844",
-};
-const GROUND_COLOR = "#00d4aa";
-const UNKNOWN_AREA_COLOR = "#666688";
+/** Node color based on last push result. */
+export type PushStatus = "succeeded" | "failed" | "pending";
 
-export function areaColor(routing_area: string | null): string {
-    if (routing_area === null) return GROUND_COLOR;
-    return AREA_COLORS[routing_area] ?? UNKNOWN_AREA_COLOR;
+export function pushStatusColor(status: PushStatus): string {
+    switch (status) {
+        case "succeeded": return "#44cc66";   // green — VF success color
+        case "failed":    return "#ff3333";   // red — VF error color
+        case "pending":   return "#ccaa33";   // amber — VF warning color
+    }
 }

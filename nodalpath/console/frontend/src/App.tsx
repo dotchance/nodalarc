@@ -27,6 +27,7 @@ export default function App() {
     };
 
     const topologyNodes = topology?.nodes ?? [];
+    const lastPushResult = consoleState?.push_history?.[0] ?? null;
 
     return (
         <div className="app-root">
@@ -42,6 +43,7 @@ export default function App() {
                         topology={topology}
                         selectedNodeId={selectedNodeId}
                         onNodeSelect={setSelectedNodeId}
+                        lastPushResult={lastPushResult}
                     />
                 </div>
                 <aside className="detail-area">

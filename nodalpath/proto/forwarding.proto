@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package nodalpath.forwarding;
+
+option python_package = "nodalpath.proto";
+
+// The service exposed by the custom MPLS container.
+// NodalPath calls this to update forwarding tables.
+service ForwardingService {
+  // Push a complete forwarding table update to the node.
+  // The node replaces its current forwarding state with the provided entries.
+  rpc UpdateForwardingTable(ForwardingTableUpdate) returns (PushResponse);
+
+  // Retrieve the node's current forwarding table.
+  rpc GetForwardingTable(Empty) returns (ForwardingTableState);
+
+  // Get the node's operational status.
+  rpc GetStatus(Empty) returns (NodeStatus);
+}
+
+message Empty {}
+
+message LabelEntry {
+  uint32 in_label = 1;
+  Action action = 2;
+  uint32 out_label = 3;           // 0 if action is POP
+  string out_interface = 4;
+  uint32 backup_out_label = 5;    // 0 if no backup
+  string backup_out_interface = 6; // empty if no backup
+}
+
+enum Action {
+  SWAP = 0;
+  POP = 1;
+  PUSH = 2;
+}
+
+message IngressEntry {
+  string dst_prefix = 1;          // e.g., "172.16.2.0/24"
+  uint32 push_label = 2;
+  string out_interface = 3;
+  uint32 backup_push_label = 4;   // 0 if no backup
+  string backup_out_interface = 5; // empty if no backup
+}
+
+message ForwardingTableUpdate {
+  string topology_state_id = 1;
+  string sim_time = 2;
+  repeated LabelEntry lsr_entries = 3;
+  repeated IngressEntry ler_entries = 4;
+}
+
+message PushResponse {
+  bool success = 1;
+  string error_message = 2;       // empty on success
+  uint32 entries_installed = 3;
+  float apply_time_ms = 4;
+}
+
+message ForwardingTableState {
+  string topology_state_id = 1;
+  string sim_time = 2;
+  repeated LabelEntry lsr_entries = 3;
+  repeated IngressEntry ler_entries = 4;
+}
+
+message NodeStatus {
+  string node_id = 1;
+  string current_topology_state_id = 2;
+  uint32 total_entries = 3;
+  float last_update_ms = 4;
+  string last_update_time = 5;    // ISO 8601
+}

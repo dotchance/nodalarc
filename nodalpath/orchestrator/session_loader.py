@@ -7,10 +7,18 @@ importing from ome/, orchestrator/, vs_api/, or measurement/.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+import socket
 from pathlib import Path
 
 import yaml
 from pydantic import TypeAdapter
+
+log = logging.getLogger(__name__)
+
+DEPLOY_SOCKET_PATH: str = os.environ.get("NODAL_DEPLOY_SOCKET", "/tmp/nodal-deploy.sock")
 
 from nodalarc.models.addressing import (
     AddressingScheme,
@@ -275,3 +283,62 @@ def load_session_context(
             prefix_map[gs_id] = f"172.16.{gs_index}.0/24"
 
     return node_registry, interface_map, prefix_map, bandwidth_map
+
+
+def _daemon_request(
+    request: dict,
+    socket_path: str = DEPLOY_SOCKET_PATH,
+    timeout: float = 10.0,
+) -> dict | None:
+    """Send a JSON request to the deploy daemon and return the response.
+
+    Returns None on any error (connection, timeout, parse failure).
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect(socket_path)
+        sock.sendall((json.dumps(request) + "\n").encode())
+        buf = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return None
+            buf += chunk
+            if b"\n" in buf:
+                line = buf[:buf.index(b"\n")]
+                return json.loads(line)
+        return None
+    except Exception as exc:
+        log.warning("Deploy daemon request failed: %s", exc)
+        return None
+    finally:
+        sock.close()
+
+
+def load_pod_ip_map(
+    node_ids: list[str],
+    socket_path: str = DEPLOY_SOCKET_PATH,
+    namespace: str = "nodalarc",
+) -> dict[str, str]:
+    """Query pod IPs for a list of node_ids via the deploy daemon.
+
+    Skips nodes whose pod IP cannot be resolved (logs warning).
+    """
+    from nodalpath.push.kubectl_exec import node_id_to_pod_name
+
+    result: dict[str, str] = {}
+    for node_id in node_ids:
+        pod_name = node_id_to_pod_name(node_id)
+        resp = _daemon_request(
+            {"action": "get_pod_ip", "pod": pod_name, "namespace": namespace},
+            socket_path=socket_path,
+        )
+        if resp and resp.get("ok") and resp.get("pod_ip"):
+            result[node_id] = resp["pod_ip"]
+        else:
+            error = resp.get("error", "no response") if resp else "no response"
+            log.warning("Failed to get pod IP for %s (%s): %s", node_id, pod_name, error)
+
+    log.info("Resolved %d/%d pod IPs", len(result), len(node_ids))
+    return result

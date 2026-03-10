@@ -115,3 +115,7 @@ node_modules/
 # IDE
 .idea/
 .vscode/
+
+# Generated proto stubs
+nodalpath/proto/forwarding_pb2.py
+nodalpath/proto/forwarding_pb2_grpc.py

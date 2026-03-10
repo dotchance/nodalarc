@@ -1,0 +1,6 @@
+{
+{% for iface_name, peer_info in interfaces.items() %}
+  "{{ iface_name }}": "{{ peer_info.peer_ipv4 }}"{% if not loop.last %},{% endif %}
+
+{% endfor %}
+}

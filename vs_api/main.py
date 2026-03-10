@@ -57,11 +57,13 @@ from nodalarc.models.metrics import TraceRequest, TraceResponse
 from nodalarc.zmq_channels import (
     MI_EVENTS_CONNECT,
     MI_TRACE_CONNECT,
+    NODALPATH_EVENTS_CONNECT,
     OME_EVENTS_CONNECT,
     PLAYBACK_CONTROL_CONNECT,
     TO_EVENTS_CONNECT,
     decode_message,
     TOPIC_ADAPTER_EVENT,
+    TOPIC_ALMANAC_EVENT,
     TOPIC_CONVERGENCE_RESULT,
     TOPIC_LATENCY_UPDATE,
     TOPIC_LINK_DOWN,
@@ -184,6 +186,18 @@ _beam_falloff_exponent: float = 2.0
 _playback_paused: bool = False
 _playback_speed: float = 1.0
 
+_almanac_state: dict = {
+    "last_topology_state_id": None,
+    "last_push_sim_time": None,
+    "last_push_wall_time": None,
+    "nodes_succeeded": 0,
+    "nodes_failed": 0,
+    "deviation_count": 0,
+    "recomputation_count": 0,
+    "nodalpath_active": False,
+}
+_almanac_lock = threading.Lock()
+
 
 def _update_position(event_data: dict) -> None:
     """Update node positions from PositionEvent."""
@@ -278,6 +292,23 @@ def _link_key(node_a: str, node_b: str) -> str:
     return f"{min(node_a, node_b)}:{max(node_a, node_b)}"
 
 
+def _update_almanac_state(event_data: dict) -> None:
+    """Update almanac state from AlmanacEvent."""
+    event_type = event_data.get("event_type", "")
+    with _almanac_lock:
+        _almanac_state["nodalpath_active"] = True
+        if event_type == "table_pushed":
+            _almanac_state["last_topology_state_id"] = event_data.get("topology_state_id")
+            _almanac_state["last_push_sim_time"] = event_data.get("sim_time")
+            _almanac_state["last_push_wall_time"] = event_data.get("wall_time")
+            _almanac_state["nodes_succeeded"] = event_data.get("nodes_succeeded", 0)
+            _almanac_state["nodes_failed"] = event_data.get("nodes_failed", 0)
+        elif event_type == "deviation_detected":
+            _almanac_state["deviation_count"] = _almanac_state.get("deviation_count", 0) + 1
+        elif event_type == "recomputation_triggered":
+            _almanac_state["recomputation_count"] = _almanac_state.get("recomputation_count", 0) + 1
+
+
 def _build_snapshot() -> dict:
     """Build a StateSnapshot dict from current state."""
     with _state_lock:
@@ -350,14 +381,20 @@ async def _zmq_subscriber() -> None:
     mi_sub.connect(MI_EVENTS_CONNECT)
     mi_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
+    np_sub = _zmq_ctx.socket(zmq.SUB)
+    np_sub.connect(NODALPATH_EVENTS_CONNECT)
+    np_sub.setsockopt(zmq.SUBSCRIBE, b"")
+
     poller = zmq.asyncio.Poller()
     poller.register(ome_sub, zmq.POLLIN)
     poller.register(to_sub, zmq.POLLIN)
     poller.register(mi_sub, zmq.POLLIN)
+    poller.register(np_sub, zmq.POLLIN)
 
     log.info(
         "VS-API ZMQ subscriber started (asyncio) — connecting to "
-        f"OME={OME_EVENTS_CONNECT} TO={TO_EVENTS_CONNECT} MI={MI_EVENTS_CONNECT}"
+        f"OME={OME_EVENTS_CONNECT} TO={TO_EVENTS_CONNECT} MI={MI_EVENTS_CONNECT} "
+        f"NP={NODALPATH_EVENTS_CONNECT}"
     )
 
     msg_count = 0
@@ -376,7 +413,7 @@ async def _zmq_subscriber() -> None:
                 log.info(f"ZMQ subscriber status: {msg_count} messages received so far")
                 last_status_time = now_mono
 
-            for sock in [ome_sub, to_sub, mi_sub]:
+            for sock in [ome_sub, to_sub, mi_sub, np_sub]:
                 if sock not in socks:
                     continue
                 raw = await sock.recv(zmq.NOBLOCK)
@@ -408,6 +445,8 @@ async def _zmq_subscriber() -> None:
                         _add_recent_event(data, data.get("event_type", "adapter"))
                     elif topic == TOPIC_PROBE_RESULT:
                         pass  # Probe results don't update snapshot state directly
+                    elif topic == TOPIC_ALMANAC_EVENT:
+                        _update_almanac_state(data)
 
                 except Exception as exc:
                     log.warning(f"ZMQ message processing error: {exc}")
@@ -420,6 +459,7 @@ async def _zmq_subscriber() -> None:
         ome_sub.close()
         to_sub.close()
         mi_sub.close()
+        np_sub.close()
 
 
 # --- FastAPI app ---
@@ -767,6 +807,13 @@ async def ws_state(websocket: WebSocket) -> None:
 def get_state() -> dict:
     """Current state snapshot."""
     return _build_snapshot()
+
+
+@app.get("/api/v1/almanac/status", dependencies=[Depends(_require_api_key)])
+def get_almanac_status() -> dict:
+    """Current NodalPath almanac push status."""
+    with _almanac_lock:
+        return dict(_almanac_state)
 
 
 @app.get("/api/v1/state/{sim_time}", dependencies=[Depends(_require_api_key)])

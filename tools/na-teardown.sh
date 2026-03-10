@@ -14,6 +14,7 @@ PYTHON_PATTERNS=(
     "orchestrator.main"
     "vs_api.main"
     "measurement.mi_main"
+    "nodalpath"
     "tools.deploy_daemon"
     "tools.na_deploy"
 )

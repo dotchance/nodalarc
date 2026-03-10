@@ -15,6 +15,7 @@ PLAYBACK_CONTROL_PORT: int = 5566
 VS_API_HTTP_PORT: int = 8080
 VF_STATIC_PORT: int = 8081
 PROBE_DAEMON_PORT: int = 9100
+NODALPATH_EVENTS_PORT: int = 5567
 
 # Socket addresses (for binding/connecting)
 # All sockets bind to 127.0.0.1 — components run on the same host.
@@ -40,6 +41,9 @@ MI_TRACE_CONNECT: str = f"tcp://127.0.0.1:{MI_TRACE_PORT}"
 PLAYBACK_CONTROL_BIND: str = f"tcp://127.0.0.1:{PLAYBACK_CONTROL_PORT}"
 PLAYBACK_CONTROL_CONNECT: str = f"tcp://127.0.0.1:{PLAYBACK_CONTROL_PORT}"
 
+NODALPATH_EVENTS_BIND: str = f"tcp://127.0.0.1:{NODALPATH_EVENTS_PORT}"
+NODALPATH_EVENTS_CONNECT: str = f"tcp://127.0.0.1:{NODALPATH_EVENTS_PORT}"
+
 # Topic prefixes (UTF-8 encoded, separated from payload by null byte)
 TOPIC_POSITION_EVENT: bytes = b"PositionEvent"
 TOPIC_VISIBILITY_EVENT: bytes = b"VisibilityEvent"
@@ -50,6 +54,7 @@ TOPIC_LATENCY_UPDATE: bytes = b"LatencyUpdate"
 TOPIC_CONVERGENCE_RESULT: bytes = b"ConvergenceResult"
 TOPIC_PROBE_RESULT: bytes = b"ProbeResult"
 TOPIC_ADAPTER_EVENT: bytes = b"AdapterEvent"
+TOPIC_ALMANAC_EVENT: bytes = b"AlmanacEvent"
 
 # Null byte separator
 _NULL_SEP: bytes = b"\x00"

@@ -524,6 +524,24 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     )
     log.info(f"Orchestrator PID: {to_proc.pid}")
 
+    # === Step 11b: Start NodalPath (for nodalpath-fwd sessions) ===
+    nodalpath_proc = None
+    if stack_dir.name == "nodalpath-fwd":
+        log.info("Step 11b: Start NodalPath (live mode)")
+        np_log = open(data_dir / "nodalpath.log", "w")
+        nodalpath_proc = subprocess.Popen(
+            [
+                sys.executable, "-m", "nodalpath",
+                "--session", session_path,
+                "--mode", "live",
+                "--transport", "grpc",
+                "--namespace", "nodalarc",
+            ],
+            stdout=np_log,
+            stderr=np_log,
+        )
+        log.info(f"NodalPath PID: {nodalpath_proc.pid}")
+
     # === Complete — save session state and print summary ===
     vsapi_pid = vsapi_proc.pid if vsapi_proc else 0
     session_state = {
@@ -536,6 +554,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         "orchestrator_pid": to_proc.pid,
         "daemon_pid": daemon_proc.pid,
         "vite_pid": vite_proc.pid if vite_proc else 0,
+        "nodalpath_pid": nodalpath_proc.pid if nodalpath_proc else 0,
         "session_config": session_path,
         "db_path": mi_db,
         "api_key": api_key,

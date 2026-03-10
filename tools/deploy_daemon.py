@@ -138,7 +138,7 @@ def _handle_deploy_streaming(req: dict, conn: socket.socket) -> None:
 def _handle_kill_processes(req: dict) -> dict:
     """Kill backend processes by matching known module names."""
     killed = 0
-    for module in ("ome.main", "orchestrator.main", "vs_api.main", "measurement.mi_main"):
+    for module in ("ome.main", "orchestrator.main", "vs_api.main", "measurement.mi_main", "nodalpath"):
         result = subprocess.run(
             ["pgrep", "-f", f"python.*-m {module}"],
             capture_output=True, text=True,

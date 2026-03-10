@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY daemons /etc/frr/daemons
 
 # Create runit service directories
-RUN mkdir -p /etc/service/zebra /etc/service/isisd /etc/service/ospfd /etc/service/pathd
+RUN mkdir -p /etc/service/zebra /etc/service/isisd /etc/service/ospfd /etc/service/pathd /etc/service/staticd
 
 # Copy entrypoint
 COPY entrypoint.sh /entrypoint.sh

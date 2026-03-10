@@ -180,6 +180,19 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             rendered = tpl.render(**vars)
             dest_name = Path(tpl_config.dst).name
             (node_dir / dest_name).write_text(rendered)
+        # Generate daemons file from stack config
+        if stack_config.daemons:
+            all_frr_daemons = [
+                "zebra", "bgpd", "ospfd", "ospf6d", "ripd", "ripngd",
+                "isisd", "pimd", "ldpd", "nhrpd", "eigrpd", "babeld",
+                "sharpd", "pbrd", "bfdd", "fabricd", "vrrpd", "pathd",
+                "staticd",
+            ]
+            daemons_content = "\n".join(
+                f"{d}={'yes' if d in stack_config.daemons else 'no'}"
+                for d in all_frr_daemons
+            ) + "\n"
+            (node_dir / "daemons").write_text(daemons_content)
         log.info(f"  Rendered configs for {node_id}")
 
     # === Step 5: Deploy K3s pods ===

@@ -16,6 +16,7 @@ VS_API_HTTP_PORT: int = 8080
 VF_STATIC_PORT: int = 8081
 PROBE_DAEMON_PORT: int = 9100
 NODALPATH_EVENTS_PORT: int = 5567
+NODALPATH_CONSOLE_PORT: int = 3100
 
 # Socket addresses (for binding/connecting)
 # All sockets bind to 127.0.0.1 — components run on the same host.

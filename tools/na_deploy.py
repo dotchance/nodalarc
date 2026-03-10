@@ -41,7 +41,7 @@ def _fail(msg: str) -> None:
 def _teardown_previous() -> None:
     """Kill stale backend processes and remove any existing Helm release + pods."""
     # Kill known backend modules from any previous session
-    for module in ("ome.main", "orchestrator.main", "vs_api.main", "measurement.mi_main"):
+    for module in ("ome.main", "orchestrator.main", "vs_api.main", "measurement.mi_main", "nodalpath"):
         result = subprocess.run(
             ["pgrep", "-f", f"python.*-m {module}"],
             capture_output=True, text=True,
@@ -570,6 +570,10 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info(f"VS-API PID: {vsapi_pid}")
     log.info(f"Orchestrator PID: {to_proc.pid}")
     log.info(f"Session state: {state_file}")
+
+    if nodalpath_proc is not None:
+        from nodalarc.zmq_channels import NODALPATH_CONSOLE_PORT
+        log.info(f"NodalPath console: http://0.0.0.0:{NODALPATH_CONSOLE_PORT}")
 
 
 def main() -> None:

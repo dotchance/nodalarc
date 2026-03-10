@@ -40,12 +40,24 @@ def _build_push_scheduler(config: NodalPathConfig, node_registry, interface_map)
 
 
 async def _run_live(config: NodalPathConfig) -> None:
+    import uvicorn
+    from nodalpath.console.server import build_app
+    from nodalpath.console.state import ConsoleState
     from nodalpath.integration.live_orchestrator import LiveOrchestrator
     from nodalpath.integration.zmq_publisher import AlmanacPublisher
+    from nodalarc.zmq_channels import NODALPATH_CONSOLE_PORT
 
     node_registry, interface_map, prefix_map, bandwidth_map = load_session_context(
         config.session_path,
     )
+
+    console_state = ConsoleState(
+        session_path=str(config.session_path),
+        transport=config.transport,
+        dry_run=config.dry_run,
+        nodes_in_registry=len(node_registry),
+    )
+
     push_scheduler = _build_push_scheduler(config, node_registry, interface_map)
     publisher = AlmanacPublisher(config.events_bind)
 
@@ -58,11 +70,29 @@ async def _run_live(config: NodalPathConfig) -> None:
         publisher=publisher,
         ome_connect=config.ome_connect,
         to_connect=config.to_connect,
+        console_state=console_state,
     )
 
-    log.info("NodalPath live mode starting (transport=%s)", config.transport)
+    console_app = build_app(console_state)
+    uvicorn_config = uvicorn.Config(
+        console_app,
+        host="0.0.0.0",
+        port=NODALPATH_CONSOLE_PORT,
+        log_level="warning",
+        access_log=False,
+    )
+    console_server = uvicorn.Server(uvicorn_config)
+
+    log.info(
+        "NodalPath live mode starting (transport=%s, console=http://0.0.0.0:%d)",
+        config.transport, NODALPATH_CONSOLE_PORT,
+    )
+
     try:
-        await orchestrator.run()
+        await asyncio.gather(
+            orchestrator.run(),
+            console_server.serve(),
+        )
     finally:
         publisher.close()
         log.info(

@@ -84,8 +84,8 @@ async def _run_live(config: NodalPathConfig) -> None:
     console_server = uvicorn.Server(uvicorn_config)
 
     log.info(
-        "NodalPath live mode starting (transport=%s, console=http://0.0.0.0:%d)",
-        config.transport, NODALPATH_CONSOLE_PORT,
+        "NodalPath live mode starting (transport=%s, dry_run=%s, console=http://0.0.0.0:%d)",
+        config.transport, config.dry_run, NODALPATH_CONSOLE_PORT,
     )
 
     try:

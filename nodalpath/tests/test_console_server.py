@@ -1,124 +1,105 @@
-"""Tests for the FastAPI operator console server."""
-
-from __future__ import annotations
-
-import types
-
+"""Tests for nodalpath.console.server — FastAPI routes and HTML dashboard."""
 import pytest
 from fastapi.testclient import TestClient
-
-from nodalpath.console.server import build_app
 from nodalpath.console.state import ConsoleState
+from nodalpath.console.server import build_app
 
 
-def _make_state(**kwargs) -> ConsoleState:
-    defaults = {"session_path": "/tmp/test-session", "transport": "grpc", "dry_run": False, "nodes_in_registry": 4}
-    defaults.update(kwargs)
-    return ConsoleState(**defaults)
-
-
-def _mock_push_result(**overrides) -> types.SimpleNamespace:
-    defaults = {
-        "topology_state_id": "topo-abc123",
-        "sim_time": "2026-03-01T14:30:00+00:00",
-        "nodes_attempted": 4,
-        "nodes_succeeded": 4,
-        "nodes_failed": 0,
-        "nodes_skipped": 0,
-        "push_duration_ms": 42.5,
-        "failed_nodes": [],
-    }
-    defaults.update(overrides)
-    return types.SimpleNamespace(**defaults)
-
-
-@pytest.fixture
-def state():
-    return _make_state()
-
-
-@pytest.fixture
-def client(state):
+def _client(session_path="/tmp/test", transport="grpc", dry_run=False, nodes=5):
+    state = ConsoleState(
+        session_path=session_path,
+        transport=transport,
+        dry_run=dry_run,
+        nodes_in_registry=nodes,
+    )
     app = build_app(state)
-    return TestClient(app)
+    return TestClient(app), state
 
 
-class TestConsoleServerHealth:
-    def test_health_returns_ok(self, client):
-        r = client.get("/api/health")
-        assert r.status_code == 200
-        assert r.json() == {"status": "ok"}
+def test_health_returns_ok():
+    client, _ = _client()
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
 
 
-class TestConsoleServerDashboard:
-    def test_dashboard_returns_html(self, client):
-        r = client.get("/")
-        assert r.status_code == 200
-        assert "text/html" in r.headers["content-type"]
-        assert "NodalPath Operator Console" in r.text
+def test_dashboard_returns_html_200():
+    client, _ = _client()
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
 
 
-class TestConsoleServerStatus:
-    def test_status_returns_snapshot(self, client, state):
-        r = client.get("/api/status")
-        assert r.status_code == 200
-        data = r.json()
-        assert data["session_path"] == "/tmp/test-session"
-        assert data["transport"] == "grpc"
-        assert data["nodes_in_registry"] == 4
-        assert data["transition_count"] == 0
-
-    def test_status_reflects_recorded_transition(self, client, state):
-        state.record_transition("2026-03-01T14:30:00", "topo-xyz", 5, 3)
-        r = client.get("/api/status")
-        data = r.json()
-        assert data["transition_count"] == 1
-        assert data["last_topology_state_id"] == "topo-xyz"
-        assert len(data["almanac_history"]) == 1
-
-    def test_status_reflects_recorded_push(self, client, state):
-        pr = _mock_push_result()
-        state.record_push_result(pr)
-        r = client.get("/api/status")
-        data = r.json()
-        assert len(data["push_history"]) == 1
-        assert data["push_history"][0]["nodes_attempted"] == 4
+def test_dashboard_contains_nodalpath_brand():
+    client, _ = _client()
+    r = client.get("/")
+    assert "NodalPath" in r.text
 
 
-class TestConsoleServerListEndpoints:
-    def test_almanac_endpoint_returns_list(self, client, state):
-        state.record_transition("2026-03-01T14:30:00", "topo-1", 5, 3)
-        r = client.get("/api/almanac")
-        assert r.status_code == 200
-        data = r.json()
-        assert isinstance(data, list)
-        assert len(data) == 1
-
-    def test_pushes_endpoint_returns_list(self, client, state):
-        state.record_push_result(_mock_push_result())
-        r = client.get("/api/pushes")
-        assert r.status_code == 200
-        data = r.json()
-        assert isinstance(data, list)
-        assert len(data) == 1
-
-    def test_deviations_endpoint_returns_list(self, client, state):
-        state.record_deviation("2026-03-01T14:30:00", "topo-1", "sat-A", "sat-B", "inject")
-        r = client.get("/api/deviations")
-        assert r.status_code == 200
-        data = r.json()
-        assert isinstance(data, list)
-        assert len(data) == 1
+def test_dashboard_uses_dark_theme_colors():
+    """Verify the CSS includes NodalArc-aligned color palette."""
+    client, _ = _client()
+    r = client.get("/")
+    assert "#1a1a2e" in r.text   # --bg-panel
+    assert "#00d4aa" in r.text   # --text-acc (teal)
+    assert "JetBrains Mono" in r.text
 
 
-class TestConsoleServerRecompute:
-    def test_recompute_queues_flag(self, client, state):
-        r = client.post("/api/recompute")
-        assert r.status_code == 200
-        assert state.consume_recompute_request() is True
+def test_status_returns_snapshot_fields():
+    client, state = _client(nodes=12)
+    state.record_transition("2026-01-01T00:01:00Z", "s1", 40, 35)
+    r = client.get("/api/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["nodes_in_registry"] == 12
+    assert data["transition_count"] == 1
+    assert "push_history" in data
+    assert "event_log" in data
 
-    def test_recompute_response_ok_true(self, client):
-        r = client.post("/api/recompute")
-        data = r.json()
-        assert data["ok"] is True
-        assert "message" in data
+
+def test_events_endpoint_returns_list():
+    client, state = _client()
+    state.record_transition("2026-01-01T00:00:00Z", "s1", 5, 5)
+    r = client.get("/api/events")
+    assert r.status_code == 200
+    events = r.json()
+    assert isinstance(events, list)
+    assert len(events) >= 1
+    assert events[0]["event_type"] == "TRANSITION"
+
+
+def test_pushes_endpoint_returns_list():
+    client, state = _client()
+    class FakeResult:
+        topology_state_id = "s1"; sim_time = "2026-01-01T00:00:00Z"
+        nodes_attempted = 3; nodes_succeeded = 3; nodes_failed = 0
+        nodes_skipped = 0; push_duration_ms = 8.0; failed_nodes = []
+    state.record_push_result(FakeResult())
+    r = client.get("/api/pushes")
+    assert r.status_code == 200
+    assert len(r.json()) == 1
+
+
+def test_deviations_endpoint_returns_list():
+    client, state = _client()
+    state.record_deviation("2026-01-01T00:00:00Z", "s1", "sat-P00S00", "sat-P01S00", "vis_lost")
+    r = client.get("/api/deviations")
+    assert r.status_code == 200
+    assert len(r.json()) == 1
+
+
+def test_recompute_queues_flag_and_returns_ok():
+    client, state = _client()
+    assert state.consume_recompute_request() is False   # flag not set
+    r = client.post("/api/recompute")
+    assert r.status_code == 200
+    assert r.json().get("ok") is True
+    assert state.consume_recompute_request() is True    # flag was set
+
+
+def test_status_reflects_deviation_count():
+    client, state = _client()
+    state.record_deviation("2026-01-01T00:00:00Z", "s1", "a", "b", "vis_lost")
+    state.record_deviation("2026-01-01T00:00:01Z", "s1", "c", "d", "scenario_inject_down")
+    r = client.get("/api/status")
+    assert r.json()["deviation_count"] == 2

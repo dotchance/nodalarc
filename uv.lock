@@ -428,6 +428,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "grpcio" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "kubernetes" },
     { name = "numpy" },
@@ -452,7 +453,6 @@ dev = [
 [package.dev-dependencies]
 dev = [
     { name = "grpcio-tools" },
-    { name = "httpx" },
     { name = "pytest-timeout" },
 ]
 
@@ -460,6 +460,7 @@ dev = [
 requires-dist = [
     { name = "fastapi" },
     { name = "grpcio", specifier = ">=1.74" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2" },
     { name = "kubernetes" },
     { name = "mypy", marker = "extra == 'dev'" },
@@ -481,7 +482,6 @@ provides-extras = ["dev"]
 [package.metadata.requires-dev]
 dev = [
     { name = "grpcio-tools", specifier = ">=1.74" },
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
 ]
 

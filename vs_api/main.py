@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 import zmq
 import zmq.asyncio
@@ -809,11 +810,47 @@ def get_state() -> dict:
     return _build_snapshot()
 
 
+_NODALPATH_CONSOLE_URL = "http://127.0.0.1:3100/api/status"
+_NODALPATH_TIMEOUT = 1.0
+
+
+async def _fetch_nodalpath_status() -> dict | None:
+    """Fetch the NodalPath console status snapshot.
+
+    Returns the parsed JSON dict on success, or None if NodalPath is not reachable.
+    Intentionally silent on connection errors — callers handle the None case.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_NODALPATH_TIMEOUT) as client:
+            r = await client.get(_NODALPATH_CONSOLE_URL)
+            r.raise_for_status()
+            return r.json()
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
+        return None
+
+
 @app.get("/api/v1/almanac/status", dependencies=[Depends(_require_api_key)])
-def get_almanac_status() -> dict:
-    """Current NodalPath almanac push status."""
-    with _almanac_lock:
-        return dict(_almanac_state)
+async def get_almanac_status() -> dict:
+    """Current NodalPath almanac push status (proxied from NodalPath console)."""
+    raw = await _fetch_nodalpath_status()
+    if raw is None:
+        return {"available": False}
+
+    return {
+        "available": True,
+        "session_path": raw.get("session_path"),
+        "transport": raw.get("transport"),
+        "dry_run": raw.get("dry_run", False),
+        "start_wall_time": raw.get("start_wall_time"),
+        "nodes_in_registry": raw.get("nodes_in_registry", 0),
+        "transition_count": raw.get("transition_count", 0),
+        "deviation_count": raw.get("deviation_count", 0),
+        "recomputation_count": raw.get("recomputation_count", 0),
+        "last_topology_state_id": raw.get("last_topology_state_id"),
+        "last_sim_time": raw.get("last_sim_time"),
+        "recent_pushes": (raw.get("push_history") or [])[:5],
+        "recent_deviations": (raw.get("deviation_history") or [])[:5],
+    }
 
 
 @app.get("/api/v1/state/{sim_time}", dependencies=[Depends(_require_api_key)])

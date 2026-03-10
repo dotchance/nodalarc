@@ -221,3 +221,218 @@ def prefix_map_36() -> dict[str, str]:
     """Terrestrial prefix map for the 36-node Iridium topology."""
     gs_names = ["gs-newyork", "gs-london", "gs-tokyo", "gs-sydney", "gs-mumbai", "gs-saopaulo"]
     return {name: f"172.16.{i}.0/24" for i, name in enumerate(gs_names)}
+
+
+# ---------------------------------------------------------------------------
+# Chunk 2: Orchestrator fixtures
+# ---------------------------------------------------------------------------
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+from nodalarc.models.events import (
+    NodePosition,
+    TimelinePositionSnapshot,
+    VisibilityEvent,
+)
+
+
+@pytest.fixture
+def simple_node_registry() -> dict[str, TopologyNode]:
+    """Node registry for 4 sats (2 planes x 2 sats) + 2 ground stations."""
+    return {
+        "sat-P00S00": TopologyNode(
+            node_id="sat-P00S00", node_type="satellite", sid=16001,
+            loopback_ipv4="10.0.0.1", plane=0, slot=0,
+        ),
+        "sat-P00S01": TopologyNode(
+            node_id="sat-P00S01", node_type="satellite", sid=16002,
+            loopback_ipv4="10.0.1.1", plane=0, slot=1,
+        ),
+        "sat-P01S00": TopologyNode(
+            node_id="sat-P01S00", node_type="satellite", sid=16003,
+            loopback_ipv4="10.1.0.1", plane=1, slot=0,
+        ),
+        "sat-P01S01": TopologyNode(
+            node_id="sat-P01S01", node_type="satellite", sid=16004,
+            loopback_ipv4="10.1.1.1", plane=1, slot=1,
+        ),
+        "gs-alpha": TopologyNode(
+            node_id="gs-alpha", node_type="ground_station", sid=24000,
+            loopback_ipv4="10.255.0.1",
+        ),
+        "gs-beta": TopologyNode(
+            node_id="gs-beta", node_type="ground_station", sid=24001,
+            loopback_ipv4="10.255.1.1",
+        ),
+    }
+
+
+@pytest.fixture
+def simple_interface_map() -> dict[tuple[str, str], tuple[str, str]]:
+    """Interface map for the 4-sat + 2-GS topology.
+
+    ISL pairs (canonical ordering):
+    - sat-P00S00 <-> sat-P00S01: isl0 / isl0 (intra-plane 0)
+    - sat-P01S00 <-> sat-P01S01: isl0 / isl0 (intra-plane 1)
+    - sat-P00S00 <-> sat-P01S00: isl1 / isl1 (cross-plane)
+    - sat-P00S01 <-> sat-P01S01: isl1 / isl1 (cross-plane)
+    GS pairs: all gnd0/gnd0
+    """
+    return {
+        ("sat-P00S00", "sat-P00S01"): ("isl0", "isl0"),
+        ("sat-P01S00", "sat-P01S01"): ("isl0", "isl0"),
+        ("sat-P00S00", "sat-P01S00"): ("isl1", "isl1"),
+        ("sat-P00S01", "sat-P01S01"): ("isl1", "isl1"),
+        ("gs-alpha", "sat-P00S00"): ("gnd0", "gnd0"),
+        ("gs-beta", "sat-P01S01"): ("gnd0", "gnd0"),
+    }
+
+
+@pytest.fixture
+def simple_prefix_map() -> dict[str, str]:
+    """Terrestrial prefix map for the 4-sat + 2-GS topology."""
+    return {
+        "gs-alpha": "172.16.0.0/24",
+        "gs-beta": "172.16.1.0/24",
+    }
+
+
+@pytest.fixture
+def simple_bandwidth_map() -> dict[tuple[str, str], float]:
+    """Bandwidth map for the 4-sat + 2-GS topology."""
+    return {
+        ("sat-P00S00", "sat-P00S01"): 1000.0,
+        ("sat-P01S00", "sat-P01S01"): 1000.0,
+        ("sat-P00S00", "sat-P01S00"): 1000.0,
+        ("sat-P00S01", "sat-P01S01"): 1000.0,
+        ("gs-alpha", "sat-P00S00"): 200.0,
+        ("gs-beta", "sat-P01S01"): 200.0,
+    }
+
+
+def _build_synthetic_records() -> list[dict]:
+    """Build synthetic timeline records for testing.
+
+    Topology: 4 sats (2 planes x 2 sats) + 2 ground stations.
+    t=0: all links up (4 ISL + 2 GS = 6 links)
+    t=30: cross-plane ISL sat-P00S01<->sat-P01S01 goes down
+    t=60: that ISL comes back up
+    """
+    t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
+    t30 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=timezone.utc)
+    t60 = datetime(2026, 3, 1, 14, 31, 0, tzinfo=timezone.utc)
+
+    records: list[dict] = []
+
+    # t=0: Position snapshot
+    positions = {
+        "sat-P00S00": NodePosition(
+            lat_deg=45.0, lon_deg=0.0, alt_km=550.0,
+            vel_x_km_s=0.0, vel_y_km_s=7.5, vel_z_km_s=0.0,
+        ),
+        "sat-P00S01": NodePosition(
+            lat_deg=45.0, lon_deg=30.0, alt_km=550.0,
+            vel_x_km_s=0.0, vel_y_km_s=7.5, vel_z_km_s=0.0,
+        ),
+        "sat-P01S00": NodePosition(
+            lat_deg=45.0, lon_deg=90.0, alt_km=550.0,
+            vel_x_km_s=0.0, vel_y_km_s=7.5, vel_z_km_s=0.0,
+        ),
+        "sat-P01S01": NodePosition(
+            lat_deg=45.0, lon_deg=120.0, alt_km=550.0,
+            vel_x_km_s=0.0, vel_y_km_s=7.5, vel_z_km_s=0.0,
+        ),
+        "gs-alpha": NodePosition(
+            lat_deg=40.0, lon_deg=0.0, alt_km=0.0,
+            vel_x_km_s=0.0, vel_y_km_s=0.0, vel_z_km_s=0.0,
+        ),
+        "gs-beta": NodePosition(
+            lat_deg=40.0, lon_deg=120.0, alt_km=0.0,
+            vel_x_km_s=0.0, vel_y_km_s=0.0, vel_z_km_s=0.0,
+        ),
+    }
+    snap = TimelinePositionSnapshot(sim_time=t0, positions=positions)
+    records.append({
+        "timestamp_s": 0.0,
+        "event_type": "Snapshot",
+        "data": snap.model_dump(mode="json"),
+    })
+
+    # t=0: ISL link_ups (4 links)
+    isl_pairs = [
+        ("sat-P00S00", "sat-P00S01", 2000.0),
+        ("sat-P01S00", "sat-P01S01", 2000.0),
+        ("sat-P00S00", "sat-P01S00", 5000.0),
+        ("sat-P00S01", "sat-P01S01", 5000.0),
+    ]
+    for a, b, range_km in isl_pairs:
+        event = VisibilityEvent(
+            sim_time=t0, node_a=a, node_b=b,
+            visible=True, scheduled=True, range_km=range_km,
+            elevation_deg=None, terminal_type="optical",
+        )
+        records.append({
+            "timestamp_s": 0.0,
+            "event_type": "VisibilityEvent",
+            "data": event.model_dump(mode="json"),
+        })
+
+    # t=0: GS link_ups (2 links)
+    gs_pairs = [
+        ("gs-alpha", "sat-P00S00", 600.0, 45.0),
+        ("gs-beta", "sat-P01S01", 600.0, 45.0),
+    ]
+    for a, b, range_km, elev in gs_pairs:
+        event = VisibilityEvent(
+            sim_time=t0, node_a=a, node_b=b,
+            visible=True, scheduled=True, range_km=range_km,
+            elevation_deg=elev, terminal_type="optical",
+        )
+        records.append({
+            "timestamp_s": 0.0,
+            "event_type": "VisibilityEvent",
+            "data": event.model_dump(mode="json"),
+        })
+
+    # t=30: Cross-plane ISL link_down
+    event = VisibilityEvent(
+        sim_time=t30, node_a="sat-P00S01", node_b="sat-P01S01",
+        visible=False, scheduled=True, range_km=5500.0,
+        elevation_deg=None, terminal_type="optical",
+    )
+    records.append({
+        "timestamp_s": 30.0,
+        "event_type": "VisibilityEvent",
+        "data": event.model_dump(mode="json"),
+    })
+
+    # t=60: Cross-plane ISL link_up
+    event = VisibilityEvent(
+        sim_time=t60, node_a="sat-P00S01", node_b="sat-P01S01",
+        visible=True, scheduled=True, range_km=5000.0,
+        elevation_deg=None, terminal_type="optical",
+    )
+    records.append({
+        "timestamp_s": 60.0,
+        "event_type": "VisibilityEvent",
+        "data": event.model_dump(mode="json"),
+    })
+
+    return records
+
+
+@pytest.fixture
+def synthetic_timeline_path(tmp_path: Path) -> Path:
+    """Write a synthetic timeline JSONL file and return its path.
+
+    3 timestamps: t=0 (initial), t=30 (link down), t=60 (link up).
+    Expected transitions: 3 (initial + down + up).
+    """
+    records = _build_synthetic_records()
+    path = tmp_path / "timeline.jsonl"
+    with open(path, "w") as f:
+        for record in records:
+            f.write(json.dumps(record) + "\n")
+    return path

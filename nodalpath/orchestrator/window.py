@@ -36,11 +36,13 @@ class SlidingWindow:
         prefix_map: dict[str, str],
         bandwidth_map: dict[tuple[str, str], float] | None = None,
         output_path: Path | None = None,
+        push_scheduler: object | None = None,
     ) -> None:
         self.timeline_path = timeline_path
         self.builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
         self.store = AlmanacStore(output_path)
         self.prefix_map = prefix_map
+        self._push_scheduler = push_scheduler
 
     def _check_transition(
         self,
@@ -58,6 +60,11 @@ class SlidingWindow:
         snapshot = self.builder.build_snapshot(sim_time_iso)
         entry = compute_almanac_entry(snapshot, self.prefix_map)
         self.store.store(entry)
+
+        if self._push_scheduler is not None:
+            prev_entry = self.store.entries[-2] if len(self.store.entries) > 1 else None
+            self._push_scheduler.push_entry(entry, prev_entry)
+
         log.info(
             "Transition at %s: %d active links, %d forwarding tables",
             sim_time_iso, len(curr), len(entry.forwarding_tables),

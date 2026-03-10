@@ -186,6 +186,22 @@
       ]
     },
     {
+      "id": "starlink-early-44-nodalpath-fwd",
+      "name": "Starlink-Early-44 NodalPath Fwd",
+      "description": "44-satellite inclined constellation with NodalPath MPLS forwarding",
+      "constellation": "starlink-early-44",
+      "satellite_count": 44,
+      "routing_stack": "nodalpath-fwd",
+      "ground_station_set": "global",
+      "tags": [
+        "inclined",
+        "nodalpath",
+        "mpls",
+        "starlink",
+        "44-sat"
+      ]
+    },
+    {
       "id": "kuiper-50-isis-flat",
       "name": "Kuiper-50 IS-IS Flat",
       "description": "50-satellite inclined constellation with single-area IS-IS",
@@ -511,7 +527,8 @@
       "compatible_sessions": [
         "starlink-early-44-isis-flat",
         "starlink-early-44-isis-striped",
-        "starlink-early-44-ospf-flat"
+        "starlink-early-44-ospf-flat",
+        "starlink-early-44-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [
@@ -528,7 +545,8 @@
       "compatible_sessions": [
         "starlink-early-44-isis-flat",
         "starlink-early-44-isis-striped",
-        "starlink-early-44-ospf-flat"
+        "starlink-early-44-ospf-flat",
+        "starlink-early-44-nodalpath-fwd"
       ],
       "duration_minutes": 18,
       "tags": [
@@ -546,7 +564,8 @@
       "compatible_sessions": [
         "starlink-early-44-isis-flat",
         "starlink-early-44-isis-striped",
-        "starlink-early-44-ospf-flat"
+        "starlink-early-44-ospf-flat",
+        "starlink-early-44-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [

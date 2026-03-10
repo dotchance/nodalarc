@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect } from "react";
 import * as d3 from "d3";
 import type { TopologySnapshot, ConsoleNode } from "../types";
 import { computeLayout, computeViewBox, areaColor, CELL_W, CELL_H } from "./layout";
@@ -14,23 +14,10 @@ interface Props {
 }
 
 export function TopologyGraph({ topology, selectedNodeId, onNodeSelect }: Props) {
+    const containerRef = useRef<HTMLDivElement>(null);
     const svgRef = useRef<SVGSVGElement>(null);
-    const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
-
-    useEffect(() => {
-        if (!svgRef.current) return;
-        const observer = new ResizeObserver(entries => {
-            const entry = entries[0];
-            if (entry) {
-                setDimensions({
-                    width: entry.contentRect.width,
-                    height: entry.contentRect.height,
-                });
-            }
-        });
-        observer.observe(svgRef.current.parentElement!);
-        return () => observer.disconnect();
-    }, []);
+    const onNodeSelectRef = useRef(onNodeSelect);
+    onNodeSelectRef.current = onNodeSelect;
 
     useEffect(() => {
         if (!svgRef.current || !topology?.available || !topology.nodes) return;
@@ -39,10 +26,13 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect }: Props)
         const links = (topology.links ?? []).filter(l => l.state === "active");
 
         const nodeMap = computeLayout(nodes);
-        computeViewBox(nodeMap);
+        const vb = computeViewBox(nodeMap);
 
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();
+
+        // Set viewBox so SVG scales to fit container
+        svg.attr("viewBox", `0 0 ${vb.width} ${vb.height}`);
 
         // ── Zoom/pan container ───────────────────────────────────────────────
         const g = svg.append("g").attr("class", "graph-root");
@@ -123,11 +113,15 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect }: Props)
         const nodeData = Array.from(nodeMap.values());
 
         // Remove previous tooltip if any
-        d3.select(svgRef.current.parentElement!).select(".graph-tooltip").remove();
-        const tooltip = d3.select(svgRef.current.parentElement!)
-            .append("div")
-            .attr("class", "graph-tooltip")
-            .style("display", "none");
+        if (containerRef.current) {
+            d3.select(containerRef.current).select(".graph-tooltip").remove();
+        }
+        const tooltip = containerRef.current
+            ? d3.select(containerRef.current)
+                .append("div")
+                .attr("class", "graph-tooltip")
+                .style("display", "none")
+            : null;
 
         function tooltipContent(node: ConsoleNode): string {
             const parts = [`<strong>${node.node_id}</strong>`];
@@ -145,18 +139,18 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect }: Props)
             .attr("class", "node")
             .attr("transform", d => `translate(${d.x},${d.y})`)
             .attr("cursor", "pointer")
-            .on("click", (_event, d) => onNodeSelect(d.node_id))
+            .on("click", (_event, d) => onNodeSelectRef.current(d.node_id))
             .on("mouseenter", function(_event, d) {
                 d3.select(this).select("circle").attr("stroke-width", 2.5);
                 tooltip
-                    .style("display", "block")
+                    ?.style("display", "block")
                     .style("left", `${d.x + 16}px`)
                     .style("top", `${d.y - 8}px`)
                     .html(tooltipContent(d));
             })
             .on("mouseleave", function(_event, d) {
                 d3.select(this).select("circle").attr("stroke-width", d.node_id === selectedId ? 2.5 : 1.5);
-                tooltip.style("display", "none");
+                tooltip?.style("display", "none");
             });
 
         nodeGroups.append("circle")
@@ -195,7 +189,7 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect }: Props)
                 ? `P${String(d.plane).padStart(2,"0")}S${String(d.slot).padStart(2,"0")}`
                 : d.node_id.replace(/^gs-/, ""));
 
-    }, [topology, selectedNodeId, onNodeSelect]);
+    }, [topology, selectedNodeId]);
 
     if (!topology?.available) {
         return (
@@ -206,11 +200,9 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect }: Props)
     }
 
     return (
-        <div className="graph-container">
+        <div ref={containerRef} className="graph-container">
             <svg
                 ref={svgRef}
-                width={dimensions.width}
-                height={dimensions.height}
                 className="topology-svg"
             />
         </div>

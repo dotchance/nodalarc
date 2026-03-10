@@ -1,4 +1,5 @@
 {
+  "_sync_note": "Copy of configs/scenarios/manifest.json. Keep in sync.",
   "sessions": [
     {
       "id": "iridium-66-isis-flat",
@@ -8,7 +9,12 @@
       "satellite_count": 66,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "polar-emphasis",
-      "tags": ["polar", "isis", "iridium", "66-sat"]
+      "tags": [
+        "polar",
+        "isis",
+        "iridium",
+        "66-sat"
+      ]
     },
     {
       "id": "iridium-66-isis-striped",
@@ -18,7 +24,13 @@
       "satellite_count": 66,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "polar-emphasis",
-      "tags": ["polar", "isis", "iridium", "66-sat", "multi-area"]
+      "tags": [
+        "polar",
+        "isis",
+        "iridium",
+        "66-sat",
+        "multi-area"
+      ]
     },
     {
       "id": "iridium-66-ospf-flat",
@@ -28,7 +40,12 @@
       "satellite_count": 66,
       "routing_stack": "frr-ospf-te",
       "ground_station_set": "polar-emphasis",
-      "tags": ["polar", "ospf", "iridium", "66-sat"]
+      "tags": [
+        "polar",
+        "ospf",
+        "iridium",
+        "66-sat"
+      ]
     },
     {
       "id": "iridium-small-36-isis-flat",
@@ -38,7 +55,12 @@
       "satellite_count": 36,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "polar-emphasis",
-      "tags": ["polar", "isis", "iridium", "36-sat"]
+      "tags": [
+        "polar",
+        "isis",
+        "iridium",
+        "36-sat"
+      ]
     },
     {
       "id": "iridium-small-36-isis-striped",
@@ -48,7 +70,13 @@
       "satellite_count": 36,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "polar-emphasis",
-      "tags": ["polar", "isis", "iridium", "36-sat", "multi-area"]
+      "tags": [
+        "polar",
+        "isis",
+        "iridium",
+        "36-sat",
+        "multi-area"
+      ]
     },
     {
       "id": "iridium-small-36-ospf-flat",
@@ -58,7 +86,12 @@
       "satellite_count": 36,
       "routing_stack": "frr-ospf-te",
       "ground_station_set": "polar-emphasis",
-      "tags": ["polar", "ospf", "iridium", "36-sat"]
+      "tags": [
+        "polar",
+        "ospf",
+        "iridium",
+        "36-sat"
+      ]
     },
     {
       "id": "oneweb-60-isis-flat",
@@ -68,7 +101,12 @@
       "satellite_count": 60,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "polar-emphasis",
-      "tags": ["polar", "isis", "oneweb", "60-sat"]
+      "tags": [
+        "polar",
+        "isis",
+        "oneweb",
+        "60-sat"
+      ]
     },
     {
       "id": "oneweb-60-isis-striped",
@@ -78,7 +116,13 @@
       "satellite_count": 60,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "polar-emphasis",
-      "tags": ["polar", "isis", "oneweb", "60-sat", "multi-area"]
+      "tags": [
+        "polar",
+        "isis",
+        "oneweb",
+        "60-sat",
+        "multi-area"
+      ]
     },
     {
       "id": "oneweb-60-ospf-flat",
@@ -88,7 +132,12 @@
       "satellite_count": 60,
       "routing_stack": "frr-ospf-te",
       "ground_station_set": "polar-emphasis",
-      "tags": ["polar", "ospf", "oneweb", "60-sat"]
+      "tags": [
+        "polar",
+        "ospf",
+        "oneweb",
+        "60-sat"
+      ]
     },
     {
       "id": "starlink-early-44-isis-flat",
@@ -98,7 +147,12 @@
       "satellite_count": 44,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "global",
-      "tags": ["inclined", "isis", "starlink", "44-sat"]
+      "tags": [
+        "inclined",
+        "isis",
+        "starlink",
+        "44-sat"
+      ]
     },
     {
       "id": "starlink-early-44-isis-striped",
@@ -108,7 +162,13 @@
       "satellite_count": 44,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "global",
-      "tags": ["inclined", "isis", "starlink", "44-sat", "multi-area"]
+      "tags": [
+        "inclined",
+        "isis",
+        "starlink",
+        "44-sat",
+        "multi-area"
+      ]
     },
     {
       "id": "starlink-early-44-ospf-flat",
@@ -118,7 +178,28 @@
       "satellite_count": 44,
       "routing_stack": "frr-ospf-te",
       "ground_station_set": "global",
-      "tags": ["inclined", "ospf", "starlink", "44-sat"]
+      "tags": [
+        "inclined",
+        "ospf",
+        "starlink",
+        "44-sat"
+      ]
+    },
+    {
+      "id": "starlink-early-44-nodalpath-fwd",
+      "name": "Starlink-Early-44 NodalPath Fwd",
+      "description": "44-satellite inclined constellation with NodalPath MPLS forwarding",
+      "constellation": "starlink-early-44",
+      "satellite_count": 44,
+      "routing_stack": "nodalpath-fwd",
+      "ground_station_set": "global",
+      "tags": [
+        "inclined",
+        "nodalpath",
+        "mpls",
+        "starlink",
+        "44-sat"
+      ]
     },
     {
       "id": "kuiper-50-isis-flat",
@@ -128,7 +209,12 @@
       "satellite_count": 50,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "global",
-      "tags": ["inclined", "isis", "kuiper", "50-sat"]
+      "tags": [
+        "inclined",
+        "isis",
+        "kuiper",
+        "50-sat"
+      ]
     },
     {
       "id": "kuiper-50-isis-striped",
@@ -138,7 +224,13 @@
       "satellite_count": 50,
       "routing_stack": "frr-isis-sr",
       "ground_station_set": "global",
-      "tags": ["inclined", "isis", "kuiper", "50-sat", "multi-area"]
+      "tags": [
+        "inclined",
+        "isis",
+        "kuiper",
+        "50-sat",
+        "multi-area"
+      ]
     },
     {
       "id": "kuiper-50-ospf-flat",
@@ -148,7 +240,12 @@
       "satellite_count": 50,
       "routing_stack": "frr-ospf-te",
       "ground_station_set": "global",
-      "tags": ["inclined", "ospf", "kuiper", "50-sat"]
+      "tags": [
+        "inclined",
+        "ospf",
+        "kuiper",
+        "50-sat"
+      ]
     }
   ],
   "scenarios": [
@@ -156,189 +253,379 @@
       "id": "steady-state",
       "name": "Steady State Observation",
       "description": "One orbital period with no injected events",
-      "compatible_sessions": ["all"],
+      "compatible_sessions": [
+        "all"
+      ],
       "duration_minutes": 95,
-      "tags": ["baseline", "observation"]
+      "tags": [
+        "baseline",
+        "observation"
+      ]
     },
     {
       "id": "isl-failure",
       "name": "ISL Failure Recovery",
       "description": "Inject ISL failure and observe reconvergence",
-      "compatible_sessions": ["all"],
+      "compatible_sessions": [
+        "all"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "convergence"]
+      "tags": [
+        "failure",
+        "convergence"
+      ]
     },
     {
       "id": "compound-failure",
       "name": "Compound Failure",
       "description": "Sequential ISL failures while first is still down",
-      "compatible_sessions": ["all"],
+      "compatible_sessions": [
+        "all"
+      ],
       "duration_minutes": 18,
-      "tags": ["failure", "convergence", "multi-fault"]
+      "tags": [
+        "failure",
+        "convergence",
+        "multi-fault"
+      ]
     },
     {
       "id": "satellite-loss",
       "name": "Satellite Loss",
       "description": "Complete satellite removal and cascade reconvergence",
-      "compatible_sessions": ["all"],
+      "compatible_sessions": [
+        "all"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "convergence", "cascade"]
+      "tags": [
+        "failure",
+        "convergence",
+        "cascade"
+      ]
     },
     {
       "id": "ground-handover",
       "name": "Ground Station Handover",
       "description": "Natural handovers during orbital motion with continuous probes",
-      "compatible_sessions": ["all"],
+      "compatible_sessions": [
+        "all"
+      ],
       "duration_minutes": 10,
-      "tags": ["handover", "observation"]
+      "tags": [
+        "handover",
+        "observation"
+      ]
     },
     {
       "id": "stress-test",
       "name": "Stress Test",
       "description": "Chained multi-event: steady-state, ISL failure, handover, satellite loss, recovery",
-      "compatible_sessions": ["all"],
+      "compatible_sessions": [
+        "all"
+      ],
       "duration_minutes": 12,
-      "tags": ["stress", "multi-event", "convergence"]
+      "tags": [
+        "stress",
+        "multi-event",
+        "convergence"
+      ]
     },
     {
       "id": "polar-seam",
       "name": "Polar Seam Observation",
       "description": "Full orbital period observing polar seam ISL dynamics",
       "compatible_sessions": [
-        "iridium-66-isis-flat", "iridium-66-isis-striped", "iridium-66-ospf-flat",
-        "iridium-small-36-isis-flat", "iridium-small-36-isis-striped", "iridium-small-36-ospf-flat",
-        "oneweb-60-isis-flat", "oneweb-60-isis-striped", "oneweb-60-ospf-flat"
+        "iridium-66-isis-flat",
+        "iridium-66-isis-striped",
+        "iridium-66-ospf-flat",
+        "iridium-small-36-isis-flat",
+        "iridium-small-36-isis-striped",
+        "iridium-small-36-ospf-flat",
+        "oneweb-60-isis-flat",
+        "oneweb-60-isis-striped",
+        "oneweb-60-ospf-flat"
       ],
       "duration_minutes": 95,
-      "tags": ["polar-seam", "observation"]
+      "tags": [
+        "polar-seam",
+        "observation"
+      ]
     },
     {
       "id": "time-mode-validation",
       "name": "Time Mode Validation",
       "description": "Validates discrete-event vs real-time mode consistency",
-      "compatible_sessions": ["all"],
+      "compatible_sessions": [
+        "all"
+      ],
       "duration_minutes": 8,
-      "tags": ["validation", "timing"]
+      "tags": [
+        "validation",
+        "timing"
+      ]
     },
     {
       "id": "iridium-66-link-failure",
       "name": "Iridium-66 Link Failure",
       "description": "Cross-plane ISL failure near equator on iridium-66",
-      "compatible_sessions": ["iridium-66-isis-flat", "iridium-66-isis-striped", "iridium-66-ospf-flat"],
+      "compatible_sessions": [
+        "iridium-66-isis-flat",
+        "iridium-66-isis-striped",
+        "iridium-66-ospf-flat"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "convergence", "polar", "iridium"]
+      "tags": [
+        "failure",
+        "convergence",
+        "polar",
+        "iridium"
+      ]
     },
     {
       "id": "iridium-66-compound-failure",
       "name": "Iridium-66 Compound Failure",
       "description": "Sequential cross-plane ISL failures isolating plane 03 on iridium-66",
-      "compatible_sessions": ["iridium-66-isis-flat", "iridium-66-isis-striped", "iridium-66-ospf-flat"],
+      "compatible_sessions": [
+        "iridium-66-isis-flat",
+        "iridium-66-isis-striped",
+        "iridium-66-ospf-flat"
+      ],
       "duration_minutes": 18,
-      "tags": ["failure", "convergence", "multi-fault", "polar", "iridium"]
+      "tags": [
+        "failure",
+        "convergence",
+        "multi-fault",
+        "polar",
+        "iridium"
+      ]
     },
     {
       "id": "iridium-66-satellite-loss",
       "name": "Iridium-66 Satellite Loss",
       "description": "Complete loss of cross-plane junction node on iridium-66",
-      "compatible_sessions": ["iridium-66-isis-flat", "iridium-66-isis-striped", "iridium-66-ospf-flat"],
+      "compatible_sessions": [
+        "iridium-66-isis-flat",
+        "iridium-66-isis-striped",
+        "iridium-66-ospf-flat"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "cascade", "polar", "iridium"]
+      "tags": [
+        "failure",
+        "cascade",
+        "polar",
+        "iridium"
+      ]
     },
     {
       "id": "iridium-small-36-link-failure",
       "name": "Iridium-Small-36 Link Failure",
       "description": "Cross-plane ISL failure on iridium-small-36",
-      "compatible_sessions": ["iridium-small-36-isis-flat", "iridium-small-36-isis-striped", "iridium-small-36-ospf-flat"],
+      "compatible_sessions": [
+        "iridium-small-36-isis-flat",
+        "iridium-small-36-isis-striped",
+        "iridium-small-36-ospf-flat"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "convergence", "polar", "iridium"]
+      "tags": [
+        "failure",
+        "convergence",
+        "polar",
+        "iridium"
+      ]
     },
     {
       "id": "iridium-small-36-compound-failure",
       "name": "Iridium-Small-36 Compound Failure",
       "description": "Sequential cross-plane ISL failures isolating plane 03 on iridium-small-36",
-      "compatible_sessions": ["iridium-small-36-isis-flat", "iridium-small-36-isis-striped", "iridium-small-36-ospf-flat"],
+      "compatible_sessions": [
+        "iridium-small-36-isis-flat",
+        "iridium-small-36-isis-striped",
+        "iridium-small-36-ospf-flat"
+      ],
       "duration_minutes": 18,
-      "tags": ["failure", "convergence", "multi-fault", "polar", "iridium"]
+      "tags": [
+        "failure",
+        "convergence",
+        "multi-fault",
+        "polar",
+        "iridium"
+      ]
     },
     {
       "id": "iridium-small-36-satellite-loss",
       "name": "Iridium-Small-36 Satellite Loss",
       "description": "Complete loss of cross-plane junction node on iridium-small-36",
-      "compatible_sessions": ["iridium-small-36-isis-flat", "iridium-small-36-isis-striped", "iridium-small-36-ospf-flat"],
+      "compatible_sessions": [
+        "iridium-small-36-isis-flat",
+        "iridium-small-36-isis-striped",
+        "iridium-small-36-ospf-flat"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "cascade", "polar", "iridium"]
+      "tags": [
+        "failure",
+        "cascade",
+        "polar",
+        "iridium"
+      ]
     },
     {
       "id": "oneweb-60-link-failure",
       "name": "OneWeb-60 Link Failure",
       "description": "Cross-plane ISL failure on oneweb-60",
-      "compatible_sessions": ["oneweb-60-isis-flat", "oneweb-60-isis-striped", "oneweb-60-ospf-flat"],
+      "compatible_sessions": [
+        "oneweb-60-isis-flat",
+        "oneweb-60-isis-striped",
+        "oneweb-60-ospf-flat"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "convergence", "polar", "oneweb"]
+      "tags": [
+        "failure",
+        "convergence",
+        "polar",
+        "oneweb"
+      ]
     },
     {
       "id": "oneweb-60-compound-failure",
       "name": "OneWeb-60 Compound Failure",
       "description": "Sequential cross-plane ISL failures isolating plane 03 on oneweb-60",
-      "compatible_sessions": ["oneweb-60-isis-flat", "oneweb-60-isis-striped", "oneweb-60-ospf-flat"],
+      "compatible_sessions": [
+        "oneweb-60-isis-flat",
+        "oneweb-60-isis-striped",
+        "oneweb-60-ospf-flat"
+      ],
       "duration_minutes": 18,
-      "tags": ["failure", "convergence", "multi-fault", "polar", "oneweb"]
+      "tags": [
+        "failure",
+        "convergence",
+        "multi-fault",
+        "polar",
+        "oneweb"
+      ]
     },
     {
       "id": "oneweb-60-satellite-loss",
       "name": "OneWeb-60 Satellite Loss",
       "description": "Complete loss of cross-plane junction node on oneweb-60",
-      "compatible_sessions": ["oneweb-60-isis-flat", "oneweb-60-isis-striped", "oneweb-60-ospf-flat"],
+      "compatible_sessions": [
+        "oneweb-60-isis-flat",
+        "oneweb-60-isis-striped",
+        "oneweb-60-ospf-flat"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "cascade", "polar", "oneweb"]
+      "tags": [
+        "failure",
+        "cascade",
+        "polar",
+        "oneweb"
+      ]
     },
     {
       "id": "starlink-early-44-link-failure",
       "name": "Starlink-Early-44 Link Failure",
       "description": "Cross-plane ISL failure on starlink-early-44",
-      "compatible_sessions": ["starlink-early-44-isis-flat", "starlink-early-44-isis-striped", "starlink-early-44-ospf-flat"],
+      "compatible_sessions": [
+        "starlink-early-44-isis-flat",
+        "starlink-early-44-isis-striped",
+        "starlink-early-44-ospf-flat",
+        "starlink-early-44-nodalpath-fwd"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "convergence", "inclined", "starlink"]
+      "tags": [
+        "failure",
+        "convergence",
+        "inclined",
+        "starlink"
+      ]
     },
     {
       "id": "starlink-early-44-compound-failure",
       "name": "Starlink-Early-44 Compound Failure",
       "description": "Sequential cross-plane ISL failures isolating plane 02 on starlink-early-44",
-      "compatible_sessions": ["starlink-early-44-isis-flat", "starlink-early-44-isis-striped", "starlink-early-44-ospf-flat"],
+      "compatible_sessions": [
+        "starlink-early-44-isis-flat",
+        "starlink-early-44-isis-striped",
+        "starlink-early-44-ospf-flat",
+        "starlink-early-44-nodalpath-fwd"
+      ],
       "duration_minutes": 18,
-      "tags": ["failure", "convergence", "multi-fault", "inclined", "starlink"]
+      "tags": [
+        "failure",
+        "convergence",
+        "multi-fault",
+        "inclined",
+        "starlink"
+      ]
     },
     {
       "id": "starlink-early-44-satellite-loss",
       "name": "Starlink-Early-44 Satellite Loss",
       "description": "Complete loss of high-traffic node on starlink-early-44",
-      "compatible_sessions": ["starlink-early-44-isis-flat", "starlink-early-44-isis-striped", "starlink-early-44-ospf-flat"],
+      "compatible_sessions": [
+        "starlink-early-44-isis-flat",
+        "starlink-early-44-isis-striped",
+        "starlink-early-44-ospf-flat",
+        "starlink-early-44-nodalpath-fwd"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "cascade", "inclined", "starlink"]
+      "tags": [
+        "failure",
+        "cascade",
+        "inclined",
+        "starlink"
+      ]
     },
     {
       "id": "kuiper-50-link-failure",
       "name": "Kuiper-50 Link Failure",
       "description": "Cross-plane ISL failure on kuiper-50",
-      "compatible_sessions": ["kuiper-50-isis-flat", "kuiper-50-isis-striped", "kuiper-50-ospf-flat"],
+      "compatible_sessions": [
+        "kuiper-50-isis-flat",
+        "kuiper-50-isis-striped",
+        "kuiper-50-ospf-flat"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "convergence", "inclined", "kuiper"]
+      "tags": [
+        "failure",
+        "convergence",
+        "inclined",
+        "kuiper"
+      ]
     },
     {
       "id": "kuiper-50-compound-failure",
       "name": "Kuiper-50 Compound Failure",
       "description": "Sequential cross-plane ISL failures isolating plane 03 on kuiper-50",
-      "compatible_sessions": ["kuiper-50-isis-flat", "kuiper-50-isis-striped", "kuiper-50-ospf-flat"],
+      "compatible_sessions": [
+        "kuiper-50-isis-flat",
+        "kuiper-50-isis-striped",
+        "kuiper-50-ospf-flat"
+      ],
       "duration_minutes": 18,
-      "tags": ["failure", "convergence", "multi-fault", "inclined", "kuiper"]
+      "tags": [
+        "failure",
+        "convergence",
+        "multi-fault",
+        "inclined",
+        "kuiper"
+      ]
     },
     {
       "id": "kuiper-50-satellite-loss",
       "name": "Kuiper-50 Satellite Loss",
       "description": "Complete loss of mid-plane junction node on kuiper-50",
-      "compatible_sessions": ["kuiper-50-isis-flat", "kuiper-50-isis-striped", "kuiper-50-ospf-flat"],
+      "compatible_sessions": [
+        "kuiper-50-isis-flat",
+        "kuiper-50-isis-striped",
+        "kuiper-50-ospf-flat"
+      ],
       "duration_minutes": 12,
-      "tags": ["failure", "cascade", "inclined", "kuiper"]
+      "tags": [
+        "failure",
+        "cascade",
+        "inclined",
+        "kuiper"
+      ]
     }
   ]
 }

@@ -20,6 +20,6 @@ class RoutingStackConfig(BaseModel):
     daemons: list[str] | None = None  # FRR-specific daemon list
     config_templates: list[ConfigTemplate]
     template_variables: dict[str, Any] = {}
-    mi_adapter: str  # MI adapter module name
+    mi_adapter: str | None = None  # MI adapter module name (null for non-FRR stacks)
     max_compression: int = 10
-    reconfigure_command: str
+    reconfigure_command: str | None = None  # Reconfigure command (null for non-FRR stacks)

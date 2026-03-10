@@ -21,7 +21,7 @@ echo "Config ready after ${WAITED}s"
 # Create runit run scripts for enabled FRR daemons
 DAEMONS_FILE="/etc/frr/daemons"
 
-for daemon in zebra isisd ospfd pathd; do
+for daemon in zebra isisd ospfd pathd staticd; do
     enabled=$(grep "^${daemon}=yes" "$DAEMONS_FILE" || true)
     if [ -n "$enabled" ]; then
         mkdir -p "/etc/service/${daemon}"

@@ -266,7 +266,7 @@ class LiveOrchestrator:
                     "node_type": node.node_type,
                     "plane": node.plane,
                     "slot": node.slot,
-                    "routing_area": None,
+                    "routing_area": getattr(node, "routing_area", None),
                     "neighbor_count": ic + gc,
                     "isl_count": ic,
                     "gnd_count": gc,

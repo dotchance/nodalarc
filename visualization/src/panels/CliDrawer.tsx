@@ -18,6 +18,7 @@ const DEFAULT_HEIGHT = 240;
 export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps) {
   const { loading, output, error, commands, execute } = useIntrospect();
 
+  const [fontSize, setFontSize] = useState(11);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [selectedNode, setSelectedNode] = useState("");
   const [selectedCommand, setSelectedCommand] = useState("");
@@ -136,11 +137,34 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
           {loading ? "Running..." : "Run"}
         </button>
 
+        <span style={{
+          marginLeft: "auto", display: "flex", alignItems: "center", gap: 0,
+          borderLeft: "1px solid #2a2a4e", paddingLeft: 8,
+        }}>
+          <button
+            onClick={() => setFontSize((s) => Math.max(9, s - 1))}
+            title="Decrease font size"
+            style={{
+              background: "none", border: "1px solid #2a2a4e", borderRadius: "4px 0 0 4px",
+              color: "#888899", fontSize: 11, cursor: "pointer", padding: "2px 6px",
+            }}
+          >A-</button>
+          <button
+            onClick={() => setFontSize((s) => Math.min(18, s + 1))}
+            title="Increase font size"
+            style={{
+              background: "none", border: "1px solid #2a2a4e", borderLeft: "none",
+              borderRadius: "0 4px 4px 0",
+              color: "#888899", fontSize: 13, cursor: "pointer", padding: "2px 6px",
+            }}
+          >A+</button>
+        </span>
+
         <button
           onClick={onClose}
           title="Close CLI drawer"
           style={{
-            marginLeft: "auto", background: "none", border: "none",
+            background: "none", border: "none",
             color: "#555577", fontSize: 16, cursor: "pointer", padding: "2px 6px",
           }}
         >✕</button>
@@ -148,22 +172,22 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
 
       <div style={{ flex: 1, overflow: "auto", padding: "8px 12px", minHeight: 0 }}>
         {loading && (
-          <pre style={{ margin: 0, fontFamily: "monospace", fontSize: 11, color: "#ffaa00" }}>
+          <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#ffaa00" }}>
             Running command...
           </pre>
         )}
         {error && (
-          <pre style={{ margin: 0, fontFamily: "monospace", fontSize: 11, color: "#ff3333" }}>
+          <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#ff3333" }}>
             {error}
           </pre>
         )}
         {output && (
-          <pre style={{ margin: 0, fontFamily: "monospace", fontSize: 11, color: "#e0e0e0", whiteSpace: "pre" }}>
+          <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#e0e0e0", whiteSpace: "pre" }}>
             {output}
           </pre>
         )}
         {!loading && !error && !output && (
-          <pre style={{ margin: 0, fontFamily: "monospace", fontSize: 11, color: "#555577", fontStyle: "italic" }}>
+          <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#555577", fontStyle: "italic" }}>
             Select a node and command, then click Run.
           </pre>
         )}

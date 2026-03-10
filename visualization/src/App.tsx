@@ -111,6 +111,31 @@ function AppInner() {
 
   const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
 
+  // Panel collapse/expand state
+  const [panelOpen, setPanelOpen] = useState(false);
+  const panelManualRef = useRef(false);
+
+  // Auto-open panel on selection, auto-close on deselect (unless manually toggled)
+  useEffect(() => {
+    if (selection && !panelManualRef.current) {
+      setPanelOpen(true);
+    } else if (!selection && !panelManualRef.current) {
+      setPanelOpen(false);
+    }
+  }, [selection]);
+
+  // Reset manual override when a new selection is made
+  useEffect(() => {
+    if (selection) {
+      panelManualRef.current = false;
+    }
+  }, [selection]);
+
+  const handlePanelToggle = useCallback(() => {
+    setPanelOpen((v) => !v);
+    panelManualRef.current = true;
+  }, []);
+
   // Ref for GlobeView imperative actions (top view, follow, screenshot, flyTo, screen position)
   const globeActionsRef = useRef<{
     flyToTopView: () => void;
@@ -182,8 +207,9 @@ function AppInner() {
       onFollowNode: handleFollowNode,
       onTopView: handleTopView,
       onToggleCli: () => setCliDrawerOpen((v) => !v),
+      onTogglePanel: handlePanelToggle,
     }),
-    [clearSelection, handleCloseCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback],
+    [clearSelection, handleCloseCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback, handlePanelToggle],
   );
 
   useKeyboard(keyboardActions);
@@ -198,7 +224,7 @@ function AppInner() {
     }
   }, [viewMode, selection]);
 
-  const layoutClass = `app-layout ${historicalMode ? "app-layout--historical" : ""}`;
+  const layoutClass = `app-layout${panelOpen ? " app-layout--panel-open" : ""}${historicalMode ? " app-layout--historical" : ""}`;
 
   return (
     <div className={layoutClass}>
@@ -325,6 +351,13 @@ function AppInner() {
             selection={selection}
           />
         )}
+        <button
+          className="panel-toggle-tab"
+          onClick={handlePanelToggle}
+          title={panelOpen ? "Collapse panel" : "Expand panel"}
+        >
+          {panelOpen ? "\u203A" : "\u2039"}
+        </button>
       </div>
 
       <div className="area-panel">

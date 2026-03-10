@@ -16,6 +16,7 @@ interface KeyboardActions {
   onTopView: () => void;
   onToggleGlobeMode?: () => void;
   onToggleCli?: () => void;
+  onTogglePanel?: () => void;
 }
 
 export function useKeyboard(actions: KeyboardActions): void {
@@ -74,6 +75,9 @@ export function useKeyboard(actions: KeyboardActions): void {
         case "n":
         case "N":
           actions.onToggleGlobeMode?.();
+          break;
+        case "]":
+          actions.onTogglePanel?.();
           break;
         case "/":
           e.preventDefault();

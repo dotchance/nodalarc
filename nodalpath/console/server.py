@@ -22,7 +22,11 @@ from nodalpath.console.state import ConsoleState
 log = logging.getLogger(__name__)
 
 
-def build_app(state: ConsoleState, almanac_store=None) -> FastAPI:
+def build_app(
+    state: ConsoleState,
+    almanac_store=None,
+    prefix_map: dict[str, str] | None = None,
+) -> FastAPI:
     """Build and return the FastAPI application.
 
     Args:
@@ -30,10 +34,13 @@ def build_app(state: ConsoleState, almanac_store=None) -> FastAPI:
         almanac_store: Optional reference to the AlmanacStore instance.
                        Required for /api/v1/node/{node_id}/state.
                        If None, that endpoint returns {"available": false}.
+        prefix_map: Optional node_id -> prefix mapping for topology reconstruction.
 
     Returns:
         A configured FastAPI app ready to be served by uvicorn.
     """
+    _prefix_map = prefix_map or {}
+
     app = FastAPI(title="NodalPath Console", docs_url=None, redoc_url=None)
 
     # ── REST endpoints ───────────────────────────────────────────────────────
@@ -134,6 +141,121 @@ def build_app(state: ConsoleState, almanac_store=None) -> FastAPI:
             "available": True,
             "node_id": node_id,
             "topology_state_id": topology_state_id,
+            "forwarding_entries": forwarding_entries,
+        })
+
+    # ── Timeline + Historical endpoints ──────────────────────────────────────
+
+    @app.get("/api/v1/timeline")
+    async def timeline() -> JSONResponse:
+        """Return all timeline ticks with push and deviation annotations."""
+        if almanac_store is None:
+            return JSONResponse({
+                "available": True,
+                "tick_count": 0,
+                "lookahead_status": state.get_lookahead_status(),
+                "ticks": [],
+            })
+
+        ticks = almanac_store.get_timeline_ticks()
+        snap = state.snapshot()
+        push_history = snap.get("push_history", [])
+        deviation_history = snap.get("deviation_history", [])
+
+        push_by_state: dict[str, dict] = {}
+        for p in push_history:
+            push_by_state[p["topology_state_id"]] = p
+
+        deviation_states: set[str] = {d["topology_state_id"] for d in deviation_history}
+
+        annotated = []
+        prev_node_count = None
+        for tick in ticks:
+            push = push_by_state.get(tick["topology_state_id"])
+            node_count = tick["node_count"]
+            delta = (node_count - prev_node_count) if prev_node_count is not None else None
+            prev_node_count = node_count
+
+            annotated.append({
+                "sim_time": tick["sim_time"],
+                "topology_state_id": tick["topology_state_id"],
+                "node_count": node_count,
+                "is_future": tick["is_future"],
+                "push_succeeded": (push["nodes_failed"] == 0) if push else None,
+                "push_failed_count": push["nodes_failed"] if push else 0,
+                "had_deviation": tick["topology_state_id"] in deviation_states,
+                "node_count_delta": delta,
+            })
+
+        return JSONResponse({
+            "available": True,
+            "tick_count": len(annotated),
+            "lookahead_status": state.get_lookahead_status(),
+            "ticks": annotated,
+        })
+
+    @app.get("/api/v1/topology/at/{sim_time:path}")
+    async def topology_at(sim_time: str) -> JSONResponse:
+        """Return the topology state at or before the given sim_time."""
+        if almanac_store is None:
+            return JSONResponse({"available": False, "reason": "almanac_store not wired"})
+
+        topo = almanac_store.get_topology_at(sim_time, _prefix_map)
+        if topo is None:
+            return JSONResponse({"available": False, "reason": "no entry at or before requested sim_time"})
+
+        return JSONResponse({
+            "available": True,
+            "is_historical": True,
+            "is_future": topo.get("is_future", False),
+            "links_available": False,
+            **topo,
+        })
+
+    @app.get("/api/v1/node/{node_id}/state/at/{sim_time:path}")
+    async def node_state_at(node_id: str, sim_time: str) -> JSONResponse:
+        """Return forwarding table for a node at a historical sim_time."""
+        if almanac_store is None:
+            return JSONResponse({"available": False, "reason": "almanac_store not wired"})
+
+        entry = almanac_store.get_entry_at(sim_time)
+        if entry is None:
+            return JSONResponse({"available": False, "reason": "no entry at or before requested sim_time"})
+
+        ft = None
+        for forwarding_table in entry.forwarding_tables:
+            if forwarding_table.node_id == node_id:
+                ft = forwarding_table
+                break
+
+        if ft is None:
+            return JSONResponse({"available": False, "reason": "node not found in entry"})
+
+        forwarding_entries = [
+            {
+                "destination": b.out_interface,
+                "next_hop": b.out_interface,
+                "outgoing_label": b.out_label,
+                "incoming_label": b.in_label,
+                "operation": b.action,
+            }
+            for b in ft.lsr_bindings
+        ] + [
+            {
+                "destination": r.dst_prefix,
+                "next_hop": r.out_interface,
+                "outgoing_label": r.push_label,
+                "incoming_label": None,
+                "operation": "push",
+            }
+            for r in ft.ler_ingress_rules
+        ]
+
+        return JSONResponse({
+            "available": True,
+            "node_id": node_id,
+            "topology_state_id": entry.topology_state_id,
+            "is_future": entry.is_future,
             "forwarding_entries": forwarding_entries,
         })
 

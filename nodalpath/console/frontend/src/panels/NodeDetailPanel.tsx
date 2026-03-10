@@ -9,9 +9,10 @@ interface Props {
     nodeId: string | null;
     topology_nodes: ConsoleNode[];
     consoleState: ConsoleStateSnapshot | null;
+    selectedSimTime?: string | null;
 }
 
-export function NodeDetailPanel({ nodeId, topology_nodes, consoleState }: Props) {
+export function NodeDetailPanel({ nodeId, topology_nodes, consoleState, selectedSimTime }: Props) {
     const [tab, setTab] = useState<Tab>("state");
     const [nodeDetail, setNodeDetail] = useState<NodeStateDetail | null>(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
@@ -23,13 +24,16 @@ export function NodeDetailPanel({ nodeId, topology_nodes, consoleState }: Props)
         if (!nodeId || tab !== "forwarding") return;
         let cancelled = false;
         setLoadingDetail(true);
-        fetch(`${API_BASE}/api/v1/node/${encodeURIComponent(nodeId)}/state`)
+        const url = selectedSimTime
+            ? `${API_BASE}/api/v1/node/${encodeURIComponent(nodeId)}/state/at/${encodeURIComponent(selectedSimTime)}`
+            : `${API_BASE}/api/v1/node/${encodeURIComponent(nodeId)}/state`;
+        fetch(url)
             .then(r => r.json())
             .then(data => { if (!cancelled) setNodeDetail(data); })
             .catch(() => { if (!cancelled) setNodeDetail({ available: false, reason: "fetch error" }); })
             .finally(() => { if (!cancelled) setLoadingDetail(false); });
         return () => { cancelled = true; };
-    }, [nodeId, tab]);
+    }, [nodeId, tab, selectedSimTime]);
 
     // Reset tab when node changes
     useEffect(() => { setTab("state"); setNodeDetail(null); }, [nodeId]);
@@ -56,6 +60,13 @@ export function NodeDetailPanel({ nodeId, topology_nodes, consoleState }: Props)
 
     return (
         <div className="detail-panel">
+            {/* ── Historical indicator ── */}
+            {selectedSimTime && (
+                <div className="historical-indicator">
+                    Historical @ {selectedSimTime.substring(11, 19)}
+                </div>
+            )}
+
             {/* ── Header ── */}
             <div className="detail-header">
                 <div className="detail-node-id">{nodeId}</div>

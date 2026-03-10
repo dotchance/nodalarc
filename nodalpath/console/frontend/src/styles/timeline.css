@@ -1,0 +1,120 @@
+.timeline-panel {
+    border-top: 1px solid var(--divider);
+    background: var(--bg-panel);
+    display: flex;
+    flex-direction: column;
+    min-height: 48px;
+    transition: min-height 0.15s ease;
+}
+
+.timeline-panel.collapsed {
+    min-height: 0;
+}
+
+.timeline-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--divider);
+    flex-shrink: 0;
+}
+
+.timeline-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-sec);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.lookahead-badge {
+    font-size: 10px;
+    font-family: var(--font);
+}
+
+.window-select {
+    background: var(--bg-body);
+    color: var(--text-sec);
+    border: 1px solid var(--divider);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 11px;
+    font-family: var(--font);
+    cursor: pointer;
+}
+
+.return-live-btn {
+    background: var(--teal);
+    color: var(--bg-body);
+    border: none;
+    border-radius: 3px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-family: var(--font);
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.collapse-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-sec);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 6px;
+}
+
+.timeline-body {
+    flex: 1;
+    overflow: hidden;
+    padding: 4px 0;
+}
+
+.timeline-svg {
+    width: 100%;
+    height: 80px;
+    display: block;
+}
+
+.timeline-empty {
+    color: var(--text-sec);
+    font-size: 11px;
+    padding: 16px;
+    text-align: center;
+}
+
+.historical-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #1a1a00;
+    border-bottom: 1px solid #ccaa33;
+    padding: 6px 12px;
+    font-size: 11px;
+    color: #ccaa33;
+    font-family: var(--font);
+}
+
+.historical-banner button {
+    background: transparent;
+    border: 1px solid #ccaa33;
+    color: #ccaa33;
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-family: var(--font);
+    cursor: pointer;
+}
+
+.historical-indicator {
+    font-size: 10px;
+    color: #ccaa33;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--divider);
+    font-family: var(--font);
+}
+
+.spacer {
+    flex: 1;
+}

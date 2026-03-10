@@ -45,3 +45,4 @@ class AlmanacEntry(BaseModel, frozen=True):
     forwarding_tables: list[ForwardingTable]
     computed_paths: list[str]             # path_ids that were computed for this state
     computation_time_ms: float            # how long the computation took
+    is_future: bool = False               # True if computed from lookahead, not yet observed

@@ -36,6 +36,13 @@ class NodalPathConfig:
     # Almanac
     lead_time_seconds: int = 3  # Push N seconds of sim_time before transition
 
+    # Lookahead
+    lookahead_enabled: bool = True
+    lookahead_horizon_s: int = 5700  # ~1 LEO orbital period
+
+    # Almanac persistence
+    almanac_output_path: Path | None = None
+
     def __post_init__(self) -> None:
         from nodalarc.zmq_channels import (
             NODALPATH_EVENTS_BIND,

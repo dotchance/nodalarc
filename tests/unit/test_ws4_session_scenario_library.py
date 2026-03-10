@@ -278,7 +278,7 @@ class TestManifest:
         assert "scenarios" in manifest
 
     def test_manifest_session_count(self, manifest):
-        assert len(manifest["sessions"]) == 15
+        assert len(manifest["sessions"]) == 16
 
     def test_manifest_scenario_count(self, manifest):
         # 8 templates + 15 constellation-specific = 23

@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+from nodalpath.engine.graph import build_graph, TopologyGraph
+from nodalpath.models.topology import TopologySnapshot, TopologyNode, TopologyEdge
+
+
+class TestBuildGraph:
+    def test_node_count(self, simple_4node_topology):
+        graph = build_graph(simple_4node_topology)
+        assert len(graph.adjacency) == 4
+
+    def test_bidirectional_edges(self, simple_4node_topology):
+        """Each TopologyEdge produces two directed GraphEdges."""
+        graph = build_graph(simple_4node_topology)
+        # sat-P00S00 should have edges to sat-P00S01 (from ISL)
+        # and edges from ground links (gs-alpha via gnd0, gs-beta via gnd1)
+        dsts = [e.dst for e in graph.adjacency["sat-P00S00"]]
+        assert "sat-P00S01" in dsts
+        assert "gs-alpha" in dsts
+        assert "gs-beta" in dsts
+
+    def test_directed_edge_count(self, simple_4node_topology):
+        """simple_4node has 4 TopologyEdges → 8 directed GraphEdges."""
+        graph = build_graph(simple_4node_topology)
+        total = sum(len(edges) for edges in graph.adjacency.values())
+        assert total == 8
+
+    def test_node_sids(self, simple_4node_topology):
+        graph = build_graph(simple_4node_topology)
+        assert graph.node_sids["sat-P00S00"] == 16001
+        assert graph.node_sids["sat-P00S01"] == 16002
+        assert graph.node_sids["gs-alpha"] == 24000
+        assert graph.node_sids["gs-beta"] == 24001
+
+    def test_node_types(self, simple_4node_topology):
+        graph = build_graph(simple_4node_topology)
+        assert graph.node_types["sat-P00S00"] == "satellite"
+        assert graph.node_types["gs-alpha"] == "ground_station"
+
+    def test_ground_stations_list(self, simple_4node_topology):
+        graph = build_graph(simple_4node_topology)
+        assert set(graph.ground_stations) == {"gs-alpha", "gs-beta"}
+
+    def test_isolated_nodes(self):
+        """Isolated nodes (no edges) appear in adjacency dict with empty lists."""
+        snapshot = TopologySnapshot(
+            sim_time="2026-03-01T14:30:00Z",
+            nodes=[
+                TopologyNode(node_id="isolated", node_type="satellite", sid=16001,
+                             loopback_ipv4="10.0.0.1", plane=0, slot=0),
+            ],
+            edges=[],
+        )
+        graph = build_graph(snapshot)
+        assert "isolated" in graph.adjacency
+        assert graph.adjacency["isolated"] == []
+
+    def test_disconnected_topology(self, disconnected_topology):
+        """Both components are present in a disconnected topology."""
+        graph = build_graph(disconnected_topology)
+        assert len(graph.adjacency) == 4
+        # sat-P00S00 connects to gs-alpha only
+        dsts_p00 = {e.dst for e in graph.adjacency["sat-P00S00"]}
+        assert dsts_p00 == {"gs-alpha"}
+        # sat-P01S00 connects to gs-beta only
+        dsts_p01 = {e.dst for e in graph.adjacency["sat-P01S00"]}
+        assert dsts_p01 == {"gs-beta"}

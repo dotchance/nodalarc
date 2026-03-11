@@ -1032,6 +1032,8 @@ async def switch_session(body: dict):
     session_path = body.get("session", "")
     if not session_path:
         return JSONResponse(status_code=400, content={"error": "session field required"})
+    # Rescan session directory so newly added YAML files are recognized
+    _session_manager.rescan()
     valid_files = _session_manager._valid_session_files()
     if session_path not in valid_files:
         return JSONResponse(status_code=400, content={"error": "Unknown session file"})

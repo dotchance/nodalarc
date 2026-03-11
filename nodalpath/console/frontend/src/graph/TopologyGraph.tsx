@@ -25,7 +25,9 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
         if (!svgRef.current || !topology?.available || !topology.nodes) return;
 
         const nodes = topology.nodes;
-        const links = (topology.links ?? []).filter(l => l.state === "active");
+        const links = (topology.links ?? []).filter(
+            l => l.state === "active" || l.state === "visible_unscheduled"
+        );
 
         const nodeMap = computeLayout(nodes);
         const vb = computeViewBox(nodeMap);
@@ -57,15 +59,28 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
         g.selectAll(".link")
             .data(links)
             .join("line")
-            .attr("class", l => `link link-${l.link_type}`)
+            .attr("class", l => `link link-${l.link_type} link-${l.state}`)
             .attr("x1", l => nodeMap.get(l.node_a)?.x ?? 0)
             .attr("y1", l => nodeMap.get(l.node_a)?.y ?? 0)
             .attr("x2", l => nodeMap.get(l.node_b)?.x ?? 0)
             .attr("y2", l => nodeMap.get(l.node_b)?.y ?? 0)
-            .attr("stroke", l => l.link_type === "ground" ? "#00d4aa" : "rgba(255,255,255,0.35)")
-            .attr("stroke-width", l => l.link_type === "ground" ? 2 : 1.5)
-            .attr("stroke-dasharray", "none")
-            .attr("stroke-opacity", 0.5);
+            .attr("stroke", l => {
+                if (l.state === "visible_unscheduled") return "rgba(255,255,255,0.2)";
+                if (l.link_type === "ground") return "#00d4aa";
+                return "rgba(255,255,255,0.35)";
+            })
+            .attr("stroke-width", l => {
+                if (l.state === "visible_unscheduled") return 1;
+                return l.link_type === "ground" ? 2 : 1.5;
+            })
+            .attr("stroke-dasharray", l => {
+                if (l.state === "visible_unscheduled") return "2,4";
+                return "none";
+            })
+            .attr("stroke-opacity", l => {
+                if (l.state === "visible_unscheduled") return 0.4;
+                return 0.5;
+            });
 
         // ── Nodes ────────────────────────────────────────────────────────────
         const nodeData = Array.from(nodeMap.values());
@@ -84,7 +99,19 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
         function tooltipContent(node: ConsoleNode): string {
             const parts = [`<strong>${node.node_id}</strong>`];
             if (node.routing_area) parts.push(`Area ${node.routing_area}`);
-            parts.push(`${node.isl_count} ISL \u00b7 ${node.gnd_count} GND`);
+
+            const nodeLinks = links.filter(
+                l => l.node_a === node.node_id || l.node_b === node.node_id
+            );
+            const activeCount = nodeLinks.filter(l => l.state === "active").length;
+            const visUnscheduled = nodeLinks.filter(l => l.state === "visible_unscheduled").length;
+
+            if (visUnscheduled > 0) {
+                parts.push(`${activeCount} active \u00b7 ${visUnscheduled} vis/unscheduled`);
+            } else {
+                parts.push(`${node.isl_count} ISL \u00b7 ${node.gnd_count} GND`);
+            }
+
             if (node.prefix) parts.push(`${node.prefix}`);
             return parts.join("<br>");
         }
@@ -139,12 +166,20 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
         );
     }
 
+    const isHistorical = topology && 'is_historical' in topology && (topology as any).links_available;
+
     return (
         <div ref={containerRef} className="graph-container">
             <svg
                 ref={svgRef}
                 className="topology-svg"
             />
+            {isHistorical && (
+                <div className="graph-legend">
+                    <span className="legend-item legend-active">{"\u2500"} active</span>
+                    <span className="legend-item legend-vis-unscheduled">{"\u254C"} vis/unscheduled</span>
+                </div>
+            )}
         </div>
     );
 }

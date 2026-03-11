@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nodalpath.console.state import ConsoleState
+    from nodalpath.orchestrator.link_state_store import LinkStateStore
 
 from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
 from nodalpath.engine.almanac_builder import compute_almanac_entry
@@ -43,6 +44,7 @@ class LookaheadWorker:
         almanac_store: AlmanacStore,
         lookahead_horizon_s: int = LOOKAHEAD_DEFAULT_S,
         console_state: ConsoleState | None = None,
+        link_state_store: LinkStateStore | None = None,
     ) -> None:
         self._timeline_path = timeline_path
         self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
@@ -50,6 +52,7 @@ class LookaheadWorker:
         self._store = almanac_store
         self._horizon_s = lookahead_horizon_s
         self._console_state = console_state
+        self._link_state_store = link_state_store
         self._running = False
 
     def stop(self) -> None:
@@ -153,6 +156,14 @@ class LookaheadWorker:
 
         entry = entry.model_copy(update={"is_future": True})
         self._store.store(entry)
+
+        if self._link_state_store is not None:
+            self._link_state_store.store(
+                topology_state_id=entry.topology_state_id,
+                full_link_state=self._builder.full_link_state,
+                sim_time=sim_time_iso,
+                is_future=True,
+            )
 
         log.debug(
             "LookaheadWorker: future transition at %s, %d tables",

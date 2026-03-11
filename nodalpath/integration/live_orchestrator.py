@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nodalpath.console.state import ConsoleState
+    from nodalpath.orchestrator.link_state_store import LinkStateStore
 
 import zmq
 import zmq.asyncio
@@ -49,6 +50,7 @@ class LiveOrchestrator:
         ome_connect: str,
         to_connect: str,
         console_state: ConsoleState | None = None,
+        link_state_store: LinkStateStore | None = None,
     ) -> None:
         self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
         self._store = AlmanacStore()
@@ -63,6 +65,11 @@ class LiveOrchestrator:
         self._transition_count = 0
         self._running = False
         self._console_state = console_state
+        self._link_state_store = link_state_store
+
+    @property
+    def link_state_store(self) -> LinkStateStore | None:
+        return self._link_state_store
 
     @property
     def transition_count(self) -> int:
@@ -289,6 +296,14 @@ class LiveOrchestrator:
                 "nodes": nodes_payload,
                 "links": links_payload,
             })
+
+        if self._link_state_store is not None:
+            self._link_state_store.store(
+                topology_state_id=entry.topology_state_id,
+                full_link_state=self._builder.full_link_state,
+                sim_time=sim_time_iso,
+                is_future=False,
+            )
 
     async def _recompute(self, sim_time_iso: str) -> None:
         """Force recomputation at current topology state (used after deviation)."""

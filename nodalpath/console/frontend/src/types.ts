@@ -15,8 +15,11 @@ export interface ConsoleNode {
 export interface ConsoleLink {
     node_a: string;
     node_b: string;
-    state: "active" | "inactive";
+    state: "active" | "visible_unscheduled" | "inactive";
     link_type: "isl" | "ground";
+    visible?: boolean;
+    scheduled?: boolean;
+    range_km?: number;
 }
 
 export interface TopologySnapshot {

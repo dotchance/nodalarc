@@ -48,6 +48,7 @@ class SnapshotBuilder:
         self._interface_map = interface_map
         self._bandwidth_map = bandwidth_map or {}
         self._active_links: dict[tuple[str, str], float] = {}  # canonical pair -> range_km
+        self._all_links: dict[tuple[str, str], tuple[bool, bool, float]] = {}
         self._positions: dict[str, tuple[float, float, float]] = {}  # node_id -> ECEF
 
     def apply_position_record(self, record: TimelinePositionSnapshot) -> None:
@@ -69,6 +70,13 @@ class SnapshotBuilder:
             self._active_links[pair] = event.range_km
         else:
             self._active_links.pop(pair, None)
+
+        self._all_links[pair] = (event.visible, event.scheduled, event.range_km)
+
+    @property
+    def full_link_state(self) -> dict[tuple[str, str], tuple[bool, bool, float]]:
+        """Snapshot of full link visibility state at current sim_time."""
+        return dict(self._all_links)
 
     @property
     def active_link_set(self) -> frozenset[tuple[str, str]]:

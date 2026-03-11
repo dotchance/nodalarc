@@ -26,6 +26,7 @@ def build_app(
     state: ConsoleState,
     almanac_store=None,
     prefix_map: dict[str, str] | None = None,
+    link_state_store=None,
 ) -> FastAPI:
     """Build and return the FastAPI application.
 
@@ -88,7 +89,14 @@ def build_app(
         topo = state.get_topology()
         if topo is None:
             return JSONResponse({"available": False})
-        return JSONResponse({"available": True, **topo})
+
+        links = topo.get("links", [])
+        for lnk in links:
+            lnk["state"] = "active"
+            lnk.setdefault("visible", True)
+            lnk.setdefault("scheduled", True)
+
+        return JSONResponse({"available": True, **topo, "links": links})
 
     @app.get("/api/v1/node/{node_id}/state")
     async def node_state(node_id: str) -> JSONResponse:
@@ -204,12 +212,33 @@ def build_app(
         if topo is None:
             return JSONResponse({"available": False, "reason": "no entry at or before requested sim_time"})
 
+        links_payload = []
+        links_available = False
+
+        if link_state_store is not None:
+            records = link_state_store.get_by_sim_time(sim_time)
+            if records is not None:
+                links_available = True
+                for r in records:
+                    links_payload.append({
+                        "node_a": r.node_a,
+                        "node_b": r.node_b,
+                        "visible": r.visible,
+                        "scheduled": r.scheduled,
+                        "range_km": r.range_km,
+                        "link_type": r.link_type,
+                        "state": "active" if (r.visible and r.scheduled)
+                                 else "visible_unscheduled" if r.visible
+                                 else "inactive",
+                    })
+
         return JSONResponse({
             "available": True,
             "is_historical": True,
             "is_future": topo.get("is_future", False),
-            "links_available": False,
+            "links_available": links_available,
             **topo,
+            "links": links_payload,
         })
 
     @app.get("/api/v1/node/{node_id}/state/at/{sim_time:path}")

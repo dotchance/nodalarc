@@ -71,6 +71,7 @@ async def _run_live(config: NodalPathConfig) -> None:
         ome_connect=config.ome_connect,
         to_connect=config.to_connect,
         console_state=console_state,
+        link_state_store=link_state_store,
     )
 
     almanac_store = orchestrator.almanac_store
@@ -80,10 +81,24 @@ async def _run_live(config: NodalPathConfig) -> None:
         loaded = almanac_store.load_from_jsonl(config.almanac_output_path)
         log.info("Loaded %d almanac entries from %s", loaded, config.almanac_output_path)
 
+    from nodalpath.orchestrator.link_state_store import LinkStateStore
+
+    link_state_output = (
+        config.almanac_output_path.with_suffix(".links.jsonl")
+        if config.almanac_output_path is not None
+        else None
+    )
+    link_state_store = LinkStateStore(output_path=link_state_output)
+
+    if link_state_output is not None and link_state_output.exists():
+        loaded = link_state_store.load_from_jsonl(link_state_output)
+        log.info("Loaded %d link state entries from %s", loaded, link_state_output)
+
     console_app = build_app(
         console_state,
         almanac_store=almanac_store,
         prefix_map=prefix_map,
+        link_state_store=link_state_store,
     )
     uvicorn_config = uvicorn.Config(
         console_app,
@@ -112,6 +127,7 @@ async def _run_live(config: NodalPathConfig) -> None:
             almanac_store=almanac_store,
             lookahead_horizon_s=config.lookahead_horizon_s,
             console_state=console_state,
+            link_state_store=link_state_store,
         )
         tasks.append(lookahead.run())
         log.info(

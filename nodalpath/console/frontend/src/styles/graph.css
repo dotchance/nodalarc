@@ -34,6 +34,35 @@
   pointer-events: none;
 }
 
+/* ── Legend ── */
+.graph-legend {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    background: rgba(13, 13, 26, 0.8);
+    border: 1px solid var(--divider);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 10px;
+    font-family: var(--font);
+    pointer-events: none;
+}
+
+.legend-item {
+    color: var(--text-sec);
+}
+
+.legend-active {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.legend-vis-unscheduled {
+    color: rgba(255, 255, 255, 0.25);
+}
+
 /* ── Tooltip ── */
 .graph-tooltip {
   position: absolute;

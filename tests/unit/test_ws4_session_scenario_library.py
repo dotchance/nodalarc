@@ -27,18 +27,22 @@ WS4_SESSIONS = [
     "iridium-66-isis-flat",
     "iridium-66-isis-striped",
     "iridium-66-ospf-flat",
+    "iridium-66-nodalpath-fwd",
     "iridium-small-36-isis-flat",
     "iridium-small-36-isis-striped",
     "iridium-small-36-ospf-flat",
+    "iridium-small-36-nodalpath-fwd",
     "oneweb-60-isis-flat",
     "oneweb-60-isis-striped",
     "oneweb-60-ospf-flat",
+    "oneweb-60-nodalpath-fwd",
     "starlink-early-44-isis-flat",
     "starlink-early-44-isis-striped",
     "starlink-early-44-ospf-flat",
     "kuiper-50-isis-flat",
     "kuiper-50-isis-striped",
     "kuiper-50-ospf-flat",
+    "kuiper-50-nodalpath-fwd",
 ]
 
 # New scenario templates created in WS4
@@ -118,7 +122,7 @@ class TestSessionMetadata:
     """Verify session configuration properties."""
 
     def test_count(self):
-        assert len(WS4_SESSIONS) == 15
+        assert len(WS4_SESSIONS) == 19
 
     @pytest.mark.parametrize("session_name", [s for s in WS4_SESSIONS if "isis-flat" in s])
     def test_isis_flat_uses_flat_strategy(self, session_name):
@@ -278,7 +282,7 @@ class TestManifest:
         assert "scenarios" in manifest
 
     def test_manifest_session_count(self, manifest):
-        assert len(manifest["sessions"]) == 16
+        assert len(manifest["sessions"]) == 20
 
     def test_manifest_scenario_count(self, manifest):
         # 8 templates + 15 constellation-specific = 23

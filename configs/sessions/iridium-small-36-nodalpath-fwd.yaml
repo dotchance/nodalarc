@@ -1,0 +1,32 @@
+session:
+  name: iridium-small-36-nodalpath-fwd
+
+constellation: configs/constellations/iridium-small-36.yaml
+ground_stations: configs/ground-stations/sets/polar-emphasis.yaml
+
+addressing:
+  sat_id_template: "sat-P{plane:02d}S{slot:02d}"
+  gs_id_template: "gs-{name}"
+
+routing:
+  stack: configs/routing-stacks/nodalpath-fwd
+  area_assignment:
+    strategy: flat
+    gs_area_id: "0.0.0.0"
+
+time:
+  mode: discrete-event
+  step_seconds: 1
+  latency_update_interval_seconds: 10
+
+traffic_flows:
+  - flow_id: svalbard-to-mcmurdo
+    src: gs-svalbard
+    dst: gs-mcmurdo
+    protocol: udp
+    bandwidth_kbps: 100
+    probe_type: continuous
+
+convergence:
+  stability_period_s: 2.0
+  timeout_s: 30.0

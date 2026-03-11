@@ -121,6 +121,30 @@ export interface HistoricalTopologyResponse extends TopologySnapshot {
     links_available: boolean;
 }
 
+// ── Path (from GET /api/v1/path) ─────────────────────────────────────────────
+
+export interface PathHop {
+    node_id: string;
+    node_type: "satellite" | "ground_station";
+    in_label: number | null;
+    out_label: number | null;
+    action: "push" | "swap" | "pop" | null;
+    out_interface: string | null;
+    latency_to_next_ms: number | null;
+}
+
+export interface PathResult {
+    src: string;
+    dst: string;
+    hops: PathHop[];
+    total_latency_ms: number;
+    method: "derived" | "probed";
+    sim_time: string;
+    topology_state_id: string;
+    reachable: boolean;
+    unreachable_reason: string | null;
+}
+
 // ── D3 graph nodes (ConsoleNode extended with computed layout position) ──────
 
 export interface GraphNode extends ConsoleNode {

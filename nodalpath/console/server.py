@@ -10,6 +10,7 @@ directs the operator to run `make build-nodalpath-console`.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -27,6 +28,7 @@ def build_app(
     almanac_store=None,
     prefix_map: dict[str, str] | None = None,
     link_state_store=None,
+    path_deriver=None,
 ) -> FastAPI:
     """Build and return the FastAPI application.
 
@@ -287,6 +289,27 @@ def build_app(
             "is_future": entry.is_future,
             "forwarding_entries": forwarding_entries,
         })
+
+    # ── Path derivation endpoint ─────────────────────────────────────────────
+
+    @app.get("/api/v1/path")
+    async def get_path(src: str, dst: str, sim_time: str | None = None) -> JSONResponse:
+        """Derive the MPLS forwarding path from src to dst."""
+        if path_deriver is None:
+            return JSONResponse({
+                "reachable": False,
+                "unreachable_reason": "path_deriver not wired",
+                "src": src, "dst": dst,
+                "hops": [], "total_latency_ms": 0.0,
+                "method": "derived", "sim_time": sim_time or "",
+                "topology_state_id": "",
+            })
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, path_deriver.derive, src, dst, sim_time
+        )
+        return JSONResponse(result.model_dump())
 
     # ── Static files or holding page ─────────────────────────────────────────
 

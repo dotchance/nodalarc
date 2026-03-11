@@ -1,6 +1,6 @@
 import { useRef, useEffect } from "react";
 import * as d3 from "d3";
-import type { TopologySnapshot, ConsoleNode, PushRecord } from "../types";
+import type { TopologySnapshot, ConsoleNode, PushRecord, PathResult } from "../types";
 import { computeLayout, computeViewBox, pushStatusColor } from "./layout";
 import type { PushStatus } from "./layout";
 import "../styles/graph.css";
@@ -13,9 +13,10 @@ interface Props {
     selectedNodeId: string | null;
     onNodeSelect: (nodeId: string) => void;
     lastPushResult: PushRecord | null;
+    pathResult?: PathResult | null;
 }
 
-export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPushResult }: Props) {
+export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPushResult, pathResult }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const svgRef = useRef<SVGSVGElement>(null);
     const onNodeSelectRef = useRef(onNodeSelect);
@@ -156,7 +157,51 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
                 ? `P${String(d.plane).padStart(2,"0")}S${String(d.slot).padStart(2,"0")}`
                 : d.node_id.replace(/^gs-/, ""));
 
-    }, [topology, selectedNodeId, lastPushResult]);
+        // ── Path overlay ─────────────────────────────────────────────────────
+        if (pathResult?.reachable && pathResult.hops.length > 0) {
+            const hopIds = pathResult.hops.map(h => h.node_id);
+
+            // Highlight hop nodes
+            nodeGroups
+                .filter(d => hopIds.includes(d.node_id))
+                .select("circle")
+                .attr("stroke", "#ff8800")
+                .attr("stroke-width", 3);
+
+            // Draw path lines between consecutive hops
+            const hopPairs: Array<[string, string]> = [];
+            for (let i = 0; i < hopIds.length - 1; i++) {
+                hopPairs.push([hopIds[i]!, hopIds[i + 1]!]);
+            }
+
+            g.selectAll(".path-link")
+                .data(hopPairs)
+                .join("line")
+                .attr("class", "path-link")
+                .attr("x1", ([a]) => nodeMap.get(a)?.x ?? 0)
+                .attr("y1", ([a]) => nodeMap.get(a)?.y ?? 0)
+                .attr("x2", ([, b]) => nodeMap.get(b)?.x ?? 0)
+                .attr("y2", ([, b]) => nodeMap.get(b)?.y ?? 0)
+                .attr("stroke", "#ff8800")
+                .attr("stroke-width", 2.5)
+                .attr("stroke-opacity", 0.9)
+                .attr("pointer-events", "none");
+
+            // Hop index labels on nodes
+            g.selectAll(".hop-index")
+                .data(pathResult.hops)
+                .join("text")
+                .attr("class", "hop-index")
+                .attr("x", h => (nodeMap.get(h.node_id)?.x ?? 0) + 12)
+                .attr("y", h => (nodeMap.get(h.node_id)?.y ?? 0) - 10)
+                .attr("fill", "#ff8800")
+                .attr("font-size", 9)
+                .attr("font-family", "JetBrains Mono, monospace")
+                .attr("pointer-events", "none")
+                .text((_, i) => String(i + 1));
+        }
+
+    }, [topology, selectedNodeId, lastPushResult, pathResult]);
 
     if (!topology?.available) {
         return (

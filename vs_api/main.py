@@ -853,6 +853,43 @@ async def get_almanac_status() -> dict:
     }
 
 
+async def _fetch_nodalpath_path(params: dict) -> dict:
+    """Fetch path from NodalPath console. Returns unavailable dict on failure."""
+    _unavailable = {
+        "reachable": False,
+        "unreachable_reason": "NodalPath not available",
+        "src": params.get("src", ""),
+        "dst": params.get("dst", ""),
+        "hops": [],
+        "total_latency_ms": 0.0,
+        "method": "derived",
+        "sim_time": params.get("sim_time", ""),
+        "topology_state_id": "",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(
+                "http://127.0.0.1:3100/api/v1/path",
+                params=params,
+            )
+            if r.status_code == 200:
+                return r.json()
+            return _unavailable
+    except Exception:
+        return _unavailable
+
+
+@app.get("/api/v1/path", dependencies=[Depends(_require_api_key)])
+async def get_path(src: str, dst: str, sim_time: str | None = None) -> JSONResponse:
+    """Unified path endpoint — proxies to NodalPath for derived paths."""
+    params = {"src": src, "dst": dst}
+    if sim_time is not None:
+        params["sim_time"] = sim_time
+
+    result = await _fetch_nodalpath_path(params)
+    return JSONResponse(result)
+
+
 @app.get("/api/v1/state/{sim_time}", dependencies=[Depends(_require_api_key)])
 def get_historical_state(sim_time: str) -> dict:
     """Historical state at a specific sim_time (nearest snapshot from SQLite)."""

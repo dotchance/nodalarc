@@ -48,6 +48,22 @@
       ]
     },
     {
+      "id": "iridium-66-nodalpath-fwd",
+      "name": "Iridium-66 NodalPath Fwd",
+      "description": "66-satellite polar constellation with NodalPath MPLS forwarding",
+      "constellation": "iridium-66",
+      "satellite_count": 66,
+      "routing_stack": "nodalpath-fwd",
+      "ground_station_set": "polar-emphasis",
+      "tags": [
+        "polar",
+        "nodalpath",
+        "mpls",
+        "iridium",
+        "66-sat"
+      ]
+    },
+    {
       "id": "iridium-small-36-isis-flat",
       "name": "Iridium-Small-36 IS-IS Flat",
       "description": "36-satellite polar constellation for fast iteration on polar seam",
@@ -94,6 +110,22 @@
       ]
     },
     {
+      "id": "iridium-small-36-nodalpath-fwd",
+      "name": "Iridium-Small-36 NodalPath Fwd",
+      "description": "36-satellite polar constellation with NodalPath MPLS forwarding",
+      "constellation": "iridium-small-36",
+      "satellite_count": 36,
+      "routing_stack": "nodalpath-fwd",
+      "ground_station_set": "polar-emphasis",
+      "tags": [
+        "polar",
+        "nodalpath",
+        "mpls",
+        "iridium",
+        "36-sat"
+      ]
+    },
+    {
       "id": "oneweb-60-isis-flat",
       "name": "OneWeb-60 IS-IS Flat",
       "description": "60-satellite high-altitude polar constellation with single-area IS-IS",
@@ -135,6 +167,22 @@
       "tags": [
         "polar",
         "ospf",
+        "oneweb",
+        "60-sat"
+      ]
+    },
+    {
+      "id": "oneweb-60-nodalpath-fwd",
+      "name": "OneWeb-60 NodalPath Fwd",
+      "description": "60-satellite high-altitude polar constellation with NodalPath MPLS forwarding",
+      "constellation": "oneweb-60",
+      "satellite_count": 60,
+      "routing_stack": "nodalpath-fwd",
+      "ground_station_set": "polar-emphasis",
+      "tags": [
+        "polar",
+        "nodalpath",
+        "mpls",
         "oneweb",
         "60-sat"
       ]
@@ -246,6 +294,22 @@
         "kuiper",
         "50-sat"
       ]
+    },
+    {
+      "id": "kuiper-50-nodalpath-fwd",
+      "name": "Kuiper-50 NodalPath Fwd",
+      "description": "50-satellite inclined constellation with NodalPath MPLS forwarding",
+      "constellation": "kuiper-50",
+      "satellite_count": 50,
+      "routing_stack": "nodalpath-fwd",
+      "ground_station_set": "global",
+      "tags": [
+        "inclined",
+        "nodalpath",
+        "mpls",
+        "kuiper",
+        "50-sat"
+      ]
     }
   ],
   "scenarios": [
@@ -338,12 +402,15 @@
         "iridium-66-isis-flat",
         "iridium-66-isis-striped",
         "iridium-66-ospf-flat",
+        "iridium-66-nodalpath-fwd",
         "iridium-small-36-isis-flat",
         "iridium-small-36-isis-striped",
         "iridium-small-36-ospf-flat",
+        "iridium-small-36-nodalpath-fwd",
         "oneweb-60-isis-flat",
         "oneweb-60-isis-striped",
-        "oneweb-60-ospf-flat"
+        "oneweb-60-ospf-flat",
+        "oneweb-60-nodalpath-fwd"
       ],
       "duration_minutes": 95,
       "tags": [
@@ -371,7 +438,8 @@
       "compatible_sessions": [
         "iridium-66-isis-flat",
         "iridium-66-isis-striped",
-        "iridium-66-ospf-flat"
+        "iridium-66-ospf-flat",
+        "iridium-66-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [
@@ -388,7 +456,8 @@
       "compatible_sessions": [
         "iridium-66-isis-flat",
         "iridium-66-isis-striped",
-        "iridium-66-ospf-flat"
+        "iridium-66-ospf-flat",
+        "iridium-66-nodalpath-fwd"
       ],
       "duration_minutes": 18,
       "tags": [
@@ -406,7 +475,8 @@
       "compatible_sessions": [
         "iridium-66-isis-flat",
         "iridium-66-isis-striped",
-        "iridium-66-ospf-flat"
+        "iridium-66-ospf-flat",
+        "iridium-66-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [
@@ -423,7 +493,8 @@
       "compatible_sessions": [
         "iridium-small-36-isis-flat",
         "iridium-small-36-isis-striped",
-        "iridium-small-36-ospf-flat"
+        "iridium-small-36-ospf-flat",
+        "iridium-small-36-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [
@@ -440,7 +511,8 @@
       "compatible_sessions": [
         "iridium-small-36-isis-flat",
         "iridium-small-36-isis-striped",
-        "iridium-small-36-ospf-flat"
+        "iridium-small-36-ospf-flat",
+        "iridium-small-36-nodalpath-fwd"
       ],
       "duration_minutes": 18,
       "tags": [
@@ -458,7 +530,8 @@
       "compatible_sessions": [
         "iridium-small-36-isis-flat",
         "iridium-small-36-isis-striped",
-        "iridium-small-36-ospf-flat"
+        "iridium-small-36-ospf-flat",
+        "iridium-small-36-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [
@@ -475,7 +548,8 @@
       "compatible_sessions": [
         "oneweb-60-isis-flat",
         "oneweb-60-isis-striped",
-        "oneweb-60-ospf-flat"
+        "oneweb-60-ospf-flat",
+        "oneweb-60-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [
@@ -492,7 +566,8 @@
       "compatible_sessions": [
         "oneweb-60-isis-flat",
         "oneweb-60-isis-striped",
-        "oneweb-60-ospf-flat"
+        "oneweb-60-ospf-flat",
+        "oneweb-60-nodalpath-fwd"
       ],
       "duration_minutes": 18,
       "tags": [
@@ -510,7 +585,8 @@
       "compatible_sessions": [
         "oneweb-60-isis-flat",
         "oneweb-60-isis-striped",
-        "oneweb-60-ospf-flat"
+        "oneweb-60-ospf-flat",
+        "oneweb-60-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [
@@ -582,7 +658,8 @@
       "compatible_sessions": [
         "kuiper-50-isis-flat",
         "kuiper-50-isis-striped",
-        "kuiper-50-ospf-flat"
+        "kuiper-50-ospf-flat",
+        "kuiper-50-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [
@@ -599,7 +676,8 @@
       "compatible_sessions": [
         "kuiper-50-isis-flat",
         "kuiper-50-isis-striped",
-        "kuiper-50-ospf-flat"
+        "kuiper-50-ospf-flat",
+        "kuiper-50-nodalpath-fwd"
       ],
       "duration_minutes": 18,
       "tags": [
@@ -617,7 +695,8 @@
       "compatible_sessions": [
         "kuiper-50-isis-flat",
         "kuiper-50-isis-striped",
-        "kuiper-50-ospf-flat"
+        "kuiper-50-ospf-flat",
+        "kuiper-50-nodalpath-fwd"
       ],
       "duration_minutes": 12,
       "tags": [

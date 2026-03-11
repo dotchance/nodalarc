@@ -61,6 +61,19 @@ async def _run_live(config: NodalPathConfig) -> None:
     push_scheduler = _build_push_scheduler(config, node_registry, interface_map)
     publisher = AlmanacPublisher(config.events_bind)
 
+    from nodalpath.orchestrator.link_state_store import LinkStateStore
+
+    link_state_output = (
+        config.almanac_output_path.with_suffix(".links.jsonl")
+        if config.almanac_output_path is not None
+        else None
+    )
+    link_state_store = LinkStateStore(output_path=link_state_output)
+
+    if link_state_output is not None and link_state_output.exists():
+        loaded = link_state_store.load_from_jsonl(link_state_output)
+        log.info("Loaded %d link state entries from %s", loaded, link_state_output)
+
     orchestrator = LiveOrchestrator(
         node_registry=node_registry,
         interface_map=interface_map,
@@ -80,19 +93,6 @@ async def _run_live(config: NodalPathConfig) -> None:
     if config.almanac_output_path is not None:
         loaded = almanac_store.load_from_jsonl(config.almanac_output_path)
         log.info("Loaded %d almanac entries from %s", loaded, config.almanac_output_path)
-
-    from nodalpath.orchestrator.link_state_store import LinkStateStore
-
-    link_state_output = (
-        config.almanac_output_path.with_suffix(".links.jsonl")
-        if config.almanac_output_path is not None
-        else None
-    )
-    link_state_store = LinkStateStore(output_path=link_state_output)
-
-    if link_state_output is not None and link_state_output.exists():
-        loaded = link_state_store.load_from_jsonl(link_state_output)
-        log.info("Loaded %d link state entries from %s", loaded, link_state_output)
 
     from nodalpath.engine.path_deriver import PathDeriver
 

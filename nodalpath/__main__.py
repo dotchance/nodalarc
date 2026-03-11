@@ -94,11 +94,21 @@ async def _run_live(config: NodalPathConfig) -> None:
         loaded = link_state_store.load_from_jsonl(link_state_output)
         log.info("Loaded %d link state entries from %s", loaded, link_state_output)
 
+    from nodalpath.engine.path_deriver import PathDeriver
+
+    path_deriver = PathDeriver(
+        almanac_store=almanac_store,
+        prefix_map=prefix_map,
+        node_registry=node_registry,
+        interface_map=interface_map,
+    )
+
     console_app = build_app(
         console_state,
         almanac_store=almanac_store,
         prefix_map=prefix_map,
         link_state_store=link_state_store,
+        path_deriver=path_deriver,
     )
     uvicorn_config = uvicorn.Config(
         console_app,

@@ -7,8 +7,10 @@ import { TopBar } from "./bars/TopBar";
 import { StatsBar } from "./bars/StatsBar";
 import { TopologyGraph } from "./graph/TopologyGraph";
 import { NodeDetailPanel } from "./panels/NodeDetailPanel";
+import { PathPanel } from "./panels/PathPanel";
 import { TimelinePanel } from "./panels/TimelinePanel";
 import { EventLog } from "./panels/EventLog";
+import type { PathResult } from "./types";
 import { API_BASE } from "./config";
 import "./styles/reset.css";
 import "./styles/variables.css";
@@ -23,6 +25,9 @@ export default function App() {
     // Historical mode state
     const [selectedSimTime, setSelectedSimTime] = useState<string | null>(null);
     const [windowMinutes, setWindowMinutes] = useState(60);
+
+    // Path overlay state
+    const [pathResult, setPathResult] = useState<PathResult | null>(null);
 
     // Timeline data
     const timeline = useTimeline();
@@ -55,6 +60,7 @@ export default function App() {
 
     const topologyNodes = activeTopology?.nodes ?? [];
     const lastPushResult = consoleState?.push_history?.[0] ?? null;
+    const groundStations = topologyNodes.filter(n => n.node_type === "ground_station");
 
     return (
         <div className="app-root">
@@ -71,6 +77,7 @@ export default function App() {
                         selectedNodeId={selectedNodeId}
                         onNodeSelect={setSelectedNodeId}
                         lastPushResult={lastPushResult}
+                        pathResult={pathResult}
                     />
                 </div>
                 <aside className="detail-area">
@@ -85,6 +92,11 @@ export default function App() {
                         topology_nodes={topologyNodes}
                         consoleState={consoleState}
                         selectedSimTime={selectedSimTime}
+                    />
+                    <PathPanel
+                        groundStations={groundStations}
+                        selectedSimTime={selectedSimTime}
+                        onPathResult={setPathResult}
                     />
                     <TimelinePanel
                         timeline={timeline}

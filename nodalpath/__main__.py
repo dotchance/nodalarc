@@ -16,7 +16,12 @@ from nodalpath.push.push_scheduler import PushScheduler, PushSchedulerConfig
 log = logging.getLogger(__name__)
 
 
-def _build_push_scheduler(config: NodalPathConfig, node_registry, interface_map) -> PushScheduler:
+def _build_push_scheduler(
+    config: NodalPathConfig,
+    node_registry,
+    interface_map,
+    pod_ip_map: dict[str, str] | None = None,
+) -> PushScheduler:
     sched_config = PushSchedulerConfig(
         namespace=config.namespace,
         timeout_seconds=config.push_timeout_seconds,
@@ -25,12 +30,6 @@ def _build_push_scheduler(config: NodalPathConfig, node_registry, interface_map)
         transport=config.transport,
         grpc_port=config.grpc_port,
     )
-    pod_ip_map = None
-    if config.transport == "grpc":
-        node_ids = list(node_registry.keys())
-        pod_ip_map = load_pod_ip_map(node_ids, namespace=config.namespace)
-        if not pod_ip_map:
-            log.warning("No pod IPs resolved — push will fail for all nodes")
     return PushScheduler(
         node_registry=node_registry,
         interface_map=interface_map,
@@ -58,7 +57,15 @@ async def _run_live(config: NodalPathConfig) -> None:
         nodes_in_registry=len(node_registry),
     )
 
-    push_scheduler = _build_push_scheduler(config, node_registry, interface_map)
+    # Build pod_ip_map early so it's available for both push and inspection
+    pod_ip_map: dict[str, str] | None = None
+    if config.transport == "grpc":
+        node_ids = list(node_registry.keys())
+        pod_ip_map = load_pod_ip_map(node_ids, namespace=config.namespace)
+        if not pod_ip_map:
+            log.warning("No pod IPs resolved — push will fail for all nodes")
+
+    push_scheduler = _build_push_scheduler(config, node_registry, interface_map, pod_ip_map)
     publisher = AlmanacPublisher(config.events_bind)
 
     from nodalpath.orchestrator.link_state_store import LinkStateStore
@@ -74,6 +81,17 @@ async def _run_live(config: NodalPathConfig) -> None:
         loaded = link_state_store.load_from_jsonl(link_state_output)
         log.info("Loaded %d link state entries from %s", loaded, link_state_output)
 
+    # Node inspection / feedback loop
+    from nodalpath.integration.node_inspector import NodeInspector
+
+    node_inspector: NodeInspector | None = None
+    if config.transport == "grpc" and pod_ip_map:
+        node_inspector = NodeInspector(
+            pod_ip_map=pod_ip_map,
+            grpc_port=config.grpc_port,
+            grpc_timeout=config.push_timeout_seconds,
+        )
+
     orchestrator = LiveOrchestrator(
         node_registry=node_registry,
         interface_map=interface_map,
@@ -85,6 +103,10 @@ async def _run_live(config: NodalPathConfig) -> None:
         to_connect=config.to_connect,
         console_state=console_state,
         link_state_store=link_state_store,
+        node_inspector=node_inspector,
+        inspection_on_push=config.inspection_on_push,
+        inspection_on_link_event=config.inspection_on_link_event,
+        inspection_heartbeat_interval_s=config.inspection_heartbeat_interval_s,
     )
 
     almanac_store = orchestrator.almanac_store
@@ -109,6 +131,7 @@ async def _run_live(config: NodalPathConfig) -> None:
         prefix_map=prefix_map,
         link_state_store=link_state_store,
         path_deriver=path_deriver,
+        node_inspector=node_inspector,
     )
     uvicorn_config = uvicorn.Config(
         console_app,
@@ -227,6 +250,10 @@ def main() -> None:
     parser.add_argument("--grpc-port", type=int, default=50051)
     parser.add_argument("--namespace", default="nodalarc")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--inspection-heartbeat", type=int, default=0,
+                        help="Inspection heartbeat interval in seconds (0=disabled)")
+    parser.add_argument("--no-inspection-on-push", action="store_true",
+                        help="Disable automatic inspection after push")
     args = parser.parse_args()
 
     if args.mode == "console":
@@ -248,6 +275,8 @@ def main() -> None:
         lookahead_enabled=not args.no_lookahead,
         lookahead_horizon_s=args.lookahead_horizon,
         almanac_output_path=Path(args.almanac_output) if args.almanac_output else None,
+        inspection_heartbeat_interval_s=args.inspection_heartbeat,
+        inspection_on_push=not args.no_inspection_on_push,
     )
 
     if config.mode == "batch":

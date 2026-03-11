@@ -145,6 +145,55 @@ export interface PathResult {
     unreachable_reason: string | null;
 }
 
+// ── Inspection (from GET /api/v1/inspect/*) ──────────────────────────────────
+
+export interface BindingDiff {
+    in_label: number;
+    kind: "missing" | "extra" | "mismatch";
+    planned_action: string | null;
+    planned_out_label: number | null;
+    planned_out_interface: string | null;
+    observed_action: string | null;
+    observed_out_label: number | null;
+    observed_out_interface: string | null;
+}
+
+export interface IngressDiff {
+    dst_prefix: string;
+    kind: "missing" | "extra" | "mismatch";
+    planned_push_label: number | null;
+    planned_out_interface: string | null;
+    observed_push_label: number | null;
+    observed_out_interface: string | null;
+}
+
+export interface InspectionNodeResult {
+    node_id: string;
+    reachable: boolean;
+    status_topology_state_id: string | null;
+    status_total_entries: number | null;
+    has_deviation: boolean;
+    error_message: string | null;
+    binding_diffs: BindingDiff[];
+    ingress_diffs: IngressDiff[];
+}
+
+export interface InspectionRunSummary {
+    run_id: string;
+    trigger: string;
+    topology_state_id: string;
+    started_at: string;
+    completed_at: string | null;
+    nodes_inspected: number;
+    nodes_reachable: number;
+    nodes_with_deviations: number;
+    nodes_unreachable: number;
+}
+
+export interface InspectionRunDetail extends InspectionRunSummary {
+    node_results: InspectionNodeResult[];
+}
+
 // ── D3 graph nodes (ConsoleNode extended with computed layout position) ──────
 
 export interface GraphNode extends ConsoleNode {

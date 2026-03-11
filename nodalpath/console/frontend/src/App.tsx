@@ -8,6 +8,7 @@ import { StatsBar } from "./bars/StatsBar";
 import { TopologyGraph } from "./graph/TopologyGraph";
 import { NodeDetailPanel } from "./panels/NodeDetailPanel";
 import { PathPanel } from "./panels/PathPanel";
+import { InspectionPanel } from "./panels/InspectionPanel";
 import { TimelinePanel } from "./panels/TimelinePanel";
 import { EventLog } from "./panels/EventLog";
 import type { PathResult } from "./types";
@@ -97,6 +98,10 @@ export default function App() {
                         groundStations={groundStations}
                         selectedSimTime={selectedSimTime}
                         onPathResult={setPathResult}
+                    />
+                    <InspectionPanel
+                        selectedNodeId={selectedNodeId}
+                        onNodeSelect={setSelectedNodeId}
                     />
                     <TimelinePanel
                         timeline={timeline}

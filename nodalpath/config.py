@@ -40,6 +40,11 @@ class NodalPathConfig:
     lookahead_enabled: bool = True
     lookahead_horizon_s: int = 5700  # ~1 LEO orbital period
 
+    # Inspection / feedback loop
+    inspection_heartbeat_interval_s: int = 0  # 0 = disabled
+    inspection_on_push: bool = True
+    inspection_on_link_event: bool = True
+
     # Almanac persistence
     almanac_output_path: Path | None = None
 

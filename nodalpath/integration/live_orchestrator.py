@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from nodalpath.console.state import ConsoleState
+    from nodalpath.integration.node_inspector import NodeInspector
     from nodalpath.orchestrator.link_state_store import LinkStateStore
 
 import zmq
@@ -51,6 +52,10 @@ class LiveOrchestrator:
         to_connect: str,
         console_state: ConsoleState | None = None,
         link_state_store: LinkStateStore | None = None,
+        node_inspector: NodeInspector | None = None,
+        inspection_on_push: bool = True,
+        inspection_on_link_event: bool = True,
+        inspection_heartbeat_interval_s: int = 0,
     ) -> None:
         self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
         self._store = AlmanacStore()
@@ -66,6 +71,10 @@ class LiveOrchestrator:
         self._running = False
         self._console_state = console_state
         self._link_state_store = link_state_store
+        self._inspector = node_inspector
+        self._inspection_on_push = inspection_on_push
+        self._inspection_on_link_event = inspection_on_link_event
+        self._inspection_heartbeat_interval_s = inspection_heartbeat_interval_s
 
     @property
     def link_state_store(self) -> LinkStateStore | None:
@@ -104,6 +113,11 @@ class LiveOrchestrator:
             "LiveOrchestrator started — OME=%s TO=%s",
             self._ome_connect, self._to_connect,
         )
+
+        if self._inspector is not None and self._inspection_heartbeat_interval_s > 0:
+            asyncio.create_task(
+                self._inspector.heartbeat_loop(self._inspection_heartbeat_interval_s),
+            )
 
         try:
             while self._running:
@@ -197,6 +211,9 @@ class LiveOrchestrator:
                             node_b=event.node_b,
                             reason=event.reason,
                         )
+                    if self._inspector is not None and self._inspection_on_link_event:
+                        state_id = entry.topology_state_id if entry else self._inspector._last_pushed_state_id
+                        asyncio.create_task(self._inspector.trigger_link_event(state_id))
                     await self._recompute(event.sim_time.isoformat())
 
             elif topic == b"LinkUp":
@@ -242,6 +259,10 @@ class LiveOrchestrator:
             nodes_failed=push_result.nodes_failed,
             push_duration_ms=push_result.push_duration_ms,
         )
+
+        if self._inspector is not None and self._inspection_on_push:
+            self._inspector.record_push(entry.topology_state_id, entry.forwarding_tables)
+            asyncio.create_task(self._inspector.trigger_push_verify(entry.topology_state_id))
 
         self._prev_link_set = curr
 
@@ -342,3 +363,7 @@ class LiveOrchestrator:
             nodes_failed=push_result.nodes_failed,
             push_duration_ms=push_result.push_duration_ms,
         )
+
+        if self._inspector is not None and self._inspection_on_push:
+            self._inspector.record_push(entry.topology_state_id, entry.forwarding_tables)
+            asyncio.create_task(self._inspector.trigger_push_verify(entry.topology_state_id))

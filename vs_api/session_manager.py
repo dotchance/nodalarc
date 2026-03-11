@@ -201,6 +201,10 @@ class SessionManager:
         """Mark a session file as the currently active session."""
         self._current_session_file = session_file
 
+    def rescan(self) -> None:
+        """Re-scan session directory to pick up newly added YAML files."""
+        self._available = self.scan_sessions()
+
     def _valid_session_files(self) -> set[str]:
         """Return the set of known session file paths from the initial scan."""
         return {s["file"] for s in self._available}
@@ -377,6 +381,8 @@ class SessionManager:
             clear_state_fn: Callback to reset VS-API in-memory state.
             update_globals_fn: Callback(session_path, new_db_path) to update VS-API globals.
         """
+        # Rescan so newly added session files are recognized
+        self.rescan()
         # Validate session_path against scanned sessions — reject unknown paths
         if session_path not in self._valid_session_files():
             self._status = "error"

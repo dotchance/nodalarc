@@ -14,7 +14,7 @@ import asyncio
 import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -29,6 +29,7 @@ def build_app(
     prefix_map: dict[str, str] | None = None,
     link_state_store=None,
     path_deriver=None,
+    node_inspector=None,
 ) -> FastAPI:
     """Build and return the FastAPI application.
 
@@ -310,6 +311,106 @@ def build_app(
             None, path_deriver.derive, src, dst, sim_time
         )
         return JSONResponse(result.model_dump())
+
+    # ── Inspection endpoints ────────────────────────────────────────────────
+
+    def _serialize_run(run) -> dict:
+        """Serialize an InspectionRun to a JSON-friendly dict."""
+        return {
+            "run_id": run.run_id,
+            "trigger": run.trigger,
+            "topology_state_id": run.topology_state_id,
+            "started_at": run.started_at.isoformat(),
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "nodes_inspected": run.nodes_inspected,
+            "nodes_reachable": run.nodes_reachable,
+            "nodes_with_deviations": run.nodes_with_deviations,
+            "nodes_unreachable": run.nodes_unreachable,
+        }
+
+    def _serialize_run_detail(run) -> dict:
+        """Serialize an InspectionRun with full per-node results."""
+        result = _serialize_run(run)
+        result["node_results"] = [
+            {
+                "node_id": nr.node_id,
+                "reachable": nr.reachable,
+                "status_topology_state_id": nr.status_topology_state_id,
+                "status_total_entries": nr.status_total_entries,
+                "has_deviation": nr.has_deviation,
+                "error_message": nr.error_message,
+                "binding_diffs": [
+                    {
+                        "in_label": d.in_label,
+                        "kind": d.kind.value,
+                        "planned_action": d.planned_action,
+                        "planned_out_label": d.planned_out_label,
+                        "planned_out_interface": d.planned_out_interface,
+                        "observed_action": d.observed_action,
+                        "observed_out_label": d.observed_out_label,
+                        "observed_out_interface": d.observed_out_interface,
+                    }
+                    for d in nr.binding_diffs
+                ],
+                "ingress_diffs": [
+                    {
+                        "dst_prefix": d.dst_prefix,
+                        "kind": d.kind.value,
+                        "planned_push_label": d.planned_push_label,
+                        "planned_out_interface": d.planned_out_interface,
+                        "observed_push_label": d.observed_push_label,
+                        "observed_out_interface": d.observed_out_interface,
+                    }
+                    for d in nr.ingress_diffs
+                ],
+            }
+            for nr in run.node_results
+        ]
+        return result
+
+    @app.get("/api/v1/inspect/runs")
+    async def inspect_runs(n: int = 10) -> JSONResponse:
+        """Return summaries of recent inspection runs."""
+        if node_inspector is None:
+            return JSONResponse({"error": "inspection not available"}, status_code=503)
+        n = min(max(n, 1), 50)
+        runs = node_inspector.recent_runs(n)
+        return JSONResponse({"runs": [_serialize_run(r) for r in runs]})
+
+    @app.get("/api/v1/inspect/runs/{run_id}")
+    async def inspect_run_detail(run_id: str) -> JSONResponse:
+        """Return full inspection run with per-node results."""
+        if node_inspector is None:
+            return JSONResponse({"error": "inspection not available"}, status_code=503)
+        run = node_inspector.get_run(run_id)
+        if run is None:
+            return JSONResponse({"error": "run not found"}, status_code=404)
+        return JSONResponse(_serialize_run_detail(run))
+
+    @app.post("/api/v1/inspect/trigger")
+    async def inspect_trigger(request: Request) -> JSONResponse:
+        """Trigger an operator inspection."""
+        if node_inspector is None:
+            return JSONResponse({"error": "inspection not available"}, status_code=503)
+        node_ids = None
+        try:
+            body = await request.json()
+            if body and "node_ids" in body:
+                node_ids = body["node_ids"]
+        except Exception:
+            pass  # Empty body is fine — inspect all
+        run = await node_inspector.trigger_operator(node_ids=node_ids)
+        return JSONResponse({"run_id": run.run_id, "status": "completed"}, status_code=200)
+
+    @app.get("/api/v1/inspect/latest")
+    async def inspect_latest() -> JSONResponse:
+        """Return the most recent inspection run summary."""
+        if node_inspector is None:
+            return JSONResponse({"error": "inspection not available"}, status_code=503)
+        run = node_inspector.latest_run
+        if run is None:
+            return JSONResponse({"run": None})
+        return JSONResponse({"run": _serialize_run(run)})
 
     # ── Static files or holding page ─────────────────────────────────────────
 

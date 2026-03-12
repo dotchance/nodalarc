@@ -25,9 +25,9 @@ from nodalarc.models.events import (
 )
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.zmq_channels import (
-    OME_EVENTS_BIND,
-    PLAYBACK_CONTROL_BIND,
-    TO_EVENTS_BIND,
+    ome_events_bind,
+    playback_control_bind,
+    to_events_bind,
     TOPIC_LATENCY_UPDATE,
     TOPIC_LINK_DOWN,
     TOPIC_LINK_UP,
@@ -82,15 +82,15 @@ class RealtimeDispatcher:
 
         # Publish TO events (link up/down/latency)
         pub_sock = ctx.socket(zmq.PUB)
-        pub_sock.bind(TO_EVENTS_BIND)
+        pub_sock.bind(to_events_bind())
 
         # Publish position events on OME port (VS-API subscribes here)
         ome_pub_sock = ctx.socket(zmq.PUB)
-        ome_pub_sock.bind(OME_EVENTS_BIND)
+        ome_pub_sock.bind(ome_events_bind())
 
         # Playback control REP socket
         playback_sock = ctx.socket(zmq.REP)
-        playback_sock.bind(PLAYBACK_CONTROL_BIND)
+        playback_sock.bind(playback_control_bind())
 
         poller = zmq.Poller()
         poller.register(playback_sock, zmq.POLLIN)

@@ -15,10 +15,24 @@ from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
-DEPLOY_SOCKET_PATH: str = os.environ.get("NODAL_DEPLOY_SOCKET", "/tmp/nodal-deploy.sock")
-DEFAULT_NAMESPACE: str = "nodalarc"
-DEFAULT_TIMEOUT: int = 10
-MAX_WORKERS: int = 20
+def _deploy_socket_path() -> str:
+    val = os.environ.get("NODAL_DEPLOY_SOCKET")
+    if val:
+        return val
+    from nodalarc.platform import get_platform_config
+    return get_platform_config().deploy_daemon_unix_socket_path
+
+def _default_namespace() -> str:
+    from nodalarc.platform import get_platform_config
+    return get_platform_config().kubernetes_namespace
+
+def _default_timeout() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().grpc_push_timeout_seconds
+
+def _max_workers() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().grpc_push_max_parallel_workers
 
 
 @dataclass
@@ -40,13 +54,17 @@ def node_id_to_pod_name(node_id: str) -> str:
 def exec_vtysh(
     node_id: str,
     commands: str,
-    namespace: str = DEFAULT_NAMESPACE,
-    timeout: int = DEFAULT_TIMEOUT,
+    namespace: str | None = None,
+    timeout: int | None = None,
 ) -> ExecResult:
     """Execute vtysh commands on a satellite pod via the deploy daemon.
 
     Never raises — all errors are captured in ExecResult.
     """
+    if namespace is None:
+        namespace = _default_namespace()
+    if timeout is None:
+        timeout = _default_timeout()
     pod_name = node_id_to_pod_name(node_id)
     req = {
         "action": "kubectl_exec",
@@ -57,7 +75,7 @@ def exec_vtysh(
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
-        sock.connect(DEPLOY_SOCKET_PATH)
+        sock.connect(_deploy_socket_path())
         sock.sendall((json.dumps(req) + "\n").encode())
         buf = b""
         while True:
@@ -82,13 +100,13 @@ def exec_vtysh(
             stdout="", stderr="No response from deploy daemon", returncode=-1,
         )
     except FileNotFoundError:
-        log.error("Deploy daemon socket not found at %s", DEPLOY_SOCKET_PATH)
+        log.error("Deploy daemon socket not found at %s", _deploy_socket_path())
         return ExecResult(
             node_id=node_id, pod_name=pod_name, success=False,
             stdout="", stderr="Deploy daemon socket not found", returncode=-1,
         )
     except ConnectionRefusedError:
-        log.error("Deploy daemon connection refused at %s", DEPLOY_SOCKET_PATH)
+        log.error("Deploy daemon connection refused at %s", _deploy_socket_path())
         return ExecResult(
             node_id=node_id, pod_name=pod_name, success=False,
             stdout="", stderr="Deploy daemon connection refused", returncode=-1,
@@ -111,8 +129,8 @@ def exec_vtysh(
 
 def push_to_nodes(
     push_tasks: list[tuple[str, str]],
-    namespace: str = DEFAULT_NAMESPACE,
-    timeout: int = DEFAULT_TIMEOUT,
+    namespace: str | None = None,
+    timeout: int | None = None,
 ) -> list[ExecResult]:
     """Push vtysh commands to multiple nodes in parallel.
 
@@ -122,12 +140,17 @@ def push_to_nodes(
     if not push_tasks:
         return []
 
+    if namespace is None:
+        namespace = _default_namespace()
+    if timeout is None:
+        timeout = _default_timeout()
+
     results: list[ExecResult | None] = [None] * len(push_tasks)
 
     def _exec_indexed(index: int, node_id: str, commands: str) -> None:
         results[index] = exec_vtysh(node_id, commands, namespace, timeout)
 
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(push_tasks))) as pool:
+    with ThreadPoolExecutor(max_workers=min(_max_workers(), len(push_tasks))) as pool:
         futures = []
         for i, (node_id, commands) in enumerate(push_tasks):
             futures.append(pool.submit(_exec_indexed, i, node_id, commands))

@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 import zmq
 
 from nodalarc.zmq_channels import (
-    OME_EVENTS_BIND,
-    TO_EVENTS_BIND,
+    ome_events_bind,
+    to_events_bind,
     encode_message,
     TOPIC_POSITION_EVENT,
     TOPIC_LINK_UP,
@@ -40,7 +40,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Replay timeline over ZMQ")
     parser.add_argument("timeline", help="Path to .jsonl timeline file")
     parser.add_argument("--delay", type=float, default=0.2, help="Seconds per event batch (default: 0.2)")
+    parser.add_argument("--platform-config", default="configs/platform.yaml",
+                        help="Path to platform config YAML")
     args = parser.parse_args()
+
+    from nodalarc.platform import init_platform_config
+    from pathlib import Path
+    init_platform_config(Path(args.platform_config))
 
     # Read all events
     events: list[dict] = []
@@ -56,13 +62,13 @@ def main() -> None:
 
     # OME PUB socket (port 5560) - PositionEvents
     ome_pub = ctx.socket(zmq.PUB)
-    ome_pub.bind(OME_EVENTS_BIND)
-    log.info(f"OME PUB bound to {OME_EVENTS_BIND}")
+    ome_pub.bind(ome_events_bind())
+    log.info(f"OME PUB bound to {ome_events_bind()}")
 
     # TO PUB socket (port 5561) - LinkUp/LinkDown
     to_pub = ctx.socket(zmq.PUB)
-    to_pub.bind(TO_EVENTS_BIND)
-    log.info(f"TO PUB bound to {TO_EVENTS_BIND}")
+    to_pub.bind(to_events_bind())
+    log.info(f"TO PUB bound to {to_events_bind()}")
 
     # Let subscribers connect
     time.sleep(1.0)

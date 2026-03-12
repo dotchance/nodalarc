@@ -26,15 +26,18 @@ from nodalarc.models.session import SessionConfig
 
 log = logging.getLogger(__name__)
 
-DEPLOY_SOCKET_PATH = os.environ.get("NODAL_DEPLOY_SOCKET", "/tmp/nodal-deploy.sock")
+from nodalarc.platform import get_platform_config
 
 
-def _daemon_request(req: dict, timeout: float = 120) -> dict:
+def _daemon_request(req: dict, timeout: float | None = None) -> dict:
     """Send a request to the deploy daemon and receive the response."""
+    if timeout is None:
+        timeout = get_platform_config().pod_termination_timeout_seconds
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
+    deploy_socket = get_platform_config().deploy_daemon_unix_socket_path
     try:
-        sock.connect(DEPLOY_SOCKET_PATH)
+        sock.connect(deploy_socket)
         data = json.dumps(req) + "\n"
         sock.sendall(data.encode())
         buf = b""
@@ -48,7 +51,7 @@ def _daemon_request(req: dict, timeout: float = 120) -> dict:
                 return json.loads(line)
         return {"ok": False, "error": "No response from deploy daemon"}
     except FileNotFoundError:
-        return {"ok": False, "error": f"Deploy daemon not running (socket {DEPLOY_SOCKET_PATH} not found)"}
+        return {"ok": False, "error": f"Deploy daemon not running (socket {deploy_socket} not found)"}
     except ConnectionRefusedError:
         return {"ok": False, "error": "Deploy daemon connection refused"}
     except socket.timeout:
@@ -59,10 +62,12 @@ def _daemon_request(req: dict, timeout: float = 120) -> dict:
 
 def _daemon_deploy_streaming(session_path: str, status_callback: Callable[[str], None] | None = None) -> dict:
     """Run deploy via daemon with streaming progress updates."""
+    cfg = get_platform_config()
+    deploy_socket = cfg.deploy_daemon_unix_socket_path
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(660)  # 11 min to cover 600s deploy timeout
+    sock.settimeout(cfg.deploy_daemon_accept_timeout_seconds)
     try:
-        sock.connect(DEPLOY_SOCKET_PATH)
+        sock.connect(deploy_socket)
         req = json.dumps({"action": "deploy_streaming", "session": session_path}) + "\n"
         sock.sendall(req.encode())
 
@@ -117,7 +122,7 @@ def _daemon_deploy_streaming(session_path: str, status_callback: Callable[[str],
 
         return {"ok": False, "error": "Connection closed without final response"}
     except FileNotFoundError:
-        return {"ok": False, "error": f"Deploy daemon not running (socket {DEPLOY_SOCKET_PATH} not found)"}
+        return {"ok": False, "error": f"Deploy daemon not running (socket {deploy_socket} not found)"}
     except ConnectionRefusedError:
         return {"ok": False, "error": "Deploy daemon connection refused"}
     except socket.timeout:

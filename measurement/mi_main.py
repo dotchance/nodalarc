@@ -33,12 +33,13 @@ from nodalarc.models.metrics import AdapterEvent, ConvergenceResult, ProbeResult
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.metrics import TraceRequest, TraceResponse
+from nodalarc.platform import get_platform_config
 from nodalarc.zmq_channels import (
-    MI_CONVERGENCE_GATE_BIND,
-    MI_EVENTS_BIND,
-    MI_TRACE_BIND,
-    OME_EVENTS_CONNECT,
-    TO_EVENTS_CONNECT,
+    mi_convergence_gate_bind,
+    mi_events_bind,
+    mi_trace_bind,
+    ome_events_connect,
+    to_events_connect,
     TOPIC_ADAPTER_EVENT,
     TOPIC_CONVERGENCE_RESULT,
     TOPIC_PROBE_RESULT,
@@ -50,8 +51,10 @@ from measurement.convergence_gate import ConvergenceGate
 log = logging.getLogger(__name__)
 
 
-def _discover_pods(namespace: str = "nodalarc") -> list[dict[str, str]]:
+def _discover_pods(namespace: str | None = None) -> list[dict[str, str]]:
     """Discover running pods via kubectl."""
+    if namespace is None:
+        namespace = get_platform_config().kubernetes_namespace
     try:
         result = subprocess.run(
             [
@@ -89,8 +92,10 @@ class MIService:
         gs_file: GroundStationFile,
         stack_config: RoutingStackConfig,
         db_path: str,
-        namespace: str = "nodalarc",
+        namespace: str | None = None,
     ) -> None:
+        if namespace is None:
+            namespace = get_platform_config().kubernetes_namespace
         self._session = session
         self._gs_file = gs_file
         self._stack_config = stack_config
@@ -111,7 +116,7 @@ class MIService:
         # ZMQ
         self._ctx = zmq.Context()
         self._pub_sock = self._ctx.socket(zmq.PUB)
-        self._pub_sock.bind(MI_EVENTS_BIND)
+        self._pub_sock.bind(mi_events_bind())
 
         # Convergence gate
         self._gate = ConvergenceGate(
@@ -233,8 +238,8 @@ class MIService:
         """Run the convergence gate on the REP socket."""
         ctx = zmq.Context()
         sock = ctx.socket(zmq.REP)
-        sock.bind(MI_CONVERGENCE_GATE_BIND)
-        log.info(f"Convergence gate bound on {MI_CONVERGENCE_GATE_BIND}")
+        sock.bind(mi_convergence_gate_bind())
+        log.info(f"Convergence gate bound on {mi_convergence_gate_bind()}")
 
         poller = zmq.Poller()
         poller.register(sock, zmq.POLLIN)
@@ -270,8 +275,8 @@ class MIService:
         """Run the trace REP socket — resolves forwarding paths."""
         ctx = zmq.Context()
         sock = ctx.socket(zmq.REP)
-        sock.bind(MI_TRACE_BIND)
-        log.info(f"Trace endpoint bound on {MI_TRACE_BIND}")
+        sock.bind(mi_trace_bind())
+        log.info(f"Trace endpoint bound on {mi_trace_bind()}")
 
         poller = zmq.Poller()
         poller.register(sock, zmq.POLLIN)
@@ -361,7 +366,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="MI service")
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument("--db", required=True, help="Path to SQLite database")
+    parser.add_argument("--platform-config", default="configs/platform.yaml")
     args = parser.parse_args()
+
+    from nodalarc.platform import init_platform_config
+    init_platform_config(Path(args.platform_config))
 
     # Load configs
     raw = yaml.safe_load(Path(args.session).read_text())

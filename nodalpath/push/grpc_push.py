@@ -24,9 +24,17 @@ from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
 
 log = logging.getLogger(__name__)
 
-DEFAULT_GRPC_PORT: int = 50051
-DEFAULT_TIMEOUT: float = 10.0
-MAX_WORKERS: int = 20
+def _default_grpc_port() -> int:
+    from nodalarc.platform import get_platform_config
+    return get_platform_config().nodalpath_fwd_grpc_port
+
+def _default_timeout() -> float:
+    from nodalpath.platform import get_nodalpath_config
+    return float(get_nodalpath_config().grpc_push_timeout_seconds)
+
+def _max_workers() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().grpc_push_max_parallel_workers
 
 
 @dataclass
@@ -101,13 +109,17 @@ def push_forwarding_table(
     node_id: str,
     pod_ip: str,
     update: ForwardingTableUpdate,
-    port: int = DEFAULT_GRPC_PORT,
-    timeout: float = DEFAULT_TIMEOUT,
+    port: int | None = None,
+    timeout: float | None = None,
 ) -> GrpcExecResult:
     """Push a forwarding table to a single node via gRPC.
 
     Never raises. All errors are captured in GrpcExecResult.
     """
+    if port is None:
+        port = _default_grpc_port()
+    if timeout is None:
+        timeout = _default_timeout()
     target = f"{pod_ip}:{port}"
     channel = grpc.insecure_channel(target)
     try:
@@ -146,9 +158,9 @@ def push_forwarding_table(
 
 def push_to_nodes_grpc(
     push_tasks: list[tuple[str, str, ForwardingTableUpdate]],
-    port: int = DEFAULT_GRPC_PORT,
-    timeout: float = DEFAULT_TIMEOUT,
-    max_workers: int = MAX_WORKERS,
+    port: int | None = None,
+    timeout: float | None = None,
+    max_workers: int | None = None,
 ) -> list[GrpcExecResult]:
     """Push forwarding tables to multiple nodes in parallel via gRPC.
 
@@ -157,6 +169,13 @@ def push_to_nodes_grpc(
     """
     if not push_tasks:
         return []
+
+    if port is None:
+        port = _default_grpc_port()
+    if timeout is None:
+        timeout = _default_timeout()
+    if max_workers is None:
+        max_workers = _max_workers()
 
     results: list[GrpcExecResult | None] = [None] * len(push_tasks)
 

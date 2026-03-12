@@ -27,9 +27,9 @@ from nodalarc.models.events import (
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.metrics import ConvergenceRequest, ConvergenceResult
 from nodalarc.zmq_channels import (
-    MI_CONVERGENCE_GATE_CONNECT,
-    PLAYBACK_CONTROL_BIND,
-    TO_EVENTS_BIND,
+    mi_convergence_gate_connect,
+    playback_control_bind,
+    to_events_bind,
     encode_message,
     TOPIC_LATENCY_UPDATE,
     TOPIC_LINK_DOWN,
@@ -150,7 +150,7 @@ class DiscreteEventDispatcher:
         try:
             pub_sock = ctx.socket(zmq.PUB)
             pub_sock.setsockopt(zmq.LINGER, 0)
-            pub_sock.bind(TO_EVENTS_BIND)
+            pub_sock.bind(to_events_bind())
 
             # Reuse TO PUB socket for position events — OME already owns
             # OME_EVENTS_BIND (port 5560) and binding there causes conflicts.
@@ -160,19 +160,19 @@ class DiscreteEventDispatcher:
             if self._use_convergence_gate:
                 conv_sock = ctx.socket(zmq.REQ)
                 conv_sock.setsockopt(zmq.LINGER, 0)
-                conv_sock.connect(MI_CONVERGENCE_GATE_CONNECT)
+                conv_sock.connect(mi_convergence_gate_connect())
 
             # Playback control REP socket
             playback_sock = ctx.socket(zmq.REP)
             playback_sock.setsockopt(zmq.LINGER, 0)
-            playback_sock.bind(PLAYBACK_CONTROL_BIND)
+            playback_sock.bind(playback_control_bind())
 
             poller = zmq.Poller()
             poller.register(playback_sock, zmq.POLLIN)
 
             log.info(
-                f"ZMQ PUB sockets bound: TO={TO_EVENTS_BIND} (positions on TO) "
-                f"Playback={PLAYBACK_CONTROL_BIND}"
+                f"ZMQ PUB sockets bound: TO={to_events_bind()} (positions on TO) "
+                f"Playback={playback_control_bind()}"
             )
             # Allow subscribers time to connect (ZMQ slow joiner).
             # VS-API (uvicorn) can take 2-3s to start its ZMQ subscriber.

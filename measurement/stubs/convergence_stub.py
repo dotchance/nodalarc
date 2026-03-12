@@ -15,7 +15,7 @@ import zmq
 
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.metrics import ConvergenceRequest, ConvergenceResult
-from nodalarc.zmq_channels import MI_CONVERGENCE_GATE_BIND
+from nodalarc.zmq_channels import mi_convergence_gate_bind
 
 log = logging.getLogger(__name__)
 
@@ -24,8 +24,8 @@ def run_stub() -> None:
     """Run the convergence gate stub — blocks forever."""
     ctx = zmq.Context()
     sock = ctx.socket(zmq.REP)
-    sock.bind(MI_CONVERGENCE_GATE_BIND)
-    log.info(f"Convergence gate stub bound on {MI_CONVERGENCE_GATE_BIND}")
+    sock.bind(mi_convergence_gate_bind())
+    log.info(f"Convergence gate stub bound on {mi_convergence_gate_bind()}")
 
     try:
         while True:
@@ -53,5 +53,13 @@ def run_stub() -> None:
 
 
 if __name__ == "__main__":
+    import argparse
+    from pathlib import Path
+    from nodalarc.platform import init_platform_config
+
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--platform-config", default="configs/platform.yaml")
+    args = parser.parse_args()
+    init_platform_config(Path(args.platform_config))
     run_stub()

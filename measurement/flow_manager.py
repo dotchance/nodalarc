@@ -17,7 +17,6 @@ from pathlib import Path
 
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig, TrafficFlowConfig
-from nodalarc.zmq_channels import PROBE_DAEMON_PORT
 
 log = logging.getLogger(__name__)
 
@@ -60,12 +59,15 @@ def resolve_dst_ip(
 
 def resolve_src_pod_ip(
     src_node_id: str,
-    namespace: str = "nodalarc",
+    namespace: str | None = None,
 ) -> str | None:
     """Resolve source GS node ID to pod IP via kubectl.
 
     Returns the pod's cluster IP for probe daemon HTTP access.
     """
+    if namespace is None:
+        from nodalarc.platform import get_platform_config
+        namespace = get_platform_config().kubernetes_namespace
     import subprocess
 
     pod_name = src_node_id.lower()
@@ -92,8 +94,11 @@ class FlowManager:
         self,
         session: SessionConfig,
         gs_file: GroundStationFile,
-        namespace: str = "nodalarc",
+        namespace: str | None = None,
     ) -> None:
+        if namespace is None:
+            from nodalarc.platform import get_platform_config
+            namespace = get_platform_config().kubernetes_namespace
         self._session = session
         self._gs_file = gs_file
         self._namespace = namespace

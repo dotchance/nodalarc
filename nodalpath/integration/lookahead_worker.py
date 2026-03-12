@@ -27,8 +27,13 @@ from nodalpath.orchestrator.transition_detector import has_transition
 
 log = logging.getLogger(__name__)
 
-LOOKAHEAD_DEFAULT_S = 5700
-POLL_INTERVAL_S = 5.0
+def _lookahead_default_s() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().lookahead_horizon_sim_seconds
+
+def _poll_interval_s() -> float:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().lookahead_poll_interval_seconds
 
 
 class LookaheadWorker:
@@ -42,10 +47,12 @@ class LookaheadWorker:
         prefix_map: dict[str, str],
         bandwidth_map: dict | None,
         almanac_store: AlmanacStore,
-        lookahead_horizon_s: int = LOOKAHEAD_DEFAULT_S,
+        lookahead_horizon_s: int | None = None,
         console_state: ConsoleState | None = None,
         link_state_store: LinkStateStore | None = None,
     ) -> None:
+        if lookahead_horizon_s is None:
+            lookahead_horizon_s = _lookahead_default_s()
         self._timeline_path = timeline_path
         self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
         self._prefix_map = prefix_map
@@ -98,7 +105,7 @@ class LookaheadWorker:
 
                 if not new_events:
                     self._set_status("waiting")
-                    await asyncio.sleep(POLL_INTERVAL_S)
+                    await asyncio.sleep(_poll_interval_s())
                     continue
 
                 self._set_status("computing")

@@ -13,11 +13,22 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-# Ring-buffer caps
-MAX_PUSH_HISTORY = 100
-MAX_DEVIATION_HISTORY = 100
-MAX_ALMANAC_HISTORY = 200
-MAX_EVENT_LOG = 300   # Unified chronological log shown in the dashboard
+# Ring-buffer caps — resolved from config at call time
+def _max_push_history() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().console_push_history_max_entries
+
+def _max_deviation_history() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().console_deviation_history_max_entries
+
+def _max_almanac_history() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().console_almanac_history_max_entries
+
+def _max_event_log() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().console_event_log_max_entries
 
 
 @dataclass
@@ -76,8 +87,8 @@ class ConsoleState:
             "details": details,
         }
         self._event_log.append(entry)
-        if len(self._event_log) > MAX_EVENT_LOG:
-            self._event_log = self._event_log[-MAX_EVENT_LOG:]
+        if len(self._event_log) > _max_event_log():
+            self._event_log = self._event_log[-_max_event_log():]
 
     # ────────────────────────────────────────────────────────────────────────
     # Public write API (called from LiveOrchestrator)
@@ -102,8 +113,8 @@ class ConsoleState:
                 "forwarding_table_count": forwarding_table_count,
             }
             self._almanac_history.append(entry)
-            if len(self._almanac_history) > MAX_ALMANAC_HISTORY:
-                self._almanac_history = self._almanac_history[-MAX_ALMANAC_HISTORY:]
+            if len(self._almanac_history) > _max_almanac_history():
+                self._almanac_history = self._almanac_history[-_max_almanac_history():]
             self._append_event(
                 "TRANSITION",
                 f"T={sim_time} | {active_link_count} links | {forwarding_table_count} tables",
@@ -124,8 +135,8 @@ class ConsoleState:
                 "failed_nodes": list(result.failed_nodes),
             }
             self._push_history.append(entry)
-            if len(self._push_history) > MAX_PUSH_HISTORY:
-                self._push_history = self._push_history[-MAX_PUSH_HISTORY:]
+            if len(self._push_history) > _max_push_history():
+                self._push_history = self._push_history[-_max_push_history():]
             ok = result.nodes_failed == 0
             summary = (
                 f"{result.nodes_succeeded}/{result.nodes_attempted} nodes "
@@ -153,8 +164,8 @@ class ConsoleState:
                 "reason": reason,
             }
             self._deviation_history.append(entry)
-            if len(self._deviation_history) > MAX_DEVIATION_HISTORY:
-                self._deviation_history = self._deviation_history[-MAX_DEVIATION_HISTORY:]
+            if len(self._deviation_history) > _max_deviation_history():
+                self._deviation_history = self._deviation_history[-_max_deviation_history():]
             self._append_event(
                 "DEVIATE",
                 f"{node_a} \u2194 {node_b} | {reason}",

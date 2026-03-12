@@ -22,7 +22,7 @@ from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, compute_area_assignments, neighbors_by_node
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.session import SessionConfig
-from nodalarc.zmq_channels import TO_SCENARIO_INJECT_BIND, encode_message, TOPIC_LINK_DOWN, TOPIC_LINK_UP
+from nodalarc.zmq_channels import to_scenario_inject_bind, encode_message, TOPIC_LINK_DOWN, TOPIC_LINK_UP
 from orchestrator.discrete_event_dispatcher import DiscreteEventDispatcher
 from orchestrator.realtime_dispatcher import RealtimeDispatcher
 
@@ -79,8 +79,8 @@ def _scenario_handler(
     """Handle scenario injection requests on port 5564."""
     ctx = zmq.Context()
     sock = ctx.socket(zmq.REP)
-    sock.bind(TO_SCENARIO_INJECT_BIND)
-    log.info(f"Scenario handler bound on {TO_SCENARIO_INJECT_BIND}")
+    sock.bind(to_scenario_inject_bind())
+    log.info(f"Scenario handler bound on {to_scenario_inject_bind()}")
 
     try:
         while True:
@@ -155,7 +155,12 @@ def main() -> None:
     parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell (seconds)")
     parser.add_argument("--no-convergence-gate", action="store_true",
                         help="Disable MI convergence gate (for stacks without MI)")
+    parser.add_argument("--platform-config", default="configs/platform.yaml",
+                        help="Path to platform configuration YAML")
     args = parser.parse_args()
+
+    from nodalarc.platform import init_platform_config
+    init_platform_config(Path(args.platform_config))
 
     data = yaml.safe_load(Path(args.session).read_text())
     session = SessionConfig.model_validate(data)

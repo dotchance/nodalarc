@@ -1,0 +1,197 @@
+# ═══════════════════════════════════════════════════════════════════════
+# Nodal Arc — Platform Configuration
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Deployment-level settings for the Nodal Arc satellite constellation
+# network emulation platform. These values are shared across all
+# sessions running on this deployment.
+#
+# This is the single source of truth for infrastructure constants.
+# No Python source file should hardcode any value defined here.
+# All modules load this file at startup via PlatformConfig.
+#
+# To customize for a different deployment, edit this file.
+# ═══════════════════════════════════════════════════════════════════════
+
+platform:
+
+  # ── Kubernetes ──────────────────────────────────────────────────────
+
+  # Kubernetes namespace where all Nodal Arc pods are deployed
+  # (satellites, ground stations, orchestrator, visualization).
+  # Must exist before running na-deploy.
+  kubernetes_namespace: nodalarc
+
+  # ── ZeroMQ Inter-Process Communication Ports ────────────────────────
+  #
+  # TCP port numbers for ZeroMQ PUB/SUB and REQ/REP sockets between
+  # backend components. All ZMQ sockets bind to 127.0.0.1 (loopback
+  # only) because ZMQ has no authentication layer.
+  #
+  # Components run on the same host and connect via localhost.
+
+  # Port: OME → TO, VS-API, NodalPath (PUB/SUB)
+  # Messages: PositionEvent, VisibilityEvent, ClockTick
+  zmq_ome_events_port: 5560
+
+  # Port: TO → MI, VS-API, NodalPath (PUB/SUB)
+  # Messages: LinkUp, LinkDown, LatencyUpdate
+  zmq_to_events_port: 5561
+
+  # Port: MI → VS-API (PUB/SUB)
+  # Messages: ConvergenceResult, ProbeResult, AdapterEvent
+  zmq_mi_events_port: 5562
+
+  # Port: TO ↔ MI convergence gate (REQ/REP)
+  # TO sends ConvergenceRequest, MI replies with ConvergenceResult
+  zmq_mi_convergence_gate_port: 5563
+
+  # Port: na-scenario → TO scenario injection (REQ/REP)
+  # Commands: inject_link_down, inject_link_up, inject_satellite_loss
+  zmq_to_scenario_inject_port: 5564
+
+  # Port: VS-API → MI forwarding path trace (REQ/REP)
+  # VS-API sends TraceRequest, MI replies with TraceResponse
+  zmq_mi_trace_port: 5565
+
+  # Port: VS-API → TO playback control (REQ/REP)
+  # Commands: pause, resume, set_speed
+  zmq_playback_control_port: 5566
+
+  # Port: NodalPath → VS-API (PUB/SUB)
+  # Messages: AlmanacEvent (path_computed, table_pushed, deviation)
+  zmq_nodalpath_events_port: 5567
+
+  # ── HTTP and WebSocket Service Ports ────────────────────────────────
+
+  # VS-API FastAPI server — serves WebSocket state snapshots at ~1Hz
+  # and REST endpoints for historical queries, introspection, session
+  # management. Binds to 0.0.0.0 (all interfaces).
+  vs_api_http_port: 8080
+
+  # Visualization Frontend static file server (React + Three.js SPA).
+  # Binds to 0.0.0.0. Served by nginx or Caddy in production.
+  vf_static_file_server_port: 8081
+
+  # NodalPath operator console — FastAPI server with React frontend
+  # for topology graph, forwarding table inspection, timeline scrubber.
+  # Binds to 0.0.0.0.
+  nodalpath_console_http_port: 3100
+
+  # ── Container-Internal Service Ports ────────────────────────────────
+  # These ports are inside pod network namespaces, accessed via pod IP.
+
+  # gRPC ForwardingService inside nodalpath-fwd sidecar containers.
+  # NodalPath pushes MPLS forwarding tables to each pod on this port.
+  # Protocol: gRPC (HTTP/2). One channel per push, no connection pooling.
+  nodalpath_fwd_grpc_port: 50051
+
+  # NETCONF stub inside nodalpath-fwd containers. Responds to hello
+  # only — satisfies NEBULA liveness probes. Not used for config.
+  # Protocol: TCP (SSH subsystem).
+  nodalpath_fwd_netconf_port: 830
+
+  # Probe daemon REST API inside ground station sidecar containers.
+  # MI configures and controls probe flows via this HTTP endpoint.
+  # Protocol: HTTP (FastAPI/uvicorn).
+  probe_daemon_http_api_port: 9100
+
+  # Probe daemon UDP socket for packet injection and reception.
+  # Carries actual probe packets for convergence measurement.
+  # Protocol: UDP (custom binary — sequence number + timestamp).
+  probe_daemon_udp_data_port: 19100
+
+  # ── Deploy Daemon ───────────────────────────────────────────────────
+
+  # Unix domain socket path for the deploy daemon process. The daemon
+  # handles kubectl exec, pod IP resolution, and vtysh config pushes
+  # on behalf of NodalPath, VS-API, and na-deploy.
+  # Multiple components connect to this single socket concurrently.
+  deploy_daemon_unix_socket_path: /tmp/nodal-deploy.sock
+
+  # ── Container Filesystem Paths ──────────────────────────────────────
+  # Paths inside FRR routing containers for config delivery.
+
+  # Directory where FRR daemon config files are copied (via kubectl cp).
+  # Contains zebra.conf, isisd.conf, ospfd.conf, etc.
+  frr_config_directory_in_container: /etc/frr
+
+  # Sentinel file created by na-deploy after config delivery completes.
+  # FRR entrypoint.sh blocks until this file exists (max 900 seconds).
+  frr_config_ready_sentinel_path: /etc/frr/.config-ready
+
+  # ── Network Infrastructure ──────────────────────────────────────────
+
+  # MTU in bytes for veth pair interfaces connecting satellite and
+  # ground station pods. 9000 enables jumbo frames for reduced
+  # per-packet overhead on high-bandwidth ISL links.
+  veth_interface_mtu_bytes: 9000
+
+  # Maximum MPLS label value the Linux kernel will accept.
+  # Set via: sysctl net.mpls.platform_labels={value}
+  # Must be >= the highest SID allocated by NodalPath.
+  # 100000 provides headroom for constellations up to ~8000 nodes.
+  mpls_kernel_max_platform_labels: 100000
+
+  # ── Operational Timeouts (seconds) ──────────────────────────────────
+
+  # Maximum wait for all K8s pods to reach Running state during
+  # na-deploy step 5 (helm install + pod scheduling + image pull).
+  pod_ready_timeout_seconds: 600
+
+  # Maximum wait for pods to terminate during na-teardown or session
+  # switch (helm uninstall + graceful shutdown + pod cleanup).
+  pod_termination_timeout_seconds: 120
+
+  # Maximum time for a single deploy daemon operation (helm install,
+  # full config delivery cycle, or service startup sequence).
+  deploy_operation_timeout_seconds: 600
+
+  # Deploy daemon socket accept() timeout. Must be longer than
+  # deploy_operation_timeout to avoid premature client disconnection.
+  deploy_daemon_accept_timeout_seconds: 660
+
+  # Delay after copying FRR configs before creating the config-ready
+  # sentinel (seconds). Allows filesystem sync in the container.
+  frr_config_delivery_settle_seconds: 5
+
+  # ── Parallel Execution ──────────────────────────────────────────────
+
+  # Maximum concurrent threads for kubectl exec operations during
+  # config delivery and vtysh command execution. Higher values
+  # speed up large constellation deployments but increase K8s
+  # API server load.
+  kubectl_exec_max_parallel_workers: 20
+
+  # ── VS-API Operational Limits ───────────────────────────────────────
+
+  # Maximum concurrent WebSocket client connections to VS-API.
+  # Each connection receives ~30-40 KB/s of state snapshots.
+  vs_api_max_websocket_connections: 50
+
+  # Rate limits for expensive VS-API endpoints (requests per minute).
+  # Introspect: each call spawns a kubectl exec process.
+  vs_api_introspect_max_requests_per_minute: 10
+  # Playback: each call modifies dispatcher state.
+  vs_api_playback_max_requests_per_minute: 30
+  # Session switch: each call does full teardown + redeploy.
+  vs_api_session_switch_max_requests_per_minute: 5
+
+  # Maximum bytes returned from a single vtysh introspect command.
+  # Prevents runaway output (e.g., "show isis database" on large
+  # constellations) from exhausting server memory.
+  vs_api_introspect_max_response_bytes: 65536
+
+  # Timeout for a single vtysh introspect command execution (seconds).
+  vs_api_introspect_command_timeout_seconds: 15
+
+  # ── System Tuning ───────────────────────────────────────────────────
+  # Applied by na-deploy to the host before pod creation.
+
+  # fs.inotify.max_user_instances — required for large constellations
+  # where many containers use inotify for filesystem watching.
+  host_inotify_max_user_instances: 512
+
+  # File descriptor limit (ulimit -n) for backend processes.
+  # Each ZMQ socket, pod connection, and open file consumes one FD.
+  host_file_descriptor_limit: 65536

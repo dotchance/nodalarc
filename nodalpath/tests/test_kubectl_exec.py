@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from nodalpath.push.kubectl_exec import (
-    DEFAULT_NAMESPACE,
+    _default_namespace,
     ExecResult,
     exec_vtysh,
     node_id_to_pod_name,

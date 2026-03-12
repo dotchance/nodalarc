@@ -24,9 +24,17 @@ from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
 
 log = logging.getLogger(__name__)
 
-DEFAULT_GRPC_PORT: int = 50051
-DEFAULT_TIMEOUT: float = 10.0
-MAX_WORKERS: int = 20
+def _default_grpc_port() -> int:
+    from nodalarc.platform import get_platform_config
+    return get_platform_config().nodalpath_fwd_grpc_port
+
+def _default_timeout() -> float:
+    from nodalpath.platform import get_nodalpath_config
+    return float(get_nodalpath_config().grpc_push_timeout_seconds)
+
+def _max_workers() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().grpc_push_max_parallel_workers
 
 _ACTION_MAP = {
     Action.SWAP: "swap",
@@ -141,13 +149,17 @@ def interrogate_node(
     pod_ip: str,
     expected_topology_state_id: str,
     planned_table: ForwardingTable,
-    port: int = DEFAULT_GRPC_PORT,
-    timeout: float = DEFAULT_TIMEOUT,
+    port: int | None = None,
+    timeout: float | None = None,
 ) -> NodeInspectionResult:
     """Interrogate a single node's forwarding state via gRPC.
 
     Never raises. All errors are captured in NodeInspectionResult.
     """
+    if port is None:
+        port = _default_grpc_port()
+    if timeout is None:
+        timeout = _default_timeout()
     target = f"{pod_ip}:{port}"
     channel = grpc.insecure_channel(target)
     try:
@@ -192,9 +204,9 @@ def interrogate_node(
 
 def interrogate_nodes(
     tasks: list[tuple[str, str, str, ForwardingTable]],
-    port: int = DEFAULT_GRPC_PORT,
-    timeout: float = DEFAULT_TIMEOUT,
-    max_workers: int = MAX_WORKERS,
+    port: int | None = None,
+    timeout: float | None = None,
+    max_workers: int | None = None,
 ) -> list[NodeInspectionResult]:
     """Interrogate multiple nodes in parallel via gRPC.
 
@@ -203,6 +215,13 @@ def interrogate_nodes(
     """
     if not tasks:
         return []
+
+    if port is None:
+        port = _default_grpc_port()
+    if timeout is None:
+        timeout = _default_timeout()
+    if max_workers is None:
+        max_workers = _max_workers()
 
     results: list[NodeInspectionResult | None] = [None] * len(tasks)
 

@@ -55,13 +55,15 @@ from nodalarc.models.vs_api import (
     TracedPath,
 )
 from nodalarc.models.metrics import TraceRequest, TraceResponse
+from nodalarc.platform import get_platform_config
 from nodalarc.zmq_channels import (
-    MI_EVENTS_CONNECT,
-    MI_TRACE_CONNECT,
-    NODALPATH_EVENTS_CONNECT,
-    OME_EVENTS_CONNECT,
-    PLAYBACK_CONTROL_CONNECT,
-    TO_EVENTS_CONNECT,
+    mi_events_connect,
+    mi_trace_connect,
+    nodalpath_events_connect,
+    ome_events_connect,
+    playback_control_connect,
+    to_events_connect,
+    vs_api_http_port,
     decode_message,
     TOPIC_ADAPTER_EVENT,
     TOPIC_ALMANAC_EVENT,
@@ -104,9 +106,6 @@ def raise_unauthorized() -> None:
 
 import time as _time
 
-_MAX_WS_CONNECTIONS = 50
-
-
 class _TokenBucket:
     """Simple per-IP token bucket rate limiter."""
 
@@ -127,10 +126,40 @@ class _TokenBucket:
         return False
 
 
-# Rate limiters: rate = tokens/sec, burst = max tokens
-_rate_introspect = _TokenBucket(rate=10 / 60, burst=10)     # 10 req/min
-_rate_playback = _TokenBucket(rate=30 / 60, burst=30)       # 30 req/min
-_rate_session_switch = _TokenBucket(rate=5 / 60, burst=5)   # 5 req/min
+# Rate limiters: lazy-initialized from platform config
+_rate_introspect: _TokenBucket | None = None
+_rate_playback: _TokenBucket | None = None
+_rate_session_switch: _TokenBucket | None = None
+
+
+def _get_rate_introspect() -> _TokenBucket:
+    global _rate_introspect
+    if _rate_introspect is None:
+        from nodalarc.platform import get_platform_config
+        cfg = get_platform_config()
+        r = cfg.vs_api_introspect_max_requests_per_minute
+        _rate_introspect = _TokenBucket(rate=r / 60, burst=r)
+    return _rate_introspect
+
+
+def _get_rate_playback() -> _TokenBucket:
+    global _rate_playback
+    if _rate_playback is None:
+        from nodalarc.platform import get_platform_config
+        cfg = get_platform_config()
+        r = cfg.vs_api_playback_max_requests_per_minute
+        _rate_playback = _TokenBucket(rate=r / 60, burst=r)
+    return _rate_playback
+
+
+def _get_rate_session_switch() -> _TokenBucket:
+    global _rate_session_switch
+    if _rate_session_switch is None:
+        from nodalarc.platform import get_platform_config
+        cfg = get_platform_config()
+        r = cfg.vs_api_session_switch_max_requests_per_minute
+        _rate_session_switch = _TokenBucket(rate=r / 60, burst=r)
+    return _rate_session_switch
 
 
 def _client_ip(request: Request) -> str:
@@ -150,15 +179,15 @@ def _check_rate(bucket: _TokenBucket, request: Request) -> None:
 
 
 def _rate_limit_introspect(request: Request) -> None:
-    _check_rate(_rate_introspect, request)
+    _check_rate(_get_rate_introspect(), request)
 
 
 def _rate_limit_playback(request: Request) -> None:
-    _check_rate(_rate_playback, request)
+    _check_rate(_get_rate_playback(), request)
 
 
 def _rate_limit_session_switch(request: Request) -> None:
-    _check_rate(_rate_session_switch, request)
+    _check_rate(_get_rate_session_switch(), request)
 
 
 # Module-level state (populated before app starts)
@@ -371,19 +400,19 @@ async def _zmq_subscriber() -> None:
     _zmq_ctx = zmq.asyncio.Context()
 
     ome_sub = _zmq_ctx.socket(zmq.SUB)
-    ome_sub.connect(OME_EVENTS_CONNECT)
+    ome_sub.connect(ome_events_connect())
     ome_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
     to_sub = _zmq_ctx.socket(zmq.SUB)
-    to_sub.connect(TO_EVENTS_CONNECT)
+    to_sub.connect(to_events_connect())
     to_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
     mi_sub = _zmq_ctx.socket(zmq.SUB)
-    mi_sub.connect(MI_EVENTS_CONNECT)
+    mi_sub.connect(mi_events_connect())
     mi_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
     np_sub = _zmq_ctx.socket(zmq.SUB)
-    np_sub.connect(NODALPATH_EVENTS_CONNECT)
+    np_sub.connect(nodalpath_events_connect())
     np_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
     poller = zmq.asyncio.Poller()
@@ -394,8 +423,8 @@ async def _zmq_subscriber() -> None:
 
     log.info(
         "VS-API ZMQ subscriber started (asyncio) — connecting to "
-        f"OME={OME_EVENTS_CONNECT} TO={TO_EVENTS_CONNECT} MI={MI_EVENTS_CONNECT} "
-        f"NP={NODALPATH_EVENTS_CONNECT}"
+        f"OME={ome_events_connect()} TO={to_events_connect()} MI={mi_events_connect()} "
+        f"NP={nodalpath_events_connect()}"
     )
 
     msg_count = 0
@@ -775,7 +804,7 @@ async def ws_state(websocket: WebSocket) -> None:
             return
     # Enforce connection limit
     async with _ws_lock:
-        if len(_ws_clients) >= _MAX_WS_CONNECTIONS:
+        if len(_ws_clients) >= get_platform_config().vs_api_max_websocket_connections:
             await websocket.close(code=1013, reason="Too many connections")
             log.warning(f"WebSocket rejected: {len(_ws_clients)} connections at limit")
             return
@@ -963,7 +992,7 @@ def trace_path(body: dict) -> dict:
     sock = ctx.socket(zmq.REQ)
     sock.setsockopt(zmq.RCVTIMEO, 10000)  # 10s timeout
     sock.setsockopt(zmq.LINGER, 0)
-    sock.connect(MI_TRACE_CONNECT)
+    sock.connect(mi_trace_connect())
 
     try:
         req = TraceRequest(src_node=src, dst_node=dst)
@@ -994,7 +1023,7 @@ def playback_control(body: dict) -> Any:
     sock = ctx.socket(zmq.REQ)
     sock.setsockopt(zmq.RCVTIMEO, 5000)
     sock.setsockopt(zmq.LINGER, 0)
-    sock.connect(PLAYBACK_CONTROL_CONNECT)
+    sock.connect(playback_control_connect())
 
     try:
         sock.send(json.dumps(body).encode())
@@ -1094,10 +1123,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="VS-API server")
     parser.add_argument("--session", default=None, help="Path to session YAML (optional)")
     parser.add_argument("--db", default=None, help="Path to SQLite database (optional)")
-    from nodalarc.zmq_channels import VS_API_HTTP_PORT
-    parser.add_argument("--port", type=int, default=VS_API_HTTP_PORT, help="HTTP port")
+    parser.add_argument("--port", type=int, default=None, help="HTTP port")
     parser.add_argument("--sessions-dir", default="configs/sessions", help="Directory with session YAMLs")
+    parser.add_argument("--platform-config", default="configs/platform.yaml", help="Path to platform config YAML")
     args = parser.parse_args()
+
+    from nodalarc.platform import init_platform_config
+    init_platform_config(Path(args.platform_config))
+
+    if args.port is None:
+        args.port = vs_api_http_port()
 
     global _db_path, _routing_stack, _constellation_name, _session_manager, _gs_elevation_map, _beam_falloff_exponent
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import socket
 
@@ -17,7 +16,7 @@ log = logging.getLogger(__name__)
 # Defense-in-depth: validate pod names even though deploy daemon also validates
 VALID_POD_NAME = re.compile(r"^[a-z0-9][a-z0-9\-]{0,62}$")
 
-DEPLOY_SOCKET_PATH = os.environ.get("NODAL_DEPLOY_SOCKET", "/tmp/nodal-deploy.sock")
+from nodalarc.platform import get_platform_config
 
 VTYSH_COMMANDS = {
     "show isis neighbor",
@@ -30,16 +29,16 @@ VTYSH_COMMANDS = {
     "show running-config",
 }
 
-_MAX_OUTPUT_BYTES = 64 * 1024  # 64 KB
-_TIMEOUT_S = 15
-
-
-def _daemon_request(req: dict, timeout: float = _TIMEOUT_S) -> dict:
+def _daemon_request(req: dict, timeout: float | None = None) -> dict:
     """Send a request to the deploy daemon and receive the response."""
+    cfg = get_platform_config()
+    if timeout is None:
+        timeout = cfg.vs_api_introspect_command_timeout_seconds
+    deploy_socket = cfg.deploy_daemon_unix_socket_path
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
-        sock.connect(DEPLOY_SOCKET_PATH)
+        sock.connect(deploy_socket)
         data = json.dumps(req) + "\n"
         sock.sendall(data.encode())
         buf = b""
@@ -94,8 +93,9 @@ def run_vtysh(node_id: str, command: str) -> dict:
         }
 
     output = resp.get("stdout", "")
-    if len(output) > _MAX_OUTPUT_BYTES:
-        output = output[:_MAX_OUTPUT_BYTES] + "\n... (truncated at 64KB)"
+    max_bytes = get_platform_config().vs_api_introspect_max_response_bytes
+    if len(output) > max_bytes:
+        output = output[:max_bytes] + "\n... (truncated)"
 
     exit_code = resp.get("exit_code", -1)
     error = resp.get("stderr", "").strip() if exit_code != 0 else None

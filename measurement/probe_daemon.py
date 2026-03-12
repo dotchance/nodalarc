@@ -38,9 +38,10 @@ app = FastAPI(title="Nodal Arc Probe Daemon", version="1.0", lifespan=_lifespan)
 
 # UDP probe packet format: 8-byte sequence number + 8-byte send timestamp (microseconds)
 # Total: 16 bytes per probe packet
+from nodalarc.platform import get_platform_config
+
 PROBE_PACKET_FMT = "!Qq"  # network byte order: unsigned long long + signed long long
 PROBE_PACKET_SIZE = struct.calcsize(PROBE_PACKET_FMT)
-PROBE_PORT_BASE = 19100  # Base port for probe receiver
 
 
 # --- Request/Response Models ---
@@ -170,7 +171,7 @@ def _run_continuous_probe(flow_id: str) -> None:
 
     interval_s = max(0.1, state.config.interval_ms / 1000.0)
     dst_ip = state.config.dst_ip
-    dst_port = PROBE_PORT_BASE
+    dst_port = get_platform_config().probe_daemon_udp_data_port
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(interval_s * 2)
@@ -216,7 +217,7 @@ def _run_burst_probe(
 ) -> ProbeResults:
     """Run a synchronous burst of N UDP probe packets."""
     interval_s = max(0.05, interval_ms / 1000.0)
-    dst_port = PROBE_PORT_BASE
+    dst_port = get_platform_config().probe_daemon_udp_data_port
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(interval_s * 3)
@@ -291,9 +292,10 @@ def _udp_echo_server() -> None:
     """Background thread: echo UDP probe packets back to sender."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("0.0.0.0", PROBE_PORT_BASE))
+    udp_port = get_platform_config().probe_daemon_udp_data_port
+    sock.bind(("0.0.0.0", udp_port))
     sock.settimeout(1.0)
-    log.info(f"UDP echo server listening on port {PROBE_PORT_BASE}")
+    log.info(f"UDP echo server listening on port {udp_port}")
 
     while not _echo_stop.is_set():
         try:
@@ -404,6 +406,6 @@ def burst(flow_id: str, req: BurstRequest) -> ProbeResults:
 
 if __name__ == "__main__":
     import uvicorn
-    from nodalarc.zmq_channels import PROBE_DAEMON_PORT
+    from nodalarc.zmq_channels import probe_daemon_port
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(app, host="0.0.0.0", port=PROBE_DAEMON_PORT)
+    uvicorn.run(app, host="0.0.0.0", port=probe_daemon_port())

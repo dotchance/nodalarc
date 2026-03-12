@@ -1,0 +1,141 @@
+# ═══════════════════════════════════════════════════════════════════════
+# NodalPath — Controller Configuration
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Settings specific to the NodalPath centralized forwarding controller.
+# NodalPath computes MPLS label-switched paths from topology state,
+# builds per-node forwarding tables, and pushes them to satellite
+# and ground station containers via gRPC.
+#
+# This file references the Nodal Arc platform config for shared
+# infrastructure settings (ports, namespace, timeouts).
+#
+# To customize for a different deployment, edit this file.
+# ═══════════════════════════════════════════════════════════════════════
+
+nodalpath:
+
+  # Path to the Nodal Arc platform configuration file.
+  # Relative paths are resolved from the project root directory.
+  platform_config_path: configs/platform.yaml
+
+  # ── Segment Routing MPLS Label Allocation ───────────────────────────
+  #
+  # MPLS labels are allocated from the IS-IS Segment Routing Global
+  # Block (SRGB). Each node gets a unique SID (Segment Identifier)
+  # derived from its position in the constellation grid.
+  #
+  # Satellite SID formula:
+  #   satellite_sid_range_start + (plane_index * sats_per_plane + slot_index) + 1
+  #
+  # Ground station SID formula:
+  #   ground_station_sid_range_start + ground_station_index
+  #
+  # These ranges must not overlap. The satellite range occupies
+  # [satellite_sid_range_start, ground_station_sid_range_start - 1].
+  # The ground station range starts at ground_station_sid_range_start.
+  #
+  # Both must fall within the SRGB range configured in the FRR IS-IS
+  # templates (default SRGB: 16000-23999 in frr-isis-sr/isisd.conf.j2).
+
+  # First MPLS label allocated to satellite nodes.
+  # Example: satellite in plane 0, slot 0 gets SID 16001.
+  satellite_sid_range_start: 16000
+
+  # First MPLS label allocated to ground station nodes.
+  # Example: first ground station (index 0) gets SID 24000.
+  ground_station_sid_range_start: 24000
+
+  # ── gRPC Forwarding Table Push ──────────────────────────────────────
+  #
+  # Controls how NodalPath pushes computed forwarding tables to the
+  # nodalpath-fwd gRPC service running in each pod's sidecar container.
+
+  # Maximum time to wait for a single gRPC ForwardingTableUpdate RPC
+  # to complete, including TCP channel establishment and the RPC call
+  # itself (seconds). Increase for high-latency management networks.
+  grpc_push_timeout_seconds: 10
+
+  # Maximum concurrent gRPC push threads. Each thread opens a channel
+  # to one pod and pushes its forwarding table. Higher values reduce
+  # total push time for large constellations (e.g., 66 nodes pushed
+  # in ~3 batches at 20 workers) but increase network and CPU load
+  # on the management network.
+  grpc_push_max_parallel_workers: 20
+
+  # ── Lookahead Pre-Computation ───────────────────────────────────────
+  #
+  # The lookahead worker reads ahead in the OME timeline JSONL file
+  # and pre-computes forwarding tables for topology states that have
+  # not yet been observed in the live ZMQ event stream. This enables
+  # the operator console to show future topology transitions.
+
+  # How far ahead in simulation time to pre-compute forwarding tables
+  # (seconds). Default 5700 seconds is approximately one LEO orbital
+  # period (~95 minutes), ensuring the full topology cycle is
+  # pre-computed. Increase for MEO/GEO constellations.
+  lookahead_horizon_sim_seconds: 5700
+
+  # How often the lookahead worker checks for new timeline data
+  # (wall-clock seconds). Lower values = more responsive lookahead
+  # but higher CPU usage from repeated timeline scanning.
+  lookahead_poll_interval_seconds: 5.0
+
+  # ── Push Scheduling ────────────────────────────────────────────────
+  #
+  # Controls when forwarding tables are pushed relative to topology
+  # transitions detected in the OME event stream.
+
+  # Push forwarding tables this many simulation seconds before the
+  # topology transition occurs (seconds). This is the proactive
+  # update window — nodes receive their new forwarding tables before
+  # the link state change happens, achieving zero convergence delay.
+  # Set to 0 for reactive-only updates (push after transition).
+  push_lead_time_sim_seconds: 3
+
+  # ── Node Inspection and Feedback Loop ───────────────────────────────
+  #
+  # The inspector queries nodes via gRPC GetForwardingTable and
+  # GetStatus RPCs to verify their installed forwarding state matches
+  # what NodalPath computed and pushed. Deviations are logged and
+  # can trigger automatic recomputation.
+
+  # Maximum number of inspection run records to retain in memory
+  # (FIFO eviction). Each run contains per-node results with
+  # binding diffs. Accessible via the console API at
+  # GET /api/v1/inspect/runs.
+  inspection_max_retained_runs: 50
+
+  # Interval between automatic heartbeat inspection cycles
+  # (wall-clock seconds). When > 0, the inspector probes all
+  # reachable nodes at this interval regardless of push activity.
+  # Set to 0 to disable periodic heartbeat inspections entirely.
+  # On-push and on-link-event inspections are controlled separately
+  # via CLI flags (--no-inspection-on-push, etc.).
+  inspection_heartbeat_interval_seconds: 0
+
+  # ── Operator Console In-Memory Buffers ──────────────────────────────
+  #
+  # Ring buffer capacities for the web console's shared state.
+  # Larger values retain more history for the dashboard but
+  # consume more memory. Oldest entries are evicted first.
+
+  # Maximum forwarding table push result entries retained.
+  # One entry per push operation (contains node counts, timing,
+  # success/failure details).
+  console_push_history_max_entries: 100
+
+  # Maximum deviation event entries retained.
+  # One entry per link-state deviation detected (contains affected
+  # nodes, reason, topology state ID).
+  console_deviation_history_max_entries: 100
+
+  # Maximum almanac transition entries retained.
+  # One entry per topology state change (contains link count,
+  # forwarding table count, simulation timestamp).
+  console_almanac_history_max_entries: 200
+
+  # Maximum unified event log entries (covers TRANSITION, PUSH,
+  # DEVIATE, RECOMPUTE, and LOOKAHEAD events shown in the console
+  # dashboard's chronological event stream).
+  console_event_log_max_entries: 300

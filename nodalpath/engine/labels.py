@@ -10,10 +10,15 @@ log = logging.getLogger(__name__)
 
 # SRGB range for NodalPath label allocation
 # Uses the same range as IS-IS SR: base 16000
-# Satellite SIDs: 16000 + (plane * sats_per_plane + slot) + 1
-# Ground station SIDs: 24000 + gs_index
-SRGB_BASE: int = 16000
-GS_SID_BASE: int = 24000
+# Satellite SIDs: base + (plane * sats_per_plane + slot) + 1
+# Ground station SIDs: gs_base + gs_index
+def _srgb_base() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().satellite_sid_range_start
+
+def _gs_sid_base() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().ground_station_sid_range_start
 
 
 def compute_sid(
@@ -32,11 +37,11 @@ def compute_sid(
     if node_type == "satellite":
         if plane is None or slot is None:
             raise ValueError(f"Satellite {node_id} requires plane and slot")
-        return SRGB_BASE + (plane * sats_per_plane + slot) + 1
+        return _srgb_base() + (plane * sats_per_plane + slot) + 1
     elif node_type == "ground_station":
         if gs_index is None:
             raise ValueError(f"Ground station {node_id} requires gs_index")
-        return GS_SID_BASE + gs_index
+        return _gs_sid_base() + gs_index
     else:
         raise ValueError(f"Unknown node_type: {node_type}")
 

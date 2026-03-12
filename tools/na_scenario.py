@@ -34,8 +34,8 @@ from nodalarc.models.scenario import (
     WaitStep,
 )
 from nodalarc.zmq_channels import (
-    MI_CONVERGENCE_GATE_CONNECT,
-    TO_SCENARIO_INJECT_CONNECT,
+    mi_convergence_gate_connect,
+    to_scenario_inject_connect,
 )
 
 log = logging.getLogger(__name__)
@@ -137,13 +137,13 @@ def run_scenario(scenario_path: str, session_path: str | None = None) -> None:
 
     # REQ socket to TO scenario injection (port 5564)
     to_sock = ctx.socket(zmq.REQ)
-    to_sock.connect(TO_SCENARIO_INJECT_CONNECT)
+    to_sock.connect(to_scenario_inject_connect())
     to_sock.setsockopt(zmq.RCVTIMEO, 10_000)
     to_sock.setsockopt(zmq.SNDTIMEO, 5_000)
 
     # REQ socket to MI convergence gate (port 5563)
     mi_sock = ctx.socket(zmq.REQ)
-    mi_sock.connect(MI_CONVERGENCE_GATE_CONNECT)
+    mi_sock.connect(mi_convergence_gate_connect())
     mi_sock.setsockopt(zmq.RCVTIMEO, 120_000)
     mi_sock.setsockopt(zmq.SNDTIMEO, 5_000)
 
@@ -196,7 +196,13 @@ def main() -> None:
         "--session",
         help="Path to session YAML (required for reconfig steps)",
     )
+    parser.add_argument("--platform-config", default="configs/platform.yaml",
+                        help="Path to platform config YAML")
     args = parser.parse_args()
+
+    from nodalarc.platform import init_platform_config
+    init_platform_config(Path(args.platform_config))
+
     run_scenario(args.scenario, args.session)
 
 

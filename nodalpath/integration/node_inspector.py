@@ -17,7 +17,9 @@ from nodalpath.push.grpc_interrogate import interrogate_nodes
 
 log = logging.getLogger(__name__)
 
-MAX_RUNS = 50
+def _max_runs() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().inspection_max_retained_runs
 
 
 class NodeInspector:
@@ -34,7 +36,7 @@ class NodeInspector:
         self._grpc_timeout = grpc_timeout
         self._last_pushed_tables: dict[str, ForwardingTable] = {}
         self._last_pushed_state_id: str = ""
-        self._runs: deque[InspectionRun] = deque(maxlen=MAX_RUNS)
+        self._runs: deque[InspectionRun] = deque(maxlen=_max_runs())
 
     def record_push(
         self,

@@ -39,12 +39,12 @@ class TestNodalPathConfig:
 
     def test_post_init_sets_zmq_addresses(self):
         from nodalarc.zmq_channels import (
-            NODALPATH_EVENTS_BIND,
-            OME_EVENTS_CONNECT,
-            TO_EVENTS_CONNECT,
+            nodalpath_events_bind,
+            ome_events_connect,
+            to_events_connect,
         )
 
         config = NodalPathConfig(session_path=Path("/tmp/test.yaml"))
-        assert config.ome_connect == OME_EVENTS_CONNECT
-        assert config.to_connect == TO_EVENTS_CONNECT
-        assert config.events_bind == NODALPATH_EVENTS_BIND
+        assert config.ome_connect == ome_events_connect()
+        assert config.to_connect == to_events_connect()
+        assert config.events_bind == nodalpath_events_bind()

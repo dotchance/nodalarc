@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from nodalpath.engine.graph import build_graph
-from nodalpath.engine.pathcomp import compute_all_gs_paths
+from nodalpath.engine.pathcomp import compute_all_paths
 from nodalpath.engine.labels import build_lsr_bindings, build_ler_ingress_rules
 from nodalpath.models.topology import TopologySnapshot
 from nodalpath.models.almanac import AlmanacEntry, ForwardingTable
@@ -27,8 +27,8 @@ def compute_almanac_entry(
     # 1. Build graph
     graph = build_graph(snapshot)
 
-    # 2. Compute all GS-to-GS paths
-    paths = compute_all_gs_paths(graph)
+    # 2. Compute all paths (any node to any node with a prefix)
+    paths = compute_all_paths(graph, prefix_map)
 
     # 3. Generate topology_state_id if not provided
     if topology_state_id is None:

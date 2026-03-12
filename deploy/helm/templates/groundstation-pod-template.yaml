@@ -38,5 +38,27 @@ spec:
         limits:
           memory: 64Mi
           cpu: 100m
+{{- if $.Values.sidecar }}
+    - name: {{ $.Values.sidecar.image | replace ":" "-" | lower }}
+      image: {{ $.Values.sidecar.image }}
+      imagePullPolicy: {{ $.Values.imagePullPolicy }}
+      securityContext:
+        capabilities:
+          add:
+{{- range $.Values.sidecar.capabilities }}
+            - {{ . }}
+{{- end }}
+{{- if .env }}
+      env:
+{{- range .env }}
+        - name: {{ .name }}
+          value: "{{ .value }}"
+{{- end }}
+{{- end }}
+      resources:
+        limits:
+          memory: {{ $.Values.groundStation.memoryLimit }}
+          cpu: {{ $.Values.groundStation.cpuLimit }}
+{{- end }}
   restartPolicy: Never
 {{- end }}

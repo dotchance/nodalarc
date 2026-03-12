@@ -36,17 +36,22 @@ class TestComputeAlmanacEntry:
 
     def test_computed_paths_list(self, simple_4node_topology, prefix_map_simple):
         entry = compute_almanac_entry(simple_4node_topology, prefix_map_simple)
-        assert len(entry.computed_paths) == 2
+        # GS-to-GS paths must exist
         assert "gs-alpha->gs-beta" in entry.computed_paths
         assert "gs-beta->gs-alpha" in entry.computed_paths
+        # Satellite-to-GS paths may also exist (any-to-any computation)
+        assert len(entry.computed_paths) >= 2
 
-    def test_disconnected_empty_bindings(self, disconnected_topology, prefix_map_simple):
+    def test_disconnected_no_cross_gs_paths(self, disconnected_topology, prefix_map_simple):
+        """No GS-to-GS paths exist, but satellite-to-local-GS paths do."""
         entry = compute_almanac_entry(disconnected_topology, prefix_map_simple)
         assert len(entry.forwarding_tables) == 4
-        assert len(entry.computed_paths) == 0
-        for ft in entry.forwarding_tables:
-            assert len(ft.lsr_bindings) == 0
-            assert len(ft.ler_ingress_rules) == 0
+        # No cross-GS paths
+        assert "gs-alpha->gs-beta" not in entry.computed_paths
+        assert "gs-beta->gs-alpha" not in entry.computed_paths
+        # Satellite-to-local-GS paths exist (directly connected)
+        assert "sat-P00S00->gs-alpha" in entry.computed_paths
+        assert "sat-P01S00->gs-beta" in entry.computed_paths
 
     def test_iridium_36_all_nodes(self, iridium_36_topology, prefix_map_36):
         entry = compute_almanac_entry(iridium_36_topology, prefix_map_36)

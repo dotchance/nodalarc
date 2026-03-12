@@ -269,10 +269,16 @@ def load_session_context(
             loopback_ipv4=addressing.gs_ipv4(gs_index),
         )
 
-    # 7. Build prefix_map (first IPv4 terrestrial prefix per GS)
+    # 7. Build prefix_map (advertised prefix per node)
+    #    GS: first IPv4 terrestrial prefix (or default template)
+    #    Satellites: loopback /32 so they can be path derivation destinations
     prefix_map: dict[str, str] = {}
-    template = gs_file.default_terrestrial_prefixes
 
+    for plane, slot in sat_pairs:
+        sat_id = addressing.sat_id(plane, slot)
+        prefix_map[sat_id] = f"{addressing.sat_ipv4(plane, slot)}/32"
+
+    template = gs_file.default_terrestrial_prefixes
     for gs_index, station in enumerate(gs_file.stations):
         gs_id = addressing.gs_id(station.name)
         if station.terrestrial_prefixes:

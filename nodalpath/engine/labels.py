@@ -122,18 +122,14 @@ def build_ler_ingress_rules(
     graph: TopologyGraph,
     prefix_map: dict[str, str],
 ) -> list[IngressRule]:
-    """Build LER ingress rules for a ground station node.
+    """Build LER ingress rules for any node that is a path source.
 
     For each path where this node is the ingress (src_node_id == node_id),
     create an IngressRule:
-    - dst_prefix: the destination ground station's terrestrial prefix
+    - dst_prefix: the destination node's advertised prefix
     - push_label: first label in the path's label_stack
-    - out_interface: the interface toward the first-hop satellite
+    - out_interface: the interface toward the first-hop node
     """
-    # Only ground stations get ingress rules
-    if graph.node_types.get(node_id) != "ground_station":
-        return []
-
     rules: list[IngressRule] = []
     for path in paths:
         if path.src_node_id != node_id:

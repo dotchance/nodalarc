@@ -122,3 +122,25 @@ def compute_all_gs_paths(
             if path is not None:
                 paths.append(path)
     return paths
+
+
+def compute_all_paths(
+    graph: TopologyGraph,
+    prefix_map: dict[str, str],
+) -> list[ComputedPath]:
+    """Compute shortest paths from every node to every node with a prefix.
+
+    This enables any-to-any path derivation: every node gets ingress rules
+    for every reachable destination that has an advertised prefix.
+    """
+    paths: list[ComputedPath] = []
+    destinations = [nid for nid in prefix_map if nid in graph.adjacency]
+    sources = list(graph.adjacency)
+    for src in sources:
+        for dst in destinations:
+            if src == dst:
+                continue
+            path = dijkstra(graph, src, dst)
+            if path is not None:
+                paths.append(path)
+    return paths

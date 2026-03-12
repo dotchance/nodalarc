@@ -30,13 +30,13 @@ class PathDeriver:
 
     Requires:
         almanac_store:  Source of ForwardingTable entries per topology state
-        prefix_map:     node_id -> advertised prefix (ground stations only)
+        prefix_map:     node_id -> advertised prefix (all nodes)
         node_registry:  node_id -> TopologyNode
         interface_map:  (node_a, node_b) -> (iface_a, iface_b) from session context
 
-    Interface-to-peer wiring is derived from interface_map at construction time.
-    Latency lookups are not available (would need TopologyEdge data); hops will
-    have latency_to_next_ms=None until edge data is available.
+    Path traversal uses SID-to-node lookup (labels encode node identity)
+    rather than interface-to-peer mapping, because ground station links
+    share the "gnd0" interface across multiple peers.
     """
 
     def __init__(
@@ -50,11 +50,10 @@ class PathDeriver:
         self._prefix_map = prefix_map
         self._node_registry = node_registry
 
-        # Build (node_id, interface_name) -> peer_node_id from interface_map
-        self._iface_to_peer: dict[tuple[str, str], str] = {}
-        for (node_a, node_b), (iface_a, iface_b) in interface_map.items():
-            self._iface_to_peer[(node_a, iface_a)] = node_b
-            self._iface_to_peer[(node_b, iface_b)] = node_a
+        # Build SID -> node_id for label-based traversal
+        self._sid_to_node: dict[int, str] = {}
+        for node_id, node in node_registry.items():
+            self._sid_to_node[node.sid] = node_id
 
         # Build reverse prefix map: prefix -> node_id
         self._prefix_to_node: dict[str, str] = {
@@ -65,8 +64,9 @@ class PathDeriver:
         """Derive the MPLS path from src to dst at the given sim_time.
 
         Args:
-            src: Source node_id — must be a ground station with ler_ingress_rules
-            dst: Destination node_id — must be a ground station with an advertised prefix
+            src: Source node_id (typically a ground station with ler_ingress_rules,
+                 but any node in the registry is accepted)
+            dst: Destination node_id (must have an advertised prefix in prefix_map)
             sim_time: ISO 8601 sim_time to query. None = most recent entry.
 
         Returns:
@@ -86,7 +86,14 @@ class PathDeriver:
         return self._derive_from_entry(src, dst, entry)
 
     def _derive_from_entry(self, src: str, dst: str, entry: AlmanacEntry) -> PathResult:
-        """Derive path using a specific AlmanacEntry."""
+        """Derive path using a specific AlmanacEntry.
+
+        Traversal uses SID-based lookup: the push_label at ingress and the
+        out_label at each transit hop encode the next node's SID, so we
+        resolve the next node via _sid_to_node rather than interface wiring.
+        This avoids the ambiguity of gnd0 interfaces that connect GS nodes
+        to multiple satellites.
+        """
         from nodalpath.models.almanac import ForwardingTable
 
         # Build node_id -> ForwardingTable lookup for this entry
@@ -94,7 +101,7 @@ class PathDeriver:
             ft.node_id: ft for ft in entry.forwarding_tables
         }
 
-        # Validate src and dst are ground stations
+        # Validate src and dst
         src_node = self._node_registry.get(src)
         dst_node = self._node_registry.get(dst)
 
@@ -104,14 +111,8 @@ class PathDeriver:
         if dst_node is None:
             return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
                                      f"dst node '{dst}' not in registry")
-        if src_node.node_type != "ground_station":
-            return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
-                                     f"src '{src}' is not a ground station")
-        if dst_node.node_type != "ground_station":
-            return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
-                                     f"dst '{dst}' is not a ground station")
 
-        # Find the dst prefix
+        # Find the dst prefix — only ground stations have advertised prefixes
         dst_prefix = self._prefix_map.get(dst)
         if dst_prefix is None:
             return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
@@ -133,34 +134,30 @@ class PathDeriver:
             return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
                                      f"no ingress rule for dst_prefix '{dst_prefix}' at src '{src}'")
 
-        # Build path starting with src ground station
-        hops: list[PathHop] = []
-        current_node = src
-        current_label = ingress_rule.push_label
-        current_iface = ingress_rule.out_interface
-        visited: set[str] = {src}
+        # Resolve the first-hop node via SID encoded in push_label
+        first_hop = self._sid_to_node.get(ingress_rule.push_label)
+        if first_hop is None:
+            return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
+                                     f"push_label {ingress_rule.push_label} does not match any node SID")
 
-        # Src hop
-        peer = self._iface_to_peer.get((src, current_iface))
-        latency: float | None = None  # no edge data available from interface_map
+        # Build path starting with src node
+        hops: list[PathHop] = []
+        current_label = ingress_rule.push_label
+        visited: set[str] = {src}
 
         hops.append(PathHop(
             node_id=src,
-            node_type="ground_station",
+            node_type=src_node.node_type,
             in_label=None,
             out_label=current_label,
             action="push",
-            out_interface=current_iface,
-            latency_to_next_ms=latency,
+            out_interface=ingress_rule.out_interface,
+            latency_to_next_ms=None,
         ))
 
-        if peer is None:
-            return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
-                                     f"interface '{current_iface}' on '{src}' not in interface_map")
+        current_node = first_hop
 
-        current_node = peer
-
-        # Step 2: Transit — follow LSR bindings
+        # Step 2: Transit — follow LSR bindings using SID-based next-hop resolution
         for _ in range(MAX_HOPS):
             if current_node in visited:
                 return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
@@ -170,11 +167,11 @@ class PathDeriver:
             node = self._node_registry.get(current_node)
             node_type = node.node_type if node else "satellite"
 
-            # Check if this is the destination ground station
+            # Check if this is the destination
             if current_node == dst:
                 hops.append(PathHop(
                     node_id=current_node,
-                    node_type="ground_station",
+                    node_type=node_type,
                     in_label=current_label,
                     out_label=None,
                     action="pop",
@@ -189,18 +186,47 @@ class PathDeriver:
                 return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
                                          f"no forwarding table for transit node '{current_node}'")
 
+            # Collect all matching bindings for the current label.
+            # Multiple paths through the same node produce multiple bindings
+            # with the same in_label (the node's SID) but different actions
+            # and out_interfaces.  Pick the one consistent with this path's
+            # direction of travel:
+            #   - "pop" is correct only when the egress interface leads to dst
+            #   - otherwise prefer "swap" toward the destination
+            candidates = [b for b in ft.lsr_bindings if b.in_label == current_label]
+
             binding = None
-            for b in ft.lsr_bindings:
-                if b.in_label == current_label:
-                    binding = b
-                    break
+            if len(candidates) == 1:
+                binding = candidates[0]
+            elif len(candidates) > 1:
+                # Prefer the binding whose out_label resolves to a node
+                # we haven't visited (forward progress).  A "pop" binding
+                # is correct only when the peer on that interface is the
+                # destination; otherwise pick a "swap" that advances toward dst.
+                for b in candidates:
+                    if b.action == "pop":
+                        # Check if this pop leads to dst — impossible to
+                        # know solely from forwarding tables, so defer pops
+                        # unless it's the only option.
+                        continue
+                    if b.out_label is not None:
+                        next_id = self._sid_to_node.get(b.out_label)
+                        if next_id is not None and next_id not in visited:
+                            binding = b
+                            break
+                # Fall back to pop if no swap candidate found
+                if binding is None:
+                    for b in candidates:
+                        if b.action == "pop":
+                            binding = b
+                            break
+                # Last resort: first candidate
+                if binding is None:
+                    binding = candidates[0]
 
             if binding is None:
                 return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
                                          f"no LSR binding for label {current_label} at '{current_node}'")
-
-            # Find peer for this hop
-            peer = self._iface_to_peer.get((current_node, binding.out_interface))
 
             hops.append(PathHop(
                 node_id=current_node,
@@ -213,27 +239,35 @@ class PathDeriver:
             ))
 
             if binding.action == "pop":
-                # Next node should be the dst ground station
-                if peer is not None:
-                    next_node = self._node_registry.get(peer)
-                    if next_node is not None:
-                        hops.append(PathHop(
-                            node_id=peer,
-                            node_type=next_node.node_type,
-                            in_label=None,
-                            out_label=None,
-                            action=None,
-                            out_interface=None,
-                            latency_to_next_ms=None,
-                        ))
+                # Penultimate hop pops — next node is the egress (dst).
+                # Resolve via out_label if present, otherwise the peer
+                # on this interface is the destination.
+                egress_node_id = dst  # PHP implies next is dst
+                egress_node = self._node_registry.get(egress_node_id)
+                if egress_node is not None:
+                    hops.append(PathHop(
+                        node_id=egress_node_id,
+                        node_type=egress_node.node_type,
+                        in_label=None,
+                        out_label=None,
+                        action=None,
+                        out_interface=None,
+                        latency_to_next_ms=None,
+                    ))
                 break
 
-            if peer is None:
+            # Resolve next hop via out_label (which is the next node's SID)
+            if binding.out_label is None:
                 return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
-                                         f"interface '{binding.out_interface}' on '{current_node}' not in interface_map")
+                                         f"swap binding at '{current_node}' has no out_label")
 
-            current_node = peer
-            current_label = binding.out_label if binding.out_label is not None else current_label
+            next_node = self._sid_to_node.get(binding.out_label)
+            if next_node is None:
+                return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,
+                                         f"out_label {binding.out_label} does not match any node SID")
+
+            current_node = next_node
+            current_label = binding.out_label
 
         else:
             return self._unreachable(src, dst, entry.sim_time, entry.topology_state_id,

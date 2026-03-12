@@ -1,6 +1,0 @@
-{
-{% for iface_name, peer_info in interface_info.items() %}
-  "{{ iface_name }}": "{{ peer_info.peer_loopback_ipv4 | default('') }}"{% if not loop.last %},{% endif %}
-
-{% endfor %}
-}

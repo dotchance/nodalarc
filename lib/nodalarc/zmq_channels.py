@@ -1,49 +1,139 @@
-"""ZeroMQ socket addresses, topic prefixes, and port constants.
+"""ZeroMQ socket addresses, topic prefixes, and port accessors.
 
 All ZeroMQ port numbers and topic strings live here. No component
 invents its own port numbers or topic strings.
+
+Port numbers and socket addresses are accessed via functions that read
+from the PlatformConfig singleton. Topic bytes constants and
+encode/decode remain as module-level constants.
 """
 
-# Port assignments
-OME_EVENTS_PORT: int = 5560
-TO_EVENTS_PORT: int = 5561
-MI_EVENTS_PORT: int = 5562
-MI_CONVERGENCE_GATE_PORT: int = 5563
-TO_SCENARIO_INJECT_PORT: int = 5564
-MI_TRACE_PORT: int = 5565
-PLAYBACK_CONTROL_PORT: int = 5566
-VS_API_HTTP_PORT: int = 8080
-VF_STATIC_PORT: int = 8081
-PROBE_DAEMON_PORT: int = 9100
-NODALPATH_EVENTS_PORT: int = 5567
-NODALPATH_CONSOLE_PORT: int = 3100
+from nodalarc.platform import get_platform_config
 
-# Socket addresses (for binding/connecting)
-# All sockets bind to 127.0.0.1 — components run on the same host.
-# Never bind to 0.0.0.0 (tcp://*) as ZMQ has no authentication layer.
-OME_EVENTS_BIND: str = f"tcp://127.0.0.1:{OME_EVENTS_PORT}"
-OME_EVENTS_CONNECT: str = f"tcp://127.0.0.1:{OME_EVENTS_PORT}"
 
-TO_EVENTS_BIND: str = f"tcp://127.0.0.1:{TO_EVENTS_PORT}"
-TO_EVENTS_CONNECT: str = f"tcp://127.0.0.1:{TO_EVENTS_PORT}"
+# --- Port accessor functions ---
 
-MI_EVENTS_BIND: str = f"tcp://127.0.0.1:{MI_EVENTS_PORT}"
-MI_EVENTS_CONNECT: str = f"tcp://127.0.0.1:{MI_EVENTS_PORT}"
+def ome_events_port() -> int:
+    return get_platform_config().zmq_ome_events_port
 
-MI_CONVERGENCE_GATE_BIND: str = f"tcp://127.0.0.1:{MI_CONVERGENCE_GATE_PORT}"
-MI_CONVERGENCE_GATE_CONNECT: str = f"tcp://127.0.0.1:{MI_CONVERGENCE_GATE_PORT}"
 
-TO_SCENARIO_INJECT_BIND: str = f"tcp://127.0.0.1:{TO_SCENARIO_INJECT_PORT}"
-TO_SCENARIO_INJECT_CONNECT: str = f"tcp://127.0.0.1:{TO_SCENARIO_INJECT_PORT}"
+def to_events_port() -> int:
+    return get_platform_config().zmq_to_events_port
 
-MI_TRACE_BIND: str = f"tcp://127.0.0.1:{MI_TRACE_PORT}"
-MI_TRACE_CONNECT: str = f"tcp://127.0.0.1:{MI_TRACE_PORT}"
 
-PLAYBACK_CONTROL_BIND: str = f"tcp://127.0.0.1:{PLAYBACK_CONTROL_PORT}"
-PLAYBACK_CONTROL_CONNECT: str = f"tcp://127.0.0.1:{PLAYBACK_CONTROL_PORT}"
+def mi_events_port() -> int:
+    return get_platform_config().zmq_mi_events_port
 
-NODALPATH_EVENTS_BIND: str = f"tcp://127.0.0.1:{NODALPATH_EVENTS_PORT}"
-NODALPATH_EVENTS_CONNECT: str = f"tcp://127.0.0.1:{NODALPATH_EVENTS_PORT}"
+
+def mi_convergence_gate_port() -> int:
+    return get_platform_config().zmq_mi_convergence_gate_port
+
+
+def to_scenario_inject_port() -> int:
+    return get_platform_config().zmq_to_scenario_inject_port
+
+
+def mi_trace_port() -> int:
+    return get_platform_config().zmq_mi_trace_port
+
+
+def playback_control_port() -> int:
+    return get_platform_config().zmq_playback_control_port
+
+
+def nodalpath_events_port() -> int:
+    return get_platform_config().zmq_nodalpath_events_port
+
+
+def vs_api_http_port() -> int:
+    return get_platform_config().vs_api_http_port
+
+
+def vf_static_port() -> int:
+    return get_platform_config().vf_static_file_server_port
+
+
+def probe_daemon_port() -> int:
+    return get_platform_config().probe_daemon_http_api_port
+
+
+def nodalpath_console_port() -> int:
+    return get_platform_config().nodalpath_console_http_port
+
+
+def nodalpath_fwd_grpc_port() -> int:
+    return get_platform_config().nodalpath_fwd_grpc_port
+
+
+def probe_daemon_udp_data_port() -> int:
+    return get_platform_config().probe_daemon_udp_data_port
+
+
+# --- Socket address accessor functions ---
+
+def ome_events_bind() -> str:
+    return get_platform_config().ome_events_bind
+
+
+def ome_events_connect() -> str:
+    return get_platform_config().ome_events_connect
+
+
+def to_events_bind() -> str:
+    return get_platform_config().to_events_bind
+
+
+def to_events_connect() -> str:
+    return get_platform_config().to_events_connect
+
+
+def mi_events_bind() -> str:
+    return get_platform_config().mi_events_bind
+
+
+def mi_events_connect() -> str:
+    return get_platform_config().mi_events_connect
+
+
+def mi_convergence_gate_bind() -> str:
+    return get_platform_config().mi_convergence_gate_bind
+
+
+def mi_convergence_gate_connect() -> str:
+    return get_platform_config().mi_convergence_gate_connect
+
+
+def to_scenario_inject_bind() -> str:
+    return get_platform_config().to_scenario_inject_bind
+
+
+def to_scenario_inject_connect() -> str:
+    return get_platform_config().to_scenario_inject_connect
+
+
+def mi_trace_bind() -> str:
+    return get_platform_config().mi_trace_bind
+
+
+def mi_trace_connect() -> str:
+    return get_platform_config().mi_trace_connect
+
+
+def playback_control_bind() -> str:
+    return get_platform_config().playback_control_bind
+
+
+def playback_control_connect() -> str:
+    return get_platform_config().playback_control_connect
+
+
+def nodalpath_events_bind() -> str:
+    return get_platform_config().nodalpath_events_bind
+
+
+def nodalpath_events_connect() -> str:
+    return get_platform_config().nodalpath_events_connect
+
 
 # Topic prefixes (UTF-8 encoded, separated from payload by null byte)
 TOPIC_POSITION_EVENT: bytes = b"PositionEvent"

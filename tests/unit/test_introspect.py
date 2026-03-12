@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
-from vs_api.introspect import VTYSH_COMMANDS, run_vtysh, _MAX_OUTPUT_BYTES
+from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
+from nodalarc.platform import get_platform_config
 
 
 class TestWhitelist:
@@ -109,7 +110,7 @@ class TestOutputTruncation:
 
     @patch("vs_api.introspect._daemon_request")
     def test_large_output_truncated(self, mock_req):
-        large_output = "x" * (_MAX_OUTPUT_BYTES + 1000)
+        large_output = "x" * (get_platform_config().vs_api_introspect_max_response_bytes + 1000)
         mock_req.return_value = {
             "ok": True,
             "stdout": large_output,
@@ -118,7 +119,7 @@ class TestOutputTruncation:
         }
         result = run_vtysh("sat-p00s00", "show running-config")
         assert len(result["output"]) < len(large_output)
-        assert result["output"].endswith("... (truncated at 64KB)")
+        assert result["output"].endswith("... (truncated)")
 
     @patch("vs_api.introspect._daemon_request")
     def test_small_output_not_truncated(self, mock_req):

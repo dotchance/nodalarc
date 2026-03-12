@@ -2,7 +2,13 @@
 import threading
 import time
 import pytest
-from nodalpath.console.state import ConsoleState, MAX_PUSH_HISTORY, MAX_ALMANAC_HISTORY, MAX_DEVIATION_HISTORY, MAX_EVENT_LOG
+from nodalpath.console.state import (
+    ConsoleState,
+    _max_push_history,
+    _max_almanac_history,
+    _max_deviation_history,
+    _max_event_log,
+)
 
 
 def _make_state(**kw) -> ConsoleState:
@@ -89,7 +95,7 @@ def test_record_push_result_thread_safe():
 
     assert errors == [], f"Thread errors: {errors}"
     snap = s.snapshot()
-    assert len(snap["push_history"]) <= MAX_PUSH_HISTORY
+    assert len(snap["push_history"]) <= _max_push_history()
 
 
 def test_record_deviation_increments_count_and_event_log():
@@ -138,19 +144,19 @@ def test_snapshot_is_independent_copy():
 
 def test_almanac_history_capped_at_max():
     s = _make_state()
-    for i in range(MAX_ALMANAC_HISTORY + 20):
+    for i in range(_max_almanac_history() + 20):
         s.record_transition(f"2026-01-01T00:{i:02d}:00Z", f"state-{i}", i, i)
     snap = s.snapshot()
-    assert len(snap["almanac_history"]) == MAX_ALMANAC_HISTORY
+    assert len(snap["almanac_history"]) == _max_almanac_history()
 
 
 def test_event_log_capped_at_max():
     s = _make_state()
     # Each record_transition() adds one event log entry
-    for i in range(MAX_EVENT_LOG + 50):
+    for i in range(_max_event_log() + 50):
         s.record_transition(f"2026-01-01T00:00:{i:02d}Z", f"s{i}", i, i)
     snap = s.snapshot()
-    assert len(snap["event_log"]) == MAX_EVENT_LOG
+    assert len(snap["event_log"]) == _max_event_log()
 
 
 def test_event_log_newest_first():

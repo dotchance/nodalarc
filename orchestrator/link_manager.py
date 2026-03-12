@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 
 def discover_pod_pids(
-    namespace: str = "nodalarc",
+    namespace: str | None = None,
     label_selector: str = "nodalarc.io/role",
 ) -> dict[str, int]:
     """Discover container PIDs for all pods in a namespace.
@@ -31,6 +31,9 @@ def discover_pod_pids(
     Uses K8s API → container ID → crictl inspect → PID.
     Returns {node_id: pid}.
     """
+    if namespace is None:
+        from nodalarc.platform import get_platform_config
+        namespace = get_platform_config().kubernetes_namespace
     try:
         kubernetes.config.load_kube_config()
     except kubernetes.config.config_exception.ConfigException:
@@ -64,7 +67,7 @@ def create_veth_pair(
     pid_b: int,
     ifname_a: str,
     ifname_b: str,
-    mtu: int = 9000,
+    mtu: int | None = None,
     node_id_a: str = "",
     node_id_b: str = "",
 ) -> None:
@@ -73,6 +76,9 @@ def create_veth_pair(
     Each end is renamed to the specified ifname inside its namespace.
     PRD 13.6: sets MTU, disables IPv6 autoconfig, sets deterministic MACs.
     """
+    if mtu is None:
+        from nodalarc.platform import get_platform_config
+        mtu = get_platform_config().veth_interface_mtu_bytes
     # Clean up stale interfaces if they exist in the target namespaces
     for pid, ifname in [(pid_a, ifname_a), (pid_b, ifname_b)]:
         ns = NetNS(f"/proc/{pid}/ns/net")
@@ -302,11 +308,14 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
         ns.close()
 
 
-def set_isis_metric(pod_name: str, ifname: str, metric: int) -> None:
+def set_isis_metric(pod_name: str, ifname: str, metric: int, namespace: str | None = None) -> None:
     """Set IS-IS metric on an interface via vtysh."""
+    if namespace is None:
+        from nodalarc.platform import get_platform_config
+        namespace = get_platform_config().kubernetes_namespace
     env = {**os.environ, "KUBECONFIG": os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")}
     subprocess.run(
-        ["kubectl", "exec", "-n", "nodalarc", pod_name, "-c", "frr", "--",
+        ["kubectl", "exec", "-n", namespace, pod_name, "-c", "frr", "--",
          "vtysh", "-c", "configure terminal",
          "-c", f"interface {ifname}",
          "-c", f"isis metric {metric}"],

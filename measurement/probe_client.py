@@ -11,13 +11,13 @@ import urllib.request
 import urllib.error
 from typing import Any
 
-from nodalarc.zmq_channels import PROBE_DAEMON_PORT
+from nodalarc.zmq_channels import probe_daemon_port
 
 log = logging.getLogger(__name__)
 
 
 def _url(pod_ip: str, path: str) -> str:
-    return f"http://{pod_ip}:{PROBE_DAEMON_PORT}{path}"
+    return f"http://{pod_ip}:{probe_daemon_port()}{path}"
 
 
 def _request(

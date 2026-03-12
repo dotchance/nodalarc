@@ -44,7 +44,7 @@ async def _run_live(config: NodalPathConfig) -> None:
     from nodalpath.console.state import ConsoleState
     from nodalpath.integration.live_orchestrator import LiveOrchestrator
     from nodalpath.integration.zmq_publisher import AlmanacPublisher
-    from nodalarc.zmq_channels import NODALPATH_CONSOLE_PORT
+    from nodalarc.zmq_channels import nodalpath_console_port
 
     node_registry, interface_map, prefix_map, bandwidth_map = load_session_context(
         config.session_path,
@@ -136,7 +136,7 @@ async def _run_live(config: NodalPathConfig) -> None:
     uvicorn_config = uvicorn.Config(
         console_app,
         host="0.0.0.0",
-        port=NODALPATH_CONSOLE_PORT,
+        port=nodalpath_console_port(),
         log_level="warning",
         access_log=False,
     )
@@ -144,7 +144,7 @@ async def _run_live(config: NodalPathConfig) -> None:
 
     log.info(
         "NodalPath live mode starting (transport=%s, dry_run=%s, console=http://0.0.0.0:%d)",
-        config.transport, config.dry_run, NODALPATH_CONSOLE_PORT,
+        config.transport, config.dry_run, nodalpath_console_port(),
     )
 
     tasks = [orchestrator.run(), console_server.serve()]
@@ -190,7 +190,7 @@ async def _run_console() -> None:
     import uvicorn
     from nodalpath.console.server import build_app
     from nodalpath.console.state import ConsoleState
-    from nodalarc.zmq_channels import NODALPATH_CONSOLE_PORT
+    from nodalarc.zmq_channels import nodalpath_console_port
 
     console_state = ConsoleState(
         session_path="(no session)",
@@ -202,13 +202,13 @@ async def _run_console() -> None:
     uvicorn_config = uvicorn.Config(
         console_app,
         host="0.0.0.0",
-        port=NODALPATH_CONSOLE_PORT,
+        port=nodalpath_console_port(),
         log_level="warning",
         access_log=False,
     )
     console_server = uvicorn.Server(uvicorn_config)
 
-    log.info("NodalPath console-only mode on http://0.0.0.0:%d", NODALPATH_CONSOLE_PORT)
+    log.info("NodalPath console-only mode on http://0.0.0.0:%d", nodalpath_console_port())
     await console_server.serve()
 
 
@@ -254,7 +254,14 @@ def main() -> None:
                         help="Inspection heartbeat interval in seconds (0=disabled)")
     parser.add_argument("--no-inspection-on-push", action="store_true",
                         help="Disable automatic inspection after push")
+    parser.add_argument("--platform-config", default="configs/platform.yaml")
+    parser.add_argument("--nodalpath-config", default="configs/nodalpath.yaml")
     args = parser.parse_args()
+
+    from nodalarc.platform import init_platform_config
+    from nodalpath.platform import init_nodalpath_config
+    init_platform_config(Path(args.platform_config))
+    init_nodalpath_config(Path(args.nodalpath_config))
 
     if args.mode == "console":
         asyncio.run(_run_console())

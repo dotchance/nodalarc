@@ -18,7 +18,12 @@ from pydantic import TypeAdapter
 
 log = logging.getLogger(__name__)
 
-DEPLOY_SOCKET_PATH: str = os.environ.get("NODAL_DEPLOY_SOCKET", "/tmp/nodal-deploy.sock")
+def _deploy_socket_path() -> str:
+    val = os.environ.get("NODAL_DEPLOY_SOCKET")
+    if val:
+        return val
+    from nodalarc.platform import get_platform_config
+    return get_platform_config().deploy_daemon_unix_socket_path
 
 from nodalarc.models.addressing import (
     AddressingScheme,
@@ -293,13 +298,15 @@ def load_session_context(
 
 def _daemon_request(
     request: dict,
-    socket_path: str = DEPLOY_SOCKET_PATH,
+    socket_path: str | None = None,
     timeout: float = 10.0,
 ) -> dict | None:
     """Send a JSON request to the deploy daemon and return the response.
 
     Returns None on any error (connection, timeout, parse failure).
     """
+    if socket_path is None:
+        socket_path = _deploy_socket_path()
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
@@ -324,13 +331,18 @@ def _daemon_request(
 
 def load_pod_ip_map(
     node_ids: list[str],
-    socket_path: str = DEPLOY_SOCKET_PATH,
-    namespace: str = "nodalarc",
+    socket_path: str | None = None,
+    namespace: str | None = None,
 ) -> dict[str, str]:
     """Query pod IPs for a list of node_ids via the deploy daemon.
 
     Skips nodes whose pod IP cannot be resolved (logs warning).
     """
+    if socket_path is None:
+        socket_path = _deploy_socket_path()
+    if namespace is None:
+        from nodalarc.platform import get_platform_config
+        namespace = get_platform_config().kubernetes_namespace
     from nodalpath.push.kubectl_exec import node_id_to_pod_name
 
     result: dict[str, str] = {}

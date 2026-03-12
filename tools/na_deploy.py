@@ -27,7 +27,7 @@ from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.template_vars import build_template_vars
 from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
-from nodalarc.zmq_channels import VS_API_HTTP_PORT
+from nodalarc.zmq_channels import vs_api_http_port
 
 log = logging.getLogger(__name__)
 
@@ -56,9 +56,11 @@ def _teardown_previous() -> None:
     # Brief pause to let processes exit
     time.sleep(1)
 
-    # Uninstall any Helm releases in the nodalarc namespace
+    # Uninstall any Helm releases in the namespace
+    from nodalarc.platform import get_platform_config
+    ns = get_platform_config().kubernetes_namespace
     result = subprocess.run(
-        ["helm", "list", "-n", "nodalarc", "--short"],
+        ["helm", "list", "-n", ns, "--short"],
         capture_output=True, text=True,
     )
     for release in result.stdout.strip().splitlines():
@@ -67,14 +69,14 @@ def _teardown_previous() -> None:
             continue
         log.info(f"Uninstalling Helm release: {release}")
         subprocess.run(
-            ["helm", "uninstall", release, "-n", "nodalarc"],
+            ["helm", "uninstall", release, "-n", ns],
             capture_output=True, text=True,
         )
 
     # Wait for all pods to terminate (up to 2 minutes)
     for tick in range(120):
         result = subprocess.run(
-            ["kubectl", "get", "pods", "-n", "nodalarc", "--no-headers"],
+            ["kubectl", "get", "pods", "-n", ns, "--no-headers"],
             capture_output=True, text=True,
         )
         pod_lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
@@ -251,10 +253,12 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     values_file = data_dir / "helm-values.yaml"
     values_file.write_text(yaml.dump(helm_values))
 
+    from nodalarc.platform import get_platform_config
+    ns = get_platform_config().kubernetes_namespace
     result = subprocess.run(
         [
             "helm", "install", session_id, "deploy/helm",
-            "-n", "nodalarc", "--create-namespace",
+            "-n", ns, "--create-namespace",
             "-f", str(values_file),
         ],
         capture_output=True, text=True,
@@ -272,7 +276,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     configured_pods: set[str] = set()
     for tick in range(600):  # 10 minute timeout
         result = subprocess.run(
-            ["kubectl", "get", "pods", "-n", "nodalarc",
+            ["kubectl", "get", "pods", "-n", ns,
              "-l", "nodalarc.io/node-id",
              "-o", "jsonpath={range .items[*]}{.metadata.name} {.status.phase}{\"\\n\"}{end}"],
             capture_output=True, text=True,
@@ -296,7 +300,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
                 continue
             node_dir = configs_dir / node_id
             cp_result = subprocess.run(
-                ["kubectl", "cp", str(node_dir) + "/.", f"nodalarc/{pod_name}:/etc/frr/",
+                ["kubectl", "cp", str(node_dir) + "/.", f"{ns}/{pod_name}:/etc/frr/",
                  "-c", "frr"],
                 capture_output=True, text=True,
             )
@@ -304,7 +308,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
                 log.warning(f"Config copy failed for {node_id}, will retry: {cp_result.stderr}")
                 continue
             touch_result = subprocess.run(
-                ["kubectl", "exec", "-n", "nodalarc", pod_name, "-c", "frr",
+                ["kubectl", "exec", "-n", ns, pod_name, "-c", "frr",
                  "--", "touch", "/etc/frr/.config-ready"],
                 capture_output=True, text=True,
             )
@@ -339,7 +343,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
 
     # Retry PID discovery — containers may still be initializing
     for attempt in range(5):
-        pid_map = discover_pod_pids(namespace="nodalarc")
+        pid_map = discover_pod_pids(namespace=ns)
         if all(pid > 0 for pid in pid_map.values()):
             break
         log.info(f"Some PIDs are 0, retrying in 3s (attempt {attempt + 1}/5)...")
@@ -352,10 +356,11 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     # Configure kernel networking in each pod namespace.
     # K3s mounts /proc/sys read-only inside containers, so we use nsenter
     # to enter the network namespace and write sysctls from the host.
+    mpls_labels = str(get_platform_config().mpls_kernel_max_platform_labels)
     for node_id, pid in pid_map.items():
         for sysctl_key, value in [
             ("net.ipv6.conf.all.forwarding", "1"),
-            ("net.mpls.platform_labels", "100000"),
+            ("net.mpls.platform_labels", mpls_labels),
         ]:
             result = subprocess.run(
                 ["nsenter", "--target", str(pid), "--net", "--",
@@ -471,8 +476,9 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     )
     log.info(f"Deploy daemon PID: {daemon_proc.pid}")
     # Wait for socket to appear
+    daemon_sock_path = get_platform_config().deploy_daemon_unix_socket_path
     for _wait in range(20):
-        if Path("/tmp/nodal-deploy.sock").exists():
+        if Path(daemon_sock_path).exists():
             break
         time.sleep(0.5)
     else:
@@ -488,7 +494,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             [sys.executable, "-m", "vs_api.main",
              "--session", session_path,
              "--db", mi_db,
-             "--port", str(VS_API_HTTP_PORT)],
+             "--port", str(vs_api_http_port())],
             stdout=vsapi_log,
             stderr=vsapi_log,
             env=vsapi_env,
@@ -499,7 +505,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         for attempt in range(30):
             try:
                 req = urllib.request.Request(
-                    f"http://localhost:{VS_API_HTTP_PORT}/api/v1/state",
+                    f"http://localhost:{vs_api_http_port()}/api/v1/state",
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
                 urllib.request.urlopen(req, timeout=1)
@@ -582,7 +588,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
                 "--session", session_path,
                 "--mode", "live",
                 "--transport", "grpc",
-                "--namespace", "nodalarc",
+                "--namespace", ns,
             ],
             stdout=np_log,
             stderr=np_log,
@@ -626,8 +632,8 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info(f"Orchestrator PID: {to_proc.pid}")
     log.info(f"Session state: {state_file}")
 
-    from nodalarc.zmq_channels import NODALPATH_CONSOLE_PORT
-    log.info(f"NodalPath console: http://0.0.0.0:{NODALPATH_CONSOLE_PORT}")
+    from nodalarc.zmq_channels import nodalpath_console_port
+    log.info(f"NodalPath console: http://0.0.0.0:{nodalpath_console_port()}")
 
 
 def main() -> None:
@@ -637,7 +643,13 @@ def main() -> None:
     parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell between event batches (seconds)")
     parser.add_argument("--skip-vsapi", action="store_true", help="Skip VS-API start (step 10)")
     parser.add_argument("--skip-teardown", action="store_true", help="Skip Step 0 teardown (caller already cleaned up)")
+    parser.add_argument("--platform-config", default="configs/platform.yaml",
+                        help="Path to platform config YAML")
     args = parser.parse_args()
+
+    from nodalarc.platform import init_platform_config
+    init_platform_config(Path(args.platform_config))
+
     deploy(args.session, dwell=args.dwell, skip_vsapi=args.skip_vsapi, skip_teardown=args.skip_teardown)
 
 

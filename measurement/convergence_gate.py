@@ -18,7 +18,7 @@ import zmq
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.metrics import ConvergenceRequest, ConvergenceResult
 from nodalarc.models.session import SessionConfig
-from nodalarc.zmq_channels import MI_CONVERGENCE_GATE_BIND
+from nodalarc.zmq_channels import mi_convergence_gate_bind
 from measurement.convergence_detector import measure_convergence
 
 log = logging.getLogger(__name__)
@@ -63,8 +63,10 @@ class ConvergenceGate:
         )
         return result.model_dump_json().encode()
 
-    def run(self, bind_addr: str = MI_CONVERGENCE_GATE_BIND) -> None:
+    def run(self, bind_addr: str | None = None) -> None:
         """Run the convergence gate — blocks forever."""
+        if bind_addr is None:
+            bind_addr = mi_convergence_gate_bind()
         ctx = zmq.Context()
         sock = ctx.socket(zmq.REP)
         sock.bind(bind_addr)

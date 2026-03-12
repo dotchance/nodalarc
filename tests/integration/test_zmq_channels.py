@@ -14,12 +14,14 @@ import pytest
 import zmq
 
 from nodalarc.zmq_channels import (
-    MI_CONVERGENCE_GATE_PORT,
-    MI_EVENTS_PORT,
-    OME_EVENTS_PORT,
-    PROBE_DAEMON_PORT,
-    TO_EVENTS_PORT,
-    TO_SCENARIO_INJECT_PORT,
+    mi_convergence_gate_port,
+    mi_events_port,
+    ome_events_port,
+    probe_daemon_port,
+    to_events_port,
+    to_scenario_inject_port,
+    vs_api_http_port,
+    vf_static_port,
     TOPIC_ADAPTER_EVENT,
     TOPIC_CLOCK_TICK,
     TOPIC_CONVERGENCE_RESULT,
@@ -29,8 +31,6 @@ from nodalarc.zmq_channels import (
     TOPIC_POSITION_EVENT,
     TOPIC_PROBE_RESULT,
     TOPIC_VISIBILITY_EVENT,
-    VS_API_HTTP_PORT,
-    VF_STATIC_PORT,
     decode_message,
     encode_message,
 )
@@ -49,16 +49,17 @@ ALL_TOPICS = [
     TOPIC_ADAPTER_EVENT,
 ]
 
-ALL_PORTS = [
-    OME_EVENTS_PORT,
-    TO_EVENTS_PORT,
-    MI_EVENTS_PORT,
-    MI_CONVERGENCE_GATE_PORT,
-    TO_SCENARIO_INJECT_PORT,
-    VS_API_HTTP_PORT,
-    VF_STATIC_PORT,
-    PROBE_DAEMON_PORT,
-]
+def _all_ports() -> list[int]:
+    return [
+        ome_events_port(),
+        to_events_port(),
+        mi_events_port(),
+        mi_convergence_gate_port(),
+        to_scenario_inject_port(),
+        vs_api_http_port(),
+        vf_static_port(),
+        probe_daemon_port(),
+    ]
 
 
 class TestEncodeDecodeRoundTrip:
@@ -98,25 +99,26 @@ class TestEncodeDecodeRoundTrip:
 
 class TestPortConstants:
     def test_all_ports_defined(self):
-        for port in ALL_PORTS:
+        for port in _all_ports():
             assert isinstance(port, int)
             assert 1024 <= port <= 65535
 
     def test_all_ports_unique(self):
-        assert len(ALL_PORTS) == len(set(ALL_PORTS)), (
-            f"Duplicate ports found: {[p for p in ALL_PORTS if ALL_PORTS.count(p) > 1]}"
+        ports = _all_ports()
+        assert len(ports) == len(set(ports)), (
+            f"Duplicate ports found: {[p for p in ports if ports.count(p) > 1]}"
         )
 
     def test_port_values_stable(self):
         """Port assignments match PRD-specified values."""
-        assert OME_EVENTS_PORT == 5560
-        assert TO_EVENTS_PORT == 5561
-        assert MI_EVENTS_PORT == 5562
-        assert MI_CONVERGENCE_GATE_PORT == 5563
-        assert TO_SCENARIO_INJECT_PORT == 5564
-        assert VS_API_HTTP_PORT == 8080
-        assert VF_STATIC_PORT == 8081
-        assert PROBE_DAEMON_PORT == 9100
+        assert ome_events_port() == 5560
+        assert to_events_port() == 5561
+        assert mi_events_port() == 5562
+        assert mi_convergence_gate_port() == 5563
+        assert to_scenario_inject_port() == 5564
+        assert vs_api_http_port() == 8080
+        assert vf_static_port() == 8081
+        assert probe_daemon_port() == 9100
 
 
 class TestTopicPrefixes:

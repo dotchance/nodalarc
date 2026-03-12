@@ -50,14 +50,14 @@ class NodalPathConfig:
 
     def __post_init__(self) -> None:
         from nodalarc.zmq_channels import (
-            NODALPATH_EVENTS_BIND,
-            OME_EVENTS_CONNECT,
-            TO_EVENTS_CONNECT,
+            nodalpath_events_bind,
+            ome_events_connect,
+            to_events_connect,
         )
 
         if not self.ome_connect:
-            self.ome_connect = OME_EVENTS_CONNECT
+            self.ome_connect = ome_events_connect()
         if not self.to_connect:
-            self.to_connect = TO_EVENTS_CONNECT
+            self.to_connect = to_events_connect()
         if not self.events_bind:
-            self.events_bind = NODALPATH_EVENTS_BIND
+            self.events_bind = nodalpath_events_bind()

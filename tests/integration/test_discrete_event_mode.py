@@ -26,8 +26,8 @@ from nodalarc.db.queries import query_convergence_events, query_link_events
 from nodalarc.db.schema import create_tables
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.zmq_channels import (
-    MI_CONVERGENCE_GATE_BIND,
-    TO_EVENTS_CONNECT,
+    mi_convergence_gate_bind,
+    to_events_connect,
     decode_message,
     TOPIC_LINK_UP,
     TOPIC_LINK_DOWN,
@@ -272,7 +272,7 @@ class TestConvergenceStub:
         """Convergence gate stub responds correctly to requests."""
         from nodalarc.models.link_events import LinkUp
         from nodalarc.models.metrics import ConvergenceRequest, ConvergenceResult
-        from nodalarc.zmq_channels import MI_CONVERGENCE_GATE_CONNECT
+        from nodalarc.zmq_channels import mi_convergence_gate_connect
 
         stub_proc = subprocess.Popen(
             [sys.executable, "-m", "measurement.stubs.convergence_stub"],
@@ -284,7 +284,7 @@ class TestConvergenceStub:
         try:
             ctx = zmq.Context()
             sock = ctx.socket(zmq.REQ)
-            sock.connect(MI_CONVERGENCE_GATE_CONNECT)
+            sock.connect(mi_convergence_gate_connect())
             sock.setsockopt(zmq.RCVTIMEO, 5000)
 
             now = datetime.now(timezone.utc)

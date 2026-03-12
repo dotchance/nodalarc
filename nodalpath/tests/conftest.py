@@ -4,6 +4,73 @@ import pytest
 from nodalpath.models.topology import TopologySnapshot, TopologyNode, TopologyEdge
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _init_platform_configs():
+    """Initialize PlatformConfig and NodalPathPlatformConfig for all NodalPath tests."""
+    from nodalarc.platform import PlatformConfig, init_platform_config, reset_platform_config
+    from nodalpath.platform import NodalPathPlatformConfig, init_nodalpath_config, reset_nodalpath_config
+
+    platform_cfg = PlatformConfig(
+        kubernetes_namespace="nodalarc",
+        zmq_ome_events_port=5560,
+        zmq_to_events_port=5561,
+        zmq_mi_events_port=5562,
+        zmq_mi_convergence_gate_port=5563,
+        zmq_to_scenario_inject_port=5564,
+        zmq_mi_trace_port=5565,
+        zmq_playback_control_port=5566,
+        zmq_nodalpath_events_port=5567,
+        vs_api_http_port=8080,
+        vf_static_file_server_port=8081,
+        nodalpath_console_http_port=3100,
+        nodalpath_fwd_grpc_port=50051,
+        nodalpath_fwd_netconf_port=830,
+        probe_daemon_http_api_port=9100,
+        probe_daemon_udp_data_port=19100,
+        deploy_daemon_unix_socket_path="/tmp/nodal-deploy.sock",
+        frr_config_directory_in_container="/etc/frr",
+        frr_config_ready_sentinel_path="/etc/frr/.config-ready",
+        veth_interface_mtu_bytes=9000,
+        mpls_kernel_max_platform_labels=100000,
+        pod_ready_timeout_seconds=600,
+        pod_termination_timeout_seconds=120,
+        deploy_operation_timeout_seconds=600,
+        deploy_daemon_accept_timeout_seconds=660,
+        frr_config_delivery_settle_seconds=5,
+        kubectl_exec_max_parallel_workers=20,
+        vs_api_max_websocket_connections=50,
+        vs_api_introspect_max_requests_per_minute=10,
+        vs_api_playback_max_requests_per_minute=30,
+        vs_api_session_switch_max_requests_per_minute=5,
+        vs_api_introspect_max_response_bytes=65536,
+        vs_api_introspect_command_timeout_seconds=15,
+        host_inotify_max_user_instances=512,
+        host_file_descriptor_limit=65536,
+    )
+    init_platform_config(platform_cfg)
+
+    np_cfg = NodalPathPlatformConfig(
+        platform_config_path="configs/platform.yaml",
+        satellite_sid_range_start=16000,
+        ground_station_sid_range_start=24000,
+        grpc_push_timeout_seconds=10,
+        grpc_push_max_parallel_workers=20,
+        lookahead_horizon_sim_seconds=5700,
+        lookahead_poll_interval_seconds=5.0,
+        push_lead_time_sim_seconds=3,
+        inspection_max_retained_runs=50,
+        inspection_heartbeat_interval_seconds=0,
+        console_push_history_max_entries=100,
+        console_deviation_history_max_entries=100,
+        console_almanac_history_max_entries=200,
+        console_event_log_max_entries=300,
+    )
+    init_nodalpath_config(np_cfg)
+    yield
+    reset_platform_config()
+    reset_nodalpath_config()
+
+
 @pytest.fixture
 def simple_4node_topology() -> TopologySnapshot:
     """A minimal topology: 2 satellites, 2 ground stations, fully connected.

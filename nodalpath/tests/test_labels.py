@@ -3,7 +3,7 @@ from __future__ import annotations
 from nodalpath.engine.graph import build_graph
 from nodalpath.engine.pathcomp import dijkstra, compute_all_gs_paths
 from nodalpath.engine.labels import (
-    SRGB_BASE, GS_SID_BASE,
+    _srgb_base, _gs_sid_base,
     compute_sid, path_to_label_stack,
     build_lsr_bindings, build_ler_ingress_rules,
 )
@@ -12,12 +12,12 @@ from nodalpath.engine.labels import (
 class TestComputeSid:
     def test_satellite_sid(self):
         sid = compute_sid("sat-P02S05", "satellite", plane=2, slot=5, sats_per_plane=11)
-        assert sid == SRGB_BASE + (2 * 11 + 5) + 1
+        assert sid == _srgb_base() + (2 * 11 + 5) + 1
         assert sid == 16028
 
     def test_ground_station_sid(self):
         sid = compute_sid("gs-hawthorne", "ground_station", gs_index=0)
-        assert sid == GS_SID_BASE + 0
+        assert sid == _gs_sid_base() + 0
         assert sid == 24000
 
     def test_sid_uniqueness_36_constellation(self):

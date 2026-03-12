@@ -424,7 +424,7 @@ def publish_timeline_zmq(
     import time
     import zmq
     from nodalarc.zmq_channels import (
-        OME_EVENTS_BIND,
+        ome_events_bind,
         TOPIC_CLOCK_TICK,
         TOPIC_VISIBILITY_EVENT,
         encode_message,
@@ -432,8 +432,8 @@ def publish_timeline_zmq(
 
     ctx = zmq.Context()
     pub = ctx.socket(zmq.PUB)
-    pub.bind(OME_EVENTS_BIND)
-    logger.info(f"OME ZMQ publisher bound on {OME_EVENTS_BIND}")
+    pub.bind(ome_events_bind())
+    logger.info(f"OME ZMQ publisher bound on {ome_events_bind()}")
 
     # Allow subscribers to connect
     time.sleep(0.5)

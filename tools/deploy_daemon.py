@@ -29,9 +29,22 @@ from nodalarc.constants import LOG_FORMAT
 
 log = logging.getLogger(__name__)
 
-DEFAULT_SOCKET_PATH = "/tmp/nodal-deploy.sock"
+def _default_socket_path() -> str:
+    try:
+        from nodalarc.platform import get_platform_config
+        return get_platform_config().deploy_daemon_unix_socket_path
+    except RuntimeError:
+        return "/tmp/nodal-deploy.sock"
+
 _KUBECONFIG = os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")
-_NAMESPACE = "nodalarc"
+
+def _namespace() -> str:
+    try:
+        from nodalarc.platform import get_platform_config
+        return get_platform_config().kubernetes_namespace
+    except RuntimeError:
+        return "nodalarc"
+
 _shutdown = threading.Event()
 
 
@@ -193,7 +206,7 @@ def _handle_kubectl_exec(req: dict) -> dict:
 
     try:
         result = subprocess.run(
-            ["kubectl", "exec", "-n", _NAMESPACE, pod, "-c", container, "--"] + command,
+            ["kubectl", "exec", "-n", _namespace(), pod, "-c", container, "--"] + command,
             capture_output=True, text=True, timeout=15,
             env=_env_with_kubeconfig(),
         )
@@ -213,7 +226,7 @@ def _handle_helm_list(req: dict) -> dict:
     """List helm releases in nodalarc namespace."""
     try:
         result = subprocess.run(
-            ["helm", "list", "-n", _NAMESPACE, "-q"],
+            ["helm", "list", "-n", _namespace(), "-q"],
             capture_output=True, text=True, timeout=30,
             env=_env_with_kubeconfig(),
         )
@@ -230,7 +243,7 @@ def _handle_helm_uninstall(req: dict) -> dict:
         return {"ok": False, "error": "release required"}
     try:
         result = subprocess.run(
-            ["helm", "uninstall", release, "-n", _NAMESPACE],
+            ["helm", "uninstall", release, "-n", _namespace()],
             capture_output=True, text=True, timeout=60,
             env=_env_with_kubeconfig(),
         )
@@ -244,7 +257,7 @@ def _handle_kubectl_wait(req: dict) -> dict:
     try:
         result = subprocess.run(
             ["kubectl", "wait", "--for=delete", "pod",
-             "-l", "nodalarc.io/node-id", "-n", _NAMESPACE, "--timeout=60s"],
+             "-l", "nodalarc.io/node-id", "-n", _namespace(), "--timeout=60s"],
             capture_output=True, text=True, timeout=90,
             env=_env_with_kubeconfig(),
         )
@@ -277,7 +290,7 @@ def _handle_modprobe_mpls(req: dict) -> dict:
 def _handle_get_pod_ip(req: dict) -> dict:
     """Get the IP address of a pod."""
     pod = req.get("pod", "")
-    namespace = req.get("namespace", _NAMESPACE)
+    namespace = req.get("namespace", _namespace())
     if not pod:
         return {"ok": False, "error": "pod required"}
     if not _VALID_POD_NAME.match(pod):
@@ -373,11 +386,16 @@ def _signal_handler(signum: int, frame: object) -> None:
 def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc deploy daemon")
-    parser.add_argument("--socket", default=DEFAULT_SOCKET_PATH,
+    parser.add_argument("--socket", default=None,
                         help="Unix socket path")
+    parser.add_argument("--platform-config", default="configs/platform.yaml",
+                        help="Path to platform config YAML")
     args = parser.parse_args()
 
-    sock_path = args.socket
+    from nodalarc.platform import init_platform_config
+    init_platform_config(Path(args.platform_config))
+
+    sock_path = args.socket if args.socket is not None else _default_socket_path()
 
     # Clean up stale socket
     if os.path.exists(sock_path):

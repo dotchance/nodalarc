@@ -18,7 +18,7 @@ import { usePlayback } from "./hooks/usePlayback";
 import { useManifest } from "./hooks/useManifest";
 import { SessionCatalog } from "./catalog/SessionCatalog";
 import { WS_URL, fetchApiKey } from "./config";
-import type { ViewMode, ColorMode, GlobeMode } from "./types";
+import type { ViewMode, ColorMode, GlobeMode, TracedPath } from "./types";
 
 import "./styles/variables.css";
 import "./styles/reset.css";
@@ -121,9 +121,10 @@ function AppInner() {
   }, [snapshot, switching, simTimeAdvanced]);
 
   const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
+  const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
 
   // Panel collapse/expand state
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(true);
   const panelManualRef = useRef(false);
 
   // Auto-open panel on selection, auto-close on deselect (unless manually toggled)
@@ -235,6 +236,16 @@ function AppInner() {
     }
   }, [viewMode, selection]);
 
+  // Merge user-requested trace into the snapshot's traced_paths so both
+  // the globe (flowPaths.ts) and topology (topoLinks.ts) render it.
+  const augmentedSnapshot = useMemo(() => {
+    if (!snapshot) return snapshot;
+    if (!userTrace) return snapshot;
+    // Replace any existing user trace, keep server-side traces
+    const serverPaths = snapshot.traced_paths.filter(p => p.flow_id !== "__user_trace__");
+    return { ...snapshot, traced_paths: [...serverPaths, userTrace] };
+  }, [snapshot, userTrace]);
+
   const layoutClass = `app-layout${panelOpen ? " app-layout--panel-open" : ""}${historicalMode ? " app-layout--historical" : ""}`;
 
   return (
@@ -306,7 +317,7 @@ function AppInner() {
           style={{ display: viewMode === "topology" ? "none" : undefined }}
         >
           <GlobeView
-            snapshot={snapshot}
+            snapshot={augmentedSnapshot}
             selection={selection}
             onSelect={select}
             colorMode={colorMode}
@@ -322,7 +333,7 @@ function AppInner() {
           style={{ display: viewMode === "globe" ? "none" : undefined }}
         >
           <TopologyView
-            snapshot={snapshot}
+            snapshot={augmentedSnapshot}
             selection={selection}
             onSelect={select}
             onFlyTo={handleFlyToNode}
@@ -372,7 +383,7 @@ function AppInner() {
       </div>
 
       <div className="area-panel">
-        <InfoPanel snapshot={snapshot} selection={selection} onSelect={select} onFlyTo={handleFlyToNode} />
+        <InfoPanel snapshot={augmentedSnapshot} selection={selection} onSelect={select} onFlyTo={handleFlyToNode} onTraceResult={setUserTrace} />
       </div>
 
       {historicalMode && (

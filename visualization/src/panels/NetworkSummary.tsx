@@ -1,6 +1,5 @@
 /** Network summary — shown when nothing is selected. */
 
-import { TraceDialog } from "./TraceDialog";
 import type { StateSnapshot, Selection } from "../types";
 
 interface NetworkSummaryProps {
@@ -119,8 +118,6 @@ export function NetworkSummary({ snapshot, onSelect: _onSelect }: NetworkSummary
         </>
       )}
 
-      <h3>Trace Path</h3>
-      <TraceDialog groundStations={gss} />
     </div>
   );
 }

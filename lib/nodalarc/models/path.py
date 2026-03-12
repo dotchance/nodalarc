@@ -17,9 +17,11 @@ class PathHop(BaseModel, frozen=True):
     """A single hop in a computed or probed path."""
     node_id: str                    # e.g., "sat-P02S05" or "gs-ashburn"
     node_type: str                  # "satellite" or "ground_station"
+    sid: int | None = None          # node's SR SID (used by label computation)
     in_label: int | None = None     # MPLS label arriving at this node (None at ingress)
     out_label: int | None = None    # MPLS label leaving this node (None at egress/pop)
     action: str | None = None       # "push", "swap", "pop", or None at src/dst
+    in_interface: str | None = None   # interface the packet arrives on (None at ingress)
     out_interface: str | None = None  # interface used to reach next hop
     latency_to_next_ms: float | None = None  # propagation delay to next hop
 

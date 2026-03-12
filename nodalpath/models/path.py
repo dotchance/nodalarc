@@ -2,14 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
-
-class PathHop(BaseModel, frozen=True):
-    """A single hop in a computed path."""
-    node_id: str                          # node at this hop
-    sid: int                              # node's SR SID
-    in_interface: str | None = None       # interface the packet arrives on (None for ingress)
-    out_interface: str | None = None      # interface the packet departs on (None for egress)
-    latency_to_next_ms: float | None = None  # latency to the next hop (None for last hop)
+from nodalarc.models.path import PathHop
 
 
 class ComputedPath(BaseModel, frozen=True):

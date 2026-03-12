@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 from nodalpath.models.topology import TopologyNode, TopologyEdge, TopologySnapshot
-from nodalpath.models.path import PathHop, ComputedPath
+from nodalarc.models.path import PathHop
+from nodalpath.models.path import ComputedPath
 from nodalpath.models.almanac import LabelBinding, IngressRule, ForwardingTable, AlmanacEntry
 
 
@@ -88,7 +89,7 @@ class TestTopologySnapshot:
 
 class TestPathHop:
     def test_round_trip(self):
-        hop = PathHop(node_id="sat-P00S00", sid=16001,
+        hop = PathHop(node_id="sat-P00S00", node_type="satellite", sid=16001,
                       in_interface="gnd0", out_interface="isl0",
                       latency_to_next_ms=3.5)
         data = hop.model_dump_json()
@@ -102,9 +103,11 @@ class TestComputedPath:
             path_id="gs-alpha->gs-beta",
             src_node_id="gs-alpha", dst_node_id="gs-beta",
             hops=[
-                PathHop(node_id="gs-alpha", sid=24000, out_interface="gnd0",
+                PathHop(node_id="gs-alpha", node_type="ground_station",
+                        sid=24000, out_interface="gnd0",
                         latency_to_next_ms=5.0),
-                PathHop(node_id="gs-beta", sid=24001, in_interface="gnd0"),
+                PathHop(node_id="gs-beta", node_type="ground_station",
+                        sid=24001, in_interface="gnd0"),
             ],
             total_latency_ms=5.0, hop_count=2,
             label_stack=[24001],
@@ -117,7 +120,7 @@ class TestComputedPath:
         with pytest.raises(ValueError, match="at least 2 hops"):
             ComputedPath(
                 path_id="a->b", src_node_id="a", dst_node_id="b",
-                hops=[PathHop(node_id="a", sid=1)],
+                hops=[PathHop(node_id="a", node_type="satellite", sid=1)],
                 total_latency_ms=0.0, hop_count=1,
                 label_stack=[],
             )

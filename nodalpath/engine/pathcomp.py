@@ -23,8 +23,9 @@ from __future__ import annotations
 import heapq
 from dataclasses import dataclass
 
+from nodalarc.models.path import PathHop
 from nodalpath.engine.graph import TopologyGraph, GraphEdge
-from nodalpath.models.path import ComputedPath, PathHop
+from nodalpath.models.path import ComputedPath
 
 
 @dataclass(frozen=True)
@@ -145,10 +146,12 @@ def dijkstra(
     path_nodes.reverse()
     path_edges.reverse()
 
-    # Build PathHop entries
+    # Build PathHop entries with MPLS annotations
+    n = len(path_nodes)
     hops_list: list[PathHop] = []
     for i, node_id in enumerate(path_nodes):
         sid = graph.node_sids[node_id]
+        node_type = graph.node_types[node_id]
 
         in_interface: str | None = None
         if i > 0:
@@ -162,9 +165,35 @@ def dijkstra(
         if i < len(path_edges):
             latency_to_next = path_edges[i].latency_ms
 
+        # MPLS label action annotation
+        if i == 0:
+            # Ingress LER — push first transit hop's SID
+            action = "push"
+            in_label = None
+            out_label = graph.node_sids[path_nodes[1]] if n > 1 else None
+        elif i == n - 1:
+            # Egress — receives native IP after PHP
+            action = None
+            in_label = None
+            out_label = None
+        elif i == n - 2:
+            # Penultimate hop — pop (PHP)
+            action = "pop"
+            in_label = sid
+            out_label = None
+        else:
+            # Transit LSR — swap
+            action = "swap"
+            in_label = sid
+            out_label = graph.node_sids[path_nodes[i + 1]]
+
         hops_list.append(PathHop(
             node_id=node_id,
+            node_type=node_type,
             sid=sid,
+            in_label=in_label,
+            out_label=out_label,
+            action=action,
             in_interface=in_interface,
             out_interface=out_interface,
             latency_to_next_ms=latency_to_next,

@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from nodalarc.models.path import PathHop, PathResult
+from nodalarc.models.path import PathResult
 from nodalpath.engine.graph import build_graph
 from nodalpath.engine.pathcomp import dijkstra, PathConstraints, DEFAULT_CONSTRAINTS
 
@@ -80,47 +80,11 @@ class PathDeriver:
             return self._unreachable(src, dst, entry_sim_time, entry_state_id,
                                      f"no feasible path from '{src}' to '{dst}'")
 
-        # Convert ComputedPath hops to PathResult hops with MPLS annotations
-        hops: list[PathHop] = []
-        for i, hop in enumerate(path.hops):
-            node = self._node_registry.get(hop.node_id)
-            node_type = node.node_type if node else "satellite"
-
-            if i == 0:
-                # Ingress LER — push first label
-                action = "push"
-                in_label = None
-                out_label = path.label_stack[0] if path.label_stack else None
-            elif i == len(path.hops) - 1:
-                # Egress — receives native IP after PHP
-                action = None
-                in_label = None
-                out_label = None
-            elif i == len(path.hops) - 2:
-                # Penultimate hop — pop (PHP)
-                action = "pop"
-                in_label = hop.sid
-                out_label = None
-            else:
-                # Transit LSR — swap
-                action = "swap"
-                in_label = hop.sid
-                out_label = path.hops[i + 1].sid if i + 1 < len(path.hops) else None
-
-            hops.append(PathHop(
-                node_id=hop.node_id,
-                node_type=node_type,
-                in_label=in_label,
-                out_label=out_label,
-                action=action,
-                out_interface=hop.out_interface,
-                latency_to_next_ms=hop.latency_to_next_ms,
-            ))
-
+        # pathcomp now produces fully-annotated canonical PathHop instances
         return PathResult(
             src=src,
             dst=dst,
-            hops=hops,
+            hops=path.hops,
             total_latency_ms=path.total_latency_ms,
             method="cspf",
             sim_time=entry_sim_time,

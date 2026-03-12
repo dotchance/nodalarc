@@ -167,7 +167,7 @@ def main() -> None:
     addressing = AddressingScheme(session.addressing)
     interface_map, bandwidth_map = _build_interface_map(session, addressing)
 
-    # Compute area assignments for routing_area metadata
+    # Compute area assignments for routing_area metadata (only if configured)
     from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
     constellation = load_constellation(session.constellation)
     expanded = expand_constellation(constellation)
@@ -175,10 +175,14 @@ def main() -> None:
     sats_per_plane = max((s.slot for s in expanded), default=0) + 1
     gs_file = load_ground_stations(session.ground_stations)
     gs_names = [s.name for s in gs_file.stations]
-    area_map = compute_area_assignments(
-        session.routing.area_assignment, plane_count, sats_per_plane, addressing, gs_names,
-    )
-    log.info(f"Area assignments: {len(area_map)} nodes, areas={set(area_map.values())}")
+    area_map: dict[str, str] = {}
+    if session.routing.area_assignment is not None:
+        area_map = compute_area_assignments(
+            session.routing.area_assignment, plane_count, sats_per_plane, addressing, gs_names,
+        )
+        log.info(f"Area assignments: {len(area_map)} nodes, areas={set(area_map.values())}")
+    else:
+        log.info("No area assignment configured — routing_area will be null for all nodes")
 
     # Load pid_map if provided (from na-deploy step 7)
     pid_map: dict[str, int] = {}

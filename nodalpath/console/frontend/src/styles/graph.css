@@ -63,6 +63,14 @@
     color: rgba(255, 255, 255, 0.25);
 }
 
+/* ── Path overlay ── */
+.path-link {
+  animation: dash-flow 0.8s linear infinite;
+}
+@keyframes dash-flow {
+  to { stroke-dashoffset: -9; }
+}
+
 /* ── Tooltip ── */
 .graph-tooltip {
   position: absolute;

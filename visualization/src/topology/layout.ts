@@ -39,8 +39,9 @@ export interface TopologyLayout {
   height: number;
 }
 
-const NODE_SPACING_X = 48;
-const NODE_SPACING_Y = 40;
+const NODE_SPACING_X = 80;
+const NODE_SPACING_Y = 64;
+const GS_SPACING = 100;
 const PLANE_GAP = 8;
 const BAND_GAP = 32;
 const MARGIN = 40;
@@ -52,32 +53,28 @@ export function computeLayout(
   const sats = nodes.filter((n) => n.node_type === "satellite");
   const gss = nodes.filter((n) => n.node_type === "ground_station");
 
-  // Group satellites by area, then by plane within each area
-  const areaMap = new Map<string, Map<number, NodeState[]>>();
-  for (const sat of sats) {
-    const area = sat.routing_area ?? "unknown";
-    if (!areaMap.has(area)) areaMap.set(area, new Map());
-    const planeMap = areaMap.get(area)!;
-    const plane = sat.plane ?? 0;
-    if (!planeMap.has(plane)) planeMap.set(plane, []);
-    planeMap.get(plane)!.push(sat);
-  }
-
-  // Sort areas for deterministic order
-  const sortedAreas = [...areaMap.keys()].sort();
+  // Check if all areas are null/undefined — if so, skip area grouping
+  const allAreasNull = sats.every((s) => s.routing_area == null);
 
   const layoutNodes: LayoutNode[] = [];
   const areaBoundsMap = new Map<string, { minX: number; minY: number; maxX: number; maxY: number }>();
   let bandY = MARGIN;
+  let maxSlotCount = 0;
 
-  for (const area of sortedAreas) {
-    const planeMap = areaMap.get(area)!;
+  if (allAreasNull) {
+    // No area grouping — lay out by plane directly (no band gaps, no area separation)
+    const planeMap = new Map<number, NodeState[]>();
+    for (const sat of sats) {
+      const plane = sat.plane ?? 0;
+      if (!planeMap.has(plane)) planeMap.set(plane, []);
+      planeMap.get(plane)!.push(sat);
+    }
     const sortedPlanes = [...planeMap.keys()].sort((a, b) => a - b);
 
     for (const plane of sortedPlanes) {
       const planeSats = planeMap.get(plane)!;
-      // Sort by slot for deterministic layout
       planeSats.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
+      if (planeSats.length > maxSlotCount) maxSlotCount = planeSats.length;
 
       for (let i = 0; i < planeSats.length; i++) {
         const sat = planeSats[i]!;
@@ -92,31 +89,77 @@ export function computeLayout(
           plane: sat.plane,
           slot: sat.slot,
         });
-
-        // Track area bounds
-        const bounds = areaBoundsMap.get(area);
-        if (bounds) {
-          bounds.minX = Math.min(bounds.minX, x);
-          bounds.minY = Math.min(bounds.minY, y);
-          bounds.maxX = Math.max(bounds.maxX, x);
-          bounds.maxY = Math.max(bounds.maxY, y);
-        } else {
-          areaBoundsMap.set(area, { minX: x, minY: y, maxX: x, maxY: y });
-        }
       }
 
       bandY += NODE_SPACING_Y + PLANE_GAP;
     }
+  } else {
+    // Group satellites by area, then by plane within each area
+    const areaMap = new Map<string, Map<number, NodeState[]>>();
+    for (const sat of sats) {
+      const area = sat.routing_area ?? "unknown";
+      if (!areaMap.has(area)) areaMap.set(area, new Map());
+      const planeMap = areaMap.get(area)!;
+      const plane = sat.plane ?? 0;
+      if (!planeMap.has(plane)) planeMap.set(plane, []);
+      planeMap.get(plane)!.push(sat);
+    }
 
-    // Extra gap between areas (subtract the plane gap we just added, add band gap)
-    bandY += BAND_GAP - PLANE_GAP;
+    // Sort areas for deterministic order
+    const sortedAreas = [...areaMap.keys()].sort();
+
+    for (const area of sortedAreas) {
+      const planeMap = areaMap.get(area)!;
+      const sortedPlanes = [...planeMap.keys()].sort((a, b) => a - b);
+
+      for (const plane of sortedPlanes) {
+        const planeSats = planeMap.get(plane)!;
+        // Sort by slot for deterministic layout
+        planeSats.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
+        if (planeSats.length > maxSlotCount) maxSlotCount = planeSats.length;
+
+        for (let i = 0; i < planeSats.length; i++) {
+          const sat = planeSats[i]!;
+          const x = MARGIN + i * NODE_SPACING_X;
+          const y = bandY;
+          layoutNodes.push({
+            id: sat.node_id,
+            x,
+            y,
+            type: "satellite",
+            area: sat.routing_area,
+            plane: sat.plane,
+            slot: sat.slot,
+          });
+
+          // Track area bounds
+          const bounds = areaBoundsMap.get(area);
+          if (bounds) {
+            bounds.minX = Math.min(bounds.minX, x);
+            bounds.minY = Math.min(bounds.minY, y);
+            bounds.maxX = Math.max(bounds.maxX, x);
+            bounds.maxY = Math.max(bounds.maxY, y);
+          } else {
+            areaBoundsMap.set(area, { minX: x, minY: y, maxX: x, maxY: y });
+          }
+        }
+
+        bandY += NODE_SPACING_Y + PLANE_GAP;
+      }
+
+      // Extra gap between areas (subtract the plane gap we just added, add band gap)
+      bandY += BAND_GAP - PLANE_GAP;
+    }
   }
 
-  // GS row below — group by area so each GS extends its area's bounding box
+  // GS row below — center ground stations relative to satellite grid width
   const gsY = bandY;
+  const satGridWidth = maxSlotCount > 0 ? (maxSlotCount - 1) * NODE_SPACING_X : 0;
+  const gsRowWidth = gss.length > 0 ? (gss.length - 1) * GS_SPACING : 0;
+  const gsStartX = MARGIN + (satGridWidth - gsRowWidth) / 2;
   for (let i = 0; i < gss.length; i++) {
     const gs = gss[i]!;
-    const x = MARGIN + i * NODE_SPACING_X;
+    const x = gsStartX + i * GS_SPACING;
     const y = gsY;
     layoutNodes.push({
       id: gs.node_id,
@@ -143,8 +186,14 @@ export function computeLayout(
     }
   }
 
+  // Filter out areas that should not be drawn:
+  // - skip when only one area exists
+  // - skip areas with null, "unknown", or "0.0.0.0" ids
   const AREA_PAD = 16;
-  const areaBounds: AreaBounds[] = [...areaBoundsMap.entries()].map(([id, b]) => ({
+  const filteredAreaEntries = [...areaBoundsMap.entries()].filter(([id]) =>
+    id !== "unknown" && id !== "0.0.0.0" && id !== "",
+  );
+  const areaBounds: AreaBounds[] = (areaBoundsMap.size <= 1 ? [] : filteredAreaEntries).map(([id, b]) => ({
     id,
     minX: b.minX - AREA_PAD,
     minY: b.minY - AREA_PAD,

@@ -251,6 +251,7 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
                 .attr("stroke", "#ff8800")
                 .attr("stroke-width", 2.5)
                 .attr("stroke-opacity", 0.9)
+                .attr("stroke-dasharray", "6 3")
                 .attr("pointer-events", "none");
 
             // Hop index labels on nodes

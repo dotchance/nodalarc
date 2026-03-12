@@ -126,6 +126,18 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: Topolog
     }
     drawLinks(ctx, layout.links, nodeMap, flowPath, dashOffsetRef.current, failTimes);
 
+    // Draw hop index numbers on flow path nodes
+    if (flowPath && flowPath.length >= 2) {
+      ctx.fillStyle = "#ff8800";
+      ctx.font = "9px monospace";
+      ctx.textAlign = "left";
+      for (let i = 0; i < flowPath.length; i++) {
+        const hopNode = nodeMap.get(flowPath[i]!);
+        if (!hopNode) continue;
+        ctx.fillText(String(i + 1), hopNode.x + 12, hopNode.y - 10);
+      }
+    }
+
     // Determine isolated nodes (no active links) and ABR nodes (links in multiple areas)
     const connectedNodes = new Set<string>();
     const nodeAreas = new Map<string, Set<string>>();

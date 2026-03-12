@@ -2,7 +2,7 @@
  *  Link colors match the globe view (config.ts constants).
  */
 
-import { LINK_ISL_COLOR, LINK_GROUND_COLOR, FAIL_HOLD_MS, FAIL_FADE_MS } from "../config";
+import { FAIL_HOLD_MS, FAIL_FADE_MS } from "../config";
 import type { LayoutLink, LayoutNode } from "./layout";
 
 /** Point-to-line-segment distance for link hit testing. */
@@ -33,13 +33,6 @@ export function hitTestLink(
     }
   }
   return null;
-}
-
-function hexToCSS(hex: number, opacity: number): string {
-  const r = (hex >> 16) & 0xff;
-  const g = (hex >> 8) & 0xff;
-  const b = hex & 0xff;
-  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
 export function drawLinks(
@@ -75,15 +68,15 @@ export function drawLinks(
       ctx.lineWidth = 2;
       ctx.setLineDash([]);
     } else if (link.isGround) {
-      ctx.strokeStyle = hexToCSS(LINK_GROUND_COLOR, 0.6);
+      ctx.strokeStyle = "rgba(0, 212, 170, 0.6)";
       ctx.lineWidth = 2;
       ctx.setLineDash([]);
     } else if (link.isCrossArea) {
-      ctx.strokeStyle = hexToCSS(LINK_ISL_COLOR, 0.4);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 3]);
     } else {
-      ctx.strokeStyle = hexToCSS(LINK_ISL_COLOR, 0.55);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
       ctx.lineWidth = 1.5;
       ctx.setLineDash([]);
     }
@@ -99,15 +92,47 @@ export function drawLinks(
     ctx.setLineDash([6, 3]);
     ctx.lineDashOffset = -dashOffset;
 
+    // Compute ring size per plane for ring-wrap detection
+    const planeSlotsCount = new Map<number, number>();
+    for (const [, node] of nodeMap) {
+      if (node.type === "satellite" && node.plane != null) {
+        planeSlotsCount.set(node.plane, (planeSlotsCount.get(node.plane) ?? 0) + 1);
+      }
+    }
+
+    const STUB_LEN = 20;
+
     for (let i = 0; i < flowPath.length - 1; i++) {
       const a = nodeMap.get(flowPath[i]!);
       const b = nodeMap.get(flowPath[i + 1]!);
       if (!a || !b) continue;
 
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
+      // Ring-wrap detection: same plane, slot difference > half ring
+      const isRingWrap = a.type === "satellite" && b.type === "satellite"
+        && a.plane != null && b.plane != null && a.plane === b.plane
+        && a.slot != null && b.slot != null
+        && (() => {
+          const ringSize = planeSlotsCount.get(a.plane!) ?? 0;
+          return ringSize > 0 && Math.abs(a.slot! - b.slot!) > ringSize / 2;
+        })();
+
+      if (isRingWrap) {
+        // Draw two short horizontal stubs instead of a long diagonal
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(a.x + (a.slot! < b.slot! ? -STUB_LEN : STUB_LEN), a.y);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(b.x + (b.slot! < a.slot! ? -STUB_LEN : STUB_LEN), b.y);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
     }
 
     ctx.setLineDash([]);

@@ -2,9 +2,7 @@ stack:
   name: nodalpath-fwd
   image: nodalpath-fwd:latest
   daemons: []
-  config_templates:
-    - src: peers.json.j2
-      dst: /etc/nodalpath/peers.json
+  config_templates: []
   template_variables:
     grpc_port: 50051
   security_context:
@@ -17,8 +15,6 @@ stack:
       value: "{{ node_id }}"
     - name: GRPC_PORT
       value: "50051"
-    - name: PEERS_PATH
-      value: "/etc/nodalpath/peers.json"
   host_setup:
     modprobe:
       - mpls_router

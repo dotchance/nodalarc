@@ -56,7 +56,7 @@ class RoutingConfig(BaseModel):
     stack: str  # Path to routing stack directory
     compression_factor: int = 1
     config_overrides: dict[str, Any] = {}
-    area_assignment: AreaAssignmentConfig
+    area_assignment: AreaAssignmentConfig | None = None
 
 
 class TimeConfig(BaseModel):

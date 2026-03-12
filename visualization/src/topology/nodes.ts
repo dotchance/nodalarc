@@ -50,12 +50,12 @@ export function drawNode(
 
   // Label
   ctx.globalAlpha = 1.0;
-  ctx.fillStyle = "#e0e0e0";
+  ctx.fillStyle = "#888899";
   ctx.font = "9px monospace";
   ctx.textAlign = "center";
   const label = node.type === "ground_station"
     ? node.id.replace("gs-", "")
-    : `P${node.plane ?? "?"}S${node.slot ?? "?"}`;
+    : `P${String(node.plane ?? 0).padStart(2, "0")}S${String(node.slot ?? 0).padStart(2, "0")}`;
   ctx.fillText(label, node.x, node.y + radius + 12);
 }
 
@@ -67,8 +67,13 @@ export function drawAreaBounds(
   ctx: CanvasRenderingContext2D,
   areas: AreaBounds[],
 ): void {
+  // Skip drawing when there's only one area or no areas
+  if (areas.length <= 1) return;
+
   const radius = 6;
   for (const area of areas) {
+    // Skip null, unknown, or 0.0.0.0 area ids
+    if (!area.id || area.id === "unknown" || area.id === "0.0.0.0") continue;
     const color = AREA_COLORS[area.id] ?? 0x888888;
     const [r, g, b] = hexToRgb(color);
     const w = area.maxX - area.minX;

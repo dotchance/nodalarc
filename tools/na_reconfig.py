@@ -97,12 +97,14 @@ def reconfig(session_path: str, target: str, set_args: list[str] | None = None, 
     if vars_file:
         config_overrides.update(yaml.safe_load(Path(vars_file).read_text()))
 
-    # Compute area assignments for target matching
+    # Compute area assignments for target matching (empty if not configured)
     pc, spp = _constellation_dims(constellation)
     gs_names = [s.name for s in gs_file.stations]
-    area_assignments = compute_area_assignments(
-        session.routing.area_assignment, pc, spp, addressing, gs_names,
-    )
+    area_assignments: dict[str, str] = {}
+    if session.routing.area_assignment is not None:
+        area_assignments = compute_area_assignments(
+            session.routing.area_assignment, pc, spp, addressing, gs_names,
+        )
 
     env = Environment(
         loader=FileSystemLoader(str(stack_dir)),

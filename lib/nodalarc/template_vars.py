@@ -185,16 +185,18 @@ def build_template_vars(
     Returns:
         Complete dict of template variables for Jinja2 rendering.
     """
-    # Compute area assignments
+    # Compute area assignments (empty if not configured)
     pc, spp = _constellation_dims(constellation)
     gs_names = [s.name for s in ground_stations.stations]
-    area_assignments = compute_area_assignments(
-        session.routing.area_assignment,
-        plane_count=pc,
-        sats_per_plane=spp,
-        addressing=addressing,
-        gs_names=gs_names,
-    )
+    area_assignments: dict[str, str] = {}
+    if session.routing.area_assignment is not None:
+        area_assignments = compute_area_assignments(
+            session.routing.area_assignment,
+            plane_count=pc,
+            sats_per_plane=spp,
+            addressing=addressing,
+            gs_names=gs_names,
+        )
 
     # Compute ISL neighbors
     neighbors = assign_isl_neighbors(constellation, addressing)

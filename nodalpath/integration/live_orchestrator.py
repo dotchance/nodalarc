@@ -88,6 +88,10 @@ class LiveOrchestrator:
     def almanac_store(self) -> AlmanacStore:
         return self._store
 
+    @property
+    def snapshot_builder(self) -> SnapshotBuilder:
+        return self._builder
+
     async def run(self) -> None:
         """Main async loop. Runs until stop() is called."""
         self._running = True

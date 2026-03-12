@@ -56,32 +56,79 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
             .on("zoom", event => g.attr("transform", event.transform));
         svg.call(zoom);
 
+        // ── Wrap detection helper ──────────────────────────────────────────
+        // In a ring topology, slot N-1 is adjacent to slot 0 but they
+        // appear at opposite ends of the grid row. Detect this so we can
+        // draw short stub lines instead of a long cross-grid diagonal.
+        const maxSlotAll = Array.from(nodeMap.values())
+            .filter(n => n.node_type === "satellite")
+            .reduce((m, n) => Math.max(m, n.slot ?? 0), 0);
+        const ringSizeAll = maxSlotAll + 1;
+        const WRAP_STUB = 20; // px
+
+        function isRingWrap(aId: string, bId: string): boolean {
+            const a = nodeMap.get(aId);
+            const b = nodeMap.get(bId);
+            if (!a || !b) return false;
+            if (a.node_type !== "satellite" || b.node_type !== "satellite") return false;
+            if (a.plane !== b.plane || a.plane == null) return false;
+            return Math.abs((a.slot ?? 0) - (b.slot ?? 0)) > ringSizeAll / 2;
+        }
+
         // ── Links ────────────────────────────────────────────────────────────
+        // For ring-wrap links, draw two stubs instead of one long line.
+        interface LinkSegment {
+            cls: string; stroke: string; strokeW: number;
+            dash: string; opacity: number;
+            x1: number; y1: number; x2: number; y2: number;
+        }
+        const linkSegments: LinkSegment[] = [];
+
+        for (const l of links) {
+            const a = nodeMap.get(l.node_a);
+            const b = nodeMap.get(l.node_b);
+            if (!a || !b) continue;
+
+            const cls = `link link-${l.link_type} link-${l.state}`;
+            const stroke = l.state === "visible_unscheduled"
+                ? "rgba(255,255,255,0.2)"
+                : l.link_type === "ground" ? "#00d4aa" : "rgba(255,255,255,0.35)";
+            const strokeW = l.state === "visible_unscheduled" ? 1 : l.link_type === "ground" ? 2 : 1.5;
+            const dash = l.state === "visible_unscheduled" ? "2,4" : "none";
+            const opacity = l.state === "visible_unscheduled" ? 0.4 : 0.5;
+
+            if (isRingWrap(l.node_a, l.node_b)) {
+                const aRight = (a.slot ?? 0) > (b.slot ?? 0);
+                linkSegments.push({
+                    cls, stroke, strokeW, dash, opacity,
+                    x1: a.x, y1: a.y,
+                    x2: a.x + (aRight ? WRAP_STUB : -WRAP_STUB), y2: a.y,
+                });
+                linkSegments.push({
+                    cls, stroke, strokeW, dash, opacity,
+                    x1: b.x - (aRight ? WRAP_STUB : -WRAP_STUB), y1: b.y,
+                    x2: b.x, y2: b.y,
+                });
+            } else {
+                linkSegments.push({
+                    cls, stroke, strokeW, dash, opacity,
+                    x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+                });
+            }
+        }
+
         g.selectAll(".link")
-            .data(links)
+            .data(linkSegments)
             .join("line")
-            .attr("class", l => `link link-${l.link_type} link-${l.state}`)
-            .attr("x1", l => nodeMap.get(l.node_a)?.x ?? 0)
-            .attr("y1", l => nodeMap.get(l.node_a)?.y ?? 0)
-            .attr("x2", l => nodeMap.get(l.node_b)?.x ?? 0)
-            .attr("y2", l => nodeMap.get(l.node_b)?.y ?? 0)
-            .attr("stroke", l => {
-                if (l.state === "visible_unscheduled") return "rgba(255,255,255,0.2)";
-                if (l.link_type === "ground") return "#00d4aa";
-                return "rgba(255,255,255,0.35)";
-            })
-            .attr("stroke-width", l => {
-                if (l.state === "visible_unscheduled") return 1;
-                return l.link_type === "ground" ? 2 : 1.5;
-            })
-            .attr("stroke-dasharray", l => {
-                if (l.state === "visible_unscheduled") return "2,4";
-                return "none";
-            })
-            .attr("stroke-opacity", l => {
-                if (l.state === "visible_unscheduled") return 0.4;
-                return 0.5;
-            });
+            .attr("class", d => d.cls)
+            .attr("x1", d => d.x1)
+            .attr("y1", d => d.y1)
+            .attr("x2", d => d.x2)
+            .attr("y2", d => d.y2)
+            .attr("stroke", d => d.stroke)
+            .attr("stroke-width", d => d.strokeW)
+            .attr("stroke-dasharray", d => d.dash)
+            .attr("stroke-opacity", d => d.opacity);
 
         // ── Nodes ────────────────────────────────────────────────────────────
         const nodeData = Array.from(nodeMap.values());
@@ -168,20 +215,39 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
                 .attr("stroke", "#ff8800")
                 .attr("stroke-width", 3);
 
-            // Draw path lines between consecutive hops
-            const hopPairs: Array<[string, string]> = [];
+            // Draw path lines between consecutive hops.
+            // Uses the same ring-wrap detection as topology links.
+            interface PathSeg { x1: number; y1: number; x2: number; y2: number; }
+            const pathSegs: PathSeg[] = [];
+
             for (let i = 0; i < hopIds.length - 1; i++) {
-                hopPairs.push([hopIds[i]!, hopIds[i + 1]!]);
+                const a = nodeMap.get(hopIds[i]!);
+                const b = nodeMap.get(hopIds[i + 1]!);
+                if (!a || !b) continue;
+
+                if (isRingWrap(hopIds[i]!, hopIds[i + 1]!)) {
+                    const aRight = (a.slot ?? 0) > (b.slot ?? 0);
+                    pathSegs.push({
+                        x1: a.x, y1: a.y,
+                        x2: a.x + (aRight ? WRAP_STUB : -WRAP_STUB), y2: a.y,
+                    });
+                    pathSegs.push({
+                        x1: b.x - (aRight ? WRAP_STUB : -WRAP_STUB), y1: b.y,
+                        x2: b.x, y2: b.y,
+                    });
+                } else {
+                    pathSegs.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+                }
             }
 
             g.selectAll(".path-link")
-                .data(hopPairs)
+                .data(pathSegs)
                 .join("line")
                 .attr("class", "path-link")
-                .attr("x1", ([a]) => nodeMap.get(a)?.x ?? 0)
-                .attr("y1", ([a]) => nodeMap.get(a)?.y ?? 0)
-                .attr("x2", ([, b]) => nodeMap.get(b)?.x ?? 0)
-                .attr("y2", ([, b]) => nodeMap.get(b)?.y ?? 0)
+                .attr("x1", d => d.x1)
+                .attr("y1", d => d.y1)
+                .attr("x2", d => d.x2)
+                .attr("y2", d => d.y2)
                 .attr("stroke", "#ff8800")
                 .attr("stroke-width", 2.5)
                 .attr("stroke-opacity", 0.9)

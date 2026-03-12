@@ -74,10 +74,10 @@ def dijkstra(
         if i < len(path_edges):
             out_interface = path_edges[i].src_interface
 
-        # latency_to_next_ms: weight of the departing edge (None for last hop)
+        # latency_to_next_ms: physical latency of the departing edge (None for last hop)
         latency_to_next: float | None = None
         if i < len(path_edges):
-            latency_to_next = path_edges[i].weight
+            latency_to_next = path_edges[i].latency_ms
 
         hops.append(PathHop(
             node_id=node_id,
@@ -87,7 +87,7 @@ def dijkstra(
             latency_to_next_ms=latency_to_next,
         ))
 
-    total_latency = sum(e.weight for e in path_edges)
+    total_latency = sum(e.latency_ms for e in path_edges)
     # label_stack = SIDs of hops[1:] (transit nodes, excluding ingress LER)
     label_stack = [hop.sid for hop in hops[1:]]
 

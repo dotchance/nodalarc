@@ -9,7 +9,8 @@ from nodalpath.models.topology import TopologySnapshot, TopologyEdge
 class GraphEdge:
     """A weighted directed edge in the computation graph."""
     dst: str                              # destination node_id
-    weight: float                         # edge weight (latency_ms)
+    weight: float                         # edge weight (latency_ms + hop penalty)
+    latency_ms: float                     # physical propagation delay
     src_interface: str
     dst_interface: str
     bandwidth_mbps: float
@@ -30,7 +31,12 @@ def build_graph(snapshot: TopologySnapshot) -> TopologyGraph:
 
     The graph is bidirectional: each TopologyEdge in the snapshot
     produces two directed GraphEdges (one in each direction).
-    Edge weight is latency_ms.
+
+    Edge weight is latency_ms plus a small hop-count penalty (0.01 ms).
+    The penalty ensures Dijkstra prefers fewer hops among paths with
+    near-equal propagation delay — without it, constellations with
+    uniform intra-plane spacing produce paths that meander through
+    rings instead of cutting across planes.
     """
     graph = TopologyGraph()
 
@@ -43,12 +49,19 @@ def build_graph(snapshot: TopologySnapshot) -> TopologyGraph:
         if node.node_type == "ground_station":
             graph.ground_stations.append(node.node_id)
 
+    # Small per-hop penalty to break ties in favor of fewer hops.
+    # 0.01 ms is negligible vs real propagation delays (10-16 ms)
+    # but sufficient to prevent ring-wandering paths.
+    hop_penalty_ms = 0.01
+
     # Add bidirectional edges
     for edge in snapshot.edges:
+        w = edge.latency_ms + hop_penalty_ms
         # Forward direction
         graph.adjacency[edge.src_node_id].append(GraphEdge(
             dst=edge.dst_node_id,
-            weight=edge.latency_ms,
+            weight=w,
+            latency_ms=edge.latency_ms,
             src_interface=edge.src_interface,
             dst_interface=edge.dst_interface,
             bandwidth_mbps=edge.bandwidth_mbps,
@@ -56,7 +69,8 @@ def build_graph(snapshot: TopologySnapshot) -> TopologyGraph:
         # Reverse direction
         graph.adjacency[edge.dst_node_id].append(GraphEdge(
             dst=edge.src_node_id,
-            weight=edge.latency_ms,
+            weight=w,
+            latency_ms=edge.latency_ms,
             src_interface=edge.dst_interface,
             dst_interface=edge.src_interface,
             bandwidth_mbps=edge.bandwidth_mbps,

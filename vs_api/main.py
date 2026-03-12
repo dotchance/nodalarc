@@ -206,6 +206,7 @@ _state = {
 }
 _state_lock = threading.Lock()
 _db_path: str = ""
+_session_file: str = ""  # Path to the active session YAML
 _routing_stack: str | None = None
 _constellation_name: str | None = None
 _ws_clients: list[WebSocket] = []
@@ -980,36 +981,326 @@ def get_flow_metrics(
         conn.close()
 
 
+def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | None:
+    """Walk real forwarding tables on live containers via gRPC.
+
+    Queries each node's nodalpath-fwd sidecar to read the installed
+    MPLS forwarding state, then follows the label chain hop-by-hop
+    from src to dst.  Returns None if gRPC is unavailable.
+    """
+    import grpc
+    import json
+    import socket as sock_mod
+
+    from nodalarc.platform import get_platform_config
+    cfg = get_platform_config()
+    grpc_port = cfg.nodalpath_fwd_grpc_port
+    deploy_socket = cfg.deploy_daemon_unix_socket_path
+
+    # Build node_id -> pod_ip map via deploy daemon
+    node_ids = {n["node_id"] for n in nodes}
+    prefix_by_node: dict[str, str] = {}
+    for n in nodes:
+        if n.get("prefix"):
+            prefix_by_node[n["node_id"]] = n["prefix"]
+
+    def get_pod_ip(node_id: str) -> str | None:
+        try:
+            s = sock_mod.socket(sock_mod.AF_UNIX, sock_mod.SOCK_STREAM)
+            s.settimeout(5)
+            s.connect(deploy_socket)
+            req = json.dumps({"action": "get_pod_ip", "pod": node_id.lower(), "namespace": cfg.kubernetes_namespace}) + "\n"
+            s.sendall(req.encode())
+            buf = b""
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    return None
+                buf += chunk
+                if b"\n" in buf:
+                    resp = json.loads(buf[:buf.index(b"\n")])
+                    return resp.get("pod_ip") if resp.get("ok") else None
+            return None
+        except Exception:
+            return None
+        finally:
+            s.close()
+
+    def query_fwd_table(pod_ip: str) -> tuple[list, list] | None:
+        """Query a node's live forwarding table via gRPC. Returns (lsr, ler) or None."""
+        try:
+            from nodalpath.proto import Empty, Action
+            from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
+
+            channel = grpc.insecure_channel(f"{pod_ip}:{grpc_port}")
+            grpc.channel_ready_future(channel).result(timeout=3)
+            stub = ForwardingServiceStub(channel)
+            fwd = stub.GetForwardingTable(Empty(), timeout=3)
+
+            action_map = {Action.SWAP: "SWAP", Action.POP: "POP", Action.PUSH: "PUSH"}
+            lsr = []
+            for e in fwd.lsr_entries:
+                lsr.append({
+                    "in_label": e.in_label,
+                    "action": action_map.get(e.action, str(e.action)),
+                    "out_label": e.out_label,
+                    "out_interface": e.out_interface,
+                })
+            ler = []
+            for e in fwd.ler_entries:
+                ler.append({
+                    "dst_prefix": e.dst_prefix,
+                    "push_label": e.push_label,
+                    "out_interface": e.out_interface,
+                })
+            channel.close()
+            return lsr, ler
+        except Exception:
+            return None
+
+    # Build SID -> node_id and prefix maps from the session context.
+    # This loads the actual addressing scheme and ground station configs
+    # so prefixes match what NodalPath installed in the forwarding tables.
+    sid_to_node: dict[int, str] = {}
+    try:
+        from nodalpath.platform import get_nodalpath_config
+        from nodalpath.orchestrator.session_loader import load_session_context
+        from pathlib import Path as _Path
+
+        np_cfg = get_nodalpath_config()
+        session_path = _Path(_session_file) if _session_file else None
+        if session_path and session_path.exists():
+            node_reg, _, session_prefixes, _ = load_session_context(session_path)
+            # Populate prefix_by_node from session context
+            for nid, prefix in session_prefixes.items():
+                prefix_by_node[nid] = prefix
+            # Build SID -> node_id from the node registry
+            for nid, node_obj in node_reg.items():
+                sid_to_node[node_obj.sid] = nid
+        else:
+            # Fallback: compute SIDs from plane/slot
+            sats = [n for n in nodes if n["node_id"].startswith("sat-")]
+            max_slot = max((n.get("slot", 0) or 0) for n in sats) if sats else 0
+            spp = max_slot + 1
+            for n in sats:
+                plane = n.get("plane", 0) or 0
+                slot = n.get("slot", 0) or 0
+                sid = np_cfg.satellite_sid_range_start + (plane * spp + slot) + 1
+                sid_to_node[sid] = n["node_id"]
+            gs_names = sorted(n["node_id"] for n in nodes if n["node_id"].startswith("gs-"))
+            for gs_idx, gs_name in enumerate(gs_names):
+                sid = np_cfg.ground_station_sid_range_start + gs_idx
+                sid_to_node[sid] = gs_name
+    except Exception as exc:
+        log.warning(f"Failed to load session context for trace: {exc}")
+
+    # Find destination prefix
+    dst_prefix = prefix_by_node.get(dst)
+    if not dst_prefix:
+        return None
+
+    # Step 1: Get source forwarding table
+    src_ip = get_pod_ip(src)
+    if not src_ip:
+        return None
+    src_fwd = query_fwd_table(src_ip)
+    if not src_fwd:
+        return None
+    _src_lsr, src_ler = src_fwd
+
+    # Find ingress rule for dst_prefix
+    ingress = None
+    for rule in src_ler:
+        if rule["dst_prefix"] == dst_prefix:
+            ingress = rule
+            break
+    if not ingress:
+        return None
+
+    # Build hop list
+    hop_details = []
+    hop_ids = [src]
+
+    # Source node — PUSH
+    hop_details.append({
+        "node_id": src,
+        "action": "PUSH",
+        "in_label": None,
+        "out_label": ingress["push_label"],
+        "out_interface": ingress["out_interface"],
+        "latency_to_next_ms": None,
+    })
+
+    current_label = ingress["push_label"]
+    current_node = sid_to_node.get(current_label)
+    visited = {src}
+    MAX_HOPS = 20
+
+    for _ in range(MAX_HOPS):
+        if not current_node or current_node in visited:
+            break
+        visited.add(current_node)
+        hop_ids.append(current_node)
+
+        if current_node == dst:
+            hop_details.append({
+                "node_id": current_node,
+                "action": None,
+                "in_label": current_label,
+                "out_label": None,
+                "out_interface": None,
+                "latency_to_next_ms": None,
+            })
+            break
+
+        # Query this node's live forwarding table
+        node_ip = get_pod_ip(current_node)
+        if not node_ip:
+            break
+        fwd_result = query_fwd_table(node_ip)
+        if not fwd_result:
+            break
+        node_lsr, node_ler = fwd_result
+
+        # Find LSR binding for current_label
+        binding = None
+        for b in node_lsr:
+            if b["in_label"] == current_label:
+                binding = b
+                break
+
+        if not binding:
+            # Maybe it's an LER ingress (dst is directly connected)
+            # Check if there's a rule for dst_prefix
+            for rule in node_ler:
+                if rule["dst_prefix"] == dst_prefix:
+                    hop_details.append({
+                        "node_id": current_node,
+                        "action": "PUSH",
+                        "in_label": current_label,
+                        "out_label": rule["push_label"],
+                        "out_interface": rule["out_interface"],
+                        "latency_to_next_ms": None,
+                    })
+                    next_node = sid_to_node.get(rule["push_label"])
+                    current_label = rule["push_label"]
+                    current_node = next_node
+                    continue
+            break
+
+        hop_details.append({
+            "node_id": current_node,
+            "action": binding["action"],
+            "in_label": binding["in_label"],
+            "out_label": binding["out_label"] if binding["action"] == "SWAP" else None,
+            "out_interface": binding["out_interface"],
+            "latency_to_next_ms": None,
+        })
+
+        if binding["action"] == "POP":
+            # Next node is the destination (PHP)
+            hop_ids.append(dst)
+            hop_details.append({
+                "node_id": dst,
+                "action": None,
+                "in_label": None,
+                "out_label": None,
+                "out_interface": None,
+                "latency_to_next_ms": None,
+            })
+            break
+        elif binding["action"] == "SWAP":
+            current_label = binding["out_label"]
+            current_node = sid_to_node.get(current_label)
+        else:
+            break
+
+    if len(hop_ids) < 2:
+        return None
+
+    # Add latencies from the link state
+    link_latency: dict[str, float] = {}
+    for l in links:
+        key_fwd = f"{l['node_a']}:{l['node_b']}"
+        key_rev = f"{l['node_b']}:{l['node_a']}"
+        lat = l.get("latency_ms", 0)
+        link_latency[key_fwd] = lat
+        link_latency[key_rev] = lat
+
+    total_latency = 0.0
+    for i, hd in enumerate(hop_details):
+        if i < len(hop_ids) - 1:
+            key = f"{hop_ids[i]}:{hop_ids[i+1]}"
+            lat = link_latency.get(key, 0)
+            hd["latency_to_next_ms"] = lat
+            total_latency += lat
+
+    return {
+        "hops": hop_ids,
+        "hop_details": hop_details,
+        "success": True,
+        "method": "live",
+        "total_latency_ms": total_latency,
+    }
+
+
 @app.post("/api/v1/trace", dependencies=[Depends(_require_api_key)])
 def trace_path(body: dict) -> dict:
-    """Request path trace via ZMQ REQ to MI trace endpoint."""
+    """Trace forwarding path by querying live container MPLS tables.
+
+    Walks the real forwarding tables installed on each node's
+    nodalpath-fwd gRPC sidecar, hop by hop from source to destination.
+    Falls back to NodalPath CSPF if live trace is unavailable.
+    """
     src = body.get("src_node", "")
     dst = body.get("dst_node", "")
     if not src or not dst:
         return {"hops": [], "error": "src_node and dst_node required"}
 
-    ctx = zmq.Context()
-    sock = ctx.socket(zmq.REQ)
-    sock.setsockopt(zmq.RCVTIMEO, 10000)  # 10s timeout
-    sock.setsockopt(zmq.LINGER, 0)
-    sock.connect(mi_trace_connect())
-
+    # Get current snapshot for node/link info
     try:
-        req = TraceRequest(src_node=src, dst_node=dst)
-        sock.send(req.model_dump_json().encode())
-        raw = sock.recv()
-        resp = TraceResponse.model_validate_json(raw)
-        result = {"hops": resp.hops, "success": resp.success}
-        if resp.error:
-            result["error"] = resp.error
-        return result
-    except zmq.Again:
-        return {"hops": [], "error": "MI trace endpoint timeout"}
+        snap = _build_snapshot()
+        nodes_list = [n.model_dump() if hasattr(n, "model_dump") else n for n in snap.get("nodes", [])]
+        links_list = [l.model_dump() if hasattr(l, "model_dump") else l for l in snap.get("links", [])]
+    except Exception:
+        nodes_list = []
+        links_list = []
+
+    # Try live gRPC trace first (real forwarding tables)
+    try:
+        result = _live_trace_grpc(src, dst, nodes_list, links_list)
+        if result:
+            return result
     except Exception as exc:
-        return {"hops": [], "error": str(exc)}
-    finally:
-        sock.close()
-        ctx.term()
+        log.debug(f"Live gRPC trace failed: {exc}")
+
+    # Fall back to NodalPath CSPF
+    try:
+        from nodalarc.platform import get_platform_config
+        np_port = get_platform_config().nodalpath_console_http_port
+        np_resp = httpx.get(
+            f"http://127.0.0.1:{np_port}/api/v1/path",
+            params={"src": src, "dst": dst},
+            timeout=5.0,
+        )
+        if np_resp.status_code == 200:
+            data = np_resp.json()
+            if data.get("reachable") and data.get("hops"):
+                hop_ids = [h["node_id"] for h in data["hops"]]
+                return {
+                    "hops": hop_ids,
+                    "hop_details": data["hops"],
+                    "success": True,
+                    "method": "cspf",
+                    "total_latency_ms": data.get("total_latency_ms", 0),
+                }
+            if data.get("reachable") is False:
+                reason = data.get("unreachable_reason", "no path found")
+                return {"hops": [], "success": False, "method": "cspf", "note": reason}
+    except Exception as exc:
+        log.debug(f"NodalPath CSPF trace failed: {exc}")
+
+    return {"hops": [], "error": "Trace unavailable"}
 
 
 @app.post("/api/v1/playback", dependencies=[Depends(_require_api_key), Depends(_rate_limit_playback)])
@@ -1131,16 +1422,24 @@ def main() -> None:
     from nodalarc.platform import init_platform_config
     init_platform_config(Path(args.platform_config))
 
+    # Also init NodalPath config (needed for live gRPC trace SID lookups)
+    try:
+        from nodalpath.platform import init_nodalpath_config
+        init_nodalpath_config(Path("configs/nodalpath.yaml"))
+    except Exception:
+        pass  # Non-fatal — CSPF fallback still works
+
     if args.port is None:
         args.port = vs_api_http_port()
 
-    global _db_path, _routing_stack, _constellation_name, _session_manager, _gs_elevation_map, _beam_falloff_exponent
+    global _db_path, _session_file, _routing_stack, _constellation_name, _session_manager, _gs_elevation_map, _beam_falloff_exponent
 
     # Initialize SessionManager
     _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
 
     if args.session and args.db:
         _db_path = args.db
+        _session_file = args.session
 
         # Load session metadata for snapshot enrichment
         session_data = yaml.safe_load(Path(args.session).read_text())

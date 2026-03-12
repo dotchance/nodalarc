@@ -7,17 +7,19 @@ import { NetworkSummary } from "./NetworkSummary";
 import { SatelliteDetail } from "./SatelliteDetail";
 import { GroundStationDetail } from "./GroundStationDetail";
 import { LinkDetail } from "./LinkDetail";
+import { TraceDialog } from "./TraceDialog";
 import { EventLog } from "./EventLog";
-import type { StateSnapshot, Selection } from "../types";
+import type { StateSnapshot, Selection, TracedPath } from "../types";
 
 interface InfoPanelProps {
   snapshot: StateSnapshot | null;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
   onFlyTo?: (nodeId: string) => void;
+  onTraceResult?: (path: TracedPath | null) => void;
 }
 
-export function InfoPanel({ snapshot, selection, onSelect, onFlyTo }: InfoPanelProps) {
+export function InfoPanel({ snapshot, selection, onSelect, onFlyTo, onTraceResult }: InfoPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [splitPct, setSplitPct] = useState(50); // percentage for detail section
   const draggingRef = useRef(false);
@@ -86,6 +88,11 @@ export function InfoPanel({ snapshot, selection, onSelect, onFlyTo }: InfoPanelP
     <div className="info-panel" ref={panelRef}>
       <div style={{ flex: `0 0 ${splitPct}%`, overflow: "auto", minHeight: 0 }}>
         {detailSection}
+        <TraceDialog
+          nodes={snapshot.nodes}
+          selectedNodeId={selection?.type !== "link" ? selection?.id ?? null : null}
+          onTraceResult={onTraceResult}
+        />
       </div>
       <div
         className="panel-divider"

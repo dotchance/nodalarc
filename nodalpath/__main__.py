@@ -123,6 +123,7 @@ async def _run_live(config: NodalPathConfig) -> None:
         prefix_map=prefix_map,
         node_registry=node_registry,
         interface_map=interface_map,
+        snapshot_builder=orchestrator.snapshot_builder,
     )
 
     console_app = build_app(

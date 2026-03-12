@@ -35,7 +35,7 @@ class ForwardingTable(BaseModel, frozen=True):
     topology_state_id: str                # identifies which topology snapshot this was computed from
     sim_time: str                         # ISO 8601 timestamp this table is valid at
     lsr_bindings: list[LabelBinding]      # transit label switching entries
-    ler_ingress_rules: list[IngressRule]  # ingress label push rules (ground stations only)
+    ler_ingress_rules: list[IngressRule]  # ingress label push rules (any node — see PRD 13.8A)
 
 
 class AlmanacEntry(BaseModel, frozen=True):

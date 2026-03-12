@@ -4,13 +4,15 @@ Runs inside the nodalpath-fwd container. Receives full forwarding table
 replacements from NodalPath and programs the Linux kernel MPLS dataplane
 using `ip -f mpls route` commands.
 
+All ISL and ground links are point-to-point veth pairs, so routes use
+`dev {iface}` without `via` — there is exactly one peer on each link.
+
 Atomicity: installs new/changed entries before removing stale ones.
 State is only updated on full success.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import subprocess
@@ -30,7 +32,6 @@ log = logging.getLogger("fwd-server")
 
 GRPC_PORT = int(os.environ.get("GRPC_PORT", "50051"))
 NODE_ID = os.environ.get("NODE_ID", "unknown")
-PEERS_PATH = os.environ.get("PEERS_PATH", "/etc/nodalpath/peers.json")
 
 # In-memory state protected by lock
 _lock = threading.Lock()
@@ -43,29 +44,14 @@ _state = {
     "last_update_time": "",
 }
 
-# Peer IP map: interface name -> peer IP address
-_peers: dict[str, str] = {}
 
-
-def _load_peers() -> None:
-    """Load peer IP map from ConfigMap-mounted JSON file."""
-    global _peers
+def _iface_up(iface: str) -> bool:
+    """Check if a network interface exists and is UP."""
     try:
-        with open(PEERS_PATH) as f:
-            _peers = json.load(f)
-        log.info("Loaded %d peer mappings from %s", len(_peers), PEERS_PATH)
+        with open(f"/sys/class/net/{iface}/operstate") as f:
+            return f.read().strip() in ("up", "unknown")
     except FileNotFoundError:
-        log.warning("Peers file not found at %s — nexthop resolution will fail", PEERS_PATH)
-    except Exception as exc:
-        log.warning("Failed to load peers from %s: %s", PEERS_PATH, exc)
-
-
-def _nexthop(iface: str) -> str:
-    """Resolve an interface name to its peer's IP address."""
-    ip = _peers.get(iface)
-    if ip is None:
-        raise ValueError(f"No peer IP for interface {iface}")
-    return ip
+        return False
 
 
 def _run_cmd(cmd: list[str]) -> None:
@@ -75,28 +61,25 @@ def _run_cmd(cmd: list[str]) -> None:
 
 def _install_lsr(entry: pb2.LabelEntry) -> None:
     """Install or replace an LSR (label switching) entry in the kernel."""
-    nh = _nexthop(entry.out_interface)
     if entry.action == pb2.Action.SWAP:
         _run_cmd([
             "ip", "-f", "mpls", "route", "replace",
-            str(entry.in_label), "via", "inet", nh,
-            "as", str(entry.out_label), "dev", entry.out_interface,
+            str(entry.in_label), "as", str(entry.out_label),
+            "dev", entry.out_interface,
         ])
     elif entry.action == pb2.Action.POP:
         _run_cmd([
             "ip", "-f", "mpls", "route", "replace",
-            str(entry.in_label), "via", "inet", nh,
-            "dev", entry.out_interface,
+            str(entry.in_label), "dev", entry.out_interface,
         ])
 
 
 def _install_ler(entry: pb2.IngressEntry) -> None:
     """Install or replace an LER (ingress) entry in the kernel."""
-    nh = _nexthop(entry.out_interface)
     _run_cmd([
         "ip", "route", "replace", entry.dst_prefix,
         "encap", "mpls", str(entry.push_label),
-        "via", nh, "dev", entry.out_interface,
+        "dev", entry.out_interface,
     ])
 
 
@@ -131,41 +114,50 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
             next_ler[entry.dst_prefix] = entry
 
         installed = 0
+        skipped = 0
+        errors = []
 
-        try:
-            # INSTALL phase: new or changed entries
-            for in_label, entry in next_lsr.items():
-                old = curr_lsr.get(in_label)
-                if old is None or not _lsr_eq(old, entry):
+        # INSTALL phase: new or changed entries (skip if interface is down)
+        for in_label, entry in next_lsr.items():
+            if not _iface_up(entry.out_interface):
+                skipped += 1
+                continue
+            old = curr_lsr.get(in_label)
+            if old is None or not _lsr_eq(old, entry):
+                try:
                     _install_lsr(entry)
                     installed += 1
+                except subprocess.CalledProcessError as exc:
+                    errors.append(f"LSR {in_label}: {exc.stderr.strip()}")
 
-            for prefix, entry in next_ler.items():
-                old = curr_ler.get(prefix)
-                if old is None or not _ler_eq(old, entry):
+        for prefix, entry in next_ler.items():
+            if not _iface_up(entry.out_interface):
+                skipped += 1
+                continue
+            old = curr_ler.get(prefix)
+            if old is None or not _ler_eq(old, entry):
+                try:
                     _install_ler(entry)
                     installed += 1
+                except subprocess.CalledProcessError as exc:
+                    errors.append(f"LER {prefix}: {exc.stderr.strip()}")
 
-            # REMOVE phase: stale entries
-            for in_label in curr_lsr:
-                if in_label not in next_lsr:
+        # REMOVE phase: stale entries
+        for in_label in curr_lsr:
+            if in_label not in next_lsr:
+                try:
                     _remove_lsr(in_label)
+                except subprocess.CalledProcessError:
+                    pass  # entry may already be gone
 
-            for prefix in curr_ler:
-                if prefix not in next_ler:
+        for prefix in curr_ler:
+            if prefix not in next_ler:
+                try:
                     _remove_ler(prefix)
+                except subprocess.CalledProcessError:
+                    pass
 
-        except subprocess.CalledProcessError as exc:
-            elapsed = (time.monotonic() - start) * 1000
-            log.error("Kernel command failed: %s (stderr: %s)", exc.cmd, exc.stderr)
-            return pb2.PushResponse(
-                success=False,
-                error_message=f"Command failed: {exc.stderr}",
-                entries_installed=installed,
-                apply_time_ms=elapsed,
-            )
-
-        # Update state on success
+        # Update state (record the intended table even if some entries were skipped)
         _state["lsr_entries"] = next_lsr
         _state["ler_entries"] = next_ler
         _state["topology_state_id"] = request.topology_state_id
@@ -176,13 +168,15 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
 
         total = len(next_lsr) + len(next_ler)
         log.info(
-            "Applied update %s: %d entries (%d installed/changed) in %.1fms",
-            request.topology_state_id, total, installed, elapsed,
+            "Applied update %s: %d entries (%d installed, %d skipped-down, %d errors) in %.1fms",
+            request.topology_state_id, total, installed, skipped, len(errors), elapsed,
         )
 
+        success = len(errors) == 0
+        error_msg = "; ".join(errors) if errors else ""
         return pb2.PushResponse(
-            success=True,
-            error_message="",
+            success=success,
+            error_message=error_msg,
             entries_installed=installed,
             apply_time_ms=elapsed,
         )
@@ -230,7 +224,6 @@ def _ler_eq(a, b) -> bool:
 
 
 def serve() -> None:
-    _load_peers()
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     add_ForwardingServiceServicer_to_server(ForwardingServiceImpl(), server)
     server.add_insecure_port(f"0.0.0.0:{GRPC_PORT}")

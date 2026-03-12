@@ -4,12 +4,12 @@ import { usePath } from "../hooks/usePath";
 import "../styles/path.css";
 
 interface Props {
-    groundStations: ConsoleNode[];
+    nodes: ConsoleNode[];
     selectedSimTime: string | null;
     onPathResult: (result: PathResult | null) => void;
 }
 
-export function PathPanel({ groundStations, selectedSimTime, onPathResult }: Props) {
+export function PathPanel({ nodes, selectedSimTime, onPathResult }: Props) {
     const [src, setSrc] = useState<string>("");
     const [dst, setDst] = useState<string>("");
     const { result, loading, error, query, clear } = usePath();
@@ -35,7 +35,7 @@ export function PathPanel({ groundStations, selectedSimTime, onPathResult }: Pro
         onPathResult(null);
     };
 
-    const gsIds = groundStations.map(n => n.node_id);
+    const nodeIds = nodes.map(n => n.node_id);
 
     return (
         <div className="path-panel">
@@ -50,9 +50,9 @@ export function PathPanel({ groundStations, selectedSimTime, onPathResult }: Pro
                         value={src}
                         onChange={e => setSrc(e.target.value)}
                     >
-                        <option value="">— ground station —</option>
-                        {gsIds.map(id => (
-                            <option key={id} value={id}>{id.replace(/^gs-/, "")}</option>
+                        <option value="">— select node —</option>
+                        {nodeIds.map(id => (
+                            <option key={id} value={id}>{id}</option>
                         ))}
                     </select>
                 </div>
@@ -63,9 +63,9 @@ export function PathPanel({ groundStations, selectedSimTime, onPathResult }: Pro
                         value={dst}
                         onChange={e => setDst(e.target.value)}
                     >
-                        <option value="">— ground station —</option>
-                        {gsIds.filter(id => id !== src).map(id => (
-                            <option key={id} value={id}>{id.replace(/^gs-/, "")}</option>
+                        <option value="">— select node —</option>
+                        {nodeIds.filter(id => id !== src).map(id => (
+                            <option key={id} value={id}>{id}</option>
                         ))}
                     </select>
                 </div>

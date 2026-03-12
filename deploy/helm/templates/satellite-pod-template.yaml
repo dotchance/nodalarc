@@ -25,5 +25,27 @@ spec:
         limits:
           memory: {{ $.Values.satellite.memoryLimit }}
           cpu: {{ $.Values.satellite.cpuLimit }}
+{{- if $.Values.sidecar }}
+    - name: {{ $.Values.sidecar.image | replace ":" "-" | lower }}
+      image: {{ $.Values.sidecar.image }}
+      imagePullPolicy: {{ $.Values.imagePullPolicy }}
+      securityContext:
+        capabilities:
+          add:
+{{- range $.Values.sidecar.capabilities }}
+            - {{ . }}
+{{- end }}
+{{- if .env }}
+      env:
+{{- range .env }}
+        - name: {{ .name }}
+          value: "{{ .value }}"
+{{- end }}
+{{- end }}
+      resources:
+        limits:
+          memory: {{ $.Values.satellite.memoryLimit }}
+          cpu: {{ $.Values.satellite.cpuLimit }}
+{{- end }}
   restartPolicy: Never
 {{- end }}

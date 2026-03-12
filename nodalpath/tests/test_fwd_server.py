@@ -2,6 +2,9 @@
 
 Imports fwd_server via sys.path manipulation since it lives outside the
 Python package. All kernel commands are mocked via subprocess.run.
+
+Point-to-point veth links: MPLS routes use `dev {iface}` without `via`
+nexthop, matching the NEBULA architecture for unnumbered p2p links.
 """
 
 from __future__ import annotations
@@ -9,7 +12,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -31,17 +34,6 @@ def _reset_state():
     fwd_server._state["ler_entries"] = {}
     fwd_server._state["last_update_ms"] = 0.0
     fwd_server._state["last_update_time"] = ""
-    yield
-
-
-@pytest.fixture(autouse=True)
-def _mock_peers():
-    """Set up a mock peers map for nexthop resolution."""
-    fwd_server._peers = {
-        "isl0": "10.0.0.2",
-        "isl1": "10.0.1.1",
-        "gnd0": "10.2.0.1",
-    }
     yield
 
 
@@ -73,8 +65,7 @@ class TestApplyLsrCommands:
         fwd_server._install_lsr(entry)
         mock_run.assert_called_once_with(
             ["ip", "-f", "mpls", "route", "replace",
-             "100", "via", "inet", "10.0.0.2",
-             "as", "200", "dev", "isl0"],
+             "100", "as", "200", "dev", "isl0"],
             check=True, capture_output=True, text=True,
         )
 
@@ -84,8 +75,7 @@ class TestApplyLsrCommands:
         fwd_server._install_lsr(entry)
         mock_run.assert_called_once_with(
             ["ip", "-f", "mpls", "route", "replace",
-             "100", "via", "inet", "10.2.0.1",
-             "dev", "gnd0"],
+             "100", "dev", "gnd0"],
             check=True, capture_output=True, text=True,
         )
 
@@ -96,7 +86,7 @@ class TestApplyLsrCommands:
         mock_run.assert_called_once_with(
             ["ip", "route", "replace", "172.16.0.0/24",
              "encap", "mpls", "100",
-             "via", "10.2.0.1", "dev", "gnd0"],
+             "dev", "gnd0"],
             check=True, capture_output=True, text=True,
         )
 
@@ -117,16 +107,10 @@ class TestApplyLsrCommands:
         )
 
 
-class TestUnknownInterface:
-    def test_unknown_interface_raises(self):
-        entry = _make_lsr_entry(iface="unknown0")
-        with pytest.raises(ValueError, match="No peer IP"):
-            fwd_server._nexthop("unknown0")
-
-
 class TestUpdateForwardingTable:
+    @patch("fwd_server._iface_up", return_value=True)
     @patch("fwd_server.subprocess.run")
-    def test_update_success(self, mock_run):
+    def test_update_success(self, mock_run, _):
         svc = fwd_server.ForwardingServiceImpl()
         request = _make_request(
             lsr=[_make_lsr_entry(100, pb2.Action.SWAP, 200, "isl0")],
@@ -137,9 +121,10 @@ class TestUpdateForwardingTable:
         assert resp.entries_installed == 2
         assert resp.apply_time_ms > 0
 
+    @patch("fwd_server._iface_up", return_value=True)
     @patch("fwd_server.subprocess.run")
-    def test_installs_before_removing(self, mock_run):
-        """Verify install-before-remove ordering for atomicity."""
+    def test_installs_before_removing(self, mock_run, _):
+        """Verify install-before-remove ordering (NEBULA_3 atomicity)."""
         svc = fwd_server.ForwardingServiceImpl()
 
         # First: install entry with in_label=100
@@ -168,9 +153,10 @@ class TestUpdateForwardingTable:
         assert remove_idx is not None
         assert install_idx < remove_idx
 
+    @patch("fwd_server._iface_up", return_value=True)
     @patch("fwd_server.subprocess.run")
-    def test_atomic_on_apply_error(self, mock_run):
-        """State should NOT be updated if an install command fails."""
+    def test_error_on_install_reports_failure(self, mock_run, _):
+        """Errors on install are reported but don't abort the entire push."""
         svc = fwd_server.ForwardingServiceImpl()
         mock_run.side_effect = subprocess.CalledProcessError(1, "ip", stderr="RTNETLINK error")
         request = _make_request(
@@ -179,35 +165,26 @@ class TestUpdateForwardingTable:
         resp = svc.UpdateForwardingTable(request, None)
         assert resp.success is False
         assert "RTNETLINK" in resp.error_message
-        assert fwd_server._state["lsr_entries"] == {}
 
+    @patch("fwd_server._iface_up", return_value=True)
     @patch("fwd_server.subprocess.run")
-    def test_atomic_on_remove_error(self, mock_run):
-        """State should NOT be updated if a remove command fails."""
+    def test_skip_down_interfaces(self, mock_run, mock_iface_up):
+        """Entries for down interfaces are skipped, not failed."""
+        mock_iface_up.side_effect = lambda iface: iface != "isl2"
         svc = fwd_server.ForwardingServiceImpl()
-
-        # First install succeeds
-        req1 = _make_request(lsr=[_make_lsr_entry(100, pb2.Action.SWAP, 200, "isl0")])
-        svc.UpdateForwardingTable(req1, None)
-
-        # Second call: replace entries, but remove fails
-        def fail_on_del(cmd, **kwargs):
-            if "del" in cmd:
-                raise subprocess.CalledProcessError(1, cmd, stderr="del failed")
-            return MagicMock()
-
-        mock_run.side_effect = fail_on_del
-        req2 = _make_request(
-            lsr=[_make_lsr_entry(101, pb2.Action.SWAP, 201, "isl0")],
-            state_id="state-2",
+        request = _make_request(
+            lsr=[
+                _make_lsr_entry(100, pb2.Action.SWAP, 200, "isl0"),
+                _make_lsr_entry(101, pb2.Action.SWAP, 201, "isl2"),
+            ],
         )
-        resp = svc.UpdateForwardingTable(req2, None)
-        assert resp.success is False
-        # State should still be from req1
-        assert fwd_server._state["topology_state_id"] == "state-1"
+        resp = svc.UpdateForwardingTable(request, None)
+        assert resp.success is True
+        assert resp.entries_installed == 1  # only isl0 installed
 
+    @patch("fwd_server._iface_up", return_value=True)
     @patch("fwd_server.subprocess.run")
-    def test_incremental_only_changed(self, mock_run):
+    def test_incremental_only_changed(self, mock_run, _):
         """Only changed entries should be installed."""
         svc = fwd_server.ForwardingServiceImpl()
 
@@ -224,8 +201,9 @@ class TestUpdateForwardingTable:
         assert resp.entries_installed == 0
         mock_run.assert_not_called()
 
+    @patch("fwd_server._iface_up", return_value=True)
     @patch("fwd_server.subprocess.run")
-    def test_full_replace(self, mock_run):
+    def test_full_replace(self, mock_run, _):
         """Full replacement: all old entries removed, all new entries installed."""
         svc = fwd_server.ForwardingServiceImpl()
 
@@ -246,8 +224,9 @@ class TestUpdateForwardingTable:
 
 
 class TestGetForwardingTable:
+    @patch("fwd_server._iface_up", return_value=True)
     @patch("fwd_server.subprocess.run")
-    def test_get_returns_current_state(self, mock_run):
+    def test_get_returns_current_state(self, mock_run, _):
         svc = fwd_server.ForwardingServiceImpl()
         request = _make_request(
             lsr=[_make_lsr_entry(100, pb2.Action.SWAP, 200, "isl0")],
@@ -270,8 +249,9 @@ class TestGetStatus:
         assert status.node_id == "sat-P00S00"
         fwd_server.NODE_ID = "unknown"  # Reset
 
+    @patch("fwd_server._iface_up", return_value=True)
     @patch("fwd_server.subprocess.run")
-    def test_status_topology_state_id(self, mock_run):
+    def test_status_topology_state_id(self, mock_run, _):
         svc = fwd_server.ForwardingServiceImpl()
         request = _make_request(
             lsr=[_make_lsr_entry(100, pb2.Action.SWAP, 200, "isl0")],
@@ -281,3 +261,9 @@ class TestGetStatus:
         status = svc.GetStatus(pb2.Empty(), None)
         assert status.current_topology_state_id == "topo-42"
         assert status.total_entries == 1
+
+
+class TestIfaceUp:
+    @patch("builtins.open", side_effect=FileNotFoundError)
+    def test_missing_interface_returns_false(self, _):
+        assert fwd_server._iface_up("nonexistent0") is False

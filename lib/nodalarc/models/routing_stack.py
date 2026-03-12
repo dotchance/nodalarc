@@ -12,6 +12,17 @@ class ConfigTemplate(BaseModel):
     dst: str  # Destination path inside the pod
 
 
+class SecurityContext(BaseModel):
+    """Security context for a sidecar container."""
+    capabilities: list[str] = []
+
+
+class EnvVar(BaseModel):
+    """Environment variable for a sidecar container."""
+    name: str
+    value: str
+
+
 class RoutingStackConfig(BaseModel):
     """Routing stack definition from stack.yaml."""
 
@@ -23,3 +34,7 @@ class RoutingStackConfig(BaseModel):
     mi_adapter: str | None = None  # MI adapter module name (null for non-FRR stacks)
     max_compression: int = 10
     reconfigure_command: str | None = None  # Reconfigure command (null for non-FRR stacks)
+    security_context: SecurityContext | None = None
+    env: list[EnvVar] = []
+    host_setup: dict[str, Any] = {}
+    transport: str | None = None

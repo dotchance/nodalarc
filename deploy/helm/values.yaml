@@ -30,6 +30,10 @@ visualization:
   memoryLimit: 128Mi
   cpuLimit: 100m
 
+# Optional sidecar container (e.g. nodalpath-fwd gRPC daemon)
+# Set by na-deploy when the routing stack specifies a non-FRR image.
+sidecar: null
+
 # Populated by na-deploy from constellation expansion
 satellites: []
 groundStations: []

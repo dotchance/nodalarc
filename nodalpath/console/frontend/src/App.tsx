@@ -61,7 +61,7 @@ export default function App() {
 
     const topologyNodes = activeTopology?.nodes ?? [];
     const lastPushResult = consoleState?.push_history?.[0] ?? null;
-    const groundStations = topologyNodes.filter(n => n.node_type === "ground_station");
+    const sortedNodes = [...topologyNodes].sort((a, b) => a.node_id.localeCompare(b.node_id));
 
     return (
         <div className="app-root">
@@ -95,7 +95,7 @@ export default function App() {
                         selectedSimTime={selectedSimTime}
                     />
                     <PathPanel
-                        groundStations={groundStations}
+                        nodes={sortedNodes}
                         selectedSimTime={selectedSimTime}
                         onPathResult={setPathResult}
                     />

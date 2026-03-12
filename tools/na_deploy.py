@@ -207,19 +207,47 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
 
     # === Step 5: Deploy K3s pods ===
     log.info("Step 5: Deploy K3s pods")
+    # Build sidecar config from stack if the stack uses a non-FRR image
+    sidecar_config: dict | None = None
+    if stack_config.image and not stack_config.image.startswith("nodalarc/frr"):
+        sidecar_config = {
+            "image": stack_config.image,
+            "capabilities": (
+                stack_config.security_context.capabilities
+                if stack_config.security_context else ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+            ),
+        }
+
     helm_values = {
         "satellites": [
-            {"nodeId": nid, "plane": vars["plane"], "slot": vars["slot"]}
+            {
+                "nodeId": nid,
+                "plane": vars["plane"],
+                "slot": vars["slot"],
+                **({"env": [
+                    {"name": e.name, "value": e.value.replace("{{ node_id }}", nid)}
+                    for e in stack_config.env
+                ]} if sidecar_config and stack_config.env else {}),
+            }
             for nid, vars in node_vars.items() if vars["node_type"] == "satellite"
         ],
         "groundStations": [
-            {"nodeId": nid, "gsName": vars["gs_name"]}
+            {
+                "nodeId": nid,
+                "gsName": vars["gs_name"],
+                **({"env": [
+                    {"name": e.name, "value": e.value.replace("{{ node_id }}", nid)}
+                    for e in stack_config.env
+                ]} if sidecar_config and stack_config.env else {}),
+            }
             for nid, vars in node_vars.items() if vars["node_type"] == "ground_station"
         ],
         "mode": "de" if session.time.mode == "discrete-event" else "rt",
         "sessionConfig": session_path,
         "timelineFile": str(timeline_path),
     }
+    if sidecar_config:
+        helm_values["sidecar"] = sidecar_config
     values_file = data_dir / "helm-values.yaml"
     values_file.write_text(yaml.dump(helm_values))
 

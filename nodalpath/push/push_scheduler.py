@@ -104,26 +104,13 @@ class PushScheduler:
         # Phase 1: Determine which nodes need pushing (transport-agnostic)
         # ------------------------------------------------------------------
         nodes_to_push: list[str] = []
-        vtysh_commands_cache: dict[str, str] = {}
         skipped = 0
 
         for table in entry.forwarding_tables:
-            node_id = table.node_id
-            if self.config.use_incremental_diff:
-                commands = diff_forwarding_tables(
-                    self._installed.get(node_id), table,
-                    self._sid_to_loopback, self._iface_to_peer_loopback,
-                )
-            else:
-                commands = forwarding_table_to_vtysh(
-                    table, self._sid_to_loopback, self._iface_to_peer_loopback,
-                )
-            if not commands:
+            if not self._table_needs_push(table):
                 skipped += 1
                 continue
-            nodes_to_push.append(node_id)
-            if self.config.transport == "vtysh":
-                vtysh_commands_cache[node_id] = commands
+            nodes_to_push.append(table.node_id)
 
         if not nodes_to_push:
             result = PushResult(
@@ -167,7 +154,7 @@ class PushScheduler:
         if self.config.transport == "grpc":
             normalized = self._push_grpc(entry, nodes_to_push)
         else:
-            normalized = self._push_vtysh(entry, nodes_to_push, vtysh_commands_cache)
+            normalized = self._push_vtysh(entry, nodes_to_push)
         duration_ms = (time.monotonic() - start) * 1000
 
         # ------------------------------------------------------------------
@@ -207,23 +194,43 @@ class PushScheduler:
         self._results.append(result)
         return result
 
+    def _table_needs_push(self, table: ForwardingTable) -> bool:
+        """Transport-agnostic check: does this table represent a change worth pushing?"""
+        if not table.lsr_bindings and not table.ler_ingress_rules:
+            return False
+        if self.config.use_incremental_diff:
+            installed = self._installed.get(table.node_id)
+            if installed is not None and (
+                installed.lsr_bindings == table.lsr_bindings
+                and installed.ler_ingress_rules == table.ler_ingress_rules
+            ):
+                return False
+        return True
+
     def _push_vtysh(
         self,
         entry: AlmanacEntry,
         nodes_to_push: list[str],
-        vtysh_commands_cache: dict[str, str],
     ) -> list[_NormalizedResult]:
         """Execute push via vtysh/kubectl exec transport."""
         push_tasks: list[tuple[str, str]] = []
         for node_id in nodes_to_push:
-            if node_id in vtysh_commands_cache:
-                commands = vtysh_commands_cache[node_id]
+            table = next(t for t in entry.forwarding_tables if t.node_id == node_id)
+            if self.config.use_incremental_diff:
+                commands = diff_forwarding_tables(
+                    self._installed.get(node_id), table,
+                    self._sid_to_loopback, self._iface_to_peer_loopback,
+                )
             else:
-                table = next(t for t in entry.forwarding_tables if t.node_id == node_id)
                 commands = forwarding_table_to_vtysh(
                     table, self._sid_to_loopback, self._iface_to_peer_loopback,
                 )
+            if not commands:
+                continue
             push_tasks.append((node_id, commands))
+
+        if not push_tasks:
+            return []
 
         exec_results = push_to_nodes(
             push_tasks,

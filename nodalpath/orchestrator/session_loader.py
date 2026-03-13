@@ -48,7 +48,7 @@ from nodalarc.models.ground_station import (
 from nodalarc.models.satellite_type import SatelliteTypeConfig
 from nodalarc.models.session import SessionConfig
 from nodalpath.engine.labels import compute_sid
-from nodalpath.models.topology import TopologyNode
+from nodalpath.models.topology import TopologyEdge, TopologyNode
 
 _constellation_adapter = TypeAdapter(ConstellationConfig)
 
@@ -189,12 +189,13 @@ def load_session_context(
 ) -> tuple[
     dict[str, TopologyNode],
     dict[tuple[str, str], tuple[str, str]],
-    dict[str, str],
+    dict[str, list[str]],
     dict[tuple[str, str], float],
+    list[TopologyEdge],
 ]:
     """Load session config and build topology context.
 
-    Returns (node_registry, interface_map, prefix_map, bandwidth_map).
+    Returns (node_registry, interface_map, prefix_map, bandwidth_map, static_edges).
 
     Imports only from lib/nodalarc/ and nodalpath/ — never from ome/,
     orchestrator/, vs_api/, or measurement/.
@@ -274,26 +275,63 @@ def load_session_context(
             loopback_ipv4=addressing.gs_ipv4(gs_index),
         )
 
-    # 7. Build prefix_map (advertised prefix per node)
-    #    GS: first IPv4 terrestrial prefix (or default template)
+    # 7. Build prefix_map (advertised prefixes per node)
+    #    GS: all terrestrial prefixes (or default template)
     #    Satellites: loopback /32 so they can be path derivation destinations
-    prefix_map: dict[str, str] = {}
+    prefix_map: dict[str, list[str]] = {}
 
     for plane, slot in sat_pairs:
         sat_id = addressing.sat_id(plane, slot)
-        prefix_map[sat_id] = f"{addressing.sat_ipv4(plane, slot)}/32"
+        prefix_map[sat_id] = [f"{addressing.sat_ipv4(plane, slot)}/32"]
 
     template = gs_file.default_terrestrial_prefixes
     for gs_index, station in enumerate(gs_file.stations):
         gs_id = addressing.gs_id(station.name)
         if station.terrestrial_prefixes:
-            prefix_map[gs_id] = station.terrestrial_prefixes[0].prefix
+            prefix_map[gs_id] = [tp.prefix for tp in station.terrestrial_prefixes]
         elif template is not None:
-            prefix_map[gs_id] = template.ipv4_template.format(gs_index=gs_index)
+            prefix_map[gs_id] = [template.ipv4_template.format(gs_index=gs_index)]
         else:
-            prefix_map[gs_id] = f"172.16.{gs_index}.0/24"
+            prefix_map[gs_id] = [f"172.16.{gs_index}.0/24"]
 
-    return node_registry, interface_map, prefix_map, bandwidth_map
+    # 8. Build static terrestrial edges
+    static_edges: list[TopologyEdge] = []
+    if session.terrestrial_links:
+        terr_counters: dict[str, int] = {}  # per-node terrN index
+        for tl in session.terrestrial_links:
+            gs_a = addressing.gs_id(tl.station_a)
+            gs_b = addressing.gs_id(tl.station_b)
+            if gs_a not in node_registry:
+                raise ValueError(f"Terrestrial link endpoint '{tl.station_a}' ('{gs_a}') not in node_registry")
+            if gs_b not in node_registry:
+                raise ValueError(f"Terrestrial link endpoint '{tl.station_b}' ('{gs_b}') not in node_registry")
+
+            idx_a = terr_counters.get(gs_a, 0) + 1
+            terr_counters[gs_a] = idx_a
+            idx_b = terr_counters.get(gs_b, 0) + 1
+            terr_counters[gs_b] = idx_b
+
+            iface_a = f"terr{idx_a}"
+            iface_b = f"terr{idx_b}"
+
+            pair = (min(gs_a, gs_b), max(gs_a, gs_b))
+            if pair[0] == gs_a:
+                interface_map[pair] = (iface_a, iface_b)
+            else:
+                interface_map[pair] = (iface_b, iface_a)
+            bandwidth_map[pair] = tl.bandwidth_mbps
+
+            static_edges.append(TopologyEdge(
+                src_node_id=pair[0],
+                dst_node_id=pair[1],
+                src_interface=interface_map[pair][0],
+                dst_interface=interface_map[pair][1],
+                latency_ms=tl.latency_ms,
+                bandwidth_mbps=tl.bandwidth_mbps,
+                link_type="terrestrial",
+            ))
+
+    return node_registry, interface_map, prefix_map, bandwidth_map, static_edges
 
 
 def _daemon_request(

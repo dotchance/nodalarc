@@ -44,7 +44,7 @@ class LiveOrchestrator:
         self,
         node_registry: dict[str, TopologyNode],
         interface_map: dict[tuple[str, str], tuple[str, str]],
-        prefix_map: dict[str, str],
+        prefix_map: dict[str, list[str]],
         bandwidth_map: dict[tuple[str, str], float] | None,
         push_scheduler: PushScheduler,
         publisher: AlmanacPublisher,
@@ -56,8 +56,9 @@ class LiveOrchestrator:
         inspection_on_push: bool = True,
         inspection_on_link_event: bool = True,
         inspection_heartbeat_interval_s: int = 0,
+        static_edges: list | None = None,
     ) -> None:
-        self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
+        self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map, static_edges=static_edges)
         self._store = AlmanacStore()
         self._prefix_map = prefix_map
         self._push_scheduler = push_scheduler
@@ -302,7 +303,7 @@ class LiveOrchestrator:
                     "neighbor_count": ic + gc,
                     "isl_count": ic,
                     "gnd_count": gc,
-                    "prefix": self._prefix_map.get(node.node_id),
+                    "prefix": ", ".join(self._prefix_map.get(node.node_id, [])),
                 })
 
             links_payload = [

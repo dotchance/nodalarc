@@ -44,17 +44,18 @@ class LookaheadWorker:
         timeline_path: Path,
         node_registry: dict,
         interface_map: dict,
-        prefix_map: dict[str, str],
+        prefix_map: dict[str, list[str]],
         bandwidth_map: dict | None,
         almanac_store: AlmanacStore,
         lookahead_horizon_s: int | None = None,
         console_state: ConsoleState | None = None,
         link_state_store: LinkStateStore | None = None,
+        static_edges: list | None = None,
     ) -> None:
         if lookahead_horizon_s is None:
             lookahead_horizon_s = _lookahead_default_s()
         self._timeline_path = timeline_path
-        self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
+        self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map, static_edges=static_edges)
         self._prefix_map = prefix_map
         self._store = almanac_store
         self._horizon_s = lookahead_horizon_s

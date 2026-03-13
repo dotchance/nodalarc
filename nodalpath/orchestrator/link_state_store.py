@@ -93,7 +93,9 @@ class LinkStateStore:
         """Store the full link state for a topology transition."""
         records: list[LinkRecord] = []
         for (node_a, node_b), (visible, scheduled, range_km) in full_link_state.items():
-            link_type = "ground" if node_a.startswith("gs-") or node_b.startswith("gs-") else "isl"
+            a_is_gs = node_a.startswith("gs-")
+            b_is_gs = node_b.startswith("gs-")
+            link_type = "terrestrial" if (a_is_gs and b_is_gs) else "ground" if (a_is_gs or b_is_gs) else "isl"
             records.append(LinkRecord(
                 node_a=node_a,
                 node_b=node_b,

@@ -27,7 +27,7 @@ def _node(node_id: str, node_type: str, sid: int,
 def _deriver(
     nodes: list[TopologyNode],
     edges: list[tuple[str, str, str, str, float]],
-    prefix_map: dict[str, str],
+    prefix_map: dict[str, list[str]],
 ) -> PathDeriver:
     """Build a PathDeriver with a SnapshotBuilder seeded with the given edges.
 
@@ -96,7 +96,7 @@ def test_simple_path_gs_sat_gs():
         ("gs-a", "sat-P00S00", "gnd0", "gnd0", 5.0),
         ("sat-P00S00", "gs-b", "gnd1", "gnd0", 5.0),
     ]
-    prefix_map = {"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("gs-a", "gs-b")
     assert result.reachable is True
@@ -121,7 +121,7 @@ def test_path_two_satellite_hops():
         ("sat-P00S00", "sat-P01S00", "isl0", "isl0", 14.0),
         ("sat-P01S00", "gs-b", "gnd0", "gnd0", 5.0),
     ]
-    prefix_map = {"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("gs-a", "gs-b")
     assert result.reachable is True
@@ -148,7 +148,7 @@ def test_path_three_satellite_hops():
         ("sat-P01S00", "sat-P02S00", "isl0", "isl0", 14.0),
         ("sat-P02S00", "gs-b", "gnd0", "gnd0", 5.0),
     ]
-    prefix_map = {"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("gs-a", "gs-b")
     assert result.reachable is True
@@ -168,7 +168,7 @@ def test_bidirectional_path():
         ("gs-a", "sat-P00S00", "gnd0", "gnd0", 5.0),
         ("sat-P00S00", "gs-b", "gnd1", "gnd0", 5.0),
     ]
-    prefix_map = {"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
 
     fwd = deriver.derive("gs-a", "gs-b")
@@ -191,7 +191,7 @@ def test_satellite_to_satellite_path():
     edges = [
         ("sat-P00S00", "sat-P01S00", "isl0", "isl0", 14.0),
     ]
-    prefix_map = {"sat-P00S00": "10.1.0.0/24", "sat-P01S00": "10.1.1.0/24"}
+    prefix_map = {"sat-P00S00": ["10.1.0.0/24"], "sat-P01S00": ["10.1.1.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("sat-P00S00", "sat-P01S00")
     assert result.reachable is True
@@ -207,7 +207,7 @@ def test_satellite_src_without_prefix_still_works():
     edges = [
         ("sat-P00S00", "gs-b", "gnd0", "gnd0", 5.0),
     ]
-    prefix_map = {"gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("sat-P00S00", "gs-b")
     assert result.reachable is True
@@ -223,7 +223,7 @@ def test_unreachable_disconnected():
         _node("gs-b", "ground_station", sid=24002),
     ]
     edges = []  # no edges
-    prefix_map = {"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("gs-a", "gs-b")
     assert result.reachable is False
@@ -240,7 +240,7 @@ def test_unreachable_no_almanac_entries():
     store.get_entry_at.return_value = None
     deriver = PathDeriver(
         almanac_store=store,
-        prefix_map={"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"},
+        prefix_map={"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]},
         node_registry={n.node_id: n for n in nodes},
         interface_map={},
     )
@@ -260,7 +260,7 @@ def test_path_method_is_cspf():
         ("gs-a", "sat-P00S00", "gnd0", "gnd0", 5.0),
         ("sat-P00S00", "gs-b", "gnd1", "gnd0", 5.0),
     ]
-    prefix_map = {"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("gs-a", "gs-b")
     assert result.method == "cspf"
@@ -276,7 +276,7 @@ def test_path_total_latency_sums_hops():
         ("gs-a", "sat-P00S00", "gnd0", "gnd0", 5.0),
         ("sat-P00S00", "gs-b", "gnd1", "gnd0", 4.0),
     ]
-    prefix_map = {"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("gs-a", "gs-b")
     assert result.reachable is True
@@ -294,7 +294,7 @@ def test_historical_path_uses_sim_time():
     store.get_entry_at.return_value = None
     deriver = PathDeriver(
         almanac_store=store,
-        prefix_map={"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"},
+        prefix_map={"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]},
         node_registry={n.node_id: n for n in nodes},
         interface_map={},
     )
@@ -312,7 +312,7 @@ def test_path_sim_time_and_state_id_in_result():
         ("gs-a", "sat-P00S00", "gnd0", "gnd0", 5.0),
         ("sat-P00S00", "gs-b", "gnd1", "gnd0", 5.0),
     ]
-    prefix_map = {"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("gs-a", "gs-b")
     assert result.sim_time == "2026-01-01T00:01:00Z"
@@ -340,7 +340,7 @@ def test_prefers_fewer_hops_over_ring_wandering():
         ("sat-P00S00", "sat-P01S00", "isl2", "isl3", 14.5),
         ("sat-P01S00", "gs-b", "gnd0", "gnd0", 5.0),
     ]
-    prefix_map = {"gs-a": "10.0.1.0/24", "gs-b": "10.0.2.0/24"}
+    prefix_map = {"gs-a": ["10.0.1.0/24"], "gs-b": ["10.0.2.0/24"]}
     deriver = _deriver(nodes, edges, prefix_map)
     result = deriver.derive("gs-a", "gs-b")
     assert result.reachable is True

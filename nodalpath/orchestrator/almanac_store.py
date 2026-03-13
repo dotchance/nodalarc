@@ -136,7 +136,7 @@ class AlmanacStore:
             })
         return ticks
 
-    def get_topology_at(self, sim_time: str, prefix_map: dict[str, str]) -> dict | None:
+    def get_topology_at(self, sim_time: str, prefix_map: dict[str, list[str]]) -> dict | None:
         """Return a console-format topology dict for the state at sim_time.
 
         Uses get_entry_at() for O(log n) lookup. Returns None if no entry
@@ -161,7 +161,7 @@ class AlmanacStore:
                 "neighbor_count": neighbor_count,
                 "isl_count": 0,
                 "gnd_count": 0,
-                "prefix": prefix_map.get(ft.node_id),
+                "prefix": ", ".join(prefix_map.get(ft.node_id, [])),
             })
 
         return {

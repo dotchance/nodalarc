@@ -85,7 +85,9 @@ class TestIndividualStationDetails:
         s = load_ground_station_individual("ashburn")
         assert s.min_elevation_deg is None  # uses default
         assert s.scheduling_policy is None  # uses default
-        assert s.terrestrial_prefixes is None  # derived from template
+        assert s.terrestrial_prefixes is not None
+        assert s.terrestrial_prefixes[0].prefix == "172.16.2.0/24"
+        assert s.terrestrial_prefixes[0].metric == 10
 
     def test_nonexistent_station(self):
         with pytest.raises(FileNotFoundError, match="Ground station file not found"):

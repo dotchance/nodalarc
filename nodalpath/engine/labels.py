@@ -125,34 +125,50 @@ def build_ler_ingress_rules(
     node_id: str,
     paths: list[ComputedPath],
     graph: TopologyGraph,
-    prefix_map: dict[str, str],
+    prefix_map: dict[str, list[str]],
 ) -> list[IngressRule]:
     """Build LER ingress rules for any node that is a path source.
 
-    For each path where this node is the ingress (src_node_id == node_id),
-    create an IngressRule:
-    - dst_prefix: the destination node's advertised prefix
-    - push_label: first label in the path's label_stack
-    - out_interface: the interface toward the first-hop node
+    For each reachable prefix, create an IngressRule using the best
+    (lowest-latency) path to an advertising node.
+
+    Multi-prefix: a destination node may advertise multiple prefixes —
+    each gets its own IngressRule via the same path.
+
+    Shared prefix: if multiple nodes advertise the same prefix (e.g.
+    0.0.0.0/0), the nearest reachable advertiser is chosen.
     """
-    rules: list[IngressRule] = []
+    # Index paths from this node by destination
+    paths_from_me: dict[str, ComputedPath] = {}
     for path in paths:
         if path.src_node_id != node_id:
             continue
-
-        dst_prefix = prefix_map.get(path.dst_node_id)
-        if dst_prefix is None:
-            continue
-
         if not path.label_stack:
             continue
+        # Keep best (lowest latency) path per destination
+        existing = paths_from_me.get(path.dst_node_id)
+        if existing is None or path.total_latency_ms < existing.total_latency_ms:
+            paths_from_me[path.dst_node_id] = path
 
-        push_label = path.label_stack[0]
-        # out_interface is the first hop's out_interface (ingress LER's departing interface)
-        out_interface = path.hops[0].out_interface or ""
+    # Build reverse map: prefix → [(advertising_node_id, path)]
+    prefix_candidates: dict[str, list[tuple[str, ComputedPath]]] = {}
+    for adv_node_id, prefixes in prefix_map.items():
+        if adv_node_id == node_id:
+            continue  # Skip self-advertising
+        path = paths_from_me.get(adv_node_id)
+        if path is None:
+            continue  # Unreachable advertiser
+        for pfx in prefixes:
+            prefix_candidates.setdefault(pfx, []).append((adv_node_id, path))
 
+    # For each prefix, pick the best (lowest-latency) advertiser
+    rules: list[IngressRule] = []
+    for pfx, candidates in prefix_candidates.items():
+        best_node, best_path = min(candidates, key=lambda c: c[1].total_latency_ms)
+        push_label = best_path.label_stack[0]
+        out_interface = best_path.hops[0].out_interface or ""
         rules.append(IngressRule(
-            dst_prefix=dst_prefix,
+            dst_prefix=pfx,
             push_label=push_label,
             out_interface=out_interface,
         ))

@@ -40,8 +40,8 @@ class TopologyEdge(BaseModel, frozen=True):
     @field_validator("link_type")
     @classmethod
     def validate_link_type(cls, v: str) -> str:
-        if v not in ("isl", "ground"):
-            raise ValueError(f"link_type must be 'isl' or 'ground', got '{v}'")
+        if v not in ("isl", "ground", "terrestrial"):
+            raise ValueError(f"link_type must be 'isl', 'ground', or 'terrestrial', got '{v}'")
         return v
 
 

@@ -32,7 +32,7 @@ class PathDeriver:
     def __init__(
         self,
         almanac_store: AlmanacStore,
-        prefix_map: dict[str, str],
+        prefix_map: dict[str, list[str]],
         node_registry: dict,
         interface_map: dict[tuple[str, str], tuple[str, str]],
         snapshot_builder: SnapshotBuilder | None = None,

@@ -232,7 +232,7 @@ def compute_all_gs_paths(
 
 def compute_all_paths(
     graph: TopologyGraph,
-    prefix_map: dict[str, str],
+    prefix_map: dict[str, list[str]],
     constraints: PathConstraints = DEFAULT_CONSTRAINTS,
 ) -> list[ComputedPath]:
     """Compute shortest paths from every node to every node with a prefix."""

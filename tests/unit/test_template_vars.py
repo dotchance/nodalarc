@@ -283,8 +283,8 @@ class TestGroundStationVars:
         assert result["interface_info"] == {}
         assert result["neighbors"] == {}
 
-    def test_gs_terrestrial_prefix_from_template(self, stripe_session, starlink_config, gs_file, addressing):
-        """Hawthorne uses default template (no per-station override)."""
+    def test_gs_terrestrial_prefix_from_station(self, stripe_session, starlink_config, gs_file, addressing):
+        """Hawthorne uses per-station explicit prefixes (unique + default route)."""
         result = build_template_vars(
             session=stripe_session,
             constellation=starlink_config,
@@ -294,11 +294,11 @@ class TestGroundStationVars:
             gs_index=0, gs_name="hawthorne",
         )
         prefixes = result["terrestrial_prefixes"]
-        assert len(prefixes) == 2  # IPv4 + IPv6
-        assert prefixes[0]["prefix"] == "172.16.0.0/24"
+        assert len(prefixes) == 2  # Unique /24 + default route
+        assert prefixes[0]["prefix"] == "172.16.1.0/24"
         assert prefixes[0]["metric"] == 10
-        assert prefixes[1]["prefix"] == "fd10::0:0/112"
-        assert prefixes[1]["metric"] == 10
+        assert prefixes[1]["prefix"] == "0.0.0.0/0"
+        assert prefixes[1]["metric"] == 100
 
     def test_gs_terrestrial_prefix_per_station_override(self, stripe_session, starlink_config, gs_file, addressing):
         """McMurdo has per-station prefix override."""

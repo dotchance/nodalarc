@@ -46,7 +46,7 @@ async def _run_live(config: NodalPathConfig) -> None:
     from nodalpath.integration.zmq_publisher import AlmanacPublisher
     from nodalarc.zmq_channels import nodalpath_console_port
 
-    node_registry, interface_map, prefix_map, bandwidth_map = load_session_context(
+    node_registry, interface_map, prefix_map, bandwidth_map, static_edges = load_session_context(
         config.session_path,
     )
 
@@ -97,6 +97,7 @@ async def _run_live(config: NodalPathConfig) -> None:
         interface_map=interface_map,
         prefix_map=prefix_map,
         bandwidth_map=bandwidth_map,
+        static_edges=static_edges,
         push_scheduler=push_scheduler,
         publisher=publisher,
         ome_connect=config.ome_connect,
@@ -162,6 +163,7 @@ async def _run_live(config: NodalPathConfig) -> None:
             lookahead_horizon_s=config.lookahead_horizon_s,
             console_state=console_state,
             link_state_store=link_state_store,
+            static_edges=static_edges,
         )
         tasks.append(lookahead.run())
         log.info(
@@ -217,7 +219,7 @@ def _run_batch(config: NodalPathConfig) -> None:
     """Batch mode — unchanged SlidingWindow.process() path."""
     from nodalpath.orchestrator.window import SlidingWindow
 
-    node_registry, interface_map, prefix_map, bandwidth_map = load_session_context(
+    node_registry, interface_map, prefix_map, bandwidth_map, static_edges = load_session_context(
         config.session_path,
     )
     push_scheduler = _build_push_scheduler(config, node_registry, interface_map) if not config.dry_run else None
@@ -230,6 +232,7 @@ def _run_batch(config: NodalPathConfig) -> None:
         bandwidth_map=bandwidth_map,
         output_path=config.output_path,
         push_scheduler=push_scheduler,
+        static_edges=static_edges,
     )
     transitions = window.process()
     log.info("Batch processing complete: %d transitions", transitions)

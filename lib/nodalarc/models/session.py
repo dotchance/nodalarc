@@ -88,6 +88,16 @@ class ConvergenceConfig(BaseModel):
     probe_interval_ms: int = 100
 
 
+class TerrestrialLinkConfig(BaseModel):
+    """A static terrestrial link between two ground stations."""
+
+    station_a: str
+    station_b: str
+    bandwidth_mbps: float = 10000.0
+    latency_ms: float = 5.0
+    loss_pct: float = 0.0
+
+
 class SessionConfig(BaseModel):
     """Top-level session configuration — the single YAML file
     that defines an entire deployment."""
@@ -100,4 +110,5 @@ class SessionConfig(BaseModel):
     routing: RoutingConfig
     time: TimeConfig = TimeConfig()
     traffic_flows: list[TrafficFlowConfig] | None = None
+    terrestrial_links: list[TerrestrialLinkConfig] | None = None
     convergence: ConvergenceConfig = ConvergenceConfig()

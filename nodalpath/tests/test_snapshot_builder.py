@@ -144,6 +144,37 @@ class TestSnapshotBuilder:
         assert "isl" in types
         assert "ground" in types
 
+    def test_static_edges_in_snapshot(
+        self, simple_node_registry, simple_interface_map, simple_bandwidth_map,
+    ) -> None:
+        """Terrestrial static edges appear in every snapshot regardless of events."""
+        from nodalpath.models.topology import TopologyEdge
+
+        static_edges = [
+            TopologyEdge(
+                src_node_id="gs-alpha", dst_node_id="gs-beta",
+                src_interface="terr1", dst_interface="terr1",
+                latency_ms=5.0, bandwidth_mbps=10000.0,
+                link_type="terrestrial",
+            ),
+        ]
+        builder = SnapshotBuilder(
+            simple_node_registry, simple_interface_map, simple_bandwidth_map,
+            static_edges=static_edges,
+        )
+
+        # Even with no link events, snapshot contains the static edge
+        snapshot = builder.build_snapshot("2026-03-01T14:30:00+00:00")
+        assert len(snapshot.edges) == 1
+        assert snapshot.edges[0].link_type == "terrestrial"
+
+        # After adding a dynamic link, both appear
+        builder.apply_link_event(self._link_up("sat-P00S00", "sat-P00S01"))
+        snapshot = builder.build_snapshot("2026-03-01T14:30:01+00:00")
+        assert len(snapshot.edges) == 2
+        types = {e.link_type for e in snapshot.edges}
+        assert types == {"terrestrial", "isl"}
+
     def test_position_update(
         self, simple_node_registry, simple_interface_map, simple_bandwidth_map,
     ) -> None:

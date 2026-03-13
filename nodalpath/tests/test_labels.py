@@ -106,3 +106,49 @@ class TestBuildLerIngressRules:
 
         rules = build_ler_ingress_rules("sat-P00S00", paths, graph, prefix_map_simple)
         assert rules == []
+
+    def test_multi_prefix_ingress_rules(self, simple_4node_topology):
+        """A GS with 2 prefixes produces 2 IngressRules from each source."""
+        graph = build_graph(simple_4node_topology)
+        paths = compute_all_gs_paths(graph)
+
+        prefix_map = {
+            "gs-alpha": ["172.16.0.0/24"],
+            "gs-beta": ["172.16.1.0/24", "10.99.0.0/16"],
+        }
+        rules = build_ler_ingress_rules("gs-alpha", paths, graph, prefix_map)
+        prefixes = {r.dst_prefix for r in rules}
+        assert prefixes == {"172.16.1.0/24", "10.99.0.0/16"}
+
+    def test_shared_prefix_best_path(self, simple_4node_topology):
+        """Shared prefix (e.g. 0.0.0.0/0) from 2 GS → picks nearer GS."""
+        graph = build_graph(simple_4node_topology)
+        from nodalpath.engine.pathcomp import compute_all_paths
+
+        prefix_map = {
+            "gs-alpha": ["0.0.0.0/0"],
+            "gs-beta": ["0.0.0.0/0"],
+        }
+        paths = compute_all_paths(graph, prefix_map)
+
+        # From sat-P00S00: gs-alpha is directly connected (5.0ms),
+        # gs-beta is further (via sat-P00S01, 3.5+4.5=8.0ms or via gnd1 7.0ms)
+        rules = build_ler_ingress_rules("sat-P00S00", paths, graph, prefix_map)
+        assert len(rules) == 1
+        assert rules[0].dst_prefix == "0.0.0.0/0"
+        # The push_label should be for gs-alpha (nearest)
+        assert rules[0].push_label == graph.node_sids["gs-alpha"]
+
+    def test_empty_prefix_no_rules(self, simple_4node_topology):
+        """Node with empty prefix list generates no ingress rules targeting it."""
+        graph = build_graph(simple_4node_topology)
+        paths = compute_all_gs_paths(graph)
+
+        prefix_map = {
+            "gs-alpha": [],
+            "gs-beta": ["172.16.1.0/24"],
+        }
+        # gs-beta should still get a rule for gs-alpha (but gs-alpha has no prefixes)
+        rules = build_ler_ingress_rules("gs-beta", paths, graph, prefix_map)
+        # Only gs-alpha's prefixes could be targets, but it has none
+        assert rules == []

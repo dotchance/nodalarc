@@ -11,3 +11,6 @@ ground_station:
       count: 1
       bandwidth_mbps: 500
       tracking_capacity: 1
+  terrestrial_prefixes:
+    - prefix: "172.16.10.0/24"
+      metric: 10

@@ -11,7 +11,7 @@ from nodalpath.models.almanac import AlmanacEntry, ForwardingTable
 
 def compute_almanac_entry(
     snapshot: TopologySnapshot,
-    prefix_map: dict[str, str],
+    prefix_map: dict[str, list[str]],
     topology_state_id: str | None = None,
 ) -> AlmanacEntry:
     """Compute a complete almanac entry for a topology snapshot.

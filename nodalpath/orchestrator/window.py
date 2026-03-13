@@ -33,13 +33,14 @@ class SlidingWindow:
         timeline_path: Path,
         node_registry: dict[str, TopologyNode],
         interface_map: dict[tuple[str, str], tuple[str, str]],
-        prefix_map: dict[str, str],
+        prefix_map: dict[str, list[str]],
         bandwidth_map: dict[tuple[str, str], float] | None = None,
         output_path: Path | None = None,
         push_scheduler: object | None = None,
+        static_edges: list | None = None,
     ) -> None:
         self.timeline_path = timeline_path
-        self.builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
+        self.builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map, static_edges=static_edges)
         self.store = AlmanacStore(output_path)
         self.prefix_map = prefix_map
         self._push_scheduler = push_scheduler

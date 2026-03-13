@@ -65,3 +65,34 @@ class TestBuildGraph:
         # sat-P01S00 connects to gs-beta only
         dsts_p01 = {e.dst for e in graph.adjacency["sat-P01S00"]}
         assert dsts_p01 == {"gs-beta"}
+
+    def test_terrestrial_excluded_from_graph(self):
+        """Terrestrial edges are excluded from the CSPF graph; nodes remain."""
+        nodes = [
+            TopologyNode(node_id="gs-alpha", node_type="ground_station", sid=24000,
+                         loopback_ipv4="10.2.0.1"),
+            TopologyNode(node_id="gs-beta", node_type="ground_station", sid=24001,
+                         loopback_ipv4="10.2.1.1"),
+            TopologyNode(node_id="sat-P00S00", node_type="satellite", sid=16001,
+                         loopback_ipv4="10.0.0.1", plane=0, slot=0),
+        ]
+        edges = [
+            TopologyEdge(src_node_id="gs-alpha", dst_node_id="gs-beta",
+                         src_interface="terr1", dst_interface="terr1",
+                         latency_ms=5.0, bandwidth_mbps=10000.0,
+                         link_type="terrestrial"),
+            TopologyEdge(src_node_id="gs-alpha", dst_node_id="sat-P00S00",
+                         src_interface="gnd0", dst_interface="gnd0",
+                         latency_ms=5.0, bandwidth_mbps=200.0,
+                         link_type="ground"),
+        ]
+        snapshot = TopologySnapshot(sim_time="2026-03-01T14:30:00Z",
+                                    nodes=nodes, edges=edges)
+        graph = build_graph(snapshot)
+        # All 3 nodes are in the graph
+        assert len(graph.adjacency) == 3
+        # Only the ground link is in the graph (not the terrestrial link)
+        total_directed = sum(len(e) for e in graph.adjacency.values())
+        assert total_directed == 2  # bidirectional ground link
+        # gs-beta has no edges (terrestrial was excluded)
+        assert graph.adjacency["gs-beta"] == []

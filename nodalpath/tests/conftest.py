@@ -181,11 +181,11 @@ def linear_6node_topology() -> TopologySnapshot:
 
 
 @pytest.fixture
-def prefix_map_simple() -> dict[str, str]:
+def prefix_map_simple() -> dict[str, list[str]]:
     """Terrestrial prefix map for the simple and linear topologies."""
     return {
-        "gs-alpha": "172.16.0.0/24",
-        "gs-beta": "172.16.1.0/24",
+        "gs-alpha": ["172.16.0.0/24"],
+        "gs-beta": ["172.16.1.0/24"],
     }
 
 
@@ -284,10 +284,10 @@ def iridium_36_topology() -> TopologySnapshot:
 
 
 @pytest.fixture
-def prefix_map_36() -> dict[str, str]:
+def prefix_map_36() -> dict[str, list[str]]:
     """Terrestrial prefix map for the 36-node Iridium topology."""
     gs_names = ["gs-newyork", "gs-london", "gs-tokyo", "gs-sydney", "gs-mumbai", "gs-saopaulo"]
-    return {name: f"172.16.{i}.0/24" for i, name in enumerate(gs_names)}
+    return {name: [f"172.16.{i}.0/24"] for i, name in enumerate(gs_names)}
 
 
 # ---------------------------------------------------------------------------
@@ -358,11 +358,11 @@ def simple_interface_map() -> dict[tuple[str, str], tuple[str, str]]:
 
 
 @pytest.fixture
-def simple_prefix_map() -> dict[str, str]:
+def simple_prefix_map() -> dict[str, list[str]]:
     """Terrestrial prefix map for the 4-sat + 2-GS topology."""
     return {
-        "gs-alpha": "172.16.0.0/24",
-        "gs-beta": "172.16.1.0/24",
+        "gs-alpha": ["172.16.0.0/24"],
+        "gs-beta": ["172.16.1.0/24"],
     }
 
 

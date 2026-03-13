@@ -273,7 +273,7 @@ class TestZebraConfig:
                          node_type="ground_station", gs_name="hawthorne", gs_index=0)
         rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
         assert "interface terr0" in rendered
-        assert "172.16.0.1/24" in rendered
+        assert "172.16.1.1/24" in rendered
 
     def test_mgmt_passive(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
         vars = _get_vars(flat_session, four_node_config, gs_file, addressing, isis_stack,
@@ -354,7 +354,7 @@ class TestIsisGroundStation:
         vars = _get_vars(flat_session, four_node_config, gs_file, addressing, isis_stack,
                          node_type="ground_station", gs_name="hawthorne", gs_index=0)
         rendered = _render_template("frr-isis-sr", "zebra.conf.j2", vars)
-        assert "172.16.0.1/24" in rendered
+        assert "172.16.1.1/24" in rendered
         assert "interface terr0" in rendered
 
     def test_gs_no_isl_interfaces(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
@@ -600,7 +600,7 @@ class TestStaticSrGroundStation:
                                 node_type="ground_station", gs_name="hawthorne", gs_index=0)
         rendered = _render_template("frr-static-sr", "zebra.conf.j2", vars)
         assert "interface terr0" in rendered
-        assert "172.16.0.1/24" in rendered
+        assert "172.16.1.1/24" in rendered
 
     def test_gs_zebra_no_igp(self, flat_session, four_node_config, gs_file, addressing, static_stack):
         vars = _get_static_vars(flat_session, four_node_config, gs_file, addressing, static_stack,

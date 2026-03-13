@@ -58,6 +58,14 @@ class TestTopologyEdge:
                 latency_ms=-1.0, bandwidth_mbps=1000.0, link_type="isl",
             )
 
+    def test_terrestrial_link_type_accepted(self):
+        edge = TopologyEdge(
+            src_node_id="gs-alpha", dst_node_id="gs-beta",
+            src_interface="terr1", dst_interface="terr1",
+            latency_ms=5.0, bandwidth_mbps=10000.0, link_type="terrestrial",
+        )
+        assert edge.link_type == "terrestrial"
+
     def test_reject_invalid_link_type(self):
         with pytest.raises(ValueError, match="link_type must be"):
             TopologyEdge(
@@ -85,6 +93,25 @@ class TestTopologySnapshot:
                 ],
                 edges=[],
             )
+
+
+class TestTerrestrialLinkConfig:
+    def test_round_trip(self):
+        from nodalarc.models.session import TerrestrialLinkConfig
+        config = TerrestrialLinkConfig(
+            station_a="alpha", station_b="beta",
+            bandwidth_mbps=10000.0, latency_ms=5.0, loss_pct=0.0,
+        )
+        data = config.model_dump_json()
+        restored = TerrestrialLinkConfig.model_validate_json(data)
+        assert restored == config
+
+    def test_defaults(self):
+        from nodalarc.models.session import TerrestrialLinkConfig
+        config = TerrestrialLinkConfig(station_a="a", station_b="b")
+        assert config.bandwidth_mbps == 10000.0
+        assert config.latency_ms == 5.0
+        assert config.loss_pct == 0.0
 
 
 class TestPathHop:

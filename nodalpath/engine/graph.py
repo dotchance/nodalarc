@@ -42,8 +42,10 @@ def build_graph(snapshot: TopologySnapshot) -> TopologyGraph:
         if node.node_type == "ground_station":
             graph.ground_stations.append(node.node_id)
 
-    # Add bidirectional edges
+    # Add bidirectional edges (exclude terrestrial — not part of MPLS domain)
     for edge in snapshot.edges:
+        if edge.link_type == "terrestrial":
+            continue
         # Forward direction
         graph.adjacency[edge.src_node_id].append(GraphEdge(
             dst=edge.dst_node_id,

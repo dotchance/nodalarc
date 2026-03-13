@@ -43,13 +43,20 @@ class SnapshotBuilder:
         node_registry: dict[str, TopologyNode],
         interface_map: dict[tuple[str, str], tuple[str, str]],
         bandwidth_map: dict[tuple[str, str], float] | None = None,
+        static_edges: list[TopologyEdge] | None = None,
     ) -> None:
         self._node_registry = node_registry
         self._interface_map = interface_map
         self._bandwidth_map = bandwidth_map or {}
+        self._static_edges: list[TopologyEdge] = static_edges or []
         self._active_links: dict[tuple[str, str], float] = {}  # canonical pair -> range_km
         self._all_links: dict[tuple[str, str], tuple[bool, bool, float]] = {}
         self._positions: dict[str, tuple[float, float, float]] = {}  # node_id -> ECEF
+
+        # Pre-populate _all_links for static terrestrial pairs (always visible/scheduled)
+        for edge in self._static_edges:
+            pair = (edge.src_node_id, edge.dst_node_id)
+            self._all_links[pair] = (True, True, 0.0)
 
     def apply_position_record(self, record: TimelinePositionSnapshot) -> None:
         """Update ECEF positions from a TimelinePositionSnapshot."""
@@ -89,7 +96,7 @@ class SnapshotBuilder:
         Includes all nodes from the registry and edges for active links only.
         """
         nodes = list(self._node_registry.values())
-        edges: list[TopologyEdge] = []
+        edges: list[TopologyEdge] = list(self._static_edges)
 
         for pair, range_km in self._active_links.items():
             a, b = pair

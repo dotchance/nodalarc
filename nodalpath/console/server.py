@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 def build_app(
     state: ConsoleState,
     almanac_store=None,
-    prefix_map: dict[str, str] | None = None,
+    prefix_map: dict[str, list[str]] | None = None,
     link_state_store=None,
     path_deriver=None,
     node_inspector=None,
@@ -314,60 +314,6 @@ def build_app(
 
     # ── Inspection endpoints ────────────────────────────────────────────────
 
-    def _serialize_run(run) -> dict:
-        """Serialize an InspectionRun to a JSON-friendly dict."""
-        return {
-            "run_id": run.run_id,
-            "trigger": run.trigger,
-            "topology_state_id": run.topology_state_id,
-            "started_at": run.started_at.isoformat(),
-            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-            "nodes_inspected": run.nodes_inspected,
-            "nodes_reachable": run.nodes_reachable,
-            "nodes_with_deviations": run.nodes_with_deviations,
-            "nodes_unreachable": run.nodes_unreachable,
-        }
-
-    def _serialize_run_detail(run) -> dict:
-        """Serialize an InspectionRun with full per-node results."""
-        result = _serialize_run(run)
-        result["node_results"] = [
-            {
-                "node_id": nr.node_id,
-                "reachable": nr.reachable,
-                "status_topology_state_id": nr.status_topology_state_id,
-                "status_total_entries": nr.status_total_entries,
-                "has_deviation": nr.has_deviation,
-                "error_message": nr.error_message,
-                "binding_diffs": [
-                    {
-                        "in_label": d.in_label,
-                        "kind": d.kind.value,
-                        "planned_action": d.planned_action,
-                        "planned_out_label": d.planned_out_label,
-                        "planned_out_interface": d.planned_out_interface,
-                        "observed_action": d.observed_action,
-                        "observed_out_label": d.observed_out_label,
-                        "observed_out_interface": d.observed_out_interface,
-                    }
-                    for d in nr.binding_diffs
-                ],
-                "ingress_diffs": [
-                    {
-                        "dst_prefix": d.dst_prefix,
-                        "kind": d.kind.value,
-                        "planned_push_label": d.planned_push_label,
-                        "planned_out_interface": d.planned_out_interface,
-                        "observed_push_label": d.observed_push_label,
-                        "observed_out_interface": d.observed_out_interface,
-                    }
-                    for d in nr.ingress_diffs
-                ],
-            }
-            for nr in run.node_results
-        ]
-        return result
-
     @app.get("/api/v1/inspect/runs")
     async def inspect_runs(n: int = 10) -> JSONResponse:
         """Return summaries of recent inspection runs."""
@@ -375,7 +321,9 @@ def build_app(
             return JSONResponse({"error": "inspection not available"}, status_code=503)
         n = min(max(n, 1), 50)
         runs = node_inspector.recent_runs(n)
-        return JSONResponse({"runs": [_serialize_run(r) for r in runs]})
+        return JSONResponse({"runs": [
+            r.model_dump(mode="json", exclude={"node_results"}) for r in runs
+        ]})
 
     @app.get("/api/v1/inspect/runs/{run_id}")
     async def inspect_run_detail(run_id: str) -> JSONResponse:
@@ -385,7 +333,7 @@ def build_app(
         run = node_inspector.get_run(run_id)
         if run is None:
             return JSONResponse({"error": "run not found"}, status_code=404)
-        return JSONResponse(_serialize_run_detail(run))
+        return JSONResponse(run.model_dump(mode="json"))
 
     @app.post("/api/v1/inspect/trigger")
     async def inspect_trigger(request: Request) -> JSONResponse:
@@ -410,7 +358,7 @@ def build_app(
         run = node_inspector.latest_run
         if run is None:
             return JSONResponse({"run": None})
-        return JSONResponse({"run": _serialize_run(run)})
+        return JSONResponse({"run": run.model_dump(mode="json", exclude={"node_results"})})
 
     # ── Static files or holding page ─────────────────────────────────────────
 

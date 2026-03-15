@@ -37,4 +37,6 @@ class RoutingStackConfig(BaseModel):
     security_context: SecurityContext | None = None
     env: list[EnvVar] = []
     host_setup: dict[str, Any] = {}
+    segment_routing: bool = False
+    ttl_propagation: str | None = None  # "uniform" | "pipe" | None
     transport: str | None = None

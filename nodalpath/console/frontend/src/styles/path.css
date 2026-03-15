@@ -84,6 +84,16 @@
     color: var(--red);
 }
 
+.path-pipe-warning {
+    padding: 8px 12px;
+    font-size: 11px;
+    color: #f5a623;
+    background: rgba(245, 166, 35, 0.08);
+    border-left: 2px solid #f5a623;
+    margin: 0 12px;
+    border-radius: 2px;
+}
+
 .path-unreachable {
     padding: 8px 12px;
     font-size: 11px;
@@ -91,6 +101,58 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
+}
+
+.path-raw-toggle {
+    background: transparent;
+    color: var(--text-sec);
+    border: 1px solid var(--divider);
+    border-radius: 2px;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-family: var(--font);
+    cursor: pointer;
+    margin-left: auto;
+}
+
+.path-raw-output {
+    margin: 0 12px 8px;
+    padding: 6px 8px;
+    background: #0a0a14;
+    border: 1px solid var(--divider);
+    border-radius: 3px;
+    font-size: 10px;
+    color: var(--text-sec);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 160px;
+    overflow-y: auto;
+}
+
+.path-partial-label {
+    color: var(--red);
+    font-weight: 600;
+}
+
+.path-hop-last-unreachable {
+    border-left-color: var(--red);
+}
+
+.path-hop-missing {
+    border-left: 2px dashed var(--red);
+    opacity: 0.6;
+}
+
+.path-hop-missing .hop-node-id {
+    color: var(--red);
+    font-weight: 400;
+}
+
+.hop-ip {
+    font-size: 9px;
+    color: var(--text-sec);
+    opacity: 0.6;
 }
 
 .path-result {
@@ -178,4 +240,86 @@
     color: var(--text-sec);
     margin-top: 1px;
     padding-left: 2px;
+}
+
+.hop-rtt {
+    font-size: 9px;
+    color: var(--text-sec);
+}
+
+.path-live-btn {
+    background: #1a5276;
+    color: #5ba3d9;
+    border: 1px solid #2a6a96;
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-family: var(--font);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.path-live-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.path-stop-btn {
+    background: #4a1010;
+    color: #ff5555;
+    border: 1px solid #6a2020;
+    border-radius: 3px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-family: var(--font);
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.path-live-indicator {
+    font-size: 9px;
+    font-weight: 700;
+    color: #44cc66;
+    background: #004400;
+    border-radius: 2px;
+    padding: 1px 5px;
+    letter-spacing: 0.05em;
+}
+
+.path-asymmetry-warning {
+    padding: 6px 0;
+    font-size: 10px;
+    color: #f5a623;
+}
+
+.path-validity-countdown {
+    padding: 4px 0;
+    font-size: 11px;
+    color: #5ba3d9;
+    font-weight: 600;
+}
+
+.path-direction-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-sec);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 6px 0 3px;
+}
+
+.path-dual-columns {
+    display: flex;
+    gap: 12px;
+}
+
+.path-column {
+    flex: 1;
+    min-width: 0;
+}
+
+.hop-netem {
+    font-size: 9px;
+    color: #5ba3d9;
+    margin-left: 6px;
 }

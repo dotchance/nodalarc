@@ -130,7 +130,9 @@ export interface PathHop {
     out_label: number | null;
     action: "push" | "swap" | "pop" | null;
     out_interface: string | null;
-    latency_to_next_ms: number | null;
+    latency_to_next_ms: number | null;  // one-way per-link (derived paths)
+    rtt_ms: number | null;              // round-trip from src (traceroute)
+    responding_ip: string | null;
 }
 
 export interface PathResult {
@@ -138,11 +140,19 @@ export interface PathResult {
     dst: string;
     hops: PathHop[];
     total_latency_ms: number;
-    method: "derived" | "probed";
+    method: "cspf" | "traceroute" | "traceroute-sr" | "traceroute-sr-pipe" | "derived" | "probed";
     sim_time: string;
     topology_state_id: string;
     reachable: boolean;
     unreachable_reason: string | null;
+    pipe_mode: boolean;
+    raw_output: string | null;
+}
+
+export interface TraceConfig {
+    trace_mode: "ip" | "sr-uniform" | "sr-pipe" | "cspf" | null;
+    pipe_mode: boolean;
+    has_sr: boolean;
 }
 
 // ── Inspection (from GET /api/v1/inspect/*) ──────────────────────────────────
@@ -192,6 +202,46 @@ export interface InspectionRunSummary {
 
 export interface InspectionRunDetail extends InspectionRunSummary {
     node_results: InspectionNodeResult[];
+}
+
+// ── Live trace (from GET /api/v1/trace/status) ──────────────────────────────
+
+export interface LiveTraceLink {
+    from_node: string;
+    to_node: string;
+    interface: string;
+    netem_delay_ms: number | null;
+    link_type: string | null;
+}
+
+export interface LiveTraceDirection {
+    hops: PathHop[];
+    links: LiveTraceLink[];
+    rtt_ms: number;
+    asymmetry_detected: boolean;
+    pmtu: number | null;
+    raw_output: string | null;
+}
+
+export interface LiveTraceResult {
+    src: string;
+    dst: string;
+    forward: LiveTraceDirection;
+    reverse: LiveTraceDirection;
+    traced_at: string;
+    sim_time: string;
+    topology_state_id: string;
+    path_valid_until: string | null;
+    path_valid_seconds: number | null;
+    method: string;
+    trace_mode: string;
+}
+
+export interface LiveTraceStatus {
+    active: boolean;
+    src: string | null;
+    dst: string | null;
+    result: LiveTraceResult | null;
 }
 
 // ── D3 graph nodes (ConsoleNode extended with computed layout position) ──────

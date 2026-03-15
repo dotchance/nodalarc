@@ -23,7 +23,9 @@ class PathHop(BaseModel, frozen=True):
     action: str | None = None       # "push", "swap", "pop", or None at src/dst
     in_interface: str | None = None   # interface the packet arrives on (None at ingress)
     out_interface: str | None = None  # interface used to reach next hop
-    latency_to_next_ms: float | None = None  # propagation delay to next hop
+    latency_to_next_ms: float | None = None  # one-way propagation delay to next hop (derived paths)
+    rtt_ms: float | None = None              # round-trip time from src to this hop (traceroute)
+    responding_ip: str | None = None         # IP from traceroute output (debugging aid)
 
 
 class PathResult(BaseModel, frozen=True):
@@ -41,6 +43,61 @@ class PathResult(BaseModel, frozen=True):
     topology_state_id: str          # links to AlmanacEntry
     reachable: bool                 # False if no path exists
     unreachable_reason: str | None = None  # e.g., "no ingress rule for dst_prefix"
+    pipe_mode: bool = False                 # True when MPLS pipe mode hides intermediate hops
+    raw_output: str | None = None           # traceroute stdout for debugging
+
+
+class TracepathHop(BaseModel, frozen=True):
+    """A single hop from tracepath output."""
+    hop_num: int
+    ip: str | None = None
+    rtt_ms: float | None = None
+    asymm: int | None = None
+    pmtu: int | None = None
+    reached: bool = False
+
+
+class TracepathResult(BaseModel, frozen=True):
+    """Parsed result from tracepath -n -b output."""
+    hops: list[TracepathHop]
+    pmtu: int | None = None
+    forward_hops: int | None = None
+    return_hops: int | None = None
+    raw_output: str = ""
+
+
+class LiveTraceLink(BaseModel, frozen=True):
+    """A single link in a live trace with kernel netem delay."""
+    from_node: str
+    to_node: str
+    interface: str
+    netem_delay_ms: float | None = None
+    link_type: str | None = None
+
+
+class LiveTraceDirection(BaseModel, frozen=True):
+    """One direction of a bidirectional live trace."""
+    hops: list[PathHop]
+    links: list[LiveTraceLink]
+    rtt_ms: float
+    asymmetry_detected: bool
+    pmtu: int | None = None
+    raw_output: str | None = None
+
+
+class LiveTraceResult(BaseModel, frozen=True):
+    """Complete bidirectional live trace result."""
+    src: str
+    dst: str
+    forward: LiveTraceDirection
+    reverse: LiveTraceDirection
+    traced_at: str
+    sim_time: str
+    topology_state_id: str
+    path_valid_until: str | None = None
+    path_valid_seconds: float | None = None
+    method: str
+    trace_mode: str
 
 
 class PathQuery(BaseModel):

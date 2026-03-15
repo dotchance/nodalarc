@@ -222,6 +222,181 @@ def _handle_kubectl_exec(req: dict) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+_VALID_IPV4 = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
+_VALID_IFNAME = re.compile(r"^[a-z][a-z0-9]{0,14}$")
+
+
+def _handle_traceroute(req: dict) -> dict:
+    """Run traceroute from a pod to an IPv4 address via kubectl exec."""
+    pod = req.get("pod", "")
+    target = req.get("target", "")
+    source = req.get("source", "")
+    if not pod or not target:
+        return {"ok": False, "error": "pod and target required"}
+    if not _VALID_POD_NAME.match(pod):
+        return {"ok": False, "error": f"Invalid pod name: {pod}"}
+    if not _VALID_IPV4.match(target):
+        return {"ok": False, "error": f"Invalid IPv4 target: {target}"}
+    if source and not _VALID_IPV4.match(source):
+        return {"ok": False, "error": f"Invalid source IP: {source}"}
+
+    try:
+        cmd = [
+            "kubectl", "exec", "-n", _namespace(), pod, "-c", "frr", "--",
+            "traceroute", "-n", "-w", "2", "-q", "1", "-m", "30",
+        ]
+        if source:
+            cmd.extend(["-s", source])
+        cmd.append(target)
+        result = subprocess.run(
+            cmd,
+            capture_output=True, text=True, timeout=90,
+            env=_env_with_kubeconfig(),
+        )
+        return {
+            "ok": True,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.returncode,
+        }
+    except subprocess.TimeoutExpired as exc:
+        # Return partial output so the tracer can show how far it got
+        return {
+            "ok": False,
+            "error": "Traceroute timed out",
+            "stdout": exc.stdout or "",
+            "stderr": exc.stderr or "",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _handle_tracepath(req: dict) -> dict:
+    """Run tracepath from a pod to an IPv4 address via kubectl exec."""
+    pod = req.get("pod", "")
+    target = req.get("target", "")
+    if not pod or not target:
+        return {"ok": False, "error": "pod and target required"}
+    if not _VALID_POD_NAME.match(pod):
+        return {"ok": False, "error": f"Invalid pod name: {pod}"}
+    if not _VALID_IPV4.match(target):
+        return {"ok": False, "error": f"Invalid IPv4 target: {target}"}
+
+    try:
+        cmd = [
+            "kubectl", "exec", "-n", _namespace(), pod, "-c", "frr", "--",
+            "tracepath", "-n", "-b", target,
+        ]
+        result = subprocess.run(
+            cmd,
+            capture_output=True, text=True, timeout=90,
+            env=_env_with_kubeconfig(),
+        )
+        return {
+            "ok": True,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.returncode,
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "error": "Tracepath timed out",
+            "stdout": exc.stdout or "",
+            "stderr": exc.stderr or "",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _handle_read_netem_delay(req: dict) -> dict:
+    """Read netem delay from a network namespace interface via pyroute2."""
+    pid = req.get("pid")
+    ifname = req.get("ifname", "")
+    if not isinstance(pid, int) or pid <= 0:
+        return {"ok": False, "error": f"Invalid pid: {pid}"}
+    if not _VALID_IFNAME.match(ifname):
+        return {"ok": False, "error": f"Invalid ifname: {ifname}"}
+
+    try:
+        from pyroute2 import NetNS
+        ns = NetNS(f"/proc/{pid}/ns/net")
+        try:
+            idx = ns.link_lookup(ifname=ifname)
+            if not idx:
+                return {"ok": False, "error": f"Interface {ifname} not found"}
+            idx = idx[0]
+            qdiscs = ns.tc("dump", index=idx)
+            for qdisc in qdiscs:
+                kind = qdisc.get_attr("TCA_KIND")
+                if kind == "netem":
+                    opts = qdisc.get_attr("TCA_OPTIONS")
+                    if opts:
+                        delay_us = opts.get("delay", 0)
+                        return {"ok": True, "delay_ms": delay_us / 1000.0}
+            return {"ok": True, "delay_ms": None}
+        finally:
+            ns.close()
+    except FileNotFoundError:
+        return {"ok": False, "error": f"PID {pid} network namespace not found"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _handle_read_link_delays(req: dict) -> dict:
+    """Batch read netem delays from multiple network namespace interfaces."""
+    queries = req.get("queries", [])
+    if not isinstance(queries, list):
+        return {"ok": False, "error": "queries must be a list"}
+
+    from pyroute2 import NetNS
+
+    # Group queries by PID to open each NetNS only once
+    by_pid: dict[int, list[tuple[int, str]]] = {}
+    for i, q in enumerate(queries):
+        pid = q.get("pid")
+        ifname = q.get("ifname", "")
+        if not isinstance(pid, int) or pid <= 0:
+            continue
+        if not _VALID_IFNAME.match(ifname):
+            continue
+        by_pid.setdefault(pid, []).append((i, ifname))
+
+    delays = [None] * len(queries)
+    for pid, items in by_pid.items():
+        try:
+            ns = NetNS(f"/proc/{pid}/ns/net")
+            try:
+                for i, ifname in items:
+                    try:
+                        idx = ns.link_lookup(ifname=ifname)
+                        if not idx:
+                            continue
+                        qdiscs = ns.tc("dump", index=idx[0])
+                        for qdisc in qdiscs:
+                            kind = qdisc.get_attr("TCA_KIND")
+                            if kind == "netem":
+                                opts = qdisc.get_attr("TCA_OPTIONS")
+                                if opts:
+                                    delays[i] = opts.get("delay", 0) / 1000.0
+                                break
+                    except Exception:
+                        continue
+            finally:
+                ns.close()
+        except Exception:
+            continue
+
+    result_list = []
+    for i, q in enumerate(queries):
+        result_list.append({
+            "pid": q.get("pid"),
+            "ifname": q.get("ifname"),
+            "delay_ms": delays[i],
+        })
+    return {"ok": True, "delays": result_list}
+
+
 def _handle_helm_list(req: dict) -> dict:
     """List helm releases in nodalarc namespace."""
     try:
@@ -360,6 +535,14 @@ def _handle_client(conn: socket.socket, addr: str) -> None:
             resp = _handle_kubectl_wait(req)
         elif action == "modprobe_mpls":
             resp = _handle_modprobe_mpls(req)
+        elif action == "traceroute":
+            resp = _handle_traceroute(req)
+        elif action == "tracepath":
+            resp = _handle_tracepath(req)
+        elif action == "read_netem_delay":
+            resp = _handle_read_netem_delay(req)
+        elif action == "read_link_delays":
+            resp = _handle_read_link_delays(req)
         elif action == "get_pod_ip":
             resp = _handle_get_pod_ip(req)
         elif action == "ping":

@@ -49,6 +49,23 @@
   width: var(--panel-width);
   min-width: var(--panel-width);
   overflow-y: auto;
+  position: relative;
+}
+
+.panel-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+}
+
+.panel-resize-handle:hover,
+.panel-resize-handle.dragging {
+  background: var(--accent-blue);
 }
 
 .panel-toggle-tab {

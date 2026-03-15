@@ -39,6 +39,16 @@ export interface TracedPath {
   src_node: string;
   dst_node: string;
   hops: string[];
+  reverse_hops?: string[];
+  hop_rtts?: (number | null)[];
+  reverse_hop_rtts?: (number | null)[];
+  rtt_ms?: number;
+  reverse_rtt_ms?: number;
+  asymmetry_detected?: boolean;
+  method?: string;
+  path_valid_until?: string;
+  path_valid_seconds?: number;
+  traced_at?: string;
 }
 
 export interface NetworkHealth {

@@ -14,6 +14,10 @@ interface FlowPathEntry {
   geometry: LineGeometry;
   material: LineMaterial;
   hops: string[];
+  reverseLine?: Line2;
+  reverseGeometry?: LineGeometry;
+  reverseMaterial?: LineMaterial;
+  reverseHops?: string[];
 }
 
 const flowPaths = new Map<string, FlowPathEntry>();
@@ -34,7 +38,14 @@ export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
     active.add(path.flow_id);
 
     if (flowPaths.has(path.flow_id)) {
-      flowPaths.get(path.flow_id)!.hops = path.hops;
+      const entry = flowPaths.get(path.flow_id)!;
+      entry.hops = path.hops;
+      // Update reverse path hops
+      if (path.reverse_hops && path.reverse_hops.length > 0 && path.asymmetry_detected) {
+        entry.reverseHops = path.reverse_hops;
+      } else {
+        entry.reverseHops = undefined;
+      }
       flowIndex++;
       continue;
     }
@@ -57,7 +68,31 @@ export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
     line.computeLineDistances();
     scene.add(line);
 
-    flowPaths.set(path.flow_id, { line, geometry, material, hops: path.hops });
+    const flowEntry: FlowPathEntry = { line, geometry, material, hops: path.hops };
+
+    // Create reverse path line if asymmetric
+    if (path.reverse_hops && path.reverse_hops.length > 0 && path.asymmetry_detected) {
+      const revGeometry = new LineGeometry();
+      revGeometry.setPositions(new Array(path.reverse_hops.length * 3).fill(0));
+      const revMaterial = new LineMaterial({
+        color: LINK_FLOW_SECONDARY_COLOR,
+        linewidth: LINK_FLOW_WIDTH,
+        resolution,
+        dashed: true,
+        dashScale: 3,
+        dashSize: 0.5,
+        gapSize: 0.3,
+      });
+      const revLine = new Line2(revGeometry, revMaterial);
+      revLine.computeLineDistances();
+      scene.add(revLine);
+      flowEntry.reverseLine = revLine;
+      flowEntry.reverseGeometry = revGeometry;
+      flowEntry.reverseMaterial = revMaterial;
+      flowEntry.reverseHops = path.reverse_hops;
+    }
+
+    flowPaths.set(path.flow_id, flowEntry);
     flowIndex++;
   }
 
@@ -67,6 +102,11 @@ export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
       scene.remove(entry.line);
       entry.geometry.dispose();
       entry.material.dispose();
+      if (entry.reverseLine) {
+        scene.remove(entry.reverseLine);
+        entry.reverseGeometry?.dispose();
+        entry.reverseMaterial?.dispose();
+      }
       flowPaths.delete(id);
     }
   }
@@ -97,6 +137,30 @@ export function animateFlowPaths(): void {
       entry.material.dashOffset -= 0.01;
     } else {
       entry.line.visible = false;
+    }
+
+    // Animate reverse path
+    if (entry.reverseLine && entry.reverseHops && entry.reverseHops.length > 0) {
+      const revPositions: number[] = [];
+      let revValid = true;
+      for (const hop of entry.reverseHops) {
+        const pos = sats.get(hop)?.mesh.position ?? gss.get(hop)?.sprite.position;
+        if (!pos) {
+          revValid = false;
+          break;
+        }
+        revPositions.push(pos.x, pos.y, pos.z);
+      }
+      if (revValid && revPositions.length >= 6) {
+        entry.reverseGeometry!.setPositions(revPositions);
+        entry.reverseLine.computeLineDistances();
+        entry.reverseLine.visible = true;
+        entry.reverseMaterial!.dashOffset -= 0.01;
+      } else {
+        entry.reverseLine.visible = false;
+      }
+    } else if (entry.reverseLine) {
+      entry.reverseLine.visible = false;
     }
   }
 }

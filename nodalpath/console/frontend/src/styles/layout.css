@@ -29,7 +29,7 @@ body {
 }
 
 .detail-area {
-  width: 360px;
+  width: 640px;
   flex-shrink: 0;
   border-left: 1px solid var(--divider);
   display: flex;

@@ -183,25 +183,62 @@ async def _run_live(config: NodalPathConfig) -> None:
         )
 
 
-async def _run_console() -> None:
-    """Console-only mode — serve the web UI without ZMQ or session context.
+async def _run_console(config: NodalPathConfig | None = None) -> None:
+    """Console-only mode — serve the web UI with live path tracing.
 
-    Used when NodalPath is started alongside a non-nodalpath-fwd session.
-    The console is accessible and ready; it just shows idle state until
-    a live session connects.
+    Used when NodalPath is started alongside a non-nodalpath-fwd session
+    (IS-IS, OSPF, etc.). If a session config is provided, loads the node
+    registry and wires a LivePathTracer that runs real traceroute through
+    the emulated FRR pods.
     """
+    import yaml
     import uvicorn
     from nodalpath.console.server import build_app
     from nodalpath.console.state import ConsoleState
     from nodalarc.zmq_channels import nodalpath_console_port
+    from nodalarc.models.routing_stack import RoutingStackConfig
+    from nodalarc.models.session import SessionConfig
+
+    live_path_tracer = None
+    trace_mode: str | None = None
+    session_label = "(no session)"
+
+    if config is not None and config.session_path is not None:
+        session_label = str(config.session_path)
+        node_registry, _iface_map, _prefix_map, _bw_map, _static_edges = load_session_context(
+            config.session_path,
+        )
+
+        # Determine trace mode from routing stack config
+        raw = yaml.safe_load(config.session_path.read_text())
+        session = SessionConfig.model_validate(raw)
+        stack_dir = Path(session.routing.stack)
+        stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
+        stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
+
+        if stack_config.segment_routing:
+            trace_mode = "sr-pipe" if stack_config.ttl_propagation == "pipe" else "sr-uniform"
+        else:
+            trace_mode = "ip"
+
+        from nodalpath.engine.live_path_tracer import LivePathTracer
+        live_path_tracer = LivePathTracer(
+            node_registry=node_registry,
+            trace_mode=trace_mode,
+        )
+        log.info("Live path tracer wired with %d nodes (mode=%s)", len(node_registry), trace_mode)
 
     console_state = ConsoleState(
-        session_path="(no session)",
+        session_path=session_label,
         transport="none",
         dry_run=False,
     )
 
-    console_app = build_app(console_state)
+    console_app = build_app(
+        console_state,
+        live_path_tracer=live_path_tracer,
+        trace_mode=trace_mode,
+    )
     uvicorn_config = uvicorn.Config(
         console_app,
         host="0.0.0.0",
@@ -268,7 +305,14 @@ def main() -> None:
     init_nodalpath_config(Path(args.nodalpath_config))
 
     if args.mode == "console":
-        asyncio.run(_run_console())
+        console_config = None
+        if args.session is not None:
+            console_config = NodalPathConfig(
+                session_path=Path(args.session),
+                mode="console",
+                namespace=args.namespace,
+            )
+        asyncio.run(_run_console(console_config))
         return
 
     if args.session is None:

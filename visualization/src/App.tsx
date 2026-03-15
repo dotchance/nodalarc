@@ -123,9 +123,15 @@ function AppInner() {
   const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
 
-  // Panel collapse/expand state
+  // Panel collapse/expand state + resizable width
   const [panelOpen, setPanelOpen] = useState(true);
   const panelManualRef = useRef(false);
+  const defaultPanelWidth = 420;
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    const saved = localStorage.getItem("nodal_panel_width");
+    return saved ? Math.max(280, Math.min(800, parseInt(saved, 10))) : defaultPanelWidth;
+  });
+  const panelDraggingRef = useRef(false);
 
   // Auto-open panel on selection, auto-close on deselect (unless manually toggled)
   useEffect(() => {
@@ -146,6 +152,24 @@ function AppInner() {
   const handlePanelToggle = useCallback(() => {
     setPanelOpen((v) => !v);
     panelManualRef.current = true;
+  }, []);
+
+  const handlePanelResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    panelDraggingRef.current = true;
+    const onMove = (ev: MouseEvent) => {
+      if (!panelDraggingRef.current) return;
+      const newWidth = Math.max(280, Math.min(800, window.innerWidth - ev.clientX));
+      setPanelWidth(newWidth);
+    };
+    const onUp = () => {
+      panelDraggingRef.current = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setPanelWidth((w) => { localStorage.setItem("nodal_panel_width", String(w)); return w; });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   }, []);
 
   // Ref for GlobeView imperative actions (top view, follow, screenshot, flyTo, screen position)
@@ -238,10 +262,15 @@ function AppInner() {
 
   // Merge user-requested trace into the snapshot's traced_paths so both
   // the globe (flowPaths.ts) and topology (topoLinks.ts) render it.
+  // Server-side __continuous_trace__ takes priority over client-side __user_trace__.
   const augmentedSnapshot = useMemo(() => {
     if (!snapshot) return snapshot;
+    const hasContinuous = snapshot.traced_paths.some(p => p.flow_id === "__continuous_trace__");
+    if (hasContinuous) {
+      // Server continuous trace present — don't add user trace
+      return snapshot;
+    }
     if (!userTrace) return snapshot;
-    // Replace any existing user trace, keep server-side traces
     const serverPaths = snapshot.traced_paths.filter(p => p.flow_id !== "__user_trace__");
     return { ...snapshot, traced_paths: [...serverPaths, userTrace] };
   }, [snapshot, userTrace]);
@@ -249,7 +278,7 @@ function AppInner() {
   const layoutClass = `app-layout${panelOpen ? " app-layout--panel-open" : ""}${historicalMode ? " app-layout--historical" : ""}`;
 
   return (
-    <div className={layoutClass}>
+    <div className={layoutClass} style={{ "--panel-width": `${panelWidth}px` } as React.CSSProperties}>
       <TopBar
         snapshot={snapshot}
         connected={connected}
@@ -383,6 +412,7 @@ function AppInner() {
       </div>
 
       <div className="area-panel">
+        <div className="panel-resize-handle" onMouseDown={handlePanelResizeStart} />
         <InfoPanel snapshot={augmentedSnapshot} selection={selection} onSelect={select} onFlyTo={handleFlyToNode} onTraceResult={setUserTrace} />
       </div>
 

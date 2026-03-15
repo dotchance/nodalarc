@@ -46,16 +46,21 @@ def _build_interface_map(
     interface_map: dict[tuple[str, str], tuple[str, str]] = {}
     bandwidth_map: dict[tuple[str, str], float] = {}
 
-    # ISL links
+    # ISL links — ifaces[0] must be pair[0]'s interface, ifaces[1] pair[1]'s
     for node_id, assignments in by_node.items():
         for na in assignments:
             pair = (min(node_id, na.peer_node_id), max(node_id, na.peer_node_id))
             if pair not in interface_map:
-                interface_map[pair] = (na.interface, "")
+                if node_id == pair[0]:
+                    interface_map[pair] = (na.interface, "")
+                else:
+                    interface_map[pair] = ("", na.interface)
                 bandwidth_map[pair] = 1000.0
             else:
                 existing = interface_map[pair]
-                if existing[0] and not existing[1]:
+                if node_id == pair[0] and not existing[0]:
+                    interface_map[pair] = (na.interface, existing[1])
+                elif node_id == pair[1] and not existing[1]:
                     interface_map[pair] = (existing[0], na.interface)
 
     # GS-satellite links (all use gnd0 on both sides)
@@ -184,6 +189,21 @@ def main() -> None:
     else:
         log.info("No area assignment configured — routing_area will be null for all nodes")
 
+    # Determine routing protocol from stack config
+    from nodalarc.models.routing_stack import RoutingStackConfig
+    stack_data = yaml.safe_load(Path(session.routing.stack, "stack.yaml").read_text())
+    stack_config = RoutingStackConfig.model_validate(stack_data["stack"])
+    daemons = stack_config.daemons
+    if "isisd" in daemons:
+        routing_protocol = "isis"
+    elif "ospfd" in daemons:
+        routing_protocol = "ospf"
+    elif "bgpd" in daemons:
+        routing_protocol = "bgp"
+    else:
+        routing_protocol = "none"
+    log.info(f"Routing protocol: {routing_protocol} (daemons: {daemons})")
+
     # Load pid_map if provided (from na-deploy step 7)
     pid_map: dict[str, int] = {}
     if args.pid_map:
@@ -208,6 +228,7 @@ def main() -> None:
             override_set=override_set,
             override_lock=override_lock,
             pid_map=pid_map,
+            routing_protocol=routing_protocol,
             latency_update_interval_s=session.time.latency_update_interval_seconds,
             dwell_s=args.dwell,
             area_map=area_map,
@@ -222,6 +243,7 @@ def main() -> None:
             override_set=override_set,
             override_lock=override_lock,
             pid_map=pid_map,
+            routing_protocol=routing_protocol,
             latency_update_interval_s=session.time.latency_update_interval_seconds,
             compression_factor=session.time.compression,
         )

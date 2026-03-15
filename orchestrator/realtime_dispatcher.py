@@ -51,6 +51,7 @@ class RealtimeDispatcher:
         override_set: set[tuple[str, str]],
         override_lock: Any,
         pid_map: dict[str, int] | None = None,
+        routing_protocol: str = "isis",
         latency_update_interval_s: int = 10,
         compression_factor: int = 1,
         timeline_path: Path | None = None,
@@ -61,6 +62,7 @@ class RealtimeDispatcher:
         self._override_set = override_set
         self._override_lock = override_lock
         self._pid_map = pid_map or {}
+        self._routing_protocol = routing_protocol
         self._latency_update_interval_s = latency_update_interval_s
         self._compression_factor = max(1, compression_factor)
 

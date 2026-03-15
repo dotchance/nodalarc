@@ -111,6 +111,7 @@ class DiscreteEventDispatcher:
         override_set: set[tuple[str, str]],
         override_lock: Any,
         pid_map: dict[str, int] | None = None,
+        routing_protocol: str = "isis",
         db_conn: Any = None,
         dwell_s: float = 1.0,
         latency_update_interval_s: int = 10,
@@ -125,6 +126,7 @@ class DiscreteEventDispatcher:
         self._override_set = override_set
         self._override_lock = override_lock
         self._pid_map = pid_map or {}
+        self._routing_protocol = routing_protocol
         self._db_conn = db_conn
         self._dwell_s = dwell_s
         self._latency_update_interval_s = latency_update_interval_s
@@ -443,30 +445,45 @@ class DiscreteEventDispatcher:
         # Apply kernel changes if we have PIDs
         info = self._active_links[pair]
         if info.pid_a and info.pid_b:
-            try:
-                from orchestrator import link_manager
-                # GS links need dynamic veth creation (no pre-wired pairs)
-                is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
-                if is_gs_link:
-                    link_manager.create_veth_pair(
-                        info.pid_a, info.pid_b, ifaces[0], ifaces[1],
-                        node_id_a=vis.node_a, node_id_b=vis.node_b,
+            from orchestrator import link_manager
+            import time as _time
+            # Retry up to 3 times — interfaces may not be visible in the
+            # namespace immediately after veth creation (netlink propagation)
+            for attempt in range(3):
+                try:
+                    # GS links need dynamic veth creation (no pre-wired pairs)
+                    is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                    if is_gs_link:
+                        link_manager.create_veth_pair(
+                            info.pid_a, info.pid_b, ifaces[0], ifaces[1],
+                            node_id_a=vis.node_a, node_id_b=vis.node_b,
+                        )
+                        link_manager.enable_mpls_input(info.pid_a, ifaces[0])
+                        link_manager.enable_mpls_input(info.pid_b, ifaces[1])
+                    link_manager.set_interface_up(info.pid_a, ifaces[0])
+                    link_manager.set_interface_up(info.pid_b, ifaces[1])
+                    link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
+                    link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
+                    if is_gs_link and vis.elevation_deg is not None:
+                        metric = max(10, int(100 * (1 - vis.elevation_deg / 90)))
+                        gs_pod = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
+                        sat_pod = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                        link_manager.set_link_metric(gs_pod, ifaces[0], metric, self._routing_protocol)
+                        link_manager.set_link_metric(sat_pod, ifaces[1], metric, self._routing_protocol)
+                        log.info(f"GS link {pair} elevation={vis.elevation_deg:.1f}° → isis metric {metric}")
+                    break  # Success
+                except FileNotFoundError as exc:
+                    if attempt < 2:
+                        log.debug(f"Retry {attempt+1}/3 for {pair}: {exc}")
+                        _time.sleep(0.5)
+                        continue
+                    log.warning(
+                        f"Link kernel setup failed for {pair} after 3 attempts: {exc} "
+                        f"(pid_a={info.pid_a} iface_a={ifaces[0]} pid_b={info.pid_b} iface_b={ifaces[1]})"
                     )
-                    link_manager.enable_mpls_input(info.pid_a, ifaces[0])
-                    link_manager.enable_mpls_input(info.pid_b, ifaces[1])
-                link_manager.set_interface_up(info.pid_a, ifaces[0])
-                link_manager.set_interface_up(info.pid_b, ifaces[1])
-                link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
-                link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
-                if is_gs_link and vis.elevation_deg is not None:
-                    metric = max(10, int(100 * (1 - vis.elevation_deg / 90)))
-                    gs_pod = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
-                    sat_pod = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
-                    link_manager.set_isis_metric(gs_pod, ifaces[0], metric)
-                    link_manager.set_isis_metric(sat_pod, ifaces[1], metric)
-                    log.info(f"GS link {pair} elevation={vis.elevation_deg:.1f}° → isis metric {metric}")
-            except Exception as exc:
-                log.warning(f"Link kernel setup failed for {pair}: {exc}")
+                except Exception as exc:
+                    log.warning(f"Link kernel setup failed for {pair}: {exc}")
+                    break
 
         now = datetime.now(timezone.utc)
         event = LinkUp(

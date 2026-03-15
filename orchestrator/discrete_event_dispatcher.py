@@ -264,10 +264,10 @@ class DiscreteEventDispatcher:
             playback_sock.send(json.dumps({"error": "unknown action"}).encode())
 
     def _teardown_remaining_links(self, pub_sock: zmq.Socket) -> None:
-        """Tear down active GS links when the dispatcher exits.
+        """Detach active GS links when the dispatcher exits.
 
-        GS links have dynamic veths and must be explicitly torn down.
-        ISL links use pre-wired veths and are left as-is.
+        GS links use permanent veths via bridges; detach clears tc shaping
+        and removes satellite from bridge. ISL links are left as-is.
         """
         gs_pairs = [
             pair for pair in self._active_links
@@ -448,29 +448,33 @@ class DiscreteEventDispatcher:
             from orchestrator import link_manager
             import time as _time
             # Retry up to 3 times — interfaces may not be visible in the
-            # namespace immediately after veth creation (netlink propagation)
+            # namespace immediately after creation (netlink propagation)
             for attempt in range(3):
                 try:
-                    # GS links need dynamic veth creation (no pre-wired pairs)
                     is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
                     if is_gs_link:
-                        link_manager.create_veth_pair(
-                            info.pid_a, info.pid_b, ifaces[0], ifaces[1],
-                            node_id_a=vis.node_a, node_id_b=vis.node_b,
-                        )
-                        link_manager.enable_mpls_input(info.pid_a, ifaces[0])
-                        link_manager.enable_mpls_input(info.pid_b, ifaces[1])
-                    link_manager.set_interface_up(info.pid_a, ifaces[0])
-                    link_manager.set_interface_up(info.pid_b, ifaces[1])
-                    link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
-                    link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
-                    if is_gs_link and vis.elevation_deg is not None:
-                        metric = max(10, int(100 * (1 - vis.elevation_deg / 90)))
-                        gs_pod = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
-                        sat_pod = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
-                        link_manager.set_link_metric(gs_pod, ifaces[0], metric, self._routing_protocol)
-                        link_manager.set_link_metric(sat_pod, ifaces[1], metric, self._routing_protocol)
-                        log.info(f"GS link {pair} elevation={vis.elevation_deg:.1f}° → metric {metric}")
+                        # Bridge attach/detach — GS gnd0 is always UP
+                        gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
+                        sat_id = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                        gs_pid = self._pid_map.get(gs_id, 0)
+                        sat_pid = self._pid_map.get(sat_id, 0)
+                        if sat_pid:
+                            link_manager.attach_to_ground_bridge(gs_id, sat_id, sat_pid)
+                        # tc shaping on BOTH GS gnd0 and satellite gnd0
+                        if gs_pid:
+                            link_manager.apply_link_shaping(gs_pid, "gnd0", latency, bandwidth)
+                        if sat_pid:
+                            link_manager.apply_link_shaping(sat_pid, "gnd0", latency, bandwidth)
+                        if vis.elevation_deg is not None:
+                            metric = max(10, int(100 * (1 - vis.elevation_deg / 90)))
+                            link_manager.set_link_metric(gs_id, "gnd0", metric, self._routing_protocol)
+                            link_manager.set_link_metric(sat_id, "gnd0", metric, self._routing_protocol)
+                            log.info(f"GS link {pair} elevation={vis.elevation_deg:.1f}° → metric {metric}")
+                    else:
+                        link_manager.set_interface_up(info.pid_a, ifaces[0])
+                        link_manager.set_interface_up(info.pid_b, ifaces[1])
+                        link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
+                        link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
                     break  # Success
                 except FileNotFoundError as exc:
                     if attempt < 2:
@@ -518,8 +522,18 @@ class DiscreteEventDispatcher:
                 from orchestrator import link_manager
                 is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
                 if is_gs_link:
-                    # Destroy dynamic veth — deleting one end removes both + qdiscs
-                    link_manager.destroy_veth_pair(info.pid_a, info.interface_a)
+                    gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
+                    sat_id = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                    gs_pid = self._pid_map.get(gs_id, 0)
+                    sat_pid = self._pid_map.get(sat_id, 0)
+                    # Remove tc shaping from BOTH sides before detach
+                    if sat_pid:
+                        link_manager.remove_link_shaping(sat_pid, "gnd0")
+                    if gs_pid:
+                        link_manager.remove_link_shaping(gs_pid, "gnd0")
+                    # Detach satellite from bridge
+                    if sat_pid:
+                        link_manager.detach_from_ground_bridge(gs_id, sat_id, sat_pid)
                 else:
                     link_manager.set_interface_down(info.pid_a, info.interface_a)
                     link_manager.set_interface_down(info.pid_b, info.interface_b)

@@ -125,8 +125,8 @@ def test_parse_with_b_flag():
 """
     result = parse_tracepath(output)
     ip_hops = [h for h in result.hops if h.ip is not None]
-    # Duplicate hop 1 lines both parse (tracepath retries)
-    assert len(ip_hops) == 5
+    # Duplicate hop 1 lines are deduplicated (first successful probe kept)
+    assert len(ip_hops) == 4
     assert ip_hops[0].ip == "10.1.2.1"
     assert ip_hops[0].rtt_ms == 7.106
     assert ip_hops[-1].ip == "10.255.5.1"

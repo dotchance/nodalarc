@@ -56,6 +56,13 @@ def _teardown_previous() -> None:
     # Brief pause to let processes exit
     time.sleep(1)
 
+    # Clean up ground bridge infrastructure from host namespace
+    try:
+        from orchestrator.link_manager import teardown_all_ground_infra
+        teardown_all_ground_infra()
+    except Exception as exc:
+        log.warning(f"Ground bridge cleanup: {exc}")
+
     # Uninstall any Helm releases in the namespace
     from nodalarc.platform import get_platform_config
     ns = get_platform_config().kubernetes_namespace
@@ -336,9 +343,12 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     from orchestrator.link_manager import (
         configure_interface,
         create_dummy_interface,
+        create_ground_bridge,
+        create_satellite_ground_veth,
         create_veth_pair,
         discover_pod_pids,
         enable_mpls_input,
+        set_interface_up,
     )
 
     # Retry PID discovery — containers may still be initializing
@@ -361,6 +371,11 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         for sysctl_key, value in [
             ("net.ipv6.conf.all.forwarding", "1"),
             ("net.mpls.platform_labels", mpls_labels),
+            # Disable rp_filter on gnd0 — ground links use tc mirred redirect
+            # between /32-addressed veths; rp_filter (even loose mode) drops
+            # multicast from unroutable source IPs, preventing OSPF adjacency.
+            ("net.ipv4.conf.all.rp_filter", "0"),
+            ("net.ipv4.conf.default.rp_filter", "0"),
         ]:
             result = subprocess.run(
                 ["nsenter", "--target", str(pid), "--net", "--",
@@ -435,6 +450,45 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         for na in assignments:
             enable_mpls_input(pid, na.interface)
     log.info("Enabled MPLS input on all ISL interfaces")
+
+    # Create GS-side veths for each ground station
+    bridge_map: dict[str, str] = {}  # gs_id → gs_port_name
+    for i, station in enumerate(gs_file.stations):
+        gs_id = addressing.gs_id(station.name)
+        gs_pid = pid_map.get(gs_id)
+        if gs_pid is None:
+            _fail(f"No PID for ground station {gs_id}")
+        gs_port = create_ground_bridge(gs_id, gs_pid)
+        bridge_map[gs_id] = gs_port
+        # Configure GS gnd0: deterministic MAC, disable IPv6 autoconfig, MPLS
+        configure_interface(gs_pid, "gnd0", gs_id)
+        enable_mpls_input(gs_pid, "gnd0")
+        # Bring GS gnd0 UP (permanently — never touched during handoffs)
+        set_interface_up(gs_pid, "gnd0")
+
+    log.info(f"Created {len(bridge_map)} GS ground link veths")
+
+    # Create satellite ground veths (all start admin DOWN)
+    sat_gnd_map: dict[str, str] = {}  # sat_id → host_side_veth_name
+    for sat in satellites:
+        sat_id = addressing.sat_id(sat.plane, sat.slot)
+        sat_pid = pid_map.get(sat_id)
+        if sat_pid is None:
+            _fail(f"No PID for satellite {sat_id}")
+        host_name, _ = create_satellite_ground_veth(sat_id, sat_pid)
+        sat_gnd_map[sat_id] = host_name
+        # Configure satellite gnd0: deterministic MAC, disable IPv6 autoconfig, MPLS
+        configure_interface(sat_pid, "gnd0", sat_id)
+        enable_mpls_input(sat_pid, "gnd0")
+
+    log.info(f"Created {len(sat_gnd_map)} satellite ground veths (all DOWN)")
+
+    # Save ground link maps for orchestrator/debugging
+    bridge_map_file = data_dir / "bridge_map.json"
+    bridge_map_file.write_text(json.dumps(bridge_map))
+    sat_gnd_map_file = data_dir / "sat_gnd_map.json"
+    sat_gnd_map_file.write_text(json.dumps(sat_gnd_map))
+    log.info(f"Saved bridge_map and sat_gnd_map to {data_dir}")
 
     # Create dummy terr0 interfaces for ground stations
     for i, station in enumerate(gs_file.stations):

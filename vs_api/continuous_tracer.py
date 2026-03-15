@@ -72,6 +72,11 @@ class ContinuousTracer:
         self._latest: LiveTraceResult | None = None
         self._src: str = ""
         self._dst: str = ""
+        # Set by notify_topology_change() to wake the trace loop early
+        self._retrace_event = asyncio.Event()
+        # Seconds to wait after a topology change before re-tracing,
+        # giving OSPF time to converge with the new satellite.
+        self._convergence_delay_s = 2.0
 
     async def start(self, src: str, dst: str) -> None:
         """Start continuous tracing between src and dst."""
@@ -91,6 +96,26 @@ class ContinuousTracer:
                 pass
             self._task = None
         self._latest = None
+
+    def notify_topology_change(self, node_a: str, node_b: str) -> None:
+        """Signal that a link changed — wake the trace loop early.
+
+        Called by the VS-API link event handler when a LinkUp or LinkDown
+        affects a ground station.  The trace loop wakes, waits for OSPF
+        convergence, then re-traces.
+        """
+        if not self.active:
+            return
+        # Only wake if the change involves a node in the current trace path
+        traced_nodes: set[str] = set()
+        if self._latest is not None:
+            traced_nodes = {h.node_id for h in self._latest.forward.hops}
+            traced_nodes |= {h.node_id for h in self._latest.reverse.hops}
+        # Always retrace if src/dst is involved, or if no path yet
+        if (node_a in (self._src, self._dst) or node_b in (self._src, self._dst)
+                or node_a in traced_nodes or node_b in traced_nodes
+                or self._latest is None):
+            self._retrace_event.set()
 
     @property
     def active(self) -> bool:
@@ -163,13 +188,20 @@ class ContinuousTracer:
                     prev_fwd_hops = fwd_hops
                     self._latest = result
 
-                # Adaptive sleep
+                # Adaptive sleep — wake early if a topology change is signalled
                 interval = self._config.trace_interval_seconds
                 if result and result.path_valid_seconds is not None:
                     if result.path_valid_seconds < self._config.trace_fast_window_seconds:
                         interval = self._config.trace_interval_fast_seconds
 
-                await asyncio.sleep(interval)
+                self._retrace_event.clear()
+                try:
+                    await asyncio.wait_for(self._retrace_event.wait(), timeout=interval)
+                    # Woke early from topology change — wait for OSPF convergence
+                    log.info("Topology change detected, waiting %.1fs for convergence", self._convergence_delay_s)
+                    await asyncio.sleep(self._convergence_delay_s)
+                except asyncio.TimeoutError:
+                    pass  # Normal interval elapsed
 
             except asyncio.CancelledError:
                 raise

@@ -268,11 +268,13 @@ def _update_position(event_data: dict) -> None:
 
 def _update_link_up(event_data: dict) -> None:
     """Update link state on LinkUp."""
-    key = _link_key(event_data.get("node_a", ""), event_data.get("node_b", ""))
+    node_a = event_data.get("node_a", "")
+    node_b = event_data.get("node_b", "")
+    key = _link_key(node_a, node_b)
     with _state_lock:
         _state["links"][key] = {
-            "node_a": event_data.get("node_a", ""),
-            "node_b": event_data.get("node_b", ""),
+            "node_a": node_a,
+            "node_b": node_b,
             "state": "active",
             "link_type": event_data.get("reason", ""),
             "link_reason": event_data.get("reason", ""),
@@ -281,13 +283,21 @@ def _update_link_up(event_data: dict) -> None:
             "range_km": 0.0,
             "traffic_load_pct": None,
         }
+    # Wake continuous tracer to re-trace after convergence
+    if _continuous_tracer is not None:
+        _continuous_tracer.notify_topology_change(node_a, node_b)
 
 
 def _update_link_down(event_data: dict) -> None:
     """Remove link state on LinkDown."""
-    key = _link_key(event_data.get("node_a", ""), event_data.get("node_b", ""))
+    node_a = event_data.get("node_a", "")
+    node_b = event_data.get("node_b", "")
+    key = _link_key(node_a, node_b)
     with _state_lock:
         _state["links"].pop(key, None)
+    # Wake continuous tracer to re-trace after convergence
+    if _continuous_tracer is not None:
+        _continuous_tracer.notify_topology_change(node_a, node_b)
 
 
 def _update_latency(event_data: dict) -> None:

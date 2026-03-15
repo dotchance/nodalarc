@@ -1,8 +1,8 @@
 """Link manager — all pyroute2 netlink operations.
 
 Creates/destroys veth pairs, creates dummy interfaces, sets interface
-state, applies tc netem/tbf. Does NOT compute latency, decide when
-links change, or know about OME events.
+state, applies tc netem/tbf, manages ground station bridges.
+Does NOT compute latency, decide when links change, or know about OME events.
 
 All netlink operations use pyroute2 directly (PRD 13.6).
 """
@@ -20,6 +20,50 @@ import kubernetes.config
 from pyroute2 import IPRoute, NetNS
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Naming helpers for ground link infrastructure (15-char Linux limit)
+# ---------------------------------------------------------------------------
+
+def _sat_short_id(sat_id: str) -> str:
+    """Stable short identifier from satellite ID.
+
+    "sat-P00S05" → "P00S05"
+    """
+    if sat_id.startswith("sat-"):
+        return sat_id[4:]
+    return sat_id[-10:]
+
+
+def _gs_short_name(gs_id: str) -> str:
+    """Extract station name from gs_id, stripping 'gs-' prefix."""
+    return gs_id[3:] if gs_id.startswith("gs-") else gs_id
+
+
+def _gs_bridge_name(gs_id: str) -> str:
+    """Bridge device name for a ground station. ≤15 chars."""
+    return f"brg-{_gs_short_name(gs_id)}"[:15]
+
+
+def _gs_bridge_port_name(gs_id: str) -> str:
+    """Host-side veth name for GS bridge port. ≤15 chars."""
+    return f"_gbr-{_gs_short_name(gs_id)}"[:15]
+
+
+def _sat_gnd_host_name(sat_id: str) -> str:
+    """Host-side veth name for satellite ground link. ≤15 chars."""
+    return f"_gnd_{_sat_short_id(sat_id)}"[:15]
+
+
+def _bridge_sysfs(bridge_name: str, param: str, value: str) -> None:
+    """Write a bridge parameter via sysfs."""
+    sysfs_path = f"/sys/class/net/{bridge_name}/bridge/{param}"
+    try:
+        with open(sysfs_path, "w") as f:
+            f.write(value)
+    except OSError as exc:
+        log.warning(f"Failed to set {param}={value} on {bridge_name}: {exc}")
 
 
 def discover_pod_pids(
@@ -361,6 +405,336 @@ def remove_link_shaping(pid: int, ifname: str) -> None:
         idx = ns.link_lookup(ifname=ifname)[0]
         ns.tc("del", index=idx, root=True)
     except Exception:
-        pass  # Interface may already be gone (dynamic veth)
+        pass  # Interface may already be gone or no qdisc set
     finally:
         ns.close()
+
+
+# ---------------------------------------------------------------------------
+# Ground station link infrastructure (tc mirred redirect)
+#
+# Linux bridges don't deliver multicast to the IP stack on bridged-veth
+# peers, which prevents OSPF adjacency formation.  Instead, we use
+# tc ingress + mirred egress redirect to create a point-to-point L2
+# connection between the GS host-side veth and the satellite host-side
+# veth.  This is functionally equivalent to directly connecting them
+# with a patch cable.
+# ---------------------------------------------------------------------------
+
+def create_ground_bridge(
+    gs_id: str,
+    gs_pid: int,
+    mtu: int | None = None,
+) -> str:
+    """Create GS-side veth pair for ground link. Idempotent.
+
+    Creates a veth pair: host end (_gbr-{gs}) stays in host ns (DOWN),
+    GS end moved into GS namespace as gnd0 (DOWN).
+
+    GS gnd0 is left admin DOWN for the caller to configure (MAC, MPLS)
+    and then bring UP.
+
+    Returns host-side veth name (used as the GS "port" for tc redirect).
+    """
+    if mtu is None:
+        from nodalarc.platform import get_platform_config
+        mtu = get_platform_config().veth_interface_mtu_bytes
+
+    gs_port = _gs_bridge_port_name(gs_id)
+
+    ipr = IPRoute()
+    try:
+        # Idempotent: skip if host port already exists
+        if ipr.link_lookup(ifname=gs_port):
+            log.debug(f"GS port {gs_port} already exists")
+            return gs_port
+
+        # Check if gnd0 already exists in GS namespace
+        ns = NetNS(f"/proc/{gs_pid}/ns/net")
+        try:
+            if ns.link_lookup(ifname="gnd0"):
+                log.debug(f"gnd0 already exists in GS ns({gs_pid})")
+                return gs_port
+        finally:
+            ns.close()
+
+        # Create veth pair with temp names
+        rand = os.urandom(3).hex()
+        tmp_host = f"_na_h{rand}"[:15]
+        tmp_ns = f"_na_n{rand}"[:15]
+
+        for tmp in [tmp_host, tmp_ns]:
+            stale = ipr.link_lookup(ifname=tmp)
+            if stale:
+                ipr.link("del", index=stale[0])
+
+        ipr.link("add", ifname=tmp_host, peer={"ifname": tmp_ns}, kind="veth")
+
+        # Host end: rename, set MTU — leave DOWN
+        host_idx = ipr.link_lookup(ifname=tmp_host)[0]
+        ipr.link("set", index=host_idx, ifname=gs_port, mtu=mtu)
+
+        # Move NS end into GS namespace
+        ns_idx = ipr.link_lookup(ifname=tmp_ns)[0]
+        ipr.link("set", index=ns_idx, net_ns_pid=gs_pid)
+
+        # Rename to gnd0 inside GS namespace, leave DOWN
+        ns = NetNS(f"/proc/{gs_pid}/ns/net")
+        try:
+            idx = ns.link_lookup(ifname=tmp_ns)[0]
+            ns.link("set", index=idx, ifname="gnd0", mtu=mtu)
+        finally:
+            ns.close()
+
+        log.info(f"Created GS port {gs_port} → gnd0 in ns({gs_pid})")
+    finally:
+        ipr.close()
+
+    return gs_port
+
+
+def create_satellite_ground_veth(
+    sat_id: str,
+    sat_pid: int,
+    mtu: int | None = None,
+) -> tuple[str, str]:
+    """Pre-create satellite ground veth pair at deploy time. Idempotent.
+
+    Creates veth pair:
+    - Host side: stays in host ns, admin DOWN, unattached to any bridge
+    - NS side: moved into satellite ns as gnd0, admin DOWN
+
+    Returns (host_side_name, "gnd0").
+    """
+    if mtu is None:
+        from nodalarc.platform import get_platform_config
+        mtu = get_platform_config().veth_interface_mtu_bytes
+
+    host_name = _sat_gnd_host_name(sat_id)
+
+    ipr = IPRoute()
+    try:
+        # Idempotent: skip if host side already exists
+        if ipr.link_lookup(ifname=host_name):
+            log.debug(f"Satellite ground veth {host_name} already exists")
+            return (host_name, "gnd0")
+
+        # Also check if gnd0 already in satellite namespace
+        ns = NetNS(f"/proc/{sat_pid}/ns/net")
+        try:
+            if ns.link_lookup(ifname="gnd0"):
+                log.debug(f"gnd0 already exists in sat ns({sat_pid})")
+                return (host_name, "gnd0")
+        finally:
+            ns.close()
+
+        # Create veth pair with temp names
+        rand = os.urandom(3).hex()
+        tmp_host = f"_na_h{rand}"[:15]
+        tmp_ns = f"_na_n{rand}"[:15]
+
+        for tmp in [tmp_host, tmp_ns]:
+            stale = ipr.link_lookup(ifname=tmp)
+            if stale:
+                ipr.link("del", index=stale[0])
+
+        ipr.link("add", ifname=tmp_host, peer={"ifname": tmp_ns}, kind="veth")
+
+        # Host end: rename, set MTU — leave DOWN and unattached
+        host_idx = ipr.link_lookup(ifname=tmp_host)[0]
+        ipr.link("set", index=host_idx, ifname=host_name, mtu=mtu)
+
+        # Move NS end into satellite namespace
+        ns_idx = ipr.link_lookup(ifname=tmp_ns)[0]
+        ipr.link("set", index=ns_idx, net_ns_pid=sat_pid)
+
+        # Rename to gnd0 inside satellite namespace, leave DOWN
+        ns = NetNS(f"/proc/{sat_pid}/ns/net")
+        try:
+            idx = ns.link_lookup(ifname=tmp_ns)[0]
+            ns.link("set", index=idx, ifname="gnd0", mtu=mtu)
+        finally:
+            ns.close()
+    finally:
+        ipr.close()
+
+    log.info(f"Created satellite ground veth {host_name} ↔ gnd0 in ns({sat_pid})")
+    return (host_name, "gnd0")
+
+
+def _tc_mirred_redirect(src: str, dst: str) -> None:
+    """Install tc ingress + mirred egress redirect from src to dst."""
+    # Remove stale ingress qdisc (idempotent)
+    subprocess.run(
+        ["tc", "qdisc", "del", "dev", src, "ingress"],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["tc", "qdisc", "add", "dev", src, "ingress"],
+        capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["tc", "filter", "add", "dev", src, "parent", "ffff:",
+         "protocol", "all", "u32", "match", "u32", "0", "0",
+         "action", "mirred", "egress", "redirect", "dev", dst],
+        capture_output=True, check=True,
+    )
+
+
+def _tc_mirred_remove(ifname: str) -> None:
+    """Remove tc ingress qdisc (and all its filters) from an interface."""
+    subprocess.run(
+        ["tc", "qdisc", "del", "dev", ifname, "ingress"],
+        capture_output=True,
+    )
+
+
+def attach_to_ground_bridge(
+    gs_id: str,
+    sat_id: str,
+    sat_pid: int,
+) -> None:
+    """Connect satellite to GS via tc mirred redirect.
+
+    Brings both host-side veths and satellite gnd0 admin UP, then
+    installs bidirectional tc mirred redirect between the GS and
+    satellite host-side veths.
+    """
+    gs_port = _gs_bridge_port_name(gs_id)
+    host_veth = _sat_gnd_host_name(sat_id)
+
+    ipr = IPRoute()
+    try:
+        for name in (gs_port, host_veth):
+            idx = ipr.link_lookup(ifname=name)
+            if not idx:
+                raise FileNotFoundError(f"{name} not found")
+            ipr.link("set", index=idx[0], state="up")
+    finally:
+        ipr.close()
+
+    # Bring satellite gnd0 UP
+    ns = NetNS(f"/proc/{sat_pid}/ns/net")
+    try:
+        gnd_idx = ns.link_lookup(ifname="gnd0")
+        if not gnd_idx:
+            raise FileNotFoundError(f"gnd0 not found in sat ns({sat_pid})")
+        ns.link("set", index=gnd_idx[0], state="up")
+    finally:
+        ns.close()
+
+    # Bidirectional tc mirred redirect between host-side veths
+    _tc_mirred_redirect(gs_port, host_veth)
+    _tc_mirred_redirect(host_veth, gs_port)
+
+    log.info(f"Attached {sat_id} to {gs_id} (tc redirect)")
+
+
+def detach_from_ground_bridge(
+    gs_id: str,
+    sat_id: str,
+    sat_pid: int,
+) -> None:
+    """Disconnect satellite from GS.
+
+    Removes tc mirred redirect, then brings satellite gnd0 and
+    host veth admin DOWN.
+    """
+    gs_port = _gs_bridge_port_name(gs_id)
+    host_veth = _sat_gnd_host_name(sat_id)
+
+    # Remove tc redirect first
+    _tc_mirred_remove(gs_port)
+    _tc_mirred_remove(host_veth)
+
+    # Bring satellite gnd0 DOWN
+    ns = NetNS(f"/proc/{sat_pid}/ns/net")
+    try:
+        gnd_idx = ns.link_lookup(ifname="gnd0")
+        if gnd_idx:
+            ns.link("set", index=gnd_idx[0], state="down")
+    finally:
+        ns.close()
+
+    # Bring host veth DOWN
+    ipr = IPRoute()
+    try:
+        host_idx = ipr.link_lookup(ifname=host_veth)
+        if host_idx:
+            ipr.link("set", index=host_idx[0], state="down")
+    finally:
+        ipr.close()
+
+    log.info(f"Detached {sat_id} from {gs_id}")
+
+    log.info(f"Detached {sat_id} from bridge {_gs_bridge_name(gs_id)}")
+
+
+def teardown_ground_bridge(gs_id: str) -> None:
+    """Remove GS port veth (and any legacy bridge) for a ground station."""
+    gs_port = _gs_bridge_port_name(gs_id)
+    bridge_name = _gs_bridge_name(gs_id)
+
+    _tc_mirred_remove(gs_port)
+
+    ipr = IPRoute()
+    try:
+        port_idx = ipr.link_lookup(ifname=gs_port)
+        if port_idx:
+            ipr.link("del", index=port_idx[0])
+            log.info(f"Deleted GS port veth {gs_port}")
+
+        # Clean up legacy bridge if present
+        bridge_idx = ipr.link_lookup(ifname=bridge_name)
+        if bridge_idx:
+            ipr.link("del", index=bridge_idx[0])
+            log.info(f"Deleted legacy bridge {bridge_name}")
+    finally:
+        ipr.close()
+
+
+def teardown_satellite_ground_veth(sat_id: str) -> None:
+    """Remove satellite ground veth pair."""
+    host_veth = _sat_gnd_host_name(sat_id)
+
+    _tc_mirred_remove(host_veth)
+
+    ipr = IPRoute()
+    try:
+        idx = ipr.link_lookup(ifname=host_veth)
+        if idx:
+            ipr.link("del", index=idx[0])
+            log.info(f"Deleted satellite ground veth {host_veth}")
+    finally:
+        ipr.close()
+
+
+def teardown_all_ground_infra() -> None:
+    """Remove all ground bridge infrastructure from host namespace.
+
+    Finds and deletes all bridges (brg-*), satellite ground veths (_gnd_*),
+    and GS bridge port veths (_gbr-*). Idempotent.
+    """
+    ipr = IPRoute()
+    try:
+        to_delete: list[tuple[int, str]] = []
+        for link in ipr.get_links():
+            ifname = link.get_attr("IFLA_IFNAME")
+            if ifname and (
+                ifname.startswith("brg-")
+                or ifname.startswith("_gnd_")
+                or ifname.startswith("_gbr-")
+            ):
+                to_delete.append((link["index"], ifname))
+
+        for idx, ifname in to_delete:
+            try:
+                ipr.link("del", index=idx)
+                log.info(f"Cleaned up {ifname}")
+            except Exception:
+                pass  # May already be gone (deleting veth deletes peer)
+
+        if to_delete:
+            log.info(f"Cleaned up {len(to_delete)} ground infrastructure devices")
+    finally:
+        ipr.close()

@@ -30,6 +30,7 @@ def parse_tracepath(stdout: str) -> TracepathResult:
         return TracepathResult(hops=[], raw_output=stdout)
 
     hops: list[TracepathHop] = []
+    seen_hops: set[int] = set()
     pmtu: int | None = None
     forward_hops: int | None = None
     return_hops: int | None = None
@@ -49,10 +50,15 @@ def parse_tracepath(stdout: str) -> TracepathResult:
             hops.append(TracepathHop(hop_num=hop_num, pmtu=hop_pmtu))
             continue
 
-        # Hop line with IP and RTT
+        # Hop line with IP and RTT — deduplicate retries at the same
+        # hop_num (tracepath sends multiple probes per TTL; keep first
+        # successful probe per hop_num)
         m = _HOP_RE.match(line)
         if m:
             hop_num = int(m.group(1))
+            if hop_num in seen_hops:
+                continue
+            seen_hops.add(hop_num)
             ip = m.group(2)
             rtt_ms = float(m.group(3))
             asymm = int(m.group(4)) if m.group(4) else None

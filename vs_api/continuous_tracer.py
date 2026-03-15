@@ -344,8 +344,9 @@ class ContinuousTracer:
     def _map_hops(self, parsed: TracepathResult, src_node: TopologyNode) -> list[PathHop]:
         """Map parsed tracepath hops to PathHop list.
 
-        Deduplicates by hop_num — tracepath can report the same hop_num
-        multiple times (retries at the same TTL).
+        Deduplicates by hop_num — tracepath reports the same hop_num
+        multiple times (retries at the same TTL).  We take the first
+        entry with a valid, resolvable IP at each hop_num.
         """
         hops: list[PathHop] = [PathHop(
             node_id=src_node.node_id,
@@ -353,15 +354,20 @@ class ContinuousTracer:
             sid=src_node.sid,
             rtt_ms=0.0,
         )]
-        seen_hop_nums: set[int] = set()
+        # Collect the first resolvable IP per hop_num
+        best_per_hop: dict[int, TracepathHop] = {}
         for th in parsed.hops:
             if th.ip is None:
                 continue
-            if th.hop_num in seen_hop_nums:
-                continue
-            seen_hop_nums.add(th.hop_num)
-            node_id = self._ip_to_node.get(th.ip)
-            if node_id is None or node_id == src_node.node_id:
+            if th.hop_num in best_per_hop:
+                continue  # already have a valid entry for this hop
+            if self._ip_to_node.get(th.ip) is not None:
+                best_per_hop[th.hop_num] = th
+
+        for hop_num in sorted(best_per_hop):
+            th = best_per_hop[hop_num]
+            node_id = self._ip_to_node[th.ip]
+            if node_id == src_node.node_id:
                 continue
             node = self._node_registry[node_id]
             hops.append(PathHop(

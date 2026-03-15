@@ -157,12 +157,21 @@ class LivePathTracer:
             rtt_ms=0.0,
         )]
 
-        for _hop_num, ip, rtt in raw:
-            if ip is None:
+        # Collect first resolvable IP per hop_num (tracepath retries
+        # produce multiple entries at the same TTL)
+        best_per_hop: dict[int, tuple[str, float | None]] = {}
+        for hop_num, ip, rtt in raw:
+            if ip is None or hop_num in best_per_hop:
                 continue
             node_id = self._ip_to_node.get(ip)
             if node_id is None:
+                log.debug(f"Unresolved hop IP {ip} at hop {hop_num}")
                 continue
+            best_per_hop[hop_num] = (ip, rtt)
+
+        for hop_num in sorted(best_per_hop):
+            ip, rtt = best_per_hop[hop_num]
+            node_id = self._ip_to_node[ip]
             if node_id == src_node.node_id:
                 continue
             node = self._node_registry[node_id]

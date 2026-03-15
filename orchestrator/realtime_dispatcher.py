@@ -288,16 +288,23 @@ class RealtimeDispatcher:
                 from orchestrator import link_manager
                 is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
                 if is_gs_link:
-                    link_manager.create_veth_pair(
-                        info.pid_a, info.pid_b, ifaces[0], ifaces[1],
-                        node_id_a=vis.node_a, node_id_b=vis.node_b,
-                    )
-                    link_manager.enable_mpls_input(info.pid_a, ifaces[0])
-                    link_manager.enable_mpls_input(info.pid_b, ifaces[1])
-                link_manager.set_interface_up(info.pid_a, ifaces[0])
-                link_manager.set_interface_up(info.pid_b, ifaces[1])
-                link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
-                link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
+                    # Bridge attach — GS gnd0 is always UP
+                    gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
+                    sat_id = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                    gs_pid = self._pid_map.get(gs_id, 0)
+                    sat_pid = self._pid_map.get(sat_id, 0)
+                    if sat_pid:
+                        link_manager.attach_to_ground_bridge(gs_id, sat_id, sat_pid)
+                    # tc shaping on BOTH GS gnd0 and satellite gnd0
+                    if gs_pid:
+                        link_manager.apply_link_shaping(gs_pid, "gnd0", latency, bandwidth)
+                    if sat_pid:
+                        link_manager.apply_link_shaping(sat_pid, "gnd0", latency, bandwidth)
+                else:
+                    link_manager.set_interface_up(info.pid_a, ifaces[0])
+                    link_manager.set_interface_up(info.pid_b, ifaces[1])
+                    link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
+                    link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
             except Exception as exc:
                 log.warning(f"Link kernel setup failed for {pair}: {exc}")
 
@@ -322,7 +329,18 @@ class RealtimeDispatcher:
                 from orchestrator import link_manager
                 is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
                 if is_gs_link:
-                    link_manager.destroy_veth_pair(info.pid_a, info.interface_a)
+                    gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
+                    sat_id = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                    gs_pid = self._pid_map.get(gs_id, 0)
+                    sat_pid = self._pid_map.get(sat_id, 0)
+                    # Remove tc shaping from BOTH sides before detach
+                    if sat_pid:
+                        link_manager.remove_link_shaping(sat_pid, "gnd0")
+                    if gs_pid:
+                        link_manager.remove_link_shaping(gs_pid, "gnd0")
+                    # Detach satellite from bridge
+                    if sat_pid:
+                        link_manager.detach_from_ground_bridge(gs_id, sat_id, sat_pid)
                 else:
                     link_manager.set_interface_down(info.pid_a, info.interface_a)
                     link_manager.set_interface_down(info.pid_b, info.interface_b)
@@ -340,7 +358,7 @@ class RealtimeDispatcher:
         pub_sock.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
 
     def _teardown_remaining_links(self, pub_sock: zmq.Socket) -> None:
-        """Tear down active GS links when the dispatcher exits."""
+        """Detach active GS links when the dispatcher exits."""
         gs_pairs = [
             pair for pair in self._active_links
             if pair[0].startswith("gs-") or pair[1].startswith("gs-")

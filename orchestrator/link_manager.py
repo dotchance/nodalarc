@@ -241,8 +241,10 @@ def set_interface_up(pid: int, ifname: str) -> None:
     """Bring an interface up inside a namespace."""
     ns = NetNS(f"/proc/{pid}/ns/net")
     try:
-        idx = ns.link_lookup(ifname=ifname)[0]
-        ns.link("set", index=idx, state="up")
+        links = ns.link_lookup(ifname=ifname)
+        if not links:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        ns.link("set", index=links[0], state="up")
     finally:
         ns.close()
 
@@ -251,8 +253,10 @@ def set_interface_down(pid: int, ifname: str) -> None:
     """Bring an interface down inside a namespace."""
     ns = NetNS(f"/proc/{pid}/ns/net")
     try:
-        idx = ns.link_lookup(ifname=ifname)[0]
-        ns.link("set", index=idx, state="down")
+        links = ns.link_lookup(ifname=ifname)
+        if not links:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        ns.link("set", index=links[0], state="down")
     finally:
         ns.close()
 
@@ -279,7 +283,10 @@ def apply_link_shaping(
 
     ns = NetNS(f"/proc/{pid}/ns/net")
     try:
-        idx = ns.link_lookup(ifname=ifname)[0]
+        links = ns.link_lookup(ifname=ifname)
+        if not links:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        idx = links[0]
         # Remove existing qdiscs (idempotent)
         try:
             ns.tc("del", index=idx, root=True)
@@ -301,24 +308,48 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
     delay_us = int(delay_ms * 1000)
     ns = NetNS(f"/proc/{pid}/ns/net")
     try:
-        idx = ns.link_lookup(ifname=ifname)[0]
-        ns.tc("change", kind="netem", index=idx, handle=0x00100000,
+        links = ns.link_lookup(ifname=ifname)
+        if not links:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        ns.tc("change", kind="netem", index=links[0], handle=0x00100000,
               parent=0x00010001, delay=delay_us)
     finally:
         ns.close()
 
 
-def set_isis_metric(pod_name: str, ifname: str, metric: int, namespace: str | None = None) -> None:
-    """Set IS-IS metric on an interface via vtysh."""
+def set_link_metric(
+    pod_name: str,
+    ifname: str,
+    metric: int,
+    routing_protocol: str,
+    namespace: str | None = None,
+) -> None:
+    """Set link metric on an interface via vtysh for the given routing protocol.
+
+    Args:
+        pod_name: K8s pod name (used with kubectl exec).
+        ifname: Interface name (e.g., gnd0, isl0).
+        metric: Metric value to set.
+        routing_protocol: One of "isis", "ospf", "bgp". Determines the vtysh command.
+        namespace: K8s namespace (defaults to platform config).
+    """
     if namespace is None:
         from nodalarc.platform import get_platform_config
         namespace = get_platform_config().kubernetes_namespace
+
+    if routing_protocol == "isis":
+        metric_cmd = f"isis metric {metric}"
+    elif routing_protocol == "ospf":
+        metric_cmd = f"ip ospf cost {metric}"
+    else:
+        return  # No metric setting for this protocol
+
     env = {**os.environ, "KUBECONFIG": os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")}
     subprocess.run(
         ["kubectl", "exec", "-n", namespace, pod_name, "-c", "frr", "--",
          "vtysh", "-c", "configure terminal",
          "-c", f"interface {ifname}",
-         "-c", f"isis metric {metric}"],
+         "-c", metric_cmd],
         capture_output=True, text=True, timeout=10, env=env,
     )
 

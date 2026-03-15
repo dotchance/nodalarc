@@ -1,0 +1,15 @@
+hostname {{ hostname }}
+log file /var/log/frr/ldpd.log informational
+
+mpls ldp
+ router-id {{ ipv4_loopback }}
+ address-family ipv4
+  discovery transport-address {{ ipv4_loopback }}
+{% for iface_name in interface_info.keys() %}
+  interface {{ iface_name }}
+{% endfor %}
+{% for iface in gnd_interfaces %}
+  interface {{ iface }}
+{% endfor %}
+ exit-address-family
+exit

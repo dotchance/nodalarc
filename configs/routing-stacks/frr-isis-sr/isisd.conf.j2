@@ -18,11 +18,10 @@ router isis NODAL
  segment-routing on
  segment-routing global-block {{ srgb_start }} {{ srgb_end }} local-block 40000 49999
  segment-routing prefix {{ ipv4_loopback }}/32 index {{ sid_index }}
-{% set lsp_interval = [1, 15 // compression_factor] | max %}
- lsp-gen-interval {{ lsp_interval }}
- spf-interval {{ lsp_interval }}
- max-lsp-lifetime {{ [350, 1200 // compression_factor] | max }}
- lsp-refresh-interval {{ [150, 900 // compression_factor] | max }}
+ lsp-gen-interval 1
+ spf-interval 50
+ max-lsp-lifetime 350
+ lsp-refresh-interval 150
 exit
 
 {% for iface_name, info in interface_info.items() %}
@@ -30,9 +29,8 @@ interface {{ iface_name }}
  ip router isis NODAL
  isis network point-to-point
  isis metric {{ (reference_bandwidth / info.bandwidth_mbps) | int }}
- isis hello-interval {{ [1, 10 // compression_factor] | max }}
+ isis hello-interval 1
  isis hello-multiplier 3
- no ipv6 nd suppress-ra
 exit
 {% endfor %}
 
@@ -41,9 +39,8 @@ interface {{ iface }}
  ip router isis NODAL
  isis network point-to-point
  isis metric 10
- isis hello-interval {{ [1, 10 // compression_factor] | max }}
+ isis hello-interval 1
  isis hello-multiplier 3
- no ipv6 nd suppress-ra
 exit
 {% endfor %}
 

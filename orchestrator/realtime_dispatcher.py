@@ -395,8 +395,19 @@ class RealtimeDispatcher:
             if info.pid_a and info.pid_b:
                 try:
                     from orchestrator import link_manager
-                    link_manager.update_delay(info.pid_a, info.interface_a, new_lat)
-                    link_manager.update_delay(info.pid_b, info.interface_b, new_lat)
+                    is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
+                    if is_gs:
+                        gs_id = node_a if node_a.startswith("gs-") else node_b
+                        sat_id = node_b if node_a.startswith("gs-") else node_a
+                        gs_pid = self._pid_map.get(gs_id, 0)
+                        sat_pid = self._pid_map.get(sat_id, 0)
+                        if gs_pid:
+                            link_manager.update_delay(gs_pid, "gnd0", new_lat)
+                        if sat_pid:
+                            link_manager.update_delay(sat_pid, "gnd0", new_lat)
+                    else:
+                        link_manager.update_delay(info.pid_a, info.interface_a, new_lat)
+                        link_manager.update_delay(info.pid_b, info.interface_b, new_lat)
                 except Exception as exc:
                     log.warning(f"Latency update failed for {pair}: {exc}")
 

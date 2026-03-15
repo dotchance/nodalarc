@@ -470,7 +470,7 @@ class DiscreteEventDispatcher:
                         sat_pod = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
                         link_manager.set_link_metric(gs_pod, ifaces[0], metric, self._routing_protocol)
                         link_manager.set_link_metric(sat_pod, ifaces[1], metric, self._routing_protocol)
-                        log.info(f"GS link {pair} elevation={vis.elevation_deg:.1f}° → isis metric {metric}")
+                        log.info(f"GS link {pair} elevation={vis.elevation_deg:.1f}° → metric {metric}")
                     break  # Success
                 except FileNotFoundError as exc:
                     if attempt < 2:

@@ -1,0 +1,36 @@
+hostname {{ hostname }}
+log syslog informational
+ip forwarding
+ipv6 forwarding
+
+interface lo
+ ip address {{ ipv4_loopback }}/32
+ ipv6 address {{ ipv6_loopback }}/128
+exit
+
+{% for iface in isl_interfaces %}
+interface {{ iface }}
+ ip address {{ ipv4_loopback }}/32
+ no ipv6 nd suppress-ra
+exit
+{% endfor %}
+
+{% for iface in gnd_interfaces %}
+interface {{ iface }}
+ ip address {{ ipv4_loopback }}/32
+ no ipv6 nd suppress-ra
+exit
+{% endfor %}
+
+{% if node_type == "ground_station" and terrestrial_prefixes is defined %}
+interface terr0
+{% for tp in terrestrial_prefixes %}
+{% if ':' in tp.host_address %}
+ ipv6 address {{ tp.host_address }}
+{% else %}
+ ip address {{ tp.host_address }}
+{% endif %}
+{% endfor %}
+exit
+{% endif %}
+

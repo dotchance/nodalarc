@@ -5,7 +5,7 @@ constellation: configs/constellations/iridium-small-36.yaml
 ground_stations: configs/ground-stations/sets/polar-emphasis.yaml
 
 routing:
-  stack: configs/routing-stacks/frr-ospf-te
+  stack: configs/routing-stacks/frr-ospf-plain
   area_assignment:
     strategy: flat
     gs_area_id: "0.0.0.0"

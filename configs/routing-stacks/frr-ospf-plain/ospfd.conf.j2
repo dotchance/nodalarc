@@ -3,9 +3,6 @@ log file /var/log/frr/ospfd.log informational
 
 router ospf
  ospf router-id {{ ipv4_loopback }}
- mpls-te on
- mpls-te router-address {{ ipv4_loopback }}
-{# TE extensions advertise bandwidth/delay in LSAs but no MPLS forwarding #}
 {% set hello_interval = 1 %}
 {% set dead_interval = 3 %}
  timers throttle spf 50 50 1000

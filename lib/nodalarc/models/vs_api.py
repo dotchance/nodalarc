@@ -57,6 +57,16 @@ class TracedPath(BaseModel):
     src_node: str
     dst_node: str
     hops: list[str]
+    reverse_hops: list[str] = []
+    hop_rtts: list[float | None] = []
+    reverse_hop_rtts: list[float | None] = []
+    rtt_ms: float = 0.0
+    reverse_rtt_ms: float = 0.0
+    asymmetry_detected: bool = False
+    method: str = "tracepath"
+    path_valid_until: str | None = None
+    path_valid_seconds: float | None = None
+    traced_at: str | None = None
 
 
 class NetworkHealth(BaseModel):

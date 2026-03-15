@@ -3,6 +3,7 @@ import { useConsoleState } from "./hooks/useConsoleState";
 import { useTopology } from "./hooks/useTopology";
 import { useTimeline } from "./hooks/useTimeline";
 import { useHistoricalTopology } from "./hooks/useHistoricalTopology";
+import { useTraceConfig } from "./hooks/useTraceConfig";
 import { TopBar } from "./bars/TopBar";
 import { StatsBar } from "./bars/StatsBar";
 import { TopologyGraph } from "./graph/TopologyGraph";
@@ -29,6 +30,9 @@ export default function App() {
 
     // Path overlay state
     const [pathResult, setPathResult] = useState<PathResult | null>(null);
+
+    // Trace config (fetch once on mount)
+    const traceConfig = useTraceConfig();
 
     // Timeline data
     const timeline = useTimeline();
@@ -98,6 +102,7 @@ export default function App() {
                         nodes={sortedNodes}
                         selectedSimTime={selectedSimTime}
                         onPathResult={setPathResult}
+                        traceConfig={traceConfig}
                     />
                     <InspectionPanel
                         selectedNodeId={selectedNodeId}

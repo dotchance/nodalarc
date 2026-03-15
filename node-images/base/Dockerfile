@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tcpdump \
     traceroute \
     iputils-ping \
+    iputils-tracepath \
     runit \
     && rm -rf /var/lib/apt/lists/*
 

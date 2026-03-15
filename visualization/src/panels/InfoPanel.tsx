@@ -92,6 +92,7 @@ export function InfoPanel({ snapshot, selection, onSelect, onFlyTo, onTraceResul
           nodes={snapshot.nodes}
           selectedNodeId={selection?.type !== "link" ? selection?.id ?? null : null}
           onTraceResult={onTraceResult}
+          snapshot={snapshot}
         />
       </div>
       <div

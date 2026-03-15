@@ -74,6 +74,7 @@ from nodalarc.zmq_channels import (
     TOPIC_POSITION_EVENT,
     TOPIC_PROBE_RESULT,
 )
+from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 from vs_api.session_manager import SessionManager
 
@@ -216,6 +217,9 @@ _gs_elevation_map: dict[str, float] = {}  # node_id -> min_elevation_deg
 _beam_falloff_exponent: float = 2.0
 _playback_paused: bool = False
 _playback_speed: float = 1.0
+
+# Continuous tracer state
+_continuous_tracer: ContinuousTracer | None = None
 
 _almanac_state: dict = {
     "last_topology_state_id": None,
@@ -370,13 +374,19 @@ def _build_snapshot() -> dict:
         ) for e in _state["recent_events"]]
         health = NetworkHealth(**_state["network_health"])
 
+        _traced: list[TracedPath] = []
+        if _continuous_tracer is not None and _continuous_tracer.active:
+            tp = _continuous_tracer.traced_path
+            if tp is not None:
+                _traced.append(tp)
+
         snapshot = StateSnapshot(
             sim_time=datetime.fromisoformat(_state["sim_time"]) if isinstance(_state["sim_time"], str) else _state["sim_time"],
             wall_time=now,
             schema_version=1,
             nodes=nodes,
             links=links,
-            traced_paths=[],
+            traced_paths=_traced,
             active_flows=[],
             recent_events=recent,
             network_health=health,
@@ -637,6 +647,10 @@ def get_auth_token() -> dict:
 
 def _clear_state() -> None:
     """Reset in-memory state during session switch."""
+    global _continuous_tracer
+    if _continuous_tracer is not None:
+        # Best-effort stop — we're in a sync context during session switch
+        _continuous_tracer = None
     with _state_lock:
         _state["nodes"].clear()
         _state["links"].clear()
@@ -1301,6 +1315,161 @@ def trace_path(body: dict) -> dict:
         log.debug(f"NodalPath CSPF trace failed: {exc}")
 
     return {"hops": [], "error": "Trace unavailable"}
+
+
+# --- Continuous trace endpoints ---
+
+
+def _get_sim_time_str() -> str:
+    """Return current sim_time as string for the continuous tracer."""
+    with _state_lock:
+        return _state["sim_time"]
+
+
+def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]) -> None:
+    """Callback when the traced path changes — add a RecentEvent."""
+    sim_time = _get_sim_time_str()
+    old_str = " -> ".join(old_hops[:4])
+    new_str = " -> ".join(new_hops[:4])
+    if len(old_hops) > 4:
+        old_str += f" ({len(old_hops)} hops)"
+    if len(new_hops) > 4:
+        new_str += f" ({len(new_hops)} hops)"
+    _add_recent_event(
+        {"sim_time": sim_time, "node_id": src, "detail": f"Path {src} -> {dst}: {old_str} => {new_str}"},
+        "PATH_CHANGE",
+    )
+
+
+@app.post("/api/v1/trace/start", dependencies=[Depends(_require_api_key)])
+async def start_continuous_trace(body: dict) -> dict:
+    """Start continuous path tracing between two nodes."""
+    global _continuous_tracer
+
+    src = body.get("src_node", "")
+    dst = body.get("dst_node", "")
+    if not src or not dst:
+        return JSONResponse(status_code=400, content={"error": "src_node and dst_node required"})
+
+    with _state_lock:
+        if src not in _state["nodes"]:
+            return JSONResponse(status_code=400, content={"error": f"Unknown node: {src}"})
+        if dst not in _state["nodes"]:
+            return JSONResponse(status_code=400, content={"error": f"Unknown node: {dst}"})
+
+    # Stop existing tracer
+    if _continuous_tracer is not None:
+        await _continuous_tracer.stop()
+        _continuous_tracer = None
+
+    # Load trace context
+    try:
+        tracer = _create_continuous_tracer()
+    except Exception as exc:
+        log.warning("Failed to create continuous tracer: %s", exc)
+        return JSONResponse(status_code=500, content={"error": f"Tracer init failed: {exc}"})
+
+    _continuous_tracer = tracer
+    await tracer.start(src, dst)
+    return {"ok": True, "src": src, "dst": dst}
+
+
+@app.post("/api/v1/trace/stop", dependencies=[Depends(_require_api_key)])
+async def stop_continuous_trace() -> dict:
+    """Stop continuous path tracing."""
+    global _continuous_tracer
+    if _continuous_tracer is not None:
+        await _continuous_tracer.stop()
+        _continuous_tracer = None
+    return {"ok": True}
+
+
+@app.get("/api/v1/trace/status", dependencies=[Depends(_require_api_key)])
+def get_trace_status() -> dict:
+    """Return current continuous trace status."""
+    if _continuous_tracer is None or not _continuous_tracer.active:
+        return {"active": False, "src": None, "dst": None, "result": None}
+
+    result = _continuous_tracer.latest_result
+    return {
+        "active": True,
+        "src": _continuous_tracer.src,
+        "dst": _continuous_tracer.dst,
+        "result": result.model_dump(mode="json") if result else None,
+    }
+
+
+def _create_continuous_tracer() -> ContinuousTracer:
+    """Create a ContinuousTracer from the current session context."""
+    cfg = get_platform_config()
+
+    # Load session context
+    node_registry: dict = {}
+    interface_map: dict = {}
+    pid_map: dict = {}
+    timeline_path: str | None = None
+    trace_mode = "ip"
+
+    log.info("Creating continuous tracer: session_file=%s exists=%s",
+             _session_file, Path(_session_file).exists() if _session_file else False)
+    if _session_file and Path(_session_file).exists():
+        # Ensure NodalPath config is initialized (load_session_context needs SID ranges)
+        try:
+            from nodalpath.platform import get_nodalpath_config
+            get_nodalpath_config()
+            log.info("NodalPath config already initialized")
+        except RuntimeError:
+            try:
+                from nodalpath.platform import init_nodalpath_config
+                init_nodalpath_config(Path("configs/nodalpath.yaml"))
+                log.info("Initialized NodalPath config from configs/nodalpath.yaml")
+            except Exception as exc:
+                log.error("Failed to init NodalPath config: %s", exc)
+        try:
+            from nodalpath.orchestrator.session_loader import load_session_context
+            ctx = load_session_context(Path(_session_file))
+            node_registry = ctx[0]
+            interface_map = ctx[1]
+            log.info("Loaded session context: %d nodes, %d interfaces", len(node_registry), len(interface_map))
+        except Exception as exc:
+            log.error("Failed to load session context: %s", exc, exc_info=True)
+
+        # Read pid_map.json
+        if _session_manager and _session_manager._current_data_dir:
+            pid_path = Path(_session_manager._current_data_dir) / "pid_map.json"
+            if pid_path.exists():
+                try:
+                    pid_map = json.loads(pid_path.read_text())
+                except Exception as exc:
+                    log.warning("Failed to read pid_map.json: %s", exc)
+
+            # Read timeline path from session-state.json
+            state_path = Path(_session_manager._current_data_dir) / "session-state.json"
+            if state_path.exists():
+                try:
+                    state_data = json.loads(state_path.read_text())
+                    timeline_path = state_data.get("timeline")
+                except Exception as exc:
+                    log.warning("Failed to read session-state.json: %s", exc)
+
+        # Determine trace mode from routing stack
+        if _routing_stack:
+            if "isis-sr" in _routing_stack or "static-sr" in _routing_stack:
+                trace_mode = "sr-uniform"
+            elif _routing_stack.startswith("nodalpath"):
+                trace_mode = "cspf"
+
+    return ContinuousTracer(
+        deploy_socket=cfg.deploy_daemon_unix_socket_path,
+        node_registry=node_registry,
+        interface_map=interface_map,
+        pid_map=pid_map,
+        trace_mode=trace_mode,
+        config=cfg,
+        timeline_path=timeline_path,
+        get_sim_time=_get_sim_time_str,
+        on_path_change=_on_path_change,
+    )
 
 
 @app.post("/api/v1/playback", dependencies=[Depends(_require_api_key), Depends(_rate_limit_playback)])

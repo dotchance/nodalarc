@@ -30,6 +30,8 @@ def build_app(
     link_state_store=None,
     path_deriver=None,
     node_inspector=None,
+    live_path_tracer=None,
+    trace_mode: str | None = None,
 ) -> FastAPI:
     """Build and return the FastAPI application.
 
@@ -52,6 +54,19 @@ def build_app(
     @app.get("/api/health")
     async def health() -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    @app.get("/api/v1/trace-config")
+    async def trace_config_endpoint() -> JSONResponse:
+        """Return the trace mode configuration for the current session."""
+        # For nodalpath-fwd sessions (path_deriver is wired), report cspf mode
+        effective_mode = trace_mode
+        if effective_mode is None and path_deriver is not None:
+            effective_mode = "cspf"
+        return JSONResponse({
+            "trace_mode": effective_mode,
+            "pipe_mode": effective_mode == "sr-pipe",
+            "has_sr": effective_mode in ("sr-uniform", "sr-pipe"),
+        })
 
     @app.get("/api/status")
     async def status() -> JSONResponse:
@@ -295,22 +310,86 @@ def build_app(
 
     @app.get("/api/v1/path")
     async def get_path(src: str, dst: str, sim_time: str | None = None) -> JSONResponse:
-        """Derive the MPLS forwarding path from src to dst."""
-        if path_deriver is None:
-            return JSONResponse({
-                "reachable": False,
-                "unreachable_reason": "path_deriver not wired",
-                "src": src, "dst": dst,
-                "hops": [], "total_latency_ms": 0.0,
-                "method": "derived", "sim_time": sim_time or "",
-                "topology_state_id": "",
-            })
+        """Derive or trace the forwarding path from src to dst.
 
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, path_deriver.derive, src, dst, sim_time
-        )
-        return JSONResponse(result.model_dump())
+        Uses CSPF path deriver when available (nodalpath-fwd sessions).
+        Falls back to live traceroute through FRR pods (IS-IS/OSPF sessions).
+        """
+        if path_deriver is not None:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None, path_deriver.derive, src, dst, sim_time
+            )
+            return JSONResponse(result.model_dump())
+
+        if live_path_tracer is not None:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None, live_path_tracer.trace, src, dst
+            )
+            return JSONResponse(result.model_dump(mode="json"))
+
+        return JSONResponse({
+            "reachable": False,
+            "unreachable_reason": "no path tracer available",
+            "src": src, "dst": dst,
+            "hops": [], "total_latency_ms": 0.0,
+            "method": "none", "sim_time": sim_time or "",
+            "topology_state_id": "",
+        })
+
+    # ── Continuous trace proxy endpoints ────────────────────────────────────
+
+    @app.post("/api/v1/trace/start")
+    async def trace_start(request: Request) -> JSONResponse:
+        """Proxy trace/start to VS-API."""
+        return await _proxy_to_vsapi("POST", "/api/v1/trace/start", await request.json())
+
+    @app.post("/api/v1/trace/stop")
+    async def trace_stop() -> JSONResponse:
+        """Proxy trace/stop to VS-API."""
+        return await _proxy_to_vsapi("POST", "/api/v1/trace/stop")
+
+    @app.get("/api/v1/trace/status")
+    async def trace_status() -> JSONResponse:
+        """Proxy trace/status to VS-API."""
+        return await _proxy_to_vsapi("GET", "/api/v1/trace/status")
+
+    async def _proxy_to_vsapi(method: str, path: str, body: dict | None = None) -> JSONResponse:
+        """Proxy a request to the VS-API server."""
+        import httpx
+        from nodalarc.platform import get_platform_config
+        vs_port = get_platform_config().vs_api_http_port
+        url = f"http://127.0.0.1:{vs_port}{path}"
+        # Fetch VS-API auth token (unauthenticated endpoint)
+        headers: dict[str, str] = {}
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as tc:
+                token_resp = await tc.get(f"http://127.0.0.1:{vs_port}/api/v1/auth/token")
+                if token_resp.status_code == 200:
+                    token = token_resp.json().get("token", "")
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
+        except Exception:
+            pass
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                if method == "POST":
+                    r = await client.post(url, json=body or {}, headers=headers)
+                else:
+                    r = await client.get(url, headers=headers)
+                if r.status_code == 404:
+                    return JSONResponse(
+                        {"error": f"VS-API endpoint {path} not found — restart VS-API to pick up new routes"},
+                        status_code=502,
+                    )
+                return JSONResponse(r.json(), status_code=r.status_code)
+        except httpx.ConnectError:
+            return JSONResponse({"error": "VS-API not reachable — is it running?"}, status_code=503)
+        except httpx.TimeoutException:
+            return JSONResponse({"error": "VS-API timeout"}, status_code=504)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=500)
 
     # ── Inspection endpoints ────────────────────────────────────────────────
 

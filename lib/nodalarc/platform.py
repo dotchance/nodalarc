@@ -73,6 +73,11 @@ class PlatformConfig(BaseModel):
     vs_api_introspect_max_response_bytes: int
     vs_api_introspect_command_timeout_seconds: int
 
+    # Continuous trace intervals
+    trace_interval_seconds: float
+    trace_interval_fast_seconds: float
+    trace_fast_window_seconds: float
+
     # System tuning
     host_inotify_max_user_instances: int
     host_file_descriptor_limit: int

@@ -185,6 +185,19 @@ platform:
   # Timeout for a single vtysh introspect command execution (seconds).
   vs_api_introspect_command_timeout_seconds: 15
 
+  # ── Continuous Trace Intervals ──────────────────────────────────────
+  # Seconds between trace iterations in the continuous path tracer.
+
+  # Normal interval: used when path is stable (no predicted change soon)
+  trace_interval_seconds: 3.0
+
+  # Fast interval: used when path_valid_seconds < trace_fast_window_seconds
+  trace_interval_fast_seconds: 1.0
+
+  # Window (seconds): switch to fast interval when the next predicted
+  # topology change is within this many seconds
+  trace_fast_window_seconds: 30.0
+
   # ── System Tuning ───────────────────────────────────────────────────
   # Applied by na-deploy to the host before pod creation.
 

@@ -369,6 +369,19 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             )
             if result.returncode != 0:
                 _fail(f"Failed to set {sysctl_key}={value} in ns({pid}): {result.stderr}")
+    # Set ip_ttl_propagate for SR stacks (controls traceroute visibility)
+    if stack_config.segment_routing:
+        ttl_val = "0" if stack_config.ttl_propagation == "pipe" else "1"
+        for node_id, pid in pid_map.items():
+            result = subprocess.run(
+                ["nsenter", "--target", str(pid), "--net", "--",
+                 "sysctl", "-w", f"net.mpls.ip_ttl_propagate={ttl_val}"],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                log.warning(f"Failed to set ip_ttl_propagate={ttl_val} in ns({pid}): {result.stderr}")
+        log.info(f"Set net.mpls.ip_ttl_propagate={ttl_val} for SR stack")
+
     log.info("Configured IPv6 forwarding and MPLS in all pod namespaces")
 
     # Compute ISL neighbor assignments to know which veths to create
@@ -441,6 +454,21 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         create_dummy_interface(gs_pid, "terr0", addrs)
 
     log.info(f"Created terr0 dummy interfaces for {len(gs_file.stations)} ground stations")
+
+    # Remove default route from each pod so traffic goes through FRR, not K3s overlay.
+    # eth0 stays (needed for kubectl exec) but must not participate in forwarding.
+    removed_default = 0
+    for node_id, pid in pid_map.items():
+        result = subprocess.run(
+            ["nsenter", "--target", str(pid), "--net", "--",
+             "ip", "route", "del", "default"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            removed_default += 1
+        else:
+            log.warning(f"Failed to remove default route in {node_id}: {result.stderr.strip()}")
+    log.info(f"Removed default route from {removed_default}/{len(pid_map)} pods")
 
     # Save pid_map for orchestrator
     pid_map_file = data_dir / "pid_map.json"
@@ -594,9 +622,14 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             stderr=np_log,
         )
     else:
-        log.info("Step 11b: Start NodalPath (console-only mode)")
+        log.info("Step 11b: Start NodalPath (console + live path trace)")
         nodalpath_proc = subprocess.Popen(
-            [sys.executable, "-m", "nodalpath", "--mode", "console"],
+            [
+                sys.executable, "-m", "nodalpath",
+                "--mode", "console",
+                "--session", session_path,
+                "--namespace", ns,
+            ],
             stdout=np_log,
             stderr=np_log,
         )

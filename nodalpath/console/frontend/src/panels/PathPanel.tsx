@@ -59,25 +59,27 @@ export function PathPanel({ nodes, selectedSimTime, onPathResult, traceConfig }:
         return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
     }, [isLiveActive && liveTrace?.src && liveTrace?.dst]);
 
-    // Countdown from path_valid_seconds (sim time delta from when trace was taken)
+    // Countdown from path_valid_seconds — this is a sim-time delta that resets
+    // each time the backend produces a new trace result. We snapshot the value
+    // and the wall-clock time it arrived, then tick down by elapsed wall time.
     useEffect(() => {
         if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
 
         const secs = liveTrace?.result?.path_valid_seconds;
-        const tracedAt = liveTrace?.result?.traced_at;
-        if (secs == null || secs <= 0 || !tracedAt) {
+        if (secs == null || secs <= 0) {
             setCountdown(secs != null && secs <= 0 ? "Path change expected" : null);
             return;
         }
-        const expiresAt = new Date(tracedAt).getTime() + secs * 1000;
+        const startWall = Date.now();
         const tick = () => {
-            const remaining = (expiresAt - Date.now()) / 1000;
+            const elapsed = (Date.now() - startWall) / 1000;
+            const remaining = secs - elapsed;
             if (remaining <= 0) {
                 setCountdown("Path change expected");
             } else {
                 const m = Math.floor(remaining / 60);
                 const s = Math.floor(remaining % 60);
-                setCountdown(m > 0 ? `${m}m ${s}s` : `${s}s`);
+                setCountdown(`Path change expected in: ${m > 0 ? `${m}m ${s}s` : `${s}s`}`);
             }
         };
         tick();

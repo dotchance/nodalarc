@@ -39,25 +39,25 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
     if (continuous && tp) onTraceResult?.(tp);
   }, [continuous, tp, onTraceResult]);
 
-  // Countdown from path_valid_seconds (sim time delta from when trace was taken)
+  // Countdown from path_valid_seconds — sim-time delta that resets each trace.
+  // Snapshot the value and wall-clock arrival time, tick down by elapsed wall time.
   useEffect(() => {
     if (countdownRef.current) { clearInterval(countdownRef.current); countdownRef.current = null; }
     const secs = tp?.path_valid_seconds;
-    const tracedAt = tp?.traced_at;
-    if (secs == null || secs <= 0 || !tracedAt) {
+    if (secs == null || secs <= 0) {
       setCountdown(secs != null && secs <= 0 ? "Path change expected" : null);
       return;
     }
-    // Compute wall-clock expiration from when the trace was taken + sim delta
-    const expiresAt = new Date(tracedAt).getTime() + secs * 1000;
+    const startWall = Date.now();
     const tick = () => {
-      const remaining = (expiresAt - Date.now()) / 1000;
+      const elapsed = (Date.now() - startWall) / 1000;
+      const remaining = secs - elapsed;
       if (remaining <= 0) {
         setCountdown("Path change expected");
       } else {
         const m = Math.floor(remaining / 60);
         const s = Math.floor(remaining % 60);
-        setCountdown(m > 0 ? `${m}m ${s}s` : `${s}s`);
+        setCountdown(`Path change expected in: ${m > 0 ? `${m}m ${s}s` : `${s}s`}`);
       }
     };
     tick();

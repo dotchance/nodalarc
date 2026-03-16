@@ -6,7 +6,7 @@ import { drawNode, drawAreaBounds, hitTestNode } from "./nodes";
 import { drawLinks, hitTestLink } from "./topoLinks";
 import { setupInteraction, type ViewTransform } from "./interaction";
 import { FAIL_HOLD_MS, FAIL_FADE_MS } from "../config";
-import type { StateSnapshot, Selection, LinkState } from "../types";
+import type { StateSnapshot, Selection, LinkState, ColorMode } from "../types";
 
 /** Recently-removed link kept for fail-flash animation. */
 interface FailedLink {
@@ -19,9 +19,10 @@ interface TopologyViewProps {
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
   onFlyTo?: (nodeId: string) => void;
+  colorMode?: ColorMode;
 }
 
-export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: TopologyViewProps) {
+export function TopologyView({ snapshot, selection, onSelect, onFlyTo, colorMode = "area" }: TopologyViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const transformRef = useRef<ViewTransform>({ offsetX: 0, offsetY: 0, scale: 1 });
   const animFrameRef = useRef<number>(0);
@@ -162,7 +163,7 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo }: Topolog
     for (const node of layout.nodes) {
       const isSelected = selection?.id === node.id;
       const isIsolated = !connectedNodes.has(node.id);
-      drawNode(ctx, node, isSelected, isIsolated, abrNodes.has(node.id));
+      drawNode(ctx, node, isSelected, isIsolated, abrNodes.has(node.id), colorMode);
     }
 
     ctx.restore();

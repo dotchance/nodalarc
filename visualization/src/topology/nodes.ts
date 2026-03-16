@@ -1,10 +1,18 @@
 /** Draw topology nodes on Canvas 2D. */
 
-import { AREA_COLORS, GS_COLOR } from "../config";
+import { AREA_COLORS, GS_COLOR, getPlaneColor } from "../config";
 import type { LayoutNode, AreaBounds } from "./layout";
+import type { ColorMode } from "../types";
 
 const SAT_RADIUS = 8;
 const GS_RADIUS = 10;
+
+function satColor(node: LayoutNode, colorMode: ColorMode): string {
+  if (colorMode === "plane" && node.plane != null) {
+    return `#${getPlaneColor(node.plane).toString(16).padStart(6, "0")}`;
+  }
+  return `#${(AREA_COLORS[node.area ?? ""] ?? 0x888888).toString(16).padStart(6, "0")}`;
+}
 
 export function drawNode(
   ctx: CanvasRenderingContext2D,
@@ -12,11 +20,12 @@ export function drawNode(
   selected: boolean,
   isolated: boolean,
   isABR: boolean,
+  colorMode: ColorMode = "area",
 ): void {
   const radius = node.type === "ground_station" ? GS_RADIUS : SAT_RADIUS;
   const color = node.type === "ground_station"
     ? `#${GS_COLOR.toString(16).padStart(6, "0")}`
-    : `#${(AREA_COLORS[node.area ?? ""] ?? 0x888888).toString(16).padStart(6, "0")}`;
+    : satColor(node, colorMode);
 
   ctx.globalAlpha = isolated ? 0.4 : 1.0;
 

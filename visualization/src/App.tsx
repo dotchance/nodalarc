@@ -366,6 +366,7 @@ function AppInner() {
             selection={selection}
             onSelect={select}
             onFlyTo={handleFlyToNode}
+            colorMode={colorMode}
           />
         </div>
         <Toolbar

@@ -179,19 +179,14 @@ class ContinuousTracer:
 
                 if result is not None:
                     fwd_hops = [h.node_id for h in result.forward.hops]
-                    # A trace "succeeded" if it has more than just the source hop
-                    trace_ok = len(fwd_hops) > 1
-
-                    if trace_ok:
-                        # Path change detection
-                        if prev_fwd_hops and fwd_hops != prev_fwd_hops and self._on_path_change:
-                            try:
-                                self._on_path_change(self._src, self._dst, prev_fwd_hops, fwd_hops)
-                            except Exception as exc:
-                                log.warning("on_path_change callback error: %s", exc)
-                        prev_fwd_hops = fwd_hops
-                        self._latest = result
-                    # If trace failed, keep previous _latest and retry quickly
+                    # Path change detection
+                    if prev_fwd_hops and fwd_hops != prev_fwd_hops and self._on_path_change:
+                        try:
+                            self._on_path_change(self._src, self._dst, prev_fwd_hops, fwd_hops)
+                        except Exception as exc:
+                            log.warning("on_path_change callback error: %s", exc)
+                    prev_fwd_hops = fwd_hops
+                    self._latest = result
 
                 # Adaptive sleep — wake early if a topology change is signalled
                 interval = self._config.trace_interval_seconds

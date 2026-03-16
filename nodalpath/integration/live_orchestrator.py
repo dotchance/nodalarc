@@ -281,9 +281,15 @@ class LiveOrchestrator:
             self._console_state.record_push_result(push_result)
 
             # Build console-format topology dict for the frontend graph
+            # Only count active links for neighbor counts
+            fls = self._builder.full_link_state
             isl_counts: dict[str, int] = {}
             gnd_counts: dict[str, int] = {}
             for edge in snapshot.edges:
+                pair = (edge.src_node_id, edge.dst_node_id)
+                vis, sched, _ = fls.get(pair, (False, False, 0.0))
+                if not (vis and sched):
+                    continue  # Only count active links
                 for nid in (edge.src_node_id, edge.dst_node_id):
                     if edge.link_type == "isl":
                         isl_counts[nid] = isl_counts.get(nid, 0) + 1
@@ -306,15 +312,25 @@ class LiveOrchestrator:
                     "prefix": ", ".join(self._prefix_map.get(node.node_id, [])),
                 })
 
-            links_payload = [
-                {
+            # Use full_link_state to determine live link status instead
+            # of hardcoding all edges as "active".
+            fls = self._builder.full_link_state
+            links_payload = []
+            for edge in snapshot.edges:
+                pair = (edge.src_node_id, edge.dst_node_id)
+                vis, sched, _range = fls.get(pair, (False, False, 0.0))
+                if vis and sched:
+                    state = "active"
+                elif vis and not sched:
+                    state = "visible_unscheduled"
+                else:
+                    state = "inactive"
+                links_payload.append({
                     "node_a": edge.src_node_id,
                     "node_b": edge.dst_node_id,
-                    "state": "active",
+                    "state": state,
                     "link_type": edge.link_type,
-                }
-                for edge in snapshot.edges
-            ]
+                })
 
             self._console_state.record_topology_snapshot({
                 "topology_state_id": entry.topology_state_id,

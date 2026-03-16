@@ -82,3 +82,14 @@ export function pushStatusColor(status: PushStatus): string {
         case "pending":   return "#ccaa33";   // amber — VF warning color
     }
 }
+
+/** Node color based on live connectivity (active link counts). */
+export function connectivityColor(node: { node_type: string; isl_count: number; gnd_count: number }): string {
+    const total = node.isl_count + node.gnd_count;
+    if (total === 0) return "#555566";        // isolated — dim gray
+    if (node.gnd_count > 0) return "#33ccff"; // has ground link — cyan
+    if (node.node_type === "ground_station") {
+        return node.gnd_count > 0 ? "#33ccff" : "#886633"; // GS: cyan if connected, brown if not
+    }
+    return "#ee5544";                          // satellite with ISLs only — warm red
+}

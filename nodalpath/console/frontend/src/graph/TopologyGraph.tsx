@@ -1,7 +1,7 @@
 import { useRef, useEffect } from "react";
 import * as d3 from "d3";
 import type { TopologySnapshot, ConsoleNode, PushRecord, PathResult } from "../types";
-import { computeLayout, computeViewBox, pushStatusColor } from "./layout";
+import { computeLayout, computeViewBox, pushStatusColor, connectivityColor } from "./layout";
 import type { PushStatus } from "./layout";
 import "../styles/graph.css";
 
@@ -186,11 +186,11 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
 
         nodeGroups.append("circle")
             .attr("r", d => d.node_type === "satellite" ? NODE_R_SAT : NODE_R_GS)
-            .attr("fill", d => pushStatusColor(nodeStatus(d.node_id)))
+            .attr("fill", d => connectivityColor(d))
             .attr("fill-opacity", d => d.neighbor_count === 0 ? 0.25 : 0.85)
             .attr("stroke", d => d.node_id === selectedNodeId
                 ? "#ffffff"
-                : pushStatusColor(nodeStatus(d.node_id)))
+                : connectivityColor(d))
             .attr("stroke-width", d => d.node_id === selectedNodeId ? 2.5 : 1.5);
 
         // Node labels

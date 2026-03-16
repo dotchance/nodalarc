@@ -667,8 +667,6 @@ def detach_from_ground_bridge(
 
     log.info(f"Detached {sat_id} from {gs_id}")
 
-    log.info(f"Detached {sat_id} from bridge {_gs_bridge_name(gs_id)}")
-
 
 def teardown_ground_bridge(gs_id: str) -> None:
     """Remove GS port veth (and any legacy bridge) for a ground station."""

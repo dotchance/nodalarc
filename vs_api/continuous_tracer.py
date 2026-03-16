@@ -178,21 +178,30 @@ class ContinuousTracer:
                     )
 
                 if result is not None:
-                    # Path change detection
                     fwd_hops = [h.node_id for h in result.forward.hops]
-                    if prev_fwd_hops and fwd_hops != prev_fwd_hops and self._on_path_change:
-                        try:
-                            self._on_path_change(self._src, self._dst, prev_fwd_hops, fwd_hops)
-                        except Exception as exc:
-                            log.warning("on_path_change callback error: %s", exc)
-                    prev_fwd_hops = fwd_hops
-                    self._latest = result
+                    # A trace "succeeded" if it has more than just the source hop
+                    trace_ok = len(fwd_hops) > 1
+
+                    if trace_ok:
+                        # Path change detection
+                        if prev_fwd_hops and fwd_hops != prev_fwd_hops and self._on_path_change:
+                            try:
+                                self._on_path_change(self._src, self._dst, prev_fwd_hops, fwd_hops)
+                            except Exception as exc:
+                                log.warning("on_path_change callback error: %s", exc)
+                        prev_fwd_hops = fwd_hops
+                        self._latest = result
+                    # If trace failed, keep previous _latest and retry quickly
 
                 # Adaptive sleep — wake early if a topology change is signalled
                 interval = self._config.trace_interval_seconds
                 if result and result.path_valid_seconds is not None:
                     if result.path_valid_seconds < self._config.trace_fast_window_seconds:
                         interval = self._config.trace_interval_fast_seconds
+
+                # On failed trace, retry faster (1s) instead of full interval
+                if result is not None and len(result.forward.hops) <= 1:
+                    interval = 1.0
 
                 self._retrace_event.clear()
                 try:

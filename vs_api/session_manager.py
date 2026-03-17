@@ -114,7 +114,8 @@ def _daemon_deploy_streaming(session_path: str, status_callback: Callable[[str],
                             elif "Created " in line and " veth" in line:
                                 veth_count += 1
                                 if veth_total > 0:
-                                    status_callback(f"Creating connections {veth_count} of {veth_total}")
+                                    display_count = min(veth_count, veth_total)
+                                    status_callback(f"Creating connections {display_count} of {veth_total}")
                                 else:
                                     status_callback(f"Creating connections ({veth_count})")
                 elif "ok" in msg:

@@ -178,16 +178,18 @@ export function computeLayout(
   // Filter out areas that should not be drawn:
   // - skip when only one area exists
   // - skip areas with null, "unknown", or "0.0.0.0" ids
-  const AREA_PAD = 16;
+  const AREA_PAD_X = 16;
+  const AREA_PAD_TOP = 12;   // Just above node circles (8px radius + 4px gap)
+  const AREA_PAD_BOTTOM = 32;  // Below node center: 8px radius + 12px gap + 9px label + 3px
   const filteredAreaEntries = [...areaBoundsMap.entries()].filter(([id]) =>
     id !== "unknown" && id !== "0.0.0.0" && id !== "",
   );
   const areaBounds: AreaBounds[] = (areaBoundsMap.size <= 1 ? [] : filteredAreaEntries).map(([id, b]) => ({
     id,
-    minX: b.minX - AREA_PAD,
-    minY: b.minY - AREA_PAD,
-    maxX: b.maxX + AREA_PAD,
-    maxY: b.maxY + AREA_PAD,
+    minX: b.minX - AREA_PAD_X,
+    minY: b.minY - AREA_PAD_TOP,
+    maxX: b.maxX + AREA_PAD_X,
+    maxY: b.maxY + AREA_PAD_BOTTOM,
   }));
 
   // Build layout links — include both active and recently-failed

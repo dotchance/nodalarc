@@ -18,7 +18,25 @@ import pytest
 import zmq
 
 from nodalarc.models.events import VisibilityEvent
+from nodalarc.platform import PlatformConfig, init_platform_config, reset_platform_config
 from orchestrator.discrete_event_dispatcher import DiscreteEventDispatcher
+
+
+@pytest.fixture(autouse=True)
+def _isolated_platform_config():
+    """Ensure tests use loopback bind with non-conflicting ports."""
+    from tests.unit.test_platform_config import _valid_config_dict
+    reset_platform_config()
+    d = _valid_config_dict()
+    d["zmq_bind_host"] = "127.0.0.1"
+    d["zmq_connect_host"] = "127.0.0.1"
+    # Use high ports to avoid conflicts with the live system
+    d["zmq_to_events_port"] = 15561
+    d["zmq_to_scenario_inject_port"] = 15564
+    d["zmq_playback_control_port"] = 15566
+    init_platform_config(PlatformConfig(**d))
+    yield
+    reset_platform_config()
 
 
 class TestOverrideSet:

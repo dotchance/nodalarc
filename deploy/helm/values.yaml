@@ -9,7 +9,7 @@ images:
   visualization: docker.io/nodalarc/visualization:1
   nodalpath: docker.io/nodalarc/nodalpath:latest
 
-imagePullPolicy: Never
+imagePullPolicy: IfNotPresent  # Use Never for purely local registry
 
 satellite:
   memoryLimit: 128Mi
@@ -24,8 +24,12 @@ orchestrator:
   cpuLimit: 500m
 
 ome:
-  memoryLimit: 256Mi
-  cpuLimit: 200m
+  enabled: false
+  cpuRequest: 500m
+  cpuLimit: "2000m"
+  memoryRequest: 512Mi
+  memoryLimit: 1Gi
+  dataDir: ""  # Set by na_deploy to the session data directory
 
 visualization:
   memoryLimit: 128Mi

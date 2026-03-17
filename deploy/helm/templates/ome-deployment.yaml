@@ -1,0 +1,84 @@
+{{- if .Values.ome.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ome
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-ome
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodalarc-ome
+  template:
+    metadata:
+      labels:
+        app: nodalarc-ome
+    spec:
+      containers:
+        - name: ome
+          image: {{ .Values.images.ome }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+            - "--continuous"
+            - "/etc/nodalarc/session.yaml"
+            - "-o"
+            # CONSTRAINT: this value, hostPath.path below, and mountPath for data-dir
+            # must all be identical. The sentinel file written by OME contains the
+            # absolute path, and na_deploy reads it from the host filesystem.
+            - "{{ .Values.ome.dataDir }}"
+          ports:
+            - containerPort: 8081
+              name: health
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: {{ .Values.ome.cpuRequest | default "500m" }}
+              memory: {{ .Values.ome.memoryRequest | default "512Mi" }}
+            limits:
+              cpu: {{ .Values.ome.cpuLimit | default "2000m" }}
+              memory: {{ .Values.ome.memoryLimit | default "1Gi" }}
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: session-config
+              mountPath: /etc/nodalarc/session.yaml
+              subPath: session.yaml
+            - name: constellation-config
+              mountPath: /etc/nodalarc/constellation.yaml
+              subPath: constellation.yaml
+            - name: ground-stations
+              mountPath: /etc/nodalarc/ground-stations.yaml
+              subPath: ground-stations.yaml
+            - name: data-dir
+              mountPath: {{ .Values.ome.dataDir }}
+      volumes:
+        - name: session-config
+          configMap:
+            name: nodalarc-session
+        - name: constellation-config
+          configMap:
+            name: nodalarc-constellation
+        - name: ground-stations
+          configMap:
+            name: nodalarc-ground-stations
+        - name: data-dir
+          hostPath:
+            path: {{ .Values.ome.dataDir }}
+            type: DirectoryOrCreate
+{{- end }}

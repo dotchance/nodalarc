@@ -1,22 +1,32 @@
+# OME (Orbital Mechanics Engine) container — computes satellite positions,
+# ISL visibility, and ground station access schedules.
+#
+# All session config comes from ConfigMap mounts at /etc/nodalarc/.
+# Static reference data (satellite types, ground stations, constellations)
+# is baked into the image.
+#
+# Build context must be the repo root:
+#   docker build -f ome/Dockerfile -t nodalarc/ome:latest .
+
 FROM python:3.14-slim
 
 WORKDIR /app
 
-# Install shared library first (PRD 13.13)
-COPY lib/ /app/lib/
-RUN pip install --no-cache-dir /app/lib/
-
-# Install OME dependencies
+# Install Python dependencies
 RUN pip install --no-cache-dir \
-    pyzmq \
-    pyyaml \
-    pydantic>=2.0 \
-    numpy \
-    sgp4 \
-    skyfield
+    pydantic>=2.0 pyzmq pyyaml numpy sgp4 skyfield
 
-# Copy OME code
-COPY ome/ /app/ome/
-COPY configs/ /app/configs/
+# Add lib/ to Python path so nodalarc package is importable
+ENV PYTHONPATH=/app/lib:/app
 
-CMD ["python", "-m", "ome.main"]
+# Copy shared library, OME module, and static reference configs
+COPY lib/ lib/
+COPY ome/ ome/
+COPY configs/satellite-types/ configs/satellite-types/
+COPY configs/ground-stations/ configs/ground-stations/
+COPY configs/constellations/ configs/constellations/
+
+# Health probe port
+EXPOSE 8081
+
+ENTRYPOINT ["python", "-m", "ome.main"]

@@ -106,6 +106,33 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
     return out_path
 
 
+def _start_health_server(port: int = 8081) -> None:
+    """Minimal HTTP health endpoint for K8s readiness/liveness probe.
+
+    Temporary scaffolding — in the end state, health/metrics/observability
+    will be a sidecar container, not application code. This function is
+    isolated and called from one place so it can be trivially removed
+    when the sidecar pattern is adopted.
+    """
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import threading
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+        def log_message(self, *args): pass
+
+    server = HTTPServer(("0.0.0.0", port), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logging.info(f"Health server listening on :{port}")
+
+
+# Timeline output goes through write_timeline_jsonl() and append_timeline_jsonl()
+# exclusively. These are the interface boundary for future ZMQ migration —
+# swapping to ZMQ PUB requires changing only these two functions in event_stream.py.
 def run_continuous(session_path: str, output_dir: str | None = None) -> None:
     """Long-lived OME: compute rolling windows until interrupted.
 
@@ -114,6 +141,8 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
     continuously and a .ready sentinel signals when the first window is
     available for the dispatcher to start tailing.
     """
+    _start_health_server()
+
     # Load session config (same as run())
     data = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(data)

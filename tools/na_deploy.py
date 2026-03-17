@@ -114,7 +114,7 @@ def _apply_configmap(name: str, ns: str, data: dict[str, str]) -> None:
         log.info(f"ConfigMap {name} applied ({len(data)} keys)")
 
 
-def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip_teardown: bool = False, host_nodalpath: bool = False) -> None:
+def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip_teardown: bool = False, host_nodalpath: bool = False, host_ome: bool = False) -> None:
     """Execute the 11-step startup sequence."""
     # === Step 0: Teardown previous session ===
     if not skip_teardown:
@@ -155,26 +155,33 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     _is_nodalpath = (resolved is not None and session.routing.protocol == "nodalpath") or (stack_dir is not None and stack_dir.name == "nodalpath-fwd")
 
     # === Step 2: Start OME (continuous mode) ===
-    log.info("Step 2: Start OME (continuous mode)")
-    ome_log = open(data_dir / "ome.log", "w")
-    ome_proc = subprocess.Popen(
-        [sys.executable, "-m", "ome.main", "--continuous",
-         session_path, "-o", str(data_dir)],
-        stdout=ome_log,
-        stderr=ome_log,
-    )
-    log.info(f"OME PID: {ome_proc.pid}")
-
-    # Wait for first window sentinel
+    # By default OME runs as a K8s Deployment (containerized).
+    # Use --host-ome to run as a host subprocess instead.
+    # For containerized OME, sentinel polling happens AFTER helm install (Step 5)
+    # because the OME pod is created by Helm.
+    ome_proc = None
     sentinel = data_dir / f"{session.session.name}-timeline.ready"
-    for _ in range(300):  # 5 minute timeout
-        if sentinel.exists():
-            timeline_path = Path(sentinel.read_text().strip())
-            break
-        time.sleep(1)
+    if not host_ome:
+        log.info("Step 2: OME will run as K8s Deployment (created at helm install)")
     else:
-        _fail("OME did not produce first window in 5 minutes")
-    log.info(f"Timeline: {timeline_path}")
+        log.info("Step 2: Start OME (continuous mode, host subprocess)")
+        ome_log = open(data_dir / "ome.log", "w")
+        ome_proc = subprocess.Popen(
+            [sys.executable, "-m", "ome.main", "--continuous",
+             session_path, "-o", str(data_dir)],
+            stdout=ome_log,
+            stderr=ome_log,
+        )
+        log.info(f"OME PID: {ome_proc.pid}")
+        # Wait for sentinel now (host OME starts immediately)
+        for _ in range(300):
+            if sentinel.exists():
+                break
+            time.sleep(1)
+        else:
+            _fail("OME did not produce first window in 5 minutes")
+
+    timeline_path = None  # Set after sentinel appears
 
     # === Step 3: Build template variables ===
     log.info("Step 3: Build template variables")
@@ -304,14 +311,61 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             "transport": "grpc" if _is_nodalpath else "grpc",
         }
         helm_values["hostZmq"] = {"enabled": True, "hostIP": host_ip}
+    if not host_ome:
+        helm_values["ome"] = {
+            "enabled": True,
+            "dataDir": str(data_dir),
+        }
     values_file = data_dir / "helm-values.yaml"
     values_file.write_text(yaml.dump(helm_values))
 
     from nodalarc.platform import get_platform_config
     ns = get_platform_config().kubernetes_namespace
+
+    # Write ConfigMaps BEFORE helm install — containerized OME and NodalPath
+    # need these at pod startup. Pod-IPs ConfigMap is written later (needs running pods).
+    log.info("Writing ConfigMaps for containerized components...")
+
+    # Session YAML — rewrite file paths for container mount locations
+    container_session = dict(raw)
+    container_session["constellation"] = "/etc/nodalarc/constellation.yaml"
+    if isinstance(session.ground_stations, str):
+        container_session["ground_stations"] = "/etc/nodalarc/ground-stations.yaml"
+    _apply_configmap("nodalarc-session", ns, {
+        "session.yaml": yaml.dump(container_session, default_flow_style=False),
+    })
+
+    # Constellation YAML
+    _apply_configmap("nodalarc-constellation", ns, {
+        "constellation.yaml": Path(session.constellation).read_text(),
+    })
+
+    # Ground stations — file content (skip for inline lists — pod mounts are optional)
+    if isinstance(session.ground_stations, str):
+        gs_path = Path(session.ground_stations)
+        if gs_path.exists():
+            _apply_configmap("nodalarc-ground-stations", ns, {
+                "ground-stations.yaml": gs_path.read_text(),
+            })
+
+    # Platform config — container version with zmq_connect_host for headless Service
+    host_platform = yaml.safe_load(Path("configs/platform.yaml").read_text())
+    container_platform = dict(host_platform.get("platform", host_platform))
+    container_platform["zmq_connect_host"] = "nodalarc-host-zmq"
+    _apply_configmap("nodalarc-platform-config", ns, {
+        "platform.yaml": yaml.dump({"platform": container_platform}, default_flow_style=False),
+    })
+
+    # NodalPath config
+    nodalpath_config_path = Path("configs/nodalpath.yaml")
+    if nodalpath_config_path.exists():
+        _apply_configmap("nodalarc-nodalpath-config", ns, {
+            "nodalpath.yaml": nodalpath_config_path.read_text(),
+        })
+
     result = subprocess.run(
         [
-            "helm", "install", session_id, "deploy/helm",
+            "helm", "upgrade", "--install", session_id, "deploy/helm",
             "-n", ns, "--create-namespace",
             "-f", str(values_file),
         ],
@@ -320,6 +374,34 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     if result.returncode != 0:
         _fail(f"Helm install failed: {result.stderr}")
     log.info("Helm install complete")
+
+    # Wait for OME sentinel if containerized (OME pod was created by helm install)
+    if not host_ome:
+        log.info("Waiting for containerized OME to produce first window...")
+        for _ in range(300):  # 5 minute timeout
+            if sentinel.exists():
+                break
+            time.sleep(1)
+        else:
+            # Check OME pod status for diagnostic
+            ome_status = subprocess.run(
+                ["kubectl", "get", "pods", "-n", ns, "-l", "app=nodalarc-ome",
+                 "-o", "jsonpath={.items[0].status.phase}"],
+                capture_output=True, text=True,
+            )
+            ome_logs = subprocess.run(
+                ["kubectl", "logs", "-n", ns, "-l", "app=nodalarc-ome", "--tail=10"],
+                capture_output=True, text=True,
+            )
+            _fail(f"OME did not produce first window in 5 minutes. "
+                  f"Pod status: {ome_status.stdout}. Last logs: {ome_logs.stdout[-500:]}")
+
+    # Read timeline path from sentinel
+    if sentinel.exists():
+        timeline_path = Path(sentinel.read_text().strip())
+        log.info(f"Timeline: {timeline_path}")
+    else:
+        _fail("Sentinel file not found after OME startup")
 
     # === Step 5+6: Wait for pods and deliver configs progressively ===
     # Deliver configs to pods as they become Running, rather than waiting
@@ -381,10 +463,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         _fail(f"Timeout: {len(missing)} pods never became ready: {sorted(missing)[:10]}...")
     log.info(f"All {len(configured_pods)} pods configured")
 
-    # Write ConfigMaps for containerized consumers (e.g. NodalPath in a pod)
-    log.info("Writing ConfigMaps for containerized components...")
-
-    # Pod IP map
+    # Write pod IP ConfigMap (needs running pods — other ConfigMaps created before helm install)
     pod_ip_data = {}
     for pod_name in sorted(configured_pods):
         nid = next((n for n in node_vars if n.lower() == pod_name), pod_name)
@@ -396,44 +475,6 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         if ip_result.returncode == 0 and ip_result.stdout.strip():
             pod_ip_data[nid] = ip_result.stdout.strip()
     _apply_configmap("nodalarc-pod-ips", ns, {"pod-ips.json": json.dumps(pod_ip_data)})
-
-    # Session YAML — rewrite file paths for container mount locations
-    container_session = dict(raw)  # raw is the parsed session YAML from Step 1
-    container_session["constellation"] = "/etc/nodalarc/constellation.yaml"
-    if isinstance(session.ground_stations, str):
-        container_session["ground_stations"] = "/etc/nodalarc/ground-stations.yaml"
-    _apply_configmap("nodalarc-session", ns, {
-        "session.yaml": yaml.dump(container_session, default_flow_style=False),
-    })
-
-    # Constellation YAML (referenced by session)
-    _apply_configmap("nodalarc-constellation", ns, {
-        "constellation.yaml": Path(session.constellation).read_text(),
-    })
-
-    # Ground stations — file content or inline list
-    if isinstance(session.ground_stations, str):
-        gs_path = Path(session.ground_stations)
-        if gs_path.exists():
-            _apply_configmap("nodalarc-ground-stations", ns, {
-                "ground-stations.yaml": gs_path.read_text(),
-            })
-
-    # Platform config — container version with zmq_connect_host pointing to headless Service
-    # so containerized components reach host-running ZMQ publishers via K8s DNS
-    host_platform = yaml.safe_load(Path("configs/platform.yaml").read_text())
-    container_platform = dict(host_platform.get("platform", host_platform))
-    container_platform["zmq_connect_host"] = "nodalarc-host-zmq"
-    _apply_configmap("nodalarc-platform-config", ns, {
-        "platform.yaml": yaml.dump({"platform": container_platform}, default_flow_style=False),
-    })
-
-    # NodalPath config
-    nodalpath_config_path = Path("configs/nodalpath.yaml")
-    if nodalpath_config_path.exists():
-        _apply_configmap("nodalarc-nodalpath-config", ns, {
-            "nodalpath.yaml": nodalpath_config_path.read_text(),
-        })
 
     # Wait for FRR daemons to start (entrypoint waits for sentinel, then launches)
     log.info("Waiting 5s for FRR daemons to start...")
@@ -805,7 +846,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         "session_id": session_id,
         "data_dir": str(data_dir),
         "timeline": str(timeline_path),
-        "ome_pid": ome_proc.pid,
+        "ome_pid": ome_proc.pid if ome_proc else 0,
         "mi_pid": mi_proc.pid if mi_proc else 0,
         "vsapi_pid": vsapi_pid,
         "orchestrator_pid": to_proc.pid,
@@ -822,7 +863,8 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info(f"Session: {session_id}")
     log.info(f"Data directory: {data_dir}")
     log.info(f"Timeline: {timeline_path}")
-    log.info(f"OME PID: {ome_proc.pid}")
+    if ome_proc:
+        log.info(f"OME PID: {ome_proc.pid}")
     if mi_proc:
         log.info(f"MI service PID: {mi_proc.pid}")
     log.info(f"VS-API PID: {vsapi_pid}")
@@ -845,6 +887,8 @@ def main() -> None:
     parser.add_argument("--skip-teardown", action="store_true", help="Skip Step 0 teardown (caller already cleaned up)")
     parser.add_argument("--host-nodalpath", action="store_true",
                         help="Run NodalPath as host subprocess instead of K8s Deployment")
+    parser.add_argument("--host-ome", action="store_true",
+                        help="Run OME as host subprocess instead of K8s Deployment")
     parser.add_argument("--platform-config", default="configs/platform.yaml",
                         help="Path to platform config YAML")
     args = parser.parse_args()
@@ -853,7 +897,8 @@ def main() -> None:
     init_platform_config(Path(args.platform_config))
 
     deploy(args.session, dwell=args.dwell, skip_vsapi=args.skip_vsapi,
-           skip_teardown=args.skip_teardown, host_nodalpath=args.host_nodalpath)
+           skip_teardown=args.skip_teardown, host_nodalpath=args.host_nodalpath,
+           host_ome=args.host_ome)
 
 
 if __name__ == "__main__":

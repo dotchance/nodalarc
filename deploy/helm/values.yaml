@@ -7,6 +7,7 @@ images:
   orchestrator: docker.io/nodalarc/orchestrator:latest
   ome: docker.io/nodalarc/ome:latest
   visualization: docker.io/nodalarc/visualization:1
+  nodalpath: docker.io/nodalarc/nodalpath:latest
 
 imagePullPolicy: Never
 
@@ -29,6 +30,18 @@ ome:
 visualization:
   memoryLimit: 128Mi
   cpuLimit: 100m
+
+nodalpath:
+  enabled: false
+  mode: console
+  transport: grpc
+  memoryLimit: 256Mi
+  cpuLimit: 500m
+
+# Host ZMQ service — points containerized components to host-running ZMQ publishers
+hostZmq:
+  enabled: false
+  hostIP: ""  # Set to the host's IP reachable from pods (e.g. node internal IP)
 
 # Optional sidecar container (e.g. nodalpath-fwd gRPC daemon)
 # Set by na-deploy when the routing stack specifies a non-FRR image.

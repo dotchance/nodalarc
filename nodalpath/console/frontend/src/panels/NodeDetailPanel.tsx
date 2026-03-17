@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import type { ConsoleNode, ConsoleStateSnapshot, NodeStateDetail } from "../types";
-import { API_BASE, GLOBE_BASE } from "../config";
+import { API_BASE, getGlobeBase } from "../config";
 import "../styles/panels.css";
 
 type Tab = "state" | "forwarding" | "history";
@@ -56,7 +56,7 @@ export function NodeDetailPanel({ nodeId, topology_nodes, consoleState, selected
         .filter(d => d.node_a === nodeId || d.node_b === nodeId)
         .slice(0, 5);
 
-    const globeUrl = `${GLOBE_BASE}/?selected=${encodeURIComponent(nodeId)}`;
+    const globeUrl = `${getGlobeBase()}/?selected=${encodeURIComponent(nodeId)}`;
 
     return (
         <div className="detail-panel">

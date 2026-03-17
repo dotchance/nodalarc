@@ -198,6 +198,18 @@ platform:
   # topology change is within this many seconds
   trace_fast_window_seconds: 30.0
 
+  # ── ZMQ Networking ─────────────────────────────────────────────────
+  #
+  # Controls bind/connect addresses for inter-component ZMQ sockets.
+  # - bind: address that PUB/REP sockets listen on
+  # - connect: address that SUB/REQ sockets connect to
+  #
+  # For single-host: bind 0.0.0.0 (allows containerized subscribers),
+  # connect 127.0.0.1 (host-to-host stays on loopback).
+  # For full containerization: connect to K8s Service DNS names.
+  zmq_bind_host: "0.0.0.0"
+  zmq_connect_host: "127.0.0.1"
+
   # ── System Tuning ───────────────────────────────────────────────────
   # Applied by na-deploy to the host before pod creation.
 

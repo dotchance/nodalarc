@@ -1,0 +1,96 @@
+{{- if .Values.nodalpath.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodalpath
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-nodalpath
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodalarc-nodalpath
+  template:
+    metadata:
+      labels:
+        app: nodalarc-nodalpath
+    spec:
+      serviceAccountName: nodalarc-orchestrator
+      containers:
+        - name: nodalpath
+          image: {{ .Values.images.nodalpath | default "nodalarc/nodalpath:latest" }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+            - "--session"
+            - "/etc/nodalarc/session.yaml"
+            - "--mode"
+            - {{ .Values.nodalpath.mode | default "console" | quote }}
+            - "--transport"
+            - {{ .Values.nodalpath.transport | default "grpc" | quote }}
+            - "--namespace"
+            - {{ .Values.namespace }}
+            - "--platform-config"
+            - "/etc/nodalarc/platform.yaml"
+            - "--nodalpath-config"
+            - "/etc/nodalarc/nodalpath.yaml"
+          ports:
+            - containerPort: 3100
+              name: console
+              protocol: TCP
+            - containerPort: 5567
+              name: zmq-events
+              protocol: TCP
+          env:
+            - name: POD_IP_MAP_PATH
+              value: /etc/nodalarc/pod-ips.json
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3100
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              memory: {{ .Values.nodalpath.memoryLimit | default "256Mi" }}
+              cpu: {{ .Values.nodalpath.cpuLimit | default "500m" }}
+          volumeMounts:
+            - name: session-config
+              mountPath: /etc/nodalarc/session.yaml
+              subPath: session.yaml
+            - name: constellation-config
+              mountPath: /etc/nodalarc/constellation.yaml
+              subPath: constellation.yaml
+            - name: ground-stations
+              mountPath: /etc/nodalarc/ground-stations.yaml
+              subPath: ground-stations.yaml
+            - name: platform-config
+              mountPath: /etc/nodalarc/platform.yaml
+              subPath: platform.yaml
+            - name: nodalpath-config
+              mountPath: /etc/nodalarc/nodalpath.yaml
+              subPath: nodalpath.yaml
+            - name: pod-ips
+              mountPath: /etc/nodalarc/pod-ips.json
+              subPath: pod-ips.json
+      volumes:
+        - name: session-config
+          configMap:
+            name: nodalarc-session
+        - name: constellation-config
+          configMap:
+            name: nodalarc-constellation
+        - name: ground-stations
+          configMap:
+            name: nodalarc-ground-stations
+            optional: true
+        - name: platform-config
+          configMap:
+            name: nodalarc-platform-config
+        - name: nodalpath-config
+          configMap:
+            name: nodalarc-nodalpath-config
+        - name: pod-ips
+          configMap:
+            name: nodalarc-pod-ips
+{{- end }}

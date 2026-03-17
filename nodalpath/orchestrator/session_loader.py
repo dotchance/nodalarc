@@ -368,14 +368,33 @@ def _daemon_request(
 
 
 def load_pod_ip_map(
-    node_ids: list[str],
+    node_ids: list[str] | None = None,
     socket_path: str | None = None,
     namespace: str | None = None,
 ) -> dict[str, str]:
-    """Query pod IPs for a list of node_ids via the deploy daemon.
+    """Load pod IP map — from ConfigMap file if available, else deploy daemon.
 
-    Skips nodes whose pod IP cannot be resolved (logs warning).
+    When running in a container, the pod IP map is mounted as a JSON file
+    via ConfigMap (set POD_IP_MAP_PATH env var or default /etc/nodalarc/pod-ips.json).
+    When running on the host, falls back to querying the deploy daemon per-node.
     """
+    import os
+
+    # Try ConfigMap file first (containerized path)
+    ip_map_path = Path(os.environ.get("POD_IP_MAP_PATH", "/etc/nodalarc/pod-ips.json"))
+    if ip_map_path.exists():
+        try:
+            data = json.loads(ip_map_path.read_text())
+            log.info("Loaded %d pod IPs from %s", len(data), ip_map_path)
+            return data
+        except Exception as exc:
+            log.warning("Failed to read pod IP map from %s: %s", ip_map_path, exc)
+
+    # Fallback: query deploy daemon (host process path)
+    if node_ids is None:
+        log.warning("No pod IP map file and no node_ids provided — returning empty map")
+        return {}
+
     if socket_path is None:
         socket_path = _deploy_socket_path()
     if namespace is None:
@@ -396,5 +415,5 @@ def load_pod_ip_map(
             error = resp.get("error", "no response") if resp else "no response"
             log.warning("Failed to get pod IP for %s (%s): %s", node_id, pod_name, error)
 
-    log.info("Resolved %d/%d pod IPs", len(result), len(node_ids))
+    log.info("Resolved %d/%d pod IPs via deploy daemon", len(result), len(node_ids))
     return result

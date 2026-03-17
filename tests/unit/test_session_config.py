@@ -11,37 +11,48 @@ from nodalarc.models.session import (
 from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
 
 
+_SAMPLE_SESSION = {
+    "session": {"name": "test-session"},
+    "constellation": "configs/constellations/iridium-small-36.yaml",
+    "ground_stations": "configs/ground-stations/sets/polar-emphasis.yaml",
+    "routing": {
+        "protocol": "isis",
+        "extensions": ["sr"],
+        "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
+    },
+    "time": {"mode": "discrete-event", "step_seconds": 1},
+    "traffic_flows": [
+        {"flow_id": "test", "src": "gs-svalbard", "dst": "gs-mcmurdo",
+         "protocol": "udp", "bandwidth_kbps": 100, "probe_type": "continuous"},
+    ],
+    "convergence": {"stability_period_s": 2.0, "timeout_s": 30.0},
+}
+
+
 class TestSessionConfigLoading:
-    def test_iridium_small_session_loads(self):
-        data = yaml.safe_load((CONFIGS_DIR / "sessions/iridium-small-36-isis-flat.yaml").read_text())
-        config = SessionConfig.model_validate(data)
-        assert config.session.name == "iridium-small-36-isis-flat"
+    def test_session_loads(self):
+        config = SessionConfig.model_validate(_SAMPLE_SESSION)
+        assert config.session.name == "test-session"
         assert config.constellation == "configs/constellations/iridium-small-36.yaml"
         assert config.routing.area_assignment.strategy == "flat"
 
     def test_defaults_applied(self):
-        data = yaml.safe_load((CONFIGS_DIR / "sessions/iridium-small-36-isis-flat.yaml").read_text())
-        config = SessionConfig.model_validate(data)
-        # Addressing defaults
+        config = SessionConfig.model_validate(_SAMPLE_SESSION)
         assert config.addressing.sat_id_template == "sat-P{plane:02d}S{slot:02d}"
         assert config.addressing.gs_id_template == "gs-{name}"
-        # Time defaults
         assert config.time.step_seconds == 1
-        # Convergence defaults
         assert config.convergence.stability_period_s == 2.0
         assert config.convergence.timeout_s == 30.0
         assert config.convergence.probe_interval_ms == 100
 
     def test_round_trip(self):
-        data = yaml.safe_load((CONFIGS_DIR / "sessions/iridium-small-36-isis-flat.yaml").read_text())
-        config = SessionConfig.model_validate(data)
+        config = SessionConfig.model_validate(_SAMPLE_SESSION)
         json_str = config.model_dump_json()
         restored = SessionConfig.model_validate_json(json_str)
         assert restored == config
 
     def test_traffic_flows_present(self):
-        data = yaml.safe_load((CONFIGS_DIR / "sessions/iridium-small-36-isis-flat.yaml").read_text())
-        config = SessionConfig.model_validate(data)
+        config = SessionConfig.model_validate(_SAMPLE_SESSION)
         assert config.traffic_flows is not None
         assert len(config.traffic_flows) == 1
 

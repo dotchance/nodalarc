@@ -171,19 +171,8 @@ export function computeLayout(
       slot: null,
     });
 
-    // Extend area bounds to include this ground station
-    const gsArea = gs.routing_area;
-    if (gsArea) {
-      const bounds = areaBoundsMap.get(gsArea);
-      if (bounds) {
-        bounds.minX = Math.min(bounds.minX, x);
-        bounds.minY = Math.min(bounds.minY, y);
-        bounds.maxX = Math.max(bounds.maxX, x);
-        bounds.maxY = Math.max(bounds.maxY, y);
-      } else {
-        areaBoundsMap.set(gsArea, { minX: x, minY: y, maxX: x, maxY: y });
-      }
-    }
+    // Ground stations sit in their own row — don't extend area bounds
+    // to include them, as their wide x-spread would distort area boxes.
   }
 
   // Filter out areas that should not be drawn:

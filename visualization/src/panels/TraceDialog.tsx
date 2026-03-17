@@ -164,6 +164,22 @@ export function TraceDialog({ nodes, selectedNodeId, onTraceResult, snapshot }: 
       {continuous && !tp && (
         <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-dim)" }}>Tracing path...</div>
       )}
+      {continuous && tp && tp.hops.length <= 1 && (() => {
+        // Check if src/dst have any active links
+        const links = snapshot?.links ?? [];
+        const srcLinks = links.filter(l => (l.node_a === src || l.node_b === src) && l.state === "active");
+        const dstLinks = links.filter(l => (l.node_a === dst || l.node_b === dst) && l.state === "active");
+        const issues: string[] = [];
+        if (srcLinks.length === 0) issues.push(`${src} has no active links`);
+        if (dstLinks.length === 0) issues.push(`${dst} has no active links`);
+        return (
+          <div style={{ marginTop: 8, fontSize: 11, color: "#f5a623" }}>
+            {issues.length > 0
+              ? `Waiting for connectivity — ${issues.join(", ")}`
+              : "Waiting for route convergence..."}
+          </div>
+        );
+      })()}
     </div>
   );
 }

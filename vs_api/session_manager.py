@@ -490,9 +490,12 @@ class SessionManager:
 
             # === Cleanup stale wizard-generated session YAMLs ===
             try:
-                active_path = Path(session_path).resolve()
+                keep = {Path(session_path).resolve()}
+                # Also keep the previous active session file (in case switch is partial)
+                if self._current_session_file:
+                    keep.add(Path(self._current_session_file).resolve())
                 for wf in self._sessions_dir.glob("_wizard-*.yaml"):
-                    if wf.resolve() != active_path:
+                    if wf.resolve() not in keep:
                         wf.unlink()
                         log.info(f"Cleaned up stale wizard session: {wf.name}")
                 self.rescan()

@@ -711,8 +711,9 @@ def _load_beam_falloff_exponent(session: SessionConfig) -> float:
 
 
 def _update_session_globals(session_path: str, new_db_path: str) -> None:
-    """Reload routing_stack, constellation_name, and db_path from new session."""
-    global _routing_stack, _constellation_name, _db_path, _gs_elevation_map, _beam_falloff_exponent
+    """Reload routing_stack, constellation_name, db_path, and session_file from new session."""
+    global _routing_stack, _constellation_name, _db_path, _session_file, _gs_elevation_map, _beam_falloff_exponent
+    _session_file = session_path
     session_data = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(session_data)
     if session.routing.stack is not None:

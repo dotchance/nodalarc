@@ -50,8 +50,13 @@ async def _run_live(config: NodalPathConfig) -> None:
         config.session_path,
     )
 
+    # Read session name from YAML for display (not the file path)
+    import yaml as _yaml
+    _session_raw = _yaml.safe_load(config.session_path.read_text())
+    _session_name = _session_raw.get("session", {}).get("name", str(config.session_path))
+
     console_state = ConsoleState(
-        session_path=str(config.session_path),
+        session_path=_session_name,
         transport=config.transport,
         dry_run=config.dry_run,
         nodes_in_registry=len(node_registry),
@@ -204,7 +209,8 @@ async def _run_console(config: NodalPathConfig | None = None) -> None:
     session_label = "(no session)"
 
     if config is not None and config.session_path is not None:
-        session_label = str(config.session_path)
+        _raw = yaml.safe_load(config.session_path.read_text())
+        session_label = _raw.get("session", {}).get("name", str(config.session_path))
         node_registry, _iface_map, _prefix_map, _bw_map, _static_edges = load_session_context(
             config.session_path,
         )
@@ -212,12 +218,20 @@ async def _run_console(config: NodalPathConfig | None = None) -> None:
         # Determine trace mode from routing stack config
         raw = yaml.safe_load(config.session_path.read_text())
         session = SessionConfig.model_validate(raw)
-        stack_dir = Path(session.routing.stack)
-        stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
-        stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
+        if session.routing.stack is not None:
+            stack_dir = Path(session.routing.stack)
+            stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
+            stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
+            segment_routing = stack_config.segment_routing
+            ttl_propagation = stack_config.ttl_propagation
+        else:
+            from nodalarc.stack_resolver import resolve_stack
+            resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
+            segment_routing = resolved.segment_routing
+            ttl_propagation = resolved.ttl_propagation
 
-        if stack_config.segment_routing:
-            trace_mode = "sr-pipe" if stack_config.ttl_propagation == "pipe" else "sr-uniform"
+        if segment_routing:
+            trace_mode = "sr-pipe" if ttl_propagation == "pipe" else "sr-uniform"
         else:
             trace_mode = "ip"
 

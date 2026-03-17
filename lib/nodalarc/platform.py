@@ -82,71 +82,78 @@ class PlatformConfig(BaseModel):
     host_inotify_max_user_instances: int
     host_file_descriptor_limit: int
 
+    # ZMQ networking — controls bind/connect addresses for inter-component
+    # communication. Default "127.0.0.1" for single-host operation.
+    # Set bind to "0.0.0.0" and connect to K8s Service DNS names when
+    # components run in separate pods.
+    zmq_bind_host: str = "127.0.0.1"
+    zmq_connect_host: str = "127.0.0.1"
+
     # --- ZMQ socket address properties ---
 
     @property
     def ome_events_bind(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_ome_events_port}"
+        return f"tcp://{self.zmq_bind_host}:{self.zmq_ome_events_port}"
 
     @property
     def ome_events_connect(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_ome_events_port}"
+        return f"tcp://{self.zmq_connect_host}:{self.zmq_ome_events_port}"
 
     @property
     def to_events_bind(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_to_events_port}"
+        return f"tcp://{self.zmq_bind_host}:{self.zmq_to_events_port}"
 
     @property
     def to_events_connect(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_to_events_port}"
+        return f"tcp://{self.zmq_connect_host}:{self.zmq_to_events_port}"
 
     @property
     def mi_events_bind(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_mi_events_port}"
+        return f"tcp://{self.zmq_bind_host}:{self.zmq_mi_events_port}"
 
     @property
     def mi_events_connect(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_mi_events_port}"
+        return f"tcp://{self.zmq_connect_host}:{self.zmq_mi_events_port}"
 
     @property
     def mi_convergence_gate_bind(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_mi_convergence_gate_port}"
+        return f"tcp://{self.zmq_bind_host}:{self.zmq_mi_convergence_gate_port}"
 
     @property
     def mi_convergence_gate_connect(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_mi_convergence_gate_port}"
+        return f"tcp://{self.zmq_connect_host}:{self.zmq_mi_convergence_gate_port}"
 
     @property
     def to_scenario_inject_bind(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_to_scenario_inject_port}"
+        return f"tcp://{self.zmq_bind_host}:{self.zmq_to_scenario_inject_port}"
 
     @property
     def to_scenario_inject_connect(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_to_scenario_inject_port}"
+        return f"tcp://{self.zmq_connect_host}:{self.zmq_to_scenario_inject_port}"
 
     @property
     def mi_trace_bind(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_mi_trace_port}"
+        return f"tcp://{self.zmq_bind_host}:{self.zmq_mi_trace_port}"
 
     @property
     def mi_trace_connect(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_mi_trace_port}"
+        return f"tcp://{self.zmq_connect_host}:{self.zmq_mi_trace_port}"
 
     @property
     def playback_control_bind(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_playback_control_port}"
+        return f"tcp://{self.zmq_bind_host}:{self.zmq_playback_control_port}"
 
     @property
     def playback_control_connect(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_playback_control_port}"
+        return f"tcp://{self.zmq_connect_host}:{self.zmq_playback_control_port}"
 
     @property
     def nodalpath_events_bind(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_nodalpath_events_port}"
+        return f"tcp://{self.zmq_bind_host}:{self.zmq_nodalpath_events_port}"
 
     @property
     def nodalpath_events_connect(self) -> str:
-        return f"tcp://127.0.0.1:{self.zmq_nodalpath_events_port}"
+        return f"tcp://{self.zmq_connect_host}:{self.zmq_nodalpath_events_port}"
 
 
 # --- Module-level singleton ---

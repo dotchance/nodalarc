@@ -55,6 +55,16 @@ def build_app(
     async def health() -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
+    @app.get("/api/config")
+    async def frontend_config() -> JSONResponse:
+        """Runtime config for the console frontend — no hardcoded ports."""
+        from nodalarc.platform import get_platform_config
+        cfg = get_platform_config()
+        return JSONResponse({
+            "globe_port": cfg.vs_api_http_port,  # VF proxied through VS-API / Vite
+            "console_port": cfg.nodalpath_console_http_port,
+        })
+
     @app.get("/api/v1/trace-config")
     async def trace_config_endpoint() -> JSONResponse:
         """Return the trace mode configuration for the current session."""

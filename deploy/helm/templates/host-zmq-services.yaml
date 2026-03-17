@@ -1,0 +1,43 @@
+{{- if .Values.hostZmq.enabled }}
+# Headless service pointing to the host for ZMQ endpoints.
+# Used by containerized components (e.g. NodalPath) to reach
+# host-running OME and orchestrator via K8s DNS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodalarc-host-zmq
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-host-zmq
+spec:
+  clusterIP: None
+  ports:
+    - name: ome-events
+      port: 5560
+      protocol: TCP
+    - name: to-events
+      port: 5561
+      protocol: TCP
+    - name: playback-control
+      port: 5566
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: nodalarc-host-zmq
+  namespace: {{ .Values.namespace }}
+subsets:
+  - addresses:
+      - ip: {{ .Values.hostZmq.hostIP | quote }}
+    ports:
+      - name: ome-events
+        port: 5560
+        protocol: TCP
+      - name: to-events
+        port: 5561
+        protocol: TCP
+      - name: playback-control
+        port: 5566
+        protocol: TCP
+{{- end }}

@@ -119,6 +119,11 @@ class LiveOrchestrator:
             self._ome_connect, self._to_connect,
         )
 
+        # Seed active link state from VS-API to catch links established before
+        # this subscriber connected (e.g. when running in a container that
+        # starts after the orchestrator has already dispatched initial events).
+        await self._seed_from_vsapi()
+
         if self._inspector is not None and self._inspection_heartbeat_interval_s > 0:
             asyncio.create_task(
                 self._inspector.heartbeat_loop(self._inspection_heartbeat_interval_s),
@@ -156,6 +161,61 @@ class LiveOrchestrator:
                 "LiveOrchestrator stopped (%d transitions, %d deviations)",
                 self._transition_count, self._deviation_detector.deviation_count,
             )
+
+    async def _seed_from_vsapi(self) -> None:
+        """Seed active link state from VS-API to catch links established before connect."""
+        try:
+            from nodalarc.platform import get_platform_config
+            cfg = get_platform_config()
+            import os
+            api_key = os.environ.get("NODAL_API_KEY", "")
+            url = f"http://{cfg.zmq_connect_host}:{cfg.vs_api_http_port}/api/v1/state"
+            headers = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+
+            import httpx
+            for attempt in range(10):
+                try:
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.get(url, headers=headers, timeout=5.0)
+                    if resp.status_code == 200:
+                        state = resp.json()
+                        links = state.get("links", [])
+                        seeded = 0
+                        sim_time = state.get("sim_time")
+                        for link in links:
+                            if link.get("state") != "active":
+                                continue
+                            pair = (min(link["node_a"], link["node_b"]), max(link["node_a"], link["node_b"]))
+                            if pair not in self._builder._active_links:
+                                self._builder._active_links[pair] = link.get("range_km", 0.0)
+                                seeded += 1
+                        if sim_time:
+                            self._current_sim_time = datetime.fromisoformat(sim_time)
+                        log.info("Seeded %d active links from VS-API (%d total)", seeded, len(self._builder._active_links))
+                        if seeded > 0:
+                            await self._check_transition(sim_time or datetime.now(timezone.utc).isoformat())
+                        return
+                    elif resp.status_code == 401:
+                        # Try fetching the API key from the token endpoint
+                        try:
+                            token_url = f"http://{cfg.zmq_connect_host}:{cfg.vs_api_http_port}/api/v1/auth/token"
+                            async with httpx.AsyncClient() as client:
+                                token_resp = await client.get(token_url, timeout=5.0)
+                            if token_resp.status_code == 200:
+                                api_key = token_resp.json().get("token", "")
+                                headers["Authorization"] = f"Bearer {api_key}"
+                                continue
+                        except Exception:
+                            pass
+                    log.warning("VS-API seed attempt %d: HTTP %d", attempt + 1, resp.status_code)
+                except Exception as exc:
+                    log.debug("VS-API seed attempt %d failed: %s", attempt + 1, exc)
+                await asyncio.sleep(2)
+            log.warning("Could not seed from VS-API after 10 attempts — starting with empty link state")
+        except Exception as exc:
+            log.warning("VS-API seed failed: %s", exc)
 
     def stop(self) -> None:
         self._running = False

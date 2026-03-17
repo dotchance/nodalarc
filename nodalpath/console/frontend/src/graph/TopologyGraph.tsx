@@ -1,7 +1,7 @@
 import { useRef, useEffect } from "react";
 import * as d3 from "d3";
 import type { TopologySnapshot, ConsoleNode, PushRecord, PathResult } from "../types";
-import { computeLayout, computeViewBox, pushStatusColor, connectivityColor } from "./layout";
+import { computeLayout, computeViewBox, connectivityColor } from "./layout";
 import type { PushStatus } from "./layout";
 import "../styles/graph.css";
 
@@ -36,11 +36,12 @@ export function TopologyGraph({ topology, selectedNodeId, onNodeSelect, lastPush
         // Build per-node push status from the most recent push result
         const failedSet = new Set<string>(lastPushResult?.failed_nodes ?? []);
 
-        function nodeStatus(node_id: string): PushStatus {
+        function _nodeStatus(node_id: string): PushStatus {
             if (failedSet.has(node_id)) return "failed";
             if (lastPushResult !== null) return "succeeded";
             return "pending";
         }
+        void _nodeStatus; // Available for future per-node coloring
 
         const svg = d3.select(svgRef.current);
         svg.selectAll("*").remove();

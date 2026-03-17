@@ -98,7 +98,23 @@ def _teardown_previous() -> None:
     log.info("Previous session cleaned up")
 
 
-def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip_teardown: bool = False) -> None:
+def _apply_configmap(name: str, ns: str, data: dict[str, str]) -> None:
+    """Create or update a ConfigMap via dry-run + apply."""
+    args = ["kubectl", "create", "configmap", name, "-n", ns, "--dry-run=client", "-o", "yaml"]
+    for key, value in data.items():
+        args.append(f"--from-literal={key}={value}")
+    dry_run = subprocess.run(args, capture_output=True, text=True)
+    if dry_run.returncode != 0:
+        log.warning(f"Failed to generate ConfigMap {name}: {dry_run.stderr}")
+        return
+    result = subprocess.run(["kubectl", "apply", "-f", "-"], input=dry_run.stdout, text=True, capture_output=True)
+    if result.returncode != 0:
+        log.warning(f"Failed to apply ConfigMap {name}: {result.stderr}")
+    else:
+        log.info(f"ConfigMap {name} applied ({len(data)} keys)")
+
+
+def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip_teardown: bool = False, host_nodalpath: bool = False) -> None:
     """Execute the 11-step startup sequence."""
     # === Step 0: Teardown previous session ===
     if not skip_teardown:
@@ -144,6 +160,9 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
         stack_config = None
         stack_dir = None
+
+    # Determine if this is a NodalPath session (used by Step 5 and Step 11b)
+    _is_nodalpath = (resolved is not None and session.routing.protocol == "nodalpath") or (stack_dir is not None and stack_dir.name == "nodalpath-fwd")
 
     # === Step 2: Start OME (continuous mode) ===
     log.info("Step 2: Start OME (continuous mode)")
@@ -280,6 +299,21 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     }
     if sidecar_config:
         helm_values["sidecar"] = sidecar_config
+    if not host_nodalpath:
+        # Containerized NodalPath (default) — detect host IP for ZMQ headless Service
+        host_ip_result = subprocess.run(
+            ["kubectl", "get", "node", "-o",
+             "jsonpath={.items[0].status.addresses[?(@.type=='InternalIP')].address}"],
+            capture_output=True, text=True,
+        )
+        host_ip = host_ip_result.stdout.strip() or "127.0.0.1"
+        log.info(f"Host IP for ZMQ services: {host_ip}")
+        helm_values["nodalpath"] = {
+            "enabled": True,
+            "mode": "live" if _is_nodalpath else "console",
+            "transport": "grpc" if _is_nodalpath else "grpc",
+        }
+        helm_values["hostZmq"] = {"enabled": True, "hostIP": host_ip}
     values_file = data_dir / "helm-values.yaml"
     values_file.write_text(yaml.dump(helm_values))
 
@@ -356,6 +390,60 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         missing = expected_pods - configured_pods
         _fail(f"Timeout: {len(missing)} pods never became ready: {sorted(missing)[:10]}...")
     log.info(f"All {len(configured_pods)} pods configured")
+
+    # Write ConfigMaps for containerized consumers (e.g. NodalPath in a pod)
+    log.info("Writing ConfigMaps for containerized components...")
+
+    # Pod IP map
+    pod_ip_data = {}
+    for pod_name in sorted(configured_pods):
+        nid = next((n for n in node_vars if n.lower() == pod_name), pod_name)
+        ip_result = subprocess.run(
+            ["kubectl", "get", "pod", pod_name, "-n", ns,
+             "-o", "jsonpath={.status.podIP}"],
+            capture_output=True, text=True,
+        )
+        if ip_result.returncode == 0 and ip_result.stdout.strip():
+            pod_ip_data[nid] = ip_result.stdout.strip()
+    _apply_configmap("nodalarc-pod-ips", ns, {"pod-ips.json": json.dumps(pod_ip_data)})
+
+    # Session YAML — rewrite file paths for container mount locations
+    container_session = dict(raw)  # raw is the parsed session YAML from Step 1
+    container_session["constellation"] = "/etc/nodalarc/constellation.yaml"
+    if isinstance(session.ground_stations, str):
+        container_session["ground_stations"] = "/etc/nodalarc/ground-stations.yaml"
+    _apply_configmap("nodalarc-session", ns, {
+        "session.yaml": yaml.dump(container_session, default_flow_style=False),
+    })
+
+    # Constellation YAML (referenced by session)
+    _apply_configmap("nodalarc-constellation", ns, {
+        "constellation.yaml": Path(session.constellation).read_text(),
+    })
+
+    # Ground stations — file content or inline list
+    if isinstance(session.ground_stations, str):
+        gs_path = Path(session.ground_stations)
+        if gs_path.exists():
+            _apply_configmap("nodalarc-ground-stations", ns, {
+                "ground-stations.yaml": gs_path.read_text(),
+            })
+
+    # Platform config — container version with zmq_connect_host pointing to headless Service
+    # so containerized components reach host-running ZMQ publishers via K8s DNS
+    host_platform = yaml.safe_load(Path("configs/platform.yaml").read_text())
+    container_platform = dict(host_platform.get("platform", host_platform))
+    container_platform["zmq_connect_host"] = "nodalarc-host-zmq"
+    _apply_configmap("nodalarc-platform-config", ns, {
+        "platform.yaml": yaml.dump({"platform": container_platform}, default_flow_style=False),
+    })
+
+    # NodalPath config
+    nodalpath_config_path = Path("configs/nodalpath.yaml")
+    if nodalpath_config_path.exists():
+        _apply_configmap("nodalarc-nodalpath-config", ns, {
+            "nodalpath.yaml": nodalpath_config_path.read_text(),
+        })
 
     # Wait for FRR daemons to start (entrypoint waits for sentinel, then launches)
     log.info("Waiting 5s for FRR daemons to start...")
@@ -687,34 +775,39 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     # Always start NodalPath console. For nodalpath-fwd sessions, run in live
     # mode (ZMQ + push). For all other sessions, run in console-only mode
     # so the operator UI is always accessible on port 3100.
-    np_log = open(data_dir / "nodalpath.log", "w")
-    _is_nodalpath = (resolved is not None and session.routing.protocol == "nodalpath") or (stack_dir is not None and stack_dir.name == "nodalpath-fwd")
-    if _is_nodalpath:
-        log.info("Step 11b: Start NodalPath (live mode)")
-        nodalpath_proc = subprocess.Popen(
-            [
-                sys.executable, "-m", "nodalpath",
-                "--session", session_path,
-                "--mode", "live",
-                "--transport", "grpc",
-                "--namespace", ns,
-            ],
-            stdout=np_log,
-            stderr=np_log,
-        )
+    # By default NodalPath runs as a K8s Deployment (containerized).
+    # Use --host-nodalpath to run as a host subprocess instead.
+    nodalpath_proc = None
+    if not host_nodalpath:
+        log.info("Step 11b: NodalPath running as K8s Deployment (skipping host subprocess)")
     else:
-        log.info("Step 11b: Start NodalPath (console + live path trace)")
-        nodalpath_proc = subprocess.Popen(
-            [
-                sys.executable, "-m", "nodalpath",
-                "--mode", "console",
-                "--session", session_path,
-                "--namespace", ns,
-            ],
-            stdout=np_log,
-            stderr=np_log,
-        )
-    log.info(f"NodalPath PID: {nodalpath_proc.pid}")
+        np_log = open(data_dir / "nodalpath.log", "w")
+        if _is_nodalpath:
+            log.info("Step 11b: Start NodalPath (live mode)")
+            nodalpath_proc = subprocess.Popen(
+                [
+                    sys.executable, "-m", "nodalpath",
+                    "--session", session_path,
+                    "--mode", "live",
+                    "--transport", "grpc",
+                    "--namespace", ns,
+                ],
+                stdout=np_log,
+                stderr=np_log,
+            )
+        else:
+            log.info("Step 11b: Start NodalPath (console + live path trace)")
+            nodalpath_proc = subprocess.Popen(
+                [
+                    sys.executable, "-m", "nodalpath",
+                    "--mode", "console",
+                    "--session", session_path,
+                    "--namespace", ns,
+                ],
+                stdout=np_log,
+                stderr=np_log,
+            )
+        log.info(f"NodalPath PID: {nodalpath_proc.pid}")
 
     # === Complete — save session state and print summary ===
     vsapi_pid = vsapi_proc.pid if vsapi_proc else 0
@@ -728,7 +821,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         "orchestrator_pid": to_proc.pid,
         "daemon_pid": daemon_proc.pid,
         "vite_pid": vite_proc.pid if vite_proc else 0,
-        "nodalpath_pid": nodalpath_proc.pid,
+        "nodalpath_pid": nodalpath_proc.pid if nodalpath_proc else 0,
         "session_config": session_path,
         "db_path": mi_db,
         "api_key": api_key,
@@ -757,6 +850,8 @@ def main() -> None:
     parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell between event batches (seconds)")
     parser.add_argument("--skip-vsapi", action="store_true", help="Skip VS-API start (step 10)")
     parser.add_argument("--skip-teardown", action="store_true", help="Skip Step 0 teardown (caller already cleaned up)")
+    parser.add_argument("--host-nodalpath", action="store_true",
+                        help="Run NodalPath as host subprocess instead of K8s Deployment")
     parser.add_argument("--platform-config", default="configs/platform.yaml",
                         help="Path to platform config YAML")
     args = parser.parse_args()
@@ -764,7 +859,8 @@ def main() -> None:
     from nodalarc.platform import init_platform_config
     init_platform_config(Path(args.platform_config))
 
-    deploy(args.session, dwell=args.dwell, skip_vsapi=args.skip_vsapi, skip_teardown=args.skip_teardown)
+    deploy(args.session, dwell=args.dwell, skip_vsapi=args.skip_vsapi,
+           skip_teardown=args.skip_teardown, host_nodalpath=args.host_nodalpath)
 
 
 if __name__ == "__main__":

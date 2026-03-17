@@ -15,8 +15,7 @@ import { useSelection } from "./hooks/useSelection";
 import { useKeyboard } from "./hooks/useKeyboard";
 import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
-import { useManifest } from "./hooks/useManifest";
-import { SessionCatalog } from "./catalog/SessionCatalog";
+import { SessionWizard } from "./catalog/SessionWizard";
 import { WS_URL, fetchApiKey } from "./config";
 import type { ViewMode, ColorMode, GlobeMode, TracedPath } from "./types";
 
@@ -28,6 +27,7 @@ import "./styles/toolbar.css";
 import "./styles/topology.css";
 import "./styles/time-controls.css";
 import "./styles/catalog.css";
+import "./styles/wizard.css";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -37,7 +37,7 @@ export function App() {
 }
 
 function AppInner() {
-  const { snapshot, connected, hasEverConnected, historicalMode, setHistoricalMode, fetchHistorical } =
+  const { snapshot, connected, hasEverConnected, kicked, historicalMode, setHistoricalMode, fetchHistorical } =
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
 
@@ -53,7 +53,6 @@ function AppInner() {
 
   const { sessions, switching, switchSession } = useSessionSwitcher(snapshot?.session_status ?? null);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
-  const { manifest } = useManifest();
 
   const [showCatalog, setShowCatalog] = useState(true);
   const [hasEverDeployed, setHasEverDeployed] = useState(false);
@@ -84,8 +83,9 @@ function AppInner() {
 
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
   const [colorMode, setColorMode] = useState<ColorMode>("area");
-  const [showGroundTracks, setShowGroundTracks] = useState(false);
-  const [showAllLinks, setShowAllLinks] = useState(true);
+  const [showGroundLinks, setShowGroundLinks] = useState(true);
+  const [showIslLinks, setShowIslLinks] = useState(true);
+  const [showSatPaths, setShowSatPaths] = useState(false);
   const [globeMode, setGlobeMode] = useState<GlobeMode>("blue-marble");
   const [followNode, setFollowNode] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
@@ -222,8 +222,9 @@ function AppInner() {
       onCloseCatalog: showCatalog && hasEverDeployed ? handleCloseCatalog : undefined,
       onToggleView: toggleView,
       onSetColorMode: setColorMode,
-      onToggleGroundTracks: () => setShowGroundTracks((v) => !v),
-      onToggleAllLinks: () => setShowAllLinks((v) => !v),
+      onToggleGroundLinks: () => setShowGroundLinks((v) => !v),
+      onToggleIslLinks: () => setShowIslLinks((v) => !v),
+      onToggleSatPaths: () => setShowSatPaths((v) => !v),
       onToggleHistorical: toggleHistorical,
       onPlayPause: () => {
         if (historicalMode) {
@@ -296,18 +297,26 @@ function AppInner() {
       />
 
       {showCatalog && (
-        <SessionCatalog
-          manifest={manifest}
-          activeSessionId={activeSessionId}
-          onDeploy={handleDeploy}
+        <SessionWizard
+          onDeployStarted={() => { setShowCatalog(false); setHasEverDeployed(true); }}
           onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
           deploying={switching}
           fallbackSessions={sessions}
+          onFallbackDeploy={handleDeploy}
         />
       )}
 
       <div className={`area-viewport ${viewMode === "split" ? "area-viewport--split" : ""}`}>
-        {!connected && !hasEverConnected && (
+        {kicked && (
+          <div className="connection-startup-error">
+            <div className="startup-error-box">
+              <h2>Session taken over</h2>
+              <p>Another browser connected and took control of this session.</p>
+              <button onClick={() => window.location.reload()}>Reconnect</button>
+            </div>
+          </div>
+        )}
+        {!kicked && !connected && !hasEverConnected && (
           <div className="connection-startup-error">
             <div className="startup-error-box">
               <h2>Cannot connect to VS-API</h2>
@@ -316,7 +325,7 @@ function AppInner() {
             </div>
           </div>
         )}
-        {!connected && hasEverConnected && (
+        {!kicked && !connected && hasEverConnected && (
           <div className="connection-banner">
             Connection lost. Reconnecting...
           </div>
@@ -351,8 +360,9 @@ function AppInner() {
             onSelect={select}
             colorMode={colorMode}
             globeMode={globeMode}
-            showGroundTracks={showGroundTracks}
-            showAllLinks={showAllLinks}
+            showGroundLinks={showGroundLinks}
+            showIslLinks={showIslLinks}
+            showSatPaths={showSatPaths}
             actionsRef={globeActionsRef}
             followNode={followNode}
           />
@@ -367,19 +377,23 @@ function AppInner() {
             onSelect={select}
             onFlyTo={handleFlyToNode}
             colorMode={colorMode}
+            showIslLinks={showIslLinks}
+            showGroundLinks={showGroundLinks}
           />
         </div>
         <Toolbar
           viewMode={viewMode}
           colorMode={colorMode}
-          showGroundTracks={showGroundTracks}
-          showAllLinks={showAllLinks}
+          showGroundLinks={showGroundLinks}
+          showIslLinks={showIslLinks}
+          showSatPaths={showSatPaths}
           followNode={followNode}
           canSplit={canSplit}
           onViewMode={setViewMode}
           onColorMode={setColorMode}
-          onToggleGroundTracks={() => setShowGroundTracks((v) => !v)}
-          onToggleAllLinks={() => setShowAllLinks((v) => !v)}
+          onToggleGroundLinks={() => setShowGroundLinks((v) => !v)}
+          onToggleIslLinks={() => setShowIslLinks((v) => !v)}
+          onToggleSatPaths={() => setShowSatPaths((v) => !v)}
           globeMode={globeMode}
           onToggleGlobeMode={() => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble")}
           onTopView={handleTopView}

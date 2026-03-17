@@ -8,12 +8,14 @@ interface WebSocketState {
   snapshot: StateSnapshot | null;
   connected: boolean;
   hasEverConnected: boolean;
+  kicked: boolean;
 }
 
 export function useWebSocket(): WebSocketState {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
   const [connected, setConnected] = useState(false);
   const [hasEverConnected, setHasEverConnected] = useState(false);
+  const [kicked, setKicked] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const retriesRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -41,12 +43,21 @@ export function useWebSocket(): WebSocketState {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       setConnected(false);
       wsRef.current = null;
+      // Kicked by another browser — stop reconnecting
+      if (ev.code === 4409) {
+        setKicked(true);
+        return;
+      }
       // Only auto-retry after having connected at least once (VF spec Section 14).
       // On initial startup failure, show error screen with manual Retry button.
       if (everConnectedRef.current) {
+        if (ev.code === 4401 || ev.code === 4003 || ev.code === 1008) {
+          // Auth failure — reset backoff, re-fetch key, then reconnect quickly
+          retriesRef.current = 0;
+        }
         fetchApiKey().finally(() => scheduleReconnect());
       }
     };
@@ -70,5 +81,5 @@ export function useWebSocket(): WebSocketState {
     };
   }, [connect]);
 
-  return { snapshot, connected, hasEverConnected };
+  return { snapshot, connected, hasEverConnected, kicked };
 }

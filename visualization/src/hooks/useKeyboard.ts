@@ -8,8 +8,9 @@ interface KeyboardActions {
   onCloseCatalog?: () => void;
   onToggleView: (mode: ViewMode) => void;
   onSetColorMode: (mode: ColorMode) => void;
-  onToggleGroundTracks: () => void;
-  onToggleAllLinks: () => void;
+  onToggleGroundLinks: () => void;
+  onToggleIslLinks: () => void;
+  onToggleSatPaths: () => void;
   onToggleHistorical: () => void;
   onPlayPause: () => void;
   onFollowNode: () => void;
@@ -54,11 +55,15 @@ export function useKeyboard(actions: KeyboardActions): void {
           break;
         case "g":
         case "G":
-          actions.onToggleGroundTracks();
+          actions.onToggleGroundLinks();
           break;
         case "l":
         case "L":
-          actions.onToggleAllLinks();
+          actions.onToggleIslLinks();
+          break;
+        case "p":
+        case "P":
+          actions.onToggleSatPaths();
           break;
         case "f":
         case "F":

@@ -185,11 +185,16 @@ class SessionManager:
             try:
                 raw = yaml.safe_load(yaml_path.read_text())
                 session = SessionConfig.model_validate(raw)
+                if session.routing.stack is not None:
+                    routing_label = Path(session.routing.stack).name
+                else:
+                    ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+                    routing_label = f"{session.routing.protocol}-{ext_str}"
                 results.append({
                     "name": session.session.name,
                     "file": str(yaml_path),
                     "constellation": Path(session.constellation).stem,
-                    "routing_stack": Path(session.routing.stack).name,
+                    "routing_stack": routing_label,
                 })
             except Exception as exc:
                 log.warning(f"Failed to parse session {yaml_path}: {exc}")
@@ -482,6 +487,17 @@ class SessionManager:
             self._status = "ready"
             self._status_detail = ""
             log.info(f"Session switch complete: {session_path}")
+
+            # === Cleanup stale wizard-generated session YAMLs ===
+            try:
+                active_path = Path(session_path).resolve()
+                for wf in self._sessions_dir.glob("_wizard-*.yaml"):
+                    if wf.resolve() != active_path:
+                        wf.unlink()
+                        log.info(f"Cleaned up stale wizard session: {wf.name}")
+                self.rescan()
+            except Exception as exc:
+                log.warning(f"Wizard YAML cleanup failed (non-fatal): {exc}")
 
             # === Cleanup old session directories (non-blocking, best-effort) ===
             try:

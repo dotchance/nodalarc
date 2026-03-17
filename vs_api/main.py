@@ -678,10 +678,13 @@ def _clear_state() -> None:
 def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
     """Load per-station min_elevation_deg from ground station config."""
     from ome.constellation_loader import load_ground_stations
-    gs_path = Path(session.ground_stations)
-    if not gs_path.exists():
-        return {}
-    gs_file = load_ground_stations(gs_path)
+    if isinstance(session.ground_stations, list):
+        gs_file = load_ground_stations(session.ground_stations)
+    else:
+        gs_path = Path(session.ground_stations)
+        if not gs_path.exists():
+            return {}
+        gs_file = load_ground_stations(gs_path)
     gs_id_tpl = session.addressing.gs_id_template
     result: dict[str, float] = {}
     for station in gs_file.stations:
@@ -712,7 +715,11 @@ def _update_session_globals(session_path: str, new_db_path: str) -> None:
     global _routing_stack, _constellation_name, _db_path, _gs_elevation_map, _beam_falloff_exponent
     session_data = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(session_data)
-    _routing_stack = Path(session.routing.stack).name
+    if session.routing.stack is not None:
+        _routing_stack = Path(session.routing.stack).name
+    else:
+        ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+        _routing_stack = f"{session.routing.protocol}-{ext_str}"
     _constellation_name = Path(session.constellation).stem
     _db_path = new_db_path
     _gs_elevation_map = _load_gs_elevation_map(session)
@@ -827,12 +834,15 @@ async def ws_state(websocket: WebSocket) -> None:
             _audit_log.warning(f"WS_AUTH_FAIL ip={ws_ip}")
             await websocket.close(code=4401, reason="Unauthorized")
             return
-    # Enforce connection limit
+    # Kick existing connections — single-user mode (one active browser at a time)
     async with _ws_lock:
-        if len(_ws_clients) >= get_platform_config().vs_api_max_websocket_connections:
-            await websocket.close(code=1013, reason="Too many connections")
-            log.warning(f"WebSocket rejected: {len(_ws_clients)} connections at limit")
-            return
+        for old_ws in list(_ws_clients):
+            try:
+                await old_ws.close(code=4409, reason="Session taken over by another browser")
+            except Exception:
+                pass
+            _ws_clients.remove(old_ws)
+            _audit_log.info(f"WS_KICKED ip={ws_ip}")
     await websocket.accept()
     async with _ws_lock:
         _ws_clients.append(websocket)
@@ -1540,6 +1550,172 @@ async def switch_session(body: dict):
     return {"status": "switching"}
 
 
+# --- Wizard API endpoints ---
+
+@app.get("/api/v1/presets/constellations", dependencies=[Depends(_require_api_key)])
+def list_constellation_presets() -> list[dict]:
+    """Return available constellation presets for the wizard."""
+    from nodalarc.session_generator import load_constellation_presets
+    presets = load_constellation_presets()
+    return [
+        {
+            "name": p.name,
+            "description": p.description,
+            "satellite_count": p.satellite_count,
+            "constellation": p.constellation,
+            "ground_stations": p.ground_stations,
+        }
+        for p in presets.values()
+    ]
+
+
+@app.get("/api/v1/presets/satellite-types", dependencies=[Depends(_require_api_key)])
+def list_satellite_types() -> list[dict]:
+    """Return available satellite type presets for the wizard."""
+    from nodalarc.models.satellite_type import SatelliteTypeConfig
+    sat_types_dir = Path("configs/satellite-types")
+    results: list[dict] = []
+    if not sat_types_dir.is_dir():
+        return results
+    for yaml_path in sorted(sat_types_dir.glob("*.yaml")):
+        raw = yaml.safe_load(yaml_path.read_text())
+        data = raw.get("satellite_type", raw)
+        cfg = SatelliteTypeConfig.model_validate(data)
+        results.append({
+            "name": cfg.name,
+            "description": cfg.description,
+            "isl_terminals": [
+                {
+                    "type": t.type,
+                    "band": t.band,
+                    "count": t.count,
+                    "role": t.role,
+                    "max_range_km": t.max_range_km,
+                    "bandwidth_mbps": t.bandwidth_mbps,
+                    "max_tracking_rate_deg_s": t.max_tracking_rate_deg_s,
+                    "field_of_regard_deg": t.field_of_regard_deg,
+                }
+                for t in cfg.isl_terminals
+            ],
+            "ground_terminals": [
+                {
+                    "type": t.type,
+                    "band": t.band,
+                    "count": t.count,
+                    "bandwidth_mbps": t.bandwidth_mbps,
+                }
+                for t in cfg.ground_terminals
+            ],
+        })
+    return results
+
+
+@app.get("/api/v1/presets/ground-stations", dependencies=[Depends(_require_api_key)])
+def list_ground_station_sets() -> list[dict]:
+    """Return available ground station sets for the wizard."""
+    gs_sets_dir = Path("configs/ground-stations/sets")
+    results: list[dict] = []
+    if not gs_sets_dir.is_dir():
+        return results
+    for yaml_path in sorted(gs_sets_dir.glob("*.yaml")):
+        raw = yaml.safe_load(yaml_path.read_text())
+        gs_data = raw.get("ground_station_set", raw)
+        results.append({
+            "name": gs_data.get("name", yaml_path.stem),
+            "description": gs_data.get("description", ""),
+            "stations": gs_data.get("stations", []),
+            "file": f"configs/ground-stations/sets/{yaml_path.name}",
+        })
+    return results
+
+
+@app.get("/api/v1/presets/ground-stations/stations", dependencies=[Depends(_require_api_key)])
+def list_individual_stations() -> list[dict]:
+    """Return all available individual ground stations for custom set building."""
+    stations_dir = Path("configs/ground-stations/stations")
+    results: list[dict] = []
+    if not stations_dir.is_dir():
+        return results
+    for yaml_path in sorted(stations_dir.glob("*.yaml")):
+        raw = yaml.safe_load(yaml_path.read_text())
+        gs = raw.get("ground_station", raw)
+        results.append({
+            "name": gs.get("name", yaml_path.stem),
+            "lat_deg": gs.get("lat_deg", 0),
+            "lon_deg": gs.get("lon_deg", 0),
+        })
+    return results
+
+
+@app.get("/api/v1/wizard/extensions", dependencies=[Depends(_require_api_key)])
+def wizard_extension_rules() -> dict:
+    """Return protocol-extension compatibility rules for client-side validation."""
+    return {
+        "protocols": {
+            "ospf": {"extensions": ["te", "mpls"], "constraints": {"mpls": ["te"]}},
+            "isis": {"extensions": ["sr", "te", "mpls"], "constraints": {"mpls": ["te"]}},
+            "static": {"extensions": ["sr"], "constraints": {}},
+            "nodalpath": {"extensions": [], "constraints": {}},
+        },
+        "area_strategies": ["flat", "stripe", "per-plane"],
+    }
+
+
+@app.post("/api/v1/session/generate", dependencies=[Depends(_require_api_key)])
+def generate_session(body: dict) -> dict:
+    """Generate a session YAML from wizard selections."""
+    from nodalarc.session_generator import generate_session_yaml
+    constellation = body.get("constellation", "")
+    protocol = body.get("protocol", "")
+    extensions = body.get("extensions", [])
+    area_strategy = body.get("area_strategy", "flat")
+    ground_stations = body.get("ground_stations")
+    satellite_type = body.get("satellite_type")
+    if not constellation or not protocol:
+        return JSONResponse(status_code=400, content={"error": "constellation and protocol are required"})
+    try:
+        yaml_str, warnings = generate_session_yaml(
+            constellation=constellation,
+            protocol=protocol,
+            extensions=extensions,
+            area_strategy=area_strategy,
+            ground_stations=ground_stations,
+            satellite_type=satellite_type,
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    return {"yaml": yaml_str, "warnings": warnings}
+
+
+@app.post("/api/v1/session/deploy", dependencies=[Depends(_require_api_key)])
+async def deploy_generated_session(body: dict) -> dict:
+    """Validate YAML, write to sessions dir, and trigger deploy."""
+    import yaml as _yaml
+    yaml_str = body.get("yaml", "")
+    if not yaml_str:
+        return JSONResponse(status_code=400, content={"error": "yaml field required"})
+    try:
+        raw = _yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"error": f"Invalid session YAML: {exc}"})
+
+    # Write to sessions directory with _wizard- prefix
+    from pathlib import Path
+    sessions_dir = Path("configs/sessions")
+    session_file = sessions_dir / f"_wizard-{session.session.name}.yaml"
+    session_file.write_text(yaml_str)
+
+    # Rescan and deploy
+    if _session_manager is None:
+        return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
+    if _session_manager.status == "switching":
+        return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
+    _session_manager.rescan()
+    asyncio.create_task(_run_switch(str(session_file)))
+    return {"status": "switching", "session_file": str(session_file)}
+
+
 @app.get("/api/v1/introspect/commands", dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)])
 def introspect_commands() -> list[str]:
     """Return sorted list of whitelisted vtysh commands."""
@@ -1623,7 +1799,11 @@ def main() -> None:
         # Load session metadata for snapshot enrichment
         session_data = yaml.safe_load(Path(args.session).read_text())
         session = SessionConfig.model_validate(session_data)
-        _routing_stack = Path(session.routing.stack).name
+        if session.routing.stack is not None:
+            _routing_stack = Path(session.routing.stack).name
+        else:
+            ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+            _routing_stack = f"{session.routing.protocol}-{ext_str}"
         _constellation_name = Path(session.constellation).stem
         _gs_elevation_map = _load_gs_elevation_map(session)
         _beam_falloff_exponent = _load_beam_falloff_exponent(session)

@@ -5,14 +5,16 @@ import type { ViewMode, ColorMode, GlobeMode } from "../types";
 interface ToolbarProps {
   viewMode: ViewMode;
   colorMode: ColorMode;
-  showGroundTracks: boolean;
-  showAllLinks: boolean;
+  showGroundLinks: boolean;
+  showIslLinks: boolean;
+  showSatPaths: boolean;
   followNode: boolean;
   canSplit: boolean;
   onViewMode: (mode: ViewMode) => void;
   onColorMode: (mode: ColorMode) => void;
-  onToggleGroundTracks: () => void;
-  onToggleAllLinks: () => void;
+  onToggleGroundLinks: () => void;
+  onToggleIslLinks: () => void;
+  onToggleSatPaths: () => void;
   globeMode: GlobeMode;
   onToggleGlobeMode: () => void;
   onTopView: () => void;
@@ -46,14 +48,16 @@ function ToolBtn({
 export function Toolbar({
   viewMode,
   colorMode,
-  showGroundTracks,
-  showAllLinks,
+  showGroundLinks,
+  showIslLinks,
+  showSatPaths,
   followNode,
   canSplit,
   onViewMode,
   onColorMode,
-  onToggleGroundTracks,
-  onToggleAllLinks,
+  onToggleGroundLinks,
+  onToggleIslLinks,
+  onToggleSatPaths,
   globeMode,
   onToggleGlobeMode,
   onTopView,
@@ -74,16 +78,22 @@ export function Toolbar({
         onClick={() => onColorMode(colorMode === "area" ? "plane" : "area")}
       />
       <ToolBtn
-        label={`Ground Tracks: ${showGroundTracks ? "ON" : "OFF"} (G)`}
+        label={`Ground Links: ${showGroundLinks ? "ON" : "OFF"} (G)`}
         icon="〰"
-        active={showGroundTracks}
-        onClick={onToggleGroundTracks}
+        active={showGroundLinks}
+        onClick={onToggleGroundLinks}
       />
       <ToolBtn
-        label={`All Links: ${showAllLinks ? "ON" : "OFF"} (L)`}
+        label={`ISL Links: ${showIslLinks ? "ON" : "OFF"} (L)`}
         icon="⟷"
-        active={showAllLinks}
-        onClick={onToggleAllLinks}
+        active={showIslLinks}
+        onClick={onToggleIslLinks}
+      />
+      <ToolBtn
+        label={`Satellite Paths: ${showSatPaths ? "ON" : "OFF"} (P)`}
+        icon="⭕"
+        active={showSatPaths}
+        onClick={onToggleSatPaths}
       />
       <ToolBtn
         label={`Globe: ${globeMode === "day-night" ? "Day/Night (N)" : "Blue Marble (N)"}`}

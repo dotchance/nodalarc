@@ -189,20 +189,25 @@ def main() -> None:
     else:
         log.info("No area assignment configured — routing_area will be null for all nodes")
 
-    # Determine routing protocol from stack config
-    from nodalarc.models.routing_stack import RoutingStackConfig
-    stack_data = yaml.safe_load(Path(session.routing.stack, "stack.yaml").read_text())
-    stack_config = RoutingStackConfig.model_validate(stack_data["stack"])
-    daemons = stack_config.daemons
-    if "isisd" in daemons:
-        routing_protocol = "isis"
-    elif "ospfd" in daemons:
-        routing_protocol = "ospf"
-    elif "bgpd" in daemons:
-        routing_protocol = "bgp"
+    # Determine routing protocol — use protocol field directly when set,
+    # fall back to daemon inference for legacy stacks
+    if session.routing.protocol is not None:
+        routing_protocol = session.routing.protocol
+        log.info(f"Routing protocol: {routing_protocol} (from session.routing.protocol)")
     else:
-        routing_protocol = "none"
-    log.info(f"Routing protocol: {routing_protocol} (daemons: {daemons})")
+        from nodalarc.models.routing_stack import RoutingStackConfig
+        stack_data = yaml.safe_load(Path(session.routing.stack, "stack.yaml").read_text())
+        stack_config = RoutingStackConfig.model_validate(stack_data["stack"])
+        daemons = stack_config.daemons
+        if "isisd" in daemons:
+            routing_protocol = "isis"
+        elif "ospfd" in daemons:
+            routing_protocol = "ospf"
+        elif "bgpd" in daemons:
+            routing_protocol = "bgp"
+        else:
+            routing_protocol = "none"
+        log.info(f"Routing protocol: {routing_protocol} (daemons: {daemons})")
 
     # Load pid_map if provided (from na-deploy step 7)
     pid_map: dict[str, int] = {}

@@ -19,12 +19,12 @@ interface OrbitPin {
 }
 
 const pins = new Map<string, OrbitPin>();
-const MAX_PINS = 3;
+const MAX_PINS = 7;
 const ORBIT_SAMPLES = 180;
 const ORBIT_LINE_WIDTH = 6;
 
 /** Compute closed orbit ring positions from position and velocity vectors. */
-function computeOrbitPositions(pos: THREE.Vector3, vel: THREE.Vector3): Float32Array {
+export function computeOrbitPositions(pos: THREE.Vector3, vel: THREE.Vector3): Float32Array {
   const normal = new THREE.Vector3().crossVectors(pos, vel).normalize();
   const radius = pos.length();
   const positions = new Float32Array((ORBIT_SAMPLES + 1) * 3);

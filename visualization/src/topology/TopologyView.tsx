@@ -20,9 +20,11 @@ interface TopologyViewProps {
   onSelect: (sel: Selection | null) => void;
   onFlyTo?: (nodeId: string) => void;
   colorMode?: ColorMode;
+  showIslLinks?: boolean;
+  showGroundLinks?: boolean;
 }
 
-export function TopologyView({ snapshot, selection, onSelect, onFlyTo, colorMode = "area" }: TopologyViewProps) {
+export function TopologyView({ snapshot, selection, onSelect, onFlyTo, colorMode = "area", showIslLinks = true, showGroundLinks = true }: TopologyViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const transformRef = useRef<ViewTransform>({ offsetX: 0, offsetY: 0, scale: 1 });
   const animFrameRef = useRef<number>(0);
@@ -125,7 +127,7 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo, colorMode
     for (const [key, fl] of failedLinksRef.current) {
       failTimes.set(key, fl.failTime);
     }
-    drawLinks(ctx, layout.links, nodeMap, flowPath, dashOffsetRef.current, failTimes);
+    drawLinks(ctx, layout.links, nodeMap, flowPath, dashOffsetRef.current, failTimes, showIslLinks, showGroundLinks);
 
     // Draw hop index numbers on flow path nodes
     if (flowPath && flowPath.length >= 2) {
@@ -169,7 +171,7 @@ export function TopologyView({ snapshot, selection, onSelect, onFlyTo, colorMode
     ctx.restore();
 
     animFrameRef.current = requestAnimationFrame(draw);
-  }, [snapshot, selection]);
+  }, [snapshot, selection, showIslLinks, showGroundLinks]);
 
   useEffect(() => {
     animFrameRef.current = requestAnimationFrame(draw);

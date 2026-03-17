@@ -50,6 +50,9 @@ def _valid_config_dict() -> dict:
         "vs_api_session_switch_max_requests_per_minute": 5,
         "vs_api_introspect_max_response_bytes": 65536,
         "vs_api_introspect_command_timeout_seconds": 15,
+        "trace_interval_seconds": 3.0,
+        "trace_interval_fast_seconds": 1.0,
+        "trace_fast_window_seconds": 30.0,
         "host_inotify_max_user_instances": 512,
         "host_file_descriptor_limit": 65536,
     }
@@ -74,11 +77,22 @@ class TestPlatformConfig:
 
     def test_zmq_address_properties(self):
         cfg = PlatformConfig(**_valid_config_dict())
+        # Default bind/connect host is 127.0.0.1
         assert cfg.ome_events_bind == "tcp://127.0.0.1:5560"
         assert cfg.ome_events_connect == "tcp://127.0.0.1:5560"
         assert cfg.to_events_bind == "tcp://127.0.0.1:5561"
         assert cfg.playback_control_bind == "tcp://127.0.0.1:5566"
         assert cfg.nodalpath_events_connect == "tcp://127.0.0.1:5567"
+
+    def test_zmq_custom_bind_connect_hosts(self):
+        d = _valid_config_dict()
+        d["zmq_bind_host"] = "0.0.0.0"
+        d["zmq_connect_host"] = "my-service.svc"
+        cfg = PlatformConfig(**d)
+        assert cfg.ome_events_bind == "tcp://0.0.0.0:5560"
+        assert cfg.ome_events_connect == "tcp://my-service.svc:5560"
+        assert cfg.to_events_bind == "tcp://0.0.0.0:5561"
+        assert cfg.nodalpath_events_connect == "tcp://my-service.svc:5567"
 
 
 class TestSingleton:

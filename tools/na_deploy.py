@@ -121,16 +121,6 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         log.info("Step 0: Teardown previous session")
         _teardown_previous()
 
-    # Check for NodalPath console frontend build
-    _console_dist = os.path.join(
-        os.path.dirname(__file__), "..", "nodalpath", "console", "frontend", "dist"
-    )
-    if not os.path.isdir(_console_dist):
-        log.warning(
-            "NodalPath console frontend not built — run `make build-nodalpath-console`. "
-            "The console will serve a holding page at http://0.0.0.0:3100"
-        )
-
     # === Step 1: Load and validate ===
     log.info("Step 1: Load and validate session config")
     raw = yaml.safe_load(Path(session_path).read_text())
@@ -839,8 +829,11 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info(f"Orchestrator PID: {to_proc.pid}")
     log.info(f"Session state: {state_file}")
 
-    from nodalarc.zmq_channels import nodalpath_console_port
-    log.info(f"NodalPath console: http://0.0.0.0:{nodalpath_console_port()}")
+    if host_nodalpath:
+        from nodalarc.zmq_channels import nodalpath_console_port
+        log.info(f"NodalPath console: http://0.0.0.0:{nodalpath_console_port()}")
+    else:
+        log.info("NodalPath console: http://0.0.0.0:31100 (K8s NodePort)")
 
 
 def main() -> None:

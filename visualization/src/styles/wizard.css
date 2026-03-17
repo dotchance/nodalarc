@@ -1,0 +1,513 @@
+/* Session wizard styles — extends catalog.css */
+
+.wizard-steps {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  align-items: center;
+}
+
+.wizard-step-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.wizard-step-pill:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.wizard-step-pill--active {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.wizard-step-pill--done {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+.wizard-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.wizard-step-pill--active .wizard-step-num {
+  background: var(--accent-blue);
+  color: var(--bg-main);
+}
+
+.wizard-step-pill--done .wizard-step-num {
+  background: var(--accent-green);
+  color: var(--bg-main);
+}
+
+.wizard-panel {
+  width: 100%;
+  max-width: 800px;
+}
+
+.wizard-panel-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+
+.wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.wizard-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.wizard-card:hover {
+  border-color: var(--text-secondary);
+}
+
+.wizard-card--selected {
+  border-color: var(--accent-blue);
+}
+
+.wizard-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.wizard-card-stat {
+  font-size: 11px;
+  color: var(--accent-teal);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.wizard-card-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.wizard-protocol-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wizard-protocol-btn {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.wizard-protocol-btn:hover:not(:disabled) {
+  border-color: var(--text-secondary);
+}
+
+.wizard-protocol-btn--selected {
+  border-color: var(--accent-blue);
+}
+
+.wizard-protocol-btn--disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.wizard-protocol-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wizard-badge-soon {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255, 136, 0, 0.15);
+  color: var(--accent-orange);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.wizard-protocol-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.wizard-section {
+  margin-bottom: 20px;
+}
+
+.wizard-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.wizard-ext-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wizard-ext-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.wizard-ext-item--unavailable {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.wizard-ext-item--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wizard-ext-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 140px;
+}
+
+.wizard-ext-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.wizard-select {
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.wizard-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.wizard-nav-btn {
+  padding: 8px 20px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.wizard-nav-btn:hover {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.wizard-nav-btn--primary {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.wizard-nav-btn--primary:hover {
+  background: var(--accent-blue);
+  color: var(--bg-main);
+}
+
+.wizard-nav-btn--primary:disabled {
+  opacity: 0.4;
+  cursor: wait;
+  pointer-events: none;
+}
+
+.wizard-nav-btn--reset {
+  border-color: var(--text-secondary);
+  color: var(--text-secondary);
+}
+
+.wizard-review {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.wizard-review-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.wizard-review-row:last-child {
+  border-bottom: none;
+}
+
+.wizard-review-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.wizard-review-value {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.wizard-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.wizard-yaml-preview {
+  margin-bottom: 16px;
+}
+
+.wizard-yaml-preview summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.wizard-yaml-preview pre {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.wizard-upload {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.wizard-upload input[type="file"] {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.wizard-error {
+  background: rgba(255, 68, 68, 0.1);
+  border: 1px solid rgba(255, 68, 68, 0.3);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #ff6666;
+  margin-bottom: 16px;
+  max-width: 800px;
+  width: 100%;
+}
+
+.wizard-loading {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.wizard-sat-summary {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.wizard-terminal-row {
+  font-size: 10px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  font-family: monospace;
+}
+
+.wizard-station-list {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--accent-teal);
+  line-height: 1.5;
+}
+
+/* Custom satellite type card */
+.wizard-card--custom {
+  border-style: dashed;
+}
+
+/* Custom satellite type form */
+.wizard-custom-form {
+  width: 100%;
+}
+
+.wizard-custom-field {
+  margin-bottom: 12px;
+}
+
+.wizard-custom-field label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.wizard-custom-field input {
+  width: 200px;
+}
+
+.wizard-terminal-group {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+
+.wizard-terminal-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.wizard-remove-btn {
+  font-size: 11px;
+  color: var(--accent-red);
+  cursor: pointer;
+  padding: 2px 8px;
+  border: 1px solid var(--accent-red);
+  border-radius: 3px;
+  background: transparent;
+}
+
+.wizard-remove-btn:hover {
+  background: rgba(255, 51, 51, 0.1);
+}
+
+.wizard-terminal-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.wizard-terminal-fields label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wizard-terminal-fields input,
+.wizard-terminal-fields select {
+  font-size: 12px;
+  padding: 4px 6px;
+  width: 100%;
+}
+
+/* Custom ground station picker */
+.wizard-custom-gs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.wizard-custom-gs-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
+.wizard-custom-gs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.wizard-custom-gs-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.wizard-custom-gs-item:hover {
+  border-color: var(--text-secondary);
+}
+
+.wizard-custom-gs-item--selected {
+  border-color: var(--accent-teal);
+}
+
+.wizard-custom-gs-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wizard-custom-gs-coords {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-family: monospace;
+}

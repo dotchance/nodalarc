@@ -22,7 +22,19 @@ export function useSessionSwitcher(sessionStatus: string | null) {
     fetchSessions();
   }, [fetchSessions]);
 
-  // Track when backend confirms it's switching
+  // Detect backend-initiated switches (e.g. wizard deploy endpoint) —
+  // if session_status becomes "switching" and we didn't trigger it locally,
+  // adopt the switch so the progress overlay appears.
+  const prevStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!switching && sessionStatus === "switching" && prevStatusRef.current !== "switching") {
+      sawSwitchingRef.current = true;
+      setSwitching(true);
+    }
+    prevStatusRef.current = sessionStatus;
+  }, [switching, sessionStatus]);
+
+  // Track when backend confirms it's switching (for locally-triggered switches)
   useEffect(() => {
     if (switching && sessionStatus === "switching") {
       sawSwitchingRef.current = true;
@@ -37,16 +49,6 @@ export function useSessionSwitcher(sessionStatus: string | null) {
       fetchSessions();
     }
   }, [switching, sessionStatus, fetchSessions]);
-
-  // Re-fetch session list whenever session status becomes "ready" (covers
-  // backend-initiated switches where the UI never set switching=true).
-  const prevStatusRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (sessionStatus === "ready" && prevStatusRef.current !== "ready") {
-      fetchSessions();
-    }
-    prevStatusRef.current = sessionStatus;
-  }, [sessionStatus, fetchSessions]);
 
   const switchSession = useCallback(
     async (file: string) => {

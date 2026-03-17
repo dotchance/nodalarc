@@ -51,12 +51,24 @@ class AreaAssignmentConfig(BaseModel):
 
 
 class RoutingConfig(BaseModel):
-    """Routing configuration."""
+    """Routing configuration.
 
-    stack: str  # Path to routing stack directory
+    Either ``stack`` (legacy path to a routing-stack directory) or
+    ``protocol`` (resolved via stack_resolver) must be set.
+    """
+
+    protocol: str | None = None  # "ospf" | "isis" | "static" | "nodalpath"
+    extensions: list[str] = []  # ["te", "mpls", "sr"]
+    stack: str | None = None  # Legacy path — bypass resolution
     compression_factor: int = 1
     config_overrides: dict[str, Any] = {}
     area_assignment: AreaAssignmentConfig | None = None
+
+    @model_validator(mode="after")
+    def _require_stack_or_protocol(self):
+        if self.stack is None and self.protocol is None:
+            raise ValueError("Either 'stack' or 'protocol' must be set")
+        return self
 
 
 class TimeConfig(BaseModel):

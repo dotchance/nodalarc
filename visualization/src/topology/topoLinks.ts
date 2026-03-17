@@ -42,6 +42,8 @@ export function drawLinks(
   flowPath: string[] | null,
   dashOffset: number = 0,
   failTimes?: Map<string, number>,
+  showIslLinks: boolean = true,
+  showGroundLinks: boolean = true,
 ): void {
   const now = performance.now();
 
@@ -50,6 +52,12 @@ export function drawLinks(
     const a = nodeMap.get(link.nodeA);
     const b = nodeMap.get(link.nodeB);
     if (!a || !b) continue;
+
+    // Hide links based on toggle state (unless in fail-flash animation)
+    if (link.state !== "failed") {
+      if (link.isGround && !showGroundLinks) continue;
+      if (!link.isGround && !showIslLinks) continue;
+    }
 
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);

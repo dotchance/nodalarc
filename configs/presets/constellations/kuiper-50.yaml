@@ -1,25 +1,11 @@
-session:
-  name: kuiper-50-isis-striped
-
+name: kuiper-50
+description: "5 planes x 10 satellites, 590 km inclined orbit. Area design comparison."
+satellite_count: 50
 constellation: configs/constellations/kuiper-50.yaml
 ground_stations: configs/ground-stations/sets/global.yaml
-
-addressing:
-  sat_id_template: "sat-P{plane:02d}S{slot:02d}"
-  gs_id_template: "gs-{name}"
-
-routing:
-  stack: configs/routing-stacks/frr-isis-sr
-  area_assignment:
-    strategy: stripe
-    planes_per_stripe: 2
-    gs_area_id: "49.0000"
-
 time:
   mode: discrete-event
   step_seconds: 1
-  latency_update_interval_seconds: 10
-
 traffic_flows:
   - flow_id: ashburn-to-frankfurt
     src: gs-ashburn
@@ -27,7 +13,6 @@ traffic_flows:
     protocol: udp
     bandwidth_kbps: 100
     probe_type: continuous
-
 convergence:
   stability_period_s: 2.0
   timeout_s: 30.0

@@ -15,9 +15,9 @@ import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellite
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
-import { updateGroundTracks, clearGroundTracks } from "./groundTracks";
 import { updateOrbitalTrails, flushTrails } from "./orbitalTrails";
 import { updateOrbitPins, clearOrbitPins } from "./orbitPins";
+import { updateAllOrbits, clearAllOrbits } from "./allOrbits";
 import { setupRaycaster } from "./raycaster";
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
@@ -37,8 +37,9 @@ interface GlobeViewProps {
   onSelect: (sel: Selection | null) => void;
   colorMode: ColorMode;
   globeMode: GlobeMode;
-  showGroundTracks: boolean;
-  showAllLinks: boolean;
+  showGroundLinks: boolean;
+  showIslLinks: boolean;
+  showSatPaths: boolean;
   actionsRef?: MutableRefObject<GlobeActions | null>;
   followNode?: boolean;
 }
@@ -49,8 +50,9 @@ export function GlobeView({
   onSelect,
   colorMode,
   globeMode,
-  showGroundTracks,
-  showAllLinks,
+  showGroundLinks,
+  showIslLinks,
+  showSatPaths,
   actionsRef,
   followNode: _followNode,
 }: GlobeViewProps) {
@@ -64,24 +66,21 @@ export function GlobeView({
   const snapshotRef = useRef<StateSnapshot | null>(null);
   const colorModeRef = useRef<ColorMode>(colorMode);
   const selectionRef = useRef<Selection | null>(null);
-  const showGroundTracksRef = useRef(showGroundTracks);
-  const showAllLinksRef = useRef(showAllLinks);
+  const showGroundLinksRef = useRef(showGroundLinks);
+  const showIslLinksRef = useRef(showIslLinks);
+  const showSatPathsRef = useRef(showSatPaths);
   const followTargetRef = useRef<string | null>(null);
 
   // Keep refs in sync
   snapshotRef.current = snapshot;
   colorModeRef.current = colorMode;
   selectionRef.current = selection;
-  showAllLinksRef.current = showAllLinks;
+  showGroundLinksRef.current = showGroundLinks;
+  showIslLinksRef.current = showIslLinks;
+  showSatPathsRef.current = showSatPaths;
 
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
-
-  // Clear ground tracks when toggled off
-  if (!showGroundTracks && showGroundTracksRef.current && sceneRef.current) {
-    clearGroundTracks(sceneRef.current);
-  }
-  showGroundTracksRef.current = showGroundTracks;
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -223,6 +222,7 @@ export function GlobeView({
         if (lastConstellationName !== null) {
           flushTrails();
           clearOrbitPins(scene);
+          clearAllOrbits(scene);
           resetDeliveryRate();
         }
         lastConstellationName = snap.constellation_name;
@@ -233,12 +233,9 @@ export function GlobeView({
         lastSnapshotRef = snap;
         updateSatellites(snap.nodes, scene, colorModeRef.current, snap.sim_time);
         updateGroundStations(snap.nodes, scene, labelContainer);
-        updateLinks(snap.links, scene, showAllLinksRef.current);
+        updateLinks(snap.links, scene, showIslLinksRef.current);
         updateFlowPaths(snap.traced_paths, scene);
         updateSunPosition(snap.sim_time);
-        if (showGroundTracksRef.current) {
-          updateGroundTracks(snap.nodes, scene);
-        }
       }
 
       // Follow selected node — rotate camera toward it, keep orbit pivot at origin
@@ -258,10 +255,11 @@ export function GlobeView({
       }
 
       animateSatellites(dt);
-      animateLinks();
+      animateLinks(showIslLinksRef.current, showGroundLinksRef.current);
       animateFlowPaths();
       if (!skipTrails) updateOrbitalTrails(scene);
       updateOrbitPins(scene);
+      updateAllOrbits(scene, showSatPathsRef.current);
       updateSelection(selectionRef.current, scene, camera);
       animateSelection(camera);
       updateCoverageFootprint(selectionRef.current, scene, camera);
@@ -285,6 +283,7 @@ export function GlobeView({
       resizeObs.disconnect();
       renderer.setAnimationLoop(null);
       clearOrbitPins(scene);
+      clearAllOrbits(scene);
       renderer.dispose();
       container.removeChild(renderer.domElement);
     };

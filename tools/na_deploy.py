@@ -131,10 +131,19 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     addressing = AddressingScheme(session.addressing)
     satellites = expand_constellation(constellation)
 
-    # Load routing stack
-    stack_dir = Path(session.routing.stack)
-    stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
-    stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
+    # Load routing stack — legacy (routing.stack) or resolved (routing.protocol)
+    resolved = None
+    if session.routing.stack is not None:
+        # Legacy path: load from stack directory
+        stack_dir = Path(session.routing.stack)
+        stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
+        stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
+    else:
+        # Resolved path: derive from protocol + extensions
+        from nodalarc.stack_resolver import resolve_stack
+        resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
+        stack_config = None
+        stack_dir = None
 
     # === Step 2: Start OME (continuous mode) ===
     log.info("Step 2: Start OME (continuous mode)")
@@ -160,7 +169,10 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
 
     # === Step 3: Build template variables ===
     log.info("Step 3: Build template variables")
-    config_overrides = dict(stack_config.template_variables)
+    if resolved is not None:
+        config_overrides = dict(resolved.template_variables)
+    else:
+        config_overrides = dict(stack_config.template_variables)
     config_overrides.update(session.routing.config_overrides)
 
     node_vars: dict[str, dict] = {}
@@ -186,21 +198,29 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
 
     # === Step 4: Render routing configurations ===
     log.info("Step 4: Render routing configurations")
+    if resolved is not None:
+        template_dir = str(Path("configs/templates/frr").resolve())
+        template_list = resolved.template_files
+        daemon_list = resolved.daemons
+    else:
+        template_dir = str(stack_dir)
+        template_list = [(t.src, t.dst) for t in stack_config.config_templates]
+        daemon_list = stack_config.daemons or []
     env = Environment(
-        loader=FileSystemLoader(str(stack_dir)),
+        loader=FileSystemLoader(template_dir),
         keep_trailing_newline=True,
     )
     configs_dir = data_dir / "configs"
     for node_id, vars in node_vars.items():
         node_dir = configs_dir / node_id
         node_dir.mkdir(parents=True, exist_ok=True)
-        for tpl_config in stack_config.config_templates:
-            tpl = env.get_template(tpl_config.src)
+        for tpl_src, tpl_dst in template_list:
+            tpl = env.get_template(tpl_src)
             rendered = tpl.render(**vars)
-            dest_name = Path(tpl_config.dst).name
+            dest_name = Path(tpl_dst).name
             (node_dir / dest_name).write_text(rendered)
-        # Generate daemons file from stack config
-        if stack_config.daemons:
+        # Generate daemons file
+        if daemon_list:
             all_frr_daemons = [
                 "zebra", "bgpd", "ospfd", "ospf6d", "ripd", "ripngd",
                 "isisd", "pimd", "ldpd", "nhrpd", "eigrpd", "babeld",
@@ -208,7 +228,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
                 "staticd",
             ]
             daemons_content = "\n".join(
-                f"{d}={'yes' if d in stack_config.daemons else 'no'}"
+                f"{d}={'yes' if d in daemon_list else 'no'}"
                 for d in all_frr_daemons
             ) + "\n"
             (node_dir / "daemons").write_text(daemons_content)
@@ -218,14 +238,23 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     log.info("Step 5: Deploy K3s pods")
     # Build sidecar config from stack if the stack uses a non-FRR image
     sidecar_config: dict | None = None
-    if stack_config.image and not stack_config.image.startswith("nodalarc/frr"):
+    _image = resolved.image if resolved else stack_config.image
+    _env_list = resolved.env if resolved else [{"name": e.name, "value": e.value} for e in stack_config.env]
+    _capabilities = (
+        resolved.security_context_capabilities if resolved
+        else (stack_config.security_context.capabilities if stack_config.security_context else [])
+    )
+    if _image and not _image.startswith("nodalarc/frr"):
         sidecar_config = {
-            "image": stack_config.image,
-            "capabilities": (
-                stack_config.security_context.capabilities
-                if stack_config.security_context else ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
-            ),
+            "image": _image,
+            "capabilities": _capabilities or ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"],
         }
+
+    def _build_env(nid: str) -> list[dict]:
+        return [
+            {"name": e["name"], "value": e["value"].replace("{{ node_id }}", nid)}
+            for e in _env_list
+        ]
 
     helm_values = {
         "satellites": [
@@ -233,10 +262,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
                 "nodeId": nid,
                 "plane": vars["plane"],
                 "slot": vars["slot"],
-                **({"env": [
-                    {"name": e.name, "value": e.value.replace("{{ node_id }}", nid)}
-                    for e in stack_config.env
-                ]} if sidecar_config and stack_config.env else {}),
+                **({"env": _build_env(nid)} if sidecar_config and _env_list else {}),
             }
             for nid, vars in node_vars.items() if vars["node_type"] == "satellite"
         ],
@@ -244,10 +270,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             {
                 "nodeId": nid,
                 "gsName": vars["gs_name"],
-                **({"env": [
-                    {"name": e.name, "value": e.value.replace("{{ node_id }}", nid)}
-                    for e in stack_config.env
-                ]} if sidecar_config and stack_config.env else {}),
+                **({"env": _build_env(nid)} if sidecar_config and _env_list else {}),
             }
             for nid, vars in node_vars.items() if vars["node_type"] == "ground_station"
         ],
@@ -385,8 +408,10 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             if result.returncode != 0:
                 _fail(f"Failed to set {sysctl_key}={value} in ns({pid}): {result.stderr}")
     # Set ip_ttl_propagate for SR stacks (controls traceroute visibility)
-    if stack_config.segment_routing:
-        ttl_val = "0" if stack_config.ttl_propagation == "pipe" else "1"
+    _segment_routing = resolved.segment_routing if resolved else stack_config.segment_routing
+    _ttl_propagation = resolved.ttl_propagation if resolved else stack_config.ttl_propagation
+    if _segment_routing:
+        ttl_val = "0" if _ttl_propagation == "pipe" else "1"
         for node_id, pid in pid_map.items():
             result = subprocess.run(
                 ["nsenter", "--target", str(pid), "--net", "--",
@@ -532,7 +557,8 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     # === Step 8: Start MI ===
     mi_db = str(data_dir / "session.db")
     mi_proc = None
-    if stack_config.mi_adapter is not None:
+    _mi_adapter = resolved.mi_adapter if resolved else stack_config.mi_adapter
+    if _mi_adapter is not None:
         log.info("Step 8: Start MI service")
         mi_log = open(data_dir / "mi.log", "w")
         mi_proc = subprocess.Popen(
@@ -648,7 +674,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         "--pid-map", str(pid_map_file),
         "--dwell", str(dwell),
     ]
-    if stack_config.mi_adapter is None:
+    if _mi_adapter is None:
         orchestrator_cmd.append("--no-convergence-gate")
     to_proc = subprocess.Popen(
         orchestrator_cmd,
@@ -662,7 +688,8 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     # mode (ZMQ + push). For all other sessions, run in console-only mode
     # so the operator UI is always accessible on port 3100.
     np_log = open(data_dir / "nodalpath.log", "w")
-    if stack_dir.name == "nodalpath-fwd":
+    _is_nodalpath = (resolved is not None and session.routing.protocol == "nodalpath") or (stack_dir is not None and stack_dir.name == "nodalpath-fwd")
+    if _is_nodalpath:
         log.info("Step 11b: Start NodalPath (live mode)")
         nodalpath_proc = subprocess.Popen(
             [

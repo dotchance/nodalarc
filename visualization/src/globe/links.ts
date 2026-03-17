@@ -184,7 +184,7 @@ export function updateLinks(
   }
 }
 
-export function animateLinks(): void {
+export function animateLinks(showIslLinks: boolean = true, showGroundLinks: boolean = true): void {
   const now = performance.now();
   const sats = getSatellites();
   const gss = getGroundStations();
@@ -197,6 +197,18 @@ export function animateLinks(): void {
     if (!posA || !posB) {
       entry.line.visible = false;
       continue;
+    }
+
+    // Hide links based on toggle state (unless in fail-flash animation)
+    if (entry.failTime === null) {
+      if (entry.isGround && !showGroundLinks) {
+        entry.line.visible = false;
+        continue;
+      }
+      if (!entry.isGround && !showIslLinks) {
+        entry.line.visible = false;
+        continue;
+      }
     }
 
     // Gently bowed curve so links read as smooth, not polygonal

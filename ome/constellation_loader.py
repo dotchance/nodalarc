@@ -281,14 +281,16 @@ def load_ground_stations_from_list(
     return _build_gs_file_from_stations(stations, default_terrestrial_prefixes)
 
 
-def load_ground_stations(path: str | Path) -> GroundStationFile:
-    """Load and validate ground station YAML (any format).
+def load_ground_stations(path: str | Path | list[str]) -> GroundStationFile:
+    """Load and validate ground stations.
 
-    Detects format by top-level keys:
-    - 'ground_station': individual station file
-    - 'ground_station_set': set file (resolves all station references)
-    - Otherwise: monolithic legacy format
+    Accepts:
+    - str/Path: YAML file path (set, individual, or legacy format)
+    - list[str]: list of individual station names to load directly
     """
+    if isinstance(path, list):
+        return load_ground_stations_from_list(path)
+
     data = yaml.safe_load(Path(path).read_text())
 
     if isinstance(data, dict):

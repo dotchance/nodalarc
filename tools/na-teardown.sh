@@ -78,10 +78,13 @@ else
     echo "  (no releases found)"
 fi
 
-# Clean up any stale K8s resources (ServiceAccounts, ConfigMaps, etc.)
+# Clean up any stale K8s resources (ServiceAccounts, Roles, ConfigMaps, etc.)
 sudo KUBECONFIG="$KUBECONFIG" kubectl delete all --all -n nodalarc 2>/dev/null || true
 sudo KUBECONFIG="$KUBECONFIG" kubectl delete serviceaccount --all -n nodalarc 2>/dev/null || true
+sudo KUBECONFIG="$KUBECONFIG" kubectl delete role --all -n nodalarc 2>/dev/null || true
+sudo KUBECONFIG="$KUBECONFIG" kubectl delete rolebinding --all -n nodalarc 2>/dev/null || true
 sudo KUBECONFIG="$KUBECONFIG" kubectl delete configmap --all -n nodalarc 2>/dev/null || true
+sudo KUBECONFIG="$KUBECONFIG" kubectl delete endpoints --all -n nodalarc 2>/dev/null || true
 
 # --- Step 8: Wait for pods to terminate ---
 echo "Waiting for pods to terminate (up to 60s)..."

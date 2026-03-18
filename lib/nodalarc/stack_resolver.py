@@ -191,7 +191,7 @@ def _resolve_static(ext_set: set[str]) -> ResolvedStack:
         template_files=templates,
         template_variables=template_vars,
         image="nodalarc/frr:10",
-        mi_adapter="frr_static_adapter",
+        mi_adapter=None,  # Static routes are controller-pushed, no routing protocol to monitor
         segment_routing=segment_routing,
         ttl_propagation=ttl_propagation,
         transport=None,

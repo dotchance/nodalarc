@@ -21,10 +21,17 @@ class LabelBinding(BaseModel, frozen=True):
 
 
 class IngressRule(BaseModel, frozen=True):
-    """An LER ingress rule: map a destination prefix to a label push."""
+    """An LER ingress rule: map a destination prefix to a label stack push.
+
+    The label_stack contains the full SR-TE label stack for the path:
+    [adj_SID_hop1, adj_SID_hop2, ..., node_SID_egress]. The ingress LER
+    pushes this entire stack. push_label is label_stack[0] for backward
+    compatibility with single-label code paths.
+    """
     dst_prefix: str                       # e.g., "172.16.2.0/24"
-    push_label: int                       # label to push at ingress
+    push_label: int                       # first label in stack (backward compat)
     out_interface: str                    # interface toward first-hop satellite
+    label_stack: list[int] = Field(default_factory=list)  # full SR-TE label stack
     backup_push_label: int | None = None
     backup_out_interface: str | None = None
 

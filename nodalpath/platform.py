@@ -26,6 +26,7 @@ class NodalPathPlatformConfig(BaseModel):
     # Segment Routing MPLS label allocation
     satellite_sid_range_start: int
     ground_station_sid_range_start: int
+    adjacency_sid_range_start: int
 
     # gRPC forwarding table push
     grpc_push_timeout_seconds: int

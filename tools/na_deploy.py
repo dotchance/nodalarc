@@ -274,10 +274,16 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         }
 
     def _build_env(nid: str) -> list[dict]:
-        return [
-            {"name": e["name"], "value": e["value"].replace("{{ node_id }}", nid)}
-            for e in _env_list
-        ]
+        vars_for_node = node_vars.get(nid, {})
+        result = []
+        for e in _env_list:
+            val = e["value"]
+            # Substitute any {{ var_name }} from the node's template vars
+            val = val.replace("{{ node_id }}", nid)
+            for k, v in vars_for_node.items():
+                val = val.replace("{{ " + k + " }}", str(v))
+            result.append({"name": e["name"], "value": val})
+        return result
 
     helm_values = {
         "satellites": [
@@ -360,6 +366,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     container_platform["zmq_connect_hosts"] = {
         "ome": "nodalarc-ome",
         "orchestrator": "nodalarc-host-zmq",
+        "vs-api": "nodalarc-host-zmq",
     }
     _apply_configmap("nodalarc-platform-config", ns, {
         "platform.yaml": yaml.dump({"platform": container_platform}, default_flow_style=False),

@@ -52,46 +52,67 @@ def build_forwarding_update(
     table: ForwardingTable,
     topology_state_id: str,
     sim_time: str,
+    iface_to_peer_loopback: dict[tuple[str, str], str] | None = None,
+    own_loopback: str = "",
 ) -> ForwardingTableUpdate:
     """Convert a ForwardingTable to a gRPC ForwardingTableUpdate message.
 
     Always sends the full table — no deltas.
-    Push actions are skipped (not supported in kernel MPLS).
+
+    iface_to_peer_loopback: maps (node_id, interface_name) → peer loopback IP.
+        Used to populate nexthop_ip on each entry so the sidecar can
+        configure FRR's ``mpls lsp`` and ``ip route`` commands with a
+        resolvable nexthop.
+
+    own_loopback: this node's own loopback IP (for node SID POP → local delivery).
     """
+    peer_map = iface_to_peer_loopback or {}
+    node_id = table.node_id
+
     lsr_entries: list[LabelEntry] = []
     for binding in table.lsr_bindings:
-        if binding.action == "swap":
-            entry = LabelEntry(
-                in_label=binding.in_label,
-                action=Action.SWAP,
-                out_label=binding.out_label or 0,
-                out_interface=binding.out_interface,
-                backup_out_label=binding.backup_out_label or 0,
-                backup_out_interface=binding.backup_out_interface or "",
-            )
-            lsr_entries.append(entry)
-        elif binding.action == "pop":
+        if binding.action == "pop":
+            # For node SID POP (out_interface="lo"), nexthop is own loopback
+            # For adjacency SID POP, nexthop is the peer on that interface
+            if binding.out_interface == "lo":
+                nexthop = own_loopback
+            else:
+                nexthop = peer_map.get((node_id, binding.out_interface), "")
             entry = LabelEntry(
                 in_label=binding.in_label,
                 action=Action.POP,
                 out_label=0,
                 out_interface=binding.out_interface,
-                backup_out_label=binding.backup_out_label or 0,
-                backup_out_interface=binding.backup_out_interface or "",
+                nexthop_ip=nexthop,
+            )
+            lsr_entries.append(entry)
+        elif binding.action == "swap":
+            # SWAP entries are not used in the SR-TE label stack model,
+            # but kept for backward compatibility with the vtysh transport.
+            nexthop = peer_map.get((node_id, binding.out_interface), "")
+            entry = LabelEntry(
+                in_label=binding.in_label,
+                action=Action.SWAP,
+                out_label=binding.out_label or 0,
+                out_interface=binding.out_interface,
+                nexthop_ip=nexthop,
             )
             lsr_entries.append(entry)
         else:
             log.warning(
-                "Skipping push action for in_label=%d on %s (not supported in kernel MPLS)",
+                "Skipping push action for in_label=%d on %s",
                 binding.in_label, table.node_id,
             )
 
     ler_entries: list[IngressEntry] = []
     for rule in table.ler_ingress_rules:
+        nexthop = peer_map.get((node_id, rule.out_interface), "")
         entry = IngressEntry(
             dst_prefix=rule.dst_prefix,
             push_label=rule.push_label,
             out_interface=rule.out_interface,
+            nexthop_ip=nexthop,
+            label_stack=list(getattr(rule, "label_stack", []) or []),
             backup_push_label=rule.backup_push_label or 0,
             backup_out_interface=rule.backup_out_interface or "",
         )

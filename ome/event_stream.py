@@ -432,6 +432,7 @@ def publish_full_state_snapshot(
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
     gs_state: dict[tuple[str, str], tuple[bool, bool]],
     sim_time_iso: str,
+    link_ranges: dict[tuple[str, str], float] | None = None,
 ) -> None:
     """Publish complete link state for subscriber catchup.
 
@@ -439,16 +440,30 @@ def publish_full_state_snapshot(
     miss events (slow joiner, restart) catch up from the next snapshot.
     This is the solution to the ZMQ slow joiner problem — no sleep after
     bind, no assumptions about subscriber timing.
+
+    The optional link_ranges dict provides range_km for each link pair,
+    enabling subscribers to compute accurate link latencies even when
+    they missed the VisibilityEvents that originally carried the range.
     """
     from nodalarc.zmq_channels import encode_message
+
+    ranges = link_ranges or {}
 
     # Serialize state dicts with string keys (tuple keys can't be JSON keys)
     isl_data = {}
     for (a, b), (visible, scheduled) in isl_state.items():
-        isl_data[f"{a}:{b}"] = {"visible": visible, "scheduled": scheduled}
+        entry: dict[str, Any] = {"visible": visible, "scheduled": scheduled}
+        r = ranges.get((a, b), 0.0)
+        if r > 0:
+            entry["range_km"] = r
+        isl_data[f"{a}:{b}"] = entry
     gs_data = {}
     for (a, b), (visible, scheduled) in gs_state.items():
-        gs_data[f"{a}:{b}"] = {"visible": visible, "scheduled": scheduled}
+        entry = {"visible": visible, "scheduled": scheduled}
+        r = ranges.get((a, b), 0.0)
+        if r > 0:
+            entry["range_km"] = r
+        gs_data[f"{a}:{b}"] = entry
 
     payload = json.dumps({
         "sim_time": sim_time_iso,

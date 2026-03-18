@@ -154,7 +154,8 @@ def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Topology Orchestrator")
     parser.add_argument("--session", required=True, help="Path to session YAML")
-    parser.add_argument("--timeline", required=True, help="Path to timeline JSONL")
+    parser.add_argument("--timeline", required=False, help="Path to timeline JSONL (legacy file mode)")
+    parser.add_argument("--ome-endpoint", help="ZMQ endpoint for OME events (e.g. tcp://nodalarc-ome:5560)")
     parser.add_argument("--mode", choices=["de", "rt"], default="de")
     parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell (seconds)")
@@ -225,9 +226,13 @@ def main() -> None:
     )
     scenario_thread.start()
 
+    if not args.timeline and not args.ome_endpoint:
+        parser.error("Either --timeline or --ome-endpoint is required")
+
     if args.mode == "de":
         dispatcher = DiscreteEventDispatcher(
-            timeline_path=Path(args.timeline),
+            timeline_path=Path(args.timeline) if args.timeline else None,
+            ome_zmq_endpoint=args.ome_endpoint,
             interface_map=interface_map,
             bandwidth_map=bandwidth_map,
             override_set=override_set,

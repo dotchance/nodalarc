@@ -94,6 +94,19 @@ class TestPlatformConfig:
         assert cfg.to_events_bind == "tcp://0.0.0.0:5561"
         assert cfg.nodalpath_events_connect == "tcp://my-service.svc:5567"
 
+    def test_zmq_per_service_connect_hosts(self):
+        d = _valid_config_dict()
+        d["zmq_connect_host"] = "127.0.0.1"
+        d["zmq_connect_hosts"] = {"ome": "nodalarc-ome", "orchestrator": "nodalarc-host-zmq"}
+        cfg = PlatformConfig(**d)
+        # Per-service overrides
+        assert cfg.ome_events_connect == "tcp://nodalarc-ome:5560"
+        assert cfg.to_events_connect == "tcp://nodalarc-host-zmq:5561"
+        assert cfg.playback_control_connect == "tcp://nodalarc-host-zmq:5566"
+        # Fallback to global for services not in dict
+        assert cfg.mi_events_connect == "tcp://127.0.0.1:5562"
+        assert cfg.nodalpath_events_connect == "tcp://127.0.0.1:5567"
+
 
 class TestSingleton:
     def setup_method(self):

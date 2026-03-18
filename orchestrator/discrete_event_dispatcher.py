@@ -105,11 +105,12 @@ class DiscreteEventDispatcher:
 
     def __init__(
         self,
-        timeline_path: Path,
-        interface_map: dict[tuple[str, str], tuple[str, str]],
-        bandwidth_map: dict[tuple[str, str], float],
-        override_set: set[tuple[str, str]],
-        override_lock: Any,
+        timeline_path: Path | None = None,
+        ome_zmq_endpoint: str | None = None,
+        interface_map: dict[tuple[str, str], tuple[str, str]] | None = None,
+        bandwidth_map: dict[tuple[str, str], float] | None = None,
+        override_set: set[tuple[str, str]] | None = None,
+        override_lock: Any = None,
         pid_map: dict[str, int] | None = None,
         routing_protocol: str = "isis",
         db_conn: Any = None,
@@ -121,9 +122,10 @@ class DiscreteEventDispatcher:
         area_map: dict[str, str] | None = None,
     ) -> None:
         self._timeline_path = timeline_path
-        self._interface_map = interface_map
-        self._bandwidth_map = bandwidth_map
-        self._override_set = override_set
+        self._ome_zmq_endpoint = ome_zmq_endpoint
+        self._interface_map = interface_map or {}
+        self._bandwidth_map = bandwidth_map or {}
+        self._override_set = override_set or set()
         self._override_lock = override_lock
         self._pid_map = pid_map or {}
         self._routing_protocol = routing_protocol
@@ -145,49 +147,198 @@ class DiscreteEventDispatcher:
         self._speed_factor: float = 1.0
 
     def run(self) -> None:
-        """Stream events from growing timeline file."""
-        # Set up ZeroMQ
+        """Run the dispatcher — ZMQ streaming or file-based depending on config."""
+        if self._ome_zmq_endpoint:
+            self._run_zmq()
+        else:
+            self._run_file()
+
+    def _setup_zmq_output(self, ctx: zmq.Context) -> tuple:
+        """Set up output ZMQ sockets (PUB, convergence, playback). Shared by both modes."""
+        pub_sock = ctx.socket(zmq.PUB)
+        pub_sock.setsockopt(zmq.LINGER, 0)
+        pub_sock.bind(to_events_bind())
+        ome_pub_sock = pub_sock  # Reuse TO PUB for position events
+
+        conv_sock = None
+        if self._use_convergence_gate:
+            conv_sock = ctx.socket(zmq.REQ)
+            conv_sock.setsockopt(zmq.LINGER, 0)
+            conv_sock.connect(mi_convergence_gate_connect())
+
+        playback_sock = ctx.socket(zmq.REP)
+        playback_sock.setsockopt(zmq.LINGER, 0)
+        playback_sock.bind(playback_control_bind())
+
+        poller = zmq.Poller()
+        poller.register(playback_sock, zmq.POLLIN)
+
+        log.info(
+            f"ZMQ PUB sockets bound: TO={to_events_bind()} "
+            f"Playback={playback_control_bind()}"
+        )
+        return pub_sock, ome_pub_sock, conv_sock, playback_sock, poller
+
+    def _run_zmq(self) -> None:
+        """Stream events from OME ZMQ PUB socket."""
+        from nodalarc.zmq_channels import decode_message
+
         ctx = zmq.Context()
+        batch_count = 0
 
         try:
-            pub_sock = ctx.socket(zmq.PUB)
-            pub_sock.setsockopt(zmq.LINGER, 0)
-            pub_sock.bind(to_events_bind())
+            pub_sock, ome_pub_sock, conv_sock, playback_sock, poller = self._setup_zmq_output(ctx)
 
-            # Reuse TO PUB socket for position events — OME already owns
-            # OME_EVENTS_BIND (port 5560) and binding there causes conflicts.
-            ome_pub_sock = pub_sock
+            # Subscribe to OME events
+            ome_sub = ctx.socket(zmq.SUB)
+            ome_sub.connect(self._ome_zmq_endpoint)
+            ome_sub.setsockopt(zmq.SUBSCRIBE, b"ClockTick")
+            ome_sub.setsockopt(zmq.SUBSCRIBE, b"VisibilityEvent")
+            ome_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
+            ome_sub.setsockopt(zmq.SUBSCRIBE, b"WindowReady")
+            ome_sub.setsockopt(zmq.SUBSCRIBE, b"FullStateSnapshot")
 
-            conv_sock = None
-            if self._use_convergence_gate:
-                conv_sock = ctx.socket(zmq.REQ)
-                conv_sock.setsockopt(zmq.LINGER, 0)
-                conv_sock.connect(mi_convergence_gate_connect())
+            ome_poller = zmq.Poller()
+            ome_poller.register(ome_sub, zmq.POLLIN)
 
-            # Playback control REP socket
-            playback_sock = ctx.socket(zmq.REP)
-            playback_sock.setsockopt(zmq.LINGER, 0)
-            playback_sock.bind(playback_control_bind())
+            log.info(f"Subscribing to OME ZMQ: {self._ome_zmq_endpoint}")
+            time.sleep(3.0)  # Allow output subscribers to connect
+            log.info("Dispatcher ready, waiting for OME events")
 
-            poller = zmq.Poller()
-            poller.register(playback_sock, zmq.POLLIN)
+            buffer: list[dict] = []
+            initialized = False
 
+            while True:
+                # Check for playback commands
+                self._handle_playback_commands(poller, playback_sock)
+                if self._paused:
+                    time.sleep(0.1)
+                    continue
+
+                # Poll OME sub with 1s timeout
+                socks = dict(ome_poller.poll(timeout=1000))
+                if ome_sub not in socks:
+                    continue
+
+                raw = ome_sub.recv(zmq.NOBLOCK)
+                topic, payload = decode_message(raw)
+                data = json.loads(payload)
+
+                if topic == b"FullStateSnapshot":
+                    if not initialized:
+                        # Cold start: FRR pods are fresh, bring up all visible links
+                        self._cold_start_from_snapshot(data, pub_sock, conv_sock, ome_pub_sock)
+                        initialized = True
+                    else:
+                        # Subsequent: update internal state only, no link commands
+                        self._update_state_from_snapshot(data)
+                    continue
+
+                if topic == b"WindowReady":
+                    # Process buffered batch
+                    if buffer:
+                        batch_start = time.monotonic()
+                        self._process_batch(buffer, pub_sock, conv_sock, ome_pub_sock)
+                        self._steps_since_latency_update += 1
+                        batch_count += 1
+
+                        if self._dwell_s > 0:
+                            effective_dwell = self._dwell_s / self._speed_factor
+                            elapsed = time.monotonic() - batch_start
+                            remaining = effective_dwell - elapsed
+                            if remaining > 0:
+                                time.sleep(remaining)
+                    buffer = []
+                    continue
+
+                # Snapshot events arriving outside a window (periodic republish
+                # from OME during inter-window sleep) should be processed immediately
+                # for position updates — don't buffer them.
+                if topic == b"Snapshot" and initialized:
+                    self._process_batch([data], pub_sock, conv_sock, ome_pub_sock)
+                    continue
+
+                # Buffer event for current batch
+                buffer.append(data)
+
+        except KeyboardInterrupt:
+            log.info("Dispatcher interrupted")
+        except Exception as exc:
+            log.error(f"Dispatcher crashed: {exc}", exc_info=True)
+        finally:
             log.info(
-                f"ZMQ PUB sockets bound: TO={to_events_bind()} (positions on TO) "
-                f"Playback={playback_control_bind()}"
+                f"ZMQ dispatcher exiting: {batch_count} batches, "
+                f"{len(self._active_links)} active links"
             )
-            # Allow subscribers time to connect (ZMQ slow joiner).
-            # VS-API (uvicorn) can take 2-3s to start its ZMQ subscriber.
-            time.sleep(3.0)
+            self._teardown_remaining_links(pub_sock)
+            ctx.term()
+
+    def _cold_start_from_snapshot(
+        self, data: dict, pub_sock, conv_sock, ome_pub_sock,
+    ) -> None:
+        """Initialize link state from FullStateSnapshot — cold start only.
+
+        FRR pods are fresh with no routing state. Treat the snapshot as
+        authoritative and issue link-up for all visible/scheduled links.
+        """
+        sim_time = data.get("sim_time", "")
+        link_count = 0
+        for state_dict in (data.get("isl_state", {}), data.get("gs_state", {})):
+            for pair_key, state in state_dict.items():
+                if state.get("visible") and state.get("scheduled"):
+                    parts = pair_key.split(":")
+                    if len(parts) == 2:
+                        node_a, node_b = parts[0], parts[1]
+                        pair = (min(node_a, node_b), max(node_a, node_b))
+                        if pair not in self._active_links and pair in self._interface_map:
+                            # Synthesize a VisibilityEvent for _handle_link_up
+                            vis = VisibilityEvent(
+                                sim_time=datetime.fromisoformat(sim_time) if sim_time else datetime.now(timezone.utc),
+                                node_a=pair[0], node_b=pair[1],
+                                visible=True, scheduled=True,
+                                range_km=0.0, elevation_deg=None,
+                                terminal_type="optical",
+                            )
+                            self._handle_link_up(vis, pub_sock)
+                            link_count += 1
+        log.info(f"Cold start from FullStateSnapshot: {link_count} links initialized")
+
+    def _update_state_from_snapshot(self, data: dict) -> None:
+        """Update internal state from FullStateSnapshot — no link commands.
+
+        M3 limitation: if this snapshot differs from FRR state (e.g. after
+        OME restart), the session is broken. Recovery = full session switch.
+        """
+        new_active: set[tuple[str, str]] = set()
+        for state_dict in (data.get("isl_state", {}), data.get("gs_state", {})):
+            for pair_key, state in state_dict.items():
+                if state.get("visible") and state.get("scheduled"):
+                    parts = pair_key.split(":")
+                    if len(parts) == 2:
+                        new_active.add((min(parts[0], parts[1]), max(parts[0], parts[1])))
+        current = set(self._active_links.keys())
+        if new_active != current:
+            log.warning(
+                f"FullStateSnapshot state differs from current: "
+                f"{len(new_active)} active vs {len(current)} tracked. "
+                f"FRR state may be inconsistent."
+            )
+
+    def _run_file(self) -> None:
+        """Stream events from growing timeline file (legacy mode)."""
+        ctx = zmq.Context()
+        batch_count = 0
+
+        try:
+            pub_sock, ome_pub_sock, conv_sock, playback_sock, poller = self._setup_zmq_output(ctx)
+
+            time.sleep(3.0)  # Allow subscribers to connect
             log.info("Slow joiner delay complete, starting event processing")
 
             reader = TimelineReader(self._timeline_path)
-            batch_count = 0
             idle_timeouts = 0
             while True:
-                # Poll for playback commands (non-blocking)
                 self._handle_playback_commands(poller, playback_sock)
-
                 if self._paused:
                     time.sleep(0.1)
                     continue

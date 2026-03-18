@@ -22,6 +22,8 @@ from ome.event_stream import (
     append_timeline_jsonl,
     precompute_timeline,
     precompute_timeline_window,
+    publish_full_state_snapshot,
+    publish_window_zmq,
     write_timeline_jsonl,
 )
 from ome.propagator import orbital_period
@@ -186,20 +188,36 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
 
     compression = session.time.compression if session.time.compression else 1
 
-    out_dir = Path(output_dir) if output_dir else Path("output")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{session.session.name}-timeline.jsonl"
-    sentinel = out_path.with_suffix(".ready")
+    # ZMQ PUB socket — primary delivery mechanism
+    import zmq
+    from nodalarc.zmq_channels import ome_events_bind
+    ctx = zmq.Context()
+    pub_sock = ctx.socket(zmq.PUB)
+    pub_sock.bind(ome_events_bind())
+    logging.info(f"OME ZMQ PUB bound to {ome_events_bind()}")
+    # No sleep after bind — FullStateSnapshot handles subscriber catchup
 
-    # Window 1: compute and write (overwrite)
-    logging.info(f"OME continuous: computing window 1 (period={period:.0f}s)")
-    events, isl_state, gs_state = precompute_timeline_window(
+    # Optional file output for debugging/development
+    out_path = None
+    sentinel = None
+    if output_dir:
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{session.session.name}-timeline.jsonl"
+        sentinel = out_path.with_suffix(".ready")
+
+    window = 0
+    epoch_for_next = epoch_unix
+    isl_state = None
+    gs_state = None
+    window_start = time.monotonic()
+    last_snapshot_wall = 0.0
+
+    _common_args = dict(
         satellites=satellites,
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
-        epoch_unix=epoch_unix,
-        duration_s=period,
         step_seconds=session.time.step_seconds,
         max_range_km=max_range_km,
         max_tracking_rate_deg_s=max_tracking_rate_deg_s,
@@ -208,50 +226,87 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation,
     )
-    write_timeline_jsonl(events, out_path)
-    sentinel.write_text(str(out_path))
-    logging.info(f"OME window 1 written: {len(events)} events, sentinel at {sentinel}")
-
-    window = 1
-    epoch_for_next = epoch_unix + period
 
     try:
         while True:
             window += 1
-            compute_start = time.monotonic()
+            logging.info(f"OME continuous: computing window {window} (period={period:.0f}s)")
             events, isl_state, gs_state = precompute_timeline_window(
-                satellites=satellites,
-                addressing=addressing,
-                gs_file=gs_file,
-                neighbors=neighbors,
+                **_common_args,
                 epoch_unix=epoch_for_next,
                 duration_s=period,
-                step_seconds=session.time.step_seconds,
-                max_range_km=max_range_km,
-                max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-                field_of_regard_deg=field_of_regard_deg,
-                polar_seam_enabled=polar_seam_enabled,
-                latitude_threshold_deg=latitude_threshold_deg,
-                default_min_elevation_deg=default_min_elevation,
-                initial_isl_state=isl_state,
-                initial_gs_state=gs_state,
-                timestamp_offset=period * (window - 1),
-            )
-            append_timeline_jsonl(events, out_path)
-            epoch_for_next += period
-            logging.info(
-                f"OME window {window} appended: {len(events)} events, "
-                f"t={period * (window - 1):.0f}s – {period * window:.0f}s"
+                **({"initial_isl_state": isl_state, "initial_gs_state": gs_state,
+                    "timestamp_offset": period * (window - 1)} if window > 1 else {}),
             )
 
-            # Sleep until dispatcher is ~50% through current window.
-            consumed_wall_s = period * 0.5 / compression
-            compute_elapsed = time.monotonic() - compute_start
-            sleep_s = max(0, consumed_wall_s - compute_elapsed)
-            logging.info(f"OME sleeping {sleep_s:.1f}s before next window")
-            time.sleep(sleep_s)
+            # Publish window events + WindowReady on ZMQ
+            publish_window_zmq(events, pub_sock, window)
+
+            # Capture the last position Snapshot from this window for republishing
+            # during periodic FullStateSnapshot (so late subscribers get positions)
+            last_position_event = None
+            for evt in reversed(events):
+                if evt.event_type == "Snapshot":
+                    last_position_event = evt
+                    break
+
+            # Compute sim_time for the end of this window
+            from datetime import datetime as _dt, timezone as _tz
+            window_end_epoch = epoch_for_next + period
+            sim_time_iso = _dt.fromtimestamp(window_end_epoch, tz=_tz.utc).isoformat()
+
+            # Publish FullStateSnapshot at window boundary
+            publish_full_state_snapshot(pub_sock, isl_state, gs_state, sim_time_iso)
+            # Also republish the last position Snapshot so late subscribers get positions
+            if last_position_event is not None:
+                from nodalarc.zmq_channels import encode_message as _enc
+                _topic = last_position_event.event_type.encode()
+                _payload = json.dumps({
+                    "timestamp_s": last_position_event.timestamp_s,
+                    "event_type": last_position_event.event_type,
+                    "data": last_position_event.data.model_dump(mode="json"),
+                }).encode()
+                pub_sock.send(_enc(_topic, _payload))
+            last_snapshot_wall = time.monotonic()
+
+            # Also write JSONL if --output-dir provided (debug/development)
+            if out_path is not None:
+                if window == 1:
+                    write_timeline_jsonl(events, out_path)
+                    sentinel.write_text(str(out_path))
+                else:
+                    append_timeline_jsonl(events, out_path)
+
+            epoch_for_next += period
+
+            # Two independent timers: window pacing + periodic FullStateSnapshot every 30s
+            window_duration = period * 0.5 / compression
+            while True:
+                elapsed = time.monotonic() - window_start
+                if elapsed >= window_duration:
+                    break
+                # Publish periodic FullStateSnapshot every 30s during inter-window sleep
+                if time.monotonic() - last_snapshot_wall >= 30.0:
+                    publish_full_state_snapshot(pub_sock, isl_state, gs_state, sim_time_iso)
+                    # Republish last position Snapshot for late subscriber catchup
+                    if last_position_event is not None:
+                        pub_sock.send(_enc(
+                            last_position_event.event_type.encode(),
+                            json.dumps({
+                                "timestamp_s": last_position_event.timestamp_s,
+                                "event_type": last_position_event.event_type,
+                                "data": last_position_event.data.model_dump(mode="json"),
+                            }).encode(),
+                        ))
+                    last_snapshot_wall = time.monotonic()
+                time.sleep(min(1.0, window_duration - elapsed))
+
+            window_start = time.monotonic()
     except KeyboardInterrupt:
         logging.info("OME continuous mode interrupted, exiting")
+    finally:
+        pub_sock.close()
+        ctx.term()
 
 
 def main() -> None:
@@ -259,10 +314,16 @@ def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Orbital Mechanics Engine")
     parser.add_argument("session", help="Path to session YAML config")
-    parser.add_argument("--output-dir", "-o", help="Output directory", default="output")
+    parser.add_argument("--output-dir", "-o", help="Output directory (optional, enables file output)", default=None)
     parser.add_argument("--continuous", action="store_true",
-                        help="Run in continuous mode (rolling windows)")
+                        help="Run in continuous mode (rolling windows + ZMQ publish)")
+    parser.add_argument("--platform-config", default="configs/platform.yaml",
+                        help="Path to platform config YAML")
     args = parser.parse_args()
+
+    from nodalarc.platform import init_platform_config
+    init_platform_config(Path(args.platform_config))
+
     if args.continuous:
         run_continuous(args.session, args.output_dir)
     else:

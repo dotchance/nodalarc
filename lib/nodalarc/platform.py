@@ -88,6 +88,15 @@ class PlatformConfig(BaseModel):
     # components run in separate pods.
     zmq_bind_host: str = "127.0.0.1"
     zmq_connect_host: str = "127.0.0.1"
+    # Per-service connect host overrides. Keys are service names (ome, orchestrator,
+    # mi, nodalpath). Values are hostnames or IPs. Falls back to zmq_connect_host
+    # if a service isn't in the dict. Adding new services in future phases is a
+    # YAML change, not a schema change.
+    zmq_connect_hosts: dict[str, str] = {}
+
+    def zmq_connect_host_for(self, service: str) -> str:
+        """Resolve connect host for a named service, falling back to global default."""
+        return self.zmq_connect_hosts.get(service, self.zmq_connect_host)
 
     # --- ZMQ socket address properties ---
 
@@ -97,7 +106,7 @@ class PlatformConfig(BaseModel):
 
     @property
     def ome_events_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host}:{self.zmq_ome_events_port}"
+        return f"tcp://{self.zmq_connect_host_for('ome')}:{self.zmq_ome_events_port}"
 
     @property
     def to_events_bind(self) -> str:
@@ -105,7 +114,7 @@ class PlatformConfig(BaseModel):
 
     @property
     def to_events_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host}:{self.zmq_to_events_port}"
+        return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_events_port}"
 
     @property
     def mi_events_bind(self) -> str:
@@ -113,7 +122,7 @@ class PlatformConfig(BaseModel):
 
     @property
     def mi_events_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host}:{self.zmq_mi_events_port}"
+        return f"tcp://{self.zmq_connect_host_for('mi')}:{self.zmq_mi_events_port}"
 
     @property
     def mi_convergence_gate_bind(self) -> str:
@@ -121,7 +130,7 @@ class PlatformConfig(BaseModel):
 
     @property
     def mi_convergence_gate_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host}:{self.zmq_mi_convergence_gate_port}"
+        return f"tcp://{self.zmq_connect_host_for('mi')}:{self.zmq_mi_convergence_gate_port}"
 
     @property
     def to_scenario_inject_bind(self) -> str:
@@ -129,7 +138,7 @@ class PlatformConfig(BaseModel):
 
     @property
     def to_scenario_inject_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host}:{self.zmq_to_scenario_inject_port}"
+        return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_scenario_inject_port}"
 
     @property
     def mi_trace_bind(self) -> str:
@@ -137,7 +146,7 @@ class PlatformConfig(BaseModel):
 
     @property
     def mi_trace_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host}:{self.zmq_mi_trace_port}"
+        return f"tcp://{self.zmq_connect_host_for('mi')}:{self.zmq_mi_trace_port}"
 
     @property
     def playback_control_bind(self) -> str:
@@ -145,7 +154,7 @@ class PlatformConfig(BaseModel):
 
     @property
     def playback_control_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host}:{self.zmq_playback_control_port}"
+        return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_playback_control_port}"
 
     @property
     def nodalpath_events_bind(self) -> str:
@@ -153,7 +162,7 @@ class PlatformConfig(BaseModel):
 
     @property
     def nodalpath_events_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host}:{self.zmq_nodalpath_events_port}"
+        return f"tcp://{self.zmq_connect_host_for('nodalpath')}:{self.zmq_nodalpath_events_port}"
 
 
 # --- Module-level singleton ---

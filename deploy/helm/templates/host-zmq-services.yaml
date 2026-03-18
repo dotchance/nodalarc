@@ -1,7 +1,8 @@
 {{- if .Values.hostZmq.enabled }}
 # Headless service pointing to the host for ZMQ endpoints.
 # Used by containerized components (e.g. NodalPath) to reach
-# host-running OME and orchestrator via K8s DNS.
+# host-running orchestrator via K8s DNS.
+# NOTE: OME has its own Service (nodalarc-ome) — port 5560 is NOT here.
 apiVersion: v1
 kind: Service
 metadata:
@@ -12,9 +13,6 @@ metadata:
 spec:
   clusterIP: None
   ports:
-    - name: ome-events
-      port: 5560
-      protocol: TCP
     - name: to-events
       port: 5561
       protocol: TCP
@@ -31,9 +29,6 @@ subsets:
   - addresses:
       - ip: {{ .Values.hostZmq.hostIP | quote }}
     ports:
-      - name: ome-events
-        port: 5560
-        protocol: TCP
       - name: to-events
         port: 5561
         protocol: TCP

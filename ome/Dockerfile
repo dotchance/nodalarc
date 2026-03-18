@@ -26,7 +26,8 @@ COPY configs/satellite-types/ configs/satellite-types/
 COPY configs/ground-stations/ configs/ground-stations/
 COPY configs/constellations/ configs/constellations/
 
-# Health probe port
+# Health probe port + ZMQ PUB port
 EXPOSE 8081
+EXPOSE 5560
 
 ENTRYPOINT ["python", "-m", "ome.main"]

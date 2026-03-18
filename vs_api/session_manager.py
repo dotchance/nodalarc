@@ -435,7 +435,7 @@ class SessionManager:
                 _daemon_request({"action": "helm_uninstall", "release": release}, timeout=60)
 
             if releases:
-                self._status_detail = "Waiting for pods to terminate"
+                self._status_detail = "Waiting for existing emulation pods to stop"
                 _daemon_request({"action": "kubectl_wait"}, timeout=90)
 
             # === Clear VS-API state ===

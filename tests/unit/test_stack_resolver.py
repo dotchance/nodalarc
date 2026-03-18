@@ -74,7 +74,7 @@ class TestStatic:
     def test_static_sr(self):
         r = resolve_stack("static", ["sr"])
         assert r.daemons == ["zebra", "staticd"]
-        assert r.mi_adapter == "frr_static_adapter"
+        assert r.mi_adapter is None
         assert r.segment_routing is True
         assert r.ttl_propagation == "uniform"
         assert r.max_compression == 1

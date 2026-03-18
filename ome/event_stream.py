@@ -400,6 +400,65 @@ def append_timeline_jsonl(events: list[TimelineEvent], output_path: Path) -> Non
     logger.info(f"Appended {len(events)} events to {output_path}")
 
 
+def publish_window_zmq(events: list[TimelineEvent], pub_sock, window_num: int) -> None:
+    """Publish a window of timeline events on ZMQ PUB socket.
+
+    Interface boundary for ZMQ delivery — same role as write_timeline_jsonl()
+    for file delivery. run_continuous() calls this function, not inline ZMQ code.
+
+    Publishes each event with its event_type as the ZMQ topic, followed by a
+    WindowReady message that signals the batch boundary to the orchestrator.
+    """
+    from nodalarc.zmq_channels import encode_message
+
+    for event in events:
+        topic = event.event_type.encode()
+        payload = json.dumps({
+            "timestamp_s": event.timestamp_s,
+            "event_type": event.event_type,
+            "data": event.data.model_dump(mode="json"),
+        }).encode()
+        pub_sock.send(encode_message(topic, payload))
+
+    # Window boundary signal — orchestrator buffers events until this arrives
+    pub_sock.send(encode_message(b"WindowReady", json.dumps({
+        "window": window_num, "event_count": len(events),
+    }).encode()))
+    logger.info(f"Published window {window_num}: {len(events)} events on ZMQ")
+
+
+def publish_full_state_snapshot(
+    pub_sock,
+    isl_state: dict[tuple[str, str], tuple[bool, bool]],
+    gs_state: dict[tuple[str, str], tuple[bool, bool]],
+    sim_time_iso: str,
+) -> None:
+    """Publish complete link state for subscriber catchup.
+
+    Published every 30 seconds and at window boundaries. Subscribers that
+    miss events (slow joiner, restart) catch up from the next snapshot.
+    This is the solution to the ZMQ slow joiner problem — no sleep after
+    bind, no assumptions about subscriber timing.
+    """
+    from nodalarc.zmq_channels import encode_message
+
+    # Serialize state dicts with string keys (tuple keys can't be JSON keys)
+    isl_data = {}
+    for (a, b), (visible, scheduled) in isl_state.items():
+        isl_data[f"{a}:{b}"] = {"visible": visible, "scheduled": scheduled}
+    gs_data = {}
+    for (a, b), (visible, scheduled) in gs_state.items():
+        gs_data[f"{a}:{b}"] = {"visible": visible, "scheduled": scheduled}
+
+    payload = json.dumps({
+        "sim_time": sim_time_iso,
+        "isl_state": isl_data,
+        "gs_state": gs_data,
+    }).encode()
+    pub_sock.send(encode_message(b"FullStateSnapshot", payload))
+    logger.info(f"Published FullStateSnapshot: {len(isl_data)} ISL + {len(gs_data)} GS pairs")
+
+
 def read_timeline_jsonl(path: Path) -> list[dict]:
     """Read timeline events from JSON Lines file."""
     events = []

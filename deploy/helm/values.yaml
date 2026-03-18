@@ -29,7 +29,6 @@ ome:
   cpuLimit: "2000m"
   memoryRequest: 512Mi
   memoryLimit: 1Gi
-  dataDir: ""  # Set by na_deploy to the session data directory
 
 visualization:
   memoryLimit: 128Mi

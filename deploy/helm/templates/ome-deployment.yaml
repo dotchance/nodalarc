@@ -22,15 +22,15 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - "--continuous"
+            - "--platform-config"
+            - "/etc/nodalarc/platform.yaml"
             - "/etc/nodalarc/session.yaml"
-            - "-o"
-            # CONSTRAINT: this value, hostPath.path below, and mountPath for data-dir
-            # must all be identical. The sentinel file written by OME contains the
-            # absolute path, and na_deploy reads it from the host filesystem.
-            - "{{ .Values.ome.dataDir }}"
           ports:
             - containerPort: 8081
               name: health
+              protocol: TCP
+            - containerPort: 5560
+              name: zmq-events
               protocol: TCP
           readinessProbe:
             httpGet:
@@ -52,9 +52,6 @@ spec:
             limits:
               cpu: {{ .Values.ome.cpuLimit | default "2000m" }}
               memory: {{ .Values.ome.memoryLimit | default "1Gi" }}
-          securityContext:
-            runAsUser: 0
-            runAsGroup: 0
           volumeMounts:
             - name: session-config
               mountPath: /etc/nodalarc/session.yaml
@@ -65,20 +62,20 @@ spec:
             - name: ground-stations
               mountPath: /etc/nodalarc/ground-stations.yaml
               subPath: ground-stations.yaml
-            - name: data-dir
-              mountPath: {{ .Values.ome.dataDir }}
+            - name: platform-config
+              mountPath: /etc/nodalarc/platform.yaml
+              subPath: platform.yaml
       volumes:
         - name: session-config
           configMap:
             name: nodalarc-session
+        - name: platform-config
+          configMap:
+            name: nodalarc-platform-config
         - name: constellation-config
           configMap:
             name: nodalarc-constellation
         - name: ground-stations
           configMap:
             name: nodalarc-ground-stations
-        - name: data-dir
-          hostPath:
-            path: {{ .Values.ome.dataDir }}
-            type: DirectoryOrCreate
 {{- end }}

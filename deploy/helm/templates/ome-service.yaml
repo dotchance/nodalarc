@@ -1,0 +1,21 @@
+{{- if .Values.ome.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodalarc-ome
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-ome
+spec:
+  selector:
+    app: nodalarc-ome
+  ports:
+    - name: zmq-events
+      port: 5560
+      targetPort: 5560
+      protocol: TCP
+    - name: health
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+{{- end }}

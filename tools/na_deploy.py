@@ -161,14 +161,14 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     )
 
     # === Step 2: Start OME (continuous mode) ===
-    # By default OME runs as a K8s Deployment (containerized).
-    # Use --host-ome to run as a host subprocess instead.
-    # For containerized OME, sentinel polling happens AFTER helm install (Step 5)
-    # because the OME pod is created by Helm.
+    # By default OME runs as a K8s Deployment with ZMQ streaming (no files).
+    # Use --host-ome to run as a host subprocess with file-based timeline.
     ome_proc = None
-    sentinel = data_dir / f"{session.session.name}-timeline.ready"
+    timeline_path = None
     if not host_ome:
-        log.info("Step 2: OME will run as K8s Deployment (created at helm install)")
+        log.info("Step 2: OME running as K8s Deployment (ZMQ streaming on port 5560)")
+        # No sentinel polling — orchestrator subscribes directly to OME ZMQ.
+        # OME publishes FullStateSnapshot every 30s for subscriber catchup.
     else:
         log.info("Step 2: Start OME (continuous mode, host subprocess)")
         ome_log = open(data_dir / "ome.log", "w")
@@ -179,15 +179,16 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             stderr=ome_log,
         )
         log.info(f"OME PID: {ome_proc.pid}")
-        # Wait for sentinel now (host OME starts immediately)
+        # Wait for sentinel (host OME writes file + sentinel)
+        sentinel = data_dir / f"{session.session.name}-timeline.ready"
         for _ in range(300):
             if sentinel.exists():
+                timeline_path = Path(sentinel.read_text().strip())
                 break
             time.sleep(1)
         else:
             _fail("OME did not produce first window in 5 minutes")
-
-    timeline_path = None  # Set after sentinel appears
+        log.info(f"Timeline: {timeline_path}")
 
     # === Step 3: Build template variables ===
     log.info("Step 3: Build template variables")
@@ -318,10 +319,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         }
         helm_values["hostZmq"] = {"enabled": True, "hostIP": host_ip}
     if not host_ome:
-        helm_values["ome"] = {
-            "enabled": True,
-            "dataDir": str(data_dir),
-        }
+        helm_values["ome"] = {"enabled": True}
     values_file = data_dir / "helm-values.yaml"
     values_file.write_text(yaml.dump(helm_values))
 
@@ -354,10 +352,15 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
                 "ground-stations.yaml": gs_path.read_text(),
             })
 
-    # Platform config — container version with zmq_connect_host for headless Service
+    # Platform config — container version with per-service ZMQ connect hosts.
+    # OME has its own K8s Service (nodalarc-ome). Orchestrator still on host
+    # (reached via nodalarc-host-zmq headless Service).
     host_platform = yaml.safe_load(Path("configs/platform.yaml").read_text())
     container_platform = dict(host_platform.get("platform", host_platform))
-    container_platform["zmq_connect_host"] = "nodalarc-host-zmq"
+    container_platform["zmq_connect_hosts"] = {
+        "ome": "nodalarc-ome",
+        "orchestrator": "nodalarc-host-zmq",
+    }
     _apply_configmap("nodalarc-platform-config", ns, {
         "platform.yaml": yaml.dump({"platform": container_platform}, default_flow_style=False),
     })
@@ -381,33 +384,8 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         _fail(f"Helm install failed: {result.stderr}")
     log.info("Helm install complete")
 
-    # Wait for OME sentinel if containerized (OME pod was created by helm install)
-    if not host_ome:
-        log.info("Waiting for containerized OME to produce first window...")
-        for _ in range(300):  # 5 minute timeout
-            if sentinel.exists():
-                break
-            time.sleep(1)
-        else:
-            # Check OME pod status for diagnostic
-            ome_status = subprocess.run(
-                ["kubectl", "get", "pods", "-n", ns, "-l", "app=nodalarc-ome",
-                 "-o", "jsonpath={.items[0].status.phase}"],
-                capture_output=True, text=True,
-            )
-            ome_logs = subprocess.run(
-                ["kubectl", "logs", "-n", ns, "-l", "app=nodalarc-ome", "--tail=10"],
-                capture_output=True, text=True,
-            )
-            _fail(f"OME did not produce first window in 5 minutes. "
-                  f"Pod status: {ome_status.stdout}. Last logs: {ome_logs.stdout[-500:]}")
-
-    # Read timeline path from sentinel
-    if sentinel.exists():
-        timeline_path = Path(sentinel.read_text().strip())
-        log.info(f"Timeline: {timeline_path}")
-    else:
-        _fail("Sentinel file not found after OME startup")
+    # For ZMQ OME: no sentinel polling needed. The orchestrator subscribes
+    # directly to the OME ZMQ Service and catches up via FullStateSnapshot.
 
     # === Step 5+6: Wait for pods and deliver configs progressively ===
     # Deliver configs to pods as they become Running, rather than waiting
@@ -794,11 +772,25 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     orchestrator_cmd = [
         sys.executable, "-m", "orchestrator.main",
         "--session", session_path,
-        "--timeline", str(timeline_path),
         "--mode", mode_flag,
         "--pid-map", str(pid_map_file),
         "--dwell", str(dwell),
     ]
+    if not host_ome:
+        # ZMQ streaming — orchestrator (host process) subscribes to OME Service.
+        # Host can't resolve K8s Service DNS, so use the Service cluster IP.
+        ome_svc_ip = subprocess.run(
+            ["kubectl", "get", "svc", "nodalarc-ome", "-n", ns,
+             "-o", "jsonpath={.spec.clusterIP}"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        if not ome_svc_ip:
+            _fail("Could not resolve nodalarc-ome Service cluster IP")
+        log.info(f"OME ZMQ endpoint: tcp://{ome_svc_ip}:5560")
+        orchestrator_cmd.extend(["--ome-endpoint", f"tcp://{ome_svc_ip}:5560"])
+    else:
+        # File-based — orchestrator tails timeline JSONL
+        orchestrator_cmd.extend(["--timeline", str(timeline_path)])
     if _mi_adapter is None:
         orchestrator_cmd.append("--no-convergence-gate")
     to_proc = subprocess.Popen(
@@ -851,7 +843,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
     session_state = {
         "session_id": session_id,
         "data_dir": str(data_dir),
-        "timeline": str(timeline_path),
+        "timeline": str(timeline_path) if timeline_path else "",
         "ome_pid": ome_proc.pid if ome_proc else 0,
         "mi_pid": mi_proc.pid if mi_proc else 0,
         "vsapi_pid": vsapi_pid,

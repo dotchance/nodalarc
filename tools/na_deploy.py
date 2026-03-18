@@ -151,8 +151,13 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         stack_config = None
         stack_dir = None
 
-    # Determine if this is a NodalPath session (used by Step 5 and Step 11b)
-    _is_nodalpath = (resolved is not None and session.routing.protocol == "nodalpath") or (stack_dir is not None and stack_dir.name == "nodalpath-fwd")
+    # Determine if NodalPath should run in live mode (push forwarding tables).
+    # Both "nodalpath" and "static" protocols need NodalPath live — static routes
+    # are controller-pushed via NodalPath gRPC, not configured by FRR.
+    _is_nodalpath = (
+        (resolved is not None and session.routing.protocol in ("nodalpath", "static"))
+        or (stack_dir is not None and stack_dir.name in ("nodalpath-fwd", "frr-static-sr"))
+    )
 
     # === Step 2: Start OME (continuous mode) ===
     # By default OME runs as a K8s Deployment (containerized).

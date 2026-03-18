@@ -235,19 +235,29 @@ class DiscreteEventDispatcher:
                     continue
 
                 if topic == b"WindowReady":
-                    # Process buffered batch
+                    # Group buffered events by timestamp and process each group
+                    # as a separate batch with dwell between them — same pacing
+                    # as the file-based TimelineReader.
                     if buffer:
-                        batch_start = time.monotonic()
-                        self._process_batch(buffer, pub_sock, conv_sock, ome_pub_sock)
-                        self._steps_since_latency_update += 1
-                        batch_count += 1
+                        batches = _group_by_timestamp(buffer)
+                        for batch in batches:
+                            # Check playback between batches
+                            self._handle_playback_commands(poller, playback_sock)
+                            while self._paused:
+                                time.sleep(0.1)
+                                self._handle_playback_commands(poller, playback_sock)
 
-                        if self._dwell_s > 0:
-                            effective_dwell = self._dwell_s / self._speed_factor
-                            elapsed = time.monotonic() - batch_start
-                            remaining = effective_dwell - elapsed
-                            if remaining > 0:
-                                time.sleep(remaining)
+                            batch_start = time.monotonic()
+                            self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)
+                            self._steps_since_latency_update += 1
+                            batch_count += 1
+
+                            if self._dwell_s > 0:
+                                effective_dwell = self._dwell_s / self._speed_factor
+                                elapsed = time.monotonic() - batch_start
+                                remaining = effective_dwell - elapsed
+                                if remaining > 0:
+                                    time.sleep(remaining)
                     buffer = []
                     continue
 
@@ -282,15 +292,25 @@ class DiscreteEventDispatcher:
         authoritative and issue link-up for all visible/scheduled links.
         """
         sim_time = data.get("sim_time", "")
+        isl_state = data.get("isl_state", {})
+        gs_state_data = data.get("gs_state", {})
+        log.info(f"FullStateSnapshot: {len(isl_state)} ISL pairs, {len(gs_state_data)} GS pairs, "
+                 f"interface_map has {len(self._interface_map)} entries")
+        # Debug: show first few ISL pairs to verify format
+        for k, v in list(isl_state.items())[:3]:
+            pair = tuple(k.split(":"))
+            in_map = pair in self._interface_map or (min(pair), max(pair)) in self._interface_map
+            log.info(f"  ISL sample: {k} -> {v}, in interface_map: {in_map}")
+
         link_count = 0
-        for state_dict in (data.get("isl_state", {}), data.get("gs_state", {})):
-            for pair_key, state in state_dict.items():
-                if state.get("visible") and state.get("scheduled"):
-                    parts = pair_key.split(":")
-                    if len(parts) == 2:
-                        node_a, node_b = parts[0], parts[1]
-                        pair = (min(node_a, node_b), max(node_a, node_b))
-                        if pair not in self._active_links and pair in self._interface_map:
+        # Initialize ISL links from cold start
+        for pair_key, state in isl_state.items():
+            if state.get("visible") and state.get("scheduled"):
+                parts = pair_key.split(":")
+                if len(parts) == 2:
+                    node_a, node_b = parts[0], parts[1]
+                    pair = (min(node_a, node_b), max(node_a, node_b))
+                    if pair not in self._active_links and pair in self._interface_map:
                             # Synthesize a VisibilityEvent for _handle_link_up
                             vis = VisibilityEvent(
                                 sim_time=datetime.fromisoformat(sim_time) if sim_time else datetime.now(timezone.utc),
@@ -301,6 +321,36 @@ class DiscreteEventDispatcher:
                             )
                             self._handle_link_up(vis, pub_sock)
                             link_count += 1
+
+        # Initialize GS links — only one satellite per GS (the scheduled one).
+        # Multiple satellites may be visible to a GS but only one is scheduled
+        # at a time. Processing all of them would create conflicting bridge redirects.
+        gs_scheduled: dict[str, tuple[str, str]] = {}  # gs_id -> (pair_key, sat_id)
+        for pair_key, state in data.get("gs_state", {}).items():
+            if state.get("visible") and state.get("scheduled"):
+                parts = pair_key.split(":")
+                if len(parts) == 2:
+                    node_a, node_b = parts[0], parts[1]
+                    gs_id = node_a if node_a.startswith("gs-") else node_b
+                    # Keep only the last scheduled satellite per GS (most recent)
+                    gs_scheduled[gs_id] = (pair_key, node_a if not node_a.startswith("gs-") else node_b)
+
+        for gs_id, (pair_key, sat_id) in gs_scheduled.items():
+            parts = pair_key.split(":")
+            node_a, node_b = min(parts[0], parts[1]), max(parts[0], parts[1])
+            pair = (node_a, node_b)
+            if pair not in self._active_links and pair in self._interface_map:
+                vis = VisibilityEvent(
+                    sim_time=datetime.fromisoformat(sim_time) if sim_time else datetime.now(timezone.utc),
+                    node_a=pair[0], node_b=pair[1],
+                    visible=True, scheduled=True,
+                    range_km=0.0, elevation_deg=25.0,  # Default elevation for initial attach
+                    terminal_type="optical",
+                )
+                self._handle_link_up(vis, pub_sock)
+                link_count += 1
+                log.info(f"Cold start GS: {gs_id} -> {sat_id}")
+
         log.info(f"Cold start from FullStateSnapshot: {link_count} links initialized")
 
     def _update_state_from_snapshot(self, data: dict) -> None:

@@ -271,8 +271,40 @@ def _handle_traceroute(req: dict) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+def _traceroute_to_tracepath(traceroute_output: str, target: str) -> str:
+    """Convert traceroute output to tracepath format for the existing parser.
+
+    traceroute: ' 1  10.0.0.1  5.123 ms'  or  ' 1  *'
+    tracepath:  ' 1:  10.0.0.1  5.123ms reached'
+    """
+    import re
+    lines = []
+    last_hop = 0
+    for line in traceroute_output.splitlines():
+        # Skip header line
+        if line.startswith("traceroute to"):
+            continue
+        # Match: ' N  IP  RTTms' or ' N  *'
+        m = re.match(r"^\s*(\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+([\d.]+)\s+ms", line)
+        if m:
+            hop_num = int(m.group(1))
+            ip = m.group(2)
+            rtt = m.group(3)
+            reached = " reached" if ip == target else ""
+            lines.append(f" {hop_num}:  {ip}  {rtt}ms{reached}")
+            last_hop = hop_num
+        # Skip '*' (no reply) hops — tracepath doesn't emit them
+    if last_hop > 0:
+        lines.append(f"     Resume: pmtu 9000 hops {last_hop} back {last_hop}")
+    return "\n".join(lines) + "\n"
+
+
 def _handle_tracepath(req: dict) -> dict:
-    """Run tracepath from a pod to an IPv4 address via kubectl exec."""
+    """Run traceroute (ICMP, 250ms timeout) from a pod to an IPv4 address.
+
+    Uses traceroute -I instead of tracepath for faster per-hop timeout.
+    Output is converted to tracepath format for the existing parser.
+    """
     pod = req.get("pod", "")
     target = req.get("target", "")
     if not pod or not target:
@@ -285,16 +317,19 @@ def _handle_tracepath(req: dict) -> dict:
     try:
         cmd = [
             "kubectl", "exec", "-n", _namespace(), pod, "-c", "frr", "--",
-            "tracepath", "-n", "-b", target,
+            "traceroute", "-I", "-n", "-w", "0.25", "-q", "1", "-m", "30",
+            target,
         ]
         result = subprocess.run(
             cmd,
-            capture_output=True, text=True, timeout=90,
+            capture_output=True, text=True, timeout=30,
             env=_env_with_kubeconfig(),
         )
+        # Convert traceroute output to tracepath format for the parser
+        stdout = _traceroute_to_tracepath(result.stdout, target)
         return {
             "ok": True,
-            "stdout": result.stdout,
+            "stdout": stdout,
             "stderr": result.stderr,
             "exit_code": result.returncode,
         }

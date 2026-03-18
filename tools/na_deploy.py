@@ -151,12 +151,13 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         stack_config = None
         stack_dir = None
 
-    # Determine if NodalPath should run in live mode (push forwarding tables).
-    # Both "nodalpath" and "static" protocols need NodalPath live — static routes
-    # are controller-pushed via NodalPath gRPC, not configured by FRR.
+    # Determine if NodalPath should run in live mode (push MPLS forwarding almanacs).
+    # Only "nodalpath" protocol uses the NEBULA model — centralized path computation
+    # with gRPC push to nodalpath-fwd sidecars. All other protocols (OSPF, IS-IS,
+    # static-SR) use FRR's distributed routing — NodalPath runs in console-only mode.
     _is_nodalpath = (
-        (resolved is not None and session.routing.protocol in ("nodalpath", "static"))
-        or (stack_dir is not None and stack_dir.name in ("nodalpath-fwd", "frr-static-sr"))
+        (resolved is not None and session.routing.protocol == "nodalpath")
+        or (stack_dir is not None and stack_dir.name == "nodalpath-fwd")
     )
 
     # === Step 2: Start OME (continuous mode) ===

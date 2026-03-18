@@ -300,8 +300,7 @@ const PROTOCOL_INFO: Record<string, { label: string; description: string; disabl
   ospf: { label: "OSPF", description: "Open Shortest Path First. Distributed link-state routing." },
   isis: { label: "IS-IS", description: "Intermediate System to Intermediate System. Native CLNS routing." },
   bgp: { label: "BGP", description: "Border Gateway Protocol.", disabled: true, disabledReason: "Coming Soon" },
-  static: { label: "Static + SR", description: "Static routes with Segment Routing. Controller-programmed forwarding." },
-  nodalpath: { label: "NodalPath", description: "Centralized MPLS path computation. No FRR routing daemon." },
+  nodalpath: { label: "NodalPath", description: "Centralized MPLS path computation (NEBULA model). No FRR routing daemon." },
 };
 
 const EXTENSION_INFO: Record<string, { label: string; description: string }> = {
@@ -648,7 +647,7 @@ export function SessionWizard({
                 <span className="wizard-review-value">{wizard.state.extensions.join(", ")}</span>
               </div>
             )}
-            {wizard.state.protocol !== "nodalpath" && wizard.state.protocol !== "static" && (
+            {wizard.state.protocol !== "nodalpath" && (
               <div className="wizard-review-row">
                 <span className="wizard-review-label">Area Strategy</span>
                 <span className="wizard-review-value">{wizard.state.areaStrategy}</span>

@@ -57,8 +57,8 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
             raise ValueError("nodalpath does not accept extensions")
         return _resolve_nodalpath()
 
-    if "sr" in ext_set and protocol not in ("isis", "static"):
-        raise ValueError("SR extension requires isis or static protocol")
+    if "sr" in ext_set and protocol not in ("ospf", "isis"):
+        raise ValueError("SR extension requires ospf or isis protocol")
     if "te" in ext_set and protocol not in ("ospf", "isis"):
         raise ValueError("TE extension requires ospf or isis protocol")
     if "mpls" in ext_set and protocol not in ("ospf", "isis"):
@@ -70,8 +70,6 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
         return _resolve_ospf(ext_set)
     elif protocol == "isis":
         return _resolve_isis(ext_set)
-    elif protocol == "static":
-        return _resolve_static(ext_set)
     else:
         raise ValueError(f"Unknown protocol: {protocol}")
 
@@ -106,6 +104,13 @@ def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:
     segment_routing = False
     ttl_propagation = None
 
+    if "sr" in ext_set:
+        daemons.append("pathd")
+        template_vars["sr_enabled"] = True
+        template_vars["srgb_start"] = 16000
+        template_vars["srgb_end"] = 23999
+        segment_routing = True
+        ttl_propagation = "uniform"
     if "te" in ext_set:
         template_vars["te_enabled"] = True
     if "mpls" in ext_set:
@@ -172,32 +177,3 @@ def _resolve_isis(ext_set: set[str]) -> ResolvedStack:
     )
 
 
-def _resolve_static(ext_set: set[str]) -> ResolvedStack:
-    daemons = ["zebra", "staticd"]
-    template_vars: dict[str, Any] = {
-        "protocol": "static",
-    }
-
-    if "sr" not in ext_set:
-        raise ValueError("static protocol requires sr extension")
-
-    segment_routing = True
-    ttl_propagation = "uniform"
-
-    templates = [_DAEMON_TEMPLATES[d] for d in daemons]
-
-    return ResolvedStack(
-        daemons=daemons,
-        template_files=templates,
-        template_variables=template_vars,
-        image="nodalarc/frr:10",
-        mi_adapter=None,  # Static routes are controller-pushed, no routing protocol to monitor
-        segment_routing=segment_routing,
-        ttl_propagation=ttl_propagation,
-        transport=None,
-        host_modules=[],
-        env=[],
-        security_context_capabilities=[],
-        reconfigure_command="vtysh -f {config_path}",
-        max_compression=1,
-    )

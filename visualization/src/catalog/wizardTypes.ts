@@ -8,7 +8,7 @@ export interface ConstellationPreset {
   ground_stations: string;
 }
 
-export type Protocol = "ospf" | "isis" | "static" | "nodalpath";
+export type Protocol = "ospf" | "isis" | "nodalpath";
 
 export interface ExtensionRules {
   protocols: Record<string, {

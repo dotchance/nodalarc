@@ -70,19 +70,14 @@ class TestISIS:
         assert r.template_variables["mpls_enabled"] is True
 
 
-class TestStatic:
-    def test_static_sr(self):
-        r = resolve_stack("static", ["sr"])
-        assert r.daemons == ["zebra", "staticd"]
-        assert r.mi_adapter is None
+class TestOSPFSR:
+    def test_ospf_sr(self):
+        r = resolve_stack("ospf", ["sr"])
+        assert "pathd" in r.daemons
         assert r.segment_routing is True
         assert r.ttl_propagation == "uniform"
-        assert r.max_compression == 1
-        assert r.template_variables["protocol"] == "static"
-
-    def test_static_requires_sr(self):
-        with pytest.raises(ValueError, match="static protocol requires sr"):
-            resolve_stack("static", [])
+        assert r.template_variables["sr_enabled"] is True
+        assert r.template_variables["srgb_start"] == 16000
 
 
 class TestNodalPath:
@@ -105,25 +100,29 @@ class TestNodalPath:
 # --- Invalid combinations ---
 
 class TestInvalid:
-    def test_sr_requires_isis_or_static(self):
-        with pytest.raises(ValueError, match="SR extension requires"):
-            resolve_stack("ospf", ["sr"])
+    def test_nodalpath_rejects_extensions(self):
+        with pytest.raises(ValueError, match="does not accept extensions"):
+            resolve_stack("nodalpath", ["sr"])
 
-    def test_te_requires_ospf_or_isis(self):
-        with pytest.raises(ValueError, match="TE extension requires"):
-            resolve_stack("static", ["sr", "te"])
+    def test_nodalpath_rejects_te(self):
+        with pytest.raises(ValueError, match="does not accept extensions"):
+            resolve_stack("nodalpath", ["te"])
 
-    def test_mpls_requires_te(self):
+    def test_mpls_requires_te_isis(self):
         with pytest.raises(ValueError, match="MPLS extension requires TE"):
             resolve_stack("isis", ["mpls"])
 
-    def test_mpls_requires_te(self):
+    def test_mpls_requires_te_ospf(self):
         with pytest.raises(ValueError, match="MPLS extension requires TE"):
             resolve_stack("ospf", ["mpls"])
 
     def test_unknown_protocol(self):
         with pytest.raises(ValueError, match="Unknown protocol"):
             resolve_stack("bgp", [])
+
+    def test_static_is_not_a_protocol(self):
+        with pytest.raises(ValueError):
+            resolve_stack("static", ["sr"])
 
 
 class TestResolvedStackFrozen:
@@ -140,11 +139,11 @@ class TestTemplateFilePaths:
         ("ospf", []),
         ("ospf", ["te"]),
         ("ospf", ["te", "mpls"]),
+        ("ospf", ["sr"]),
         ("isis", []),
         ("isis", ["sr"]),
         ("isis", ["te"]),
         ("isis", ["te", "mpls"]),
-        ("static", ["sr"]),
     ])
     def test_dst_paths(self, protocol, extensions):
         r = resolve_stack(protocol, extensions)

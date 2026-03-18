@@ -26,7 +26,6 @@ LEGACY_STACKS = {
     "frr-ospf-te": ("ospf", ["te"]),
     "frr-ospf-te-mpls": ("ospf", ["te", "mpls"]),
     "frr-isis-sr": ("isis", ["sr"]),
-    "frr-static-sr": ("static", ["sr"]),
 }
 
 # Sample template variables that exercise all template branches

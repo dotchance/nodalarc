@@ -1,3 +1,4 @@
+mgmtd=yes
 zebra=yes
 bgpd=no
 ospfd=yes

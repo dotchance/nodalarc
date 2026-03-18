@@ -59,6 +59,8 @@ class LiveOrchestrator:
         static_edges: list | None = None,
     ) -> None:
         self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map, static_edges=static_edges)
+        self._node_registry = node_registry
+        self._interface_map = interface_map
         self._store = AlmanacStore()
         self._prefix_map = prefix_map
         self._push_scheduler = push_scheduler
@@ -102,6 +104,7 @@ class LiveOrchestrator:
         ome_sub.connect(self._ome_connect)
         ome_sub.setsockopt(zmq.SUBSCRIBE, b"VisibilityEvent")
         ome_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
+        ome_sub.setsockopt(zmq.SUBSCRIBE, b"FullStateSnapshot")
 
         to_sub = ctx.socket(zmq.SUB)
         to_sub.connect(self._to_connect)
@@ -129,21 +132,39 @@ class LiveOrchestrator:
                 self._inspector.heartbeat_loop(self._inspection_heartbeat_interval_s),
             )
 
+        _poll_count = 0
         try:
             while self._running:
                 try:
-                    socks = dict(await poller.poll(timeout=100))
+                    socks = dict(await poller.poll(timeout=1000))
                 except zmq.ZMQError as exc:
                     log.error("ZMQ poller error: %s", exc)
                     break
 
+                _poll_count += 1
+                if _poll_count % 30 == 1:
+                    log.info(
+                        "Poll #%d: %d sockets ready, active_links=%d, transitions=%d",
+                        _poll_count, len(socks),
+                        len(self._builder._active_links), self._transition_count,
+                    )
+
+                # Drain ALL buffered messages per socket (not just one)
                 if ome_sub in socks:
-                    raw = await ome_sub.recv(zmq.NOBLOCK)
-                    await self._handle_ome_message(raw)
+                    while True:
+                        try:
+                            raw = await ome_sub.recv(zmq.NOBLOCK)
+                            await self._handle_ome_message(raw)
+                        except zmq.Again:
+                            break
 
                 if to_sub in socks:
-                    raw = await to_sub.recv(zmq.NOBLOCK)
-                    await self._handle_to_message(raw)
+                    while True:
+                        try:
+                            raw = await to_sub.recv(zmq.NOBLOCK)
+                            await self._handle_to_message(raw)
+                        except zmq.Again:
+                            break
 
                 # Check for manual recompute request from console
                 if self._console_state is not None and self._console_state.consume_recompute_request():
@@ -169,7 +190,9 @@ class LiveOrchestrator:
             cfg = get_platform_config()
             import os
             api_key = os.environ.get("NODAL_API_KEY", "")
-            url = f"http://{cfg.zmq_connect_host}:{cfg.vs_api_http_port}/api/v1/state"
+            # VS-API runs on the host — use per-service host override if available
+            vs_api_host = cfg.zmq_connect_host_for("vs-api")
+            url = f"http://{vs_api_host}:{cfg.vs_api_http_port}/api/v1/state"
             headers = {}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
@@ -200,7 +223,7 @@ class LiveOrchestrator:
                     elif resp.status_code == 401:
                         # Try fetching the API key from the token endpoint
                         try:
-                            token_url = f"http://{cfg.zmq_connect_host}:{cfg.vs_api_http_port}/api/v1/auth/token"
+                            token_url = f"http://{vs_api_host}:{cfg.vs_api_http_port}/api/v1/auth/token"
                             async with httpx.AsyncClient() as client:
                                 token_resp = await client.get(token_url, timeout=5.0)
                             if token_resp.status_code == 200:
@@ -221,20 +244,30 @@ class LiveOrchestrator:
         self._running = False
 
     async def _handle_ome_message(self, raw: bytes) -> None:
-        """Process one OME message."""
+        """Process one OME message.
+
+        Handles both wrapped format (from OME ZMQ direct: {timestamp_s, event_type, data: {...}})
+        and unwrapped format (from orchestrator re-publish: the model directly).
+        """
         try:
             topic, payload = decode_message(raw)
             data = json.loads(payload)
 
-            if topic == b"VisibilityEvent":
-                event = VisibilityEvent.model_validate(data)
+            # Unwrap if OME sends wrapped events (has "data" key with nested model)
+            inner = data.get("data", data) if isinstance(data, dict) and "event_type" in data else data
+
+            if topic == b"FullStateSnapshot":
+                await self._handle_full_state_snapshot(data)
+
+            elif topic == b"VisibilityEvent":
+                event = VisibilityEvent.model_validate(inner)
                 if self._current_sim_time is not None and event.sim_time != self._current_sim_time:
                     await self._check_transition(self._current_sim_time.isoformat())
                 self._current_sim_time = event.sim_time
                 self._builder.apply_link_event(event)
 
             elif topic == b"Snapshot":
-                snapshot = TimelinePositionSnapshot.model_validate(data)
+                snapshot = TimelinePositionSnapshot.model_validate(inner)
                 self._builder.apply_position_record(snapshot)
                 # Trigger transition check on sim_time change from Snapshots too
                 if self._current_sim_time is not None and snapshot.sim_time != self._current_sim_time:
@@ -242,7 +275,90 @@ class LiveOrchestrator:
                 self._current_sim_time = snapshot.sim_time
 
         except Exception as exc:
-            log.warning("OME message processing error: %s", exc)
+            log.warning("OME message processing error: %s", exc, exc_info=True)
+
+    async def _handle_full_state_snapshot(self, data: dict) -> None:
+        """Initialize link state from OME FullStateSnapshot (slow joiner catchup).
+
+        ZMQ Slow Joiner Problem
+        -----------------------
+        ZMQ PUB/SUB has a well-known "slow joiner" race: when a SUB socket
+        connects to a PUB, there is a brief window where messages published
+        by the PUB are lost because the SUB's subscription has not yet
+        propagated. In our architecture, the OME publishes VisibilityEvent
+        messages as a stream, and NodalPath subscribes to reconstruct link
+        state. If NodalPath starts (or restarts) after the OME has already
+        published the initial window of events, those events are gone -- the
+        SUB never receives them and NodalPath's link state is empty.
+
+        FullStateSnapshot solves this by providing a complete point-in-time
+        snapshot of all link states (ISL and ground). The OME publishes
+        FullStateSnapshot periodically (every 30 seconds) and at the start
+        of each simulation window. When NodalPath receives one, it
+        replaces its entire active_links set with the snapshot contents,
+        then triggers a transition check to compute and push forwarding
+        tables for the current topology.
+
+        Belt and Suspenders: VS-API Seed
+        ---------------------------------
+        In addition to FullStateSnapshot, the `_seed_from_vsapi()` method
+        (called at startup) fetches the current link state from the VS-API
+        HTTP endpoint. This is a second line of defense: if the first
+        FullStateSnapshot is delayed or the OME has not published one yet,
+        the VS-API seed provides the initial state. Both mechanisms write
+        to the same `_builder._active_links` dict, so whichever arrives
+        first populates the state and the other is a no-op (or a
+        refinement). The VS-API seed is best-effort (10 retries, then
+        gives up) because FullStateSnapshot is the authoritative source.
+
+        range_km Extraction
+        -------------------
+        The FullStateSnapshot includes `range_km` for each link pair.
+        This is extracted and stored in `_builder._active_links` (which
+        maps link pairs to their range in km) because NodalPath uses
+        range_km to compute accurate one-way light-propagation latency
+        for the MPLS forwarding model. Without range_km, the latency
+        computation would fall back to a default or zero, producing
+        incorrect tc netem delay values on the veth pairs. Storing
+        range_km at the link level (rather than fetching it later)
+        ensures the latency is available immediately when the forwarding
+        table is computed.
+        """
+        sim_time = data.get("sim_time", datetime.now(timezone.utc).isoformat())
+
+        link_count = 0
+        for state_key in ("isl_state", "gs_state"):
+            for pair_key, state in data.get(state_key, {}).items():
+                parts = pair_key.split(":")
+                if len(parts) != 2:
+                    continue
+                node_a, node_b = parts[0], parts[1]
+                # Ensure canonical ordering
+                if node_a > node_b:
+                    node_a, node_b = node_b, node_a
+                pair = (node_a, node_b)
+                visible = state.get("visible", False)
+                scheduled = state.get("scheduled", False)
+
+                range_km = state.get("range_km", 0.0)
+
+                if visible and scheduled:
+                    self._builder._active_links[pair] = range_km
+                    link_count += 1
+                else:
+                    self._builder._active_links.pop(pair, None)
+
+                self._builder._all_links[pair] = (visible, scheduled, range_km)
+
+        self._current_sim_time = datetime.fromisoformat(sim_time)
+
+        log.info(
+            "FullStateSnapshot: %d active links initialized at %s",
+            link_count, sim_time,
+        )
+
+        # Trigger transition check — computes initial paths and pushes tables
+        await self._check_transition(sim_time)
 
     async def _handle_to_message(self, raw: bytes) -> None:
         """Process one TO message — deviations + re-published OME events."""
@@ -296,7 +412,11 @@ class LiveOrchestrator:
             return
 
         snapshot = self._builder.build_snapshot(sim_time_iso)
-        entry = compute_almanac_entry(snapshot, self._prefix_map)
+        entry = compute_almanac_entry(
+            snapshot, self._prefix_map,
+            node_registry=self._node_registry,
+            interface_map=self._interface_map,
+        )
         self._store.store(entry)
         self._transition_count += 1
 
@@ -410,7 +530,11 @@ class LiveOrchestrator:
     async def _recompute(self, sim_time_iso: str) -> None:
         """Force recomputation at current topology state (used after deviation)."""
         snapshot = self._builder.build_snapshot(sim_time_iso)
-        entry = compute_almanac_entry(snapshot, self._prefix_map)
+        entry = compute_almanac_entry(
+            snapshot, self._prefix_map,
+            node_registry=self._node_registry,
+            interface_map=self._interface_map,
+        )
         self._store.store(entry)
 
         if self._console_state is not None:

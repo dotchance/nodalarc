@@ -16,3 +16,4 @@ bfdd=no
 fabricd=no
 vrrpd=no
 pathd=yes
+staticd=yes

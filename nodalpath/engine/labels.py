@@ -1,3 +1,55 @@
+"""SR-MPLS label allocation and forwarding table generation (RFC 8402).
+
+NodalPath implements centralized SR-TE: the ground segment (PCE) computes
+full explicit paths and builds label stacks at the ingress LER. This module
+handles label allocation and label stack assembly.
+
+Label Types (RFC 8402)
+======================
+
+**Node SIDs** — globally unique, one per node (satellite or ground station).
+Identify the node itself. Used as the bottom-of-stack label for egress
+delivery: when the egress node pops its node SID, the inner IP packet is
+delivered locally.
+
+**Adjacency SIDs** — per-interface, locally significant. Each ISL/ground
+interface on a node gets a unique adjacency SID that encodes "exit this
+node via this specific interface." Used for all transit hops in the label
+stack.
+
+Label Stack Assembly
+====================
+
+For a path: ingress → hop_B (via isl0) → hop_C (via isl2) → egress_D
+
+The ingress pushes:
+  [adj_SID_B_isl0, adj_SID_C_isl2, node_SID_D]
+
+- Transit hops pop their adjacency SID and forward out the encoded interface
+- The egress pops its node SID and delivers the IP packet locally
+- No SWAP entries at transit nodes — only POP
+- No per-path state at transit nodes — adjacency SIDs are fixed per interface
+
+This eliminates label conflicts: each node's adjacency SID appears at most
+once in any stack, and the FRR rule is always POP → forward out one specific
+interface. Multiple LSPs through the same node use different adjacency SIDs
+if they exit via different interfaces.
+
+FRR Configuration (per node)
+=============================
+
+Each node gets:
+- One ``mpls lsp <adj_SID> <nexthop> implicit-null`` per ISL interface
+  (POP adjacency SID → forward out that interface)
+- One ``mpls lsp <node_SID> <own_loopback> implicit-null``
+  (POP node SID → deliver locally)
+- LER ingress rules via ``ip route <prefix> <nexthop> label <stack>``
+  (push full label stack at ingress)
+
+Total FRR rules per node: ~4 (3 ISL adj-SIDs + 1 node SID) regardless
+of how many LSPs traverse the node.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -8,10 +60,9 @@ from nodalpath.models.almanac import LabelBinding, IngressRule
 
 log = logging.getLogger(__name__)
 
-# SRGB range for NodalPath label allocation
-# Uses the same range as IS-IS SR: base 16000
-# Satellite SIDs: base + (plane * sats_per_plane + slot) + 1
-# Ground station SIDs: gs_base + gs_index
+
+# --- SID range accessors ---
+
 def _srgb_base() -> int:
     from nodalpath.platform import get_nodalpath_config
     return get_nodalpath_config().satellite_sid_range_start
@@ -20,6 +71,12 @@ def _gs_sid_base() -> int:
     from nodalpath.platform import get_nodalpath_config
     return get_nodalpath_config().ground_station_sid_range_start
 
+def _adj_sid_base() -> int:
+    from nodalpath.platform import get_nodalpath_config
+    return get_nodalpath_config().adjacency_sid_range_start
+
+
+# --- Node SID computation (unchanged from original) ---
 
 def compute_sid(
     node_id: str,
@@ -46,77 +103,139 @@ def compute_sid(
         raise ValueError(f"Unknown node_type: {node_type}")
 
 
-def path_to_label_stack(path: ComputedPath) -> list[int]:
-    """Extract the MPLS label stack for a computed path.
+# --- Adjacency SID computation ---
 
-    The label stack is the sequence of SIDs for nodes AFTER the ingress LER.
-    The ingress LER pushes this stack. Each transit LSR pops the top label
-    and forwards based on the next label. The penultimate hop pops the last
-    label (PHP) and the egress node receives native IP.
+# Maximum interfaces per node (isl0, isl1, isl2, gnd0, terr0, ...)
+MAX_INTERFACES_PER_NODE = 8
+
+
+def compute_adjacency_sid(node_index: int, iface_index: int) -> int:
+    """Compute the adjacency SID for a specific interface on a specific node.
+
+    ADJ_SID = ADJ_SID_BASE + (node_index * MAX_INTERFACES_PER_NODE + iface_index)
     """
-    return [hop.sid for hop in path.hops[1:]]
+    return _adj_sid_base() + (node_index * MAX_INTERFACES_PER_NODE + iface_index)
 
+
+# Well-known interface name → index mapping
+_IFACE_INDEX = {"isl0": 0, "isl1": 1, "isl2": 2, "isl3": 3, "gnd0": 4, "terr0": 5, "terr1": 6}
+
+
+def build_adjacency_sid_map(
+    node_registry: dict,
+    interface_map: dict[tuple[str, str], tuple[str, str]],
+) -> dict[tuple[str, str], int]:
+    """Build a map of (node_id, interface_name) → adjacency SID.
+
+    Scans all interfaces referenced in the interface_map to assign
+    deterministic adjacency SIDs.
+    """
+    # Assign a stable node index to each node (sorted for determinism)
+    node_ids = sorted(node_registry.keys())
+    node_index_map = {nid: idx for idx, nid in enumerate(node_ids)}
+
+    adj_map: dict[tuple[str, str], int] = {}
+    for (node_a, node_b), (iface_a, iface_b) in interface_map.items():
+        for node_id, iface_name in [(node_a, iface_a), (node_b, iface_b)]:
+            key = (node_id, iface_name)
+            if key in adj_map:
+                continue
+            node_idx = node_index_map.get(node_id)
+            if node_idx is None:
+                continue
+            iface_idx = _IFACE_INDEX.get(iface_name)
+            if iface_idx is None:
+                log.warning("Unknown interface name %s on %s, skipping adj-SID", iface_name, node_id)
+                continue
+            adj_map[key] = compute_adjacency_sid(node_idx, iface_idx)
+
+    return adj_map
+
+
+# --- Label stack assembly ---
+
+def path_to_label_stack(
+    path: ComputedPath,
+    adj_sid_map: dict[tuple[str, str], int],
+) -> list[int]:
+    """Build the SR-TE label stack for a computed path.
+
+    Returns [adj_SID_hop1, adj_SID_hop2, ..., node_SID_egress].
+
+    Transit hops use adjacency SIDs (encoding the exit interface).
+    The egress (last hop) uses its node SID (for local delivery).
+    The ingress (first hop) is NOT in the stack — it pushes the stack.
+    """
+    if len(path.hops) < 2:
+        return []
+
+    stack: list[int] = []
+    for i, hop in enumerate(path.hops[1:], start=1):
+        is_egress = (i == len(path.hops) - 1)
+        if is_egress:
+            # Bottom of stack: egress node SID (deliver locally)
+            stack.append(hop.sid)
+        else:
+            # Transit: adjacency SID for this hop's out_interface
+            adj_key = (hop.node_id, hop.out_interface)
+            adj_sid = adj_sid_map.get(adj_key)
+            if adj_sid is None:
+                log.warning(
+                    "No adjacency SID for %s:%s in path %s, falling back to node SID",
+                    hop.node_id, hop.out_interface, path.path_id,
+                )
+                stack.append(hop.sid)
+            else:
+                stack.append(adj_sid)
+
+    return stack
+
+
+# --- LSR binding generation ---
 
 def build_lsr_bindings(
     node_id: str,
     paths: list[ComputedPath],
     graph: TopologyGraph,
+    adj_sid_map: dict[tuple[str, str], int] | None = None,
 ) -> list[LabelBinding]:
-    """Build MPLS LSR label bindings for a transit node.
+    """Build MPLS POP bindings for a node's adjacency SIDs and node SID.
 
-    For each path that transits this node, create a LabelBinding:
-    - in_label: this node's SID
-    - action: "swap" if not penultimate hop, "pop" if penultimate hop
-    - out_label: next hop's SID (None if action is "pop")
-    - out_interface: the interface toward the next hop
+    In the SR-TE label stack model, transit nodes have NO per-path state.
+    Each node needs:
+    - One POP per adjacency SID (one per interface): pop and forward out
+      the encoded interface
+    - One POP for its node SID: pop and deliver locally (egress)
+
+    These are FIXED regardless of how many LSPs traverse the node.
     """
     bindings: list[LabelBinding] = []
-    seen_labels: set[tuple[int, str]] = set()  # (in_label, path_id) dedup
-
     node_sid = graph.node_sids.get(node_id)
-    if node_sid is None:
-        return bindings
 
-    for path in paths:
-        # Find this node in the path's hops (not as first or last hop for transit)
-        for i, hop in enumerate(path.hops):
-            if hop.node_id != node_id:
+    # Node SID POP (egress: deliver locally via loopback)
+    if node_sid is not None:
+        bindings.append(LabelBinding(
+            in_label=node_sid,
+            action="pop",
+            out_label=None,
+            out_interface="lo",
+        ))
+
+    # Adjacency SID POPs (transit: forward out the specific interface)
+    if adj_sid_map is not None:
+        seen_adj: set[int] = set()
+        for (nid, iface_name), adj_sid in sorted(adj_sid_map.items()):
+            if nid != node_id:
                 continue
-            # Skip if this is the first hop (ingress LER) or last hop (egress)
-            if i == 0 or i == len(path.hops) - 1:
+            if adj_sid in seen_adj:
                 continue
-
-            # This node is a transit node at position i
-            in_label = hop.sid
-            next_hop = path.hops[i + 1]
-            out_interface = hop.out_interface
-
-            # Dedup key
-            dedup_key = (in_label, path.path_id)
-            if dedup_key in seen_labels:
-                log.warning(
-                    "Duplicate in_label %d for node %s in path %s",
-                    in_label, node_id, path.path_id,
-                )
-                continue
-            seen_labels.add(dedup_key)
-
-            # Penultimate hop: next hop is the last hop → action is "pop"
-            is_penultimate = (i + 1 == len(path.hops) - 1)
-            if is_penultimate:
-                bindings.append(LabelBinding(
-                    in_label=in_label,
-                    action="pop",
-                    out_label=None,
-                    out_interface=out_interface or "",
-                ))
-            else:
-                bindings.append(LabelBinding(
-                    in_label=in_label,
-                    action="swap",
-                    out_label=next_hop.sid,
-                    out_interface=out_interface or "",
-                ))
+            seen_adj.add(adj_sid)
+            bindings.append(LabelBinding(
+                in_label=adj_sid,
+                action="pop",
+                out_label=None,
+                out_interface=iface_name,
+            ))
 
     return bindings
 
@@ -126,6 +245,7 @@ def build_ler_ingress_rules(
     paths: list[ComputedPath],
     graph: TopologyGraph,
     prefix_map: dict[str, list[str]],
+    adj_sid_map: dict[tuple[str, str], int] | None = None,
 ) -> list[IngressRule]:
     """Build LER ingress rules for any node that is a path source.
 
@@ -165,12 +285,20 @@ def build_ler_ingress_rules(
     rules: list[IngressRule] = []
     for pfx, candidates in prefix_candidates.items():
         best_node, best_path = min(candidates, key=lambda c: c[1].total_latency_ms)
-        push_label = best_path.label_stack[0]
         out_interface = best_path.hops[0].out_interface or ""
+
+        # Build SR-TE label stack using adjacency SIDs if available
+        if adj_sid_map is not None:
+            sr_stack = path_to_label_stack(best_path, adj_sid_map)
+        else:
+            sr_stack = list(best_path.label_stack)
+
+        push_label = sr_stack[0] if sr_stack else 0
         rules.append(IngressRule(
             dst_prefix=pfx,
             push_label=push_label,
             out_interface=out_interface,
+            label_stack=sr_stack,
         ))
 
     return rules

@@ -329,14 +329,22 @@ class ContinuousTracer:
         import httpx
 
         from nodalarc.platform import get_platform_config
-        np_port = get_platform_config().nodalpath_console_http_port
+        cfg = get_platform_config()
+        # NodalPath may run in a K8s container (NodePort 31100) or on the host (port 3100)
+        np_host = cfg.zmq_connect_host_for("nodalpath")
+        if np_host == cfg.zmq_connect_host:
+            # Fallback to global host → NodalPath is on the host or via NodePort
+            # Try NodePort first (31100), fall back to direct port (3100)
+            np_port = 31100
+        else:
+            np_port = cfg.nodalpath_console_http_port
 
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 fwd_resp, rev_resp = await asyncio.gather(
-                    client.get(f"http://127.0.0.1:{np_port}/api/v1/path",
+                    client.get(f"http://{np_host}:{np_port}/api/v1/path",
                                params={"src": self._src, "dst": self._dst}),
-                    client.get(f"http://127.0.0.1:{np_port}/api/v1/path",
+                    client.get(f"http://{np_host}:{np_port}/api/v1/path",
                                params={"src": self._dst, "dst": self._src}),
                 )
         except Exception as exc:
@@ -472,14 +480,26 @@ class ContinuousTracer:
 
     @staticmethod
     def _cspf_hops(data: dict) -> list[PathHop]:
-        """Build PathHop list from CSPF response."""
+        """Build PathHop list from CSPF response.
+
+        Computes cumulative rtt_ms from per-hop latency_to_next_ms so the
+        frontend can display per-hop timing. The CSPF response provides
+        one-way latency per hop; cumulative values give increasing RTT
+        from source to each hop (one-way, not round-trip).
+        """
         raw_hops = data.get("hops", [])
         result = []
+        cumulative_ms = 0.0
         for h in raw_hops:
             if isinstance(h, dict):
-                result.append(PathHop.model_validate(h))
+                # Override rtt_ms with cumulative latency before validation
+                # (PathHop is frozen, so we set it during construction)
+                h_copy = dict(h)
+                h_copy["rtt_ms"] = cumulative_ms
+                result.append(PathHop.model_validate(h_copy))
+                cumulative_ms += h.get("latency_to_next_ms") or 0.0
             elif isinstance(h, str):
-                result.append(PathHop(node_id=h, node_type="satellite"))
+                result.append(PathHop(node_id=h, node_type="satellite", rtt_ms=cumulative_ms))
         return result
 
     @staticmethod

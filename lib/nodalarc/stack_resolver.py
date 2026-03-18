@@ -76,7 +76,7 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
 
 def _resolve_nodalpath() -> ResolvedStack:
     return ResolvedStack(
-        daemons=[],
+        daemons=["zebra", "staticd"],
         template_files=[],
         template_variables={"grpc_port": 50051},
         image="nodalpath-fwd:latest",
@@ -88,6 +88,7 @@ def _resolve_nodalpath() -> ResolvedStack:
         env=[
             {"name": "NODE_ID", "value": "{{ node_id }}"},
             {"name": "GRPC_PORT", "value": "50051"},
+            {"name": "LOOPBACK_IPV4", "value": "{{ ipv4_loopback }}"},
         ],
         security_context_capabilities=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"],
         reconfigure_command=None,

@@ -4,7 +4,12 @@ import time
 
 from nodalpath.engine.graph import build_graph
 from nodalpath.engine.pathcomp import compute_all_paths
-from nodalpath.engine.labels import build_lsr_bindings, build_ler_ingress_rules
+from nodalpath.engine.labels import (
+    build_adjacency_sid_map,
+    build_lsr_bindings,
+    build_ler_ingress_rules,
+    path_to_label_stack,
+)
 from nodalpath.models.topology import TopologySnapshot
 from nodalpath.models.almanac import AlmanacEntry, ForwardingTable
 
@@ -13,14 +18,18 @@ def compute_almanac_entry(
     snapshot: TopologySnapshot,
     prefix_map: dict[str, list[str]],
     topology_state_id: str | None = None,
+    node_registry: dict | None = None,
+    interface_map: dict[tuple[str, str], tuple[str, str]] | None = None,
 ) -> AlmanacEntry:
     """Compute a complete almanac entry for a topology snapshot.
 
     This is the top-level function that orchestrates:
     1. Build the topology graph from the snapshot
     2. Compute all ground-station-to-ground-station paths
-    3. For each node, build its forwarding table (LSR bindings + LER rules)
-    4. Package everything into an AlmanacEntry
+    3. Build adjacency SID map for SR-TE label stacks
+    4. Assign label stacks to computed paths
+    5. For each node, build its forwarding table (LSR bindings + LER rules)
+    6. Package everything into an AlmanacEntry
     """
     t0 = time.monotonic()
 
@@ -30,16 +39,27 @@ def compute_almanac_entry(
     # 2. Compute all paths (any node to any node with a prefix)
     paths = compute_all_paths(graph, prefix_map)
 
-    # 3. Generate topology_state_id if not provided
+    # 3. Build adjacency SID map (if node_registry + interface_map provided)
+    adj_sid_map: dict[tuple[str, str], int] | None = None
+    if node_registry is not None and interface_map is not None:
+        adj_sid_map = build_adjacency_sid_map(node_registry, interface_map)
+
+    # 4. The ComputedPath.label_stack is set during path computation
+    # (node SIDs by default). The SR-TE adjacency SID stack is built
+    # per-path inside build_ler_ingress_rules using adj_sid_map.
+
+    # 5. Generate topology_state_id if not provided
     if topology_state_id is None:
         compact = snapshot.sim_time.replace("-", "").replace(":", "")
         topology_state_id = f"ts-{compact}"
 
-    # 4. Build forwarding tables for every node
+    # 6. Build forwarding tables for every node
     forwarding_tables: list[ForwardingTable] = []
     for node_id in graph.adjacency:
-        lsr_bindings = build_lsr_bindings(node_id, paths, graph)
-        ler_ingress_rules = build_ler_ingress_rules(node_id, paths, graph, prefix_map)
+        lsr_bindings = build_lsr_bindings(node_id, paths, graph, adj_sid_map)
+        ler_ingress_rules = build_ler_ingress_rules(
+            node_id, paths, graph, prefix_map, adj_sid_map,
+        )
 
         forwarding_tables.append(ForwardingTable(
             node_id=node_id,

@@ -25,6 +25,7 @@ message LabelEntry {
   string out_interface = 4;
   uint32 backup_out_label = 5;    // 0 if no backup
   string backup_out_interface = 6; // empty if no backup
+  string nexthop_ip = 7;          // peer loopback IP for FRR mpls lsp nexthop
 }
 
 enum Action {
@@ -35,10 +36,12 @@ enum Action {
 
 message IngressEntry {
   string dst_prefix = 1;          // e.g., "172.16.2.0/24"
-  uint32 push_label = 2;
+  uint32 push_label = 2;          // first label (backward compat)
   string out_interface = 3;
   uint32 backup_push_label = 4;   // 0 if no backup
   string backup_out_interface = 5; // empty if no backup
+  string nexthop_ip = 6;          // peer loopback IP for FRR ip route nexthop
+  repeated uint32 label_stack = 7; // full SR-TE label stack [adj1, adj2, ..., node_egress]
 }
 
 message ForwardingTableUpdate {

@@ -46,6 +46,19 @@ nodalpath:
   # Example: first ground station (index 0) gets SID 24000.
   ground_station_sid_range_start: 24000
 
+  # First MPLS label allocated to adjacency SIDs (SR-MPLS RFC 8402).
+  # Each ISL/ground interface on each node gets a unique adjacency SID
+  # that encodes "exit this node via this specific interface." Used in
+  # label stacks for transit hops — the ingress LER pushes a stack of
+  # adjacency SIDs (one per transit hop) with the egress node SID at
+  # the bottom.
+  #
+  # Adjacency SID formula:
+  #   adjacency_sid_range_start + (node_index * max_interfaces_per_node + iface_index)
+  #
+  # Must not overlap with satellite or ground station SID ranges.
+  adjacency_sid_range_start: 30000
+
   # ── gRPC Forwarding Table Push ──────────────────────────────────────
   #
   # Controls how NodalPath pushes computed forwarding tables to the

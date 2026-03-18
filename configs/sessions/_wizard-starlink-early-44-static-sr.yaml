@@ -1,0 +1,21 @@
+session:
+  name: starlink-early-44-static-sr
+constellation: configs/constellations/starlink-early-44.yaml
+ground_stations: configs/ground-stations/sets/global.yaml
+routing:
+  protocol: static
+  extensions:
+  - sr
+time:
+  mode: discrete-event
+  step_seconds: 1
+traffic_flows:
+- flow_id: ashburn-to-frankfurt
+  src: gs-ashburn
+  dst: gs-frankfurt
+  protocol: udp
+  bandwidth_kbps: 100
+  probe_type: continuous
+convergence:
+  stability_period_s: 2.0
+  timeout_s: 30.0

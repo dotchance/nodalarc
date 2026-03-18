@@ -1,2 +1,3 @@
 grpcio==1.78.0
 protobuf>=6.31.1,<7
+pyroute2>=0.7.12

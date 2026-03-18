@@ -245,6 +245,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         # Generate daemons file
         if daemon_list:
             all_frr_daemons = [
+                "mgmtd",  # FRR 10.x config management daemon (must be first)
                 "zebra", "bgpd", "ospfd", "ospf6d", "ripd", "ripngd",
                 "isisd", "pimd", "ldpd", "nhrpd", "eigrpd", "babeld",
                 "sharpd", "pbrd", "bfdd", "fabricd", "vrrpd", "pathd",

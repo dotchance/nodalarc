@@ -128,87 +128,136 @@ def _iface_up(iface: str) -> bool:
 
 
 
-def _run_cmd(cmd: list[str]) -> None:
-    """Run a shell command. Raises subprocess.CalledProcessError on failure."""
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+from pyroute2 import IPRoute
+
+# Linux AF_MPLS constant (not in Python's socket module)
+AF_MPLS = 28
+
+# Policy routing table for NodalPath forwarding state, isolated from FRR/main table.
+# Clean teardown = flush this table. No interference with IS-IS/OSPF in other modes.
+POLICY_TABLE = int(os.environ.get("NODALPATH_TABLE", "100"))
+
+# Shared IPRoute handle (created once, reused).
+_ipr: IPRoute | None = None
 
 
-def _vtysh(*commands: str) -> None:
-    """Execute one or more vtysh commands. Raises on failure."""
-    cmd = ["vtysh"]
-    for c in commands:
-        cmd += ["-c", c]
-    _run_cmd(cmd)
+def _get_ipr() -> IPRoute:
+    global _ipr
+    if _ipr is None:
+        _ipr = IPRoute()
+    return _ipr
 
 
-LOOPBACK_IPV4 = os.environ.get("LOOPBACK_IPV4", "")
+def _ensure_policy_rule() -> None:
+    """Install ip rule so all traffic uses the NodalPath policy table.
+
+    ``ip rule add from all lookup <table> pref 100``
+
+    This makes the kernel look up the NodalPath table (with MPLS encap
+    routes) before the main table. Required on EVERY node, not just the
+    source — return traffic also needs the policy table for routing.
+    """
+    ipr = _get_ipr()
+    # Check if rule already exists
+    rules = ipr.get_rules(family=2)  # AF_INET
+    for rule in rules:
+        for attr_name, attr_val in rule["attrs"]:
+            if attr_name == "FRA_TABLE" and attr_val == POLICY_TABLE:
+                return  # Already installed
+    try:
+        ipr.rule("add", table=POLICY_TABLE, priority=100)
+        log.info("Installed ip rule: from all lookup %d pref 100", POLICY_TABLE)
+    except Exception as exc:
+        log.warning("Failed to install ip rule: %s", exc)
+
+
+def _iface_index(iface: str) -> int:
+    """Get the kernel interface index for a named interface."""
+    ipr = _get_ipr()
+    links = ipr.link_lookup(ifname=iface)
+    if not links:
+        raise FileNotFoundError(f"Interface {iface} not found")
+    return links[0]
 
 
 def _install_lsr(entry: pb2.LabelEntry) -> None:
-    """Install an LSR entry via FRR vtysh.
+    """Install an LSR entry via netlink (pyroute2).
 
-    POP entries configure ``mpls lsp <label> <nexthop> implicit-null``
-    which pops the top MPLS label and forwards the remaining packet
-    (still MPLS if label stack has more labels, or IP if bottom-of-stack)
-    to the nexthop. FRR handles nexthop resolution through zebra.
+    POP: pop the top MPLS label and forward out the specified interface.
+    Uses oif (output interface index) directly — no IP nexthop resolution
+    needed. This is the Spacetime pattern: the satellite management agent
+    programs the kernel FIB directly, specifying exact interface indices.
     """
-    nexthop = entry.nexthop_ip
-    if not nexthop:
-        # Fallback: node SID POP uses own loopback
-        if entry.out_interface == "lo":
-            nexthop = LOOPBACK_IPV4
-        else:
-            log.warning("No nexthop_ip for LSR in_label=%d, skipping", entry.in_label)
-            return
+    ipr = _get_ipr()
+    oif = _iface_index(entry.out_interface)
 
     if entry.action == pb2.Action.POP:
-        _vtysh("configure terminal",
-               f"mpls lsp {entry.in_label} {nexthop} implicit-null",
-               "end")
+        # MPLS POP: pop top label, forward remaining packet out oif.
+        # No newdst = pure POP (remove label header, deliver inner packet).
+        # If remaining labels exist in the stack, the kernel processes the
+        # next label. If bottom-of-stack, the inner IP packet is forwarded.
+        ipr.route("replace",
+                   family=AF_MPLS,
+                   dst={"label": entry.in_label, "bos": 1},
+                   oif=oif)
+
     elif entry.action == pb2.Action.SWAP:
-        _vtysh("configure terminal",
-               f"mpls lsp {entry.in_label} {nexthop} {entry.out_label}",
-               "end")
+        ipr.route("replace",
+                   family=AF_MPLS,
+                   dst={"label": entry.in_label, "bos": 1},
+                   oif=oif,
+                   newdst={"label": entry.out_label, "bos": 1})
 
 
 def _install_ler(entry: pb2.IngressEntry) -> None:
-    """Install an LER ingress entry via FRR vtysh.
+    """Install an LER ingress entry via netlink (pyroute2).
 
-    Uses ``ip route <prefix> <nexthop> label <stack>`` where <stack>
-    is the full SR-TE label stack (adjacency SIDs + egress node SID).
+    Pushes the full SR-TE label stack onto IP packets matching the
+    destination prefix and sends out the specified interface.
+    Uses MPLS encap with explicit oif — no nexthop resolution.
     """
-    nexthop = entry.nexthop_ip
-    if not nexthop:
-        log.warning("No nexthop_ip for LER dst=%s, skipping", entry.dst_prefix)
-        return
+    ipr = _get_ipr()
+    oif = _iface_index(entry.out_interface)
 
-    # Use the full label stack if available, otherwise single label
+    # Build label stack from proto field, fallback to single label
     if entry.label_stack:
-        label_str = "/".join(str(l) for l in entry.label_stack)
+        labels = list(entry.label_stack)
     else:
-        label_str = str(entry.push_label)
+        labels = [entry.push_label]
 
-    _vtysh("configure terminal",
-           f"ip route {entry.dst_prefix} {nexthop} label {label_str}",
-           "end")
+    # Parse prefix
+    dst, prefix_len = entry.dst_prefix.split("/")
+
+    ipr.route("replace",
+               table=POLICY_TABLE,
+               dst=dst,
+               dst_len=int(prefix_len),
+               oif=oif,
+               encap={"type": "mpls", "labels": labels})
 
 
 def _remove_lsr(in_label: int) -> None:
-    """Remove an LSR entry via FRR vtysh."""
-    _vtysh("configure terminal",
-           f"no mpls lsp {in_label}",
-           "end")
+    """Remove an LSR entry via netlink."""
+    ipr = _get_ipr()
+    try:
+        ipr.route("del",
+                   family=AF_MPLS,
+                   dst={"label": in_label, "bos": 1})
+    except Exception:
+        pass  # entry may already be gone
 
 
 def _remove_ler(entry) -> None:
-    """Remove an LER entry via FRR vtysh."""
-    nexthop = entry.nexthop_ip if hasattr(entry, "nexthop_ip") else ""
-    if nexthop:
-        _vtysh("configure terminal",
-               f"no ip route {entry.dst_prefix} {nexthop}",
-               "end")
-    else:
-        log.warning("Cannot remove LER %s without nexthop_ip", entry.dst_prefix)
+    """Remove an LER entry via netlink."""
+    ipr = _get_ipr()
+    try:
+        dst, prefix_len = entry.dst_prefix.split("/")
+        ipr.route("del",
+                   table=POLICY_TABLE,
+                   dst=dst,
+                   dst_len=int(prefix_len))
+    except Exception:
+        pass
 
 
 class ForwardingServiceImpl(ForwardingServiceServicer):
@@ -383,6 +432,9 @@ def _retry_pending() -> None:
 
 
 def serve() -> None:
+    # Install ip rule so all traffic uses the NodalPath policy table
+    _ensure_policy_rule()
+
     # Start background retry thread for skipped-down entries
     threading.Thread(target=_retry_pending, daemon=True).start()
 

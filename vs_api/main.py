@@ -1653,9 +1653,8 @@ def wizard_extension_rules() -> dict:
     """Return protocol-extension compatibility rules for client-side validation."""
     return {
         "protocols": {
-            "ospf": {"extensions": ["te", "mpls"], "constraints": {"mpls": ["te"]}},
+            "ospf": {"extensions": ["sr", "te", "mpls"], "constraints": {"mpls": ["te"]}},
             "isis": {"extensions": ["sr", "te", "mpls"], "constraints": {"mpls": ["te"]}},
-            "static": {"extensions": ["sr"], "constraints": {}},
             "nodalpath": {"extensions": [], "constraints": {}},
         },
         "area_strategies": ["flat", "stripe", "per-plane"],

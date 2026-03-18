@@ -41,7 +41,7 @@ class TestGenerateSessionYaml:
         ("isis", ["sr"]),
         ("isis", ["te"]),
         ("isis", ["te", "mpls"]),
-        ("static", ["sr"]),
+        ("ospf", ["sr"]),
         ("nodalpath", []),
     ])
     def test_generate_and_roundtrip(self, constellation, protocol, extensions):
@@ -79,8 +79,8 @@ class TestGenerateInvalid:
             generate_session_yaml("nonexistent", "ospf", [])
 
     def test_invalid_combo(self):
-        with pytest.raises(ValueError, match="SR extension requires"):
-            generate_session_yaml("iridium-66", "ospf", ["sr"])
+        with pytest.raises(ValueError, match="does not accept extensions"):
+            generate_session_yaml("iridium-66", "nodalpath", ["sr"])
 
 
 class TestNodalPathNoAreaAssignment:

@@ -73,7 +73,7 @@ def generate_session_yaml(
 
     # Build area assignment
     area_assignment: dict[str, Any] | None = None
-    if protocol not in ("nodalpath", "static"):
+    if protocol != "nodalpath":
         area_assignment = {"strategy": area_strategy}
         if area_strategy == "stripe":
             area_assignment["planes_per_stripe"] = 2

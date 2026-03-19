@@ -175,7 +175,6 @@ class TestDispatcherOverrideIntegration:
             override_lock=lock,
             
             
-            max_idle_timeouts=1,
         )
         dispatcher.run()
 
@@ -207,7 +206,6 @@ class TestDispatcherOverrideIntegration:
             override_lock=lock,
             
             
-            max_idle_timeouts=1,
         )
         dispatcher.run()
 
@@ -236,7 +234,6 @@ class TestDispatcherOverrideIntegration:
             override_lock=lock,
             
             
-            max_idle_timeouts=1,
         )
 
         # Remove override before second event processes
@@ -277,7 +274,6 @@ class TestDispatcherOverrideIntegration:
             override_lock=lock,
             
             
-            max_idle_timeouts=1,
         )
 
         # Clear all overrides before running

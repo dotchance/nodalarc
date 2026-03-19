@@ -62,9 +62,6 @@ def _make_dispatcher(interface_map, bandwidth_map):
         bandwidth_map=bandwidth_map,
         override_set=set(),
         override_lock=threading.Lock(),
-        
-        
-        max_idle_timeouts=1,
     )
 
 
@@ -104,13 +101,13 @@ class TestGSHandoff:
         dispatcher._process_batch([
             _snap_record(0, positions),
             _vis_record(0, "gs-test", "sat-P00S00", True, True, 40),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
         assert len(_gs_links(dispatcher._active_links)) == 1
 
         # Terminal deallocated (scheduled=False)
         dispatcher._process_batch([
             _vis_record(3, "gs-test", "sat-P00S00", True, False, 20),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
 
         assert len(_gs_links(dispatcher._active_links)) == 0
 
@@ -128,12 +125,12 @@ class TestGSHandoff:
         dispatcher._process_batch([
             _snap_record(0, positions),
             _vis_record(0, "gs-test", "sat-P00S00", True, True, 40),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
         pub_sock.reset_mock()
 
         dispatcher._process_batch([
             _vis_record(3, "gs-test", "sat-P00S00", True, False, 20),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
 
         events = _decode_events(pub_sock)
         downs = [d for t, d in events if t == TOPIC_LINK_DOWN]
@@ -156,12 +153,12 @@ class TestGSHandoff:
         dispatcher._process_batch([
             _snap_record(0, positions),
             _vis_record(0, "sat-P00S00", "sat-P00S01", True, True),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
         assert len(dispatcher._active_links) == 1
 
         dispatcher._process_batch([
             _vis_record(3, "sat-P00S00", "sat-P00S01", True, False),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
 
         # ISL must still be active
         assert len(dispatcher._active_links) == 1
@@ -184,7 +181,7 @@ class TestGSHandoff:
         # Initial snapshot
         dispatcher._process_batch([
             _snap_record(0, positions),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
 
         # Sequential handoffs: each satellite takes over from the previous
         for i in range(n_sats):
@@ -200,7 +197,7 @@ class TestGSHandoff:
                 float((i + 1) * 10), gs, sat_ids[i],
                 visible=True, scheduled=True, elevation=60.0,
             ))
-            dispatcher._process_batch(batch, pub_sock, None, MagicMock())
+            dispatcher._process_batch(batch, pub_sock, MagicMock())
 
         # Exactly 1 GS link active (the last scheduled satellite)
         gs_active = _gs_links(dispatcher._active_links)
@@ -222,13 +219,13 @@ class TestGSHandoff:
         dispatcher._process_batch([
             _snap_record(0, positions),
             _vis_record(0, "gs-test", "sat-P00S00", True, True, 40),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
         assert len(_gs_links(dispatcher._active_links)) == 1
 
         # Satellite deallocated, nothing replaces it
         dispatcher._process_batch([
             _vis_record(10, "gs-test", "sat-P00S00", True, False, 10),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
 
         assert len(_gs_links(dispatcher._active_links)) == 0
 
@@ -259,7 +256,7 @@ class TestGSHandoff:
             _snap_record(0, positions),
             _vis_record(0, gs_a, sat_a1, True, True, 40),
             _vis_record(0, gs_b, sat_b1, True, True, 40),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
         assert len(_gs_links(dispatcher._active_links)) == 2
 
         # Both handoff simultaneously
@@ -269,7 +266,7 @@ class TestGSHandoff:
             _vis_record(10, gs_a, sat_a2, True, True, 60),
             _vis_record(10, gs_b, sat_b1, True, False, 15),
             _vis_record(10, gs_b, sat_b2, True, True, 60),
-        ], pub_sock, None, MagicMock())
+        ], pub_sock, MagicMock())
 
         gs_active = _gs_links(dispatcher._active_links)
         assert len(gs_active) == 2, (

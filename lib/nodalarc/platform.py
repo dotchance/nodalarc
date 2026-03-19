@@ -120,6 +120,11 @@ class PlatformConfig(BaseModel):
         return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_events_port}"
 
     @property
+    def scheduler_events_hostname(self) -> str:
+        """Hostname for headless Scheduler events Service (PUB/SUB fan-in)."""
+        return self.zmq_connect_host_for("scheduler-events")
+
+    @property
     def mi_events_bind(self) -> str:
         return f"tcp://{self.zmq_bind_host}:{self.zmq_mi_events_port}"
 

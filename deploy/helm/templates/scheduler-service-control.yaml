@@ -1,7 +1,11 @@
+# ClusterIP Service for Scheduler REQ/REP control ports.
+# Single VIP — correct for REQ/REP sockets (one endpoint per request).
+# Port 5564: scenario injection (na-scenario → Scheduler)
+# Port 5566: playback control (VS-API → Scheduler)
 apiVersion: v1
 kind: Service
 metadata:
-  name: nodalarc-scheduler
+  name: nodalarc-scheduler-control
   namespace: {{ .Values.namespace }}
   labels:
     app: nodalarc-scheduler
@@ -9,10 +13,6 @@ spec:
   selector:
     app: nodalarc-scheduler
   ports:
-    - name: to-events
-      port: 5561
-      targetPort: 5561
-      protocol: TCP
     - name: scenario-inject
       port: 5564
       targetPort: 5564

@@ -1,11 +1,10 @@
 session:
-  name: starlink-early-44-isis-sr
+  name: starlink-early-44-isis-plain
 constellation: configs/constellations/starlink-early-44.yaml
 ground_stations: configs/ground-stations/sets/global.yaml
 routing:
   protocol: isis
-  extensions:
-  - sr
+  extensions: []
   area_assignment:
     strategy: flat
     gs_area_id: '49.0001'

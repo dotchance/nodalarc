@@ -12,6 +12,3 @@ traffic_flows:
     protocol: udp
     bandwidth_kbps: 100
     probe_type: continuous
-convergence:
-  stability_period_s: 2.0
-  timeout_s: 30.0

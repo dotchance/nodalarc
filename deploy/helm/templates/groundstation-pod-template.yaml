@@ -24,6 +24,7 @@ spec:
         limits:
           memory: {{ $.Values.groundStation.memoryLimit }}
           cpu: {{ $.Values.groundStation.cpuLimit }}
+{{- if $.Values.probeEnabled }}
     - name: probe
       image: {{ $.Values.images.probe }}
       imagePullPolicy: {{ $.Values.imagePullPolicy }}
@@ -38,6 +39,7 @@ spec:
         limits:
           memory: 64Mi
           cpu: 100m
+{{- end }}
 {{- if $.Values.sidecar }}
     - name: {{ $.Values.sidecar.image | replace ":" "-" | lower }}
       image: {{ $.Values.sidecar.image }}

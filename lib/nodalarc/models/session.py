@@ -92,11 +92,24 @@ class TrafficFlowConfig(BaseModel):
 
 
 class ConvergenceConfig(BaseModel):
-    """Convergence detection settings."""
+    """Convergence detection settings for MI probe measurement."""
 
     stability_period_s: float = 2.0
     timeout_s: float = 30.0
     probe_interval_ms: int = 100
+
+
+class MiConfig(BaseModel):
+    """Measurement Infrastructure configuration. Disabled by default.
+
+    When enabled, MI runs protocol adapters, probe daemons, and a
+    convergence gate for measuring routing convergence after link events.
+    When disabled (default), no MI processes start and no MI ports bind.
+    """
+
+    enabled: bool = False
+    adapter: str | None = None  # e.g. "frr_isis_adapter"
+    convergence: ConvergenceConfig = ConvergenceConfig()
 
 
 class TerrestrialLinkConfig(BaseModel):
@@ -122,4 +135,5 @@ class SessionConfig(BaseModel):
     time: TimeConfig = TimeConfig()
     traffic_flows: list[TrafficFlowConfig] | None = None
     terrestrial_links: list[TerrestrialLinkConfig] | None = None
-    convergence: ConvergenceConfig = ConvergenceConfig()
+    mi: MiConfig = MiConfig()
+    convergence: ConvergenceConfig = ConvergenceConfig()  # backward compat — use mi.convergence

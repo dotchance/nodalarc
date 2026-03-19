@@ -1,12 +1,9 @@
 """Tests for session_generator — generate YAML, parse back, assert fields match."""
 
 import pytest
-
 import yaml
-
 from nodalarc.models.session import SessionConfig
 from nodalarc.session_generator import (
-    ConstellationPreset,
     generate_session_yaml,
     load_constellation_presets,
 )
@@ -30,20 +27,30 @@ class TestLoadPresets:
 class TestGenerateSessionYaml:
     """Generate YAML for every valid preset x protocol x extension combo."""
 
-    @pytest.mark.parametrize("constellation", [
-        "iridium-66", "iridium-small-36", "starlink-early-44", "oneweb-60", "kuiper-50",
-    ])
-    @pytest.mark.parametrize("protocol,extensions", [
-        ("ospf", []),
-        ("ospf", ["te"]),
-        ("ospf", ["te", "mpls"]),
-        ("isis", []),
-        ("isis", ["sr"]),
-        ("isis", ["te"]),
-        ("isis", ["te", "mpls"]),
-        ("ospf", ["sr"]),
-        ("nodalpath", []),
-    ])
+    @pytest.mark.parametrize(
+        "constellation",
+        [
+            "iridium-66",
+            "iridium-small-36",
+            "starlink-early-44",
+            "oneweb-60",
+            "kuiper-50",
+        ],
+    )
+    @pytest.mark.parametrize(
+        "protocol,extensions",
+        [
+            ("ospf", []),
+            ("ospf", ["te"]),
+            ("ospf", ["te", "mpls"]),
+            ("isis", []),
+            ("isis", ["sr"]),
+            ("isis", ["te"]),
+            ("isis", ["te", "mpls"]),
+            ("ospf", ["sr"]),
+            ("nodalpath", []),
+        ],
+    )
     def test_generate_and_roundtrip(self, constellation, protocol, extensions):
         yaml_str, warnings = generate_session_yaml(
             constellation=constellation,
@@ -54,7 +61,9 @@ class TestGenerateSessionYaml:
         raw = yaml.safe_load(yaml_str)
         session = SessionConfig.model_validate(raw)
 
-        assert session.session.name == f"{constellation}-{protocol}-{'-'.join(extensions) or 'plain'}"
+        assert (
+            session.session.name == f"{constellation}-{protocol}-{'-'.join(extensions) or 'plain'}"
+        )
         assert session.routing.protocol == protocol
         assert session.routing.extensions == extensions
         assert session.routing.stack is None  # Wizard sessions use protocol, not stack

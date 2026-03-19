@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -11,14 +11,14 @@ from nodalpath.models.almanac_event import AlmanacEvent
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class TestAlmanacEventSerialization:
     def test_path_computed_round_trip(self):
         event = AlmanacEvent(
             event_type="path_computed",
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             wall_time=_utcnow(),
             topology_state_id="topo-abc123",
         )
@@ -31,7 +31,7 @@ class TestAlmanacEventSerialization:
     def test_table_pushed_fields(self):
         event = AlmanacEvent(
             event_type="table_pushed",
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             wall_time=_utcnow(),
             topology_state_id="topo-abc123",
             nodes_attempted=10,
@@ -47,7 +47,7 @@ class TestAlmanacEventSerialization:
     def test_deviation_fields(self):
         event = AlmanacEvent(
             event_type="deviation_detected",
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             wall_time=_utcnow(),
             topology_state_id="topo-abc123",
             deviation_node_a="sat-P00S00",
@@ -61,7 +61,7 @@ class TestAlmanacEventSerialization:
     def test_optional_fields_default_none(self):
         event = AlmanacEvent(
             event_type="path_computed",
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             wall_time=_utcnow(),
             topology_state_id="topo-abc123",
         )
@@ -77,7 +77,7 @@ class TestAlmanacEventSerialization:
     def test_frozen_immutability(self):
         event = AlmanacEvent(
             event_type="path_computed",
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             wall_time=_utcnow(),
             topology_state_id="topo-abc123",
         )
@@ -97,8 +97,8 @@ class TestAlmanacEventSerialization:
     def test_wall_time_tz_aware(self):
         event = AlmanacEvent(
             event_type="path_computed",
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
-            wall_time=datetime(2026, 3, 1, 14, 30, 1, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
+            wall_time=datetime(2026, 3, 1, 14, 30, 1, tzinfo=UTC),
             topology_state_id="topo-abc123",
         )
         assert event.wall_time.tzinfo is not None

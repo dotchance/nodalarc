@@ -1,14 +1,13 @@
 """Tests for satellite type Pydantic model and YAML loading."""
 
 import pytest
-import yaml
-from pydantic import ValidationError
-
 from nodalarc.models.satellite_type import (
     GroundTerminalDef,
     IslTerminalDef,
     SatelliteTypeConfig,
 )
+from pydantic import ValidationError
+
 from ome.constellation_loader import load_satellite_type, set_satellite_type_dir
 from tests.conftest import CONFIGS_DIR
 
@@ -27,16 +26,24 @@ def _set_sat_type_dir():
 class TestIslTerminalDef:
     def test_valid_optical(self):
         t = IslTerminalDef(
-            type="optical", count=4, max_range_km=5000,
-            bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+            type="optical",
+            count=4,
+            max_range_km=5000,
+            bandwidth_mbps=100,
+            max_tracking_rate_deg_s=3.0,
         )
         assert t.field_of_regard_deg == 360.0  # default
 
     def test_valid_rf_with_band(self):
         t = IslTerminalDef(
-            type="rf", band="Ka", count=2, role="intra-plane",
-            max_range_km=4400, bandwidth_mbps=10,
-            max_tracking_rate_deg_s=4.0, field_of_regard_deg=120,
+            type="rf",
+            band="Ka",
+            count=2,
+            role="intra-plane",
+            max_range_km=4400,
+            bandwidth_mbps=10,
+            max_tracking_rate_deg_s=4.0,
+            field_of_regard_deg=120,
         )
         assert t.band == "Ka"
         assert t.role == "intra-plane"
@@ -44,66 +51,93 @@ class TestIslTerminalDef:
     def test_invalid_type(self):
         with pytest.raises(ValidationError, match="type must be"):
             IslTerminalDef(
-                type="microwave", count=2, max_range_km=5000,
-                bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                type="microwave",
+                count=2,
+                max_range_km=5000,
+                bandwidth_mbps=100,
+                max_tracking_rate_deg_s=3.0,
             )
 
     def test_count_too_high(self):
         with pytest.raises(ValidationError, match="terminal count must be 1-8"):
             IslTerminalDef(
-                type="optical", count=9, max_range_km=5000,
-                bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                type="optical",
+                count=9,
+                max_range_km=5000,
+                bandwidth_mbps=100,
+                max_tracking_rate_deg_s=3.0,
             )
 
     def test_count_zero(self):
         with pytest.raises(ValidationError, match="terminal count must be 1-8"):
             IslTerminalDef(
-                type="optical", count=0, max_range_km=5000,
-                bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                type="optical",
+                count=0,
+                max_range_km=5000,
+                bandwidth_mbps=100,
+                max_tracking_rate_deg_s=3.0,
             )
 
     def test_negative_range(self):
         with pytest.raises(ValidationError, match="max_range_km must be positive"):
             IslTerminalDef(
-                type="optical", count=2, max_range_km=-100,
-                bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                type="optical",
+                count=2,
+                max_range_km=-100,
+                bandwidth_mbps=100,
+                max_tracking_rate_deg_s=3.0,
             )
 
     def test_negative_bandwidth(self):
         with pytest.raises(ValidationError, match="bandwidth_mbps must be positive"):
             IslTerminalDef(
-                type="optical", count=2, max_range_km=5000,
-                bandwidth_mbps=-10, max_tracking_rate_deg_s=3.0,
+                type="optical",
+                count=2,
+                max_range_km=5000,
+                bandwidth_mbps=-10,
+                max_tracking_rate_deg_s=3.0,
             )
 
     def test_negative_tracking_rate(self):
         with pytest.raises(ValidationError, match="max_tracking_rate_deg_s must be positive"):
             IslTerminalDef(
-                type="optical", count=2, max_range_km=5000,
-                bandwidth_mbps=100, max_tracking_rate_deg_s=-1.0,
+                type="optical",
+                count=2,
+                max_range_km=5000,
+                bandwidth_mbps=100,
+                max_tracking_rate_deg_s=-1.0,
             )
 
     def test_invalid_role(self):
         with pytest.raises(ValidationError, match="role must be"):
             IslTerminalDef(
-                type="optical", count=2, role="diagonal",
-                max_range_km=5000, bandwidth_mbps=100,
+                type="optical",
+                count=2,
+                role="diagonal",
+                max_range_km=5000,
+                bandwidth_mbps=100,
                 max_tracking_rate_deg_s=3.0,
             )
 
     def test_field_of_regard_over_360(self):
         with pytest.raises(ValidationError, match="field_of_regard_deg must be 0-360"):
             IslTerminalDef(
-                type="optical", count=2, max_range_km=5000,
-                bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                type="optical",
+                count=2,
+                max_range_km=5000,
+                bandwidth_mbps=100,
+                max_tracking_rate_deg_s=3.0,
                 field_of_regard_deg=400,
             )
 
     def test_field_of_regard_negative(self):
         with pytest.raises(ValidationError, match="field_of_regard_deg must be 0-360"):
             IslTerminalDef(
-                type="optical", count=2, max_range_km=5000,
-                bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                type="optical",
+                count=2,
+                max_range_km=5000,
+                bandwidth_mbps=100,
+                max_tracking_rate_deg_s=3.0,
                 field_of_regard_deg=-10,
             )
 
@@ -115,12 +149,18 @@ class TestSatelliteTypeConfig:
                 name="too-many",
                 isl_terminals=[
                     IslTerminalDef(
-                        type="optical", count=5, max_range_km=5000,
-                        bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                        type="optical",
+                        count=5,
+                        max_range_km=5000,
+                        bandwidth_mbps=100,
+                        max_tracking_rate_deg_s=3.0,
                     ),
                     IslTerminalDef(
-                        type="optical", count=5, max_range_km=5000,
-                        bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                        type="optical",
+                        count=5,
+                        max_range_km=5000,
+                        bandwidth_mbps=100,
+                        max_tracking_rate_deg_s=3.0,
                     ),
                 ],
             )
@@ -131,8 +171,11 @@ class TestSatelliteTypeConfig:
                 name="too-many-ground",
                 isl_terminals=[
                     IslTerminalDef(
-                        type="optical", count=2, max_range_km=5000,
-                        bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                        type="optical",
+                        count=2,
+                        max_range_km=5000,
+                        bandwidth_mbps=100,
+                        max_tracking_rate_deg_s=3.0,
                     ),
                 ],
                 ground_terminals=[
@@ -154,8 +197,11 @@ class TestSatelliteTypeConfig:
             name="no-ground",
             isl_terminals=[
                 IslTerminalDef(
-                    type="optical", count=2, max_range_km=5000,
-                    bandwidth_mbps=100, max_tracking_rate_deg_s=3.0,
+                    type="optical",
+                    count=2,
+                    max_range_km=5000,
+                    bandwidth_mbps=100,
+                    max_tracking_rate_deg_s=3.0,
                 ),
             ],
         )
@@ -165,24 +211,30 @@ class TestSatelliteTypeConfig:
 class TestSatelliteTypeYAMLRoundTrip:
     """Load each satellite type YAML file and verify it round-trips."""
 
-    @pytest.mark.parametrize("name", [
-        "iridium-next",
-        "starlink-v2",
-        "oneweb-gen2",
-        "kuiper-v1",
-        "generic-4isl",
-    ])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "iridium-next",
+            "starlink-v2",
+            "oneweb-gen2",
+            "kuiper-v1",
+            "generic-4isl",
+        ],
+    )
     def test_load_and_validate(self, name: str):
         sat_type = load_satellite_type(name)
         assert sat_type.name == name
 
-    @pytest.mark.parametrize("name", [
-        "iridium-next",
-        "starlink-v2",
-        "oneweb-gen2",
-        "kuiper-v1",
-        "generic-4isl",
-    ])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "iridium-next",
+            "starlink-v2",
+            "oneweb-gen2",
+            "kuiper-v1",
+            "generic-4isl",
+        ],
+    )
     def test_round_trip_serialization(self, name: str):
         sat_type = load_satellite_type(name)
         # Serialize to dict and back

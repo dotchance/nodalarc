@@ -59,11 +59,14 @@ def build_app(
     async def frontend_config() -> JSONResponse:
         """Runtime config for the console frontend — no hardcoded ports."""
         from nodalarc.platform import get_platform_config
+
         cfg = get_platform_config()
-        return JSONResponse({
-            "globe_port": cfg.vs_api_http_port,  # VF proxied through VS-API / Vite
-            "console_port": cfg.nodalpath_console_http_port,
-        })
+        return JSONResponse(
+            {
+                "globe_port": cfg.vs_api_http_port,  # VF proxied through VS-API / Vite
+                "console_port": cfg.nodalpath_console_http_port,
+            }
+        )
 
     @app.get("/api/v1/trace-config")
     async def trace_config_endpoint() -> JSONResponse:
@@ -72,11 +75,13 @@ def build_app(
         effective_mode = trace_mode
         if effective_mode is None and path_deriver is not None:
             effective_mode = "cspf"
-        return JSONResponse({
-            "trace_mode": effective_mode,
-            "pipe_mode": effective_mode == "sr-pipe",
-            "has_sr": effective_mode in ("sr-uniform", "sr-pipe"),
-        })
+        return JSONResponse(
+            {
+                "trace_mode": effective_mode,
+                "pipe_mode": effective_mode == "sr-pipe",
+                "has_sr": effective_mode in ("sr-uniform", "sr-pipe"),
+            }
+        )
 
     @app.get("/api/status")
     async def status() -> JSONResponse:
@@ -173,12 +178,14 @@ def build_app(
             for r in ft.ler_ingress_rules
         ]
 
-        return JSONResponse({
-            "available": True,
-            "node_id": node_id,
-            "topology_state_id": topology_state_id,
-            "forwarding_entries": forwarding_entries,
-        })
+        return JSONResponse(
+            {
+                "available": True,
+                "node_id": node_id,
+                "topology_state_id": topology_state_id,
+                "forwarding_entries": forwarding_entries,
+            }
+        )
 
     # ── Timeline + Historical endpoints ──────────────────────────────────────
 
@@ -186,12 +193,14 @@ def build_app(
     async def timeline() -> JSONResponse:
         """Return all timeline ticks with push and deviation annotations."""
         if almanac_store is None:
-            return JSONResponse({
-                "available": True,
-                "tick_count": 0,
-                "lookahead_status": state.get_lookahead_status(),
-                "ticks": [],
-            })
+            return JSONResponse(
+                {
+                    "available": True,
+                    "tick_count": 0,
+                    "lookahead_status": state.get_lookahead_status(),
+                    "ticks": [],
+                }
+            )
 
         ticks = almanac_store.get_timeline_ticks()
         snap = state.snapshot()
@@ -212,23 +221,27 @@ def build_app(
             delta = (node_count - prev_node_count) if prev_node_count is not None else None
             prev_node_count = node_count
 
-            annotated.append({
-                "sim_time": tick["sim_time"],
-                "topology_state_id": tick["topology_state_id"],
-                "node_count": node_count,
-                "is_future": tick["is_future"],
-                "push_succeeded": (push["nodes_failed"] == 0) if push else None,
-                "push_failed_count": push["nodes_failed"] if push else 0,
-                "had_deviation": tick["topology_state_id"] in deviation_states,
-                "node_count_delta": delta,
-            })
+            annotated.append(
+                {
+                    "sim_time": tick["sim_time"],
+                    "topology_state_id": tick["topology_state_id"],
+                    "node_count": node_count,
+                    "is_future": tick["is_future"],
+                    "push_succeeded": (push["nodes_failed"] == 0) if push else None,
+                    "push_failed_count": push["nodes_failed"] if push else 0,
+                    "had_deviation": tick["topology_state_id"] in deviation_states,
+                    "node_count_delta": delta,
+                }
+            )
 
-        return JSONResponse({
-            "available": True,
-            "tick_count": len(annotated),
-            "lookahead_status": state.get_lookahead_status(),
-            "ticks": annotated,
-        })
+        return JSONResponse(
+            {
+                "available": True,
+                "tick_count": len(annotated),
+                "lookahead_status": state.get_lookahead_status(),
+                "ticks": annotated,
+            }
+        )
 
     @app.get("/api/v1/topology/at/{sim_time:path}")
     async def topology_at(sim_time: str) -> JSONResponse:
@@ -238,7 +251,9 @@ def build_app(
 
         topo = almanac_store.get_topology_at(sim_time, _prefix_map)
         if topo is None:
-            return JSONResponse({"available": False, "reason": "no entry at or before requested sim_time"})
+            return JSONResponse(
+                {"available": False, "reason": "no entry at or before requested sim_time"}
+            )
 
         links_payload = []
         links_available = False
@@ -248,26 +263,32 @@ def build_app(
             if records is not None:
                 links_available = True
                 for r in records:
-                    links_payload.append({
-                        "node_a": r.node_a,
-                        "node_b": r.node_b,
-                        "visible": r.visible,
-                        "scheduled": r.scheduled,
-                        "range_km": r.range_km,
-                        "link_type": r.link_type,
-                        "state": "active" if (r.visible and r.scheduled)
-                                 else "visible_unscheduled" if r.visible
-                                 else "inactive",
-                    })
+                    links_payload.append(
+                        {
+                            "node_a": r.node_a,
+                            "node_b": r.node_b,
+                            "visible": r.visible,
+                            "scheduled": r.scheduled,
+                            "range_km": r.range_km,
+                            "link_type": r.link_type,
+                            "state": "active"
+                            if (r.visible and r.scheduled)
+                            else "visible_unscheduled"
+                            if r.visible
+                            else "inactive",
+                        }
+                    )
 
-        return JSONResponse({
-            "available": True,
-            "is_historical": True,
-            "is_future": topo.get("is_future", False),
-            "links_available": links_available,
-            **topo,
-            "links": links_payload,
-        })
+        return JSONResponse(
+            {
+                "available": True,
+                "is_historical": True,
+                "is_future": topo.get("is_future", False),
+                "links_available": links_available,
+                **topo,
+                "links": links_payload,
+            }
+        )
 
     @app.get("/api/v1/node/{node_id}/state/at/{sim_time:path}")
     async def node_state_at(node_id: str, sim_time: str) -> JSONResponse:
@@ -277,7 +298,9 @@ def build_app(
 
         entry = almanac_store.get_entry_at(sim_time)
         if entry is None:
-            return JSONResponse({"available": False, "reason": "no entry at or before requested sim_time"})
+            return JSONResponse(
+                {"available": False, "reason": "no entry at or before requested sim_time"}
+            )
 
         ft = None
         for forwarding_table in entry.forwarding_tables:
@@ -308,13 +331,15 @@ def build_app(
             for r in ft.ler_ingress_rules
         ]
 
-        return JSONResponse({
-            "available": True,
-            "node_id": node_id,
-            "topology_state_id": entry.topology_state_id,
-            "is_future": entry.is_future,
-            "forwarding_entries": forwarding_entries,
-        })
+        return JSONResponse(
+            {
+                "available": True,
+                "node_id": node_id,
+                "topology_state_id": entry.topology_state_id,
+                "is_future": entry.is_future,
+                "forwarding_entries": forwarding_entries,
+            }
+        )
 
     # ── Path derivation endpoint ─────────────────────────────────────────────
 
@@ -327,26 +352,27 @@ def build_app(
         """
         if path_deriver is not None:
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None, path_deriver.derive, src, dst, sim_time
-            )
+            result = await loop.run_in_executor(None, path_deriver.derive, src, dst, sim_time)
             return JSONResponse(result.model_dump())
 
         if live_path_tracer is not None:
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None, live_path_tracer.trace, src, dst
-            )
+            result = await loop.run_in_executor(None, live_path_tracer.trace, src, dst)
             return JSONResponse(result.model_dump(mode="json"))
 
-        return JSONResponse({
-            "reachable": False,
-            "unreachable_reason": "no path tracer available",
-            "src": src, "dst": dst,
-            "hops": [], "total_latency_ms": 0.0,
-            "method": "none", "sim_time": sim_time or "",
-            "topology_state_id": "",
-        })
+        return JSONResponse(
+            {
+                "reachable": False,
+                "unreachable_reason": "no path tracer available",
+                "src": src,
+                "dst": dst,
+                "hops": [],
+                "total_latency_ms": 0.0,
+                "method": "none",
+                "sim_time": sim_time or "",
+                "topology_state_id": "",
+            }
+        )
 
     # ── Continuous trace proxy endpoints ────────────────────────────────────
 
@@ -369,6 +395,7 @@ def build_app(
         """Proxy a request to the VS-API server."""
         import httpx
         from nodalarc.platform import get_platform_config
+
         cfg = get_platform_config()
         vs_host = cfg.zmq_connect_host_for("vs-api")
         vs_port = cfg.vs_api_http_port
@@ -392,7 +419,9 @@ def build_app(
                     r = await client.get(url, headers=headers)
                 if r.status_code == 404:
                     return JSONResponse(
-                        {"error": f"VS-API endpoint {path} not found — restart VS-API to pick up new routes"},
+                        {
+                            "error": f"VS-API endpoint {path} not found — restart VS-API to pick up new routes"
+                        },
                         status_code=502,
                     )
                 return JSONResponse(r.json(), status_code=r.status_code)
@@ -412,9 +441,9 @@ def build_app(
             return JSONResponse({"error": "inspection not available"}, status_code=503)
         n = min(max(n, 1), 50)
         runs = node_inspector.recent_runs(n)
-        return JSONResponse({"runs": [
-            r.model_dump(mode="json", exclude={"node_results"}) for r in runs
-        ]})
+        return JSONResponse(
+            {"runs": [r.model_dump(mode="json", exclude={"node_results"}) for r in runs]}
+        )
 
     @app.get("/api/v1/inspect/runs/{run_id}")
     async def inspect_run_detail(run_id: str) -> JSONResponse:
@@ -457,6 +486,7 @@ def build_app(
     if os.path.isdir(_dist):
         app.mount("/", StaticFiles(directory=_dist, html=True), name="static")
     else:
+
         @app.get("/", response_class=HTMLResponse)
         async def holding_page() -> HTMLResponse:
             return HTMLResponse(

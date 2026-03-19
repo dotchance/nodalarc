@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 
 from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
+
 from nodalpath.engine.almanac_builder import compute_almanac_entry
 from nodalpath.models.topology import TopologyNode
 from nodalpath.orchestrator.almanac_store import AlmanacStore
@@ -40,7 +41,9 @@ class SlidingWindow:
         static_edges: list | None = None,
     ) -> None:
         self.timeline_path = timeline_path
-        self.builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map, static_edges=static_edges)
+        self.builder = SnapshotBuilder(
+            node_registry, interface_map, bandwidth_map, static_edges=static_edges
+        )
         self.store = AlmanacStore(output_path)
         self.prefix_map = prefix_map
         self._push_scheduler = push_scheduler
@@ -68,7 +71,9 @@ class SlidingWindow:
 
         log.info(
             "Transition at %s: %d active links, %d forwarding tables",
-            sim_time_iso, len(curr), len(entry.forwarding_tables),
+            sim_time_iso,
+            len(curr),
+            len(entry.forwarding_tables),
         )
         return curr, True
 
@@ -89,7 +94,8 @@ class SlidingWindow:
             # Timestamp boundary — check for transition on the previous batch
             if current_time is not None and record_time != current_time:
                 prev_link_set, did = self._check_transition(
-                    prev_link_set, current_time_iso,
+                    prev_link_set,
+                    current_time_iso,
                 )
                 if did:
                     transition_count += 1
@@ -106,7 +112,8 @@ class SlidingWindow:
         # Final batch
         if current_time is not None:
             prev_link_set, did = self._check_transition(
-                prev_link_set, current_time_iso,
+                prev_link_set,
+                current_time_iso,
             )
             if did:
                 transition_count += 1

@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-from pydantic import ValidationError
-
 from nodalarc.platform import (
     PlatformConfig,
     get_platform_config,
     init_platform_config,
     reset_platform_config,
 )
+from pydantic import ValidationError
 
 
 def _valid_config_dict() -> dict:

@@ -31,6 +31,7 @@ J2000_UNIX = 946728000.0
 
 class Vec3(NamedTuple):
     """3D vector."""
+
     x: float
     y: float
     z: float
@@ -38,14 +39,16 @@ class Vec3(NamedTuple):
 
 class OrbitalElements(NamedTuple):
     """Keplerian orbital elements for circular orbits."""
+
     semi_major_axis_km: float  # a = altitude + Earth radius
-    inclination_rad: float     # i
-    raan_rad: float            # Ω (Right Ascension of Ascending Node)
-    true_anomaly_rad: float    # ν at epoch
+    inclination_rad: float  # i
+    raan_rad: float  # Ω (Right Ascension of Ascending Node)
+    true_anomaly_rad: float  # ν at epoch
 
 
 class GeoPosition(NamedTuple):
     """Geodetic position."""
+
     lat_deg: float
     lon_deg: float
     alt_km: float
@@ -142,10 +145,7 @@ def gmst(unix_timestamp: float) -> float:
 
     # GMST in degrees (IAU 1982 model, simplified)
     gmst_deg = (
-        280.46061837
-        + 360.98564736629 * (jd - 2451545.0)
-        + 0.000387933 * t**2
-        - t**3 / 38710000.0
+        280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * t**2 - t**3 / 38710000.0
     )
     return math.radians(gmst_deg % 360.0)
 
@@ -198,10 +198,7 @@ def ecef_to_geodetic(pos_ecef: Vec3) -> GeoPosition:
     cos_lat = math.cos(lat_rad)
     n = WGS84_A / math.sqrt(1.0 - WGS84_E2 * sin_lat**2)
 
-    if abs(cos_lat) > 1e-10:
-        alt_km = p / cos_lat - n
-    else:
-        alt_km = abs(z) - n * (1.0 - WGS84_E2)
+    alt_km = p / cos_lat - n if abs(cos_lat) > 1e-10 else abs(z) - n * (1.0 - WGS84_E2)
 
     return GeoPosition(
         lat_deg=math.degrees(lat_rad),
@@ -275,4 +272,4 @@ def propagate_keplerian(
 
 def distance_km(a: Vec3, b: Vec3) -> float:
     """Euclidean distance between two 3D points."""
-    return math.sqrt((a.x - b.x)**2 + (a.y - b.y)**2 + (a.z - b.z)**2)
+    return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)

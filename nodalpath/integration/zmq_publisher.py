@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import zmq
-
 from nodalarc.zmq_channels import TOPIC_ALMANAC_EVENT, encode_message
+
 from nodalpath.models.almanac_event import AlmanacEvent
 
 log = logging.getLogger(__name__)
@@ -44,16 +44,18 @@ class AlmanacPublisher:
         push_duration_ms: float,
     ) -> None:
         """Convenience method: publish a table_pushed event."""
-        self.publish(AlmanacEvent(
-            event_type="table_pushed",
-            sim_time=sim_time,
-            wall_time=datetime.now(timezone.utc),
-            topology_state_id=topology_state_id,
-            nodes_attempted=nodes_attempted,
-            nodes_succeeded=nodes_succeeded,
-            nodes_failed=nodes_failed,
-            push_duration_ms=push_duration_ms,
-        ))
+        self.publish(
+            AlmanacEvent(
+                event_type="table_pushed",
+                sim_time=sim_time,
+                wall_time=datetime.now(UTC),
+                topology_state_id=topology_state_id,
+                nodes_attempted=nodes_attempted,
+                nodes_succeeded=nodes_succeeded,
+                nodes_failed=nodes_failed,
+                push_duration_ms=push_duration_ms,
+            )
+        )
 
     def publish_path_computed(
         self,
@@ -61,12 +63,14 @@ class AlmanacPublisher:
         topology_state_id: str,
     ) -> None:
         """Convenience method: publish a path_computed event."""
-        self.publish(AlmanacEvent(
-            event_type="path_computed",
-            sim_time=sim_time,
-            wall_time=datetime.now(timezone.utc),
-            topology_state_id=topology_state_id,
-        ))
+        self.publish(
+            AlmanacEvent(
+                event_type="path_computed",
+                sim_time=sim_time,
+                wall_time=datetime.now(UTC),
+                topology_state_id=topology_state_id,
+            )
+        )
 
     def publish_deviation(
         self,
@@ -77,15 +81,17 @@ class AlmanacPublisher:
         reason: str,
     ) -> None:
         """Convenience method: publish a deviation_detected event."""
-        self.publish(AlmanacEvent(
-            event_type="deviation_detected",
-            sim_time=sim_time,
-            wall_time=datetime.now(timezone.utc),
-            topology_state_id=topology_state_id,
-            deviation_node_a=node_a,
-            deviation_node_b=node_b,
-            deviation_reason=reason,
-        ))
+        self.publish(
+            AlmanacEvent(
+                event_type="deviation_detected",
+                sim_time=sim_time,
+                wall_time=datetime.now(UTC),
+                topology_state_id=topology_state_id,
+                deviation_node_a=node_a,
+                deviation_node_b=node_b,
+                deviation_reason=reason,
+            )
+        )
 
     def close(self) -> None:
         self._sock.close()

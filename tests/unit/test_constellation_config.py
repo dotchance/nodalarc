@@ -3,18 +3,12 @@
 Proves discriminated union dispatch, validation rules, and round-trips.
 """
 
-from pathlib import Path
-
 import pytest
 import yaml
-
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ExplicitConstellation,
-    IslOverride,
-    IslTerminal,
     ParametricConstellation,
-    TerminalConfig,
     TLEConstellation,
 )
 from pydantic import TypeAdapter, ValidationError
@@ -39,9 +33,22 @@ class TestDiscriminatedUnion:
         assert len(config.satellites) == 4
 
     def test_tle_dispatch(self):
-        data = {"mode": "tle", "name": "test-tle", "tle_file": "tle.txt",
-                "default_terminals": {"isl": [{"type": "optical", "count": 2,
-                "max_range_km": 5000, "bandwidth_mbps": 1000, "max_tracking_rate_deg_s": 3.0}]}}
+        data = {
+            "mode": "tle",
+            "name": "test-tle",
+            "tle_file": "tle.txt",
+            "default_terminals": {
+                "isl": [
+                    {
+                        "type": "optical",
+                        "count": 2,
+                        "max_range_km": 5000,
+                        "bandwidth_mbps": 1000,
+                        "max_tracking_rate_deg_s": 3.0,
+                    }
+                ]
+            },
+        }
         config = adapter.validate_python(data)
         assert isinstance(config, TLEConstellation)
 
@@ -104,26 +111,52 @@ class TestValidationRejections:
 
     def test_terminal_count_exceeds_8(self):
         data = {
-            "mode": "parametric", "name": "bad",
+            "mode": "parametric",
+            "name": "bad",
             "orbit": {"altitude_km": 550, "inclination_deg": 53, "pattern": "walker-delta"},
-            "planes": {"count": 2, "raan_spacing_deg": 30, "sats_per_plane": 2, "phase_offset_deg": 6},
-            "default_terminals": {"isl": [
-                {"type": "optical", "count": 9, "max_range_km": 5000,
-                 "bandwidth_mbps": 1000, "max_tracking_rate_deg_s": 3.0}
-            ]},
+            "planes": {
+                "count": 2,
+                "raan_spacing_deg": 30,
+                "sats_per_plane": 2,
+                "phase_offset_deg": 6,
+            },
+            "default_terminals": {
+                "isl": [
+                    {
+                        "type": "optical",
+                        "count": 9,
+                        "max_range_km": 5000,
+                        "bandwidth_mbps": 1000,
+                        "max_tracking_rate_deg_s": 3.0,
+                    }
+                ]
+            },
         }
         with pytest.raises(ValidationError, match="terminal count must be 0-8"):
             adapter.validate_python(data)
 
     def test_negative_tracking_rate(self):
         data = {
-            "mode": "parametric", "name": "bad",
+            "mode": "parametric",
+            "name": "bad",
             "orbit": {"altitude_km": 550, "inclination_deg": 53, "pattern": "walker-delta"},
-            "planes": {"count": 2, "raan_spacing_deg": 30, "sats_per_plane": 2, "phase_offset_deg": 6},
-            "default_terminals": {"isl": [
-                {"type": "optical", "count": 2, "max_range_km": 5000,
-                 "bandwidth_mbps": 1000, "max_tracking_rate_deg_s": -1.0}
-            ]},
+            "planes": {
+                "count": 2,
+                "raan_spacing_deg": 30,
+                "sats_per_plane": 2,
+                "phase_offset_deg": 6,
+            },
+            "default_terminals": {
+                "isl": [
+                    {
+                        "type": "optical",
+                        "count": 2,
+                        "max_range_km": 5000,
+                        "bandwidth_mbps": 1000,
+                        "max_tracking_rate_deg_s": -1.0,
+                    }
+                ]
+            },
         }
         with pytest.raises(ValidationError, match="max_tracking_rate_deg_s must be positive"):
             adapter.validate_python(data)
@@ -148,19 +181,48 @@ class TestInvalidFixtures:
 class TestIslOverride:
     def test_override_loads(self):
         data = {
-            "mode": "explicit", "name": "with-override",
-            "default_terminals": {"isl": [
-                {"type": "optical", "count": 2, "max_range_km": 5000,
-                 "bandwidth_mbps": 1000, "max_tracking_rate_deg_s": 3.0}
-            ]},
+            "mode": "explicit",
+            "name": "with-override",
+            "default_terminals": {
+                "isl": [
+                    {
+                        "type": "optical",
+                        "count": 2,
+                        "max_range_km": 5000,
+                        "bandwidth_mbps": 1000,
+                        "max_tracking_rate_deg_s": 3.0,
+                    }
+                ]
+            },
             "satellites": [
-                {"plane": 0, "slot": 0, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 0}},
-                {"plane": 0, "slot": 1, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 180}},
+                {
+                    "plane": 0,
+                    "slot": 0,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "true_anomaly_deg": 0,
+                    },
+                },
+                {
+                    "plane": 0,
+                    "slot": 1,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "true_anomaly_deg": 180,
+                    },
+                },
             ],
             "isl_overrides": [
-                {"node": "sat-P00S00", "links": [
-                    {"terminal": "isl0", "peer": "sat-P00S01"},
-                ]},
+                {
+                    "node": "sat-P00S00",
+                    "links": [
+                        {"terminal": "isl0", "peer": "sat-P00S01"},
+                    ],
+                },
             ],
         }
         config = adapter.validate_python(data)

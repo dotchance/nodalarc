@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from nodalpath.engine.graph import build_graph
-from nodalpath.engine.pathcomp import dijkstra, compute_all_gs_paths
 from nodalpath.engine.labels import (
-    _srgb_base, _gs_sid_base,
-    compute_sid, path_to_label_stack,
-    build_lsr_bindings, build_ler_ingress_rules,
+    _gs_sid_base,
+    _srgb_base,
+    build_ler_ingress_rules,
+    build_lsr_bindings,
+    compute_sid,
+    path_to_label_stack,
 )
+from nodalpath.engine.pathcomp import compute_all_gs_paths, dijkstra
 
 
 class TestComputeSid:
@@ -26,8 +29,13 @@ class TestComputeSid:
         sats_per_plane = 6
         for p in range(6):
             for s in range(sats_per_plane):
-                sid = compute_sid(f"sat-P{p:02d}S{s:02d}", "satellite",
-                                  plane=p, slot=s, sats_per_plane=sats_per_plane)
+                sid = compute_sid(
+                    f"sat-P{p:02d}S{s:02d}",
+                    "satellite",
+                    plane=p,
+                    slot=s,
+                    sats_per_plane=sats_per_plane,
+                )
                 sids.add(sid)
         for i in range(6):
             sid = compute_sid(f"gs-{i}", "ground_station", gs_index=i)

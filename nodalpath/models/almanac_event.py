@@ -22,10 +22,10 @@ class AlmanacEvent(BaseModel):
     topology_state_id: str
 
     # Optional fields populated depending on event_type
-    node_id: str | None = None          # For node-specific push events
+    node_id: str | None = None  # For node-specific push events
     nodes_attempted: int | None = None  # table_pushed
     nodes_succeeded: int | None = None  # table_pushed
-    nodes_failed: int | None = None     # table_pushed
+    nodes_failed: int | None = None  # table_pushed
     push_duration_ms: float | None = None  # table_pushed
     deviation_node_a: str | None = None  # deviation_detected
     deviation_node_b: str | None = None  # deviation_detected

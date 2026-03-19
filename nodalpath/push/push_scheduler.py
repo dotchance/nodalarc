@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from nodalpath.models.almanac import AlmanacEntry, ForwardingTable
 from nodalpath.models.topology import TopologyNode
@@ -15,7 +15,7 @@ from nodalpath.push.vtysh_push import diff_forwarding_tables, forwarding_table_t
 log = logging.getLogger(__name__)
 
 
-class PushStatusCode(str, Enum):
+class PushStatusCode(StrEnum):
     DELIVERED = "delivered"
     FAILED = "failed"
     SKIPPED = "skipped"
@@ -24,6 +24,7 @@ class PushStatusCode(str, Enum):
 @dataclass
 class PushResult:
     """Result of pushing forwarding tables for one almanac entry."""
+
     topology_state_id: str
     sim_time: str
     nodes_attempted: int
@@ -37,6 +38,7 @@ class PushResult:
 @dataclass
 class PushSchedulerConfig:
     """Configuration for the push scheduler."""
+
     namespace: str = "nodalarc"
     timeout_seconds: int = 10
     use_incremental_diff: bool = True
@@ -48,6 +50,7 @@ class PushSchedulerConfig:
 @dataclass
 class _NormalizedResult:
     """Internal transport-agnostic push result."""
+
     node_id: str
     success: bool
     error: str
@@ -136,7 +139,8 @@ class PushScheduler:
         if self.config.dry_run:
             log.debug(
                 "Dry run: would push to %d nodes for state %s",
-                len(nodes_to_push), entry.topology_state_id,
+                len(nodes_to_push),
+                entry.topology_state_id,
             )
             for node_id in nodes_to_push:
                 self._installed[node_id] = next(
@@ -195,7 +199,12 @@ class PushScheduler:
 
         log.info(
             "Push for state %s: %d attempted, %d succeeded, %d failed, %d skipped (%.1fms)",
-            entry.topology_state_id, len(nodes_to_push), succeeded, failed, skipped, duration_ms,
+            entry.topology_state_id,
+            len(nodes_to_push),
+            succeeded,
+            failed,
+            skipped,
+            duration_ms,
         )
 
         self._results.append(result)
@@ -225,12 +234,16 @@ class PushScheduler:
             table = next(t for t in entry.forwarding_tables if t.node_id == node_id)
             if self.config.use_incremental_diff:
                 commands = diff_forwarding_tables(
-                    self._installed.get(node_id), table,
-                    self._sid_to_loopback, self._iface_to_peer_loopback,
+                    self._installed.get(node_id),
+                    table,
+                    self._sid_to_loopback,
+                    self._iface_to_peer_loopback,
                 )
             else:
                 commands = forwarding_table_to_vtysh(
-                    table, self._sid_to_loopback, self._iface_to_peer_loopback,
+                    table,
+                    self._sid_to_loopback,
+                    self._iface_to_peer_loopback,
                 )
             if not commands:
                 continue

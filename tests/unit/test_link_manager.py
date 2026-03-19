@@ -15,7 +15,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 
 import pytest
 
@@ -26,9 +25,13 @@ pytestmark = pytest.mark.requires_root
 _IS_ROOT = os.geteuid() == 0
 
 if not _IS_ROOT:
-    _has_sudo = subprocess.run(
-        ["sudo", "-n", "true"], capture_output=True,
-    ).returncode == 0
+    _has_sudo = (
+        subprocess.run(
+            ["sudo", "-n", "true"],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
     if not _has_sudo:
         pytest.skip(
             "requires root and no passwordless sudo available",
@@ -46,12 +49,10 @@ if _IS_ROOT:
         create_veth_pair,
         destroy_veth_pair,
         deterministic_mac,
-        disable_ipv6_autoconfig,
         set_interface_down,
         set_interface_up,
         update_delay,
     )
-    from pyroute2 import NetNS
 
     @pytest.fixture
     def two_ns_with_pids():
@@ -70,11 +71,13 @@ if _IS_ROOT:
         # Start a process in each namespace to get a PID
         proc_a = subprocess.Popen(
             ["ip", "netns", "exec", ns_a, "sleep", "3600"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         proc_b = subprocess.Popen(
             ["ip", "netns", "exec", ns_b, "sleep", "3600"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
         yield ns_a, ns_b, proc_a.pid, proc_b.pid
@@ -90,7 +93,8 @@ if _IS_ROOT:
     def _exec_in_ns(ns_name: str, cmd: list[str]) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["ip", "netns", "exec", ns_name] + cmd,
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
 
     class TestVethCreation:
@@ -121,8 +125,12 @@ if _IS_ROOT:
             ns_a, ns_b, pid_a, pid_b = two_ns_with_pids
 
             create_veth_pair(
-                pid_a, pid_b, "isl0", "isl1",
-                node_id_a="sat-P00S00", node_id_b="sat-P00S01",
+                pid_a,
+                pid_b,
+                "isl0",
+                "isl1",
+                node_id_a="sat-P00S00",
+                node_id_b="sat-P00S01",
             )
 
             expected_mac_a = deterministic_mac("sat-P00S00", "isl0")
@@ -249,9 +257,14 @@ if _IS_ROOT:
             """link_manager.create_dummy_interface creates terr0 with addresses."""
             ns_a, _, pid_a, _ = two_ns_with_pids
 
-            create_dummy_interface(pid_a, "terr0", [
-                "172.16.0.1/24", "fd10::0:1/112",
-            ])
+            create_dummy_interface(
+                pid_a,
+                "terr0",
+                [
+                    "172.16.0.1/24",
+                    "fd10::0:1/112",
+                ],
+            )
 
             result = _exec_in_ns(ns_a, ["ip", "addr", "show", "terr0"])
             assert "172.16.0.1" in result.stdout
@@ -300,10 +313,20 @@ else:
         Individual test results are printed from the subprocess output.
         """
         result = subprocess.run(
-            ["sudo", "-E", sys.executable, "-m", "pytest",
-             os.path.abspath(__file__), "-v", "--tb=short",
-             "-p", "no:cacheprovider"],
-            capture_output=True, text=True,
+            [
+                "sudo",
+                "-E",
+                sys.executable,
+                "-m",
+                "pytest",
+                os.path.abspath(__file__),
+                "-v",
+                "--tb=short",
+                "-p",
+                "no:cacheprovider",
+            ],
+            capture_output=True,
+            text=True,
             timeout=120,
         )
         # Log subprocess output so individual test results are visible

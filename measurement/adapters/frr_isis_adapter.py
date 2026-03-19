@@ -10,7 +10,7 @@ import logging
 import re
 import subprocess
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from nodalarc.models.metrics import AdapterEvent
 
@@ -145,11 +145,21 @@ class FrrIsisAdapter:
 
         result = subprocess.run(
             [
-                "kubectl", "exec", "-n", state.namespace, state.pod_name,
-                "-c", "frr", "--",
-                "vtysh", "-c", f"show ip route {dst_ip}",
+                "kubectl",
+                "exec",
+                "-n",
+                state.namespace,
+                state.pod_name,
+                "-c",
+                "frr",
+                "--",
+                "vtysh",
+                "-c",
+                f"show ip route {dst_ip}",
             ],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             log.warning(f"trace_path failed for {node_id}: {result.stderr}")
@@ -176,11 +186,21 @@ class FrrIsisAdapter:
         try:
             result = subprocess.run(
                 [
-                    "kubectl", "exec", "-n", state.namespace, state.pod_name,
-                    "-c", "frr", "--",
-                    "vtysh", "-c", "show isis neighbor",
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    state.namespace,
+                    state.pod_name,
+                    "-c",
+                    "frr",
+                    "--",
+                    "vtysh",
+                    "-c",
+                    "show isis neighbor",
                 ],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
         except subprocess.TimeoutExpired:
             log.warning(f"IS-IS neighbor poll timed out for {node_id}")
@@ -191,7 +211,7 @@ class FrrIsisAdapter:
             return
 
         current = parse_isis_neighbors(result.stdout)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         with self._lock:
             # Diff against previous state
@@ -201,48 +221,54 @@ class FrrIsisAdapter:
             for key, info in current.items():
                 prev_info = prev.get(key)
                 if prev_info is None and info["state"] == "Up":
-                    state.events.append(AdapterEvent(
-                        sim_time=now,
-                        wall_time=now,
-                        node_id=node_id,
-                        event_type="adjacency_up",
-                        event_data={
-                            "source": "vtysh_poll",
-                            "system_id": info["system_id"],
-                            "interface": info["interface"],
-                            "state": info["state"],
-                        },
-                    ))
+                    state.events.append(
+                        AdapterEvent(
+                            sim_time=now,
+                            wall_time=now,
+                            node_id=node_id,
+                            event_type="adjacency_up",
+                            event_data={
+                                "source": "vtysh_poll",
+                                "system_id": info["system_id"],
+                                "interface": info["interface"],
+                                "state": info["state"],
+                            },
+                        )
+                    )
                 elif prev_info and prev_info["state"] != "Up" and info["state"] == "Up":
-                    state.events.append(AdapterEvent(
-                        sim_time=now,
-                        wall_time=now,
-                        node_id=node_id,
-                        event_type="adjacency_up",
-                        event_data={
-                            "source": "vtysh_poll",
-                            "system_id": info["system_id"],
-                            "interface": info["interface"],
-                            "state": info["state"],
-                            "previous_state": prev_info["state"],
-                        },
-                    ))
+                    state.events.append(
+                        AdapterEvent(
+                            sim_time=now,
+                            wall_time=now,
+                            node_id=node_id,
+                            event_type="adjacency_up",
+                            event_data={
+                                "source": "vtysh_poll",
+                                "system_id": info["system_id"],
+                                "interface": info["interface"],
+                                "state": info["state"],
+                                "previous_state": prev_info["state"],
+                            },
+                        )
+                    )
 
             # Lost adjacencies
             for key, info in prev.items():
                 if key not in current and info["state"] == "Up":
-                    state.events.append(AdapterEvent(
-                        sim_time=now,
-                        wall_time=now,
-                        node_id=node_id,
-                        event_type="adjacency_down",
-                        event_data={
-                            "source": "vtysh_poll",
-                            "system_id": info["system_id"],
-                            "interface": info["interface"],
-                            "previous_state": info["state"],
-                        },
-                    ))
+                    state.events.append(
+                        AdapterEvent(
+                            sim_time=now,
+                            wall_time=now,
+                            node_id=node_id,
+                            event_type="adjacency_down",
+                            event_data={
+                                "source": "vtysh_poll",
+                                "system_id": info["system_id"],
+                                "interface": info["interface"],
+                                "previous_state": info["state"],
+                            },
+                        )
+                    )
 
             state.last_neighbors = current
 
@@ -256,9 +282,17 @@ class FrrIsisAdapter:
         try:
             proc = subprocess.Popen(
                 [
-                    "kubectl", "exec", "-n", state.namespace, state.pod_name,
-                    "-c", "frr", "--",
-                    "tail", "-f", "/var/log/frr/isisd.log",
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    state.namespace,
+                    state.pod_name,
+                    "-c",
+                    "frr",
+                    "--",
+                    "tail",
+                    "-f",
+                    "/var/log/frr/isisd.log",
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -271,21 +305,23 @@ class FrrIsisAdapter:
                 if parsed is None:
                     continue
 
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 with self._lock:
                     s = self._nodes.get(node_id)
                     if s is None:
                         break
-                    s.events.append(AdapterEvent(
-                        sim_time=now,
-                        wall_time=now,
-                        node_id=node_id,
-                        event_type=parsed["type"],
-                        event_data={
-                            "source": "syslog_parse",
-                            "detail": parsed["detail"],
-                        },
-                    ))
+                    s.events.append(
+                        AdapterEvent(
+                            sim_time=now,
+                            wall_time=now,
+                            node_id=node_id,
+                            event_type=parsed["type"],
+                            event_data={
+                                "source": "syslog_parse",
+                                "detail": parsed["detail"],
+                            },
+                        )
+                    )
 
         except Exception as exc:
             log.warning(f"IS-IS log tailer for {node_id} failed: {exc}")
@@ -295,9 +331,14 @@ class _NodeState:
     """Per-node tracking state for the IS-IS adapter."""
 
     __slots__ = (
-        "node_id", "management_ip", "_pod_name", "_namespace",
-        "last_neighbors", "events",
-        "log_thread", "tail_proc",
+        "node_id",
+        "management_ip",
+        "_pod_name",
+        "_namespace",
+        "last_neighbors",
+        "events",
+        "log_thread",
+        "tail_proc",
     )
 
     def __init__(self, node_id: str, management_ip: str) -> None:
@@ -327,11 +368,18 @@ class _NodeState:
         try:
             result = subprocess.run(
                 [
-                    "kubectl", "get", "pods", "--all-namespaces",
-                    "--field-selector", f"status.podIP={self.management_ip}",
-                    "-o", "jsonpath={.items[0].metadata.namespace} {.items[0].metadata.name}",
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "--all-namespaces",
+                    "--field-selector",
+                    f"status.podIP={self.management_ip}",
+                    "-o",
+                    "jsonpath={.items[0].metadata.namespace} {.items[0].metadata.name}",
                 ],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0 and result.stdout.strip():
                 parts = result.stdout.strip().split()

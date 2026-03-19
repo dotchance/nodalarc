@@ -1,9 +1,9 @@
 """Unit tests for FRR OSPF adapter — parse canned vtysh output."""
 
 from measurement.adapters.frr_ospf_adapter import (
-    parse_ospf_neighbors,
-    parse_ospf_log_line,
     _is_full_state,
+    parse_ospf_log_line,
+    parse_ospf_neighbors,
 )
 
 

@@ -1,9 +1,7 @@
 """Test build_template_vars() — the single Jinja2 namespace builder."""
 
 import pytest
-
 from nodalarc.models.addressing import AddressingScheme
-from ome.constellation_loader import load_constellation
 from nodalarc.models.session import (
     AreaAssignmentConfig,
     RoutingConfig,
@@ -12,6 +10,8 @@ from nodalarc.models.session import (
     TimeConfig,
 )
 from nodalarc.template_vars import build_template_vars
+
+from ome.constellation_loader import load_constellation
 from tests.conftest import CONFIGS_DIR
 
 
@@ -33,6 +33,7 @@ def starlink_config():
 @pytest.fixture
 def gs_file():
     from ome.constellation_loader import load_ground_stations
+
     return load_ground_stations(CONFIGS_DIR / "ground-stations/sets/global.yaml")
 
 
@@ -61,7 +62,9 @@ def stripe_session():
         routing=RoutingConfig(
             stack="configs/routing-stacks/frr-isis-sr",
             area_assignment=AreaAssignmentConfig(
-                strategy="stripe", planes_per_stripe=2, gs_area_id="49.0000",
+                strategy="stripe",
+                planes_per_stripe=2,
+                gs_area_id="49.0000",
             ),
         ),
         time=TimeConfig(compression=5),
@@ -76,7 +79,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         assert result["node_id"] == "sat-P00S00"
         assert result["node_type"] == "satellite"
@@ -93,7 +97,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         assert result["hostname"] == result["node_id"]
         assert result["hostname"] == "sat-P00S00"
@@ -105,7 +110,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         assert result["mgmt_interface"] == "eth0"
 
@@ -116,18 +122,22 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         assert result["compression_factor"] == 5
 
-    def test_isl_interfaces_match_terminal_count(self, flat_session, four_node_config, gs_file, addressing):
+    def test_isl_interfaces_match_terminal_count(
+        self, flat_session, four_node_config, gs_file, addressing
+    ):
         result = build_template_vars(
             session=flat_session,
             constellation=four_node_config,
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         assert result["isl_interfaces"] == ["isl0", "isl1"]  # 4-node has 2 OCTs
         assert result["isl_count"] == 2
@@ -139,7 +149,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         assert result["gnd_interfaces"] == ["gnd0"]  # 4-node has 1 ground terminal
 
@@ -150,7 +161,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         neighbors = result["neighbors"]
         assert isinstance(neighbors, dict)
@@ -167,7 +179,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         iinfo = result["interface_info"]
         assert isinstance(iinfo, dict)
@@ -191,7 +204,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         iinfo = result["interface_info"]
         for iface_name, info in iinfo.items():
@@ -199,7 +213,9 @@ class TestSatelliteVars:
             # In flat strategy, all nodes have the same area
             assert info["peer_area_id"] == "49.0001"
 
-    def test_interface_info_peer_loopback_ipv4(self, stripe_session, starlink_config, gs_file, addressing):
+    def test_interface_info_peer_loopback_ipv4(
+        self, stripe_session, starlink_config, gs_file, addressing
+    ):
         """Peer loopback IPv4 is populated for all ISL interfaces."""
         result = build_template_vars(
             session=stripe_session,
@@ -207,7 +223,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         iinfo = result["interface_info"]
         for iface_name, info in iinfo.items():
@@ -223,7 +240,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=1, slot=5,
+            plane=1,
+            slot=5,
         )
         iinfo = result["interface_info"]
         cross_area_ifaces = {k: v for k, v in iinfo.items() if v["cross_area"]}
@@ -240,7 +258,8 @@ class TestSatelliteVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=5,
+            plane=0,
+            slot=5,
         )
         iinfo = result["interface_info"]
         # Plane 0 and plane 1 are in same stripe (planes_per_stripe=2)
@@ -256,7 +275,8 @@ class TestGroundStationVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="ground_station",
-            gs_index=0, gs_name="hawthorne",
+            gs_index=0,
+            gs_name="hawthorne",
         )
         assert result["node_id"] == "gs-hawthorne"
         assert result["node_type"] == "ground_station"
@@ -275,7 +295,8 @@ class TestGroundStationVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="ground_station",
-            gs_index=0, gs_name="hawthorne",
+            gs_index=0,
+            gs_name="hawthorne",
         )
         assert len(result["gnd_interfaces"]) > 0
         assert result["isl_interfaces"] == []
@@ -283,7 +304,9 @@ class TestGroundStationVars:
         assert result["interface_info"] == {}
         assert result["neighbors"] == {}
 
-    def test_gs_terrestrial_prefix_from_station(self, stripe_session, starlink_config, gs_file, addressing):
+    def test_gs_terrestrial_prefix_from_station(
+        self, stripe_session, starlink_config, gs_file, addressing
+    ):
         """Hawthorne uses per-station explicit prefixes (unique + default route)."""
         result = build_template_vars(
             session=stripe_session,
@@ -291,7 +314,8 @@ class TestGroundStationVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="ground_station",
-            gs_index=0, gs_name="hawthorne",
+            gs_index=0,
+            gs_name="hawthorne",
         )
         prefixes = result["terrestrial_prefixes"]
         assert len(prefixes) == 2  # Unique /24 + default route
@@ -300,7 +324,9 @@ class TestGroundStationVars:
         assert prefixes[1]["prefix"] == "0.0.0.0/0"
         assert prefixes[1]["metric"] == 100
 
-    def test_gs_terrestrial_prefix_per_station_override(self, stripe_session, starlink_config, gs_file, addressing):
+    def test_gs_terrestrial_prefix_per_station_override(
+        self, stripe_session, starlink_config, gs_file, addressing
+    ):
         """McMurdo has per-station prefix override."""
         result = build_template_vars(
             session=stripe_session,
@@ -308,7 +334,8 @@ class TestGroundStationVars:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="ground_station",
-            gs_index=6, gs_name="mcmurdo",
+            gs_index=6,
+            gs_name="mcmurdo",
         )
         prefixes = result["terrestrial_prefixes"]
         assert len(prefixes) == 2
@@ -326,14 +353,17 @@ class TestConfigOverrides:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
             config_overrides={"srgb_start": 16000, "srgb_end": 23999, "reference_bandwidth": 10000},
         )
         assert result["srgb_start"] == 16000
         assert result["srgb_end"] == 23999
         assert result["reference_bandwidth"] == 10000
 
-    def test_node_vars_override_config_overrides(self, flat_session, four_node_config, gs_file, addressing):
+    def test_node_vars_override_config_overrides(
+        self, flat_session, four_node_config, gs_file, addressing
+    ):
         """Node-specific vars (node_id, area_id, etc.) should not be overwritten by config_overrides."""
         result = build_template_vars(
             session=flat_session,
@@ -341,19 +371,23 @@ class TestConfigOverrides:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
             config_overrides={"node_id": "should-not-win"},
         )
         assert result["node_id"] == "sat-P00S00"
 
-    def test_config_overrides_custom_keys(self, flat_session, four_node_config, gs_file, addressing):
+    def test_config_overrides_custom_keys(
+        self, flat_session, four_node_config, gs_file, addressing
+    ):
         result = build_template_vars(
             session=flat_session,
             constellation=four_node_config,
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
             config_overrides={"router_id_format": "ospf", "metric_type": "wide"},
         )
         assert result["router_id_format"] == "ospf"
@@ -368,7 +402,8 @@ class TestBandwidthInInterfaceInfo:
             ground_stations=gs_file,
             addressing=addressing,
             node_type="satellite",
-            plane=0, slot=0,
+            plane=0,
+            slot=0,
         )
         for iface_name, info in result["interface_info"].items():
             assert "bandwidth_mbps" in info

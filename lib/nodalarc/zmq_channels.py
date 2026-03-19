@@ -10,8 +10,8 @@ encode/decode remain as module-level constants.
 
 from nodalarc.platform import get_platform_config
 
-
 # --- Port accessor functions ---
+
 
 def ome_events_port() -> int:
     return get_platform_config().zmq_ome_events_port
@@ -70,6 +70,7 @@ def probe_daemon_udp_data_port() -> int:
 
 
 # --- Socket address accessor functions ---
+
 
 def ome_events_bind() -> str:
     return get_platform_config().ome_events_bind

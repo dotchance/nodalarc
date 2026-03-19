@@ -38,8 +38,10 @@ def create_adapter(adapter_name: str) -> ProtocolAdapter:
     """Create adapter by name from stack.yaml mi_adapter field."""
     if adapter_name == "frr_isis_adapter":
         from measurement.adapters.frr_isis_adapter import FrrIsisAdapter
+
         return FrrIsisAdapter()
     if adapter_name == "frr_ospf_adapter":
         from measurement.adapters.frr_ospf_adapter import FrrOspfAdapter
+
         return FrrOspfAdapter()
     raise ValueError(f"Unknown MI adapter: {adapter_name}")

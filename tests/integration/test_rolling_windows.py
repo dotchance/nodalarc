@@ -25,7 +25,9 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 def four_node_timeline(tmp_path):
     """Generate custom-example timeline."""
     import tempfile
+
     import yaml
+
     from ome.main import run as ome_run
 
     session = {
@@ -39,7 +41,10 @@ def four_node_timeline(tmp_path):
         "time": {"step_seconds": 1},
     }
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,
+        mode="w",
+        suffix=".yaml",
+        dir=str(PROJECT_ROOT),
+        delete=False,
     ) as f:
         yaml.dump(session, f)
         session_path = f.name

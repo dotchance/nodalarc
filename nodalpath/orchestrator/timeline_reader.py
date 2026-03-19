@@ -58,7 +58,8 @@ def read_timeline(
             if model_cls is None:
                 log.warning(
                     "Unknown event_type %r at line %d, skipping",
-                    event_type, line_num,
+                    event_type,
+                    line_num,
                 )
                 continue
 
@@ -67,7 +68,8 @@ def read_timeline(
             except Exception:
                 log.warning(
                     "Failed to parse %s at line %d, skipping",
-                    event_type, line_num,
+                    event_type,
+                    line_num,
                 )
                 continue
 

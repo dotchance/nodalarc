@@ -14,6 +14,7 @@ Response: {"ok": true|false, "error": "...", ...}
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -29,21 +30,27 @@ from nodalarc.constants import LOG_FORMAT
 
 log = logging.getLogger(__name__)
 
+
 def _default_socket_path() -> str:
     try:
         from nodalarc.platform import get_platform_config
+
         return get_platform_config().deploy_daemon_unix_socket_path
     except RuntimeError:
         return "/tmp/nodal-deploy.sock"
 
+
 _KUBECONFIG = os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")
+
 
 def _namespace() -> str:
     try:
         from nodalarc.platform import get_platform_config
+
         return get_platform_config().kubernetes_namespace
     except RuntimeError:
         return "nodalarc"
+
 
 _shutdown = threading.Event()
 
@@ -57,6 +64,7 @@ def _chown_session_data(session_path: str) -> None:
     try:
         import yaml
         from nodalarc.models.session import SessionConfig
+
         raw = yaml.safe_load(Path(session_path).read_text())
         cfg = SessionConfig.model_validate(raw)
         data_base = Path(cfg.session.data_dir)
@@ -65,7 +73,8 @@ def _chown_session_data(session_path: str) -> None:
         # Find newest subdirectory
         subdirs = sorted(
             [d for d in data_base.iterdir() if d.is_dir()],
-            key=lambda d: d.stat().st_mtime, reverse=True,
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
         )
         if not subdirs:
             return
@@ -78,7 +87,8 @@ def _chown_session_data(session_path: str) -> None:
             uid, gid = str(stat.st_uid), str(stat.st_gid)
         subprocess.run(
             ["chown", "-R", f"{uid}:{gid}", str(newest)],
-            capture_output=True, timeout=30,
+            capture_output=True,
+            timeout=30,
         )
         log.info(f"chown {newest.name} to {uid}:{gid}")
     except Exception as exc:
@@ -93,9 +103,19 @@ def _handle_deploy(req: dict) -> dict:
 
     try:
         proc = subprocess.run(
-            [sys.executable, "-u", "-m", "tools.na_deploy",
-             "--session", session_path, "--skip-vsapi", "--skip-teardown"],
-            capture_output=True, text=True, timeout=600,
+            [
+                sys.executable,
+                "-u",
+                "-m",
+                "tools.na_deploy",
+                "--session",
+                session_path,
+                "--skip-vsapi",
+                "--skip-teardown",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
             env=_env_with_kubeconfig(),
         )
         ok = proc.returncode == 0
@@ -122,9 +142,19 @@ def _handle_deploy_streaming(req: dict, conn: socket.socket) -> None:
 
     try:
         proc = subprocess.Popen(
-            [sys.executable, "-u", "-m", "tools.na_deploy",
-             "--session", session_path, "--skip-vsapi", "--skip-teardown"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            [
+                sys.executable,
+                "-u",
+                "-m",
+                "tools.na_deploy",
+                "--session",
+                session_path,
+                "--skip-vsapi",
+                "--skip-teardown",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
             env=_env_with_kubeconfig(),
         )
         last_lines: list[str] = []
@@ -151,10 +181,17 @@ def _handle_deploy_streaming(req: dict, conn: socket.socket) -> None:
 def _handle_kill_processes(req: dict) -> dict:
     """Kill backend processes by matching known module names."""
     killed = 0
-    for module in ("ome.main", "orchestrator.main", "vs_api.main", "measurement.mi_main", "nodalpath"):
+    for module in (
+        "ome.main",
+        "orchestrator.main",
+        "vs_api.main",
+        "measurement.mi_main",
+        "nodalpath",
+    ):
         result = subprocess.run(
             ["pgrep", "-f", f"python.*-m {module}"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         for line in result.stdout.strip().splitlines():
             pid = line.strip()
@@ -207,7 +244,9 @@ def _handle_kubectl_exec(req: dict) -> dict:
     try:
         result = subprocess.run(
             ["kubectl", "exec", "-n", _namespace(), pod, "-c", container, "--"] + command,
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
             env=_env_with_kubeconfig(),
         )
         return {
@@ -242,15 +281,31 @@ def _handle_traceroute(req: dict) -> dict:
 
     try:
         cmd = [
-            "kubectl", "exec", "-n", _namespace(), pod, "-c", "frr", "--",
-            "traceroute", "-n", "-w", "2", "-q", "1", "-m", "30",
+            "kubectl",
+            "exec",
+            "-n",
+            _namespace(),
+            pod,
+            "-c",
+            "frr",
+            "--",
+            "traceroute",
+            "-n",
+            "-w",
+            "2",
+            "-q",
+            "1",
+            "-m",
+            "30",
         ]
         if source:
             cmd.extend(["-s", source])
         cmd.append(target)
         result = subprocess.run(
             cmd,
-            capture_output=True, text=True, timeout=90,
+            capture_output=True,
+            text=True,
+            timeout=90,
             env=_env_with_kubeconfig(),
         )
         return {
@@ -278,6 +333,7 @@ def _traceroute_to_tracepath(traceroute_output: str, target: str) -> str:
     tracepath:  ' 1:  10.0.0.1  5.123ms reached'
     """
     import re
+
     lines = []
     last_hop = 0
     for line in traceroute_output.splitlines():
@@ -316,13 +372,30 @@ def _handle_tracepath(req: dict) -> dict:
 
     try:
         cmd = [
-            "kubectl", "exec", "-n", _namespace(), pod, "-c", "frr", "--",
-            "traceroute", "-I", "-n", "-w", "0.25", "-q", "1", "-m", "30",
+            "kubectl",
+            "exec",
+            "-n",
+            _namespace(),
+            pod,
+            "-c",
+            "frr",
+            "--",
+            "traceroute",
+            "-I",
+            "-n",
+            "-w",
+            "0.25",
+            "-q",
+            "1",
+            "-m",
+            "30",
             target,
         ]
         result = subprocess.run(
             cmd,
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
             env=_env_with_kubeconfig(),
         )
         # Convert traceroute output to tracepath format for the parser
@@ -355,6 +428,7 @@ def _handle_read_netem_delay(req: dict) -> dict:
 
     try:
         from pyroute2 import NetNS
+
         ns = NetNS(f"/proc/{pid}/ns/net")
         try:
             idx = ns.link_lookup(ifname=ifname)
@@ -424,11 +498,13 @@ def _handle_read_link_delays(req: dict) -> dict:
 
     result_list = []
     for i, q in enumerate(queries):
-        result_list.append({
-            "pid": q.get("pid"),
-            "ifname": q.get("ifname"),
-            "delay_ms": delays[i],
-        })
+        result_list.append(
+            {
+                "pid": q.get("pid"),
+                "ifname": q.get("ifname"),
+                "delay_ms": delays[i],
+            }
+        )
     return {"ok": True, "delays": result_list}
 
 
@@ -437,7 +513,9 @@ def _handle_helm_list(req: dict) -> dict:
     try:
         result = subprocess.run(
             ["helm", "list", "-n", _namespace(), "-q"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
             env=_env_with_kubeconfig(),
         )
         releases = [r.strip() for r in result.stdout.strip().split("\n") if r.strip()]
@@ -454,7 +532,9 @@ def _handle_helm_uninstall(req: dict) -> dict:
     try:
         result = subprocess.run(
             ["helm", "uninstall", release, "-n", _namespace()],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
             env=_env_with_kubeconfig(),
         )
         return {"ok": result.returncode == 0, "output": result.stdout}
@@ -466,9 +546,20 @@ def _handle_kubectl_wait(req: dict) -> dict:
     """Wait for pods to terminate."""
     try:
         result = subprocess.run(
-            ["kubectl", "wait", "--for=delete", "pod",
-             "-l", "nodalarc.io/node-id", "-n", _namespace(), "--timeout=60s"],
-            capture_output=True, text=True, timeout=90,
+            [
+                "kubectl",
+                "wait",
+                "--for=delete",
+                "pod",
+                "-l",
+                "nodalarc.io/node-id",
+                "-n",
+                _namespace(),
+                "--timeout=60s",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
             env=_env_with_kubeconfig(),
         )
         return {"ok": True}
@@ -487,7 +578,10 @@ def _handle_modprobe_mpls(req: dict) -> dict:
         try:
             subprocess.run(
                 ["modprobe", mod],
-                capture_output=True, text=True, timeout=15, check=True,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=True,
             )
             loaded.append(mod)
         except subprocess.CalledProcessError as exc:
@@ -507,9 +601,10 @@ def _handle_get_pod_ip(req: dict) -> dict:
         return {"ok": False, "error": f"Invalid pod name: {pod}"}
     try:
         result = subprocess.run(
-            ["kubectl", "get", "pod", pod, "-n", namespace,
-             "-o", "jsonpath={.status.podIP}"],
-            capture_output=True, text=True, timeout=15,
+            ["kubectl", "get", "pod", pod, "-n", namespace, "-o", "jsonpath={.status.podIP}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
             env=_env_with_kubeconfig(),
         )
         if result.returncode != 0:
@@ -539,7 +634,7 @@ def _recv(conn: socket.socket) -> dict | None:
             return None
         buf += chunk
         if b"\n" in buf:
-            line = buf[:buf.index(b"\n")]
+            line = buf[: buf.index(b"\n")]
             return json.loads(line)
 
 
@@ -588,10 +683,8 @@ def _handle_client(conn: socket.socket, addr: str) -> None:
         _send(conn, resp)
     except Exception as exc:
         log.error(f"Client handler error: {exc}")
-        try:
+        with contextlib.suppress(Exception):
             _send(conn, {"ok": False, "error": str(exc)})
-        except Exception:
-            pass
     finally:
         conn.close()
 
@@ -604,13 +697,14 @@ def _signal_handler(signum: int, frame: object) -> None:
 def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc deploy daemon")
-    parser.add_argument("--socket", default=None,
-                        help="Unix socket path")
-    parser.add_argument("--platform-config", default="configs/platform.yaml",
-                        help="Path to platform config YAML")
+    parser.add_argument("--socket", default=None, help="Unix socket path")
+    parser.add_argument(
+        "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
+    )
     args = parser.parse_args()
 
     from nodalarc.platform import init_platform_config
+
     init_platform_config(Path(args.platform_config))
 
     sock_path = args.socket if args.socket is not None else _default_socket_path()
@@ -641,7 +735,7 @@ def main() -> None:
             conn, addr = server.accept()
             t = threading.Thread(target=_handle_client, args=(conn, addr), daemon=True)
             t.start()
-        except socket.timeout:
+        except TimeoutError:
             continue
         except OSError:
             break

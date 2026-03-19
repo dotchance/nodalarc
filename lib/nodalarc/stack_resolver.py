@@ -4,13 +4,13 @@ Replaces the need for per-stack directories when deploying via the wizard.
 Legacy deploys using routing.stack still load from stack.yaml directly.
 """
 
+from dataclasses import dataclass
 from typing import Any, NamedTuple
-
-from dataclasses import dataclass, field
 
 
 class TemplateFile(NamedTuple):
     """A Jinja2 template to render into a pod."""
+
     src: str
     dst: str
 
@@ -18,6 +18,7 @@ class TemplateFile(NamedTuple):
 @dataclass(frozen=True)
 class ResolvedStack:
     """Fully resolved routing stack — everything na_deploy needs."""
+
     daemons: list[str]
     template_files: list[TemplateFile]
     template_variables: dict[str, Any]
@@ -176,5 +177,3 @@ def _resolve_isis(ext_set: set[str]) -> ResolvedStack:
         reconfigure_command="vtysh -f {config_path}",
         max_compression=10,
     )
-
-

@@ -7,23 +7,18 @@ LinkUp/LinkDown using inproc ZMQ sockets (no network).
 
 from __future__ import annotations
 
-import json
 import threading
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import zmq
-
 from nodalarc.models.events import VisibilityEvent
-from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.zmq_channels import (
     TOPIC_LINK_DOWN,
     TOPIC_LINK_UP,
-    TOPIC_VISIBILITY_EVENT,
     decode_message,
-    encode_message,
 )
+
 from orchestrator.realtime_dispatcher import RealtimeDispatcher
 
 
@@ -50,7 +45,7 @@ def bandwidth_map():
 
 
 def _make_vis_event(node_a, node_b, visible, scheduled):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return VisibilityEvent(
         sim_time=now,
         node_a=node_a,

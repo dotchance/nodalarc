@@ -26,6 +26,8 @@ dev = [
     "pytest",
     "pytest-cov",
     "mypy",
+    "ruff>=0.4.4",
+    "pre-commit>=3.7.0",
 ]
 
 [tool.pytest.ini_options]
@@ -41,3 +43,19 @@ dev = [
     "grpcio-tools>=1.74",
     "pytest-timeout>=2.4.0",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501", "B008", "E402", "E741", "E701", "E702", "F841", "SIM115"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B", "SIM"]
+"**/tests/**" = ["B", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

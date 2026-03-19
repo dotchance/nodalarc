@@ -1,7 +1,5 @@
 """Test AddressingScheme identity and IP derivation."""
 
-import pytest
-
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.session import AddressingConfig
 

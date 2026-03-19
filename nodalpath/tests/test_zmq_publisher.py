@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from nodalarc.zmq_channels import TOPIC_ALMANAC_EVENT, decode_message
+
 from nodalpath.models.almanac_event import AlmanacEvent
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ class TestAlmanacPublisher:
         pub = AlmanacPublisher("tcp://127.0.0.1:5567")
         event = AlmanacEvent(
             event_type="path_computed",
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             wall_time=_utcnow(),
             topology_state_id="topo-abc",
         )
@@ -60,7 +60,7 @@ class TestAlmanacPublisher:
 
         event = AlmanacEvent(
             event_type="path_computed",
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             wall_time=_utcnow(),
             topology_state_id="topo-abc",
         )
@@ -73,7 +73,7 @@ class TestAlmanacPublisher:
 
         pub = AlmanacPublisher("tcp://127.0.0.1:5567")
         pub.publish_table_pushed(
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             topology_state_id="topo-abc",
             nodes_attempted=10,
             nodes_succeeded=9,
@@ -94,7 +94,7 @@ class TestAlmanacPublisher:
 
         pub = AlmanacPublisher("tcp://127.0.0.1:5567")
         pub.publish_path_computed(
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             topology_state_id="topo-xyz",
         )
         raw = mock_sock.send.call_args[0][0]
@@ -109,7 +109,7 @@ class TestAlmanacPublisher:
 
         pub = AlmanacPublisher("tcp://127.0.0.1:5567")
         pub.publish_deviation(
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             topology_state_id="topo-abc",
             node_a="sat-P00S00",
             node_b="sat-P00S01",
@@ -129,7 +129,7 @@ class TestAlmanacPublisher:
 
         pub = AlmanacPublisher("tcp://127.0.0.1:5567")
         pub.publish_path_computed(
-            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
             topology_state_id="topo-abc",
         )
         raw = mock_sock.send.call_args[0][0]

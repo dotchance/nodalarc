@@ -5,13 +5,10 @@ report type, and verifies the output contains expected information.
 """
 
 import sqlite3
-import tempfile
-from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
-
 from nodalarc.db.schema import create_tables
+
 from tools.na_compare import (
     _attach_databases,
     _count_table,

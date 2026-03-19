@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -56,20 +55,26 @@ def _mac_to_link_local(mac_str: str) -> str:
 
 def _default_grpc_port() -> int:
     from nodalarc.platform import get_platform_config
+
     return get_platform_config().nodalpath_fwd_grpc_port
+
 
 def _default_timeout() -> float:
     from nodalpath.platform import get_nodalpath_config
+
     return float(get_nodalpath_config().grpc_push_timeout_seconds)
+
 
 def _max_workers() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().grpc_push_max_parallel_workers
 
 
 @dataclass
 class GrpcExecResult:
     """Result of a gRPC forwarding table push."""
+
     node_id: str
     pod_ip: str
     success: bool
@@ -141,7 +146,8 @@ def build_forwarding_update(
         else:
             log.warning(
                 "Skipping push action for in_label=%d on %s",
-                binding.in_label, table.node_id,
+                binding.in_label,
+                table.node_id,
             )
 
     ler_entries: list[IngressEntry] = []
@@ -198,20 +204,29 @@ def push_forwarding_table(
         )
     except grpc.FutureTimeoutError:
         return GrpcExecResult(
-            node_id=node_id, pod_ip=pod_ip, success=False,
-            entries_installed=0, apply_time_ms=0.0,
+            node_id=node_id,
+            pod_ip=pod_ip,
+            success=False,
+            entries_installed=0,
+            apply_time_ms=0.0,
             error_message=f"Channel not ready after {timeout}s",
         )
     except grpc.RpcError as exc:
         return GrpcExecResult(
-            node_id=node_id, pod_ip=pod_ip, success=False,
-            entries_installed=0, apply_time_ms=0.0,
+            node_id=node_id,
+            pod_ip=pod_ip,
+            success=False,
+            entries_installed=0,
+            apply_time_ms=0.0,
             error_message=str(exc),
         )
     except Exception as exc:
         return GrpcExecResult(
-            node_id=node_id, pod_ip=pod_ip, success=False,
-            entries_installed=0, apply_time_ms=0.0,
+            node_id=node_id,
+            pod_ip=pod_ip,
+            success=False,
+            entries_installed=0,
+            apply_time_ms=0.0,
             error_message=str(exc),
         )
     finally:

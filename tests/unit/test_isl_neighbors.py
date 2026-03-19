@@ -1,9 +1,6 @@
 """Test ISL neighbor assignment for all constellation types."""
 
-import yaml
 import pytest
-from pydantic import TypeAdapter
-
 from nodalarc.models.addressing import (
     AddressingScheme,
     NeighborAssignment,
@@ -11,6 +8,8 @@ from nodalarc.models.addressing import (
     neighbors_by_node,
 )
 from nodalarc.models.constellation import ConstellationConfig
+from pydantic import TypeAdapter
+
 from ome.constellation_loader import load_constellation
 from tests.conftest import CONFIGS_DIR
 
@@ -187,19 +186,48 @@ class TestIridium66Assignment:
 class TestIslOverrides:
     def test_override_applied(self, addressing):
         data = {
-            "mode": "explicit", "name": "with-override",
-            "default_terminals": {"isl": [
-                {"type": "optical", "count": 2, "max_range_km": 5000,
-                 "bandwidth_mbps": 1000, "max_tracking_rate_deg_s": 3.0}
-            ]},
+            "mode": "explicit",
+            "name": "with-override",
+            "default_terminals": {
+                "isl": [
+                    {
+                        "type": "optical",
+                        "count": 2,
+                        "max_range_km": 5000,
+                        "bandwidth_mbps": 1000,
+                        "max_tracking_rate_deg_s": 3.0,
+                    }
+                ]
+            },
             "satellites": [
-                {"plane": 0, "slot": 0, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 0}},
-                {"plane": 0, "slot": 1, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 180}},
+                {
+                    "plane": 0,
+                    "slot": 0,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "true_anomaly_deg": 0,
+                    },
+                },
+                {
+                    "plane": 0,
+                    "slot": 1,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "true_anomaly_deg": 180,
+                    },
+                },
             ],
             "isl_overrides": [
-                {"node": "sat-P00S00", "links": [
-                    {"terminal": "isl0", "peer": "sat-P00S01"},
-                ]},
+                {
+                    "node": "sat-P00S00",
+                    "links": [
+                        {"terminal": "isl0", "peer": "sat-P00S01"},
+                    ],
+                },
             ],
         }
         config = adapter.validate_python(data)
@@ -214,19 +242,48 @@ class TestIslOverrides:
 
     def test_non_overridden_node_still_auto(self, addressing):
         data = {
-            "mode": "explicit", "name": "with-override",
-            "default_terminals": {"isl": [
-                {"type": "optical", "count": 2, "max_range_km": 5000,
-                 "bandwidth_mbps": 1000, "max_tracking_rate_deg_s": 3.0}
-            ]},
+            "mode": "explicit",
+            "name": "with-override",
+            "default_terminals": {
+                "isl": [
+                    {
+                        "type": "optical",
+                        "count": 2,
+                        "max_range_km": 5000,
+                        "bandwidth_mbps": 1000,
+                        "max_tracking_rate_deg_s": 3.0,
+                    }
+                ]
+            },
             "satellites": [
-                {"plane": 0, "slot": 0, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 0}},
-                {"plane": 0, "slot": 1, "orbit": {"altitude_km": 550, "inclination_deg": 53, "raan_deg": 0, "true_anomaly_deg": 180}},
+                {
+                    "plane": 0,
+                    "slot": 0,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "true_anomaly_deg": 0,
+                    },
+                },
+                {
+                    "plane": 0,
+                    "slot": 1,
+                    "orbit": {
+                        "altitude_km": 550,
+                        "inclination_deg": 53,
+                        "raan_deg": 0,
+                        "true_anomaly_deg": 180,
+                    },
+                },
             ],
             "isl_overrides": [
-                {"node": "sat-P00S00", "links": [
-                    {"terminal": "isl0", "peer": "sat-P00S01"},
-                ]},
+                {
+                    "node": "sat-P00S00",
+                    "links": [
+                        {"terminal": "isl0", "peer": "sat-P00S01"},
+                    ],
+                },
             ],
         }
         config = adapter.validate_python(data)
@@ -249,7 +306,7 @@ class TestFrozenResult:
         result = assign_isl_neighbors(four_node_config, addressing)
         for node_id, na in result:
             assert isinstance(na, NeighborAssignment)
-            assert hasattr(na, 'interface')
-            assert hasattr(na, 'peer_node_id')
-            assert hasattr(na, 'link_type')
-            assert hasattr(na, 'priority')
+            assert hasattr(na, "interface")
+            assert hasattr(na, "peer_node_id")
+            assert hasattr(na, "link_type")
+            assert hasattr(na, "priority")

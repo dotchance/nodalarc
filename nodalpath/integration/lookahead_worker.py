@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from nodalpath.orchestrator.link_state_store import LinkStateStore
 
 from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
+
 from nodalpath.engine.almanac_builder import compute_almanac_entry
 from nodalpath.orchestrator.almanac_store import AlmanacStore
 from nodalpath.orchestrator.snapshot_builder import SnapshotBuilder
@@ -27,12 +28,16 @@ from nodalpath.orchestrator.transition_detector import has_transition
 
 log = logging.getLogger(__name__)
 
+
 def _lookahead_default_s() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().lookahead_horizon_sim_seconds
+
 
 def _poll_interval_s() -> float:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().lookahead_poll_interval_seconds
 
 
@@ -55,7 +60,9 @@ class LookaheadWorker:
         if lookahead_horizon_s is None:
             lookahead_horizon_s = _lookahead_default_s()
         self._timeline_path = timeline_path
-        self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map, static_edges=static_edges)
+        self._builder = SnapshotBuilder(
+            node_registry, interface_map, bandwidth_map, static_edges=static_edges
+        )
         self._prefix_map = prefix_map
         self._store = almanac_store
         self._horizon_s = lookahead_horizon_s
@@ -72,7 +79,8 @@ class LookaheadWorker:
         self._set_status("starting")
         log.info(
             "LookaheadWorker started (horizon=%ds, file=%s)",
-            self._horizon_s, self._timeline_path,
+            self._horizon_s,
+            self._timeline_path,
         )
 
         # Wait for the live orchestrator to process at least one transition
@@ -91,7 +99,8 @@ class LookaheadWorker:
 
         log.info(
             "LookaheadWorker baseline=%s horizon_end=%s",
-            baseline_sim_time, horizon_end,
+            baseline_sim_time,
+            horizon_end,
         )
 
         prev_link_set: frozenset = frozenset()
@@ -100,9 +109,7 @@ class LookaheadWorker:
 
         try:
             while self._running:
-                new_events, file_position = _read_new_events(
-                    self._timeline_path, file_position
-                )
+                new_events, file_position = _read_new_events(self._timeline_path, file_position)
 
                 if not new_events:
                     self._set_status("waiting")
@@ -131,7 +138,10 @@ class LookaheadWorker:
                             log.warning("LookaheadWorker bad VisibilityEvent: %s", exc)
                             continue
 
-                        if current_sim_time is not None and event.sim_time.isoformat() != current_sim_time:
+                        if (
+                            current_sim_time is not None
+                            and event.sim_time.isoformat() != current_sim_time
+                        ):
                             prev_link_set = await self._check_transition(
                                 current_sim_time, prev_link_set
                             )
@@ -151,9 +161,7 @@ class LookaheadWorker:
         finally:
             log.info("LookaheadWorker stopped")
 
-    async def _check_transition(
-        self, sim_time_iso: str, prev_link_set: frozenset
-    ) -> frozenset:
+    async def _check_transition(self, sim_time_iso: str, prev_link_set: frozenset) -> frozenset:
         """Check for topology transition and store future entry if changed."""
         curr = self._builder.active_link_set
         if not has_transition(prev_link_set, curr):
@@ -175,7 +183,8 @@ class LookaheadWorker:
 
         log.debug(
             "LookaheadWorker: future transition at %s, %d tables",
-            sim_time_iso, len(entry.forwarding_tables),
+            sim_time_iso,
+            len(entry.forwarding_tables),
         )
 
         return curr

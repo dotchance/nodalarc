@@ -34,10 +34,12 @@ from pathlib import Path
 os.chdir(Path(__file__).parent.parent.parent)
 os.environ.setdefault("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")
 
-from nodalarc.platform import init_platform_config, get_platform_config
+from nodalarc.platform import get_platform_config, init_platform_config
+
 init_platform_config(Path("configs/platform.yaml"))
 
 from nodalpath.platform import init_nodalpath_config
+
 init_nodalpath_config(Path("configs/nodalpath.yaml"))
 
 from nodalpath.engine.labels import compute_sid
@@ -55,23 +57,37 @@ GRPC_PORT = get_platform_config().nodalpath_fwd_grpc_port
 # ---------------------------------------------------------------------------
 
 
-def kubectl_exec(pod: str, container: str, command: list[str], timeout: int = 15) -> subprocess.CompletedProcess:
+def kubectl_exec(
+    pod: str, container: str, command: list[str], timeout: int = 15
+) -> subprocess.CompletedProcess:
     """Execute a command in a pod container via kubectl."""
     cmd = [
-        "kubectl", "exec", "-n", NAMESPACE, pod,
-        "-c", container, "--",
+        "kubectl",
+        "exec",
+        "-n",
+        NAMESPACE,
+        pod,
+        "-c",
+        container,
+        "--",
     ] + command
     return subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, env=KUBECTL_ENV,
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=KUBECTL_ENV,
     )
 
 
 def kubectl_logs(pod: str, container: str, tail: int = 200) -> str:
     """Fetch recent logs from a pod container."""
     result = subprocess.run(
-        ["kubectl", "logs", "-n", NAMESPACE, pod, "-c", container,
-         f"--tail={tail}"],
-        capture_output=True, text=True, timeout=15, env=KUBECTL_ENV,
+        ["kubectl", "logs", "-n", NAMESPACE, pod, "-c", container, f"--tail={tail}"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env=KUBECTL_ENV,
     )
     return result.stdout
 
@@ -79,10 +95,21 @@ def kubectl_logs(pod: str, container: str, tail: int = 200) -> str:
 def get_satellite_pods() -> list[dict]:
     """List all satellite pods with plane/slot labels."""
     result = subprocess.run(
-        ["kubectl", "get", "pods", "-n", NAMESPACE,
-         "-l", "nodalarc.io/role=satellite",
-         "-o", "json"],
-        capture_output=True, text=True, timeout=15, env=KUBECTL_ENV,
+        [
+            "kubectl",
+            "get",
+            "pods",
+            "-n",
+            NAMESPACE,
+            "-l",
+            "nodalarc.io/role=satellite",
+            "-o",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env=KUBECTL_ENV,
     )
     if result.returncode != 0:
         return []
@@ -94,23 +121,36 @@ def get_satellite_pods() -> list[dict]:
         plane = int(labels.get("nodalarc.io/plane", -1))
         slot = int(labels.get("nodalarc.io/slot", -1))
         pod_ip = item.get("status", {}).get("podIP", "")
-        pods.append({
-            "name": name,
-            "plane": plane,
-            "slot": slot,
-            "pod_ip": pod_ip,
-            "node_id": labels.get("nodalarc.io/node-id", name),
-        })
+        pods.append(
+            {
+                "name": name,
+                "plane": plane,
+                "slot": slot,
+                "pod_ip": pod_ip,
+                "node_id": labels.get("nodalarc.io/node-id", name),
+            }
+        )
     return pods
 
 
 def get_gs_pods() -> list[dict]:
     """List all ground station pods."""
     result = subprocess.run(
-        ["kubectl", "get", "pods", "-n", NAMESPACE,
-         "-l", "nodalarc.io/role=ground-station",
-         "-o", "json"],
-        capture_output=True, text=True, timeout=15, env=KUBECTL_ENV,
+        [
+            "kubectl",
+            "get",
+            "pods",
+            "-n",
+            NAMESPACE,
+            "-l",
+            "nodalarc.io/role=ground-station",
+            "-o",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env=KUBECTL_ENV,
     )
     if result.returncode != 0:
         return []
@@ -120,17 +160,20 @@ def get_gs_pods() -> list[dict]:
         labels = item.get("metadata", {}).get("labels", {})
         name = item["metadata"]["name"]
         pod_ip = item.get("status", {}).get("podIP", "")
-        pods.append({
-            "name": name,
-            "pod_ip": pod_ip,
-            "node_id": labels.get("nodalarc.io/node-id", name),
-        })
+        pods.append(
+            {
+                "name": name,
+                "pod_ip": pod_ip,
+                "node_id": labels.get("nodalarc.io/node-id", name),
+            }
+        )
     return pods
 
 
 def get_api_key() -> str:
     """Fetch VS-API auth token."""
     import urllib.request
+
     try:
         r = urllib.request.urlopen("http://localhost:8080/api/v1/auth/token", timeout=5)
         return json.loads(r.read()).get("token", "")
@@ -141,6 +184,7 @@ def get_api_key() -> str:
 def api_post(path: str, data: dict) -> dict:
     """POST to VS-API."""
     import urllib.request
+
     key = get_api_key()
     req = urllib.request.Request(
         f"http://localhost:8080{path}",
@@ -158,6 +202,7 @@ def api_post(path: str, data: dict) -> dict:
 def api_get(path: str) -> dict:
     """GET from VS-API."""
     import urllib.request
+
     key = get_api_key()
     req = urllib.request.Request(
         f"http://localhost:8080{path}",
@@ -197,8 +242,7 @@ def test_mpls_loopback_assigned() -> tuple[bool, str]:
     for pod in pods[:8]:  # Sample up to 8 pods
         plane, slot = pod["plane"], pod["slot"]
         expected_ip = f"10.{plane}.{slot}.1"
-        result = kubectl_exec(pod["name"], SIDECAR_CONTAINER,
-                              ["ip", "-4", "addr", "show", "lo"])
+        result = kubectl_exec(pod["name"], SIDECAR_CONTAINER, ["ip", "-4", "addr", "show", "lo"])
         if result.returncode != 0:
             failures.append(f"{pod['name']}: kubectl exec failed ({result.stderr.strip()[:80]})")
             continue
@@ -208,7 +252,10 @@ def test_mpls_loopback_assigned() -> tuple[bool, str]:
             failures.append(f"{pod['name']}: expected {expected_ip} on lo, not found")
 
     if failures:
-        return False, f"FAIL: {len(failures)} failures (checked {checked + len(failures)}): {failures[0]}"
+        return (
+            False,
+            f"FAIL: {len(failures)} failures (checked {checked + len(failures)}): {failures[0]}",
+        )
     return True, f"PASS: {checked} pods have correct loopback addresses"
 
 
@@ -226,8 +273,7 @@ def test_mpls_link_local_addresses() -> tuple[bool, str]:
     checked = 0
     failures = []
     for pod in pods[:6]:  # Sample 6 pods
-        result = kubectl_exec(pod["name"], SIDECAR_CONTAINER,
-                              ["ip", "-4", "-o", "addr", "show"])
+        result = kubectl_exec(pod["name"], SIDECAR_CONTAINER, ["ip", "-4", "-o", "addr", "show"])
         if result.returncode != 0:
             failures.append(f"{pod['name']}: kubectl exec failed")
             continue
@@ -262,7 +308,8 @@ def test_mpls_forwarding_tables_installed() -> tuple[bool, str]:
     - The POP entry's in_label matches compute_sid()
     """
     import grpc
-    from nodalpath.proto import Empty, Action
+
+    from nodalpath.proto import Action, Empty
     from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
 
     pods = get_satellite_pods()
@@ -280,8 +327,10 @@ def test_mpls_forwarding_tables_installed() -> tuple[bool, str]:
             continue
 
         expected_sid = compute_sid(
-            pod["node_id"], "satellite",
-            plane=pod["plane"], slot=pod["slot"],
+            pod["node_id"],
+            "satellite",
+            plane=pod["plane"],
+            slot=pod["slot"],
             sats_per_plane=sats_per_plane,
         )
 
@@ -306,9 +355,7 @@ def test_mpls_forwarding_tables_installed() -> tuple[bool, str]:
 
         pop_label = pop_entries[0].in_label
         if pop_label != expected_sid:
-            failures.append(
-                f"{pod['name']}: POP in_label={pop_label}, expected SID={expected_sid}"
-            )
+            failures.append(f"{pod['name']}: POP in_label={pop_label}, expected SID={expected_sid}")
             continue
 
         # Check LER entries exist (should have entries for remote prefixes)
@@ -320,7 +367,10 @@ def test_mpls_forwarding_tables_installed() -> tuple[bool, str]:
 
     if failures:
         detail = "; ".join(failures[:3])
-        return False, f"FAIL: {len(failures)} failures (checked {checked + len(failures)}): {detail}"
+        return (
+            False,
+            f"FAIL: {len(failures)} failures (checked {checked + len(failures)}): {detail}",
+        )
     return True, (
         f"PASS: {checked} pods have correct forwarding tables "
         f"(1 POP LSR + LER entries, SID matches compute_sid)"
@@ -341,7 +391,8 @@ def test_mpls_kernel_routes_installed() -> tuple[bool, str]:
     - Route count matches sidecar's table count
     """
     import grpc
-    from nodalpath.proto import Empty, Action
+
+    from nodalpath.proto import Empty
     from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
 
     pods = get_satellite_pods()
@@ -358,8 +409,10 @@ def test_mpls_kernel_routes_installed() -> tuple[bool, str]:
             continue
 
         expected_sid = compute_sid(
-            pod["node_id"], "satellite",
-            plane=pod["plane"], slot=pod["slot"],
+            pod["node_id"],
+            "satellite",
+            plane=pod["plane"],
+            slot=pod["slot"],
             sats_per_plane=sats_per_plane,
         )
 
@@ -378,8 +431,9 @@ def test_mpls_kernel_routes_installed() -> tuple[bool, str]:
         sidecar_ler_count = len(fwd.ler_entries)
 
         # Check MPLS routes in kernel
-        mpls_result = kubectl_exec(pod["name"], SIDECAR_CONTAINER,
-                                   ["ip", "-f", "mpls", "route", "show"])
+        mpls_result = kubectl_exec(
+            pod["name"], SIDECAR_CONTAINER, ["ip", "-f", "mpls", "route", "show"]
+        )
         if mpls_result.returncode != 0:
             failures.append(f"{pod['name']}: 'ip -f mpls route show' failed")
             continue
@@ -414,8 +468,7 @@ def test_mpls_kernel_routes_installed() -> tuple[bool, str]:
             continue
 
         # Check IP routes for LER entries (encap mpls)
-        ip_result = kubectl_exec(pod["name"], SIDECAR_CONTAINER,
-                                 ["ip", "route", "show"])
+        ip_result = kubectl_exec(pod["name"], SIDECAR_CONTAINER, ["ip", "route", "show"])
         if ip_result.returncode != 0:
             failures.append(f"{pod['name']}: 'ip route show' failed")
             continue
@@ -484,7 +537,8 @@ def test_mpls_single_hop_ping() -> tuple[bool, str]:
 
     # Use 'frr' container for ping (sidecar doesn't have ping installed)
     result = kubectl_exec(
-        src_pod["name"], "frr",
+        src_pod["name"],
+        "frr",
         ["ping", "-c", "3", "-W", "3", "-I", src_loopback, dst_loopback],
         timeout=20,
     )
@@ -541,7 +595,8 @@ def test_mpls_multi_hop_ping() -> tuple[bool, str]:
 
     # Use 'frr' container for ping (sidecar doesn't have ping installed)
     result = kubectl_exec(
-        src_pod["name"], "frr",
+        src_pod["name"],
+        "frr",
         ["ping", "-c", "3", "-W", "5", "-I", src_loopback, dst_loopback],
         timeout=30,
     )
@@ -607,8 +662,7 @@ def test_cspf_trace_returns_hops() -> tuple[bool, str]:
             if len(hops) >= 2:
                 api_post("/api/v1/trace/stop", {})
                 return True, (
-                    f"PASS: trace {src_id} -> {dst_id}: "
-                    f"{len(hops)} hops, RTT {rtt:.1f}ms"
+                    f"PASS: trace {src_id} -> {dst_id}: {len(hops)} hops, RTT {rtt:.1f}ms"
                 )
 
     api_post("/api/v1/trace/stop", {})
@@ -701,16 +755,18 @@ def main() -> int:
         ("8. Sidecar retry logs", test_sidecar_retry_on_interface_up),
     ]
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  NodalPath MPLS Integration Tests")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Pre-flight: check that we have satellite pods
     sat_pods = get_satellite_pods()
     if not sat_pods:
         print("\n  ABORT: No satellite pods found in namespace 'nodalarc'.")
         print("  Deploy a NodalPath session first:")
-        print("    sudo .venv/bin/python -m tools.na_deploy --session configs/sessions/_test-nodalpath.yaml")
+        print(
+            "    sudo .venv/bin/python -m tools.na_deploy --session configs/sessions/_test-nodalpath.yaml"
+        )
         return 1
 
     print(f"\n  Found {len(sat_pods)} satellite pods")
@@ -734,9 +790,9 @@ def main() -> int:
         else:
             failed += 1
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  RESULT: {passed} passed, {failed} failed / {passed + failed} total")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     return 1 if failed > 0 else 0
 

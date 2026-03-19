@@ -1,7 +1,7 @@
 """Tests for LiveOrchestrator <-> ConsoleState integration."""
-import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+
+from unittest.mock import MagicMock
+
 from nodalpath.console.state import ConsoleState
 from nodalpath.integration.live_orchestrator import LiveOrchestrator
 
@@ -15,9 +15,11 @@ def _make_orchestrator(with_state=True):
     publisher = MagicMock()
     publisher.publish = MagicMock()
     publisher.close = MagicMock()
-    console_state = ConsoleState(
-        session_path="/tmp/test", transport="grpc", dry_run=True, nodes_in_registry=2
-    ) if with_state else None
+    console_state = (
+        ConsoleState(session_path="/tmp/test", transport="grpc", dry_run=True, nodes_in_registry=2)
+        if with_state
+        else None
+    )
 
     orch = LiveOrchestrator(
         node_registry=node_registry,
@@ -51,10 +53,17 @@ def test_transition_records_to_console_state():
 def test_push_result_recorded_to_console_state():
     """PushResult from push_scheduler appears in ConsoleState."""
     _, state = _make_orchestrator()
+
     class FakeResult:
-        topology_state_id = "s-abc"; sim_time = "2026-01-01T00:00:00Z"
-        nodes_attempted = 2; nodes_succeeded = 2; nodes_failed = 0
-        nodes_skipped = 0; push_duration_ms = 11.0; failed_nodes = []
+        topology_state_id = "s-abc"
+        sim_time = "2026-01-01T00:00:00Z"
+        nodes_attempted = 2
+        nodes_succeeded = 2
+        nodes_failed = 0
+        nodes_skipped = 0
+        push_duration_ms = 11.0
+        failed_nodes = []
+
     state.record_push_result(FakeResult())
     snap = state.snapshot()
     assert len(snap["push_history"]) == 1
@@ -64,7 +73,9 @@ def test_push_result_recorded_to_console_state():
 def test_deviation_records_to_console_state():
     """Deviation event appears in ConsoleState and increments deviation_count."""
     _, state = _make_orchestrator()
-    state.record_deviation("2026-01-01T00:00:00Z", "s1", "sat-P00S00", "sat-P01S00", "scenario_inject_down")
+    state.record_deviation(
+        "2026-01-01T00:00:00Z", "s1", "sat-P00S00", "sat-P01S00", "scenario_inject_down"
+    )
     snap = state.snapshot()
     assert snap["deviation_count"] == 1
     assert snap["deviation_history"][0]["node_a"] == "sat-P00S00"
@@ -84,4 +95,4 @@ def test_manual_recompute_request_consumed_by_orchestrator():
     assert state.consume_recompute_request() is False
     state.request_recompute()
     assert state.consume_recompute_request() is True
-    assert state.consume_recompute_request() is False   # consumed
+    assert state.consume_recompute_request() is False  # consumed

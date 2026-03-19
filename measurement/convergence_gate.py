@@ -8,17 +8,12 @@ Run: python -m measurement.convergence_gate --session <path>
 
 from __future__ import annotations
 
-import argparse
 import logging
-from datetime import datetime, timezone
-from typing import Any
 
 import zmq
-
-from nodalarc.constants import LOG_FORMAT
-from nodalarc.models.metrics import ConvergenceRequest, ConvergenceResult
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.metrics import ConvergenceRequest
 from nodalarc.zmq_channels import mi_convergence_gate_bind
+
 from measurement.convergence_detector import measure_convergence
 
 log = logging.getLogger(__name__)

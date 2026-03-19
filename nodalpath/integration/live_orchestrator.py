@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -15,10 +15,10 @@ if TYPE_CHECKING:
 
 import zmq
 import zmq.asyncio
-
 from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.zmq_channels import decode_message
+
 from nodalpath.engine.almanac_builder import compute_almanac_entry
 from nodalpath.integration.deviation import DeviationDetector
 from nodalpath.integration.zmq_publisher import AlmanacPublisher
@@ -58,7 +58,9 @@ class LiveOrchestrator:
         inspection_heartbeat_interval_s: int = 0,
         static_edges: list | None = None,
     ) -> None:
-        self._builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map, static_edges=static_edges)
+        self._builder = SnapshotBuilder(
+            node_registry, interface_map, bandwidth_map, static_edges=static_edges
+        )
         self._node_registry = node_registry
         self._interface_map = interface_map
         self._store = AlmanacStore()
@@ -119,7 +121,8 @@ class LiveOrchestrator:
 
         log.info(
             "LiveOrchestrator started — OME=%s TO=%s",
-            self._ome_connect, self._to_connect,
+            self._ome_connect,
+            self._to_connect,
         )
 
         # Seed active link state from VS-API to catch links established before
@@ -145,8 +148,10 @@ class LiveOrchestrator:
                 if _poll_count % 30 == 1:
                     log.info(
                         "Poll #%d: %d sockets ready, active_links=%d, transitions=%d",
-                        _poll_count, len(socks),
-                        len(self._builder._active_links), self._transition_count,
+                        _poll_count,
+                        len(socks),
+                        len(self._builder._active_links),
+                        self._transition_count,
                     )
 
                 # Drain ALL buffered messages per socket (not just one)
@@ -167,7 +172,10 @@ class LiveOrchestrator:
                             break
 
                 # Check for manual recompute request from console
-                if self._console_state is not None and self._console_state.consume_recompute_request():
+                if (  # noqa: SIM102
+                    self._console_state is not None
+                    and self._console_state.consume_recompute_request()
+                ):
                     if self._current_sim_time is not None:
                         log.info("Manual recompute requested via console")
                         await self._recompute(self._current_sim_time.isoformat())
@@ -180,15 +188,18 @@ class LiveOrchestrator:
             ctx.term()
             log.info(
                 "LiveOrchestrator stopped (%d transitions, %d deviations)",
-                self._transition_count, self._deviation_detector.deviation_count,
+                self._transition_count,
+                self._deviation_detector.deviation_count,
             )
 
     async def _seed_from_vsapi(self) -> None:
         """Seed active link state from VS-API to catch links established before connect."""
         try:
             from nodalarc.platform import get_platform_config
+
             cfg = get_platform_config()
             import os
+
             api_key = os.environ.get("NODAL_API_KEY", "")
             # VS-API runs on the host — use per-service host override if available
             vs_api_host = cfg.zmq_connect_host_for("vs-api")
@@ -198,6 +209,7 @@ class LiveOrchestrator:
                 headers["Authorization"] = f"Bearer {api_key}"
 
             import httpx
+
             for attempt in range(10):
                 try:
                     async with httpx.AsyncClient() as client:
@@ -210,20 +222,29 @@ class LiveOrchestrator:
                         for link in links:
                             if link.get("state") != "active":
                                 continue
-                            pair = (min(link["node_a"], link["node_b"]), max(link["node_a"], link["node_b"]))
+                            pair = (
+                                min(link["node_a"], link["node_b"]),
+                                max(link["node_a"], link["node_b"]),
+                            )
                             if pair not in self._builder._active_links:
                                 self._builder._active_links[pair] = link.get("range_km", 0.0)
                                 seeded += 1
                         if sim_time:
                             self._current_sim_time = datetime.fromisoformat(sim_time)
-                        log.info("Seeded %d active links from VS-API (%d total)", seeded, len(self._builder._active_links))
+                        log.info(
+                            "Seeded %d active links from VS-API (%d total)",
+                            seeded,
+                            len(self._builder._active_links),
+                        )
                         if seeded > 0:
-                            await self._check_transition(sim_time or datetime.now(timezone.utc).isoformat())
+                            await self._check_transition(sim_time or datetime.now(UTC).isoformat())
                         return
                     elif resp.status_code == 401:
                         # Try fetching the API key from the token endpoint
                         try:
-                            token_url = f"http://{vs_api_host}:{cfg.vs_api_http_port}/api/v1/auth/token"
+                            token_url = (
+                                f"http://{vs_api_host}:{cfg.vs_api_http_port}/api/v1/auth/token"
+                            )
                             async with httpx.AsyncClient() as client:
                                 token_resp = await client.get(token_url, timeout=5.0)
                             if token_resp.status_code == 200:
@@ -236,7 +257,9 @@ class LiveOrchestrator:
                 except Exception as exc:
                     log.debug("VS-API seed attempt %d failed: %s", attempt + 1, exc)
                 await asyncio.sleep(2)
-            log.warning("Could not seed from VS-API after 10 attempts — starting with empty link state")
+            log.warning(
+                "Could not seed from VS-API after 10 attempts — starting with empty link state"
+            )
         except Exception as exc:
             log.warning("VS-API seed failed: %s", exc)
 
@@ -254,7 +277,9 @@ class LiveOrchestrator:
             data = json.loads(payload)
 
             # Unwrap if OME sends wrapped events (has "data" key with nested model)
-            inner = data.get("data", data) if isinstance(data, dict) and "event_type" in data else data
+            inner = (
+                data.get("data", data) if isinstance(data, dict) and "event_type" in data else data
+            )
 
             if topic == b"FullStateSnapshot":
                 await self._handle_full_state_snapshot(data)
@@ -270,7 +295,10 @@ class LiveOrchestrator:
                 snapshot = TimelinePositionSnapshot.model_validate(inner)
                 self._builder.apply_position_record(snapshot)
                 # Trigger transition check on sim_time change from Snapshots too
-                if self._current_sim_time is not None and snapshot.sim_time != self._current_sim_time:
+                if (
+                    self._current_sim_time is not None
+                    and snapshot.sim_time != self._current_sim_time
+                ):
                     await self._check_transition(self._current_sim_time.isoformat())
                 self._current_sim_time = snapshot.sim_time
 
@@ -324,7 +352,7 @@ class LiveOrchestrator:
         ensures the latency is available immediately when the forwarding
         table is computed.
         """
-        sim_time = data.get("sim_time", datetime.now(timezone.utc).isoformat())
+        sim_time = data.get("sim_time", datetime.now(UTC).isoformat())
 
         link_count = 0
         for state_key in ("isl_state", "gs_state"):
@@ -354,7 +382,8 @@ class LiveOrchestrator:
 
         log.info(
             "FullStateSnapshot: %d active links initialized at %s",
-            link_count, sim_time,
+            link_count,
+            sim_time,
         )
 
         # Trigger transition check — computes initial paths and pushes tables
@@ -393,7 +422,11 @@ class LiveOrchestrator:
                             reason=event.reason,
                         )
                     if self._inspector is not None and self._inspection_on_link_event:
-                        state_id = entry.topology_state_id if entry else self._inspector._last_pushed_state_id
+                        state_id = (
+                            entry.topology_state_id
+                            if entry
+                            else self._inspector._last_pushed_state_id
+                        )
                         asyncio.create_task(self._inspector.trigger_link_event(state_id))
                     await self._recompute(event.sim_time.isoformat())
 
@@ -413,7 +446,8 @@ class LiveOrchestrator:
 
         snapshot = self._builder.build_snapshot(sim_time_iso)
         entry = compute_almanac_entry(
-            snapshot, self._prefix_map,
+            snapshot,
+            self._prefix_map,
             node_registry=self._node_registry,
             interface_map=self._interface_map,
         )
@@ -422,7 +456,9 @@ class LiveOrchestrator:
 
         log.info(
             "Transition at %s: %d active links, %d forwarding tables",
-            sim_time_iso, len(curr), len(entry.forwarding_tables),
+            sim_time_iso,
+            len(curr),
+            len(entry.forwarding_tables),
         )
 
         self._publisher.publish_path_computed(
@@ -433,7 +469,10 @@ class LiveOrchestrator:
         prev_entry = self._store.entries[-2] if len(self._store.entries) > 1 else None
         loop = asyncio.get_running_loop()
         push_result = await loop.run_in_executor(
-            None, self._push_scheduler.push_entry, entry, prev_entry,
+            None,
+            self._push_scheduler.push_entry,
+            entry,
+            prev_entry,
         )
 
         self._publisher.publish_table_pushed(
@@ -480,17 +519,19 @@ class LiveOrchestrator:
             for node in snapshot.nodes:
                 ic = isl_counts.get(node.node_id, 0)
                 gc = gnd_counts.get(node.node_id, 0)
-                nodes_payload.append({
-                    "node_id": node.node_id,
-                    "node_type": node.node_type,
-                    "plane": node.plane,
-                    "slot": node.slot,
-                    "routing_area": getattr(node, "routing_area", None),
-                    "neighbor_count": ic + gc,
-                    "isl_count": ic,
-                    "gnd_count": gc,
-                    "prefix": ", ".join(self._prefix_map.get(node.node_id, [])),
-                })
+                nodes_payload.append(
+                    {
+                        "node_id": node.node_id,
+                        "node_type": node.node_type,
+                        "plane": node.plane,
+                        "slot": node.slot,
+                        "routing_area": getattr(node, "routing_area", None),
+                        "neighbor_count": ic + gc,
+                        "isl_count": ic,
+                        "gnd_count": gc,
+                        "prefix": ", ".join(self._prefix_map.get(node.node_id, [])),
+                    }
+                )
 
             # Use full_link_state to determine live link status instead
             # of hardcoding all edges as "active".
@@ -505,19 +546,23 @@ class LiveOrchestrator:
                     state = "visible_unscheduled"
                 else:
                     state = "inactive"
-                links_payload.append({
-                    "node_a": edge.src_node_id,
-                    "node_b": edge.dst_node_id,
-                    "state": state,
-                    "link_type": edge.link_type,
-                })
+                links_payload.append(
+                    {
+                        "node_a": edge.src_node_id,
+                        "node_b": edge.dst_node_id,
+                        "state": state,
+                        "link_type": edge.link_type,
+                    }
+                )
 
-            self._console_state.record_topology_snapshot({
-                "topology_state_id": entry.topology_state_id,
-                "sim_time": sim_time_iso,
-                "nodes": nodes_payload,
-                "links": links_payload,
-            })
+            self._console_state.record_topology_snapshot(
+                {
+                    "topology_state_id": entry.topology_state_id,
+                    "sim_time": sim_time_iso,
+                    "nodes": nodes_payload,
+                    "links": links_payload,
+                }
+            )
 
         if self._link_state_store is not None:
             self._link_state_store.store(
@@ -531,7 +576,8 @@ class LiveOrchestrator:
         """Force recomputation at current topology state (used after deviation)."""
         snapshot = self._builder.build_snapshot(sim_time_iso)
         entry = compute_almanac_entry(
-            snapshot, self._prefix_map,
+            snapshot,
+            self._prefix_map,
             node_registry=self._node_registry,
             interface_map=self._interface_map,
         )
@@ -542,19 +588,25 @@ class LiveOrchestrator:
 
         log.info(
             "Recomputation at %s after deviation: %d forwarding tables",
-            sim_time_iso, len(entry.forwarding_tables),
+            sim_time_iso,
+            len(entry.forwarding_tables),
         )
 
-        self._publisher.publish(AlmanacEvent(
-            event_type="recomputation_triggered",
-            sim_time=datetime.fromisoformat(sim_time_iso),
-            wall_time=datetime.now(timezone.utc),
-            topology_state_id=entry.topology_state_id,
-        ))
+        self._publisher.publish(
+            AlmanacEvent(
+                event_type="recomputation_triggered",
+                sim_time=datetime.fromisoformat(sim_time_iso),
+                wall_time=datetime.now(UTC),
+                topology_state_id=entry.topology_state_id,
+            )
+        )
 
         loop = asyncio.get_running_loop()
         push_result = await loop.run_in_executor(
-            None, self._push_scheduler.push_entry, entry, None,
+            None,
+            self._push_scheduler.push_entry,
+            entry,
+            None,
         )
 
         if self._console_state is not None:

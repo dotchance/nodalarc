@@ -9,11 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import time
 from typing import Any
-
-import yaml
-from pathlib import Path
 
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig, TrafficFlowConfig
@@ -67,6 +63,7 @@ def resolve_src_pod_ip(
     """
     if namespace is None:
         from nodalarc.platform import get_platform_config
+
         namespace = get_platform_config().kubernetes_namespace
     import subprocess
 
@@ -74,11 +71,18 @@ def resolve_src_pod_ip(
     try:
         result = subprocess.run(
             [
-                "kubectl", "get", "pod", pod_name,
-                "-n", namespace,
-                "-o", "jsonpath={.status.podIP}",
+                "kubectl",
+                "get",
+                "pod",
+                pod_name,
+                "-n",
+                namespace,
+                "-o",
+                "jsonpath={.status.podIP}",
             ],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -98,6 +102,7 @@ class FlowManager:
     ) -> None:
         if namespace is None:
             from nodalarc.platform import get_platform_config
+
             namespace = get_platform_config().kubernetes_namespace
         self._session = session
         self._gs_file = gs_file
@@ -125,15 +130,16 @@ class FlowManager:
         from measurement import probe_client
 
         dst_ip = resolve_dst_ip(
-            flow_config.dst, self._gs_file, self._session,
+            flow_config.dst,
+            self._gs_file,
+            self._session,
         )
         src_pod_ip = resolve_src_pod_ip(
-            flow_config.src, self._namespace,
+            flow_config.src,
+            self._namespace,
         )
         if src_pod_ip is None:
-            raise RuntimeError(
-                f"Cannot resolve pod IP for source {flow_config.src}"
-            )
+            raise RuntimeError(f"Cannot resolve pod IP for source {flow_config.src}")
 
         probe_client.configure_flow(
             pod_ip=src_pod_ip,
@@ -152,10 +158,7 @@ class FlowManager:
             "protocol": flow_config.protocol,
             "probe_type": flow_config.probe_type,
         }
-        log.info(
-            f"Flow {flow_config.flow_id}: {flow_config.src} → "
-            f"{flow_config.dst} ({dst_ip})"
-        )
+        log.info(f"Flow {flow_config.flow_id}: {flow_config.src} → {flow_config.dst} ({dst_ip})")
 
     def remove_flow(self, flow_id: str) -> None:
         """Stop and remove a probe flow."""

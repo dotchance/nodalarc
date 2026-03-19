@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 
 class TopologyNode(BaseModel, frozen=True):
     """A node in the topology graph."""
-    node_id: str                          # e.g., "sat-P02S05" or "gs-hawthorne"
-    node_type: str                        # "satellite" or "ground_station"
-    sid: int                              # SR node SID from SRGB range
-    loopback_ipv4: str                    # e.g., "10.0.2.6"
-    plane: int | None = None              # orbital plane index (satellites only)
-    slot: int | None = None               # slot index within plane (satellites only)
+
+    node_id: str  # e.g., "sat-P02S05" or "gs-hawthorne"
+    node_type: str  # "satellite" or "ground_station"
+    sid: int  # SR node SID from SRGB range
+    loopback_ipv4: str  # e.g., "10.0.2.6"
+    plane: int | None = None  # orbital plane index (satellites only)
+    slot: int | None = None  # slot index within plane (satellites only)
 
     @field_validator("node_type")
     @classmethod
@@ -22,13 +23,14 @@ class TopologyNode(BaseModel, frozen=True):
 
 class TopologyEdge(BaseModel, frozen=True):
     """A directed edge (link) in the topology graph."""
+
     src_node_id: str
     dst_node_id: str
-    src_interface: str                    # e.g., "isl0", "isl1", "gnd0"
+    src_interface: str  # e.g., "isl0", "isl1", "gnd0"
     dst_interface: str
-    latency_ms: float                     # one-way propagation delay in milliseconds
-    bandwidth_mbps: float                 # link capacity
-    link_type: str                        # "isl" or "ground"
+    latency_ms: float  # one-way propagation delay in milliseconds
+    bandwidth_mbps: float  # link capacity
+    link_type: str  # "isl" or "ground"
 
     @field_validator("latency_ms")
     @classmethod
@@ -47,7 +49,8 @@ class TopologyEdge(BaseModel, frozen=True):
 
 class TopologySnapshot(BaseModel, frozen=True):
     """Complete network topology at a single point in time."""
-    sim_time: str                         # ISO 8601 timestamp
+
+    sim_time: str  # ISO 8601 timestamp
     nodes: list[TopologyNode]
     edges: list[TopologyEdge]
 

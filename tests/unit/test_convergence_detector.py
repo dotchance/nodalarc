@@ -7,23 +7,22 @@ Tests:
 - Handles no-flows-configured case (fixed dwell, no measurement)
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-import pytest
-
-from measurement.convergence_detector import (
-    measure_convergence,
-    _find_affected_flows,
-)
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.session import ConvergenceConfig
+
+from measurement.convergence_detector import (
+    _find_affected_flows,
+    measure_convergence,
+)
 
 
 def _make_link_down(node_a="sat-P00S00", node_b="sat-P00S01"):
     return LinkDown(
-        sim_time=datetime.now(timezone.utc),
-        wall_time=datetime.now(timezone.utc),
+        sim_time=datetime.now(UTC),
+        wall_time=datetime.now(UTC),
         node_a=node_a,
         node_b=node_b,
         interface_a="isl0",
@@ -34,8 +33,8 @@ def _make_link_down(node_a="sat-P00S00", node_b="sat-P00S01"):
 
 def _make_link_up(node_a="sat-P00S00", node_b="sat-P00S01"):
     return LinkUp(
-        sim_time=datetime.now(timezone.utc),
-        wall_time=datetime.now(timezone.utc),
+        sim_time=datetime.now(UTC),
+        wall_time=datetime.now(UTC),
         node_a=node_a,
         node_b=node_b,
         interface_a="isl0",
@@ -98,8 +97,18 @@ class TestFindAffectedFlows:
             ["gs-frankfurt", "sat-P01S00", "sat-P01S01", "gs-hawthorne"],
         ]
         flows = {
-            "f1": {"src": "gs-hawthorne", "dst": "gs-frankfurt", "dst_ip": "172.16.1.1", "src_pod_ip": "10.42.0.1"},
-            "f2": {"src": "gs-frankfurt", "dst": "gs-hawthorne", "dst_ip": "172.16.0.1", "src_pod_ip": "10.42.0.2"},
+            "f1": {
+                "src": "gs-hawthorne",
+                "dst": "gs-frankfurt",
+                "dst_ip": "172.16.1.1",
+                "src_pod_ip": "10.42.0.1",
+            },
+            "f2": {
+                "src": "gs-frankfurt",
+                "dst": "gs-hawthorne",
+                "dst_ip": "172.16.0.1",
+                "src_pod_ip": "10.42.0.2",
+            },
         }
         event = _make_link_down("sat-P00S00", "sat-P00S01")
         affected = _find_affected_flows(event, flows, adapter=mock_adapter)

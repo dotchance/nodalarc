@@ -5,22 +5,27 @@ SnapshotBuilder's current state. Tests provide topology edges and
 verify that correct shortest paths are returned with MPLS annotations.
 """
 
+from datetime import UTC
 from unittest.mock import MagicMock
 
 from nodalpath.engine.path_deriver import PathDeriver
 from nodalpath.models.almanac import AlmanacEntry
-from nodalpath.models.topology import TopologyNode, TopologyEdge
+from nodalpath.models.topology import TopologyNode
 from nodalpath.orchestrator.snapshot_builder import SnapshotBuilder
-
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
-def _node(node_id: str, node_type: str, sid: int,
-          loopback: str = "10.0.0.1", plane=None, slot=None) -> TopologyNode:
+
+def _node(
+    node_id: str, node_type: str, sid: int, loopback: str = "10.0.0.1", plane=None, slot=None
+) -> TopologyNode:
     return TopologyNode(
-        node_id=node_id, node_type=node_type,
-        sid=sid, loopback_ipv4=loopback,
-        plane=plane, slot=slot,
+        node_id=node_id,
+        node_type=node_type,
+        sid=sid,
+        loopback_ipv4=loopback,
+        plane=plane,
+        slot=slot,
     )
 
 
@@ -50,15 +55,22 @@ def _deriver(
     builder = SnapshotBuilder(node_registry, interface_map, bandwidth_map)
 
     # Seed the builder with link-up events via direct state injection
+    from datetime import datetime
+
     from nodalarc.models.events import VisibilityEvent
-    from datetime import datetime, timezone
-    t = datetime(2026, 1, 1, 0, 1, 0, tzinfo=timezone.utc)
+
+    t = datetime(2026, 1, 1, 0, 1, 0, tzinfo=UTC)
     for src, dst, _si, _di, lat in edges:
         range_km = lat * 299.792458  # reverse the latency->range formula
         event = VisibilityEvent(
-            sim_time=t, node_a=min(src, dst), node_b=max(src, dst),
-            visible=True, scheduled=True, range_km=range_km,
-            elevation_deg=None, terminal_type="optical",
+            sim_time=t,
+            node_a=min(src, dst),
+            node_b=max(src, dst),
+            visible=True,
+            scheduled=True,
+            range_km=range_km,
+            elevation_deg=None,
+            terminal_type="optical",
         )
         builder.apply_link_event(event)
 
@@ -84,6 +96,7 @@ def _deriver(
 
 
 # ── basic path tests ──────────────────────────────────────────────────────
+
 
 def test_simple_path_gs_sat_gs():
     """gs-a -> sat-P00S00 -> gs-b, single hop through one satellite."""
@@ -182,6 +195,7 @@ def test_bidirectional_path():
 
 # ── any-to-any src/dst ───────────────────────────────────────────────────
 
+
 def test_satellite_to_satellite_path():
     """Satellites can be src/dst if they have prefixes."""
     nodes = [
@@ -216,6 +230,7 @@ def test_satellite_src_without_prefix_still_works():
 
 # ── unreachable cases ────────────────────────────────────────────────────
 
+
 def test_unreachable_disconnected():
     """Disconnected nodes return unreachable."""
     nodes = [
@@ -249,6 +264,7 @@ def test_unreachable_no_almanac_entries():
 
 
 # ── metadata ─────────────────────────────────────────────────────────────
+
 
 def test_path_method_is_cspf():
     nodes = [

@@ -15,29 +15,38 @@ from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
+
 def _deploy_socket_path() -> str:
     val = os.environ.get("NODAL_DEPLOY_SOCKET")
     if val:
         return val
     from nodalarc.platform import get_platform_config
+
     return get_platform_config().deploy_daemon_unix_socket_path
+
 
 def _default_namespace() -> str:
     from nodalarc.platform import get_platform_config
+
     return get_platform_config().kubernetes_namespace
+
 
 def _default_timeout() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().grpc_push_timeout_seconds
+
 
 def _max_workers() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().grpc_push_max_parallel_workers
 
 
 @dataclass
 class ExecResult:
     """Result of a kubectl exec invocation."""
+
     node_id: str
     pod_name: str
     success: bool
@@ -84,7 +93,7 @@ def exec_vtysh(
                 break
             buf += chunk
             if b"\n" in buf:
-                line = buf[:buf.index(b"\n")]
+                line = buf[: buf.index(b"\n")]
                 resp = json.loads(line)
                 success = resp.get("ok", False)
                 return ExecResult(
@@ -96,32 +105,52 @@ def exec_vtysh(
                     returncode=resp.get("exit_code", 0 if success else 1),
                 )
         return ExecResult(
-            node_id=node_id, pod_name=pod_name, success=False,
-            stdout="", stderr="No response from deploy daemon", returncode=-1,
+            node_id=node_id,
+            pod_name=pod_name,
+            success=False,
+            stdout="",
+            stderr="No response from deploy daemon",
+            returncode=-1,
         )
     except FileNotFoundError:
         log.error("Deploy daemon socket not found at %s", _deploy_socket_path())
         return ExecResult(
-            node_id=node_id, pod_name=pod_name, success=False,
-            stdout="", stderr="Deploy daemon socket not found", returncode=-1,
+            node_id=node_id,
+            pod_name=pod_name,
+            success=False,
+            stdout="",
+            stderr="Deploy daemon socket not found",
+            returncode=-1,
         )
     except ConnectionRefusedError:
         log.error("Deploy daemon connection refused at %s", _deploy_socket_path())
         return ExecResult(
-            node_id=node_id, pod_name=pod_name, success=False,
-            stdout="", stderr="Deploy daemon connection refused", returncode=-1,
+            node_id=node_id,
+            pod_name=pod_name,
+            success=False,
+            stdout="",
+            stderr="Deploy daemon connection refused",
+            returncode=-1,
         )
-    except socket.timeout:
+    except TimeoutError:
         log.error("Deploy daemon timed out for %s after %ds", pod_name, timeout)
         return ExecResult(
-            node_id=node_id, pod_name=pod_name, success=False,
-            stdout="", stderr=f"Timeout after {timeout}s", returncode=-1,
+            node_id=node_id,
+            pod_name=pod_name,
+            success=False,
+            stdout="",
+            stderr=f"Timeout after {timeout}s",
+            returncode=-1,
         )
     except Exception as exc:
         log.error("Deploy daemon error for %s: %s", pod_name, exc)
         return ExecResult(
-            node_id=node_id, pod_name=pod_name, success=False,
-            stdout="", stderr=str(exc), returncode=-1,
+            node_id=node_id,
+            pod_name=pod_name,
+            success=False,
+            stdout="",
+            stderr=str(exc),
+            returncode=-1,
         )
     finally:
         sock.close()

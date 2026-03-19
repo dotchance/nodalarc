@@ -17,8 +17,8 @@ import secrets
 import sqlite3
 import sys
 import threading
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,24 +29,17 @@ import zmq.asyncio
 from fastapi import Depends, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import TypeAdapter
-
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.db.queries import (
     insert_snapshot,
-    query_adapter_events,
     query_convergence_events,
     query_link_events,
     query_nearest_snapshot,
     query_probe_results,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.events import PositionEvent
-from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
-from nodalarc.models.metrics import AdapterEvent, ConvergenceResult, ProbeResult
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
-    ActiveFlow,
     LinkState,
     NetworkHealth,
     NodeState,
@@ -54,17 +47,8 @@ from nodalarc.models.vs_api import (
     StateSnapshot,
     TracedPath,
 )
-from nodalarc.models.metrics import TraceRequest, TraceResponse
 from nodalarc.platform import get_platform_config
 from nodalarc.zmq_channels import (
-    mi_events_connect,
-    mi_trace_connect,
-    nodalpath_events_connect,
-    ome_events_connect,
-    playback_control_connect,
-    to_events_connect,
-    vs_api_http_port,
-    decode_message,
     TOPIC_ADAPTER_EVENT,
     TOPIC_ALMANAC_EVENT,
     TOPIC_CONVERGENCE_RESULT,
@@ -73,7 +57,15 @@ from nodalarc.zmq_channels import (
     TOPIC_LINK_UP,
     TOPIC_POSITION_EVENT,
     TOPIC_PROBE_RESULT,
+    decode_message,
+    mi_events_connect,
+    nodalpath_events_connect,
+    ome_events_connect,
+    playback_control_connect,
+    to_events_connect,
+    vs_api_http_port,
 )
+
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 from vs_api.session_manager import SessionManager
@@ -100,12 +92,14 @@ def _require_api_key(request: Request) -> None:
 
 def raise_unauthorized() -> None:
     from fastapi import HTTPException
+
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 # --- Rate Limiting (in-memory token bucket per IP) ---
 
 import time as _time
+
 
 class _TokenBucket:
     """Simple per-IP token bucket rate limiter."""
@@ -137,6 +131,7 @@ def _get_rate_introspect() -> _TokenBucket:
     global _rate_introspect
     if _rate_introspect is None:
         from nodalarc.platform import get_platform_config
+
         cfg = get_platform_config()
         r = cfg.vs_api_introspect_max_requests_per_minute
         _rate_introspect = _TokenBucket(rate=r / 60, burst=r)
@@ -147,6 +142,7 @@ def _get_rate_playback() -> _TokenBucket:
     global _rate_playback
     if _rate_playback is None:
         from nodalarc.platform import get_platform_config
+
         cfg = get_platform_config()
         r = cfg.vs_api_playback_max_requests_per_minute
         _rate_playback = _TokenBucket(rate=r / 60, burst=r)
@@ -157,6 +153,7 @@ def _get_rate_session_switch() -> _TokenBucket:
     global _rate_session_switch
     if _rate_session_switch is None:
         from nodalarc.platform import get_platform_config
+
         cfg = get_platform_config()
         r = cfg.vs_api_session_switch_max_requests_per_minute
         _rate_session_switch = _TokenBucket(rate=r / 60, burst=r)
@@ -176,6 +173,7 @@ def _check_rate(bucket: _TokenBucket, request: Request) -> None:
     ip = _client_ip(request)
     if not bucket.allow(ip):
         from fastapi import HTTPException
+
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
@@ -203,7 +201,7 @@ _state = {
         "unreachable_flows": 0,
         "last_convergence_ms": None,
     },
-    "sim_time": datetime.now(timezone.utc).isoformat(),
+    "sim_time": datetime.now(UTC).isoformat(),
 }
 _state_lock = threading.Lock()
 _db_path: str = ""
@@ -312,12 +310,14 @@ def _update_latency(event_data: dict) -> None:
 def _add_recent_event(event_data: dict, event_type: str) -> None:
     """Add to recent events list (cap at 50)."""
     with _state_lock:
-        _state["recent_events"].append({
-            "sim_time": event_data.get("sim_time", datetime.now(timezone.utc).isoformat()),
-            "node_id": event_data.get("node_id", event_data.get("node_a", "")),
-            "event_type": event_type,
-            "summary": event_data.get("detail", event_data.get("reason", event_type)),
-        })
+        _state["recent_events"].append(
+            {
+                "sim_time": event_data.get("sim_time", datetime.now(UTC).isoformat()),
+                "node_id": event_data.get("node_id", event_data.get("node_a", "")),
+                "event_type": event_type,
+                "summary": event_data.get("detail", event_data.get("reason", event_type)),
+            }
+        )
         if len(_state["recent_events"]) > 50:
             _state["recent_events"] = _state["recent_events"][-50:]
 
@@ -357,7 +357,7 @@ def _update_almanac_state(event_data: dict) -> None:
 def _build_snapshot() -> dict:
     """Build a StateSnapshot dict from current state."""
     with _state_lock:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         links = [LinkState(**l) for l in _state["links"].values()]
 
         # Compute isl_count / gnd_count from active links
@@ -373,15 +373,23 @@ def _build_snapshot() -> dict:
                     _isl_counts[nid] = _isl_counts.get(nid, 0) + 1
         nodes = []
         for n in _state["nodes"].values():
-            patched = {**n, "isl_count": _isl_counts.get(n["node_id"], 0),
-                       "gnd_count": _gnd_counts.get(n["node_id"], 0)}
+            patched = {
+                **n,
+                "isl_count": _isl_counts.get(n["node_id"], 0),
+                "gnd_count": _gnd_counts.get(n["node_id"], 0),
+            }
             nodes.append(NodeState(**patched))
-        recent = [RecentEvent(
-            sim_time=datetime.fromisoformat(e["sim_time"]) if isinstance(e["sim_time"], str) else e["sim_time"],
-            node_id=e["node_id"],
-            event_type=e["event_type"],
-            summary=e["summary"],
-        ) for e in _state["recent_events"]]
+        recent = [
+            RecentEvent(
+                sim_time=datetime.fromisoformat(e["sim_time"])
+                if isinstance(e["sim_time"], str)
+                else e["sim_time"],
+                node_id=e["node_id"],
+                event_type=e["event_type"],
+                summary=e["summary"],
+            )
+            for e in _state["recent_events"]
+        ]
         health = NetworkHealth(**_state["network_health"])
 
         _traced: list[TracedPath] = []
@@ -391,7 +399,9 @@ def _build_snapshot() -> dict:
                 _traced.append(tp)
 
         snapshot = StateSnapshot(
-            sim_time=datetime.fromisoformat(_state["sim_time"]) if isinstance(_state["sim_time"], str) else _state["sim_time"],
+            sim_time=datetime.fromisoformat(_state["sim_time"])
+            if isinstance(_state["sim_time"], str)
+            else _state["sim_time"],
             wall_time=now,
             schema_version=1,
             nodes=nodes,
@@ -430,7 +440,7 @@ async def _zmq_subscriber() -> None:
 
     # MI subscription is conditional — only connect if MI is enabled
     mi_sub = None
-    if _session_config and _session_config.mi and _session_config.mi.enabled:
+    if _session_config and _session_config.mi and _session_config.mi.enabled:  # noqa: F821
         mi_sub = _zmq_ctx.socket(zmq.SUB)
         mi_sub.connect(mi_events_connect())
         mi_sub.setsockopt(zmq.SUBSCRIBE, b"")
@@ -481,8 +491,7 @@ async def _zmq_subscriber() -> None:
 
                     if msg_count <= 5 or msg_count % 100 == 0:
                         log.info(
-                            f"ZMQ message #{msg_count}: topic={topic} "
-                            f"payload_bytes={len(payload)}"
+                            f"ZMQ message #{msg_count}: topic={topic} payload_bytes={len(payload)}"
                         )
 
                     if topic == TOPIC_POSITION_EVENT:
@@ -521,6 +530,7 @@ async def _zmq_subscriber() -> None:
 
 
 # --- FastAPI app ---
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -603,6 +613,7 @@ class BodySizeLimitMiddleware:
             await self.app(scope, receive, send)
             return
         from starlette.requests import Request as StarletteRequest
+
         request = StarletteRequest(scope)
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > _MAX_BODY_BYTES:
@@ -623,6 +634,7 @@ class AuditLogMiddleware:
             await self.app(scope, receive, send)
             return
         from starlette.requests import Request as StarletteRequest
+
         request = StarletteRequest(scope)
         ip = _client_ip(request)
         status_code = 0
@@ -679,12 +691,13 @@ def _clear_state() -> None:
             "unreachable_flows": 0,
             "last_convergence_ms": None,
         }
-        _state["sim_time"] = datetime.now(timezone.utc).isoformat()
+        _state["sim_time"] = datetime.now(UTC).isoformat()
 
 
 def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
     """Load per-station min_elevation_deg from ground station config."""
     from ome.constellation_loader import load_ground_stations
+
     if isinstance(session.ground_stations, list):
         gs_file = load_ground_stations(session.ground_stations)
     else:
@@ -696,7 +709,11 @@ def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
     result: dict[str, float] = {}
     for station in gs_file.stations:
         node_id = gs_id_tpl.format(name=station.name)
-        elev = station.min_elevation_deg if station.min_elevation_deg is not None else gs_file.default_min_elevation_deg
+        elev = (
+            station.min_elevation_deg
+            if station.min_elevation_deg is not None
+            else gs_file.default_min_elevation_deg
+        )
         result[node_id] = elev
     return result
 
@@ -704,6 +721,7 @@ def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
 def _load_beam_falloff_exponent(session: SessionConfig) -> float:
     """Load beam_falloff_exponent from the constellation's satellite type."""
     from ome.constellation_loader import load_constellation, load_satellite_type
+
     constellation_path = Path(session.constellation)
     if not constellation_path.exists():
         return 2.0
@@ -719,7 +737,13 @@ def _load_beam_falloff_exponent(session: SessionConfig) -> float:
 
 def _update_session_globals(session_path: str, new_db_path: str) -> None:
     """Reload routing_stack, constellation_name, db_path, and session_file from new session."""
-    global _routing_stack, _constellation_name, _db_path, _session_file, _gs_elevation_map, _beam_falloff_exponent
+    global \
+        _routing_stack, \
+        _constellation_name, \
+        _db_path, \
+        _session_file, \
+        _gs_elevation_map, \
+        _beam_falloff_exponent
     _session_file = session_path
     session_data = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(session_data)
@@ -735,6 +759,7 @@ def _update_session_globals(session_path: str, new_db_path: str) -> None:
 
     # Ensure tables exist in new DB
     import sqlite3 as _sqlite3
+
     conn = _sqlite3.connect(new_db_path)
     create_tables(conn)
     conn.close()
@@ -845,10 +870,8 @@ async def ws_state(websocket: WebSocket) -> None:
     # Kick existing connections — single-user mode (one active browser at a time)
     async with _ws_lock:
         for old_ws in list(_ws_clients):
-            try:
+            with suppress(Exception):
                 await old_ws.close(code=4409, reason="Session taken over by another browser")
-            except Exception:
-                pass
             _ws_clients.remove(old_ws)
             _audit_log.info(f"WS_KICKED ip={ws_ip}")
     await websocket.accept()
@@ -1030,11 +1053,12 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
     MPLS forwarding state, then follows the label chain hop-by-hop
     from src to dst.  Returns None if gRPC is unavailable.
     """
-    import grpc
     import json
     import socket as sock_mod
 
+    import grpc
     from nodalarc.platform import get_platform_config
+
     cfg = get_platform_config()
     grpc_port = cfg.nodalpath_fwd_grpc_port
     deploy_socket = cfg.deploy_daemon_unix_socket_path
@@ -1051,7 +1075,16 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
             s = sock_mod.socket(sock_mod.AF_UNIX, sock_mod.SOCK_STREAM)
             s.settimeout(5)
             s.connect(deploy_socket)
-            req = json.dumps({"action": "get_pod_ip", "pod": node_id.lower(), "namespace": cfg.kubernetes_namespace}) + "\n"
+            req = (
+                json.dumps(
+                    {
+                        "action": "get_pod_ip",
+                        "pod": node_id.lower(),
+                        "namespace": cfg.kubernetes_namespace,
+                    }
+                )
+                + "\n"
+            )
             s.sendall(req.encode())
             buf = b""
             while True:
@@ -1060,7 +1093,7 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
                     return None
                 buf += chunk
                 if b"\n" in buf:
-                    resp = json.loads(buf[:buf.index(b"\n")])
+                    resp = json.loads(buf[: buf.index(b"\n")])
                     return resp.get("pod_ip") if resp.get("ok") else None
             return None
         except Exception:
@@ -1071,7 +1104,7 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
     def query_fwd_table(pod_ip: str) -> tuple[list, list] | None:
         """Query a node's live forwarding table via gRPC. Returns (lsr, ler) or None."""
         try:
-            from nodalpath.proto import Empty, Action
+            from nodalpath.proto import Action, Empty
             from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
 
             channel = grpc.insecure_channel(f"{pod_ip}:{grpc_port}")
@@ -1082,19 +1115,23 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
             action_map = {Action.SWAP: "SWAP", Action.POP: "POP", Action.PUSH: "PUSH"}
             lsr = []
             for e in fwd.lsr_entries:
-                lsr.append({
-                    "in_label": e.in_label,
-                    "action": action_map.get(e.action, str(e.action)),
-                    "out_label": e.out_label,
-                    "out_interface": e.out_interface,
-                })
+                lsr.append(
+                    {
+                        "in_label": e.in_label,
+                        "action": action_map.get(e.action, str(e.action)),
+                        "out_label": e.out_label,
+                        "out_interface": e.out_interface,
+                    }
+                )
             ler = []
             for e in fwd.ler_entries:
-                ler.append({
-                    "dst_prefix": e.dst_prefix,
-                    "push_label": e.push_label,
-                    "out_interface": e.out_interface,
-                })
+                ler.append(
+                    {
+                        "dst_prefix": e.dst_prefix,
+                        "push_label": e.push_label,
+                        "out_interface": e.out_interface,
+                    }
+                )
             channel.close()
             return lsr, ler
         except Exception:
@@ -1105,9 +1142,10 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
     # so prefixes match what NodalPath installed in the forwarding tables.
     sid_to_node: dict[int, str] = {}
     try:
-        from nodalpath.platform import get_nodalpath_config
-        from nodalpath.orchestrator.session_loader import load_session_context
         from pathlib import Path as _Path
+
+        from nodalpath.orchestrator.session_loader import load_session_context
+        from nodalpath.platform import get_nodalpath_config
 
         np_cfg = get_nodalpath_config()
         session_path = _Path(_session_file) if _session_file else None
@@ -1164,14 +1202,16 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
     hop_ids = [src]
 
     # Source node — PUSH
-    hop_details.append({
-        "node_id": src,
-        "action": "PUSH",
-        "in_label": None,
-        "out_label": ingress["push_label"],
-        "out_interface": ingress["out_interface"],
-        "latency_to_next_ms": None,
-    })
+    hop_details.append(
+        {
+            "node_id": src,
+            "action": "PUSH",
+            "in_label": None,
+            "out_label": ingress["push_label"],
+            "out_interface": ingress["out_interface"],
+            "latency_to_next_ms": None,
+        }
+    )
 
     current_label = ingress["push_label"]
     current_node = sid_to_node.get(current_label)
@@ -1185,14 +1225,16 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
         hop_ids.append(current_node)
 
         if current_node == dst:
-            hop_details.append({
-                "node_id": current_node,
-                "action": None,
-                "in_label": current_label,
-                "out_label": None,
-                "out_interface": None,
-                "latency_to_next_ms": None,
-            })
+            hop_details.append(
+                {
+                    "node_id": current_node,
+                    "action": None,
+                    "in_label": current_label,
+                    "out_label": None,
+                    "out_interface": None,
+                    "latency_to_next_ms": None,
+                }
+            )
             break
 
         # Query this node's live forwarding table
@@ -1216,40 +1258,46 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
             # Check if there's a rule for dst_prefix
             for rule in node_ler:
                 if rule["dst_prefix"] == dst_prefix:
-                    hop_details.append({
-                        "node_id": current_node,
-                        "action": "PUSH",
-                        "in_label": current_label,
-                        "out_label": rule["push_label"],
-                        "out_interface": rule["out_interface"],
-                        "latency_to_next_ms": None,
-                    })
+                    hop_details.append(
+                        {
+                            "node_id": current_node,
+                            "action": "PUSH",
+                            "in_label": current_label,
+                            "out_label": rule["push_label"],
+                            "out_interface": rule["out_interface"],
+                            "latency_to_next_ms": None,
+                        }
+                    )
                     next_node = sid_to_node.get(rule["push_label"])
                     current_label = rule["push_label"]
                     current_node = next_node
                     continue
             break
 
-        hop_details.append({
-            "node_id": current_node,
-            "action": binding["action"],
-            "in_label": binding["in_label"],
-            "out_label": binding["out_label"] if binding["action"] == "SWAP" else None,
-            "out_interface": binding["out_interface"],
-            "latency_to_next_ms": None,
-        })
+        hop_details.append(
+            {
+                "node_id": current_node,
+                "action": binding["action"],
+                "in_label": binding["in_label"],
+                "out_label": binding["out_label"] if binding["action"] == "SWAP" else None,
+                "out_interface": binding["out_interface"],
+                "latency_to_next_ms": None,
+            }
+        )
 
         if binding["action"] == "POP":
             # Next node is the destination (PHP)
             hop_ids.append(dst)
-            hop_details.append({
-                "node_id": dst,
-                "action": None,
-                "in_label": None,
-                "out_label": None,
-                "out_interface": None,
-                "latency_to_next_ms": None,
-            })
+            hop_details.append(
+                {
+                    "node_id": dst,
+                    "action": None,
+                    "in_label": None,
+                    "out_label": None,
+                    "out_interface": None,
+                    "latency_to_next_ms": None,
+                }
+            )
             break
         elif binding["action"] == "SWAP":
             current_label = binding["out_label"]
@@ -1272,7 +1320,7 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
     total_latency = 0.0
     for i, hd in enumerate(hop_details):
         if i < len(hop_ids) - 1:
-            key = f"{hop_ids[i]}:{hop_ids[i+1]}"
+            key = f"{hop_ids[i]}:{hop_ids[i + 1]}"
             lat = link_latency.get(key, 0)
             hd["latency_to_next_ms"] = lat
             total_latency += lat
@@ -1302,8 +1350,12 @@ def trace_path(body: dict) -> dict:
     # Get current snapshot for node/link info
     try:
         snap = _build_snapshot()
-        nodes_list = [n.model_dump() if hasattr(n, "model_dump") else n for n in snap.get("nodes", [])]
-        links_list = [l.model_dump() if hasattr(l, "model_dump") else l for l in snap.get("links", [])]
+        nodes_list = [
+            n.model_dump() if hasattr(n, "model_dump") else n for n in snap.get("nodes", [])
+        ]
+        links_list = [
+            l.model_dump() if hasattr(l, "model_dump") else l for l in snap.get("links", [])
+        ]
     except Exception:
         nodes_list = []
         links_list = []
@@ -1319,6 +1371,7 @@ def trace_path(body: dict) -> dict:
     # Fall back to NodalPath CSPF
     try:
         from nodalarc.platform import get_platform_config
+
         np_port = get_platform_config().nodalpath_console_http_port
         np_resp = httpx.get(
             f"http://127.0.0.1:{np_port}/api/v1/path",
@@ -1364,7 +1417,11 @@ def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]
     if len(new_hops) > 4:
         new_str += f" ({len(new_hops)} hops)"
     _add_recent_event(
-        {"sim_time": sim_time, "node_id": src, "detail": f"Path {src} -> {dst}: {old_str} => {new_str}"},
+        {
+            "sim_time": sim_time,
+            "node_id": src,
+            "detail": f"Path {src} -> {dst}: {old_str} => {new_str}",
+        },
         "PATH_CHANGE",
     )
 
@@ -1438,27 +1495,37 @@ def _create_continuous_tracer() -> ContinuousTracer:
     timeline_path: str | None = None
     trace_mode = "ip"
 
-    log.info("Creating continuous tracer: session_file=%s exists=%s",
-             _session_file, Path(_session_file).exists() if _session_file else False)
+    log.info(
+        "Creating continuous tracer: session_file=%s exists=%s",
+        _session_file,
+        Path(_session_file).exists() if _session_file else False,
+    )
     if _session_file and Path(_session_file).exists():
         # Ensure NodalPath config is initialized (load_session_context needs SID ranges)
         try:
             from nodalpath.platform import get_nodalpath_config
+
             get_nodalpath_config()
             log.info("NodalPath config already initialized")
         except RuntimeError:
             try:
                 from nodalpath.platform import init_nodalpath_config
+
                 init_nodalpath_config(Path("configs/nodalpath.yaml"))
                 log.info("Initialized NodalPath config from configs/nodalpath.yaml")
             except Exception as exc:
                 log.error("Failed to init NodalPath config: %s", exc)
         try:
             from nodalpath.orchestrator.session_loader import load_session_context
+
             ctx = load_session_context(Path(_session_file))
             node_registry = ctx[0]
             interface_map = ctx[1]
-            log.info("Loaded session context: %d nodes, %d interfaces", len(node_registry), len(interface_map))
+            log.info(
+                "Loaded session context: %d nodes, %d interfaces",
+                len(node_registry),
+                len(interface_map),
+            )
         except Exception as exc:
             log.error("Failed to load session context: %s", exc, exc_info=True)
 
@@ -1500,7 +1567,9 @@ def _create_continuous_tracer() -> ContinuousTracer:
     )
 
 
-@app.post("/api/v1/playback", dependencies=[Depends(_require_api_key), Depends(_rate_limit_playback)])
+@app.post(
+    "/api/v1/playback", dependencies=[Depends(_require_api_key), Depends(_rate_limit_playback)]
+)
 def playback_control(body: dict) -> Any:
     """Relay playback command to dispatcher via ZMQ."""
     action = body.get("action", "")
@@ -1539,7 +1608,11 @@ def list_sessions() -> list[dict]:
     return _session_manager.list_sessions()
 
 
-@app.post("/api/v1/sessions/switch", response_model=None, dependencies=[Depends(_require_api_key), Depends(_rate_limit_session_switch)])
+@app.post(
+    "/api/v1/sessions/switch",
+    response_model=None,
+    dependencies=[Depends(_require_api_key), Depends(_rate_limit_session_switch)],
+)
 async def switch_session(body: dict):
     """Trigger async session switch. Returns immediately."""
     if _session_manager is None:
@@ -1560,10 +1633,12 @@ async def switch_session(body: dict):
 
 # --- Wizard API endpoints ---
 
+
 @app.get("/api/v1/presets/constellations", dependencies=[Depends(_require_api_key)])
 def list_constellation_presets() -> list[dict]:
     """Return available constellation presets for the wizard."""
     from nodalarc.session_generator import load_constellation_presets
+
     presets = load_constellation_presets()
     return [
         {
@@ -1581,6 +1656,7 @@ def list_constellation_presets() -> list[dict]:
 def list_satellite_types() -> list[dict]:
     """Return available satellite type presets for the wizard."""
     from nodalarc.models.satellite_type import SatelliteTypeConfig
+
     sat_types_dir = Path("configs/satellite-types")
     results: list[dict] = []
     if not sat_types_dir.is_dir():
@@ -1589,32 +1665,34 @@ def list_satellite_types() -> list[dict]:
         raw = yaml.safe_load(yaml_path.read_text())
         data = raw.get("satellite_type", raw)
         cfg = SatelliteTypeConfig.model_validate(data)
-        results.append({
-            "name": cfg.name,
-            "description": cfg.description,
-            "isl_terminals": [
-                {
-                    "type": t.type,
-                    "band": t.band,
-                    "count": t.count,
-                    "role": t.role,
-                    "max_range_km": t.max_range_km,
-                    "bandwidth_mbps": t.bandwidth_mbps,
-                    "max_tracking_rate_deg_s": t.max_tracking_rate_deg_s,
-                    "field_of_regard_deg": t.field_of_regard_deg,
-                }
-                for t in cfg.isl_terminals
-            ],
-            "ground_terminals": [
-                {
-                    "type": t.type,
-                    "band": t.band,
-                    "count": t.count,
-                    "bandwidth_mbps": t.bandwidth_mbps,
-                }
-                for t in cfg.ground_terminals
-            ],
-        })
+        results.append(
+            {
+                "name": cfg.name,
+                "description": cfg.description,
+                "isl_terminals": [
+                    {
+                        "type": t.type,
+                        "band": t.band,
+                        "count": t.count,
+                        "role": t.role,
+                        "max_range_km": t.max_range_km,
+                        "bandwidth_mbps": t.bandwidth_mbps,
+                        "max_tracking_rate_deg_s": t.max_tracking_rate_deg_s,
+                        "field_of_regard_deg": t.field_of_regard_deg,
+                    }
+                    for t in cfg.isl_terminals
+                ],
+                "ground_terminals": [
+                    {
+                        "type": t.type,
+                        "band": t.band,
+                        "count": t.count,
+                        "bandwidth_mbps": t.bandwidth_mbps,
+                    }
+                    for t in cfg.ground_terminals
+                ],
+            }
+        )
     return results
 
 
@@ -1628,12 +1706,14 @@ def list_ground_station_sets() -> list[dict]:
     for yaml_path in sorted(gs_sets_dir.glob("*.yaml")):
         raw = yaml.safe_load(yaml_path.read_text())
         gs_data = raw.get("ground_station_set", raw)
-        results.append({
-            "name": gs_data.get("name", yaml_path.stem),
-            "description": gs_data.get("description", ""),
-            "stations": gs_data.get("stations", []),
-            "file": f"configs/ground-stations/sets/{yaml_path.name}",
-        })
+        results.append(
+            {
+                "name": gs_data.get("name", yaml_path.stem),
+                "description": gs_data.get("description", ""),
+                "stations": gs_data.get("stations", []),
+                "file": f"configs/ground-stations/sets/{yaml_path.name}",
+            }
+        )
     return results
 
 
@@ -1647,11 +1727,13 @@ def list_individual_stations() -> list[dict]:
     for yaml_path in sorted(stations_dir.glob("*.yaml")):
         raw = yaml.safe_load(yaml_path.read_text())
         gs = raw.get("ground_station", raw)
-        results.append({
-            "name": gs.get("name", yaml_path.stem),
-            "lat_deg": gs.get("lat_deg", 0),
-            "lon_deg": gs.get("lon_deg", 0),
-        })
+        results.append(
+            {
+                "name": gs.get("name", yaml_path.stem),
+                "lat_deg": gs.get("lat_deg", 0),
+                "lon_deg": gs.get("lon_deg", 0),
+            }
+        )
     return results
 
 
@@ -1672,6 +1754,7 @@ def wizard_extension_rules() -> dict:
 def generate_session(body: dict) -> dict:
     """Generate a session YAML from wizard selections."""
     from nodalarc.session_generator import generate_session_yaml
+
     constellation = body.get("constellation", "")
     protocol = body.get("protocol", "")
     extensions = body.get("extensions", [])
@@ -1679,7 +1762,9 @@ def generate_session(body: dict) -> dict:
     ground_stations = body.get("ground_stations")
     satellite_type = body.get("satellite_type")
     if not constellation or not protocol:
-        return JSONResponse(status_code=400, content={"error": "constellation and protocol are required"})
+        return JSONResponse(
+            status_code=400, content={"error": "constellation and protocol are required"}
+        )
     try:
         yaml_str, warnings = generate_session_yaml(
             constellation=constellation,
@@ -1698,6 +1783,7 @@ def generate_session(body: dict) -> dict:
 async def deploy_generated_session(body: dict) -> dict:
     """Validate YAML, write to sessions dir, and trigger deploy."""
     import yaml as _yaml
+
     yaml_str = body.get("yaml", "")
     if not yaml_str:
         return JSONResponse(status_code=400, content={"error": "yaml field required"})
@@ -1709,6 +1795,7 @@ async def deploy_generated_session(body: dict) -> dict:
 
     # Write to sessions directory with _wizard- prefix
     from pathlib import Path
+
     sessions_dir = Path("configs/sessions")
     session_file = sessions_dir / f"_wizard-{session.session.name}.yaml"
     session_file.write_text(yaml_str)
@@ -1723,13 +1810,18 @@ async def deploy_generated_session(body: dict) -> dict:
     return {"status": "switching", "session_file": str(session_file)}
 
 
-@app.get("/api/v1/introspect/commands", dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)])
+@app.get(
+    "/api/v1/introspect/commands",
+    dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)],
+)
 def introspect_commands() -> list[str]:
     """Return sorted list of whitelisted vtysh commands."""
     return sorted(VTYSH_COMMANDS)
 
 
-@app.post("/api/v1/introspect", dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)])
+@app.post(
+    "/api/v1/introspect", dependencies=[Depends(_require_api_key), Depends(_rate_limit_introspect)]
+)
 def introspect(body: dict) -> dict:
     """Run a whitelisted vtysh command on a node's FRR container."""
     node_id = body.get("node_id", "")
@@ -1777,16 +1869,22 @@ def main() -> None:
     parser.add_argument("--session", default=None, help="Path to session YAML (optional)")
     parser.add_argument("--db", default=None, help="Path to SQLite database (optional)")
     parser.add_argument("--port", type=int, default=None, help="HTTP port")
-    parser.add_argument("--sessions-dir", default="configs/sessions", help="Directory with session YAMLs")
-    parser.add_argument("--platform-config", default="configs/platform.yaml", help="Path to platform config YAML")
+    parser.add_argument(
+        "--sessions-dir", default="configs/sessions", help="Directory with session YAMLs"
+    )
+    parser.add_argument(
+        "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
+    )
     args = parser.parse_args()
 
     from nodalarc.platform import init_platform_config
+
     init_platform_config(Path(args.platform_config))
 
     # Also init NodalPath config (needed for live gRPC trace SID lookups)
     try:
         from nodalpath.platform import init_nodalpath_config
+
         init_nodalpath_config(Path("configs/nodalpath.yaml"))
     except Exception:
         pass  # Non-fatal — CSPF fallback still works
@@ -1794,7 +1892,14 @@ def main() -> None:
     if args.port is None:
         args.port = vs_api_http_port()
 
-    global _db_path, _session_file, _routing_stack, _constellation_name, _session_manager, _gs_elevation_map, _beam_falloff_exponent
+    global \
+        _db_path, \
+        _session_file, \
+        _routing_stack, \
+        _constellation_name, \
+        _session_manager, \
+        _gs_elevation_map, \
+        _beam_falloff_exponent
 
     # Initialize SessionManager
     _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
@@ -1809,7 +1914,9 @@ def main() -> None:
         if session.routing.stack is not None:
             _routing_stack = Path(session.routing.stack).name
         else:
-            ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+            ext_str = (
+                "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+            )
             _routing_stack = f"{session.routing.protocol}-{ext_str}"
         _constellation_name = Path(session.constellation).stem
         _gs_elevation_map = _load_gs_elevation_map(session)
@@ -1832,10 +1939,7 @@ def main() -> None:
                 _update_session_globals(session_config, new_db_path)
                 # Pre-populate in-memory state from last DB snapshot
                 _restore_state_from_db(new_db_path)
-                log.info(
-                    f"Recovered session: {recovered.get('session_id')} "
-                    f"(db={new_db_path})"
-                )
+                log.info(f"Recovered session: {recovered.get('session_id')} (db={new_db_path})")
             else:
                 log.warning(
                     f"Found live session {recovered.get('session_id')} "

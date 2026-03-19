@@ -10,28 +10,26 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from pydantic import TypeAdapter
-
-from ome.propagator import OrbitalElements, elements_from_params
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ExplicitConstellation,
     GroundTerminal,
     IslTerminal,
     ParametricConstellation,
-    TLEConstellation,
     TerminalConfig,
+    TLEConstellation,
 )
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
-    GroundStationIndividualFile,
     GroundStationSetConfig,
-    GroundStationSetFile,
     GroundTerminalDef,
     TerrestrialPrefixTemplate,
 )
 from nodalarc.models.satellite_type import SatelliteTypeConfig
+from pydantic import TypeAdapter
+
+from ome.propagator import OrbitalElements, elements_from_params
 
 adapter = TypeAdapter(ConstellationConfig)
 
@@ -116,21 +114,25 @@ def _sat_type_to_terminal_config(sat_type: SatelliteTypeConfig) -> TerminalConfi
     """
     isl_terminals = []
     for td in sat_type.isl_terminals:
-        isl_terminals.append(IslTerminal(
-            type=td.type,
-            count=td.count,
-            max_range_km=td.max_range_km,
-            bandwidth_mbps=td.bandwidth_mbps,
-            max_tracking_rate_deg_s=td.max_tracking_rate_deg_s,
-            field_of_regard_deg=td.field_of_regard_deg,
-        ))
+        isl_terminals.append(
+            IslTerminal(
+                type=td.type,
+                count=td.count,
+                max_range_km=td.max_range_km,
+                bandwidth_mbps=td.bandwidth_mbps,
+                max_tracking_rate_deg_s=td.max_tracking_rate_deg_s,
+                field_of_regard_deg=td.field_of_regard_deg,
+            )
+        )
     ground_terminals = []
     for td in sat_type.ground_terminals:
-        ground_terminals.append(GroundTerminal(
-            type=td.type,
-            count=td.count,
-            bandwidth_mbps=td.bandwidth_mbps,
-        ))
+        ground_terminals.append(
+            GroundTerminal(
+                type=td.type,
+                count=td.count,
+                bandwidth_mbps=td.bandwidth_mbps,
+            )
+        )
     return TerminalConfig(isl=isl_terminals, ground=ground_terminals)
 
 
@@ -143,7 +145,7 @@ def resolve_constellation_terminals(config: ConstellationConfig) -> Constellatio
 
     Returns the config (possibly mutated) for convenience.
     """
-    if not isinstance(config, (ParametricConstellation, ExplicitConstellation, TLEConstellation)):
+    if not isinstance(config, ParametricConstellation | ExplicitConstellation | TLEConstellation):
         return config
     if config.default_terminals is not None:
         return config
@@ -369,12 +371,15 @@ def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
                 raan_deg=raan,
                 true_anomaly_deg=true_anomaly,
             )
-            satellites.append(SatelliteNode(
-                plane=p, slot=s,
-                elements=elements,
-                isl_terminal_count=isl_count,
-                ground_terminal_count=gnd_count,
-            ))
+            satellites.append(
+                SatelliteNode(
+                    plane=p,
+                    slot=s,
+                    elements=elements,
+                    isl_terminal_count=isl_count,
+                    ground_terminal_count=gnd_count,
+                )
+            )
 
     return satellites
 
@@ -402,12 +407,15 @@ def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
             raan_deg=sat_cfg.orbit.raan_deg,
             true_anomaly_deg=sat_cfg.orbit.true_anomaly_deg,
         )
-        satellites.append(SatelliteNode(
-            plane=sat_cfg.plane, slot=sat_cfg.slot,
-            elements=elements,
-            isl_terminal_count=isl_count,
-            ground_terminal_count=gnd_count,
-        ))
+        satellites.append(
+            SatelliteNode(
+                plane=sat_cfg.plane,
+                slot=sat_cfg.slot,
+                elements=elements,
+                isl_terminal_count=isl_count,
+                ground_terminal_count=gnd_count,
+            )
+        )
 
     return satellites
 

@@ -5,10 +5,9 @@ files depend on. If a model round-trip fails, components that serialize
 and deserialize will disagree on the data.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from nodalarc.models.events import (
     ClockTick,
     NodePosition,
@@ -35,8 +34,8 @@ from nodalarc.models.vs_api import (
     TracedPath,
 )
 
-NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-LATER = datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+LATER = datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC)
 
 
 def _round_trip(model_instance):
@@ -54,15 +53,23 @@ def _round_trip(model_instance):
 class TestNodePosition:
     def test_round_trip(self):
         pos = NodePosition(
-            lat_deg=33.92, lon_deg=-118.33, alt_km=550.0,
-            vel_x_km_s=1.0, vel_y_km_s=2.0, vel_z_km_s=3.0,
+            lat_deg=33.92,
+            lon_deg=-118.33,
+            alt_km=550.0,
+            vel_x_km_s=1.0,
+            vel_y_km_s=2.0,
+            vel_z_km_s=3.0,
         )
         _round_trip(pos)
 
     def test_frozen(self):
         pos = NodePosition(
-            lat_deg=0.0, lon_deg=0.0, alt_km=550.0,
-            vel_x_km_s=0.0, vel_y_km_s=0.0, vel_z_km_s=0.0,
+            lat_deg=0.0,
+            lon_deg=0.0,
+            alt_km=550.0,
+            vel_x_km_s=0.0,
+            vel_y_km_s=0.0,
+            vel_z_km_s=0.0,
         )
         with pytest.raises(Exception):
             pos.lat_deg = 10.0
@@ -71,17 +78,27 @@ class TestNodePosition:
 class TestPositionEvent:
     def test_round_trip(self):
         evt = PositionEvent(
-            sim_time=NOW, node_id="sat-P00S00",
-            lat_deg=33.92, lon_deg=-118.33, alt_km=550.0,
-            vel_x_km_s=1.0, vel_y_km_s=2.0, vel_z_km_s=3.0,
+            sim_time=NOW,
+            node_id="sat-P00S00",
+            lat_deg=33.92,
+            lon_deg=-118.33,
+            alt_km=550.0,
+            vel_x_km_s=1.0,
+            vel_y_km_s=2.0,
+            vel_z_km_s=3.0,
         )
         _round_trip(evt)
 
     def test_frozen(self):
         evt = PositionEvent(
-            sim_time=NOW, node_id="sat-P00S00",
-            lat_deg=0.0, lon_deg=0.0, alt_km=550.0,
-            vel_x_km_s=0.0, vel_y_km_s=0.0, vel_z_km_s=0.0,
+            sim_time=NOW,
+            node_id="sat-P00S00",
+            lat_deg=0.0,
+            lon_deg=0.0,
+            alt_km=550.0,
+            vel_x_km_s=0.0,
+            vel_y_km_s=0.0,
+            vel_z_km_s=0.0,
         )
         with pytest.raises(Exception):
             evt.node_id = "sat-P01S01"
@@ -90,35 +107,55 @@ class TestPositionEvent:
 class TestVisibilityEvent:
     def test_round_trip(self):
         evt = VisibilityEvent(
-            sim_time=NOW, node_a="sat-P00S00", node_b="sat-P00S01",
-            visible=True, scheduled=True, range_km=1500.0,
-            elevation_deg=None, terminal_type="optical",
+            sim_time=NOW,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            visible=True,
+            scheduled=True,
+            range_km=1500.0,
+            elevation_deg=None,
+            terminal_type="optical",
         )
         _round_trip(evt)
 
     def test_node_ordering_enforced(self):
         """node_a must be alphabetically < node_b; validator swaps if needed."""
         evt = VisibilityEvent(
-            sim_time=NOW, node_a="sat-P01S00", node_b="sat-P00S00",
-            visible=True, scheduled=True, range_km=1000.0,
-            elevation_deg=None, terminal_type="optical",
+            sim_time=NOW,
+            node_a="sat-P01S00",
+            node_b="sat-P00S00",
+            visible=True,
+            scheduled=True,
+            range_km=1000.0,
+            elevation_deg=None,
+            terminal_type="optical",
         )
         assert evt.node_a == "sat-P00S00"
         assert evt.node_b == "sat-P01S00"
 
     def test_ground_link_has_elevation(self):
         evt = VisibilityEvent(
-            sim_time=NOW, node_a="gs-ashburn", node_b="sat-P00S00",
-            visible=True, scheduled=True, range_km=800.0,
-            elevation_deg=45.0, terminal_type="optical",
+            sim_time=NOW,
+            node_a="gs-ashburn",
+            node_b="sat-P00S00",
+            visible=True,
+            scheduled=True,
+            range_km=800.0,
+            elevation_deg=45.0,
+            terminal_type="optical",
         )
         assert evt.elevation_deg == 45.0
 
     def test_frozen(self):
         evt = VisibilityEvent(
-            sim_time=NOW, node_a="sat-P00S00", node_b="sat-P00S01",
-            visible=True, scheduled=True, range_km=1000.0,
-            elevation_deg=None, terminal_type="optical",
+            sim_time=NOW,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            visible=True,
+            scheduled=True,
+            range_km=1000.0,
+            elevation_deg=None,
+            terminal_type="optical",
         )
         with pytest.raises(Exception):
             evt.visible = False
@@ -127,7 +164,9 @@ class TestVisibilityEvent:
 class TestClockTick:
     def test_round_trip(self):
         tick = ClockTick(
-            sim_time=NOW, wall_time=NOW, compression_ratio=1.0,
+            sim_time=NOW,
+            wall_time=NOW,
+            compression_ratio=1.0,
         )
         _round_trip(tick)
 
@@ -138,12 +177,20 @@ class TestTimelinePositionSnapshot:
             sim_time=NOW,
             positions={
                 "sat-P00S00": NodePosition(
-                    lat_deg=0.0, lon_deg=0.0, alt_km=550.0,
-                    vel_x_km_s=7.0, vel_y_km_s=0.0, vel_z_km_s=0.0,
+                    lat_deg=0.0,
+                    lon_deg=0.0,
+                    alt_km=550.0,
+                    vel_x_km_s=7.0,
+                    vel_y_km_s=0.0,
+                    vel_z_km_s=0.0,
                 ),
                 "gs-ashburn": NodePosition(
-                    lat_deg=39.04, lon_deg=-77.49, alt_km=0.1,
-                    vel_x_km_s=0.0, vel_y_km_s=0.0, vel_z_km_s=0.0,
+                    lat_deg=39.04,
+                    lon_deg=-77.49,
+                    alt_km=0.1,
+                    vel_x_km_s=0.0,
+                    vel_y_km_s=0.0,
+                    vel_z_km_s=0.0,
                 ),
             },
         )
@@ -159,20 +206,28 @@ class TestTimelinePositionSnapshot:
 class TestLinkUp:
     def test_round_trip(self):
         evt = LinkUp(
-            sim_time=NOW, wall_time=NOW,
-            node_a="sat-P00S00", node_b="sat-P00S01",
-            interface_a="isl0", interface_b="isl1",
-            latency_ms=5.0, bandwidth_mbps=1000.0,
+            sim_time=NOW,
+            wall_time=NOW,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            interface_a="isl0",
+            interface_b="isl1",
+            latency_ms=5.0,
+            bandwidth_mbps=1000.0,
             reason="vis_gained",
         )
         _round_trip(evt)
 
     def test_frozen(self):
         evt = LinkUp(
-            sim_time=NOW, wall_time=NOW,
-            node_a="sat-P00S00", node_b="sat-P00S01",
-            interface_a="isl0", interface_b="isl1",
-            latency_ms=5.0, bandwidth_mbps=1000.0,
+            sim_time=NOW,
+            wall_time=NOW,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            interface_a="isl0",
+            interface_b="isl1",
+            latency_ms=5.0,
+            bandwidth_mbps=1000.0,
             reason="vis_gained",
         )
         with pytest.raises(Exception):
@@ -182,9 +237,12 @@ class TestLinkUp:
 class TestLinkDown:
     def test_round_trip(self):
         evt = LinkDown(
-            sim_time=NOW, wall_time=NOW,
-            node_a="sat-P00S00", node_b="sat-P00S01",
-            interface_a="isl0", interface_b="isl1",
+            sim_time=NOW,
+            wall_time=NOW,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            interface_a="isl0",
+            interface_b="isl1",
             reason="vis_lost",
         )
         _round_trip(evt)
@@ -193,9 +251,12 @@ class TestLinkDown:
 class TestLatencyUpdate:
     def test_round_trip(self):
         evt = LatencyUpdate(
-            sim_time=NOW, wall_time=NOW,
-            node_a="sat-P00S00", node_b="sat-P00S01",
-            latency_ms=5.5, range_km=1650.0,
+            sim_time=NOW,
+            wall_time=NOW,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            latency_ms=5.5,
+            range_km=1650.0,
         )
         _round_trip(evt)
 
@@ -206,10 +267,14 @@ class TestLatencyUpdate:
 class TestConvergenceRequest:
     def test_round_trip_with_link_up(self):
         link_up = LinkUp(
-            sim_time=NOW, wall_time=NOW,
-            node_a="sat-P00S00", node_b="sat-P00S01",
-            interface_a="isl0", interface_b="isl1",
-            latency_ms=5.0, bandwidth_mbps=1000.0,
+            sim_time=NOW,
+            wall_time=NOW,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            interface_a="isl0",
+            interface_b="isl1",
+            latency_ms=5.0,
+            bandwidth_mbps=1000.0,
             reason="vis_gained",
         )
         req = ConvergenceRequest(event_id="evt-001", link_event=link_up)
@@ -217,9 +282,12 @@ class TestConvergenceRequest:
 
     def test_round_trip_with_link_down(self):
         link_down = LinkDown(
-            sim_time=NOW, wall_time=NOW,
-            node_a="sat-P00S00", node_b="sat-P00S01",
-            interface_a="isl0", interface_b="isl1",
+            sim_time=NOW,
+            wall_time=NOW,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            interface_a="isl0",
+            interface_b="isl1",
             reason="vis_lost",
         )
         req = ConvergenceRequest(event_id="evt-002", link_event=link_down)
@@ -229,19 +297,29 @@ class TestConvergenceRequest:
 class TestConvergenceResult:
     def test_round_trip(self):
         res = ConvergenceResult(
-            event_id="evt-001", converged=True, duration_ms=1500.0,
-            packets_lost=0, packets_sent=50,
-            sim_time_start=NOW, sim_time_end=LATER,
-            wall_time_start=NOW, wall_time_end=LATER,
+            event_id="evt-001",
+            converged=True,
+            duration_ms=1500.0,
+            packets_lost=0,
+            packets_sent=50,
+            sim_time_start=NOW,
+            sim_time_end=LATER,
+            wall_time_start=NOW,
+            wall_time_end=LATER,
         )
         _round_trip(res)
 
     def test_round_trip_with_triggering_link(self):
         res = ConvergenceResult(
-            event_id="evt-002", converged=False, duration_ms=30000.0,
-            packets_lost=5, packets_sent=100,
-            sim_time_start=NOW, sim_time_end=LATER,
-            wall_time_start=NOW, wall_time_end=LATER,
+            event_id="evt-002",
+            converged=False,
+            duration_ms=30000.0,
+            packets_lost=5,
+            packets_sent=100,
+            sim_time_start=NOW,
+            sim_time_end=LATER,
+            wall_time_start=NOW,
+            wall_time_end=LATER,
             triggering_link_event_id=42,
         )
         restored = _round_trip(res)
@@ -251,11 +329,17 @@ class TestConvergenceResult:
 class TestProbeResult:
     def test_round_trip(self):
         res = ProbeResult(
-            sim_time=NOW, wall_time=NOW,
-            flow_id="ashburn-to-frankfurt", src_node="gs-ashburn", dst_node="gs-frankfurt",
-            packets_sent=100, packets_received=98,
-            latency_min_ms=20.0, latency_max_ms=25.0,
-            latency_avg_ms=22.5, jitter_ms=1.2,
+            sim_time=NOW,
+            wall_time=NOW,
+            flow_id="ashburn-to-frankfurt",
+            src_node="gs-ashburn",
+            dst_node="gs-frankfurt",
+            packets_sent=100,
+            packets_received=98,
+            latency_min_ms=20.0,
+            latency_max_ms=25.0,
+            latency_avg_ms=22.5,
+            jitter_ms=1.2,
         )
         _round_trip(res)
 
@@ -263,8 +347,10 @@ class TestProbeResult:
 class TestAdapterEvent:
     def test_round_trip(self):
         evt = AdapterEvent(
-            sim_time=NOW, wall_time=NOW,
-            node_id="sat-P00S00", event_type="adjacency_up",
+            sim_time=NOW,
+            wall_time=NOW,
+            node_id="sat-P00S00",
+            event_type="adjacency_up",
             event_data={"neighbor": "sat-P00S01", "source": "grpc"},
         )
         _round_trip(evt)
@@ -272,8 +358,10 @@ class TestAdapterEvent:
     def test_event_data_any_type(self):
         """event_data accepts arbitrary nested data."""
         evt = AdapterEvent(
-            sim_time=NOW, wall_time=NOW,
-            node_id="sat-P00S00", event_type="spf_end",
+            sim_time=NOW,
+            wall_time=NOW,
+            node_id="sat-P00S00",
+            event_type="spf_end",
             event_data={"duration_us": 1234, "paths": ["a", "b"], "source": "syslog"},
         )
         restored = _round_trip(evt)
@@ -289,7 +377,8 @@ class TestTraceRequest:
 class TestTraceResponse:
     def test_round_trip_success(self):
         resp = TraceResponse(
-            src_node="gs-hawthorne", dst_node="gs-ashburn",
+            src_node="gs-hawthorne",
+            dst_node="gs-ashburn",
             hops=["sat-P00S00", "sat-P01S00", "sat-P01S05"],
             success=True,
         )
@@ -300,8 +389,11 @@ class TestTraceResponse:
 
     def test_round_trip_failure(self):
         resp = TraceResponse(
-            src_node="gs-hawthorne", dst_node="gs-ashburn",
-            hops=[], success=False, error="no route",
+            src_node="gs-hawthorne",
+            dst_node="gs-ashburn",
+            hops=[],
+            success=False,
+            error="no route",
         )
         restored = _round_trip(resp)
         assert restored.success is False
@@ -314,21 +406,39 @@ class TestTraceResponse:
 class TestNodeState:
     def test_satellite_round_trip(self):
         ns = NodeState(
-            node_id="sat-P03S07", node_type="satellite",
-            lat_deg=33.0, lon_deg=-118.0, alt_km=550.0,
-            vel_x_km_s=1.0, vel_y_km_s=2.0, vel_z_km_s=3.0,
-            plane=3, slot=7, routing_area="49.0001",
-            neighbor_count=4, isl_count=3, gnd_count=1,
+            node_id="sat-P03S07",
+            node_type="satellite",
+            lat_deg=33.0,
+            lon_deg=-118.0,
+            alt_km=550.0,
+            vel_x_km_s=1.0,
+            vel_y_km_s=2.0,
+            vel_z_km_s=3.0,
+            plane=3,
+            slot=7,
+            routing_area="49.0001",
+            neighbor_count=4,
+            isl_count=3,
+            gnd_count=1,
         )
         _round_trip(ns)
 
     def test_ground_station_round_trip(self):
         ns = NodeState(
-            node_id="gs-ashburn", node_type="ground_station",
-            lat_deg=39.04, lon_deg=-77.49, alt_km=0.1,
-            vel_x_km_s=None, vel_y_km_s=None, vel_z_km_s=None,
-            plane=None, slot=None, routing_area="49.0000",
-            neighbor_count=1, isl_count=0, gnd_count=1,
+            node_id="gs-ashburn",
+            node_type="ground_station",
+            lat_deg=39.04,
+            lon_deg=-77.49,
+            alt_km=0.1,
+            vel_x_km_s=None,
+            vel_y_km_s=None,
+            vel_z_km_s=None,
+            plane=None,
+            slot=None,
+            routing_area="49.0000",
+            neighbor_count=1,
+            isl_count=0,
+            gnd_count=1,
         )
         _round_trip(ns)
 
@@ -336,10 +446,14 @@ class TestNodeState:
 class TestLinkState:
     def test_round_trip(self):
         ls = LinkState(
-            node_a="sat-P00S00", node_b="sat-P00S01",
-            state="active", link_type="intra_plane_isl",
-            link_reason=None, latency_ms=3.2,
-            bandwidth_mbps=1000.0, range_km=960.0,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            state="active",
+            link_type="intra_plane_isl",
+            link_reason=None,
+            latency_ms=3.2,
+            bandwidth_mbps=1000.0,
+            range_km=960.0,
             traffic_load_pct=None,
         )
         _round_trip(ls)
@@ -347,15 +461,25 @@ class TestLinkState:
     def test_traffic_load_null_vs_zero(self):
         """None means no probe data; 0 means probes running but no load."""
         ls_none = LinkState(
-            node_a="a", node_b="b", state="active",
-            link_type=None, link_reason=None,
-            latency_ms=5.0, bandwidth_mbps=100.0, range_km=500.0,
+            node_a="a",
+            node_b="b",
+            state="active",
+            link_type=None,
+            link_reason=None,
+            latency_ms=5.0,
+            bandwidth_mbps=100.0,
+            range_km=500.0,
             traffic_load_pct=None,
         )
         ls_zero = LinkState(
-            node_a="a", node_b="b", state="active",
-            link_type=None, link_reason=None,
-            latency_ms=5.0, bandwidth_mbps=100.0, range_km=500.0,
+            node_a="a",
+            node_b="b",
+            state="active",
+            link_type=None,
+            link_reason=None,
+            latency_ms=5.0,
+            bandwidth_mbps=100.0,
+            range_km=500.0,
             traffic_load_pct=0.0,
         )
         assert ls_none.traffic_load_pct is None
@@ -366,7 +490,8 @@ class TestTracedPath:
     def test_round_trip(self):
         tp = TracedPath(
             flow_id="ashburn-to-frankfurt",
-            src_node="gs-ashburn", dst_node="gs-frankfurt",
+            src_node="gs-ashburn",
+            dst_node="gs-frankfurt",
             hops=["gs-ashburn", "sat-P02S05", "sat-P02S06", "sat-P03S06", "gs-frankfurt"],
         )
         _round_trip(tp)
@@ -375,8 +500,10 @@ class TestTracedPath:
 class TestNetworkHealth:
     def test_round_trip(self):
         nh = NetworkHealth(
-            status="converged", converging_since_ms=None,
-            unreachable_flows=0, last_convergence_ms=1500.0,
+            status="converged",
+            converging_since_ms=None,
+            unreachable_flows=0,
+            last_convergence_ms=1500.0,
         )
         _round_trip(nh)
 
@@ -385,8 +512,10 @@ class TestActiveFlow:
     def test_round_trip(self):
         af = ActiveFlow(
             flow_id="ashburn-to-frankfurt",
-            src_node="gs-ashburn", dst_node="gs-frankfurt",
-            protocol="udp", probe_type="continuous",
+            src_node="gs-ashburn",
+            dst_node="gs-frankfurt",
+            protocol="udp",
+            probe_type="continuous",
         )
         _round_trip(af)
 
@@ -394,8 +523,10 @@ class TestActiveFlow:
 class TestRecentEvent:
     def test_round_trip(self):
         re = RecentEvent(
-            sim_time=NOW, node_id="sat-P00S00",
-            event_type="adjacency_up", summary="IS-IS adjacency with sat-P00S01 came up",
+            sim_time=NOW,
+            node_id="sat-P00S00",
+            event_type="adjacency_up",
+            summary="IS-IS adjacency with sat-P00S01 came up",
         )
         _round_trip(re)
 
@@ -403,22 +534,37 @@ class TestRecentEvent:
 class TestStateSnapshot:
     def test_round_trip(self):
         snap = StateSnapshot(
-            sim_time=NOW, wall_time=NOW, schema_version=1,
+            sim_time=NOW,
+            wall_time=NOW,
+            schema_version=1,
             nodes=[
                 NodeState(
-                    node_id="sat-P00S00", node_type="satellite",
-                    lat_deg=0.0, lon_deg=0.0, alt_km=550.0,
-                    vel_x_km_s=7.0, vel_y_km_s=0.0, vel_z_km_s=0.0,
-                    plane=0, slot=0, routing_area="49.0001",
-                    neighbor_count=2, isl_count=2, gnd_count=0,
+                    node_id="sat-P00S00",
+                    node_type="satellite",
+                    lat_deg=0.0,
+                    lon_deg=0.0,
+                    alt_km=550.0,
+                    vel_x_km_s=7.0,
+                    vel_y_km_s=0.0,
+                    vel_z_km_s=0.0,
+                    plane=0,
+                    slot=0,
+                    routing_area="49.0001",
+                    neighbor_count=2,
+                    isl_count=2,
+                    gnd_count=0,
                 ),
             ],
             links=[
                 LinkState(
-                    node_a="sat-P00S00", node_b="sat-P00S01",
-                    state="active", link_type="intra_plane_isl",
-                    link_reason=None, latency_ms=3.0,
-                    bandwidth_mbps=1000.0, range_km=900.0,
+                    node_a="sat-P00S00",
+                    node_b="sat-P00S01",
+                    state="active",
+                    link_type="intra_plane_isl",
+                    link_reason=None,
+                    latency_ms=3.0,
+                    bandwidth_mbps=1000.0,
+                    range_km=900.0,
                     traffic_load_pct=None,
                 ),
             ],
@@ -426,8 +572,10 @@ class TestStateSnapshot:
             active_flows=[],
             recent_events=[],
             network_health=NetworkHealth(
-                status="converged", converging_since_ms=None,
-                unreachable_flows=0, last_convergence_ms=None,
+                status="converged",
+                converging_since_ms=None,
+                unreachable_flows=0,
+                last_convergence_ms=None,
             ),
         )
         restored = _round_trip(snap)

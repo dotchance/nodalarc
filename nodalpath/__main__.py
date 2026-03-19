@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import sys
 from pathlib import Path
 
 from nodalarc.constants import LOG_FORMAT
+
 from nodalpath.config import NodalPathConfig
 from nodalpath.orchestrator.session_loader import load_pod_ip_map, load_session_context
 from nodalpath.push.push_scheduler import PushScheduler, PushSchedulerConfig
@@ -40,11 +40,12 @@ def _build_push_scheduler(
 
 async def _run_live(config: NodalPathConfig) -> None:
     import uvicorn
+    from nodalarc.zmq_channels import nodalpath_console_port
+
     from nodalpath.console.server import build_app
     from nodalpath.console.state import ConsoleState
     from nodalpath.integration.live_orchestrator import LiveOrchestrator
     from nodalpath.integration.zmq_publisher import AlmanacPublisher
-    from nodalarc.zmq_channels import nodalpath_console_port
 
     node_registry, interface_map, prefix_map, bandwidth_map, static_edges = load_session_context(
         config.session_path,
@@ -52,6 +53,7 @@ async def _run_live(config: NodalPathConfig) -> None:
 
     # Read session name from YAML for display (not the file path)
     import yaml as _yaml
+
     _session_raw = _yaml.safe_load(config.session_path.read_text())
     _session_name = _session_raw.get("session", {}).get("name", str(config.session_path))
 
@@ -151,13 +153,16 @@ async def _run_live(config: NodalPathConfig) -> None:
 
     log.info(
         "NodalPath live mode starting (transport=%s, dry_run=%s, console=http://0.0.0.0:%d)",
-        config.transport, config.dry_run, nodalpath_console_port(),
+        config.transport,
+        config.dry_run,
+        nodalpath_console_port(),
     )
 
     tasks = [orchestrator.run(), console_server.serve()]
 
     if config.lookahead_enabled and config.timeline_path is not None:
         from nodalpath.integration.lookahead_worker import LookaheadWorker
+
         lookahead = LookaheadWorker(
             timeline_path=config.timeline_path,
             node_registry=node_registry,
@@ -173,7 +178,8 @@ async def _run_live(config: NodalPathConfig) -> None:
         tasks.append(lookahead.run())
         log.info(
             "LookaheadWorker enabled (horizon=%ds, file=%s)",
-            config.lookahead_horizon_s, config.timeline_path,
+            config.lookahead_horizon_s,
+            config.timeline_path,
         )
     else:
         log.info("LookaheadWorker disabled (pass --timeline to enable)")
@@ -196,13 +202,14 @@ async def _run_console(config: NodalPathConfig | None = None) -> None:
     registry and wires a LivePathTracer that runs real traceroute through
     the emulated FRR pods.
     """
-    import yaml
     import uvicorn
-    from nodalpath.console.server import build_app
-    from nodalpath.console.state import ConsoleState
-    from nodalarc.zmq_channels import nodalpath_console_port
+    import yaml
     from nodalarc.models.routing_stack import RoutingStackConfig
     from nodalarc.models.session import SessionConfig
+    from nodalarc.zmq_channels import nodalpath_console_port
+
+    from nodalpath.console.server import build_app
+    from nodalpath.console.state import ConsoleState
 
     live_path_tracer = None
     trace_mode: str | None = None
@@ -226,6 +233,7 @@ async def _run_console(config: NodalPathConfig | None = None) -> None:
             ttl_propagation = stack_config.ttl_propagation
         else:
             from nodalarc.stack_resolver import resolve_stack
+
             resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
             segment_routing = resolved.segment_routing
             ttl_propagation = resolved.ttl_propagation
@@ -236,6 +244,7 @@ async def _run_console(config: NodalPathConfig | None = None) -> None:
             trace_mode = "ip"
 
         from nodalpath.engine.live_path_tracer import LivePathTracer
+
         live_path_tracer = LivePathTracer(
             node_registry=node_registry,
             trace_mode=trace_mode,
@@ -273,7 +282,9 @@ def _run_batch(config: NodalPathConfig) -> None:
     node_registry, interface_map, prefix_map, bandwidth_map, static_edges = load_session_context(
         config.session_path,
     )
-    push_scheduler = _build_push_scheduler(config, node_registry, interface_map) if not config.dry_run else None
+    push_scheduler = (
+        _build_push_scheduler(config, node_registry, interface_map) if not config.dry_run else None
+    )
 
     window = SlidingWindow(
         timeline_path=config.timeline_path,
@@ -295,26 +306,41 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="NodalPath forwarding almanac controller")
     parser.add_argument("--session", help="Path to session YAML (required for live/batch)")
     parser.add_argument("--mode", choices=["live", "batch", "console"], default="live")
-    parser.add_argument("--timeline", help="OME timeline JSONL path (batch mode / enables lookahead)")
+    parser.add_argument(
+        "--timeline", help="OME timeline JSONL path (batch mode / enables lookahead)"
+    )
     parser.add_argument("--output", help="Almanac JSONL output path")
-    parser.add_argument("--lookahead-horizon", type=int, default=5700,
-                        help="Lookahead horizon in seconds (default: 5700)")
+    parser.add_argument(
+        "--lookahead-horizon",
+        type=int,
+        default=5700,
+        help="Lookahead horizon in seconds (default: 5700)",
+    )
     parser.add_argument("--almanac-output", help="Almanac JSONL output path (enables persistence)")
     parser.add_argument("--no-lookahead", action="store_true", help="Disable lookahead worker")
     parser.add_argument("--transport", choices=["grpc", "vtysh"], default="grpc")
     parser.add_argument("--grpc-port", type=int, default=50051)
     parser.add_argument("--namespace", default="nodalarc")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--inspection-heartbeat", type=int, default=0,
-                        help="Inspection heartbeat interval in seconds (0=disabled)")
-    parser.add_argument("--no-inspection-on-push", action="store_true",
-                        help="Disable automatic inspection after push")
+    parser.add_argument(
+        "--inspection-heartbeat",
+        type=int,
+        default=0,
+        help="Inspection heartbeat interval in seconds (0=disabled)",
+    )
+    parser.add_argument(
+        "--no-inspection-on-push",
+        action="store_true",
+        help="Disable automatic inspection after push",
+    )
     parser.add_argument("--platform-config", default="configs/platform.yaml")
     parser.add_argument("--nodalpath-config", default="configs/nodalpath.yaml")
     args = parser.parse_args()
 
     from nodalarc.platform import init_platform_config
+
     from nodalpath.platform import init_nodalpath_config
+
     init_platform_config(Path(args.platform_config))
     init_nodalpath_config(Path(args.nodalpath_config))
 

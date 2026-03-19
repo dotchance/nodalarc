@@ -3,10 +3,10 @@
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
-
 from nodalarc.models.path import PathResult
-from nodalpath.console.state import ConsoleState
+
 from nodalpath.console.server import build_app
+from nodalpath.console.state import ConsoleState
 
 
 def _client(deriver=None, trace_mode=None):
@@ -18,9 +18,12 @@ def _client(deriver=None, trace_mode=None):
 def _mock_deriver(reachable=True):
     d = MagicMock()
     d.derive.return_value = PathResult(
-        src="gs-a", dst="gs-b",
-        hops=[], total_latency_ms=42.0,
-        method="derived", sim_time="2026-01-01T00:01:00Z",
+        src="gs-a",
+        dst="gs-b",
+        hops=[],
+        total_latency_ms=42.0,
+        method="derived",
+        sim_time="2026-01-01T00:01:00Z",
         topology_state_id="s1",
         reachable=reachable,
         unreachable_reason=None if reachable else "no path",
@@ -66,6 +69,7 @@ def test_path_without_sim_time():
 
 
 # ── trace-config endpoint tests ────────────────────────────────────────
+
 
 def test_trace_config_ip_mode():
     client = _client(trace_mode="ip")

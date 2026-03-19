@@ -3,34 +3,44 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 from nodalarc.models.events import NodePosition, TimelinePositionSnapshot, VisibilityEvent
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.zmq_channels import encode_message
+
 from nodalpath.integration.live_orchestrator import LiveOrchestrator
 from nodalpath.models.topology import TopologyNode
 from nodalpath.push.push_scheduler import PushResult
 
-
 # --- Fixtures ---
+
 
 @pytest.fixture
 def node_registry():
     return {
         "sat-P00S00": TopologyNode(
-            node_id="sat-P00S00", node_type="satellite", sid=16001,
-            loopback_ipv4="10.0.0.1", plane=0, slot=0,
+            node_id="sat-P00S00",
+            node_type="satellite",
+            sid=16001,
+            loopback_ipv4="10.0.0.1",
+            plane=0,
+            slot=0,
         ),
         "sat-P00S01": TopologyNode(
-            node_id="sat-P00S01", node_type="satellite", sid=16002,
-            loopback_ipv4="10.0.0.2", plane=0, slot=1,
+            node_id="sat-P00S01",
+            node_type="satellite",
+            sid=16002,
+            loopback_ipv4="10.0.0.2",
+            plane=0,
+            slot=1,
         ),
         "gs-alpha": TopologyNode(
-            node_id="gs-alpha", node_type="ground_station", sid=24000,
+            node_id="gs-alpha",
+            node_type="ground_station",
+            sid=24000,
             loopback_ipv4="10.2.0.1",
         ),
     }
@@ -89,15 +99,22 @@ def orchestrator(node_registry, interface_map, prefix_map, mock_push_scheduler, 
 
 
 def _make_vis_event_raw(
-    node_a: str, node_b: str,
-    visible: bool, scheduled: bool,
+    node_a: str,
+    node_b: str,
+    visible: bool,
+    scheduled: bool,
     sim_time: datetime,
     range_km: float = 2000.0,
 ) -> bytes:
     event = VisibilityEvent(
-        sim_time=sim_time, node_a=node_a, node_b=node_b,
-        visible=visible, scheduled=scheduled, range_km=range_km,
-        elevation_deg=None, terminal_type="optical",
+        sim_time=sim_time,
+        node_a=node_a,
+        node_b=node_b,
+        visible=visible,
+        scheduled=scheduled,
+        range_km=range_km,
+        elevation_deg=None,
+        terminal_type="optical",
     )
     payload = event.model_dump_json().encode()
     return encode_message(b"VisibilityEvent", payload)
@@ -108,12 +125,20 @@ def _make_snapshot_raw(sim_time: datetime) -> bytes:
         sim_time=sim_time,
         positions={
             "sat-P00S00": NodePosition(
-                lat_deg=45.0, lon_deg=0.0, alt_km=550.0,
-                vel_x_km_s=0.0, vel_y_km_s=7.5, vel_z_km_s=0.0,
+                lat_deg=45.0,
+                lon_deg=0.0,
+                alt_km=550.0,
+                vel_x_km_s=0.0,
+                vel_y_km_s=7.5,
+                vel_z_km_s=0.0,
             ),
             "sat-P00S01": NodePosition(
-                lat_deg=45.0, lon_deg=30.0, alt_km=550.0,
-                vel_x_km_s=0.0, vel_y_km_s=7.5, vel_z_km_s=0.0,
+                lat_deg=45.0,
+                lon_deg=30.0,
+                alt_km=550.0,
+                vel_x_km_s=0.0,
+                vel_y_km_s=7.5,
+                vel_z_km_s=0.0,
             ),
         },
     )
@@ -122,15 +147,18 @@ def _make_snapshot_raw(sim_time: datetime) -> bytes:
 
 
 def _make_link_down_raw(
-    node_a: str, node_b: str,
+    node_a: str,
+    node_b: str,
     reason: str,
     sim_time: datetime,
 ) -> bytes:
     event = LinkDown(
         sim_time=sim_time,
-        wall_time=datetime.now(timezone.utc),
-        node_a=node_a, node_b=node_b,
-        interface_a="isl0", interface_b="isl0",
+        wall_time=datetime.now(UTC),
+        node_a=node_a,
+        node_b=node_b,
+        interface_a="isl0",
+        interface_b="isl0",
         reason=reason,
     )
     payload = event.model_dump_json().encode()
@@ -138,16 +166,20 @@ def _make_link_down_raw(
 
 
 def _make_link_up_raw(
-    node_a: str, node_b: str,
+    node_a: str,
+    node_b: str,
     reason: str,
     sim_time: datetime,
 ) -> bytes:
     event = LinkUp(
         sim_time=sim_time,
-        wall_time=datetime.now(timezone.utc),
-        node_a=node_a, node_b=node_b,
-        interface_a="isl0", interface_b="isl0",
-        latency_ms=3.5, bandwidth_mbps=1000.0,
+        wall_time=datetime.now(UTC),
+        node_a=node_a,
+        node_b=node_b,
+        interface_a="isl0",
+        interface_b="isl0",
+        latency_ms=3.5,
+        bandwidth_mbps=1000.0,
         reason=reason,
     )
     payload = event.model_dump_json().encode()
@@ -161,21 +193,22 @@ def _run(coro):
 
 # --- Tests ---
 
+
 class TestLiveOrchestratorHandlers:
     def test_visibility_event_updates_builder(self, orchestrator):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
         raw = _make_vis_event_raw("sat-P00S00", "sat-P00S01", True, True, t0)
         _run(orchestrator._handle_ome_message(raw))
         assert ("sat-P00S00", "sat-P00S01") in orchestrator._builder.active_link_set
 
     def test_link_up_adds_to_active_set(self, orchestrator):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
         raw = _make_vis_event_raw("gs-alpha", "sat-P00S00", True, True, t0)
         _run(orchestrator._handle_ome_message(raw))
         assert ("gs-alpha", "sat-P00S00") in orchestrator._builder.active_link_set
 
     def test_link_down_removes_from_active_set(self, orchestrator):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
         raw_up = _make_vis_event_raw("sat-P00S00", "sat-P00S01", True, True, t0)
         _run(orchestrator._handle_ome_message(raw_up))
         assert ("sat-P00S00", "sat-P00S01") in orchestrator._builder.active_link_set
@@ -184,9 +217,11 @@ class TestLiveOrchestratorHandlers:
         _run(orchestrator._handle_ome_message(raw_down))
         assert ("sat-P00S00", "sat-P00S01") not in orchestrator._builder.active_link_set
 
-    def test_transition_detected_on_sim_time_boundary(self, orchestrator, mock_push_scheduler, mock_publisher):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
-        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=timezone.utc)
+    def test_transition_detected_on_sim_time_boundary(
+        self, orchestrator, mock_push_scheduler, mock_publisher
+    ):
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
+        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=UTC)
 
         raw = _make_vis_event_raw("sat-P00S00", "sat-P00S01", True, True, t0)
         _run(orchestrator._handle_ome_message(raw))
@@ -200,9 +235,9 @@ class TestLiveOrchestratorHandlers:
         mock_publisher.publish_table_pushed.assert_called_once()
 
     def test_no_transition_on_identical_link_set(self, orchestrator, mock_push_scheduler):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
-        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=timezone.utc)
-        t2 = datetime(2026, 3, 1, 14, 31, 0, tzinfo=timezone.utc)
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
+        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=UTC)
+        t2 = datetime(2026, 3, 1, 14, 31, 0, tzinfo=UTC)
 
         raw = _make_vis_event_raw("sat-P00S00", "sat-P00S01", True, True, t0)
         _run(orchestrator._handle_ome_message(raw))
@@ -216,8 +251,8 @@ class TestLiveOrchestratorHandlers:
         assert orchestrator.transition_count == 1
 
     def test_transition_calls_push_scheduler(self, orchestrator, mock_push_scheduler):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
-        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=timezone.utc)
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
+        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=UTC)
 
         raw = _make_vis_event_raw("sat-P00S00", "sat-P00S01", True, True, t0)
         _run(orchestrator._handle_ome_message(raw))
@@ -231,8 +266,8 @@ class TestLiveOrchestratorHandlers:
         assert entry.sim_time == t0.isoformat()
 
     def test_transition_publishes_path_computed(self, orchestrator, mock_publisher):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
-        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=timezone.utc)
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
+        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=UTC)
 
         raw = _make_vis_event_raw("sat-P00S00", "sat-P00S01", True, True, t0)
         _run(orchestrator._handle_ome_message(raw))
@@ -244,8 +279,8 @@ class TestLiveOrchestratorHandlers:
         assert call_kwargs["sim_time"] == t0
 
     def test_transition_publishes_table_pushed(self, orchestrator, mock_publisher):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
-        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=timezone.utc)
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
+        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=UTC)
 
         raw = _make_vis_event_raw("sat-P00S00", "sat-P00S01", True, True, t0)
         _run(orchestrator._handle_ome_message(raw))
@@ -257,9 +292,11 @@ class TestLiveOrchestratorHandlers:
         assert call_kwargs["nodes_attempted"] == 3
         assert call_kwargs["nodes_succeeded"] == 3
 
-    def test_to_link_down_deviation_triggers_recompute(self, orchestrator, mock_push_scheduler, mock_publisher):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
-        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=timezone.utc)
+    def test_to_link_down_deviation_triggers_recompute(
+        self, orchestrator, mock_push_scheduler, mock_publisher
+    ):
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
+        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=UTC)
 
         raw = _make_vis_event_raw("sat-P00S00", "sat-P00S01", True, True, t0)
         _run(orchestrator._handle_ome_message(raw))
@@ -276,9 +313,11 @@ class TestLiveOrchestratorHandlers:
         mock_publisher.publish.assert_called_once()
         assert mock_push_scheduler.push_entry.call_count == 1
 
-    def test_to_link_down_normal_no_recompute(self, orchestrator, mock_push_scheduler, mock_publisher):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
-        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=timezone.utc)
+    def test_to_link_down_normal_no_recompute(
+        self, orchestrator, mock_push_scheduler, mock_publisher
+    ):
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
+        t1 = datetime(2026, 3, 1, 14, 30, 30, tzinfo=UTC)
 
         raw = _make_vis_event_raw("sat-P00S00", "sat-P00S01", True, True, t0)
         _run(orchestrator._handle_ome_message(raw))
@@ -296,6 +335,7 @@ class TestLiveOrchestratorHandlers:
 
     def test_stop_exits_run_loop(self, orchestrator):
         """stop() causes run() to return promptly."""
+
         async def _test():
             async def stop_soon():
                 await asyncio.sleep(0.1)
@@ -327,7 +367,7 @@ class TestLiveOrchestratorHandlers:
         asyncio.run(_test())
 
     def test_position_snapshot_applied(self, orchestrator):
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
         raw = _make_snapshot_raw(t0)
         _run(orchestrator._handle_ome_message(raw))
         assert len(orchestrator._builder._positions) > 0

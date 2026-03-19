@@ -1,11 +1,9 @@
 """Unit tests for probe daemon — flow state management and result tracking."""
 
-import threading
-
 from measurement.probe_daemon import (
     FlowConfig,
-    _FlowState,
     _flows,
+    _FlowState,
     _lock,
 )
 
@@ -122,7 +120,9 @@ class TestFlowState:
     def test_probe_packet_format(self):
         """Verify UDP probe packet format: 8-byte seq + 8-byte timestamp."""
         import struct
+
         from measurement.probe_daemon import PROBE_PACKET_FMT, PROBE_PACKET_SIZE
+
         assert PROBE_PACKET_SIZE == 16
         # Pack and unpack round-trip
         seq, ts = 42, 1234567890123456

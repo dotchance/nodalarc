@@ -10,13 +10,15 @@ Under 100 lines.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
+from nodalarc.constants import LOG_FORMAT
+from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
+from nodalarc.models.session import SessionConfig
 
 from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
 from ome.event_stream import (
@@ -28,9 +30,6 @@ from ome.event_stream import (
     write_timeline_jsonl,
 )
 from ome.propagator import orbital_period
-from nodalarc.constants import LOG_FORMAT
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
-from nodalarc.models.session import SessionConfig
 
 
 def run(session_path: str, output_dir: str | None = None) -> Path:
@@ -66,6 +65,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
     latitude_threshold_deg = 70.0
 
     from nodalarc.models.constellation import ParametricConstellation
+
     if isinstance(constellation_config, ParametricConstellation):
         if constellation_config.default_terminals.isl:
             isl = constellation_config.default_terminals.isl[0]
@@ -105,7 +105,9 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
     out_path = out_dir / f"{session.session.name}-timeline.jsonl"
     write_timeline_jsonl(events, out_path)
 
-    logging.info(f"OME complete: {len(events)} events, {len(satellites)} satellites, period={period:.0f}s")
+    logging.info(
+        f"OME complete: {len(events)} events, {len(satellites)} satellites, period={period:.0f}s"
+    )
     return out_path
 
 
@@ -117,15 +119,17 @@ def _start_health_server(port: int = 8081) -> None:
     isolated and called from one place so it can be trivially removed
     when the sidecar pattern is adopted.
     """
-    from http.server import HTTPServer, BaseHTTPRequestHandler
     import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
 
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'{"status":"ok"}')
-        def log_message(self, *args): pass
+
+        def log_message(self, *args):
+            pass
 
     server = HTTPServer(("0.0.0.0", port), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -169,6 +173,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
     latitude_threshold_deg = 70.0
 
     from nodalarc.models.constellation import ParametricConstellation
+
     if isinstance(constellation_config, ParametricConstellation):
         if constellation_config.default_terminals.isl:
             isl = constellation_config.default_terminals.isl[0]
@@ -192,6 +197,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
     # ZMQ PUB socket — primary delivery mechanism
     import zmq
     from nodalarc.zmq_channels import ome_events_bind
+
     ctx = zmq.Context()
     pub_sock = ctx.socket(zmq.PUB)
     pub_sock.bind(ome_events_bind())
@@ -236,8 +242,15 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                 **_common_args,
                 epoch_unix=epoch_for_next,
                 duration_s=period,
-                **({"initial_isl_state": isl_state, "initial_gs_state": gs_state,
-                    "timestamp_offset": period * (window - 1)} if window > 1 else {}),
+                **(
+                    {
+                        "initial_isl_state": isl_state,
+                        "initial_gs_state": gs_state,
+                        "timestamp_offset": period * (window - 1),
+                    }
+                    if window > 1
+                    else {}
+                ),
             )
 
             # Publish window events + WindowReady on ZMQ
@@ -258,37 +271,48 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                     last_position_event = evt
                     snap_count += 1
                     if snap_count % 10 == 0 or snap_count == 1:
-                        position_trajectory.append({
-                            "timestamp_s": evt.timestamp_s,
-                            "event_type": evt.event_type,
-                            "data": evt.data.model_dump(mode="json"),
-                        })
+                        position_trajectory.append(
+                            {
+                                "timestamp_s": evt.timestamp_s,
+                                "event_type": evt.event_type,
+                                "data": evt.data.model_dump(mode="json"),
+                            }
+                        )
                 elif evt.event_type == "VisibilityEvent":
                     pair = (evt.data.node_a, evt.data.node_b)
                     link_ranges[pair] = evt.data.range_km
                     # Include ALL visibility events — link transitions must
                     # be replayed for the topology view to show changes.
-                    position_trajectory.append({
-                        "timestamp_s": evt.timestamp_s,
-                        "event_type": evt.event_type,
-                        "data": evt.data.model_dump(mode="json"),
-                    })
+                    position_trajectory.append(
+                        {
+                            "timestamp_s": evt.timestamp_s,
+                            "event_type": evt.event_type,
+                            "data": evt.data.model_dump(mode="json"),
+                        }
+                    )
             # Always include the last snapshot
             if last_position_event and (snap_count % 10 != 0):
-                position_trajectory.append({
-                    "timestamp_s": last_position_event.timestamp_s,
-                    "event_type": last_position_event.event_type,
-                    "data": last_position_event.data.model_dump(mode="json"),
-                })
+                position_trajectory.append(
+                    {
+                        "timestamp_s": last_position_event.timestamp_s,
+                        "event_type": last_position_event.event_type,
+                        "data": last_position_event.data.model_dump(mode="json"),
+                    }
+                )
 
             # Compute sim_time for the end of this window
-            from datetime import datetime as _dt, timezone as _tz
+            from datetime import datetime as _dt
+
             window_end_epoch = epoch_for_next + period
-            sim_time_iso = _dt.fromtimestamp(window_end_epoch, tz=_tz.utc).isoformat()
+            sim_time_iso = _dt.fromtimestamp(window_end_epoch, tz=UTC).isoformat()
 
             # Publish FullStateSnapshot at window boundary (includes position trajectory)
             publish_full_state_snapshot(
-                pub_sock, isl_state, gs_state, sim_time_iso, link_ranges,
+                pub_sock,
+                isl_state,
+                gs_state,
+                sim_time_iso,
+                link_ranges,
                 position_trajectory=position_trajectory,
             )
             last_snapshot_wall = time.monotonic()
@@ -312,7 +336,11 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                 # Publish periodic FullStateSnapshot every 30s during inter-window sleep
                 if time.monotonic() - last_snapshot_wall >= 30.0:
                     publish_full_state_snapshot(
-                        pub_sock, isl_state, gs_state, sim_time_iso, link_ranges,
+                        pub_sock,
+                        isl_state,
+                        gs_state,
+                        sim_time_iso,
+                        link_ranges,
                         position_trajectory=position_trajectory,
                     )
                     last_snapshot_wall = time.monotonic()
@@ -331,14 +359,21 @@ def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Orbital Mechanics Engine")
     parser.add_argument("session", help="Path to session YAML config")
-    parser.add_argument("--output-dir", "-o", help="Output directory (optional, enables file output)", default=None)
-    parser.add_argument("--continuous", action="store_true",
-                        help="Run in continuous mode (rolling windows + ZMQ publish)")
-    parser.add_argument("--platform-config", default="configs/platform.yaml",
-                        help="Path to platform config YAML")
+    parser.add_argument(
+        "--output-dir", "-o", help="Output directory (optional, enables file output)", default=None
+    )
+    parser.add_argument(
+        "--continuous",
+        action="store_true",
+        help="Run in continuous mode (rolling windows + ZMQ publish)",
+    )
+    parser.add_argument(
+        "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
+    )
     args = parser.parse_args()
 
     from nodalarc.platform import init_platform_config
+
     init_platform_config(Path(args.platform_config))
 
     if args.continuous:

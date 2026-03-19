@@ -19,6 +19,7 @@ os.environ.setdefault("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")
 
 # Ensure platform config is initialized
 from nodalarc.platform import init_platform_config
+
 init_platform_config(Path("configs/platform.yaml"))
 
 
@@ -61,7 +62,8 @@ def api_post(path: str, data: dict) -> dict:
 def teardown():
     subprocess.run(
         ["bash", "tools/na-teardown.sh"],
-        capture_output=True, timeout=180,
+        capture_output=True,
+        timeout=180,
         env={**os.environ, "KUBECONFIG": "/etc/rancher/k3s/k3s.yaml"},
     )
     time.sleep(3)
@@ -70,9 +72,10 @@ def teardown():
 def deploy(session_path: str) -> bool:
     env = {**os.environ, "KUBECONFIG": "/etc/rancher/k3s/k3s.yaml"}
     result = subprocess.run(
-        [sys.executable, "-m", "tools.na_deploy",
-         "--session", session_path, "--skip-teardown"],
-        capture_output=True, text=True, timeout=600,
+        [sys.executable, "-m", "tools.na_deploy", "--session", session_path, "--skip-teardown"],
+        capture_output=True,
+        text=True,
+        timeout=600,
         env=env,
     )
     if result.returncode != 0:
@@ -83,6 +86,7 @@ def deploy(session_path: str) -> bool:
 
 def generate_session(constellation: str, protocol: str, extensions: list[str]) -> str:
     from nodalarc.session_generator import generate_session_yaml
+
     ext_str = "-".join(extensions) if extensions else "plain"
     name = f"{constellation}-{protocol}-{ext_str}"
     path = f"configs/sessions/_test-{name}.yaml"
@@ -114,12 +118,15 @@ def do_trace(src: str, dst: str, timeout_s: int = 30) -> tuple[bool, str]:
 
 
 def run_test(
-    constellation: str, protocol: str, extensions: list[str],
-    label: str, wait_s: int = 90,
+    constellation: str,
+    protocol: str,
+    extensions: list[str],
+    label: str,
+    wait_s: int = 90,
 ) -> tuple[int, int]:
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"  {label}")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
 
     teardown()
 
@@ -137,30 +144,37 @@ def run_test(
     nodes = state.get("nodes", [])
     links = state.get("links", [])
     active = [l for l in links if l.get("state") == "active"]
-    gs_active = [l for l in active if l["node_a"].startswith("gs-") or l["node_b"].startswith("gs-")]
-    connected_gs = sorted(set(
-        l["node_a"] if l["node_a"].startswith("gs-") else l["node_b"]
-        for l in gs_active
-    ))
+    gs_active = [
+        l for l in active if l["node_a"].startswith("gs-") or l["node_b"].startswith("gs-")
+    ]
+    connected_gs = sorted(
+        set(l["node_a"] if l["node_a"].startswith("gs-") else l["node_b"] for l in gs_active)
+    )
     sats = [n for n in nodes if n.get("node_type") == "satellite"]
-    print(f"  Sats: {len(sats)}, Active: {len(active)} ({len(active)-len(gs_active)} ISL, {len(gs_active)} GS)")
+    print(
+        f"  Sats: {len(sats)}, Active: {len(active)} ({len(active) - len(gs_active)} ISL, {len(gs_active)} GS)"
+    )
     print(f"  Connected GS: {connected_gs}")
 
     passed = 0
     failed = 0
 
     # Sat-to-sat traces
-    print(f"  sat-P00S00 -> sat-P02S05: ", end="", flush=True)
+    print("  sat-P00S00 -> sat-P02S05: ", end="", flush=True)
     ok, desc = do_trace("sat-P00S00", "sat-P02S05")
     print(desc)
-    if ok: passed += 1
-    else: failed += 1
+    if ok:
+        passed += 1
+    else:
+        failed += 1
 
-    print(f"  sat-P01S00 -> sat-P03S05: ", end="", flush=True)
+    print("  sat-P01S00 -> sat-P03S05: ", end="", flush=True)
     ok, desc = do_trace("sat-P01S00", "sat-P03S05")
     print(desc)
-    if ok: passed += 1
-    else: failed += 1
+    if ok:
+        passed += 1
+    else:
+        failed += 1
 
     # GS-to-GS if 2+ connected
     if len(connected_gs) >= 2:
@@ -168,31 +182,62 @@ def run_test(
         print(f"  {src} -> {dst} (GS-GS): ", end="", flush=True)
         ok, desc = do_trace(src, dst)
         print(desc)
-        if ok: passed += 1
+        if ok:
+            passed += 1
         else:
             failed += 1
             # DIAGNOSE: check IS-IS state on both GS
-            print(f"    --- GS-GS FAILURE DIAGNOSIS ---")
+            print("    --- GS-GS FAILURE DIAGNOSIS ---")
             for gs in (src, dst):
                 try:
                     r = subprocess.run(
-                        ["kubectl", "exec", "-n", "nodalarc", gs, "-c", "frr", "--",
-                         "vtysh", "-c", "show isis neighbor"],
-                        capture_output=True, text=True, timeout=10,
+                        [
+                            "kubectl",
+                            "exec",
+                            "-n",
+                            "nodalarc",
+                            gs,
+                            "-c",
+                            "frr",
+                            "--",
+                            "vtysh",
+                            "-c",
+                            "show isis neighbor",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
                         env={**os.environ, "KUBECONFIG": "/etc/rancher/k3s/k3s.yaml"},
                     )
                     neighbor_lines = [l for l in r.stdout.splitlines() if "Up" in l or "Down" in l]
-                    print(f"    {gs} IS-IS: {neighbor_lines[0] if neighbor_lines else 'NO NEIGHBOR'}")
+                    print(
+                        f"    {gs} IS-IS: {neighbor_lines[0] if neighbor_lines else 'NO NEIGHBOR'}"
+                    )
                 except Exception as e:
                     print(f"    {gs} IS-IS: error ({e})")
             try:
                 r = subprocess.run(
-                    ["kubectl", "exec", "-n", "nodalarc", src, "-c", "frr", "--",
-                     "vtysh", "-c", "show ip route summary"],
-                    capture_output=True, text=True, timeout=10,
+                    [
+                        "kubectl",
+                        "exec",
+                        "-n",
+                        "nodalarc",
+                        src,
+                        "-c",
+                        "frr",
+                        "--",
+                        "vtysh",
+                        "-c",
+                        "show ip route summary",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                     env={**os.environ, "KUBECONFIG": "/etc/rancher/k3s/k3s.yaml"},
                 )
-                isis_line = [l for l in r.stdout.splitlines() if "isis" in l.lower() or "ospf" in l.lower()]
+                isis_line = [
+                    l for l in r.stdout.splitlines() if "isis" in l.lower() or "ospf" in l.lower()
+                ]
                 print(f"    {src} routes: {isis_line[0].strip() if isis_line else 'NO IGP ROUTES'}")
             except Exception:
                 pass
@@ -225,8 +270,8 @@ if __name__ == "__main__":
         total_pass += p
         total_fail += f
 
-    print(f"\n{'='*50}")
-    print(f"  FINAL: {total_pass} passed, {total_fail} failed / {total_pass+total_fail} total")
-    print(f"{'='*50}")
+    print(f"\n{'=' * 50}")
+    print(f"  FINAL: {total_pass} passed, {total_fail} failed / {total_pass + total_fail} total")
+    print(f"{'=' * 50}")
 
     sys.exit(1 if total_fail > 0 else 0)

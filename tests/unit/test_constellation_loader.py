@@ -3,21 +3,16 @@
 import math
 
 import pytest
-import yaml
+from nodalarc.models.constellation import (
+    ConstellationConfig,
+    ParametricConstellation,
+)
 from pydantic import TypeAdapter
 
 from ome.constellation_loader import (
     expand_constellation,
-    expand_explicit,
-    expand_parametric,
     load_constellation,
     load_ground_stations,
-)
-from nodalarc.models.constellation import (
-    ConstellationConfig,
-    ExplicitConstellation,
-    ParametricConstellation,
-    TLEConstellation,
 )
 from tests.conftest import CONFIGS_DIR
 
@@ -116,12 +111,20 @@ class TestExplicitExpansion:
 class TestTLEStub:
     def test_tle_raises_not_implemented(self):
         data = {
-            "mode": "tle", "name": "test-tle", "tle_file": "tle.txt",
-            "default_terminals": {"isl": [{
-                "type": "optical", "count": 2,
-                "max_range_km": 5000, "bandwidth_mbps": 1000,
-                "max_tracking_rate_deg_s": 3.0,
-            }]},
+            "mode": "tle",
+            "name": "test-tle",
+            "tle_file": "tle.txt",
+            "default_terminals": {
+                "isl": [
+                    {
+                        "type": "optical",
+                        "count": 2,
+                        "max_range_km": 5000,
+                        "bandwidth_mbps": 1000,
+                        "max_tracking_rate_deg_s": 3.0,
+                    }
+                ]
+            },
         }
         config = adapter.validate_python(data)
         with pytest.raises(NotImplementedError):

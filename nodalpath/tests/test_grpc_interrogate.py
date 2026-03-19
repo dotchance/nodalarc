@@ -5,11 +5,16 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import grpc
-import pytest
 
 from nodalpath.models.almanac import ForwardingTable, IngressRule, LabelBinding
 from nodalpath.models.inspection import BindingDiffKind
-from nodalpath.proto import Action, ForwardingTableState, LabelEntry, IngressEntry, NodeStatus, Empty
+from nodalpath.proto import (
+    Action,
+    ForwardingTableState,
+    IngressEntry,
+    LabelEntry,
+    NodeStatus,
+)
 from nodalpath.push.grpc_interrogate import (
     _diff_ingress,
     _diff_lsr,
@@ -51,9 +56,11 @@ def _make_observed_state(
 
 class TestDiffLsr:
     def test_missing_binding(self):
-        planned = _make_table(bindings=[
-            LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
-        ])
+        planned = _make_table(
+            bindings=[
+                LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
+            ]
+        )
         observed = _make_observed_state(lsr_entries=[])
         diffs = _diff_lsr(planned, observed)
         assert len(diffs) == 1
@@ -62,9 +69,11 @@ class TestDiffLsr:
 
     def test_extra_binding(self):
         planned = _make_table(bindings=[])
-        observed = _make_observed_state(lsr_entries=[
-            LabelEntry(in_label=100, action=Action.SWAP, out_label=200, out_interface="isl0"),
-        ])
+        observed = _make_observed_state(
+            lsr_entries=[
+                LabelEntry(in_label=100, action=Action.SWAP, out_label=200, out_interface="isl0"),
+            ]
+        )
         diffs = _diff_lsr(planned, observed)
         assert len(diffs) == 1
         assert diffs[0].kind == BindingDiffKind.EXTRA
@@ -72,12 +81,16 @@ class TestDiffLsr:
         assert diffs[0].observed_action == "swap"
 
     def test_mismatch_binding(self):
-        planned = _make_table(bindings=[
-            LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
-        ])
-        observed = _make_observed_state(lsr_entries=[
-            LabelEntry(in_label=100, action=Action.SWAP, out_label=300, out_interface="isl0"),
-        ])
+        planned = _make_table(
+            bindings=[
+                LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
+            ]
+        )
+        observed = _make_observed_state(
+            lsr_entries=[
+                LabelEntry(in_label=100, action=Action.SWAP, out_label=300, out_interface="isl0"),
+            ]
+        )
         diffs = _diff_lsr(planned, observed)
         assert len(diffs) == 1
         assert diffs[0].kind == BindingDiffKind.MISMATCH
@@ -85,22 +98,30 @@ class TestDiffLsr:
         assert diffs[0].observed_out_label == 300
 
     def test_matching_binding_no_diff(self):
-        planned = _make_table(bindings=[
-            LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
-        ])
-        observed = _make_observed_state(lsr_entries=[
-            LabelEntry(in_label=100, action=Action.SWAP, out_label=200, out_interface="isl0"),
-        ])
+        planned = _make_table(
+            bindings=[
+                LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
+            ]
+        )
+        observed = _make_observed_state(
+            lsr_entries=[
+                LabelEntry(in_label=100, action=Action.SWAP, out_label=200, out_interface="isl0"),
+            ]
+        )
         diffs = _diff_lsr(planned, observed)
         assert len(diffs) == 0
 
     def test_pop_binding_match(self):
-        planned = _make_table(bindings=[
-            LabelBinding(in_label=100, action="pop", out_interface="gnd0"),
-        ])
-        observed = _make_observed_state(lsr_entries=[
-            LabelEntry(in_label=100, action=Action.POP, out_label=0, out_interface="gnd0"),
-        ])
+        planned = _make_table(
+            bindings=[
+                LabelBinding(in_label=100, action="pop", out_interface="gnd0"),
+            ]
+        )
+        observed = _make_observed_state(
+            lsr_entries=[
+                LabelEntry(in_label=100, action=Action.POP, out_label=0, out_interface="gnd0"),
+            ]
+        )
         diffs = _diff_lsr(planned, observed)
         assert len(diffs) == 0
 
@@ -112,9 +133,11 @@ class TestDiffLsr:
 
 class TestDiffIngress:
     def test_missing_ingress(self):
-        planned = _make_table(rules=[
-            IngressRule(dst_prefix="10.0.0.0/8", push_label=100, out_interface="gnd0"),
-        ])
+        planned = _make_table(
+            rules=[
+                IngressRule(dst_prefix="10.0.0.0/8", push_label=100, out_interface="gnd0"),
+            ]
+        )
         observed = _make_observed_state(ler_entries=[])
         diffs = _diff_ingress(planned, observed)
         assert len(diffs) == 1
@@ -123,20 +146,26 @@ class TestDiffIngress:
 
     def test_extra_ingress(self):
         planned = _make_table(rules=[])
-        observed = _make_observed_state(ler_entries=[
-            IngressEntry(dst_prefix="10.0.0.0/8", push_label=100, out_interface="gnd0"),
-        ])
+        observed = _make_observed_state(
+            ler_entries=[
+                IngressEntry(dst_prefix="10.0.0.0/8", push_label=100, out_interface="gnd0"),
+            ]
+        )
         diffs = _diff_ingress(planned, observed)
         assert len(diffs) == 1
         assert diffs[0].kind == BindingDiffKind.EXTRA
 
     def test_mismatch_ingress(self):
-        planned = _make_table(rules=[
-            IngressRule(dst_prefix="10.0.0.0/8", push_label=100, out_interface="gnd0"),
-        ])
-        observed = _make_observed_state(ler_entries=[
-            IngressEntry(dst_prefix="10.0.0.0/8", push_label=200, out_interface="gnd0"),
-        ])
+        planned = _make_table(
+            rules=[
+                IngressRule(dst_prefix="10.0.0.0/8", push_label=100, out_interface="gnd0"),
+            ]
+        )
+        observed = _make_observed_state(
+            ler_entries=[
+                IngressEntry(dst_prefix="10.0.0.0/8", push_label=200, out_interface="gnd0"),
+            ]
+        )
         diffs = _diff_ingress(planned, observed)
         assert len(diffs) == 1
         assert diffs[0].kind == BindingDiffKind.MISMATCH
@@ -175,11 +204,15 @@ class TestInterrogateNode:
         mock_stub_instance.GetStatus.return_value = mock_status
         mock_stub_instance.GetForwardingTable.return_value = mock_fwd
 
-        planned = _make_table(bindings=[
-            LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
-        ])
+        planned = _make_table(
+            bindings=[
+                LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
+            ]
+        )
 
-        with patch("nodalpath.push.grpc_interrogate.ForwardingServiceStub", return_value=mock_stub_instance):
+        with patch(
+            "nodalpath.push.grpc_interrogate.ForwardingServiceStub", return_value=mock_stub_instance
+        ):
             result = interrogate_node("sat-P00S00", "10.42.0.10", "state-1", planned)
 
         assert result.reachable is True
@@ -219,7 +252,9 @@ class TestInterrogateNode:
 
         planned = _make_table()
 
-        with patch("nodalpath.push.grpc_interrogate.ForwardingServiceStub", return_value=mock_stub_instance):
+        with patch(
+            "nodalpath.push.grpc_interrogate.ForwardingServiceStub", return_value=mock_stub_instance
+        ):
             result = interrogate_node("sat-P00S00", "10.42.0.10", "state-1", planned)
 
         assert result.reachable is False
@@ -245,10 +280,12 @@ class TestInterrogateNodes:
         ]
         table_a = _make_table(node_id="a")
         table_b = _make_table(node_id="b")
-        results = interrogate_nodes([
-            ("a", "1.1.1.1", "state-1", table_a),
-            ("b", "2.2.2.2", "state-1", table_b),
-        ])
+        results = interrogate_nodes(
+            [
+                ("a", "1.1.1.1", "state-1", table_a),
+                ("b", "2.2.2.2", "state-1", table_b),
+            ]
+        )
         assert len(results) == 2
         assert results[0].node_id == "a"
         assert results[1].node_id == "b"

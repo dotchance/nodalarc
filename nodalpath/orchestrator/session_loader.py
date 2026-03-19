@@ -18,12 +18,15 @@ from pydantic import TypeAdapter
 
 log = logging.getLogger(__name__)
 
+
 def _deploy_socket_path() -> str:
     val = os.environ.get("NODAL_DEPLOY_SOCKET")
     if val:
         return val
     from nodalarc.platform import get_platform_config
+
     return get_platform_config().deploy_daemon_unix_socket_path
+
 
 from nodalarc.models.addressing import (
     AddressingScheme,
@@ -47,6 +50,7 @@ from nodalarc.models.ground_station import (
 )
 from nodalarc.models.satellite_type import SatelliteTypeConfig
 from nodalarc.models.session import SessionConfig
+
 from nodalpath.engine.labels import compute_sid
 from nodalpath.models.topology import TopologyEdge, TopologyNode
 
@@ -83,7 +87,9 @@ def _sat_type_to_terminal_config(sat_type: SatelliteTypeConfig) -> TerminalConfi
     """Convert SatelliteTypeConfig to TerminalConfig for addressing."""
     isl_terminals = [
         IslTerminal(
-            type=td.type, count=td.count, max_range_km=td.max_range_km,
+            type=td.type,
+            count=td.count,
+            max_range_km=td.max_range_km,
             bandwidth_mbps=td.bandwidth_mbps,
             max_tracking_rate_deg_s=td.max_tracking_rate_deg_s,
             field_of_regard_deg=td.field_of_regard_deg,
@@ -98,10 +104,11 @@ def _sat_type_to_terminal_config(sat_type: SatelliteTypeConfig) -> TerminalConfi
 
 
 def _resolve_terminals(
-    config: ConstellationConfig, project_root: Path,
+    config: ConstellationConfig,
+    project_root: Path,
 ) -> None:
     """Resolve satellite_type → default_terminals if needed."""
-    if not isinstance(config, (ParametricConstellation, ExplicitConstellation)):
+    if not isinstance(config, ParametricConstellation | ExplicitConstellation):
         return
     if config.default_terminals is not None:
         return
@@ -117,11 +124,7 @@ def _get_satellite_pairs(
     """Extract (plane, slot) pairs and sats_per_plane from constellation config."""
     if isinstance(config, ParametricConstellation):
         sats_per_plane = config.planes.sats_per_plane
-        pairs = [
-            (p, s)
-            for p in range(config.planes.count)
-            for s in range(sats_per_plane)
-        ]
+        pairs = [(p, s) for p in range(config.planes.count) for s in range(sats_per_plane)]
         return pairs, sats_per_plane
     if isinstance(config, ExplicitConstellation):
         pairs = [(sat.plane, sat.slot) for sat in config.satellites]
@@ -159,7 +162,8 @@ def _build_gs_file(
 
 
 def _load_ground_stations(
-    spec: str | list[str], project_root: Path,
+    spec: str | list[str],
+    project_root: Path,
 ) -> GroundStationFile:
     """Load ground stations from path, set name, or station name list."""
     if isinstance(spec, list):
@@ -258,20 +262,28 @@ def load_session_context(
     for plane, slot in sat_pairs:
         node_id = addressing.sat_id(plane, slot)
         sid = compute_sid(
-            node_id, "satellite",
-            plane=plane, slot=slot, sats_per_plane=sats_per_plane,
+            node_id,
+            "satellite",
+            plane=plane,
+            slot=slot,
+            sats_per_plane=sats_per_plane,
         )
         node_registry[node_id] = TopologyNode(
-            node_id=node_id, node_type="satellite", sid=sid,
+            node_id=node_id,
+            node_type="satellite",
+            sid=sid,
             loopback_ipv4=addressing.sat_ipv4(plane, slot),
-            plane=plane, slot=slot,
+            plane=plane,
+            slot=slot,
         )
 
     for gs_index, station in enumerate(gs_file.stations):
         node_id = addressing.gs_id(station.name)
         sid = compute_sid(node_id, "ground_station", gs_index=gs_index)
         node_registry[node_id] = TopologyNode(
-            node_id=node_id, node_type="ground_station", sid=sid,
+            node_id=node_id,
+            node_type="ground_station",
+            sid=sid,
             loopback_ipv4=addressing.gs_ipv4(gs_index),
         )
 
@@ -302,9 +314,13 @@ def load_session_context(
             gs_a = addressing.gs_id(tl.station_a)
             gs_b = addressing.gs_id(tl.station_b)
             if gs_a not in node_registry:
-                raise ValueError(f"Terrestrial link endpoint '{tl.station_a}' ('{gs_a}') not in node_registry")
+                raise ValueError(
+                    f"Terrestrial link endpoint '{tl.station_a}' ('{gs_a}') not in node_registry"
+                )
             if gs_b not in node_registry:
-                raise ValueError(f"Terrestrial link endpoint '{tl.station_b}' ('{gs_b}') not in node_registry")
+                raise ValueError(
+                    f"Terrestrial link endpoint '{tl.station_b}' ('{gs_b}') not in node_registry"
+                )
 
             idx_a = terr_counters.get(gs_a, 0) + 1
             terr_counters[gs_a] = idx_a
@@ -321,15 +337,17 @@ def load_session_context(
                 interface_map[pair] = (iface_b, iface_a)
             bandwidth_map[pair] = tl.bandwidth_mbps
 
-            static_edges.append(TopologyEdge(
-                src_node_id=pair[0],
-                dst_node_id=pair[1],
-                src_interface=interface_map[pair][0],
-                dst_interface=interface_map[pair][1],
-                latency_ms=tl.latency_ms,
-                bandwidth_mbps=tl.bandwidth_mbps,
-                link_type="terrestrial",
-            ))
+            static_edges.append(
+                TopologyEdge(
+                    src_node_id=pair[0],
+                    dst_node_id=pair[1],
+                    src_interface=interface_map[pair][0],
+                    dst_interface=interface_map[pair][1],
+                    latency_ms=tl.latency_ms,
+                    bandwidth_mbps=tl.bandwidth_mbps,
+                    link_type="terrestrial",
+                )
+            )
 
     return node_registry, interface_map, prefix_map, bandwidth_map, static_edges
 
@@ -357,7 +375,7 @@ def _daemon_request(
                 return None
             buf += chunk
             if b"\n" in buf:
-                line = buf[:buf.index(b"\n")]
+                line = buf[: buf.index(b"\n")]
                 return json.loads(line)
         return None
     except Exception as exc:
@@ -399,6 +417,7 @@ def load_pod_ip_map(
         socket_path = _deploy_socket_path()
     if namespace is None:
         from nodalarc.platform import get_platform_config
+
         namespace = get_platform_config().kubernetes_namespace
     from nodalpath.push.kubectl_exec import node_id_to_pod_name
 

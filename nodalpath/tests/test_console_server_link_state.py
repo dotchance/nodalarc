@@ -52,8 +52,11 @@ def test_topology_at_no_link_store():
     state = ConsoleState(session_path="/tmp/t", transport="grpc", dry_run=False)
     almanac = MagicMock()
     almanac.get_topology_at.return_value = {
-        "topology_state_id": "s1", "sim_time": "2026-01-01T00:01:00Z",
-        "is_future": False, "nodes": [], "links": [],
+        "topology_state_id": "s1",
+        "sim_time": "2026-01-01T00:01:00Z",
+        "is_future": False,
+        "nodes": [],
+        "links": [],
     }
     app = build_app(state, almanac_store=almanac, prefix_map={}, link_state_store=None)
     client = TestClient(app)
@@ -63,13 +66,21 @@ def test_topology_at_no_link_store():
 
 def test_topology_current_adds_state_field():
     state = ConsoleState(session_path="/tmp/t", transport="grpc", dry_run=False)
-    state.record_topology_snapshot({
-        "topology_state_id": "s1",
-        "sim_time": "2026-01-01T00:01:00Z",
-        "nodes": [],
-        "links": [{"node_a": "sat-P00S00", "node_b": "sat-P00S01",
-                   "state": "active", "link_type": "isl"}],
-    })
+    state.record_topology_snapshot(
+        {
+            "topology_state_id": "s1",
+            "sim_time": "2026-01-01T00:01:00Z",
+            "nodes": [],
+            "links": [
+                {
+                    "node_a": "sat-P00S00",
+                    "node_b": "sat-P00S01",
+                    "state": "active",
+                    "link_type": "isl",
+                }
+            ],
+        }
+    )
     app = build_app(state)
     client = TestClient(app)
     r = client.get("/api/v1/topology/current")

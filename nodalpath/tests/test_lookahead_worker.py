@@ -7,8 +7,6 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from nodalpath.integration.lookahead_worker import (
     LookaheadWorker,
     _add_seconds_to_iso,
@@ -32,10 +30,13 @@ def test_read_new_events_empty_file(tmp_path: Path) -> None:
 
 def test_read_new_events_skips_clocktick(tmp_path: Path) -> None:
     path = tmp_path / "timeline.jsonl"
-    _write_events(path, [
-        {"event_type": "ClockTick", "data": {}},
-        {"event_type": "VisibilityEvent", "data": {"sim_time": "2026-01-01T00:01:00Z"}},
-    ])
+    _write_events(
+        path,
+        [
+            {"event_type": "ClockTick", "data": {}},
+            {"event_type": "VisibilityEvent", "data": {"sim_time": "2026-01-01T00:01:00Z"}},
+        ],
+    )
     events, pos = _read_new_events(path, 0)
     assert len(events) == 1
     assert events[0][0] == "VisibilityEvent"

@@ -64,12 +64,12 @@ def _count_table(conn: sqlite3.Connection, table: str) -> int:
         return 0
 
 
-def _time_range(conn: sqlite3.Connection, table: str, col: str = "sim_time") -> tuple[str | None, str | None]:
+def _time_range(
+    conn: sqlite3.Connection, table: str, col: str = "sim_time"
+) -> tuple[str | None, str | None]:
     """Get min/max of a time column, or (None, None) if empty."""
     try:
-        row = conn.execute(
-            f"SELECT MIN({col}), MAX({col}) FROM {table}"
-        ).fetchone()
+        row = conn.execute(f"SELECT MIN({col}), MAX({col}) FROM {table}").fetchone()
         return row[0], row[1]
     except sqlite3.OperationalError:
         return None, None
@@ -140,10 +140,7 @@ def report_convergence(conn: sqlite3.Connection) -> str:
         dur = e["duration_ms"]
         lost = e["packets_lost"]
         sent = e["packets_sent"]
-        lines.append(
-            f"{e['event_id']:<20} {converged:<10} "
-            f"{dur:>12.1f} {lost:>10} {sent:>10}"
-        )
+        lines.append(f"{e['event_id']:<20} {converged:<10} {dur:>12.1f} {lost:>10} {sent:>10}")
         durations.append(dur)
         total_lost += lost
 
@@ -178,10 +175,7 @@ def report_link_events(conn: sqlite3.Connection) -> str:
         return "\n".join(lines)
 
     # Timeline
-    header = (
-        f"{'sim_time':<26} {'type':<16} {'node_a':<14} "
-        f"{'node_b':<14} {'latency_ms':>10}"
-    )
+    header = f"{'sim_time':<26} {'type':<16} {'node_a':<14} {'node_b':<14} {'latency_ms':>10}"
     lines.append(header)
     lines.append("-" * len(header))
     for e in events:
@@ -296,11 +290,15 @@ def main() -> None:
         description="Nodal Arc Single-Session Report Tool",
     )
     parser.add_argument(
-        "--db", required=True, metavar="PATH",
+        "--db",
+        required=True,
+        metavar="PATH",
         help="Path to session SQLite database",
     )
     parser.add_argument(
-        "--report", choices=REPORT_TYPES, default="summary",
+        "--report",
+        choices=REPORT_TYPES,
+        default="summary",
         help="Report type (default: summary)",
     )
     args = parser.parse_args()

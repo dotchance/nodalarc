@@ -70,16 +70,24 @@ class TestGrpcPush:
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_grpc_calls_grpc_push_not_vtysh(
-        self, mock_grpc_push, mock_vtysh_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        mock_vtysh_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc")
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -94,18 +102,25 @@ class TestGrpcPush:
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_vtysh_calls_vtysh_push_not_grpc(
-        self, mock_grpc_push, mock_vtysh_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        mock_vtysh_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="vtysh")
         sched = PushScheduler(simple_node_registry, simple_interface_map, config=config)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
 
         from nodalpath.push.kubectl_exec import ExecResult
+
         mock_vtysh_push.return_value = [
             ExecResult("sat-P00S00", "sat-p00s00", True, "", "", 0),
         ]
@@ -115,16 +130,23 @@ class TestGrpcPush:
 
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_pod_ip_used_in_grpc_task(
-        self, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc")
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -138,16 +160,23 @@ class TestGrpcPush:
 
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_incremental_skip_no_changes(
-        self, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc", use_incremental_diff=True)
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -167,14 +196,19 @@ class TestGrpcPush:
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     @patch("nodalpath.push.grpc_push.build_forwarding_update")
     def test_full_table_always_sent(
-        self, mock_build, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_build,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         """Even with use_incremental_diff=True, gRPC sends full tables."""
         config = PushSchedulerConfig(transport="grpc", use_incremental_diff=True)
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         b1 = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
         t1 = _make_table("sat-P00S00", bindings=[b1])
@@ -194,16 +228,23 @@ class TestGrpcPush:
 
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_installed_updated_on_success(
-        self, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc")
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -216,16 +257,23 @@ class TestGrpcPush:
 
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_not_updated_on_failure(
-        self, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc")
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -238,16 +286,23 @@ class TestGrpcPush:
 
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_dry_run_grpc(
-        self, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc", dry_run=True)
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -258,16 +313,23 @@ class TestGrpcPush:
 
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_topology_state_id_in_update(
-        self, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc")
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table], state_id="topo-42")
@@ -282,16 +344,23 @@ class TestGrpcPush:
 
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_sim_time_in_update(
-        self, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc")
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table], sim_time="2026-06-15T12:00:00Z")
@@ -306,13 +375,17 @@ class TestGrpcPush:
 
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_push_result_counts(
-        self, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc")
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         b = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
         t1 = _make_table("sat-P00S00", bindings=[b])
@@ -332,13 +405,17 @@ class TestGrpcPush:
 
     @patch("nodalpath.push.grpc_push.push_to_nodes_grpc")
     def test_failed_nodes(
-        self, mock_grpc_push,
-        simple_node_registry, simple_interface_map,
+        self,
+        mock_grpc_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(transport="grpc")
         sched = PushScheduler(
-            simple_node_registry, simple_interface_map,
-            config=config, pod_ip_map=_POD_IP_MAP,
+            simple_node_registry,
+            simple_interface_map,
+            config=config,
+            pod_ip_map=_POD_IP_MAP,
         )
         b = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
         t1 = _make_table("sat-P00S00", bindings=[b])

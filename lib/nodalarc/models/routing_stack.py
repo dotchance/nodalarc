@@ -14,11 +14,13 @@ class ConfigTemplate(BaseModel):
 
 class SecurityContext(BaseModel):
     """Security context for a sidecar container."""
+
     capabilities: list[str] = []
 
 
 class EnvVar(BaseModel):
     """Environment variable for a sidecar container."""
+
     name: str
     value: str
 

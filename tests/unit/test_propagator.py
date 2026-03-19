@@ -9,9 +9,9 @@ Validates against analytic properties:
 import math
 
 import pytest
+from nodalarc.constants import EARTH_RADIUS_KM
 
 from ome.propagator import (
-    EARTH_ROTATION_RATE,
     GeoPosition,
     Vec3,
     distance_km,
@@ -24,7 +24,6 @@ from ome.propagator import (
     propagate_eci,
     propagate_keplerian,
 )
-from nodalarc.constants import EARTH_RADIUS_KM
 
 # Reference epoch: 2025-01-01T00:00:00 UTC
 EPOCH = 1735689600.0
@@ -233,9 +232,9 @@ class TestEcefVelocity:
 
         # Velocities should differ (ECEF != ECI)
         diff = math.sqrt(
-            (vel_ecef.x - vel_eci.x)**2 +
-            (vel_ecef.y - vel_eci.y)**2 +
-            (vel_ecef.z - vel_eci.z)**2,
+            (vel_ecef.x - vel_eci.x) ** 2
+            + (vel_ecef.y - vel_eci.y) ** 2
+            + (vel_ecef.z - vel_eci.z) ** 2,
         )
         assert diff > 0.1  # Non-trivial difference
 

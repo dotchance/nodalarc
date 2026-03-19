@@ -16,8 +16,9 @@ import logging
 from typing import TYPE_CHECKING
 
 from nodalarc.models.path import PathResult
+
 from nodalpath.engine.graph import build_graph
-from nodalpath.engine.pathcomp import dijkstra, PathConstraints, DEFAULT_CONSTRAINTS
+from nodalpath.engine.pathcomp import DEFAULT_CONSTRAINTS, PathConstraints, dijkstra
 
 if TYPE_CHECKING:
     from nodalpath.orchestrator.almanac_store import AlmanacStore
@@ -61,24 +62,31 @@ class PathDeriver:
         else:
             entry = self._almanac_store.get_entry_at(sim_time)
             if entry is None:
-                return self._unreachable(src, dst, sim_time or "", "",
-                                         "no almanac entry at requested sim_time")
+                return self._unreachable(
+                    src, dst, sim_time or "", "", "no almanac entry at requested sim_time"
+                )
 
         entry_sim_time = entry.sim_time
         entry_state_id = entry.topology_state_id
 
         # Build graph from current snapshot builder state
         if self._snapshot_builder is None:
-            return self._unreachable(src, dst, entry_sim_time, entry_state_id,
-                                     "no snapshot builder available")
+            return self._unreachable(
+                src, dst, entry_sim_time, entry_state_id, "no snapshot builder available"
+            )
 
         snapshot = self._snapshot_builder.build_snapshot(entry_sim_time)
         graph = build_graph(snapshot)
         path = dijkstra(graph, src, dst, self._constraints)
 
         if path is None:
-            return self._unreachable(src, dst, entry_sim_time, entry_state_id,
-                                     f"no feasible path from '{src}' to '{dst}'")
+            return self._unreachable(
+                src,
+                dst,
+                entry_sim_time,
+                entry_state_id,
+                f"no feasible path from '{src}' to '{dst}'",
+            )
 
         # pathcomp now produces fully-annotated canonical PathHop instances
         return PathResult(

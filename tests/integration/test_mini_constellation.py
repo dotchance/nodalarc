@@ -15,7 +15,6 @@ Requires K3s running and container images built.
 
 from __future__ import annotations
 
-import json
 import subprocess
 import time
 
@@ -49,8 +48,10 @@ SESSION_STARLINK_OSPF_PATH = str(PROJECT_ROOT / "configs/sessions/starlink-early
 
 # Expected satellites in custom-example: 2 planes × 2 sats
 EXPECTED_SATS_CUSTOM = [
-    "sat-P00S00", "sat-P00S01",
-    "sat-P01S00", "sat-P01S01",
+    "sat-P00S00",
+    "sat-P00S01",
+    "sat-P01S00",
+    "sat-P01S01",
 ]
 EXPECTED_GS_CUSTOM = ["gs-hawthorne", "gs-ashburn"]
 
@@ -63,6 +64,7 @@ STARLINK_TOTAL_PODS = STARLINK_SAT_COUNT + STARLINK_GS_COUNT
 def _create_custom_session() -> str:
     """Create temp session config for custom-example constellation."""
     import tempfile
+
     import yaml
 
     session = {
@@ -76,7 +78,10 @@ def _create_custom_session() -> str:
         "time": {"step_seconds": 10},
     }
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,
+        mode="w",
+        suffix=".yaml",
+        dir=str(PROJECT_ROOT),
+        delete=False,
     ) as f:
         yaml.dump(session, f)
         return f.name
@@ -89,7 +94,8 @@ class TestPrerequisites:
         """K3s cluster is accessible."""
         result = subprocess.run(
             ["kubectl", "cluster-info"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0
 
@@ -97,7 +103,8 @@ class TestPrerequisites:
         """Nodalarc namespace was created."""
         result = subprocess.run(
             ["kubectl", "get", "namespace", nodalarc_namespace],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0
 
@@ -105,7 +112,8 @@ class TestPrerequisites:
         """Helm is available and working."""
         result = subprocess.run(
             ["helm", "version", "--short"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0
 
@@ -113,7 +121,8 @@ class TestPrerequisites:
         """crictl is available for PID discovery."""
         result = subprocess.run(
             ["which", "crictl"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             pytest.skip("crictl not installed")
@@ -122,7 +131,8 @@ class TestPrerequisites:
         """FRR container image is available."""
         result = subprocess.run(
             ["sudo", "crictl", "images", "--no-trunc"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             pytest.skip("crictl not available")
@@ -146,7 +156,8 @@ class TestMiniConstellation:
         """Skip entire class if container images aren't available."""
         result = subprocess.run(
             ["sudo", "crictl", "images", "--no-trunc"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0 or "nodalarc/frr" not in result.stdout:
             pytest.skip("Container images not available for deployment test")
@@ -166,9 +177,9 @@ class TestMiniConstellation:
 
         try:
             result = subprocess.run(
-                ["sudo", "-E", sys.executable, "-m", "tools.na_deploy",
-                 "--session", session_path],
-                capture_output=True, text=True,
+                ["sudo", "-E", sys.executable, "-m", "tools.na_deploy", "--session", session_path],
+                capture_output=True,
+                text=True,
                 timeout=300,
             )
         finally:
@@ -191,10 +202,19 @@ class TestMiniConstellation:
         assert wait_for_pods_running(nodalarc_namespace, timeout=60)
 
         result = subprocess.run(
-            ["kubectl", "get", "pods", "-n", nodalarc_namespace,
-             "-l", "nodalarc.io/node-id",
-             "-o", "jsonpath={.items[*].metadata.labels.nodalarc\\.io/node-id}"],
-            capture_output=True, text=True,
+            [
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                nodalarc_namespace,
+                "-l",
+                "nodalarc.io/node-id",
+                "-o",
+                "jsonpath={.items[*].metadata.labels.nodalarc\\.io/node-id}",
+            ],
+            capture_output=True,
+            text=True,
         )
         node_ids = set(result.stdout.strip().split())
         # custom-example = 4 satellites + 2 ground stations = 6 pods
@@ -209,10 +229,21 @@ class TestMiniConstellation:
         for sat in EXPECTED_SATS_CUSTOM:
             for attempt in range(60):
                 result = subprocess.run(
-                    ["kubectl", "exec", "-n", nodalarc_namespace,
-                     sat.lower(), "-c", "frr", "--",
-                     "vtysh", "-c", "show isis neighbor"],
-                    capture_output=True, text=True,
+                    [
+                        "kubectl",
+                        "exec",
+                        "-n",
+                        nodalarc_namespace,
+                        sat.lower(),
+                        "-c",
+                        "frr",
+                        "--",
+                        "vtysh",
+                        "-c",
+                        "show isis neighbor",
+                    ],
+                    capture_output=True,
+                    text=True,
                 )
                 if "Up" in result.stdout:
                     break
@@ -228,27 +259,46 @@ class TestMiniConstellation:
         """
         for _ in range(30):
             result = subprocess.run(
-                ["kubectl", "exec", "-n", nodalarc_namespace,
-                 "sat-p00s00", "--",
-                 "ping", "-c", "1", "-W", "2", "10.0.1.1"],
-                capture_output=True, text=True,
+                [
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    nodalarc_namespace,
+                    "sat-p00s00",
+                    "--",
+                    "ping",
+                    "-c",
+                    "1",
+                    "-W",
+                    "2",
+                    "10.0.1.1",
+                ],
+                capture_output=True,
+                text=True,
             )
             if result.returncode == 0:
                 break
             time.sleep(1)
-        assert result.returncode == 0, (
-            f"Sat-to-sat ping failed: {result.stdout}\n{result.stderr}"
-        )
+        assert result.returncode == 0, f"Sat-to-sat ping failed: {result.stdout}\n{result.stderr}"
 
     def test_teardown_removes_all_pods(self, deployed_custom, nodalarc_namespace):
         """Teardown removes all pods from the namespace."""
         cleanup_deployment(deployed_custom, nodalarc_namespace)
 
         result = subprocess.run(
-            ["kubectl", "get", "pods", "-n", nodalarc_namespace,
-             "-l", "nodalarc.io/node-id",
-             "-o", "jsonpath={.items[*].metadata.name}"],
-            capture_output=True, text=True,
+            [
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                nodalarc_namespace,
+                "-l",
+                "nodalarc.io/node-id",
+                "-o",
+                "jsonpath={.items[*].metadata.name}",
+            ],
+            capture_output=True,
+            text=True,
         )
         assert result.stdout.strip() == "", f"Pods remain after teardown: {result.stdout}"
 
@@ -267,7 +317,8 @@ class TestStarlinkEarly:
     def _skip_without_images(self, k3s_available):
         result = subprocess.run(
             ["sudo", "crictl", "images", "--no-trunc"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0 or "nodalarc/frr" not in result.stdout:
             pytest.skip("Container images not available for deployment test")
@@ -278,9 +329,17 @@ class TestStarlinkEarly:
         import sys
 
         result = subprocess.run(
-            ["sudo", "-E", sys.executable, "-m", "tools.na_deploy",
-             "--session", SESSION_STARLINK_ISIS_PATH],
-            capture_output=True, text=True,
+            [
+                "sudo",
+                "-E",
+                sys.executable,
+                "-m",
+                "tools.na_deploy",
+                "--session",
+                SESSION_STARLINK_ISIS_PATH,
+            ],
+            capture_output=True,
+            text=True,
             timeout=600,
         )
         if result.returncode != 0:
@@ -299,10 +358,19 @@ class TestStarlinkEarly:
         assert wait_for_pods_running(nodalarc_namespace, timeout=180)
 
         result = subprocess.run(
-            ["kubectl", "get", "pods", "-n", nodalarc_namespace,
-             "-l", "nodalarc.io/node-id",
-             "-o", "jsonpath={.items[*].metadata.labels.nodalarc\\.io/node-id}"],
-            capture_output=True, text=True,
+            [
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                nodalarc_namespace,
+                "-l",
+                "nodalarc.io/node-id",
+                "-o",
+                "jsonpath={.items[*].metadata.labels.nodalarc\\.io/node-id}",
+            ],
+            capture_output=True,
+            text=True,
         )
         node_ids = set(result.stdout.strip().split())
         assert len(node_ids) == STARLINK_TOTAL_PODS, (
@@ -314,26 +382,46 @@ class TestStarlinkEarly:
         # Check a middle satellite (P03S05) for adjacencies
         for _ in range(60):
             result = subprocess.run(
-                ["kubectl", "exec", "-n", nodalarc_namespace,
-                 "sat-p03s05", "-c", "frr", "--",
-                 "vtysh", "-c", "show isis neighbor"],
-                capture_output=True, text=True,
+                [
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    nodalarc_namespace,
+                    "sat-p03s05",
+                    "-c",
+                    "frr",
+                    "--",
+                    "vtysh",
+                    "-c",
+                    "show isis neighbor",
+                ],
+                capture_output=True,
+                text=True,
             )
             if "Up" in result.stdout:
                 break
             time.sleep(1)
         else:
-            pytest.fail(
-                f"IS-IS adjacencies did not form within 60s.\n{result.stdout}"
-            )
+            pytest.fail(f"IS-IS adjacencies did not form within 60s.\n{result.stdout}")
 
         # Spot-check a few satellites across different planes
         for sat_pod in ["sat-p00s00", "sat-p02s05", "sat-p03s10"]:
             result = subprocess.run(
-                ["kubectl", "exec", "-n", nodalarc_namespace,
-                 sat_pod, "-c", "frr", "--",
-                 "vtysh", "-c", "show isis neighbor"],
-                capture_output=True, text=True,
+                [
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    nodalarc_namespace,
+                    sat_pod,
+                    "-c",
+                    "frr",
+                    "--",
+                    "vtysh",
+                    "-c",
+                    "show isis neighbor",
+                ],
+                capture_output=True,
+                text=True,
             )
             assert "Up" in result.stdout, f"{sat_pod} has no IS-IS neighbor Up"
 
@@ -347,17 +435,27 @@ class TestStarlinkEarly:
         # Retry ping for up to 120s to allow IS-IS convergence across areas
         for _ in range(120):
             result = subprocess.run(
-                ["kubectl", "exec", "-n", nodalarc_namespace,
-                 "sat-p00s00", "--",
-                 "ping", "-c", "1", "-W", "2", "10.3.5.1"],
-                capture_output=True, text=True,
+                [
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    nodalarc_namespace,
+                    "sat-p00s00",
+                    "--",
+                    "ping",
+                    "-c",
+                    "1",
+                    "-W",
+                    "2",
+                    "10.3.5.1",
+                ],
+                capture_output=True,
+                text=True,
             )
             if result.returncode == 0:
                 break
             time.sleep(1)
-        assert result.returncode == 0, (
-            f"Cross-plane ping failed: {result.stdout}\n{result.stderr}"
-        )
+        assert result.returncode == 0, f"Cross-plane ping failed: {result.stdout}\n{result.stderr}"
 
 
 class TestOspfDeployment:
@@ -371,7 +469,8 @@ class TestOspfDeployment:
     def _skip_without_images(self, k3s_available):
         result = subprocess.run(
             ["sudo", "crictl", "images", "--no-trunc"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0 or "nodalarc/frr" not in result.stdout:
             pytest.skip("Container images not available for deployment test")
@@ -382,9 +481,17 @@ class TestOspfDeployment:
         import sys
 
         result = subprocess.run(
-            ["sudo", "-E", sys.executable, "-m", "tools.na_deploy",
-             "--session", SESSION_STARLINK_OSPF_PATH],
-            capture_output=True, text=True,
+            [
+                "sudo",
+                "-E",
+                sys.executable,
+                "-m",
+                "tools.na_deploy",
+                "--session",
+                SESSION_STARLINK_OSPF_PATH,
+            ],
+            capture_output=True,
+            text=True,
             timeout=600,
         )
         if result.returncode != 0:
@@ -404,18 +511,27 @@ class TestOspfDeployment:
 
         for _ in range(60):
             result = subprocess.run(
-                ["kubectl", "exec", "-n", nodalarc_namespace,
-                 "sat-p03s05", "-c", "frr", "--",
-                 "vtysh", "-c", "show ip ospf neighbor"],
-                capture_output=True, text=True,
+                [
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    nodalarc_namespace,
+                    "sat-p03s05",
+                    "-c",
+                    "frr",
+                    "--",
+                    "vtysh",
+                    "-c",
+                    "show ip ospf neighbor",
+                ],
+                capture_output=True,
+                text=True,
             )
             if "Full" in result.stdout:
                 break
             time.sleep(1)
         else:
-            pytest.fail(
-                f"OSPF adjacencies did not form within 60s.\n{result.stdout}"
-            )
+            pytest.fail(f"OSPF adjacencies did not form within 60s.\n{result.stdout}")
 
     def test_ospf_cross_plane_ping(self, deployed_ospf, nodalarc_namespace):
         """Cross-plane ping with OSPF profile — equivalent forwarding.
@@ -425,10 +541,22 @@ class TestOspfDeployment:
         """
         for _ in range(120):
             result = subprocess.run(
-                ["kubectl", "exec", "-n", nodalarc_namespace,
-                 "sat-p00s00", "--",
-                 "ping", "-c", "1", "-W", "2", "10.3.5.1"],
-                capture_output=True, text=True,
+                [
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    nodalarc_namespace,
+                    "sat-p00s00",
+                    "--",
+                    "ping",
+                    "-c",
+                    "1",
+                    "-W",
+                    "2",
+                    "10.3.5.1",
+                ],
+                capture_output=True,
+                text=True,
             )
             if result.returncode == 0:
                 break

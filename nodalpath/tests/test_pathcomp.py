@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from nodalpath.engine.graph import build_graph
-from nodalpath.engine.pathcomp import dijkstra, compute_all_gs_paths
+from nodalpath.engine.pathcomp import compute_all_gs_paths, dijkstra
 
 
 class TestDijkstra:
@@ -66,8 +66,12 @@ class TestDijkstra:
         assert path.hop_count == 6
         node_ids = [h.node_id for h in path.hops]
         assert node_ids == [
-            "gs-alpha", "sat-P00S00", "sat-P00S01",
-            "sat-P00S02", "sat-P00S03", "gs-beta",
+            "gs-alpha",
+            "sat-P00S00",
+            "sat-P00S01",
+            "sat-P00S02",
+            "sat-P00S03",
+            "gs-beta",
         ]
 
     def test_linear_total_latency(self, linear_6node_topology):

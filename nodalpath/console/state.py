@@ -9,25 +9,32 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
 # Ring-buffer caps — resolved from config at call time
 def _max_push_history() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().console_push_history_max_entries
+
 
 def _max_deviation_history() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().console_deviation_history_max_entries
+
 
 def _max_almanac_history() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().console_almanac_history_max_entries
+
 
 def _max_event_log() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().console_event_log_max_entries
 
 
@@ -40,9 +47,9 @@ class ConsoleState:
 
     # ── Identity (set at startup, immutable thereafter) ────────────────────
     session_path: str
-    transport: str       # "grpc", "vtysh", or "netconf"
+    transport: str  # "grpc", "vtysh", or "netconf"
     dry_run: bool
-    start_wall_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    start_wall_time: datetime = field(default_factory=lambda: datetime.now(UTC))
     nodes_in_registry: int = 0
 
     # ── Scalar counters (written by async loop) ─────────────────────────────
@@ -81,14 +88,14 @@ class ConsoleState:
     def _append_event(self, event_type: str, summary: str, details: dict) -> None:
         """Append one entry to the unified event log. Caller must hold _lock."""
         entry = {
-            "wall_time": datetime.now(timezone.utc).isoformat(),
+            "wall_time": datetime.now(UTC).isoformat(),
             "event_type": event_type,
             "summary": summary,
             "details": details,
         }
         self._event_log.append(entry)
         if len(self._event_log) > _max_event_log():
-            self._event_log = self._event_log[-_max_event_log():]
+            self._event_log = self._event_log[-_max_event_log() :]
 
     # ────────────────────────────────────────────────────────────────────────
     # Public write API (called from LiveOrchestrator)
@@ -114,7 +121,7 @@ class ConsoleState:
             }
             self._almanac_history.append(entry)
             if len(self._almanac_history) > _max_almanac_history():
-                self._almanac_history = self._almanac_history[-_max_almanac_history():]
+                self._almanac_history = self._almanac_history[-_max_almanac_history() :]
             self._append_event(
                 "TRANSITION",
                 f"T={sim_time} | {active_link_count} links | {forwarding_table_count} tables",
@@ -136,7 +143,7 @@ class ConsoleState:
             }
             self._push_history.append(entry)
             if len(self._push_history) > _max_push_history():
-                self._push_history = self._push_history[-_max_push_history():]
+                self._push_history = self._push_history[-_max_push_history() :]
             ok = result.nodes_failed == 0
             summary = (
                 f"{result.nodes_succeeded}/{result.nodes_attempted} nodes "
@@ -165,7 +172,7 @@ class ConsoleState:
             }
             self._deviation_history.append(entry)
             if len(self._deviation_history) > _max_deviation_history():
-                self._deviation_history = self._deviation_history[-_max_deviation_history():]
+                self._deviation_history = self._deviation_history[-_max_deviation_history() :]
             self._append_event(
                 "DEVIATE",
                 f"{node_a} \u2194 {node_b} | {reason}",

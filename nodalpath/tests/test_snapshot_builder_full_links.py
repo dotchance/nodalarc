@@ -1,14 +1,15 @@
 """Tests for SnapshotBuilder full link state tracking."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from nodalarc.models.events import VisibilityEvent
+
 from nodalpath.orchestrator.snapshot_builder import SnapshotBuilder
 
 
 def _event(node_a, node_b, visible, scheduled, range_km=1000.0) -> VisibilityEvent:
     return VisibilityEvent(
-        sim_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        sim_time=datetime(2026, 1, 1, tzinfo=UTC),
         node_a=node_a,
         node_b=node_b,
         visible=visible,

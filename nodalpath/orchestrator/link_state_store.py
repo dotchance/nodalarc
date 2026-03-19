@@ -95,16 +95,24 @@ class LinkStateStore:
         for (node_a, node_b), (visible, scheduled, range_km) in full_link_state.items():
             a_is_gs = node_a.startswith("gs-")
             b_is_gs = node_b.startswith("gs-")
-            link_type = "terrestrial" if (a_is_gs and b_is_gs) else "ground" if (a_is_gs or b_is_gs) else "isl"
-            records.append(LinkRecord(
-                node_a=node_a,
-                node_b=node_b,
-                visible=visible,
-                scheduled=scheduled,
-                range_km=range_km,
-                link_type=link_type,
-                is_future=is_future,
-            ))
+            link_type = (
+                "terrestrial"
+                if (a_is_gs and b_is_gs)
+                else "ground"
+                if (a_is_gs or b_is_gs)
+                else "isl"
+            )
+            records.append(
+                LinkRecord(
+                    node_a=node_a,
+                    node_b=node_b,
+                    visible=visible,
+                    scheduled=scheduled,
+                    range_km=range_km,
+                    link_type=link_type,
+                    is_future=is_future,
+                )
+            )
 
         self._by_state_id[topology_state_id] = records
         self._by_sim_time[sim_time] = topology_state_id
@@ -113,7 +121,7 @@ class LinkStateStore:
             self._times.append(sim_time)
             self._state_ids.append(topology_state_id)
             if len(self._times) > 1 and self._times[-1] < self._times[-2]:
-                pairs = sorted(zip(self._times, self._state_ids))
+                pairs = sorted(zip(self._times, self._state_ids, strict=False))
                 self._times = [p[0] for p in pairs]
                 self._state_ids = [p[1] for p in pairs]
 
@@ -170,7 +178,7 @@ class LinkStateStore:
                     log.warning("Skipping malformed link state entry: %s", exc)
 
         if loaded > 0:
-            pairs = sorted(zip(self._times, self._state_ids))
+            pairs = sorted(zip(self._times, self._state_ids, strict=False))
             self._times = [p[0] for p in pairs]
             self._state_ids = [p[1] for p in pairs]
 

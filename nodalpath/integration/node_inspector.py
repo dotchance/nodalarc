@@ -9,7 +9,7 @@ import asyncio
 import logging
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from nodalpath.models.almanac import ForwardingTable
 from nodalpath.models.inspection import InspectionRun, NodeInspectionResult
@@ -17,8 +17,10 @@ from nodalpath.push.grpc_interrogate import interrogate_nodes
 
 log = logging.getLogger(__name__)
 
+
 def _max_runs() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().inspection_max_retained_runs
 
 
@@ -58,7 +60,8 @@ class NodeInspector:
     async def trigger_heartbeat(self) -> InspectionRun:
         """Periodic heartbeat inspection of all nodes."""
         return await self._run_inspection(
-            "heartbeat", self._last_pushed_state_id,
+            "heartbeat",
+            self._last_pushed_state_id,
         )
 
     async def trigger_operator(
@@ -67,7 +70,9 @@ class NodeInspector:
     ) -> InspectionRun:
         """Operator-triggered inspection of specific or all nodes."""
         return await self._run_inspection(
-            "operator", self._last_pushed_state_id, node_ids=node_ids,
+            "operator",
+            self._last_pushed_state_id,
+            node_ids=node_ids,
         )
 
     @property
@@ -99,13 +104,13 @@ class NodeInspector:
             run_id=uuid.uuid4().hex[:12],
             trigger=trigger,
             topology_state_id=topology_state_id or "",
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         self._runs.append(run)
 
         if not self._last_pushed_tables:
             log.warning("No pushed tables recorded — inspection will be empty")
-            run.completed_at = datetime.now(timezone.utc)
+            run.completed_at = datetime.now(UTC)
             return run
 
         # Build task list
@@ -120,7 +125,7 @@ class NodeInspector:
                 log.debug("Skipping %s: no pod_ip or no planned table", nid)
 
         if not tasks:
-            run.completed_at = datetime.now(timezone.utc)
+            run.completed_at = datetime.now(UTC)
             return run
 
         # Run gRPC interrogation in default executor (blocking I/O)
@@ -128,12 +133,14 @@ class NodeInspector:
         results: list[NodeInspectionResult] = await loop.run_in_executor(
             None,
             lambda: interrogate_nodes(
-                tasks, port=self._grpc_port, timeout=self._grpc_timeout,
+                tasks,
+                port=self._grpc_port,
+                timeout=self._grpc_timeout,
             ),
         )
 
         run.node_results = results
-        run.completed_at = datetime.now(timezone.utc)
+        run.completed_at = datetime.now(UTC)
 
         # Log summary
         deviated = run.nodes_with_deviations
@@ -141,12 +148,18 @@ class NodeInspector:
         if deviated or unreachable:
             log.warning(
                 "Inspection %s (%s): %d/%d nodes deviated, %d unreachable",
-                run.run_id, trigger, deviated, run.nodes_inspected, unreachable,
+                run.run_id,
+                trigger,
+                deviated,
+                run.nodes_inspected,
+                unreachable,
             )
         else:
             log.info(
                 "Inspection %s (%s): %d nodes nominal",
-                run.run_id, trigger, run.nodes_inspected,
+                run.run_id,
+                trigger,
+                run.nodes_inspected,
             )
 
         return run

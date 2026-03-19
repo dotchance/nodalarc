@@ -1,11 +1,10 @@
 """Tests for stack_resolver — every valid combo and invalid combos."""
 
 import pytest
-
-from nodalarc.stack_resolver import ResolvedStack, resolve_stack
-
+from nodalarc.stack_resolver import resolve_stack
 
 # --- Valid combinations ---
+
 
 class TestOSPF:
     def test_ospf_plain(self):
@@ -99,6 +98,7 @@ class TestNodalPath:
 
 # --- Invalid combinations ---
 
+
 class TestInvalid:
     def test_nodalpath_rejects_extensions(self):
         with pytest.raises(ValueError, match="does not accept extensions"):
@@ -135,16 +135,19 @@ class TestResolvedStackFrozen:
 class TestTemplateFilePaths:
     """All template files have correct dst paths."""
 
-    @pytest.mark.parametrize("protocol,extensions", [
-        ("ospf", []),
-        ("ospf", ["te"]),
-        ("ospf", ["te", "mpls"]),
-        ("ospf", ["sr"]),
-        ("isis", []),
-        ("isis", ["sr"]),
-        ("isis", ["te"]),
-        ("isis", ["te", "mpls"]),
-    ])
+    @pytest.mark.parametrize(
+        "protocol,extensions",
+        [
+            ("ospf", []),
+            ("ospf", ["te"]),
+            ("ospf", ["te", "mpls"]),
+            ("ospf", ["sr"]),
+            ("isis", []),
+            ("isis", ["sr"]),
+            ("isis", ["te"]),
+            ("isis", ["te", "mpls"]),
+        ],
+    )
     def test_dst_paths(self, protocol, extensions):
         r = resolve_stack(protocol, extensions)
         for tf in r.template_files:

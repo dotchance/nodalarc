@@ -12,17 +12,15 @@ import argparse
 import json
 import logging
 import time
-from datetime import datetime, timezone
 
 import zmq
-
 from nodalarc.zmq_channels import (
+    TOPIC_LINK_DOWN,
+    TOPIC_LINK_UP,
+    TOPIC_POSITION_EVENT,
+    encode_message,
     ome_events_bind,
     to_events_bind,
-    encode_message,
-    TOPIC_POSITION_EVENT,
-    TOPIC_LINK_UP,
-    TOPIC_LINK_DOWN,
 )
 
 log = logging.getLogger(__name__)
@@ -39,13 +37,18 @@ def compute_area(plane: int | None, planes_per_stripe: int = 2) -> str | None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay timeline over ZMQ")
     parser.add_argument("timeline", help="Path to .jsonl timeline file")
-    parser.add_argument("--delay", type=float, default=0.2, help="Seconds per event batch (default: 0.2)")
-    parser.add_argument("--platform-config", default="configs/platform.yaml",
-                        help="Path to platform config YAML")
+    parser.add_argument(
+        "--delay", type=float, default=0.2, help="Seconds per event batch (default: 0.2)"
+    )
+    parser.add_argument(
+        "--platform-config", default="configs/platform.yaml", help="Path to platform config YAML"
+    )
     args = parser.parse_args()
 
-    from nodalarc.platform import init_platform_config
     from pathlib import Path
+
+    from nodalarc.platform import init_platform_config
+
     init_platform_config(Path(args.platform_config))
 
     # Read all events
@@ -111,30 +114,34 @@ def main() -> None:
                                 plane = int(parts[0])
                                 slot = int(parts[1])
                         area = compute_area(plane) if node_type == "satellite" else "49.0000"
-                        positions_list.append({
-                            "node_id": node_id,
-                            "node_type": node_type,
-                            "lat_deg": pos["lat_deg"],
-                            "lon_deg": pos["lon_deg"],
-                            "alt_km": pos["alt_km"],
-                            "vel_x_km_s": pos.get("vel_x_km_s"),
-                            "vel_y_km_s": pos.get("vel_y_km_s"),
-                            "vel_z_km_s": pos.get("vel_z_km_s"),
-                            "plane": plane,
-                            "slot": slot,
-                            "routing_area": area,
-                            "neighbor_count": 0,
-                            "isl_count": 0,
-                            "gnd_count": 0,
-                        })
+                        positions_list.append(
+                            {
+                                "node_id": node_id,
+                                "node_type": node_type,
+                                "lat_deg": pos["lat_deg"],
+                                "lon_deg": pos["lon_deg"],
+                                "alt_km": pos["alt_km"],
+                                "vel_x_km_s": pos.get("vel_x_km_s"),
+                                "vel_y_km_s": pos.get("vel_y_km_s"),
+                                "vel_z_km_s": pos.get("vel_z_km_s"),
+                                "plane": plane,
+                                "slot": slot,
+                                "routing_area": area,
+                                "neighbor_count": 0,
+                                "isl_count": 0,
+                                "gnd_count": 0,
+                            }
+                        )
                     position_data = {
                         "sim_time": data["sim_time"],
                         "positions": positions_list,
                     }
-                    ome_pub.send(encode_message(
-                        TOPIC_POSITION_EVENT,
-                        json.dumps(position_data).encode(),
-                    ))
+                    ome_pub.send(
+                        encode_message(
+                            TOPIC_POSITION_EVENT,
+                            json.dumps(position_data).encode(),
+                        )
+                    )
 
                 elif etype == "VisibilityEvent":
                     node_a = data["node_a"]
@@ -154,23 +161,26 @@ def main() -> None:
                                 "latency_ms": 0.0,
                                 "bandwidth_mbps": 0.0,
                             }
-                            to_pub.send(encode_message(
-                                TOPIC_LINK_UP,
-                                json.dumps(link_data).encode(),
-                            ))
-                    elif not visible:
-                        if pair in active_links:
-                            active_links.discard(pair)
-                            link_data = {
-                                "sim_time": data["sim_time"],
-                                "node_a": node_a,
-                                "node_b": node_b,
-                                "reason": data.get("reason", "vis_lost"),
-                            }
-                            to_pub.send(encode_message(
+                            to_pub.send(
+                                encode_message(
+                                    TOPIC_LINK_UP,
+                                    json.dumps(link_data).encode(),
+                                )
+                            )
+                    elif not visible and pair in active_links:
+                        active_links.discard(pair)
+                        link_data = {
+                            "sim_time": data["sim_time"],
+                            "node_a": node_a,
+                            "node_b": node_b,
+                            "reason": data.get("reason", "vis_lost"),
+                        }
+                        to_pub.send(
+                            encode_message(
                                 TOPIC_LINK_DOWN,
                                 json.dumps(link_data).encode(),
-                            ))
+                            )
+                        )
 
             time.sleep(args.delay)
 

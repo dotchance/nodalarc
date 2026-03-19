@@ -1,23 +1,19 @@
 """Test timeline precomputation and JSON Lines I/O."""
 
 import json
-from pathlib import Path
 
 import pytest
-import yaml
+from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
+from nodalarc.models.constellation import ConstellationConfig
+from nodalarc.models.events import ClockTick, TimelinePositionSnapshot, VisibilityEvent
 from pydantic import TypeAdapter
 
 from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
 from ome.event_stream import (
-    TimelineEvent,
     precompute_timeline,
     read_timeline_jsonl,
     write_timeline_jsonl,
 )
-from ome.propagator import orbital_period
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
-from nodalarc.models.constellation import ConstellationConfig
-from nodalarc.models.events import ClockTick, TimelinePositionSnapshot, VisibilityEvent
 from tests.conftest import CONFIGS_DIR
 
 adapter = TypeAdapter(ConstellationConfig)

@@ -29,6 +29,7 @@ VTYSH_COMMANDS = {
     "show running-config",
 }
 
+
 def _daemon_request(req: dict, timeout: float | None = None) -> dict:
     """Send a request to the deploy daemon and receive the response."""
     cfg = get_platform_config()
@@ -48,14 +49,14 @@ def _daemon_request(req: dict, timeout: float | None = None) -> dict:
                 break
             buf += chunk
             if b"\n" in buf:
-                line = buf[:buf.index(b"\n")]
+                line = buf[: buf.index(b"\n")]
                 return json.loads(line)
         return {"ok": False, "error": "No response from deploy daemon"}
     except FileNotFoundError:
         return {"ok": False, "error": "Deploy daemon not running"}
     except ConnectionRefusedError:
         return {"ok": False, "error": "Deploy daemon connection refused"}
-    except socket.timeout:
+    except TimeoutError:
         return {"ok": False, "error": "Command timed out"}
     finally:
         sock.close()
@@ -76,12 +77,14 @@ def run_vtysh(node_id: str, command: str) -> dict:
     if not VALID_POD_NAME.match(pod_name):
         raise ValueError(f"Invalid pod name: {pod_name}")
 
-    resp = _daemon_request({
-        "action": "kubectl_exec",
-        "pod": pod_name,
-        "container": "frr",
-        "command": ["vtysh", "-c", command],
-    })
+    resp = _daemon_request(
+        {
+            "action": "kubectl_exec",
+            "pod": pod_name,
+            "container": "frr",
+            "command": ["vtysh", "-c", command],
+        }
+    )
 
     if "error" in resp and not resp.get("ok"):
         return {

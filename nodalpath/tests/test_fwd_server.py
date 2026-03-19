@@ -12,12 +12,14 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 # Add the container directory to sys.path so we can import fwd_server
-_CONTAINER_DIR = str(Path(__file__).resolve().parent.parent.parent / "node-images" / "nodalpath-fwd")
+_CONTAINER_DIR = str(
+    Path(__file__).resolve().parent.parent.parent / "node-images" / "nodalpath-fwd"
+)
 if _CONTAINER_DIR not in sys.path:
     sys.path.insert(0, _CONTAINER_DIR)
 
@@ -39,13 +41,18 @@ def _reset_state():
 
 def _make_lsr_entry(in_label=100, action=pb2.Action.SWAP, out_label=200, iface="isl0"):
     return pb2.LabelEntry(
-        in_label=in_label, action=action, out_label=out_label, out_interface=iface,
+        in_label=in_label,
+        action=action,
+        out_label=out_label,
+        out_interface=iface,
     )
 
 
 def _make_ler_entry(prefix="172.16.0.0/24", label=100, iface="gnd0"):
     return pb2.IngressEntry(
-        dst_prefix=prefix, push_label=label, out_interface=iface,
+        dst_prefix=prefix,
+        push_label=label,
+        out_interface=iface,
     )
 
 
@@ -64,9 +71,10 @@ class TestApplyLsrCommands:
         entry = _make_lsr_entry(in_label=100, action=pb2.Action.SWAP, out_label=200, iface="isl0")
         fwd_server._install_lsr(entry)
         mock_run.assert_called_once_with(
-            ["ip", "-f", "mpls", "route", "replace",
-             "100", "as", "200", "dev", "isl0"],
-            check=True, capture_output=True, text=True,
+            ["ip", "-f", "mpls", "route", "replace", "100", "as", "200", "dev", "isl0"],
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
     @patch("fwd_server.subprocess.run")
@@ -74,9 +82,10 @@ class TestApplyLsrCommands:
         entry = _make_lsr_entry(in_label=100, action=pb2.Action.POP, out_label=0, iface="gnd0")
         fwd_server._install_lsr(entry)
         mock_run.assert_called_once_with(
-            ["ip", "-f", "mpls", "route", "replace",
-             "100", "dev", "gnd0"],
-            check=True, capture_output=True, text=True,
+            ["ip", "-f", "mpls", "route", "replace", "100", "dev", "gnd0"],
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
     @patch("fwd_server.subprocess.run")
@@ -84,10 +93,10 @@ class TestApplyLsrCommands:
         entry = _make_ler_entry(prefix="172.16.0.0/24", label=100, iface="gnd0")
         fwd_server._install_ler(entry)
         mock_run.assert_called_once_with(
-            ["ip", "route", "replace", "172.16.0.0/24",
-             "encap", "mpls", "100",
-             "dev", "gnd0"],
-            check=True, capture_output=True, text=True,
+            ["ip", "route", "replace", "172.16.0.0/24", "encap", "mpls", "100", "dev", "gnd0"],
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
     @patch("fwd_server.subprocess.run")
@@ -95,7 +104,9 @@ class TestApplyLsrCommands:
         fwd_server._remove_lsr(100)
         mock_run.assert_called_once_with(
             ["ip", "-f", "mpls", "route", "del", "100"],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
     @patch("fwd_server.subprocess.run")
@@ -103,7 +114,9 @@ class TestApplyLsrCommands:
         fwd_server._remove_ler("172.16.0.0/24")
         mock_run.assert_called_once_with(
             ["ip", "route", "del", "172.16.0.0/24"],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
 

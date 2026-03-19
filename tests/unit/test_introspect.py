@@ -1,12 +1,11 @@
 """Unit tests for vs_api.introspect — whitelist validation and vtysh execution."""
 
-import socket
 from unittest.mock import patch
 
 import pytest
+from nodalarc.platform import get_platform_config
 
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
-from nodalarc.platform import get_platform_config
 
 
 class TestWhitelist:

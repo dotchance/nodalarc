@@ -5,8 +5,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-import pytest
-
 from nodalpath.models.topology import TopologyNode
 from nodalpath.orchestrator.window import SlidingWindow
 
@@ -33,13 +31,20 @@ class TestSlidingWindow:
         )
 
     def test_process_nonzero_transitions(
-        self, synthetic_timeline_path, simple_node_registry,
-        simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+        self,
+        synthetic_timeline_path,
+        simple_node_registry,
+        simple_interface_map,
+        simple_prefix_map,
+        simple_bandwidth_map,
     ) -> None:
         """Processing the synthetic timeline produces transitions."""
         window = self._make_window(
-            synthetic_timeline_path, simple_node_registry,
-            simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+            synthetic_timeline_path,
+            simple_node_registry,
+            simple_interface_map,
+            simple_prefix_map,
+            simple_bandwidth_map,
         )
         count = window.process()
         assert count >= 2  # at minimum: initial topology + link_down
@@ -47,25 +52,39 @@ class TestSlidingWindow:
         assert count == 3
 
     def test_store_has_entries(
-        self, synthetic_timeline_path, simple_node_registry,
-        simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+        self,
+        synthetic_timeline_path,
+        simple_node_registry,
+        simple_interface_map,
+        simple_prefix_map,
+        simple_bandwidth_map,
     ) -> None:
         """After processing, the almanac store contains entries."""
         window = self._make_window(
-            synthetic_timeline_path, simple_node_registry,
-            simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+            synthetic_timeline_path,
+            simple_node_registry,
+            simple_interface_map,
+            simple_prefix_map,
+            simple_bandwidth_map,
         )
         window.process()
         assert window.store.entry_count >= 2
 
     def test_forwarding_tables_for_all_nodes(
-        self, synthetic_timeline_path, simple_node_registry,
-        simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+        self,
+        synthetic_timeline_path,
+        simple_node_registry,
+        simple_interface_map,
+        simple_prefix_map,
+        simple_bandwidth_map,
     ) -> None:
         """Each almanac entry has forwarding tables for all nodes."""
         window = self._make_window(
-            synthetic_timeline_path, simple_node_registry,
-            simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+            synthetic_timeline_path,
+            simple_node_registry,
+            simple_interface_map,
+            simple_prefix_map,
+            simple_bandwidth_map,
         )
         window.process()
         for entry in window.store.entries:
@@ -74,33 +93,44 @@ class TestSlidingWindow:
                 assert node_id in ft_node_ids
 
     def test_gs_nodes_have_ingress_rules(
-        self, synthetic_timeline_path, simple_node_registry,
-        simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+        self,
+        synthetic_timeline_path,
+        simple_node_registry,
+        simple_interface_map,
+        simple_prefix_map,
+        simple_bandwidth_map,
     ) -> None:
         """Ground station nodes have LER ingress rules in their forwarding tables."""
         window = self._make_window(
-            synthetic_timeline_path, simple_node_registry,
-            simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+            synthetic_timeline_path,
+            simple_node_registry,
+            simple_interface_map,
+            simple_prefix_map,
+            simple_bandwidth_map,
         )
         window.process()
         # Check the first entry (full topology, all links up)
         first_entry = window.store.entries[0]
-        gs_tables = [
-            ft for ft in first_entry.forwarding_tables
-            if ft.node_id.startswith("gs-")
-        ]
+        gs_tables = [ft for ft in first_entry.forwarding_tables if ft.node_id.startswith("gs-")]
         # At least one GS should have ingress rules when a path exists
         has_rules = any(ft.ler_ingress_rules for ft in gs_tables)
         assert has_rules, "No GS has ingress rules in the first almanac entry"
 
     def test_chronological_transition_times(
-        self, synthetic_timeline_path, simple_node_registry,
-        simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+        self,
+        synthetic_timeline_path,
+        simple_node_registry,
+        simple_interface_map,
+        simple_prefix_map,
+        simple_bandwidth_map,
     ) -> None:
         """Transition times are in chronological order."""
         window = self._make_window(
-            synthetic_timeline_path, simple_node_registry,
-            simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+            synthetic_timeline_path,
+            simple_node_registry,
+            simple_interface_map,
+            simple_prefix_map,
+            simple_bandwidth_map,
         )
         window.process()
         times = window.store.transition_times
@@ -108,13 +138,20 @@ class TestSlidingWindow:
         assert times == sorted(times)
 
     def test_link_down_reduces_edges(
-        self, synthetic_timeline_path, simple_node_registry,
-        simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+        self,
+        synthetic_timeline_path,
+        simple_node_registry,
+        simple_interface_map,
+        simple_prefix_map,
+        simple_bandwidth_map,
     ) -> None:
         """The link_down transition produces fewer edges than the initial state."""
         window = self._make_window(
-            synthetic_timeline_path, simple_node_registry,
-            simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+            synthetic_timeline_path,
+            simple_node_registry,
+            simple_interface_map,
+            simple_prefix_map,
+            simple_bandwidth_map,
         )
         window.process()
         entries = window.store.entries
@@ -136,13 +173,20 @@ class TestSlidingWindow:
         # but the topology changed, so computed_paths may differ
 
     def test_performance(
-        self, synthetic_timeline_path, simple_node_registry,
-        simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+        self,
+        synthetic_timeline_path,
+        simple_node_registry,
+        simple_interface_map,
+        simple_prefix_map,
+        simple_bandwidth_map,
     ) -> None:
         """Processing completes in under 5 seconds for the synthetic timeline."""
         window = self._make_window(
-            synthetic_timeline_path, simple_node_registry,
-            simple_interface_map, simple_prefix_map, simple_bandwidth_map,
+            synthetic_timeline_path,
+            simple_node_registry,
+            simple_interface_map,
+            simple_prefix_map,
+            simple_bandwidth_map,
         )
         t0 = time.monotonic()
         window.process()

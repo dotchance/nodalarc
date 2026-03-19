@@ -9,18 +9,25 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
+from nodalarc.models.events import (
+    ClockTick,
+    NodePosition,
+    TimelinePositionSnapshot,
+    VisibilityEvent,
+)
+from nodalarc.models.ground_station import GroundStationFile
 
 from ome.constellation_loader import SatelliteNode
 from ome.propagator import (
     GeoPosition,
     Vec3,
-    distance_km,
     geodetic_to_ecef,
     propagate_keplerian,
-    orbital_period,
 )
 from ome.visibility import (
     GroundVisibility,
@@ -30,15 +37,6 @@ from ome.visibility import (
     schedule_ground_links,
     schedule_isl_terminals,
 )
-from nodalarc.constants import SPEED_OF_LIGHT_KM_S
-from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
-from nodalarc.models.events import (
-    ClockTick,
-    NodePosition,
-    TimelinePositionSnapshot,
-    VisibilityEvent,
-)
-from nodalarc.models.ground_station import GroundStationFile
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +74,7 @@ def _build_snapshot(
     """Build position snapshot for all nodes."""
     positions: dict[str, NodePosition] = {}
 
-    for node_id, (ecef, vel, geo) in sat_positions.items():
+    for node_id, (_ecef, vel, geo) in sat_positions.items():
         positions[node_id] = NodePosition(
             lat_deg=geo.lat_deg,
             lon_deg=geo.lon_deg,
@@ -86,7 +84,7 @@ def _build_snapshot(
             vel_z_km_s=vel.z,
         )
 
-    for node_id, (ecef, geo) in gs_positions.items():
+    for node_id, (_ecef, geo) in gs_positions.items():
         positions[node_id] = NodePosition(
             lat_deg=geo.lat_deg,
             lon_deg=geo.lon_deg,
@@ -116,7 +114,11 @@ def precompute_timeline_window(
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     timestamp_offset: float = 0.0,
-) -> tuple[list[TimelineEvent], dict[tuple[str, str], tuple[bool, bool]], dict[tuple[str, str], tuple[bool, bool]]]:
+) -> tuple[
+    list[TimelineEvent],
+    dict[tuple[str, str], tuple[bool, bool]],
+    dict[tuple[str, str], tuple[bool, bool]],
+]:
     """Precompute a single window of the timeline.
 
     Emits:
@@ -144,27 +146,33 @@ def precompute_timeline_window(
     if gs_file:
         default_gs_count = sum(t.count for t in gs_file.default_terminals)
         default_gs_policy = gs_file.default_scheduling_policy or "highest-elevation"
-        for i, station in enumerate(gs_file.stations):
+        for _i, station in enumerate(gs_file.stations):
             node_id = addressing.gs_id(station.name)
             geo = GeoPosition(station.lat_deg, station.lon_deg, (station.alt_m or 0) / 1000.0)
             ecef = geodetic_to_ecef(geo)
             gs_positions[node_id] = (ecef, geo)
-            gs_min_elevations[node_id] = station.min_elevation_deg or gs_file.default_min_elevation_deg or 25.0
+            gs_min_elevations[node_id] = (
+                station.min_elevation_deg or gs_file.default_min_elevation_deg or 25.0
+            )
             gs_terminal_counts[node_id] = (
                 sum(t.count for t in station.terminals) if station.terminals else default_gs_count
             )
             gs_policies[node_id] = station.scheduling_policy or default_gs_policy
 
     # Track ISL state: (node_a, node_b) -> (visible, scheduled)
-    isl_state: dict[tuple[str, str], tuple[bool, bool]] = dict(initial_isl_state) if initial_isl_state else {}
+    isl_state: dict[tuple[str, str], tuple[bool, bool]] = (
+        dict(initial_isl_state) if initial_isl_state else {}
+    )
     # Track GS state: (gs_id, sat_id) -> (visible, scheduled)
-    gs_state: dict[tuple[str, str], tuple[bool, bool]] = dict(initial_gs_state) if initial_gs_state else {}
+    gs_state: dict[tuple[str, str], tuple[bool, bool]] = (
+        dict(initial_gs_state) if initial_gs_state else {}
+    )
 
     steps = int(duration_s / step_seconds)
     for step in range(steps + 1):
         dt = step * step_seconds
         timestamp_s = dt + timestamp_offset
-        sim_time = datetime.fromtimestamp(epoch_unix + dt, tz=timezone.utc)
+        sim_time = datetime.fromtimestamp(epoch_unix + dt, tz=UTC)
 
         # 1. Compute all satellite positions
         sat_positions = _compute_positions(satellites, addressing, epoch_unix, dt)
@@ -208,13 +216,17 @@ def precompute_timeline_window(
 
                 is_cross = na.link_type == "cross_plane_isl"
                 result = check_isl_visibility(
-                    pos_a, vel_a, pos_b, vel_b,
+                    pos_a,
+                    vel_a,
+                    pos_b,
+                    vel_b,
                     max_range_km=max_range_km,
                     max_tracking_rate_deg_s=max_tracking_rate_deg_s if is_cross else None,
                     field_of_regard_deg=field_of_regard_deg,
                     polar_seam_enabled=polar_seam_enabled and is_cross,
                     latitude_threshold_deg=latitude_threshold_deg,
-                    geo_a=geo_a, geo_b=geo_b,
+                    geo_a=geo_a,
+                    geo_b=geo_b,
                 )
 
                 isl_visibility[pair] = (result.visible, result.range_km)
@@ -248,7 +260,7 @@ def precompute_timeline_window(
 
         # Build pair -> scheduled lookup (both sides must agree)
         isl_scheduled: dict[tuple[str, str], bool] = {}
-        for nid, links in all_isl_schedules.items():
+        for _nid, links in all_isl_schedules.items():
             for link in links:
                 pair = (min(link.node_a, link.node_b), max(link.node_a, link.node_b))
                 if pair not in isl_scheduled:
@@ -387,6 +399,7 @@ def append_timeline_jsonl(events: list[TimelineEvent], output_path: Path) -> Non
     Uses fsync to ensure the dispatcher's tail-reader sees complete lines.
     """
     import os
+
     with open(output_path, "a") as f:
         for event in events:
             record = {
@@ -413,17 +426,27 @@ def publish_window_zmq(events: list[TimelineEvent], pub_sock, window_num: int) -
 
     for event in events:
         topic = event.event_type.encode()
-        payload = json.dumps({
-            "timestamp_s": event.timestamp_s,
-            "event_type": event.event_type,
-            "data": event.data.model_dump(mode="json"),
-        }).encode()
+        payload = json.dumps(
+            {
+                "timestamp_s": event.timestamp_s,
+                "event_type": event.event_type,
+                "data": event.data.model_dump(mode="json"),
+            }
+        ).encode()
         pub_sock.send(encode_message(topic, payload))
 
     # Window boundary signal — orchestrator buffers events until this arrives
-    pub_sock.send(encode_message(b"WindowReady", json.dumps({
-        "window": window_num, "event_count": len(events),
-    }).encode()))
+    pub_sock.send(
+        encode_message(
+            b"WindowReady",
+            json.dumps(
+                {
+                    "window": window_num,
+                    "event_count": len(events),
+                }
+            ).encode(),
+        )
+    )
     logger.info(f"Published window {window_num}: {len(events)} events on ZMQ")
 
 
@@ -504,12 +527,13 @@ def publish_timeline_zmq(
     Used in RT mode to replay a pre-computed timeline.
     """
     import time
+
     import zmq
     from nodalarc.zmq_channels import (
-        ome_events_bind,
         TOPIC_CLOCK_TICK,
         TOPIC_VISIBILITY_EVENT,
         encode_message,
+        ome_events_bind,
     )
 
     ctx = zmq.Context()

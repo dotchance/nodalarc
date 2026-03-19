@@ -13,7 +13,7 @@ from nodalarc.models.constellation import (
     ExplicitConstellation,
     ParametricConstellation,
 )
-from nodalarc.models.session import AreaAssignmentConfig, AddressingConfig
+from nodalarc.models.session import AddressingConfig, AreaAssignmentConfig
 
 
 class AddressingScheme:
@@ -68,8 +68,10 @@ class AddressingScheme:
 # Area assignment
 # ---------------------------------------------------------------------------
 
+
 class AreaAssignment(NamedTuple):
     """Area assignment for a single node."""
+
     node_id: str
     area_id: str
 
@@ -141,12 +143,14 @@ def compute_area_assignments(
 # ISL neighbor assignment (structural — plane/slot modular arithmetic)
 # ---------------------------------------------------------------------------
 
+
 class NeighborAssignment(NamedTuple):
     """Immutable ISL neighbor assignment for one terminal."""
-    interface: str       # "isl0", "isl1", etc.
-    peer_node_id: str    # "sat-P03S08"
-    link_type: str       # "intra_plane_isl", "cross_plane_isl", "ground_uplink", "ground_downlink"
-    priority: int        # 0=intra-fwd, 1=intra-aft, 2=cross-right, 3=cross-left
+
+    interface: str  # "isl0", "isl1", etc.
+    peer_node_id: str  # "sat-P03S08"
+    link_type: str  # "intra_plane_isl", "cross_plane_isl", "ground_uplink", "ground_downlink"
+    priority: int  # 0=intra-fwd, 1=intra-aft, 2=cross-right, 3=cross-left
 
 
 def _get_constellation_params(
@@ -200,7 +204,7 @@ def assign_isl_neighbors(
     # Build override lookup: node_id -> {terminal_name: peer}
     overrides: dict[str, dict[str, str]] = {}
     isl_overrides = None
-    if isinstance(constellation, (ParametricConstellation, ExplicitConstellation)):
+    if isinstance(constellation, ParametricConstellation | ExplicitConstellation):
         isl_overrides = constellation.isl_overrides
     if isl_overrides:
         for ovr in isl_overrides:
@@ -221,12 +225,17 @@ def assign_isl_neighbors(
                 for idx, (terminal, peer) in enumerate(ovr_map.items()):
                     # Infer link_type from peer's plane
                     link_type = "override"
-                    assignments.append((node_id, NeighborAssignment(
-                        interface=terminal,
-                        peer_node_id=peer,
-                        link_type=link_type,
-                        priority=idx,
-                    )))
+                    assignments.append(
+                        (
+                            node_id,
+                            NeighborAssignment(
+                                interface=terminal,
+                                peer_node_id=peer,
+                                link_type=link_type,
+                                priority=idx,
+                            ),
+                        )
+                    )
                 continue
 
             # Standard structural assignment
@@ -234,57 +243,69 @@ def assign_isl_neighbors(
 
             # Priority 0: intra-plane forward (next slot in same plane)
             fwd_slot = (s + 1) % sats_per_plane
-            candidates.append(NeighborAssignment(
-                interface="",  # filled below
-                peer_node_id=addressing.sat_id(p, fwd_slot),
-                link_type="intra_plane_isl",
-                priority=0,
-            ))
+            candidates.append(
+                NeighborAssignment(
+                    interface="",  # filled below
+                    peer_node_id=addressing.sat_id(p, fwd_slot),
+                    link_type="intra_plane_isl",
+                    priority=0,
+                )
+            )
 
             # Priority 1: intra-plane aft (previous slot in same plane)
             aft_slot = (s - 1) % sats_per_plane
-            candidates.append(NeighborAssignment(
-                interface="",
-                peer_node_id=addressing.sat_id(p, aft_slot),
-                link_type="intra_plane_isl",
-                priority=1,
-            ))
+            candidates.append(
+                NeighborAssignment(
+                    interface="",
+                    peer_node_id=addressing.sat_id(p, aft_slot),
+                    link_type="intra_plane_isl",
+                    priority=1,
+                )
+            )
 
             # Priority 2: cross-plane right (same slot, next plane)
             right_plane = p + 1
             if right_plane < plane_count:
-                candidates.append(NeighborAssignment(
-                    interface="",
-                    peer_node_id=addressing.sat_id(right_plane, s),
-                    link_type="cross_plane_isl",
-                    priority=2,
-                ))
+                candidates.append(
+                    NeighborAssignment(
+                        interface="",
+                        peer_node_id=addressing.sat_id(right_plane, s),
+                        link_type="cross_plane_isl",
+                        priority=2,
+                    )
+                )
             elif wraps:
                 # Walker-star: wrap to plane 0
-                candidates.append(NeighborAssignment(
-                    interface="",
-                    peer_node_id=addressing.sat_id(0, s),
-                    link_type="cross_plane_isl",
-                    priority=2,
-                ))
+                candidates.append(
+                    NeighborAssignment(
+                        interface="",
+                        peer_node_id=addressing.sat_id(0, s),
+                        link_type="cross_plane_isl",
+                        priority=2,
+                    )
+                )
 
             # Priority 3: cross-plane left (same slot, previous plane)
             left_plane = p - 1
             if left_plane >= 0:
-                candidates.append(NeighborAssignment(
-                    interface="",
-                    peer_node_id=addressing.sat_id(left_plane, s),
-                    link_type="cross_plane_isl",
-                    priority=3,
-                ))
+                candidates.append(
+                    NeighborAssignment(
+                        interface="",
+                        peer_node_id=addressing.sat_id(left_plane, s),
+                        link_type="cross_plane_isl",
+                        priority=3,
+                    )
+                )
             elif wraps:
                 # Walker-star: wrap to last plane
-                candidates.append(NeighborAssignment(
-                    interface="",
-                    peer_node_id=addressing.sat_id(plane_count - 1, s),
-                    link_type="cross_plane_isl",
-                    priority=3,
-                ))
+                candidates.append(
+                    NeighborAssignment(
+                        interface="",
+                        peer_node_id=addressing.sat_id(plane_count - 1, s),
+                        link_type="cross_plane_isl",
+                        priority=3,
+                    )
+                )
 
             # Deduplicate: if fwd and aft resolve to the same peer
             # (e.g. 2 sats per plane), keep only the higher-priority one
@@ -300,12 +321,17 @@ def assign_isl_neighbors(
 
             # Assign interface names
             for idx, na in enumerate(assigned):
-                assignments.append((node_id, NeighborAssignment(
-                    interface=f"isl{idx}",
-                    peer_node_id=na.peer_node_id,
-                    link_type=na.link_type,
-                    priority=na.priority,
-                )))
+                assignments.append(
+                    (
+                        node_id,
+                        NeighborAssignment(
+                            interface=f"isl{idx}",
+                            peer_node_id=na.peer_node_id,
+                            link_type=na.link_type,
+                            priority=na.priority,
+                        ),
+                    )
+                )
 
     return frozenset(assignments)
 

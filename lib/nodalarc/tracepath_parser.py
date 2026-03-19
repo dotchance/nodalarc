@@ -63,13 +63,15 @@ def parse_tracepath(stdout: str) -> TracepathResult:
             rtt_ms = float(m.group(3))
             asymm = int(m.group(4)) if m.group(4) else None
             reached = m.group(5) is not None
-            hops.append(TracepathHop(
-                hop_num=hop_num,
-                ip=ip,
-                rtt_ms=rtt_ms,
-                asymm=asymm,
-                reached=reached,
-            ))
+            hops.append(
+                TracepathHop(
+                    hop_num=hop_num,
+                    ip=ip,
+                    rtt_ms=rtt_ms,
+                    asymm=asymm,
+                    reached=reached,
+                )
+            )
             continue
 
         # Resume line

@@ -20,7 +20,8 @@ def k3s_available():
     """Skip integration tests if K3s is not available."""
     result = subprocess.run(
         ["kubectl", "cluster-info"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         pytest.skip("K3s not available")
@@ -31,7 +32,8 @@ def nodalarc_namespace(k3s_available):
     """Ensure nodalarc namespace exists (session-scoped for reuse across classes)."""
     subprocess.run(
         ["kubectl", "create", "namespace", "nodalarc"],
-        capture_output=True, check=False,
+        capture_output=True,
+        check=False,
     )
     yield "nodalarc"
 
@@ -41,11 +43,18 @@ def wait_for_pods_running(namespace: str, timeout: int = 120) -> bool:
     for _ in range(timeout):
         result = subprocess.run(
             [
-                "kubectl", "get", "pods", "-n", namespace,
-                "-l", "nodalarc.io/node-id",
-                "-o", "jsonpath={.items[*].status.phase}",
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                namespace,
+                "-l",
+                "nodalarc.io/node-id",
+                "-o",
+                "jsonpath={.items[*].status.phase}",
             ],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         phases = result.stdout.strip().split()
         if phases and all(p == "Running" for p in phases):
@@ -72,7 +81,8 @@ def cleanup_deployment(session_id: str, namespace: str = "nodalarc") -> None:
                         except PermissionError:
                             subprocess.run(
                                 ["sudo", "kill", str(pid)],
-                                capture_output=True, check=False,
+                                capture_output=True,
+                                check=False,
                             )
                         except ProcessLookupError:
                             pass
@@ -81,14 +91,22 @@ def cleanup_deployment(session_id: str, namespace: str = "nodalarc") -> None:
 
     subprocess.run(
         ["helm", "uninstall", session_id, "-n", namespace],
-        capture_output=True, check=False,
+        capture_output=True,
+        check=False,
     )
     # Wait for pods to terminate
     subprocess.run(
         [
-            "kubectl", "wait", "--for=delete", "pod",
-            "-l", "nodalarc.io/node-id", "-n", namespace,
+            "kubectl",
+            "wait",
+            "--for=delete",
+            "pod",
+            "-l",
+            "nodalarc.io/node-id",
+            "-n",
+            namespace,
             "--timeout=60s",
         ],
-        capture_output=True, check=False,
+        capture_output=True,
+        check=False,
     )

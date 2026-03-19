@@ -4,8 +4,6 @@ PRD Section 13.10: target selectors for config push.
 Tests: all, plane:N, node:ID, area:N, type:satellite, type:ground_station.
 """
 
-import pytest
-
 from tools.na_reconfig import _match_target
 
 
@@ -63,10 +61,14 @@ class TestMatchTargetType:
         assert _match_target("type:satellite", "sat-P00S00", "satellite", 0, "49.0001")
 
     def test_type_satellite_rejects_gs(self):
-        assert not _match_target("type:satellite", "gs-hawthorne", "ground_station", None, "49.0001")
+        assert not _match_target(
+            "type:satellite", "gs-hawthorne", "ground_station", None, "49.0001"
+        )
 
     def test_type_ground_station(self):
-        assert _match_target("type:ground_station", "gs-hawthorne", "ground_station", None, "49.0001")
+        assert _match_target(
+            "type:ground_station", "gs-hawthorne", "ground_station", None, "49.0001"
+        )
 
     def test_type_ground_station_rejects_sat(self):
         assert not _match_target("type:ground_station", "sat-P00S00", "satellite", 0, "49.0001")

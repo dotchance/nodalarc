@@ -7,8 +7,6 @@ Tests:
 - Counter-rotating (walker-star) high angular velocity
 """
 
-import math
-
 import pytest
 
 from ome.propagator import (
@@ -16,10 +14,8 @@ from ome.propagator import (
     elements_from_params,
     orbital_period,
     propagate_eci,
-    propagate_keplerian,
 )
 from ome.visibility import compute_angular_velocity
-
 
 EPOCH = 1735689600.0
 
@@ -42,7 +38,9 @@ class TestCoRotatingSamePlane:
             pos1, vel1 = propagate_eci(e1, 0.0)
             pos2, vel2 = propagate_eci(e2, 0.0)
             ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
-            assert ang_vel < 0.5, f"Same-plane sep={ta_sep}° angular velocity {ang_vel:.4f} should be < 0.5"
+            assert ang_vel < 0.5, (
+                f"Same-plane sep={ta_sep}° angular velocity {ang_vel:.4f} should be < 0.5"
+            )
 
 
 class TestCrossPlaneIncreasingLatitude:
@@ -81,9 +79,12 @@ class TestTrackingRateCalibration:
         Starlink-early-44: 4 planes, 45° RAAN spacing, 53° inclination, 550 km.
         """
         from pathlib import Path
+
         from ome.constellation_loader import load_constellation
 
-        config_path = Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"
+        config_path = (
+            Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"
+        )
         if not config_path.exists():
             pytest.skip("starlink-early-44 config not available")
 
@@ -116,9 +117,12 @@ class TestTrackingRateCalibration:
     def test_tracking_rate_read_from_config(self):
         """OME reads tracking rate from constellation config, not hardcoded."""
         from pathlib import Path
+
         from ome.constellation_loader import load_constellation
 
-        config_path = Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"
+        config_path = (
+            Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"
+        )
         config = load_constellation(config_path)
 
         # Config has an explicit tracking rate

@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import subprocess
 import sys
@@ -25,12 +26,12 @@ from pathlib import Path
 
 import yaml
 from jinja2 import Environment, FileSystemLoader
-
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
-from nodalarc.template_vars import build_template_vars, _constellation_dims
+from nodalarc.template_vars import _constellation_dims, build_template_vars
+
 from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
 
 log = logging.getLogger(__name__)
@@ -47,10 +48,8 @@ def _parse_set_args(set_args: list[str] | None) -> dict:
         try:
             value = int(value)
         except ValueError:
-            try:
+            with contextlib.suppress(ValueError):
                 value = float(value)
-            except ValueError:
-                pass
         result[key.strip()] = value
     return result
 
@@ -77,7 +76,9 @@ def _match_target(
     return False
 
 
-def reconfig(session_path: str, target: str, set_args: list[str] | None = None, vars_file: str | None = None) -> None:
+def reconfig(
+    session_path: str, target: str, set_args: list[str] | None = None, vars_file: str | None = None
+) -> None:
     """Re-render and push configs to targeted nodes."""
     raw = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(raw)
@@ -103,7 +104,11 @@ def reconfig(session_path: str, target: str, set_args: list[str] | None = None, 
     area_assignments: dict[str, str] = {}
     if session.routing.area_assignment is not None:
         area_assignments = compute_area_assignments(
-            session.routing.area_assignment, pc, spp, addressing, gs_names,
+            session.routing.area_assignment,
+            pc,
+            spp,
+            addressing,
+            gs_names,
         )
 
     env = Environment(
@@ -121,9 +126,13 @@ def reconfig(session_path: str, target: str, set_args: list[str] | None = None, 
             continue
 
         vars = build_template_vars(
-            session=session, constellation=constellation,
-            ground_stations=gs_file, addressing=addressing,
-            node_type="satellite", plane=sat.plane, slot=sat.slot,
+            session=session,
+            constellation=constellation,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="satellite",
+            plane=sat.plane,
+            slot=sat.slot,
             config_overrides=config_overrides,
         )
         _render_and_push(env, stack_config, node_id, vars)
@@ -137,9 +146,13 @@ def reconfig(session_path: str, target: str, set_args: list[str] | None = None, 
             continue
 
         vars = build_template_vars(
-            session=session, constellation=constellation,
-            ground_stations=gs_file, addressing=addressing,
-            node_type="ground_station", gs_name=station.name, gs_index=i,
+            session=session,
+            constellation=constellation,
+            ground_stations=gs_file,
+            addressing=addressing,
+            node_type="ground_station",
+            gs_name=station.name,
+            gs_index=i,
             config_overrides=config_overrides,
         )
         _render_and_push(env, stack_config, node_id, vars)
@@ -169,9 +182,16 @@ def _render_and_push(env, stack_config, node_id, vars):
         config_dirs = {str(Path(tc.dst).parent) for tc in stack_config.config_templates}
         for config_dir in config_dirs:
             result = subprocess.run(
-                ["kubectl", "cp", str(tmp_path) + "/.",
-                 f"nodalarc/{node_id}:{config_dir}/", "-c", "frr"],
-                capture_output=True, text=True,
+                [
+                    "kubectl",
+                    "cp",
+                    str(tmp_path) + "/.",
+                    f"nodalarc/{node_id}:{config_dir}/",
+                    "-c",
+                    "frr",
+                ],
+                capture_output=True,
+                text=True,
             )
             if result.returncode != 0:
                 log.error(f"Config copy failed for {node_id}: {result.stderr}")
@@ -183,9 +203,9 @@ def _render_and_push(env, stack_config, node_id, vars):
                 config_path=tpl_config.dst,
             )
             result = subprocess.run(
-                ["kubectl", "exec", "-n", "nodalarc", node_id, "-c", "frr",
-                 "--", "sh", "-c", cmd],
-                capture_output=True, text=True,
+                ["kubectl", "exec", "-n", "nodalarc", node_id, "-c", "frr", "--", "sh", "-c", cmd],
+                capture_output=True,
+                text=True,
             )
             if result.returncode != 0:
                 log.error(f"Reconfigure failed for {node_id} ({cmd}): {result.stderr}")
@@ -222,8 +242,8 @@ def add_flow(session_path: str, flow_spec: str) -> None:
     gs_file = load_ground_stations(session.ground_stations)
 
     spec = _parse_flow_spec(flow_spec)
-    from measurement.flow_manager import resolve_dst_ip, resolve_src_pod_ip
     from measurement import probe_client
+    from measurement.flow_manager import resolve_dst_ip, resolve_src_pod_ip
 
     dst_ip = resolve_dst_ip(spec["dst"], gs_file, session)
     src_pod_ip = resolve_src_pod_ip(spec["src"])
@@ -250,8 +270,8 @@ def remove_flow(session_path: str, flow_id: str) -> None:
 
     # We need to find which GS pod this flow runs on.
     # Check all GS pods for the flow.
-    from measurement.flow_manager import resolve_src_pod_ip
     from measurement import probe_client
+    from measurement.flow_manager import resolve_src_pod_ip
 
     for station in gs_file.stations:
         gs_id = f"gs-{station.name}"
@@ -272,13 +292,14 @@ def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc reconfiguration tool")
     parser.add_argument("--session", required=True)
-    parser.add_argument("--target",
-                        help="Target: all, plane:N, node:ID, area:N, type:satellite|ground_station")
-    parser.add_argument("--set", nargs="*", dest="set_args",
-                        help="Override variables: key=value")
+    parser.add_argument(
+        "--target", help="Target: all, plane:N, node:ID, area:N, type:satellite|ground_station"
+    )
+    parser.add_argument("--set", nargs="*", dest="set_args", help="Override variables: key=value")
     parser.add_argument("--vars-file", help="YAML file with override variables")
-    parser.add_argument("--add-flow",
-                        help="Add probe flow: flow_id:src:dst:protocol:bandwidth_kbps:probe_type")
+    parser.add_argument(
+        "--add-flow", help="Add probe flow: flow_id:src:dst:protocol:bandwidth_kbps:probe_type"
+    )
     parser.add_argument("--remove-flow", help="Remove probe flow by flow_id")
     args = parser.parse_args()
 

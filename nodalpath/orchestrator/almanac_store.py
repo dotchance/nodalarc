@@ -94,7 +94,9 @@ class AlmanacStore:
         return self._entries[idx - 1]
 
     def get_forwarding_entries_for_node(
-        self, node_id: str, topology_state_id: str,
+        self,
+        node_id: str,
+        topology_state_id: str,
     ) -> ForwardingTable | None:
         """Return the forwarding table for a node at a given topology state."""
         for entry in reversed(self._entries):
@@ -106,7 +108,9 @@ class AlmanacStore:
         return None
 
     def get_forwarding_table(
-        self, sim_time: str, node_id: str,
+        self,
+        sim_time: str,
+        node_id: str,
     ) -> ForwardingTable | None:
         """Return forwarding table for a specific node at a given time."""
         entry = self.get_entry_at(sim_time)
@@ -128,12 +132,14 @@ class AlmanacStore:
         """
         ticks = []
         for entry in self._entries:
-            ticks.append({
-                "sim_time": entry.sim_time,
-                "topology_state_id": entry.topology_state_id,
-                "node_count": len(entry.forwarding_tables),
-                "is_future": entry.is_future,
-            })
+            ticks.append(
+                {
+                    "sim_time": entry.sim_time,
+                    "topology_state_id": entry.topology_state_id,
+                    "node_count": len(entry.forwarding_tables),
+                    "is_future": entry.is_future,
+                }
+            )
         return ticks
 
     def get_topology_at(self, sim_time: str, prefix_map: dict[str, list[str]]) -> dict | None:
@@ -152,17 +158,19 @@ class AlmanacStore:
         nodes = []
         for ft in entry.forwarding_tables:
             neighbor_count = len(ft.lsr_bindings) + len(ft.ler_ingress_rules)
-            nodes.append({
-                "node_id": ft.node_id,
-                "node_type": "ground_station" if ft.node_id.startswith("gs-") else "satellite",
-                "plane": _plane_from_node_id(ft.node_id),
-                "slot": _slot_from_node_id(ft.node_id),
-                "routing_area": None,
-                "neighbor_count": neighbor_count,
-                "isl_count": 0,
-                "gnd_count": 0,
-                "prefix": ", ".join(prefix_map.get(ft.node_id, [])),
-            })
+            nodes.append(
+                {
+                    "node_id": ft.node_id,
+                    "node_type": "ground_station" if ft.node_id.startswith("gs-") else "satellite",
+                    "plane": _plane_from_node_id(ft.node_id),
+                    "slot": _slot_from_node_id(ft.node_id),
+                    "routing_area": None,
+                    "neighbor_count": neighbor_count,
+                    "isl_count": 0,
+                    "gnd_count": 0,
+                    "prefix": ", ".join(prefix_map.get(ft.node_id, [])),
+                }
+            )
 
         return {
             "topology_state_id": entry.topology_state_id,

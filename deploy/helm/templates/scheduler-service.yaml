@@ -1,0 +1,25 @@
+{{- if .Values.scheduler.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodalarc-scheduler
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-scheduler
+spec:
+  selector:
+    app: nodalarc-scheduler
+  ports:
+    - name: to-events
+      port: 5561
+      targetPort: 5561
+      protocol: TCP
+    - name: scenario-inject
+      port: 5564
+      targetPort: 5564
+      protocol: TCP
+    - name: playback-control
+      port: 5566
+      targetPort: 5566
+      protocol: TCP
+{{- end }}

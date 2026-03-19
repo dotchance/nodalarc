@@ -1,8 +1,10 @@
-{{- if .Values.hostZmq.enabled }}
+{{- if and .Values.hostZmq.enabled (not .Values.scheduler.enabled) }}
 # Headless service pointing to the host for ZMQ endpoints.
 # Used by containerized components (e.g. NodalPath) to reach
 # host-running orchestrator via K8s DNS.
 # NOTE: OME has its own Service (nodalarc-ome) — port 5560 is NOT here.
+# NOTE: When scheduler.enabled=true, nodalarc-scheduler Service provides
+# these ports instead — this headless service is not created.
 apiVersion: v1
 kind: Service
 metadata:

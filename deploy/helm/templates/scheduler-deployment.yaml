@@ -1,0 +1,72 @@
+{{- if .Values.scheduler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodalarc-scheduler
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodalarc-scheduler
+  template:
+    metadata:
+      labels:
+        app: nodalarc-scheduler
+    spec:
+      serviceAccountName: nodalarc-orchestrator
+      containers:
+        - name: scheduler
+          image: {{ .Values.images.scheduler | default "docker.io/nodalarc/scheduler:latest" }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+            - "--session"
+            - "/etc/nodalarc/session.yaml"
+            - "--ome-endpoint"
+            - "tcp://nodalarc-ome:5560"
+            - "--platform-config"
+            - "/etc/nodalarc/platform.yaml"
+          ports:
+            - containerPort: 5561
+              name: to-events
+            - containerPort: 5564
+              name: scenario-inject
+            - containerPort: 5566
+              name: playback
+          resources:
+            limits:
+              memory: {{ .Values.scheduler.memoryLimit | default "512Mi" }}
+              cpu: {{ .Values.scheduler.cpuLimit | default "500m" }}
+          volumeMounts:
+            - name: session-config
+              mountPath: /etc/nodalarc/session.yaml
+              subPath: session.yaml
+            - name: platform-config
+              mountPath: /etc/nodalarc/platform.yaml
+              subPath: platform.yaml
+            - name: constellation-config
+              mountPath: /etc/nodalarc/constellation.yaml
+              subPath: constellation.yaml
+            {{- if .Values.scheduler.groundStationsConfigMap }}
+            - name: ground-stations
+              mountPath: /etc/nodalarc/ground-stations.yaml
+              subPath: ground-stations.yaml
+            {{- end }}
+      volumes:
+        - name: session-config
+          configMap:
+            name: nodalarc-session
+        - name: platform-config
+          configMap:
+            name: nodalarc-platform-config
+        - name: constellation-config
+          configMap:
+            name: nodalarc-constellation
+        {{- if .Values.scheduler.groundStationsConfigMap }}
+        - name: ground-stations
+          configMap:
+            name: nodalarc-ground-stations
+        {{- end }}
+{{- end }}

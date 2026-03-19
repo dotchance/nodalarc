@@ -1,0 +1,34 @@
+{{- if .Values.nodeAgent.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nodalarc-node-agent
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nodalarc-node-agent
+  namespace: {{ .Values.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nodalarc-node-agent
+  namespace: {{ .Values.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nodalarc-node-agent
+subjects:
+  - kind: ServiceAccount
+    name: nodalarc-node-agent
+    namespace: {{ .Values.namespace }}
+{{- end }}

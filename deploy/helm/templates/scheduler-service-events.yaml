@@ -1,0 +1,20 @@
+# Headless Service for Scheduler ZMQ PUB port 5561.
+# DNS returns individual pod IPs (not a VIP) so VS-API can connect
+# to each Scheduler replica independently via ZMQ SUB multi-connect.
+# In M5 with one replica: one IP. At scale with N replicas: N IPs.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodalarc-scheduler-events
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-scheduler
+spec:
+  clusterIP: None
+  selector:
+    app: nodalarc-scheduler
+  ports:
+    - name: to-events
+      port: 5561
+      targetPort: 5561
+      protocol: TCP

@@ -435,8 +435,9 @@ def deploy(
     container_platform = dict(host_platform.get("platform", host_platform))
     container_platform["zmq_connect_hosts"] = {
         "ome": "nodalarc-ome",
-        "orchestrator": "nodalarc-scheduler",
-        "vs-api": "nodalarc-scheduler",
+        "orchestrator": "nodalarc-scheduler-control",  # REQ/REP (scenario, playback)
+        "scheduler-events": "nodalarc-scheduler-events",  # PUB/SUB (headless)
+        "vs-api": "nodalarc-scheduler-control",
     }
     _apply_configmap(
         "nodalarc-platform-config",

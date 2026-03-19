@@ -239,17 +239,24 @@ class DiscreteEventDispatcher:
                     else:
                         self._update_state_from_snapshot(data)
 
-                    # Replay one position snapshot from the trajectory per
-                    # FullStateSnapshot cycle. Each cycle advances to the next
-                    # position in the trajectory, giving the VF advancing sim_time
-                    # and changing positions so satellites animate on the globe.
+                    # Replay position snapshots from the trajectory at real-time
+                    # pace. Each FullStateSnapshot cycle (30s wall), advance by
+                    # 30 × compression sim-seconds worth of trajectory positions.
+                    # This gives the VF smooth satellite animation at the correct
+                    # orbital speed.
                     trajectory = data.get("position_trajectory", [])
                     if trajectory:
                         if not hasattr(self, "_traj_index"):
                             self._traj_index = 0
+                            self._traj_last_wall = time.monotonic()
+                        wall_elapsed = time.monotonic() - self._traj_last_wall
+                        self._traj_last_wall = time.monotonic()
+                        # Advance by wall_elapsed seconds worth of trajectory
+                        # (step_seconds=1 means 1 trajectory entry per sim-second)
+                        step = max(1, int(wall_elapsed))
                         idx = self._traj_index % len(trajectory)
                         self._process_batch([trajectory[idx]], pub_sock, conv_sock, ome_pub_sock)
-                        self._traj_index += 1
+                        self._traj_index += step
                     continue
 
                 if topic == b"WindowReady":

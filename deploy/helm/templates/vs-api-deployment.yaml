@@ -31,6 +31,7 @@ spec:
             - "/etc/nodalarc/platform.yaml"
           ports:
             - containerPort: 8080
+              hostPort: 8080    # VF dev server on host needs localhost:8080
               name: http
           env:
             - name: NODAL_API_KEY

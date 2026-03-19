@@ -7,6 +7,7 @@ images:
   orchestrator: docker.io/nodalarc/orchestrator:latest
   ome: docker.io/nodalarc/ome:latest
   visualization: docker.io/nodalarc/visualization:1
+  vf: docker.io/nodalarc/vf:latest
   nodalpath: docker.io/nodalarc/nodalpath:latest
   scheduler: docker.io/nodalarc/scheduler:latest
   nodeAgent: docker.io/nodalarc/node-agent:latest
@@ -36,6 +37,12 @@ ome:
 visualization:
   memoryLimit: 128Mi
   cpuLimit: 100m
+
+# VF: containerized React SPA served by nginx
+vf:
+  memoryLimit: 128Mi
+  cpuLimit: 100m
+  vsApiHost: ""  # Set to host IP (e.g., 192.168.10.202) for external access
 
 nodalpath:
   enabled: false

@@ -3,8 +3,11 @@
 export const EARTH_RADIUS = 100;
 export const KM_PER_UNIT = 6371 / EARTH_RADIUS;
 
+// Runtime config injected by container entrypoint (config.js), then
+// Vite build-time env vars, then auto-derive from browser hostname.
+const _cfg = (window as any).NODALARC_CONFIG || {};
 const _host = typeof window !== "undefined" ? window.location.hostname : "localhost";
-export const REST_URL = import.meta.env.VITE_VSAPI_REST_URL as string || `http://${_host}:8080`;
+export const REST_URL = _cfg.vsApiUrl || import.meta.env.VITE_VSAPI_REST_URL as string || `http://${_host}:8080`;
 
 /** API key for authentication. Read from env at build time or sessionStorage at runtime. */
 function _getApiKey(): string {
@@ -43,13 +46,13 @@ export async function fetchApiKey(): Promise<string> {
 
 /** Build WebSocket URL with auth token as query parameter. */
 export function getWsUrl(): string {
-  const base = import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
+  const base = _cfg.wsUrl || import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
   const key = getApiKey();
   return key ? `${base}?token=${encodeURIComponent(key)}` : base;
 }
 
 /** WS_URL kept for backwards compatibility (diagnostics display). */
-export const WS_URL = import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
+export const WS_URL = _cfg.wsUrl || import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
 
 /** Return headers object with Authorization if API key is set. */
 export function authHeaders(extra?: Record<string, string>): Record<string, string> {

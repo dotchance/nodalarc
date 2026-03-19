@@ -851,41 +851,21 @@ def deploy(
     else:
         log.warning("VS-API pod did not reach Running in 120s")
 
-    # === Step 10b: Start Vite dev server (skip during session switches) ===
-    if not skip_vsapi:
-        log.info("Step 10b: Start Vite dev server")
-        # Kill any existing Vite on port 3000
-        subprocess.run(["pkill", "-f", "node_modules/.bin/vite"], capture_output=True)
-        time.sleep(1)
-        # Ensure inotify instance limit is high enough for Vite's file watchers
-        subprocess.run(
-            ["sysctl", "-w", "fs.inotify.max_user_instances=512"],
+    # === Step 10b: VF (K8s Deployment — nginx serving static assets) ===
+    log.info("Step 10b: VF runs as K8s Deployment (waiting for pod)")
+    vite_proc = None
+    for _wait in range(30):
+        result = subprocess.run(
+            ["kubectl", "get", "pods", "-n", ns, "-l", "app=nodalarc-vf", "--no-headers"],
             capture_output=True,
+            text=True,
         )
-        vite_env = {**os.environ, "VITE_API_KEY": api_key}
-        vite_log = open(data_dir / "vite.log", "w")
-        vite_proc = subprocess.Popen(
-            ["bash", "-c", "ulimit -n 65536; exec npx vite --host 0.0.0.0 --port 3000"],
-            cwd=str(Path("visualization").resolve()),
-            stdout=vite_log,
-            stderr=vite_log,
-            env=vite_env,
-        )
-        log.info(f"Vite dev server PID: {vite_proc.pid}")
-        # Wait for port 3000 to be listening (up to 15s)
-        import socket
-
-        for _vite_wait in range(30):
-            try:
-                with socket.create_connection(("127.0.0.1", 3000), timeout=0.5):
-                    break
-            except OSError:
-                time.sleep(0.5)
-        else:
-            log.warning("Vite dev server did not start listening on port 3000 in 15s")
+        if "Running" in result.stdout:
+            log.info("VF pod Running")
+            break
+        time.sleep(2)
     else:
-        log.info("Step 10b: Skipping Vite (session switch — VF fetches new key at runtime)")
-        vite_proc = None
+        log.warning("VF pod did not reach Running in 60s")
 
     # === Step 11: Scheduler + Node Agent (K8s pods) ===
     # Both are deployed by the Helm chart as K8s Deployment/DaemonSet.
@@ -969,7 +949,7 @@ def deploy(
         "scheduler": "k8s-deployment",
         "node_agent": "k8s-daemonset",
         "daemon_pid": daemon_proc.pid,
-        "vite_pid": vite_proc.pid if vite_proc else 0,
+        "vf": "k8s-deployment",
         "nodalpath_pid": nodalpath_proc.pid if nodalpath_proc else 0,
         "session_config": session_path,
         "db_path": mi_db,

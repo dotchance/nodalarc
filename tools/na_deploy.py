@@ -43,6 +43,8 @@ def _teardown_previous() -> None:
     for module in (
         "ome.main",
         "orchestrator.main",
+        "scheduler",
+        "node_agent",
         "vs_api.main",
         "measurement.mi_main",
         "nodalpath",
@@ -910,19 +912,32 @@ def deploy(
         log.info("Step 10b: Skipping Vite (session switch — VF fetches new key at runtime)")
         vite_proc = None
 
-    # === Step 11: Begin event dispatch ===
-    log.info("Step 11: Begin event dispatch")
-    to_log = open(data_dir / "orchestrator.log", "w")
-    orchestrator_cmd = [
+    # === Step 11: Begin event dispatch (Scheduler + Node Agent) ===
+    log.info("Step 11: Start Node Agent + Scheduler")
+
+    # Step 11a: Start Node Agent (host subprocess, privileged)
+    # The Node Agent listens on port 50100 and executes netlink operations.
+    na_log = open(data_dir / "node_agent.log", "w")
+    na_proc = subprocess.Popen(
+        [sys.executable, "-m", "node_agent", "--port", "50100"],
+        stdout=na_log,
+        stderr=na_log,
+    )
+    log.info(f"Node Agent PID: {na_proc.pid}")
+    # Brief pause for gRPC server to start
+    time.sleep(1)
+
+    # Step 11b: Start Scheduler (host subprocess)
+    # The Scheduler subscribes to OME ZMQ events and dispatches to the Node Agent.
+    scheduler_log = open(data_dir / "scheduler.log", "w")
+    scheduler_cmd = [
         sys.executable,
         "-m",
-        "orchestrator.main",
+        "scheduler",
         "--session",
         session_path,
         "--pid-map",
         str(pid_map_file),
-        "--routing-protocol",
-        routing_protocol,  # noqa: F821
     ]
     if not host_ome:
         ome_svc_ip = subprocess.run(
@@ -931,17 +946,37 @@ def deploy(
             text=True,
         ).stdout.strip()
         if not ome_svc_ip:
-            _fail("Could not resolve nodalarc-ome Service cluster IP")
+            # Fall back to pod IP
+            ome_pod_ip = subprocess.run(
+                [
+                    "kubectl",
+                    "get",
+                    "pod",
+                    "-n",
+                    ns,
+                    "-l",
+                    "app=nodalarc-ome",
+                    "-o",
+                    "jsonpath={.items[0].status.podIP}",
+                ],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            if ome_pod_ip:
+                ome_svc_ip = ome_pod_ip
+            else:
+                _fail("Could not resolve OME ZMQ endpoint")
         log.info(f"OME ZMQ endpoint: tcp://{ome_svc_ip}:5560")
-        orchestrator_cmd.extend(["--ome-endpoint", f"tcp://{ome_svc_ip}:5560"])
+        scheduler_cmd.extend(["--ome-endpoint", f"tcp://{ome_svc_ip}:5560"])
     else:
-        orchestrator_cmd.extend(["--timeline", str(timeline_path)])
+        # Host OME: Scheduler connects to localhost where host OME publishes
+        scheduler_cmd.extend(["--ome-endpoint", "tcp://127.0.0.1:5560"])
     to_proc = subprocess.Popen(
-        orchestrator_cmd,
-        stdout=to_log,
-        stderr=to_log,
+        scheduler_cmd,
+        stdout=scheduler_log,
+        stderr=scheduler_log,
     )
-    log.info(f"Orchestrator PID: {to_proc.pid}")
+    log.info(f"Scheduler PID: {to_proc.pid}")
 
     # === Step 11b: Start NodalPath ===
     # Always start NodalPath console. For nodalpath-fwd sessions, run in live
@@ -1001,7 +1036,8 @@ def deploy(
         "ome_pid": ome_proc.pid if ome_proc else 0,
         "mi_pid": mi_proc.pid if mi_proc else 0,
         "vsapi_pid": vsapi_pid,
-        "orchestrator_pid": to_proc.pid,
+        "scheduler_pid": to_proc.pid,
+        "node_agent_pid": na_proc.pid,
         "daemon_pid": daemon_proc.pid,
         "vite_pid": vite_proc.pid if vite_proc else 0,
         "nodalpath_pid": nodalpath_proc.pid if nodalpath_proc else 0,
@@ -1020,7 +1056,8 @@ def deploy(
     if mi_proc:
         log.info(f"MI service PID: {mi_proc.pid}")
     log.info(f"VS-API PID: {vsapi_pid}")
-    log.info(f"Orchestrator PID: {to_proc.pid}")
+    log.info(f"Node Agent PID: {na_proc.pid}")
+    log.info(f"Scheduler PID: {to_proc.pid}")
     log.info(f"Session state: {state_file}")
 
     if host_nodalpath:

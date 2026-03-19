@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package nodalarc.node_agent;
+
+// The Node Agent runs as a DaemonSet on each K3s node.
+// It executes privileged netlink operations against local pod namespaces.
+// The Scheduler sends batched commands; the agent executes them concurrently.
+service NodeAgentService {
+  // Bring down a batch of interfaces atomically.
+  // All operations execute concurrently. ACK returned when all complete.
+  rpc BatchLinkDown(BatchLinkDownRequest) returns (BatchLinkDownResponse);
+
+  // Bring up a batch of interfaces with tc shaping and NDP resolution.
+  // All operations execute concurrently. ACK returned when all complete.
+  rpc BatchLinkUp(BatchLinkUpRequest) returns (BatchLinkUpResponse);
+
+  // Update netem delay on active interfaces.
+  rpc SetLatency(SetLatencyRequest) returns (SetLatencyResponse);
+
+  // Return observed interface state for reconciliation.
+  rpc GetTopology(GetTopologyRequest) returns (GetTopologyResponse);
+}
+
+enum LinkType {
+  ISL = 0;
+  GROUND = 1;
+}
+
+enum Locality {
+  LOCAL = 0;        // Both pods on this node (M4: always LOCAL)
+  CROSS_NODE = 1;   // Pods on different nodes (M9: VXLAN tunnels)
+}
+
+// --- BatchLinkDown ---
+
+message InterfaceDown {
+  string node_id = 1;
+  string interface_name = 2;
+  int32 pid = 3;
+  LinkType link_type = 4;
+  // Ground-specific: needed for bridge detach
+  string gs_id = 5;
+  string sat_id = 6;
+  int32 gs_pid = 7;
+  int32 sat_pid = 8;
+}
+
+message BatchLinkDownRequest {
+  string batch_id = 1;             // e.g. "1710000000-down-001"
+  string target_sim_time = 2;      // ISO 8601 — metadata for event logging
+  Locality locality = 3;
+  repeated InterfaceDown interfaces = 4;
+}
+
+message BatchLinkDownResponse {
+  bool success = 1;
+  string error_message = 2;
+  int32 interfaces_downed = 3;
+  float apply_time_ms = 4;
+}
+
+// --- BatchLinkUp ---
+
+message InterfaceUp {
+  string node_id = 1;
+  string interface_name = 2;
+  int32 pid = 3;
+  LinkType link_type = 4;
+  double latency_ms = 5;
+  double bandwidth_mbps = 6;
+  // Ground-specific: needed for bridge attach
+  string gs_id = 7;
+  string sat_id = 8;
+  int32 gs_pid = 9;
+  int32 sat_pid = 10;
+  // NDP: peer MAC for deriving link-local address (ISL only)
+  string peer_mac = 11;
+}
+
+message BatchLinkUpRequest {
+  string batch_id = 1;
+  string target_sim_time = 2;
+  Locality locality = 3;
+  repeated InterfaceUp interfaces = 4;
+}
+
+message BatchLinkUpResponse {
+  bool success = 1;
+  string error_message = 2;
+  int32 interfaces_upped = 3;
+  float apply_time_ms = 4;
+}
+
+// --- SetLatency ---
+
+message LatencyEntry {
+  string node_id = 1;
+  string interface_name = 2;
+  int32 pid = 3;
+  double latency_ms = 4;
+  LinkType link_type = 5;
+  // Ground-specific
+  string gs_id = 6;
+  string sat_id = 7;
+  int32 gs_pid = 8;
+  int32 sat_pid = 9;
+}
+
+message SetLatencyRequest {
+  repeated LatencyEntry entries = 1;
+}
+
+message SetLatencyResponse {
+  bool success = 1;
+  string error_message = 2;
+  int32 entries_updated = 3;
+}
+
+// --- GetTopology ---
+
+message GetTopologyRequest {}
+
+message InterfaceState {
+  string node_id = 1;
+  string interface_name = 2;
+  bool admin_up = 3;
+  bool oper_up = 4;
+  double current_latency_ms = 5;
+}
+
+message GetTopologyResponse {
+  repeated InterfaceState interfaces = 1;
+}

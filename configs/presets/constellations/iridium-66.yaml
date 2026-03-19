@@ -4,7 +4,6 @@ satellite_count: 66
 constellation: configs/constellations/iridium-66.yaml
 ground_stations: configs/ground-stations/sets/polar-emphasis.yaml
 time:
-  mode: discrete-event
   step_seconds: 1
 traffic_flows:
   - flow_id: svalbard-to-mcmurdo

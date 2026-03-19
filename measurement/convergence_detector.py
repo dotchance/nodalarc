@@ -49,7 +49,7 @@ def measure_convergence(
             f"Convergence {event_id}: no flows configured, "
             f"dwell {convergence_config.timeout_s}s"
         )
-        # In DE mode with no flows, return immediately as converged
+        # No flows = no probes to measure. Return immediately as converged.
         end_time = datetime.now(timezone.utc)
         return ConvergenceResult(
             event_id=event_id,

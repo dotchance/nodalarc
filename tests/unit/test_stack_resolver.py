@@ -89,7 +89,7 @@ class TestNodalPath:
         assert r.transport == "grpc"
         assert r.mi_adapter is None
         assert r.host_modules == ["mpls_router", "mpls_iptunnel"]
-        assert len(r.env) == 2
+        assert len(r.env) == 3
         assert r.security_context_capabilities == ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
 
     def test_nodalpath_no_extensions(self):

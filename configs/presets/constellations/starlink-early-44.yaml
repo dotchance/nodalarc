@@ -4,7 +4,6 @@ satellite_count: 44
 constellation: configs/constellations/starlink-early-44.yaml
 ground_stations: configs/ground-stations/sets/global.yaml
 time:
-  mode: discrete-event
   step_seconds: 1
 traffic_flows:
   - flow_id: ashburn-to-frankfurt

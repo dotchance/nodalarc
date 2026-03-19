@@ -237,9 +237,10 @@ class DiscreteEventDispatcher:
                                 has_snapshot = any(e.get("event_type") == "Snapshot" for e in group)
                                 if has_snapshot:
                                     break  # Pause until next step interval
-                            # Wrap around when trajectory exhausted
+                            # Hold at last position when trajectory exhausted
+                            # (don't wrap — wait for window 2 with fresh data)
                             if self._traj_group_idx >= len(self._traj_groups):
-                                self._traj_group_idx = 0
+                                self._traj_group_idx = len(self._traj_groups) - 1
                             self._traj_last_wall = now
                     continue
 

@@ -630,6 +630,18 @@ class Dispatcher:
         if not data.get("isl_state") and not data.get("gs_state"):
             return
 
+        # Update position table from the latest position in the trajectory.
+        # FullStateSnapshots include position_trajectory with Snapshot events.
+        # Between OME windows, these are the only source of position updates.
+        position_trajectory = data.get("position_trajectory", [])
+        if position_trajectory:
+            last_snap = position_trajectory[-1]
+            if last_snap.get("event_type") == "Snapshot":
+                snap_data = last_snap.get("data", {})
+                snap = TimelinePositionSnapshot.model_validate(snap_data)
+                self._position_table.update_from_snapshot(snap)
+                self._current_sim_time = snap.sim_time
+
         # Parse the FullStateSnapshot format:
         # isl_state: {"node_a:node_b": {"visible": true, "scheduled": true, "range_km": ...}}
         # gs_state: {"gs_id:sat_id": {"visible": true, "scheduled": true, ...}}
@@ -683,6 +695,11 @@ class Dispatcher:
             len(self._active_links),
             sim_time,
         )
+
+        # Trigger latency updates if positions changed.
+        # Between OME windows, FullStateSnapshots are the only event source.
+        if self._active_links and position_trajectory:
+            await self._update_latencies(to_pub)
 
     # ------------------------------------------------------------------
     # Checkpoint (fire-and-forget)

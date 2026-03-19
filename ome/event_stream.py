@@ -433,6 +433,7 @@ def publish_full_state_snapshot(
     gs_state: dict[tuple[str, str], tuple[bool, bool]],
     sim_time_iso: str,
     link_ranges: dict[tuple[str, str], float] | None = None,
+    position_trajectory: list[dict] | None = None,
 ) -> None:
     """Publish complete link state for subscriber catchup.
 
@@ -465,13 +466,20 @@ def publish_full_state_snapshot(
             entry["range_km"] = r
         gs_data[f"{a}:{b}"] = entry
 
-    payload = json.dumps({
+    snapshot_dict: dict[str, Any] = {
         "sim_time": sim_time_iso,
         "isl_state": isl_data,
         "gs_state": gs_data,
-    }).encode()
+    }
+    if position_trajectory:
+        snapshot_dict["position_trajectory"] = position_trajectory
+
+    payload = json.dumps(snapshot_dict).encode()
     pub_sock.send(encode_message(b"FullStateSnapshot", payload))
-    logger.info(f"Published FullStateSnapshot: {len(isl_data)} ISL + {len(gs_data)} GS pairs")
+    logger.info(
+        f"Published FullStateSnapshot: {len(isl_data)} ISL + {len(gs_data)} GS pairs"
+        + (f" + {len(position_trajectory)} positions" if position_trajectory else "")
+    )
 
 
 def read_timeline_jsonl(path: Path) -> list[dict]:

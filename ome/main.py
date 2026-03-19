@@ -243,15 +243,20 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
             # Publish window events + WindowReady on ZMQ
             publish_window_zmq(events, pub_sock, window)
 
-            # Capture the last position Snapshot and build range map from events.
-            # The range map carries link distances into FullStateSnapshot so
-            # subscribers (NodalPath) can compute accurate latencies even when
-            # they missed the VisibilityEvents (slow joiner catchup).
+            # Extract position trajectory and range map from window events.
+            # The position trajectory is included in FullStateSnapshot so late
+            # subscribers get the complete orbital path, not just the final position.
+            position_trajectory: list[dict] = []
             last_position_event = None
             link_ranges: dict[tuple[str, str], float] = {}
             for evt in events:
                 if evt.event_type == "Snapshot":
                     last_position_event = evt
+                    position_trajectory.append({
+                        "timestamp_s": evt.timestamp_s,
+                        "event_type": evt.event_type,
+                        "data": evt.data.model_dump(mode="json"),
+                    })
                 elif evt.event_type == "VisibilityEvent":
                     pair = (evt.data.node_a, evt.data.node_b)
                     link_ranges[pair] = evt.data.range_km
@@ -261,18 +266,11 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
             window_end_epoch = epoch_for_next + period
             sim_time_iso = _dt.fromtimestamp(window_end_epoch, tz=_tz.utc).isoformat()
 
-            # Publish FullStateSnapshot at window boundary
-            publish_full_state_snapshot(pub_sock, isl_state, gs_state, sim_time_iso, link_ranges)
-            # Also republish the last position Snapshot so late subscribers get positions
-            if last_position_event is not None:
-                from nodalarc.zmq_channels import encode_message as _enc
-                _topic = last_position_event.event_type.encode()
-                _payload = json.dumps({
-                    "timestamp_s": last_position_event.timestamp_s,
-                    "event_type": last_position_event.event_type,
-                    "data": last_position_event.data.model_dump(mode="json"),
-                }).encode()
-                pub_sock.send(_enc(_topic, _payload))
+            # Publish FullStateSnapshot at window boundary (includes position trajectory)
+            publish_full_state_snapshot(
+                pub_sock, isl_state, gs_state, sim_time_iso, link_ranges,
+                position_trajectory=position_trajectory,
+            )
             last_snapshot_wall = time.monotonic()
 
             # Also write JSONL if --output-dir provided (debug/development)
@@ -293,18 +291,10 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                     break
                 # Publish periodic FullStateSnapshot every 30s during inter-window sleep
                 if time.monotonic() - last_snapshot_wall >= 30.0:
-                    publish_full_state_snapshot(pub_sock, isl_state, gs_state, sim_time_iso, link_ranges)
-                    # Republish last position Snapshot for late subscriber catchup
-                    if last_position_event is not None:
-                        logging.info("Republishing position Snapshot for late subscribers")
-                        pub_sock.send(_enc(
-                            last_position_event.event_type.encode(),
-                            json.dumps({
-                                "timestamp_s": last_position_event.timestamp_s,
-                                "event_type": last_position_event.event_type,
-                                "data": last_position_event.data.model_dump(mode="json"),
-                            }).encode(),
-                        ))
+                    publish_full_state_snapshot(
+                        pub_sock, isl_state, gs_state, sim_time_iso, link_ranges,
+                        position_trajectory=position_trajectory,
+                    )
                     last_snapshot_wall = time.monotonic()
                 time.sleep(min(1.0, window_duration - elapsed))
 

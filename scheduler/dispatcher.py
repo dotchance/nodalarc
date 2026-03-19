@@ -106,7 +106,7 @@ class Dispatcher:
         for agent_addr in self._loc.all_agent_addrs():
             try:
                 stub = self._pool.get_stub(agent_addr)
-                resp = stub.GetTopology(node_agent_pb2.GetTopologyRequest())
+                resp = stub.get_topology(node_agent_pb2.GetTopologyRequest())
                 observed: dict[str, set[str]] = {}
                 for iface in resp.interfaces:
                     observed.setdefault(iface.node_id, set()).add(iface.interface_name)
@@ -422,7 +422,7 @@ class Dispatcher:
                 locality=node_agent_pb2.LOCAL,
                 interfaces=ifaces,
             )
-            tasks.append(loop.run_in_executor(None, stub.BatchLinkDown, req))
+            tasks.append(loop.run_in_executor(None, stub.batch_link_down, req))
 
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -530,7 +530,7 @@ class Dispatcher:
                 locality=node_agent_pb2.LOCAL,
                 interfaces=ifaces,
             )
-            tasks.append(loop.run_in_executor(None, stub.BatchLinkUp, req))
+            tasks.append(loop.run_in_executor(None, stub.batch_link_up, req))
 
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -630,7 +630,7 @@ class Dispatcher:
         for agent_addr, entries in agent_entries.items():
             stub = self._pool.get_stub(agent_addr)
             req = node_agent_pb2.SetLatencyRequest(entries=entries)
-            tasks.append(loop.run_in_executor(None, stub.SetLatency, req))
+            tasks.append(loop.run_in_executor(None, stub.set_latency, req))
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -854,9 +854,7 @@ class Dispatcher:
         for agent_addr in self._loc.all_agent_addrs():
             try:
                 stub = self._pool.get_stub(agent_addr)
-                resp = await loop.run_in_executor(
-                    None, stub.GetTopology, node_agent_pb2.GetTopologyRequest()
-                )
+                resp = await loop.run_in_executor(None, stub.get_topology)
                 for iface in resp.interfaces:
                     total_interfaces += 1
                     if iface.admin_up:

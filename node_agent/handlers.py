@@ -24,8 +24,6 @@ import logging
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import grpc
-
 from node_agent import ground_bridge, namespace_ops
 from node_agent.proto import node_agent_pb2
 
@@ -168,15 +166,13 @@ def _update_latency_entry(
 
 def handle_batch_link_down(
     request: node_agent_pb2.BatchLinkDownRequest,
-    context: grpc.ServicerContext,
+    context=None,
     pid_map: dict[str, int] | None = None,
 ) -> node_agent_pb2.BatchLinkDownResponse:
-    """Handle BatchLinkDown RPC."""
+    """Handle BatchLinkDown."""
     if request.locality == node_agent_pb2.CROSS_NODE:
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("CROSS_NODE not implemented (M9)")
         return node_agent_pb2.BatchLinkDownResponse(
-            success=False, error_message="CROSS_NODE not implemented"
+            success=False, error_message="CROSS_NODE not implemented (M9)"
         )
 
     start = _time.monotonic()
@@ -308,7 +304,7 @@ def _isl_ndp_phase2(
 
 def handle_batch_link_up(
     request: node_agent_pb2.BatchLinkUpRequest,
-    context: grpc.ServicerContext,
+    context=None,
     pid_map: dict[str, int] | None = None,
 ) -> node_agent_pb2.BatchLinkUpResponse:
     """Handle BatchLinkUp RPC.
@@ -328,10 +324,8 @@ def handle_batch_link_up(
     the UP transition internally).
     """
     if request.locality == node_agent_pb2.CROSS_NODE:
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("CROSS_NODE not implemented (M9)")
         return node_agent_pb2.BatchLinkUpResponse(
-            success=False, error_message="CROSS_NODE not implemented"
+            success=False, error_message="CROSS_NODE not implemented (M9)"
         )
 
     start = _time.monotonic()
@@ -415,7 +409,7 @@ def handle_batch_link_up(
 
 def handle_set_latency(
     request: node_agent_pb2.SetLatencyRequest,
-    context: grpc.ServicerContext,
+    context=None,
     pid_map: dict[str, int] | None = None,
 ) -> node_agent_pb2.SetLatencyResponse:
     """Handle SetLatency RPC.
@@ -468,7 +462,7 @@ _TICK_TO_US = _read_psched_tick_factor()
 
 def handle_get_topology(
     request: node_agent_pb2.GetTopologyRequest,
-    context: grpc.ServicerContext,
+    context=None,
     pid_map: dict[str, int] | None = None,
 ) -> node_agent_pb2.GetTopologyResponse:
     """Handle GetTopology RPC — return observed interface state.

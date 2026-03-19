@@ -226,21 +226,12 @@ class DiscreteEventDispatcher:
                         now = time.monotonic()
                         elapsed = now - self._traj_last_wall
                         if elapsed >= self._traj_step_s:
-                            # Process groups until we hit a Snapshot group (position update).
-                            # VisibilityEvent-only groups are consumed instantly so link
-                            # state catches up without delaying position animation.
-                            while self._traj_group_idx < len(self._traj_groups):
-                                gidx = self._traj_group_idx
-                                group = self._traj_groups[gidx]
+                            # Process one group per step — uniform pacing for both
+                            # VisibilityEvents and Snapshots. No bursts.
+                            if self._traj_group_idx < len(self._traj_groups):
+                                group = self._traj_groups[self._traj_group_idx]
                                 self._process_batch(group, pub_sock, conv_sock, ome_pub_sock)
                                 self._traj_group_idx += 1
-                                has_snapshot = any(e.get("event_type") == "Snapshot" for e in group)
-                                if has_snapshot:
-                                    break  # Pause until next step interval
-                            # Hold at last position when trajectory exhausted
-                            # (don't wrap — wait for window 2 with fresh data)
-                            if self._traj_group_idx >= len(self._traj_groups):
-                                self._traj_group_idx = len(self._traj_groups) - 1
                             self._traj_last_wall = now
                     continue
 
@@ -268,10 +259,12 @@ class DiscreteEventDispatcher:
                         self._traj_groups = groups
                         self._traj_group_idx = 0
                         self._traj_last_wall = time.monotonic()
-                        # Step interval from first two Snapshot-containing groups
-                        snap_ts = [g[0].get("timestamp_s", 0) for g in groups
-                                   if any(e.get("event_type") == "Snapshot" for e in g)]
-                        self._traj_step_s = max(1.0, snap_ts[1] - snap_ts[0]) if len(snap_ts) >= 2 else 10.0
+                        # Step interval: total sim duration / total groups = wall-seconds per group
+                        # This gives uniform pacing — every group gets the same wall time.
+                        first_ts = groups[0][0].get("timestamp_s", 0)
+                        last_ts = groups[-1][0].get("timestamp_s", 0)
+                        total_sim_s = max(1.0, last_ts - first_ts)
+                        self._traj_step_s = total_sim_s / len(groups)
                         log.info(f"Trajectory loaded: {len(groups)} groups, step={self._traj_step_s:.0f}s")
                     continue
 
@@ -364,34 +357,39 @@ class DiscreteEventDispatcher:
                             self._handle_link_up(vis, pub_sock)
                             link_count += 1
 
-        # Initialize GS links — only one satellite per GS (the scheduled one).
-        # Multiple satellites may be visible to a GS but only one is scheduled
-        # at a time. Processing all of them would create conflicting bridge redirects.
-        gs_scheduled: dict[str, tuple[str, str]] = {}  # gs_id -> (pair_key, sat_id)
-        for pair_key, state in data.get("gs_state", {}).items():
-            if state.get("visible") and state.get("scheduled"):
-                parts = pair_key.split(":")
-                if len(parts) == 2:
-                    node_a, node_b = parts[0], parts[1]
-                    gs_id = node_a if node_a.startswith("gs-") else node_b
-                    # Keep only the last scheduled satellite per GS (most recent)
-                    gs_scheduled[gs_id] = (pair_key, node_a if not node_a.startswith("gs-") else node_b)
+        # GS links: skip during cold start when trajectory replay is available.
+        # The FullStateSnapshot reflects end-of-window GS state, but the trajectory
+        # replays from the start. GS links depend on orbital position and change
+        # frequently — the trajectory's VisibilityEvents establish them at the
+        # correct times. ISL links are stable (always visible between neighbors).
+        if not data.get("position_trajectory"):
+            # No trajectory — establish GS links from FullStateSnapshot (legacy path)
+            gs_scheduled: dict[str, tuple[str, str]] = {}
+            for pair_key, state in data.get("gs_state", {}).items():
+                if state.get("visible") and state.get("scheduled"):
+                    parts = pair_key.split(":")
+                    if len(parts) == 2:
+                        node_a, node_b = parts[0], parts[1]
+                        gs_id = node_a if node_a.startswith("gs-") else node_b
+                        gs_scheduled[gs_id] = (pair_key, node_a if not node_a.startswith("gs-") else node_b)
 
-        for gs_id, (pair_key, sat_id) in gs_scheduled.items():
-            parts = pair_key.split(":")
-            node_a, node_b = min(parts[0], parts[1]), max(parts[0], parts[1])
-            pair = (node_a, node_b)
-            if pair not in self._active_links and pair in self._interface_map:
-                vis = VisibilityEvent(
-                    sim_time=datetime.fromisoformat(sim_time) if sim_time else datetime.now(timezone.utc),
-                    node_a=pair[0], node_b=pair[1],
-                    visible=True, scheduled=True,
-                    range_km=0.0, elevation_deg=25.0,  # Default elevation for initial attach
-                    terminal_type="optical",
-                )
-                self._handle_link_up(vis, pub_sock)
-                link_count += 1
-                log.info(f"Cold start GS: {gs_id} -> {sat_id}")
+            for gs_id, (pair_key, sat_id) in gs_scheduled.items():
+                parts = pair_key.split(":")
+                node_a, node_b = min(parts[0], parts[1]), max(parts[0], parts[1])
+                pair = (node_a, node_b)
+                if pair not in self._active_links and pair in self._interface_map:
+                    vis = VisibilityEvent(
+                        sim_time=datetime.fromisoformat(sim_time) if sim_time else datetime.now(timezone.utc),
+                        node_a=pair[0], node_b=pair[1],
+                        visible=True, scheduled=True,
+                        range_km=0.0, elevation_deg=25.0,
+                        terminal_type="optical",
+                    )
+                    self._handle_link_up(vis, pub_sock)
+                    link_count += 1
+                    log.info(f"Cold start GS: {gs_id} -> {sat_id}")
+        else:
+            log.info("Skipping GS link init — trajectory replay will handle GS connectivity")
 
         self._in_cold_start = False
         log.info(f"Cold start from FullStateSnapshot: {link_count} links initialized")

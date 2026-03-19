@@ -429,14 +429,14 @@ def deploy(
             )
 
     # Platform config — container version with per-service ZMQ connect hosts.
-    # OME has its own K8s Service (nodalarc-ome). Orchestrator still on host
-    # (reached via nodalarc-host-zmq headless Service).
+    # OME has its own K8s Service (nodalarc-ome). Scheduler owns TO events
+    # (port 5561) via nodalarc-scheduler Service.
     host_platform = yaml.safe_load(Path("configs/platform.yaml").read_text())
     container_platform = dict(host_platform.get("platform", host_platform))
     container_platform["zmq_connect_hosts"] = {
         "ome": "nodalarc-ome",
-        "orchestrator": "nodalarc-host-zmq",
-        "vs-api": "nodalarc-host-zmq",
+        "orchestrator": "nodalarc-scheduler",
+        "vs-api": "nodalarc-scheduler",
     }
     _apply_configmap(
         "nodalarc-platform-config",
@@ -912,71 +912,26 @@ def deploy(
         log.info("Step 10b: Skipping Vite (session switch — VF fetches new key at runtime)")
         vite_proc = None
 
-    # === Step 11: Begin event dispatch (Scheduler + Node Agent) ===
-    log.info("Step 11: Start Node Agent + Scheduler")
-
-    # Step 11a: Start Node Agent (host subprocess, privileged)
-    # The Node Agent listens on port 50100 and executes netlink operations.
-    na_log = open(data_dir / "node_agent.log", "w")
-    na_proc = subprocess.Popen(
-        [sys.executable, "-m", "node_agent", "--port", "50100", "--pid-map", str(pid_map_file)],
-        stdout=na_log,
-        stderr=na_log,
-    )
-    log.info(f"Node Agent PID: {na_proc.pid}")
-    # Brief pause for gRPC server to start
-    time.sleep(1)
-
-    # Step 11b: Start Scheduler (host subprocess)
-    # The Scheduler subscribes to OME ZMQ events and dispatches to the Node Agent.
-    scheduler_log = open(data_dir / "scheduler.log", "w")
-    scheduler_cmd = [
-        sys.executable,
-        "-m",
-        "scheduler",
-        "--session",
-        session_path,
-        "--pid-map",
-        str(pid_map_file),
-    ]
-    if not host_ome:
-        ome_svc_ip = subprocess.run(
-            ["kubectl", "get", "svc", "nodalarc-ome", "-n", ns, "-o", "jsonpath={.spec.clusterIP}"],
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        if not ome_svc_ip:
-            # Fall back to pod IP
-            ome_pod_ip = subprocess.run(
-                [
-                    "kubectl",
-                    "get",
-                    "pod",
-                    "-n",
-                    ns,
-                    "-l",
-                    "app=nodalarc-ome",
-                    "-o",
-                    "jsonpath={.items[0].status.podIP}",
-                ],
+    # === Step 11: Scheduler + Node Agent (K8s pods) ===
+    # Both are deployed by the Helm chart as K8s Deployment/DaemonSet.
+    # Wait for them to be ready.
+    log.info("Step 11: Waiting for Scheduler + Node Agent pods")
+    for label, name in [
+        ("app=nodalarc-scheduler", "Scheduler"),
+        ("app=nodalarc-node-agent", "Node Agent"),
+    ]:
+        for _wait in range(60):
+            result = subprocess.run(
+                ["kubectl", "get", "pods", "-n", ns, "-l", label, "--no-headers"],
                 capture_output=True,
                 text=True,
-            ).stdout.strip()
-            if ome_pod_ip:
-                ome_svc_ip = ome_pod_ip
-            else:
-                _fail("Could not resolve OME ZMQ endpoint")
-        log.info(f"OME ZMQ endpoint: tcp://{ome_svc_ip}:5560")
-        scheduler_cmd.extend(["--ome-endpoint", f"tcp://{ome_svc_ip}:5560"])
-    else:
-        # Host OME: Scheduler connects to localhost where host OME publishes
-        scheduler_cmd.extend(["--ome-endpoint", "tcp://127.0.0.1:5560"])
-    to_proc = subprocess.Popen(
-        scheduler_cmd,
-        stdout=scheduler_log,
-        stderr=scheduler_log,
-    )
-    log.info(f"Scheduler PID: {to_proc.pid}")
+            )
+            if "Running" in result.stdout:
+                log.info(f"{name} pod Running")
+                break
+            time.sleep(2)
+        else:
+            log.warning(f"{name} pod did not reach Running in 120s")
 
     # === Step 11b: Start NodalPath ===
     # Always start NodalPath console. For nodalpath-fwd sessions, run in live
@@ -1036,8 +991,8 @@ def deploy(
         "ome_pid": ome_proc.pid if ome_proc else 0,
         "mi_pid": mi_proc.pid if mi_proc else 0,
         "vsapi_pid": vsapi_pid,
-        "scheduler_pid": to_proc.pid,
-        "node_agent_pid": na_proc.pid,
+        "scheduler": "k8s-deployment",
+        "node_agent": "k8s-daemonset",
         "daemon_pid": daemon_proc.pid,
         "vite_pid": vite_proc.pid if vite_proc else 0,
         "nodalpath_pid": nodalpath_proc.pid if nodalpath_proc else 0,
@@ -1056,8 +1011,8 @@ def deploy(
     if mi_proc:
         log.info(f"MI service PID: {mi_proc.pid}")
     log.info(f"VS-API PID: {vsapi_pid}")
-    log.info(f"Node Agent PID: {na_proc.pid}")
-    log.info(f"Scheduler PID: {to_proc.pid}")
+    log.info("Node Agent: K8s DaemonSet")
+    log.info("Scheduler: K8s Deployment")
     log.info(f"Session state: {state_file}")
 
     if host_nodalpath:

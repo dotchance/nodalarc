@@ -78,8 +78,13 @@ def discover_local_pod_pids(
         raw_id = container_id.split("://", 1)[-1]
         # crictl inspect -> parse JSON -> info.pid
         try:
+            # Use CONTAINER_RUNTIME_ENDPOINT env var if set (K3s uses a non-standard path)
+            crictl_cmd = ["crictl"]
+            runtime_ep = os.environ.get("CONTAINER_RUNTIME_ENDPOINT")
+            if runtime_ep:
+                crictl_cmd.extend(["--runtime-endpoint", runtime_ep])
             proc = subprocess.run(
-                ["crictl", "inspect", raw_id],
+                [*crictl_cmd, "inspect", raw_id],
                 capture_output=True,
                 text=True,
                 check=True,

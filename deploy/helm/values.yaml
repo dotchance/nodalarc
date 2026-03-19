@@ -11,7 +11,7 @@ images:
   scheduler: docker.io/nodalarc/scheduler:latest
   nodeAgent: docker.io/nodalarc/node-agent:latest
 
-imagePullPolicy: IfNotPresent  # Use Never for purely local registry
+imagePullPolicy: Never  # Local images loaded into K3s containerd directly
 
 satellite:
   memoryLimit: 128Mi
@@ -48,7 +48,6 @@ nodalpath:
 scheduler:
   memoryLimit: 512Mi
   cpuLimit: 500m
-  groundStationsConfigMap: false  # Set true if ground-stations ConfigMap exists
 
 # M4: Node Agent DaemonSet runs on each K3s node.
 # Executes privileged netlink operations on behalf of the Scheduler.

@@ -481,10 +481,13 @@ async def _zmq_subscriber() -> None:
 
     # MI subscription is conditional — only connect if MI is enabled
     mi_sub = None
-    if _session_config and _session_config.mi and _session_config.mi.enabled:  # noqa: F821
-        mi_sub = _zmq_ctx.socket(zmq.SUB)
-        mi_sub.connect(mi_events_connect())
-        mi_sub.setsockopt(zmq.SUBSCRIBE, b"")
+    try:
+        if _session_config and _session_config.mi and _session_config.mi.enabled:  # noqa: F821
+            mi_sub = _zmq_ctx.socket(zmq.SUB)
+            mi_sub.connect(mi_events_connect())
+            mi_sub.setsockopt(zmq.SUBSCRIBE, b"")
+    except NameError:
+        pass  # _session_config not yet set — MI disabled
     else:
         log.info("MI not configured — skipping MI metrics subscription")
 

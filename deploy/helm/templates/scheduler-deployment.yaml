@@ -29,7 +29,6 @@ spec:
             - "/etc/nodalarc/platform.yaml"
           ports:
             - containerPort: 5561
-              hostPort: 5561       # Keep until VS-API is containerized (M5 Step 3)
               name: to-events
             - containerPort: 5564
               name: scenario-inject

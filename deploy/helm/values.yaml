@@ -10,6 +10,7 @@ images:
   nodalpath: docker.io/nodalarc/nodalpath:latest
   scheduler: docker.io/nodalarc/scheduler:latest
   nodeAgent: docker.io/nodalarc/node-agent:latest
+  vsApi: docker.io/nodalarc/vs-api:latest
 
 imagePullPolicy: Never  # Local images loaded into K3s containerd directly
 
@@ -54,6 +55,11 @@ scheduler:
 nodeAgent:
   grpcPort: 50100
   memoryLimit: 256Mi
+  cpuLimit: 500m
+
+# VS-API: FastAPI server for visualization state
+vsApi:
+  memoryLimit: 512Mi
   cpuLimit: 500m
 
 # Optional sidecar container (e.g. nodalpath-fwd gRPC daemon)

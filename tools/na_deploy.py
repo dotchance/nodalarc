@@ -25,7 +25,6 @@ from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.template_vars import build_template_vars
-from nodalarc.zmq_channels import vs_api_http_port
 
 from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
 
@@ -835,48 +834,22 @@ def deploy(
     else:
         log.warning("Deploy daemon socket did not appear in 10s")
 
-    # === Step 10: Start VS-API ===
+    # === Step 10: VS-API (K8s Deployment) ===
     api_key = os.environ.get("NODAL_API_KEY", "") or secrets.token_urlsafe(32)
-    if not skip_vsapi:
-        log.info("Step 10: Start VS-API")
-        vsapi_env = {**os.environ, "NODAL_API_KEY": api_key}
-        vsapi_log = open(data_dir / "vsapi.log", "w")
-        vsapi_proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "vs_api.main",
-                "--session",
-                session_path,
-                "--db",
-                mi_db,
-                "--port",
-                str(vs_api_http_port()),
-            ],
-            stdout=vsapi_log,
-            stderr=vsapi_log,
-            env=vsapi_env,
+    log.info("Step 10: VS-API runs as K8s Deployment (waiting for pod)")
+    vsapi_proc = None
+    for _wait in range(60):
+        result = subprocess.run(
+            ["kubectl", "get", "pods", "-n", ns, "-l", "app=nodalarc-vs-api", "--no-headers"],
+            capture_output=True,
+            text=True,
         )
-        log.info(f"VS-API PID: {vsapi_proc.pid}")
-        # Wait for VS-API to be healthy before starting orchestrator
-        import urllib.request
-
-        for _attempt in range(30):
-            try:
-                req = urllib.request.Request(
-                    f"http://localhost:{vs_api_http_port()}/api/v1/state",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
-                urllib.request.urlopen(req, timeout=1)
-                log.info("VS-API healthy")
-                break
-            except Exception:
-                time.sleep(0.5)
-        else:
-            log.warning("VS-API did not become healthy in 15s, proceeding anyway")
+        if "Running" in result.stdout:
+            log.info("VS-API pod Running")
+            break
+        time.sleep(2)
     else:
-        log.info("Step 10: Skipping VS-API (--skip-vsapi)")
-        vsapi_proc = None
+        log.warning("VS-API pod did not reach Running in 120s")
 
     # === Step 10b: Start Vite dev server (skip during session switches) ===
     if not skip_vsapi:
@@ -985,14 +958,14 @@ def deploy(
         log.info(f"NodalPath PID: {nodalpath_proc.pid}")
 
     # === Complete — save session state and print summary ===
-    vsapi_pid = vsapi_proc.pid if vsapi_proc else 0
+    # VS-API is now a K8s Deployment, no host PID
     session_state = {
         "session_id": session_id,
         "data_dir": str(data_dir),
         "timeline": str(timeline_path) if timeline_path else "",
         "ome_pid": ome_proc.pid if ome_proc else 0,
         "mi_pid": mi_proc.pid if mi_proc else 0,
-        "vsapi_pid": vsapi_pid,
+        "vsapi": "k8s-deployment",
         "scheduler": "k8s-deployment",
         "node_agent": "k8s-daemonset",
         "daemon_pid": daemon_proc.pid,
@@ -1005,7 +978,12 @@ def deploy(
     state_file = data_dir / "session-state.json"
     state_file.write_text(json.dumps(session_state, indent=2))
     _apply_configmap(
-        "nodalarc-session-state", ns, {"session-state.json": json.dumps(session_state)}
+        "nodalarc-session-state",
+        ns,
+        {
+            "session-state.json": json.dumps(session_state),
+            "api_key": api_key,
+        },
     )
 
     log.info(f"Session: {session_id}")
@@ -1015,7 +993,7 @@ def deploy(
         log.info(f"OME PID: {ome_proc.pid}")
     if mi_proc:
         log.info(f"MI service PID: {mi_proc.pid}")
-    log.info(f"VS-API PID: {vsapi_pid}")
+    log.info("VS-API: K8s Deployment")
     log.info("Node Agent: K8s DaemonSet")
     log.info("Scheduler: K8s Deployment")
     log.info(f"Session state: {state_file}")

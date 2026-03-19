@@ -79,6 +79,8 @@ class PushScheduler:
             nid: node.loopback_ipv4 for nid, node in node_registry.items()
         }
         self._iface_to_peer_loopback: dict[tuple[str, str], str] = {}
+        # Maps (node_id, iface) → (peer_node_id, peer_iface) for MAC/link-local derivation
+        self._iface_to_peer_info: dict[tuple[str, str], tuple[str, str]] = {}
         for (src, dst), (src_iface, dst_iface) in interface_map.items():
             src_lo = node_registry[src].loopback_ipv4 if src in node_registry else None
             dst_lo = node_registry[dst].loopback_ipv4 if dst in node_registry else None
@@ -86,6 +88,8 @@ class PushScheduler:
                 self._iface_to_peer_loopback[(src, src_iface)] = dst_lo
             if src_lo is not None:
                 self._iface_to_peer_loopback[(dst, dst_iface)] = src_lo
+            self._iface_to_peer_info[(src, src_iface)] = (dst, dst_iface)
+            self._iface_to_peer_info[(dst, dst_iface)] = (src, src_iface)
         self._installed: dict[str, ForwardingTable] = {}
         self._results: list[PushResult] = []
 
@@ -271,6 +275,7 @@ class PushScheduler:
                 sim_time=entry.sim_time,
                 iface_to_peer_loopback=self._iface_to_peer_loopback,
                 own_loopback=own_lo,
+                iface_to_peer_info=self._iface_to_peer_info,
             )
             pod_ip = self._pod_ip_map.get(node_id, "")
             grpc_tasks.append((node_id, pod_ip, update))

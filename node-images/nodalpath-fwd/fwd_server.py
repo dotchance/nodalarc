@@ -1,83 +1,35 @@
-"""gRPC ForwardingService — kernel MPLS forwarding via iproute2.
+"""nodalpath-fwd satellite management agent.
 
-Runs inside the nodalpath-fwd container. Receives full forwarding table
-replacements from NodalPath and programs the Linux kernel MPLS dataplane
-using `ip -f mpls route` commands.
+Receives ForwardingTableUpdate gRPC messages from the NodalPath ground PCE and
+programs the Linux kernel FIB directly via pyroute2, operating in policy routing
+table 100 (isolated from FRR's main table).
 
-MPLS Forwarding Model (hop-by-hop)
-===================================
+MPLS forwarding model:
 
-NodalPath uses a **hop-by-hop** MPLS forwarding model, not a traditional
-end-to-end LSP model. In a traditional LSP, the ingress LER pushes a full
-label stack and each transit LSR SWAPs the top label. In our model:
+- SR-MPLS with label stacks per RFC 8402
+- Adjacency SIDs (transit hops): AF_MPLS route, POP, forward out named interface
+- Node SIDs (egress): AF_MPLS route, POP, deliver locally via loopback
+- LER ingress (source nodes): IP route with MPLS encap, full label stack
 
-  1. The ingress LER pushes a SINGLE label: the SID of the **next hop**.
-  2. The next-hop node POPs that label (its own SID).
-  3. The inner IP packet is delivered to the local IP FIB for re-routing.
-  4. The IP FIB has LER entries that push the SID of the *next* next hop.
-  5. Repeat until the packet reaches the egress node.
+Neighbor resolution:
 
-This design exists because the Linux kernel MPLS table only supports
-**one rule per input label**. If we installed both a POP (for packets
-destined to this node) and SWAP entries (for transit traffic with this
-node's SID), only one could exist. The hop-by-hop model sidesteps this
-entirely: each node only needs a single POP for its own SID.
+MPLS routes use ``via inet6 fe80::<peer_link_local>`` for correct L2 frame
+construction. The peer link-local is derived from the peer's MAC address via
+EUI-64 transform and provided in the ForwardingTableUpdate proto.
 
-POP routing: `via inet 127.0.0.1 dev lo`
------------------------------------------
-When a node receives a packet with its own SID as the MPLS label, the
-kernel pops the label and must deliver the inner IP packet somewhere.
-We route it `via inet 127.0.0.1 dev lo`, which hands the decapsulated
-IP packet back to the kernel's IPv4 routing table. The IP FIB then
-matches the destination against installed LER ingress rules, which push
-the next-hop SID and forward out the correct interface. This is the
-mechanism that makes hop-by-hop re-encapsulation work.
+Neighbor table management is the kernel's responsibility via NDP. The Topology
+Observer triggers NDP solicitation and waits for REACHABLE state before emitting
+LinkUp, ensuring the neighbor is resolved when routes are installed. This sidecar
+never touches the neighbor table.
 
-SWAP routing: `via inet <peer_ip> dev <iface>`
------------------------------------------------
-SWAP entries (used only for special cases, not the normal forwarding
-path) require `via inet <peer_ip>` because the Linux kernel needs an
-IP nexthop to perform L2 (ARP/neighbor) resolution on the outgoing
-interface. Unnumbered veth pairs have no inherent L2 address mapping,
-so without an IP nexthop the kernel cannot fill in the Ethernet
-destination. The /31 link-local addresses (169.254.x.x) assigned by
-the orchestrator's link_manager provide this resolution target.
+If a route install fails because the neighbor is not yet resolved (race condition),
+the retry mechanism catches it. By retry time NDP has completed.
 
-Retry thread
-------------
-There is a race between NodalPath pushing forwarding tables and the
-orchestrator bringing up veth interfaces. NodalPath may compute and
-push a forwarding table that references interfaces (e.g., isl0, gnd0)
-that do not exist yet because the orchestrator has not finished creating
-the veth pair and moving it into the container namespace. Entries that
-fail because the interface is DOWN are queued in `_pending_lsr` /
-`_pending_ler` and retried every 2 seconds by the `_retry_pending`
-background thread. When the interface finally comes UP, the retry
-thread installs the entry and clears the peer IP cache (since the
-interface now has its /31 address assigned).
+FRR role in NodalPath sessions:
 
-_peer_ip_cache
---------------
-Each ISL veth has a deterministic /31 link-local address assigned by
-the orchestrator (see link_manager.create_veth_pair). To build the
-`via inet <peer_ip>` nexthop for MPLS routes, we read the local
-address and flip the last bit to derive the peer. This is cached in
-`_peer_ip_cache` to avoid repeated subprocess calls to `ip addr show`.
-The cache is cleared whenever the retry thread installs entries after
-an interface state change, because new interfaces may have addresses
-that were not present when the cache was populated.
-
-Known limitation
-----------------
-Linux kernel MPLS supports only one rule per input label. You cannot
-install both POP and SWAP for the same label. This is why the entire
-forwarding model is hop-by-hop: each node has exactly one LSR entry
-(POP for its own SID) and multiple LER entries (PUSH for each
-reachable destination prefix). See labels.py for the table generation
-logic.
-
-Atomicity: installs new/changed entries before removing stale ones.
-State is only updated on full success.
+FRR runs zebra and staticd for observability only. ``show mpls table`` and
+``show ip route table 100`` reflect the kernel FIB state installed by this sidecar.
+FRR does not install or modify forwarding state in NodalPath sessions.
 """
 
 from __future__ import annotations
@@ -85,11 +37,14 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import socket
 import threading
 import time
 from concurrent import futures
 
 import grpc
+from pyroute2 import IPRoute
+
 from proto import forwarding_pb2 as pb2
 from proto.forwarding_pb2_grpc import (
     ForwardingServiceServicer,
@@ -101,6 +56,13 @@ log = logging.getLogger("fwd-server")
 
 GRPC_PORT = int(os.environ.get("GRPC_PORT", "50051"))
 NODE_ID = os.environ.get("NODE_ID", "unknown")
+
+# Linux AF_MPLS constant (not in Python's socket module)
+AF_MPLS = 28
+
+# Policy routing table for NodalPath forwarding state, isolated from FRR/main table.
+# Clean teardown = flush this table. No interference with IS-IS/OSPF in other modes.
+POLICY_TABLE = int(os.environ.get("NODALPATH_TABLE", "100"))
 
 # In-memory state protected by lock
 _lock = threading.Lock()
@@ -116,27 +78,6 @@ _state = {
 _pending_lsr: dict[int, object] = {}       # in_label -> LabelEntry
 _pending_ler: dict[str, object] = {}       # dst_prefix -> IngressEntry
 
-
-def _iface_up(iface: str) -> bool:
-    """Check if a network interface exists and is UP."""
-    try:
-        with open(f"/sys/class/net/{iface}/operstate") as f:
-            return f.read().strip() in ("up", "unknown")
-    except FileNotFoundError:
-        return False
-
-
-
-
-from pyroute2 import IPRoute
-
-# Linux AF_MPLS constant (not in Python's socket module)
-AF_MPLS = 28
-
-# Policy routing table for NodalPath forwarding state, isolated from FRR/main table.
-# Clean teardown = flush this table. No interference with IS-IS/OSPF in other modes.
-POLICY_TABLE = int(os.environ.get("NODALPATH_TABLE", "100"))
-
 # Shared IPRoute handle (created once, reused).
 _ipr: IPRoute | None = None
 
@@ -149,26 +90,27 @@ def _get_ipr() -> IPRoute:
 
 
 def _ensure_policy_rule() -> None:
-    """Install ip rule so all traffic uses the NodalPath policy table.
-
-    ``ip rule add from all lookup <table> pref 100``
-
-    This makes the kernel look up the NodalPath table (with MPLS encap
-    routes) before the main table. Required on EVERY node, not just the
-    source — return traffic also needs the policy table for routing.
-    """
+    """Install ip rule so all traffic uses the NodalPath policy table."""
     ipr = _get_ipr()
-    # Check if rule already exists
     rules = ipr.get_rules(family=2)  # AF_INET
     for rule in rules:
         for attr_name, attr_val in rule["attrs"]:
             if attr_name == "FRA_TABLE" and attr_val == POLICY_TABLE:
-                return  # Already installed
+                return
     try:
         ipr.rule("add", table=POLICY_TABLE, priority=100)
         log.info("Installed ip rule: from all lookup %d pref 100", POLICY_TABLE)
     except Exception as exc:
         log.warning("Failed to install ip rule: %s", exc)
+
+
+def _iface_up(iface: str) -> bool:
+    """Check if a network interface exists and is UP."""
+    try:
+        with open(f"/sys/class/net/{iface}/operstate") as f:
+            return f.read().strip() in ("up", "unknown")
+    except FileNotFoundError:
+        return False
 
 
 def _iface_index(iface: str) -> int:
@@ -180,52 +122,67 @@ def _iface_index(iface: str) -> int:
     return links[0]
 
 
+# ---------------------------------------------------------------------------
+# MPLS route installation via pyroute2 netlink
+# ---------------------------------------------------------------------------
+
 def _install_lsr(entry: pb2.LabelEntry) -> None:
-    """Install an LSR entry via netlink (pyroute2).
+    """Install an LSR entry via netlink.
 
     POP: pop the top MPLS label and forward out the specified interface.
-    Uses oif (output interface index) directly — no IP nexthop resolution
-    needed. This is the Spacetime pattern: the satellite management agent
-    programs the kernel FIB directly, specifying exact interface indices.
+    Uses ``via inet6 <peer_link_local>`` for L2 resolution. The neighbor
+    is already REACHABLE via NDP (the TO waited for it before LinkUp).
+
+    Node SID POP (out_interface="lo"): deliver locally via loopback.
     """
     ipr = _get_ipr()
     oif = _iface_index(entry.out_interface)
 
+    if entry.out_interface == "lo":
+        via = {"family": socket.AF_INET, "addr": "127.0.0.1"}
+    elif entry.nexthop_ll:
+        via = {"family": socket.AF_INET6, "addr": entry.nexthop_ll}
+    else:
+        log.warning("No nexthop_ll for LSR in_label=%d dev %s, using bare oif",
+                     entry.in_label, entry.out_interface)
+        via = None
+
     if entry.action == pb2.Action.POP:
-        # MPLS POP: pop top label, forward remaining packet out oif.
-        # No newdst = pure POP (remove label header, deliver inner packet).
-        # If remaining labels exist in the stack, the kernel processes the
-        # next label. If bottom-of-stack, the inner IP packet is forwarded.
-        ipr.route("replace",
-                   family=AF_MPLS,
-                   dst={"label": entry.in_label, "bos": 1},
-                   oif=oif)
+        kwargs = {
+            "family": AF_MPLS,
+            "dst": {"label": entry.in_label, "bos": 1},
+            "oif": oif,
+        }
+        if via:
+            kwargs["via"] = via
+        ipr.route("replace", **kwargs)
 
     elif entry.action == pb2.Action.SWAP:
-        ipr.route("replace",
-                   family=AF_MPLS,
-                   dst={"label": entry.in_label, "bos": 1},
-                   oif=oif,
-                   newdst={"label": entry.out_label, "bos": 1})
+        kwargs = {
+            "family": AF_MPLS,
+            "dst": {"label": entry.in_label, "bos": 1},
+            "oif": oif,
+            "newdst": {"label": entry.out_label, "bos": 1},
+        }
+        if via:
+            kwargs["via"] = via
+        ipr.route("replace", **kwargs)
 
 
 def _install_ler(entry: pb2.IngressEntry) -> None:
-    """Install an LER ingress entry via netlink (pyroute2).
+    """Install an LER ingress entry via netlink.
 
     Pushes the full SR-TE label stack onto IP packets matching the
     destination prefix and sends out the specified interface.
-    Uses MPLS encap with explicit oif — no nexthop resolution.
     """
     ipr = _get_ipr()
     oif = _iface_index(entry.out_interface)
 
-    # Build label stack from proto field, fallback to single label
     if entry.label_stack:
         labels = list(entry.label_stack)
     else:
         labels = [entry.push_label]
 
-    # Parse prefix
     dst, prefix_len = entry.dst_prefix.split("/")
 
     ipr.route("replace",
@@ -244,7 +201,7 @@ def _remove_lsr(in_label: int) -> None:
                    family=AF_MPLS,
                    dst={"label": in_label, "bos": 1})
     except Exception:
-        pass  # entry may already be gone
+        pass
 
 
 def _remove_ler(entry) -> None:
@@ -260,6 +217,10 @@ def _remove_ler(entry) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# gRPC ForwardingService implementation
+# ---------------------------------------------------------------------------
+
 class ForwardingServiceImpl(ForwardingServiceServicer):
     """gRPC service implementation for kernel MPLS forwarding."""
 
@@ -272,7 +233,6 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
         curr_lsr = dict(_state["lsr_entries"])
         curr_ler = dict(_state["ler_entries"])
 
-        # Build next-state lookup dicts
         next_lsr = {}
         for entry in request.lsr_entries:
             next_lsr[entry.in_label] = entry
@@ -285,12 +245,12 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
         errors = []
 
         # INSTALL phase: new or changed entries (skip if interface is down,
-        # but queue for background retry when the interface comes UP).
+        # queue for background retry when the interface comes UP).
         _pending_lsr.clear()
         _pending_ler.clear()
 
         for in_label, entry in next_lsr.items():
-            if not _iface_up(entry.out_interface):
+            if entry.out_interface != "lo" and not _iface_up(entry.out_interface):
                 skipped += 1
                 _pending_lsr[in_label] = entry
                 continue
@@ -300,7 +260,9 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
                     _install_lsr(entry)
                     installed += 1
                 except subprocess.CalledProcessError as exc:
-                    errors.append(f"LSR {in_label}: {exc.stderr.strip()}")
+                    errors.append(f"LSR {in_label}: {exc.stderr.strip() if hasattr(exc, 'stderr') else exc}")
+                except Exception as exc:
+                    errors.append(f"LSR {in_label}: {exc}")
 
         for prefix, entry in next_ler.items():
             if not _iface_up(entry.out_interface):
@@ -313,24 +275,26 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
                     _install_ler(entry)
                     installed += 1
                 except subprocess.CalledProcessError as exc:
-                    errors.append(f"LER {prefix}: {exc.stderr.strip()}")
+                    errors.append(f"LER {prefix}: {exc.stderr.strip() if hasattr(exc, 'stderr') else exc}")
+                except Exception as exc:
+                    errors.append(f"LER {prefix}: {exc}")
 
         # REMOVE phase: stale entries
         for in_label in curr_lsr:
             if in_label not in next_lsr:
                 try:
                     _remove_lsr(in_label)
-                except subprocess.CalledProcessError:
-                    pass  # entry may already be gone
+                except Exception:
+                    pass
 
         for prefix, old_entry in curr_ler.items():
             if prefix not in next_ler:
                 try:
                     _remove_ler(old_entry)
-                except subprocess.CalledProcessError:
+                except Exception:
                     pass
 
-        # Update state (record the intended table even if some entries were skipped)
+        # Update state
         _state["lsr_entries"] = next_lsr
         _state["ler_entries"] = next_ler
         _state["topology_state_id"] = request.topology_state_id
@@ -378,7 +342,6 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
 
 
 def _lsr_eq(a, b) -> bool:
-    """Compare two LabelEntry protos for equality."""
     return (
         a.in_label == b.in_label
         and a.action == b.action
@@ -388,7 +351,6 @@ def _lsr_eq(a, b) -> bool:
 
 
 def _ler_eq(a, b) -> bool:
-    """Compare two IngressEntry protos for equality."""
     return (
         a.dst_prefix == b.dst_prefix
         and a.push_label == b.push_label
@@ -396,11 +358,16 @@ def _ler_eq(a, b) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Background retry for entries skipped due to DOWN interfaces
+# ---------------------------------------------------------------------------
+
 def _retry_pending() -> None:
-    """Background thread: retry entries skipped due to DOWN interfaces.
+    """Retry entries skipped due to DOWN interfaces.
 
     Checks every 2 seconds. When an interface comes UP, installs the
-    queued entries. Cleared on each new UpdateForwardingTable call.
+    queued entries. The neighbor should be REACHABLE by this point
+    (the TO waited for NDP before emitting LinkUp).
     """
     while True:
         time.sleep(2)
@@ -410,12 +377,12 @@ def _retry_pending() -> None:
             retried = 0
             for in_label in list(_pending_lsr):
                 entry = _pending_lsr[in_label]
-                if _iface_up(entry.out_interface):
+                if entry.out_interface == "lo" or _iface_up(entry.out_interface):
                     try:
                         _install_lsr(entry)
                         retried += 1
-                    except subprocess.CalledProcessError:
-                        pass
+                    except Exception as exc:
+                        log.warning("Retry failed for LSR %d: %s", in_label, exc)
                     del _pending_lsr[in_label]
             for prefix in list(_pending_ler):
                 entry = _pending_ler[prefix]
@@ -423,19 +390,20 @@ def _retry_pending() -> None:
                     try:
                         _install_ler(entry)
                         retried += 1
-                    except subprocess.CalledProcessError:
-                        pass
+                    except Exception as exc:
+                        log.warning("Retry failed for LER %s: %s", prefix, exc)
                     del _pending_ler[prefix]
             if retried:
                 remaining = len(_pending_lsr) + len(_pending_ler)
                 log.info("Retry: installed %d entries after interface UP (%d still pending)", retried, remaining)
 
 
-def serve() -> None:
-    # Install ip rule so all traffic uses the NodalPath policy table
-    _ensure_policy_rule()
+# ---------------------------------------------------------------------------
+# Server entry point
+# ---------------------------------------------------------------------------
 
-    # Start background retry thread for skipped-down entries
+def serve() -> None:
+    _ensure_policy_rule()
     threading.Thread(target=_retry_pending, daemon=True).start()
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))

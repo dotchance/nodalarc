@@ -25,7 +25,9 @@ message LabelEntry {
   string out_interface = 4;
   uint32 backup_out_label = 5;    // 0 if no backup
   string backup_out_interface = 6; // empty if no backup
-  string nexthop_ip = 7;          // peer loopback IP for FRR mpls lsp nexthop
+  string nexthop_ip = 7;          // peer loopback IP (legacy, unused in netlink path)
+  string nexthop_ll = 8;          // peer IPv6 link-local (fe80::...) for MPLS via inet6
+  string nexthop_mac = 9;         // peer MAC for PERMANENT neighbor entry
 }
 
 enum Action {
@@ -40,8 +42,10 @@ message IngressEntry {
   string out_interface = 3;
   uint32 backup_push_label = 4;   // 0 if no backup
   string backup_out_interface = 5; // empty if no backup
-  string nexthop_ip = 6;          // peer loopback IP for FRR ip route nexthop
+  string nexthop_ip = 6;          // peer loopback IP (legacy, unused in netlink path)
   repeated uint32 label_stack = 7; // full SR-TE label stack [adj1, adj2, ..., node_egress]
+  string nexthop_ll = 8;          // peer IPv6 link-local for LER encap via inet6
+  string nexthop_mac = 9;         // peer MAC for PERMANENT neighbor entry
 }
 
 message ForwardingTableUpdate {

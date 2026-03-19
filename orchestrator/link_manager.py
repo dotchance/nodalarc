@@ -224,6 +224,108 @@ def disable_ipv6_autoconfig(pid: int, ifname: str) -> None:
             log.warning(f"Failed to set {param}=0 for {ifname} in ns({pid}): {result.stderr.strip()}")
 
 
+def mac_to_link_local(mac_str: str) -> str:
+    """Derive canonical IPv6 link-local from MAC via EUI-64.
+
+    '02:ee:d2:0a:a9:36' → 'fe80::ee:d2ff:fe0a:a936'
+
+    Used to compute the peer's link-local address for NDP solicitation
+    and for ``via inet6`` in MPLS routes.
+    """
+    import ipaddress
+    parts = [int(x, 16) for x in mac_str.split(":")]
+    parts[0] ^= 0x02  # flip U/L bit
+    eui64 = parts[:3] + [0xFF, 0xFE] + parts[3:]
+    groups = [
+        f"{eui64[0]:02x}{eui64[1]:02x}",
+        f"{eui64[2]:02x}{eui64[3]:02x}",
+        f"{eui64[4]:02x}{eui64[5]:02x}",
+        f"{eui64[6]:02x}{eui64[7]:02x}",
+    ]
+    raw = "fe80::" + ":".join(groups)
+    return str(ipaddress.IPv6Address(raw))
+
+
+def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str,
+                          timeout_ms: int = 500) -> bool:
+    """Trigger NDP solicitation and wait for the peer to become REACHABLE.
+
+    After the TO brings an ISL or ground interface admin UP, call this
+    before emitting LinkUp. This ensures the kernel's neighbor table has
+    a resolved L2 entry for the peer's link-local, so MPLS routes with
+    ``via inet6 <peer_ll>`` can forward immediately.
+
+    Uses a UDP6 connect() to trigger the kernel to send a Neighbor
+    Solicitation, then polls the neighbor table until REACHABLE or STALE.
+
+    Returns True if resolved within timeout, False otherwise.
+    On timeout, logs a warning — the sidecar's retry mechanism handles it.
+    """
+    import socket as _socket
+    import time as _time
+
+    ns_path = f"/proc/{pid}/ns/net"
+    ns = NetNS(ns_path)
+    try:
+        iface_links = ns.link_lookup(ifname=ifname)
+        if not iface_links:
+            log.warning("NDP: interface %s not found in ns(%d)", ifname, pid)
+            return False
+        iface_idx = iface_links[0]
+    finally:
+        ns.close()
+
+    # Trigger NS by pinging the peer's link-local with %scope format.
+    # The %ifname suffix is required for link-local addresses to bind to
+    # the correct interface. Without it, the kernel may send the NS from
+    # a different interface and resolve the wrong neighbor.
+    subprocess.run(
+        ["nsenter", "--target", str(pid), "--net", "--",
+         "ping", "-6", "-c", "1", "-W", "1", f"{peer_ll}%{ifname}"],
+        capture_output=True, text=True, timeout=5,
+    )
+
+    # Poll neighbor table
+    start = _time.monotonic()
+    deadline = start + (timeout_ms / 1000)
+    NUD_REACHABLE = 0x02
+    NUD_STALE = 0x04
+    NUD_FAILED = 0x20
+
+    while _time.monotonic() < deadline:
+        ns = NetNS(ns_path)
+        try:
+            neighbours = ns.get_neighbours(family=10, ifindex=iface_idx)  # AF_INET6=10
+            for n in neighbours:
+                attrs = dict(n["attrs"])
+                if attrs.get("NDA_DST") == peer_ll:
+                    state = n["state"]
+                    elapsed = (_time.monotonic() - start) * 1000
+                    if state & (NUD_REACHABLE | NUD_STALE):
+                        log.debug(
+                            "NDP resolved %s on %s in ns(%d) in %.1fms",
+                            peer_ll, ifname, pid, elapsed,
+                        )
+                        return True
+                    if state & NUD_FAILED:
+                        log.error(
+                            "NDP FAILED for %s on %s in ns(%d) after %.1fms",
+                            peer_ll, ifname, pid, elapsed,
+                        )
+                        return False
+        finally:
+            ns.close()
+        _time.sleep(0.010)  # 10ms poll
+
+    elapsed = (_time.monotonic() - start) * 1000
+    log.warning(
+        "NDP timeout for %s on %s in ns(%d) after %.1fms — "
+        "proceeding, sidecar retry will catch it",
+        peer_ll, ifname, pid, elapsed,
+    )
+    return False
+
+
 def deterministic_mac(node_id: str, ifname: str) -> str:
     """Derive a deterministic locally-administered unicast MAC address.
 

@@ -24,29 +24,29 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10\x66orwarding.proto\x12\x14nodalpath.forwarding\"\x07\n\x05\x45mpty\"\xc2\x01\n\nLabelEntry\x12\x10\n\x08in_label\x18\x01 \x01(\r\x12,\n\x06\x61\x63tion\x18\x02 \x01(\x0e\x32\x1c.nodalpath.forwarding.Action\x12\x11\n\tout_label\x18\x03 \x01(\r\x12\x15\n\rout_interface\x18\x04 \x01(\t\x12\x18\n\x10\x62\x61\x63kup_out_label\x18\x05 \x01(\r\x12\x1c\n\x14\x62\x61\x63kup_out_interface\x18\x06 \x01(\t\x12\x12\n\nnexthop_ip\x18\x07 \x01(\t\"\xaf\x01\n\x0cIngressEntry\x12\x12\n\ndst_prefix\x18\x01 \x01(\t\x12\x12\n\npush_label\x18\x02 \x01(\r\x12\x15\n\rout_interface\x18\x03 \x01(\t\x12\x19\n\x11\x62\x61\x63kup_push_label\x18\x04 \x01(\r\x12\x1c\n\x14\x62\x61\x63kup_out_interface\x18\x05 \x01(\t\x12\x12\n\nnexthop_ip\x18\x06 \x01(\t\x12\x13\n\x0blabel_stack\x18\x07 \x03(\r\"\xb4\x01\n\x15\x46orwardingTableUpdate\x12\x19\n\x11topology_state_id\x18\x01 \x01(\t\x12\x10\n\x08sim_time\x18\x02 \x01(\t\x12\x35\n\x0blsr_entries\x18\x03 \x03(\x0b\x32 .nodalpath.forwarding.LabelEntry\x12\x37\n\x0bler_entries\x18\x04 \x03(\x0b\x32\".nodalpath.forwarding.IngressEntry\"h\n\x0cPushResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x19\n\x11\x65ntries_installed\x18\x03 \x01(\r\x12\x15\n\rapply_time_ms\x18\x04 \x01(\x02\"\xb3\x01\n\x14\x46orwardingTableState\x12\x19\n\x11topology_state_id\x18\x01 \x01(\t\x12\x10\n\x08sim_time\x18\x02 \x01(\t\x12\x35\n\x0blsr_entries\x18\x03 \x03(\x0b\x32 .nodalpath.forwarding.LabelEntry\x12\x37\n\x0bler_entries\x18\x04 \x03(\x0b\x32\".nodalpath.forwarding.IngressEntry\"\x89\x01\n\nNodeStatus\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12!\n\x19\x63urrent_topology_state_id\x18\x02 \x01(\t\x12\x15\n\rtotal_entries\x18\x03 \x01(\r\x12\x16\n\x0elast_update_ms\x18\x04 \x01(\x02\x12\x18\n\x10last_update_time\x18\x05 \x01(\t*%\n\x06\x41\x63tion\x12\x08\n\x04SWAP\x10\x00\x12\x07\n\x03POP\x10\x01\x12\x08\n\x04PUSH\x10\x02\x32\xa8\x02\n\x11\x46orwardingService\x12h\n\x15UpdateForwardingTable\x12+.nodalpath.forwarding.ForwardingTableUpdate\x1a\".nodalpath.forwarding.PushResponse\x12]\n\x12GetForwardingTable\x12\x1b.nodalpath.forwarding.Empty\x1a*.nodalpath.forwarding.ForwardingTableState\x12J\n\tGetStatus\x12\x1b.nodalpath.forwarding.Empty\x1a .nodalpath.forwarding.NodeStatusb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10\x66orwarding.proto\x12\x14nodalpath.forwarding\"\x07\n\x05\x45mpty\"\xeb\x01\n\nLabelEntry\x12\x10\n\x08in_label\x18\x01 \x01(\r\x12,\n\x06\x61\x63tion\x18\x02 \x01(\x0e\x32\x1c.nodalpath.forwarding.Action\x12\x11\n\tout_label\x18\x03 \x01(\r\x12\x15\n\rout_interface\x18\x04 \x01(\t\x12\x18\n\x10\x62\x61\x63kup_out_label\x18\x05 \x01(\r\x12\x1c\n\x14\x62\x61\x63kup_out_interface\x18\x06 \x01(\t\x12\x12\n\nnexthop_ip\x18\x07 \x01(\t\x12\x12\n\nnexthop_ll\x18\x08 \x01(\t\x12\x13\n\x0bnexthop_mac\x18\t \x01(\t\"\xd8\x01\n\x0cIngressEntry\x12\x12\n\ndst_prefix\x18\x01 \x01(\t\x12\x12\n\npush_label\x18\x02 \x01(\r\x12\x15\n\rout_interface\x18\x03 \x01(\t\x12\x19\n\x11\x62\x61\x63kup_push_label\x18\x04 \x01(\r\x12\x1c\n\x14\x62\x61\x63kup_out_interface\x18\x05 \x01(\t\x12\x12\n\nnexthop_ip\x18\x06 \x01(\t\x12\x13\n\x0blabel_stack\x18\x07 \x03(\r\x12\x12\n\nnexthop_ll\x18\x08 \x01(\t\x12\x13\n\x0bnexthop_mac\x18\t \x01(\t\"\xb4\x01\n\x15\x46orwardingTableUpdate\x12\x19\n\x11topology_state_id\x18\x01 \x01(\t\x12\x10\n\x08sim_time\x18\x02 \x01(\t\x12\x35\n\x0blsr_entries\x18\x03 \x03(\x0b\x32 .nodalpath.forwarding.LabelEntry\x12\x37\n\x0bler_entries\x18\x04 \x03(\x0b\x32\".nodalpath.forwarding.IngressEntry\"h\n\x0cPushResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x19\n\x11\x65ntries_installed\x18\x03 \x01(\r\x12\x15\n\rapply_time_ms\x18\x04 \x01(\x02\"\xb3\x01\n\x14\x46orwardingTableState\x12\x19\n\x11topology_state_id\x18\x01 \x01(\t\x12\x10\n\x08sim_time\x18\x02 \x01(\t\x12\x35\n\x0blsr_entries\x18\x03 \x03(\x0b\x32 .nodalpath.forwarding.LabelEntry\x12\x37\n\x0bler_entries\x18\x04 \x03(\x0b\x32\".nodalpath.forwarding.IngressEntry\"\x89\x01\n\nNodeStatus\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12!\n\x19\x63urrent_topology_state_id\x18\x02 \x01(\t\x12\x15\n\rtotal_entries\x18\x03 \x01(\r\x12\x16\n\x0elast_update_ms\x18\x04 \x01(\x02\x12\x18\n\x10last_update_time\x18\x05 \x01(\t*%\n\x06\x41\x63tion\x12\x08\n\x04SWAP\x10\x00\x12\x07\n\x03POP\x10\x01\x12\x08\n\x04PUSH\x10\x02\x32\xa8\x02\n\x11\x46orwardingService\x12h\n\x15UpdateForwardingTable\x12+.nodalpath.forwarding.ForwardingTableUpdate\x1a\".nodalpath.forwarding.PushResponse\x12]\n\x12GetForwardingTable\x12\x1b.nodalpath.forwarding.Empty\x1a*.nodalpath.forwarding.ForwardingTableState\x12J\n\tGetStatus\x12\x1b.nodalpath.forwarding.Empty\x1a .nodalpath.forwarding.NodeStatusb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'forwarding_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_ACTION']._serialized_start=1037
-  _globals['_ACTION']._serialized_end=1074
+  _globals['_ACTION']._serialized_start=1119
+  _globals['_ACTION']._serialized_end=1156
   _globals['_EMPTY']._serialized_start=42
   _globals['_EMPTY']._serialized_end=49
   _globals['_LABELENTRY']._serialized_start=52
-  _globals['_LABELENTRY']._serialized_end=246
-  _globals['_INGRESSENTRY']._serialized_start=249
-  _globals['_INGRESSENTRY']._serialized_end=424
-  _globals['_FORWARDINGTABLEUPDATE']._serialized_start=427
-  _globals['_FORWARDINGTABLEUPDATE']._serialized_end=607
-  _globals['_PUSHRESPONSE']._serialized_start=609
-  _globals['_PUSHRESPONSE']._serialized_end=713
-  _globals['_FORWARDINGTABLESTATE']._serialized_start=716
-  _globals['_FORWARDINGTABLESTATE']._serialized_end=895
-  _globals['_NODESTATUS']._serialized_start=898
-  _globals['_NODESTATUS']._serialized_end=1035
-  _globals['_FORWARDINGSERVICE']._serialized_start=1077
-  _globals['_FORWARDINGSERVICE']._serialized_end=1373
+  _globals['_LABELENTRY']._serialized_end=287
+  _globals['_INGRESSENTRY']._serialized_start=290
+  _globals['_INGRESSENTRY']._serialized_end=506
+  _globals['_FORWARDINGTABLEUPDATE']._serialized_start=509
+  _globals['_FORWARDINGTABLEUPDATE']._serialized_end=689
+  _globals['_PUSHRESPONSE']._serialized_start=691
+  _globals['_PUSHRESPONSE']._serialized_end=795
+  _globals['_FORWARDINGTABLESTATE']._serialized_start=798
+  _globals['_FORWARDINGTABLESTATE']._serialized_end=977
+  _globals['_NODESTATUS']._serialized_start=980
+  _globals['_NODESTATUS']._serialized_end=1117
+  _globals['_FORWARDINGSERVICE']._serialized_start=1159
+  _globals['_FORWARDINGSERVICE']._serialized_end=1455
 # @@protoc_insertion_point(module_scope)

@@ -8,6 +8,8 @@ images:
   ome: docker.io/nodalarc/ome:latest
   visualization: docker.io/nodalarc/visualization:1
   nodalpath: docker.io/nodalarc/nodalpath:latest
+  scheduler: docker.io/nodalarc/scheduler:latest
+  nodeAgent: docker.io/nodalarc/node-agent:latest
 
 imagePullPolicy: IfNotPresent  # Use Never for purely local registry
 
@@ -38,6 +40,23 @@ nodalpath:
   enabled: false
   mode: console
   transport: grpc
+  memoryLimit: 256Mi
+  cpuLimit: 500m
+
+# M4: Scheduler replaces the host-side orchestrator.
+# When enabled, the Scheduler consumes OME events and dispatches
+# topology changes to Node Agents via gRPC.
+scheduler:
+  enabled: false
+  memoryLimit: 512Mi
+  cpuLimit: 500m
+  groundStationsConfigMap: false  # Set true if ground-stations ConfigMap exists
+
+# M4: Node Agent DaemonSet runs on each K3s node.
+# Executes privileged netlink operations on behalf of the Scheduler.
+nodeAgent:
+  enabled: false
+  grpcPort: 50100
   memoryLimit: 256Mi
   cpuLimit: 500m
 

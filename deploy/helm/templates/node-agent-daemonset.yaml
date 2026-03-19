@@ -1,0 +1,63 @@
+{{- if .Values.nodeAgent.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nodalarc-node-agent
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-node-agent
+spec:
+  selector:
+    matchLabels:
+      app: nodalarc-node-agent
+  template:
+    metadata:
+      labels:
+        app: nodalarc-node-agent
+        nodalarc.io/role: node-agent
+    spec:
+      hostNetwork: true
+      hostPID: true
+      serviceAccountName: nodalarc-node-agent
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: node-agent
+          image: {{ .Values.images.nodeAgent | default "docker.io/nodalarc/node-agent:latest" }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          securityContext:
+            privileged: true
+          args:
+            - "--port"
+            - "{{ .Values.nodeAgent.grpcPort | default 50100 }}"
+            - "--platform-config"
+            - "/etc/nodalarc/platform.yaml"
+          ports:
+            - containerPort: {{ .Values.nodeAgent.grpcPort | default 50100 }}
+              hostPort: {{ .Values.nodeAgent.grpcPort | default 50100 }}
+              name: grpc
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            limits:
+              memory: {{ .Values.nodeAgent.memoryLimit | default "256Mi" }}
+              cpu: {{ .Values.nodeAgent.cpuLimit | default "500m" }}
+          volumeMounts:
+            - name: platform-config
+              mountPath: /etc/nodalarc/platform.yaml
+              subPath: platform.yaml
+            - name: containerd-sock
+              mountPath: /run/containerd/containerd.sock
+              readOnly: true
+      volumes:
+        - name: platform-config
+          configMap:
+            name: nodalarc-platform-config
+        - name: containerd-sock
+          hostPath:
+            path: /run/containerd/containerd.sock
+            type: Socket
+{{- end }}

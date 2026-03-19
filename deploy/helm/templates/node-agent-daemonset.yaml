@@ -1,4 +1,3 @@
-{{- if .Values.nodeAgent.enabled }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -60,4 +59,3 @@ spec:
           hostPath:
             path: /run/containerd/containerd.sock
             type: Socket
-{{- end }}

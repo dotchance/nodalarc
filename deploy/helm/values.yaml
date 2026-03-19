@@ -44,10 +44,8 @@ nodalpath:
   cpuLimit: 500m
 
 # M4: Scheduler replaces the host-side orchestrator.
-# When enabled, the Scheduler consumes OME events and dispatches
-# topology changes to Node Agents via gRPC.
+# Consumes OME events and dispatches topology changes to Node Agents via gRPC.
 scheduler:
-  enabled: false
   memoryLimit: 512Mi
   cpuLimit: 500m
   groundStationsConfigMap: false  # Set true if ground-stations ConfigMap exists
@@ -55,15 +53,9 @@ scheduler:
 # M4: Node Agent DaemonSet runs on each K3s node.
 # Executes privileged netlink operations on behalf of the Scheduler.
 nodeAgent:
-  enabled: false
   grpcPort: 50100
   memoryLimit: 256Mi
   cpuLimit: 500m
-
-# Host ZMQ service — points containerized components to host-running ZMQ publishers
-hostZmq:
-  enabled: false
-  hostIP: ""  # Set to the host's IP reachable from pods (e.g. node internal IP)
 
 # Optional sidecar container (e.g. nodalpath-fwd gRPC daemon)
 # Set by na-deploy when the routing stack specifies a non-FRR image.

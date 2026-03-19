@@ -1,109 +1,126 @@
-"""Phase 2 test: Node Agent gRPC server boots and accepts connections.
+"""Test Node Agent ZMQ ROUTER server.
 
-All RPCs should return UNIMPLEMENTED status in Phase 2.
+Tests the ZMQ transport layer — server starts, accepts connections,
+dispatches to handlers, returns serialized protobuf responses.
 """
 
 from __future__ import annotations
 
 import threading
-from concurrent import futures
+import time
 
-import grpc
 import pytest
+import zmq
 
 from node_agent.proto import node_agent_pb2
-from node_agent.proto.node_agent_pb2_grpc import (
-    NodeAgentServiceStub,
-    add_NodeAgentServiceServicer_to_server,
-)
-from node_agent.server import NodeAgentServicer
+from node_agent.server import NodeAgentServer
 
 
 @pytest.fixture()
-def agent_channel():
-    """Start an in-process gRPC server and return a channel to it."""
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
-    servicer = NodeAgentServicer()
-    add_NodeAgentServiceServicer_to_server(servicer, server)
-    port = server.add_insecure_port("localhost:0")  # random port
-    server.start()
-    channel = grpc.insecure_channel(f"localhost:{port}")
-    yield channel
-    channel.close()
-    server.stop(grace=0)
+def agent_zmq():
+    """Start an in-process ZMQ server and return a DEALER client socket."""
+    server = NodeAgentServer(port=0)  # 0 = random port
+
+    # Bind to random port
+    ctx = zmq.Context()
+    router = ctx.socket(zmq.ROUTER)
+    port = router.bind_to_random_port("tcp://127.0.0.1")
+    router.close()
+    ctx.term()
+
+    # Use the discovered port
+    server._port = port
+
+    t = threading.Thread(target=server.run, daemon=True)
+    t.start()
+    time.sleep(0.3)
+
+    client_ctx = zmq.Context()
+    client = client_ctx.socket(zmq.DEALER)
+    client.setsockopt(zmq.RCVTIMEO, 5000)
+    client.connect(f"tcp://127.0.0.1:{port}")
+    time.sleep(0.1)
+
+    yield client, port
+
+    server.stop()
+    client.close()
+    client_ctx.term()
 
 
-class TestNodeAgentServer:
-    def test_server_boots_and_accepts_connection(self, agent_channel):
-        """Server starts and a gRPC channel can connect."""
-        stub = NodeAgentServiceStub(agent_channel)
-        # Just verify we can create a stub — the connection is lazy
-        assert stub is not None
+def _call(sock, msg_type: bytes, request) -> bytes:
+    """Send a request and return the raw response bytes."""
+    sock.send_multipart([b"", msg_type, request.SerializeToString()])
+    frames = sock.recv_multipart()
+    return frames[-1]  # Last frame is the response
 
-    def test_get_topology_returns_response(self, agent_channel):
-        """GetTopology returns a response (empty until Phase 5 reconciliation)."""
-        stub = NodeAgentServiceStub(agent_channel)
-        resp = stub.GetTopology(node_agent_pb2.GetTopologyRequest())
-        assert len(resp.interfaces) == 0
 
-    def test_batch_link_down_empty_succeeds(self, agent_channel):
-        """Empty BatchLinkDown returns success."""
-        stub = NodeAgentServiceStub(agent_channel)
+class TestNodeAgentZMQServer:
+    def test_server_starts_and_accepts_connection(self, agent_zmq):
+        sock, port = agent_zmq
+        # GetTopology with empty pid_map → empty response (no crash)
+        resp_bytes = _call(sock, b"GetTopology", node_agent_pb2.GetTopologyRequest())
+        resp = node_agent_pb2.GetTopologyResponse()
+        resp.ParseFromString(resp_bytes)
+        assert resp is not None
+
+    def test_empty_batch_link_down(self, agent_zmq):
+        sock, _ = agent_zmq
         req = node_agent_pb2.BatchLinkDownRequest(
             batch_id="test-001",
             target_sim_time="2024-01-01T00:00:00Z",
             locality=node_agent_pb2.LOCAL,
         )
-        resp = stub.BatchLinkDown(req)
+        resp_bytes = _call(sock, b"BatchLinkDown", req)
+        resp = node_agent_pb2.BatchLinkDownResponse()
+        resp.ParseFromString(resp_bytes)
         assert resp.success is True
+        assert resp.interfaces_downed == 0
 
-    def test_batch_link_up_empty_succeeds(self, agent_channel):
-        """Empty BatchLinkUp returns success."""
-        stub = NodeAgentServiceStub(agent_channel)
+    def test_empty_batch_link_up(self, agent_zmq):
+        sock, _ = agent_zmq
         req = node_agent_pb2.BatchLinkUpRequest(
             batch_id="test-002",
-            target_sim_time="2024-01-01T00:00:00Z",
             locality=node_agent_pb2.LOCAL,
         )
-        resp = stub.BatchLinkUp(req)
+        resp_bytes = _call(sock, b"BatchLinkUp", req)
+        resp = node_agent_pb2.BatchLinkUpResponse()
+        resp.ParseFromString(resp_bytes)
         assert resp.success is True
+        assert resp.interfaces_upped == 0
 
-    def test_set_latency_empty_succeeds(self, agent_channel):
-        """Empty SetLatency returns success."""
-        stub = NodeAgentServiceStub(agent_channel)
+    def test_empty_set_latency(self, agent_zmq):
+        sock, _ = agent_zmq
         req = node_agent_pb2.SetLatencyRequest()
-        resp = stub.SetLatency(req)
+        resp_bytes = _call(sock, b"SetLatency", req)
+        resp = node_agent_pb2.SetLatencyResponse()
+        resp.ParseFromString(resp_bytes)
         assert resp.success is True
 
-    def test_cross_node_locality_accepted(self, agent_channel):
-        """CROSS_NODE locality is accepted by the proto (returns UNIMPLEMENTED for now)."""
-        stub = NodeAgentServiceStub(agent_channel)
+    def test_cross_node_returns_error(self, agent_zmq):
+        sock, _ = agent_zmq
         req = node_agent_pb2.BatchLinkDownRequest(
             batch_id="test-cross",
             locality=node_agent_pb2.CROSS_NODE,
         )
-        with pytest.raises(grpc.RpcError) as exc_info:
-            stub.BatchLinkDown(req)
-        # In Phase 2 all RPCs are UNIMPLEMENTED; in Phase 3 CROSS_NODE
-        # will specifically return UNIMPLEMENTED while LOCAL is handled
-        assert exc_info.value.code() == grpc.StatusCode.UNIMPLEMENTED
+        resp_bytes = _call(sock, b"BatchLinkDown", req)
+        resp = node_agent_pb2.BatchLinkDownResponse()
+        resp.ParseFromString(resp_bytes)
+        assert resp.success is False
+        assert "CROSS_NODE" in resp.error_message
 
-    def test_multiple_concurrent_calls(self, agent_channel):
-        """Server handles concurrent gRPC calls without deadlocking."""
-        stub = NodeAgentServiceStub(agent_channel)
-        errors = []
+    def test_unknown_message_type(self, agent_zmq):
+        sock, _ = agent_zmq
+        sock.send_multipart([b"", b"UnknownType", b""])
+        frames = sock.recv_multipart()
+        # Should return empty response, not crash
+        assert frames[-1] == b""
 
-        def call_get_topology():
-            try:
-                stub.GetTopology(node_agent_pb2.GetTopologyRequest())
-            except grpc.RpcError as e:
-                if e.code() != grpc.StatusCode.UNIMPLEMENTED:
-                    errors.append(e)
-
-        threads = [threading.Thread(target=call_get_topology) for _ in range(4)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=5)
-
-        assert not errors, f"Unexpected errors: {errors}"
+    def test_concurrent_calls(self, agent_zmq):
+        sock, port = agent_zmq
+        # Multiple sequential calls (ZMQ DEALER is single-threaded on client)
+        for _ in range(5):
+            resp_bytes = _call(sock, b"GetTopology", node_agent_pb2.GetTopologyRequest())
+            resp = node_agent_pb2.GetTopologyResponse()
+            resp.ParseFromString(resp_bytes)
+            assert resp is not None

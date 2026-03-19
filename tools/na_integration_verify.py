@@ -12,7 +12,11 @@ import time
 
 
 async def read_ws_snapshots(
-    host: str, port: int, token: str, count: int, max_seconds: float,
+    host: str,
+    port: int,
+    token: str,
+    count: int,
+    max_seconds: float,
     min_interval: float = 0.0,
 ) -> dict:
     """Connect to VS-API WebSocket and read N snapshots.
@@ -87,9 +91,7 @@ def verify_snapshots(
 
     # Satellite count
     for i, s in enumerate(snapshots):
-        sat_nodes = [
-            n for n in s.get("nodes", []) if n.get("node_type") == "satellite"
-        ]
+        sat_nodes = [n for n in s.get("nodes", []) if n.get("node_type") == "satellite"]
         if len(sat_nodes) != expected_sat_count:
             errors.append(
                 f"Snapshot {i}: satellite count={len(sat_nodes)} expected={expected_sat_count}"
@@ -143,8 +145,13 @@ def verify_snapshots(
 
 
 async def read_ws_with_origin_header(
-    host: str, port: int, token: str, count: int, max_seconds: float,
-    origin: str, min_interval: float = 0.0,
+    host: str,
+    port: int,
+    token: str,
+    count: int,
+    max_seconds: float,
+    origin: str,
+    min_interval: float = 0.0,
 ) -> dict:
     """Like read_ws_snapshots but passes an Origin header, simulating a browser."""
     import websockets
@@ -157,9 +164,7 @@ async def read_ws_with_origin_header(
     start = time.monotonic()
     try:
         async with asyncio.timeout(max_seconds):
-            async with websockets.connect(
-                url, additional_headers={"Origin": origin}
-            ) as ws:
+            async with websockets.connect(url, additional_headers={"Origin": origin}) as ws:
                 last_keep = 0.0
                 while len(snapshots) < count:
                     msg = await asyncio.wait_for(ws.recv(), timeout=5.0)
@@ -201,7 +206,9 @@ def cmd_read_ws_with_origin():
     max_seconds = float(sys.argv[6])
     origin = sys.argv[7]
     min_interval = float(sys.argv[8]) if len(sys.argv) > 8 else 0.0
-    result = asyncio.run(read_ws_with_origin_header(host, port, token, count, max_seconds, origin, min_interval))
+    result = asyncio.run(
+        read_ws_with_origin_header(host, port, token, count, max_seconds, origin, min_interval)
+    )
     print(json.dumps(result))
     sys.exit(0 if result.get("ok") else 1)
 
@@ -216,9 +223,7 @@ def cmd_verify():
         data = json.load(f)
 
     if "error" in data and not data.get("ok"):
-        print(
-            f"FAIL: WebSocket error: {data['error']} (got {data.get('count', 0)} snapshots)"
-        )
+        print(f"FAIL: WebSocket error: {data['error']} (got {data.get('count', 0)} snapshots)")
         sys.exit(1)
 
     snaps = data["snapshots"]
@@ -231,11 +236,7 @@ def cmd_verify():
             print(f"  - {e}")
         sim_times = [s.get("sim_time", "") for s in snaps]
         wall_times = [s.get("wall_time", "") for s in snaps]
-        sat_nodes = [
-            n
-            for n in snaps[0].get("nodes", [])
-            if n.get("node_type") == "satellite"
-        ]
+        sat_nodes = [n for n in snaps[0].get("nodes", []) if n.get("node_type") == "satellite"]
         print(f"sim_times: {sim_times}")
         print(f"wall_times: {wall_times}")
         print(f"elapsed: {elapsed:.1f}s")
@@ -243,11 +244,7 @@ def cmd_verify():
         print(f"expected_sat_count: {expected_sats}")
         sys.exit(1)
     else:
-        sat_nodes = [
-            n
-            for n in snaps[0].get("nodes", [])
-            if n.get("node_type") == "satellite"
-        ]
+        sat_nodes = [n for n in snaps[0].get("nodes", []) if n.get("node_type") == "satellite"]
         print(
             f"OK: {len(snaps)} snapshots verified ({elapsed:.1f}s), sim_time advancing, positions changing, {len(sat_nodes)} satellites"
         )

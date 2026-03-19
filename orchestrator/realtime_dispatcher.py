@@ -13,27 +13,27 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import zmq
-
 from nodalarc.models.events import (
     TimelinePositionSnapshot,
     VisibilityEvent,
 )
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.zmq_channels import (
-    ome_events_bind,
-    playback_control_bind,
-    to_events_bind,
     TOPIC_LATENCY_UPDATE,
     TOPIC_LINK_DOWN,
     TOPIC_LINK_UP,
     TOPIC_POSITION_EVENT,
     encode_message,
+    ome_events_bind,
+    playback_control_bind,
+    to_events_bind,
 )
+
 from orchestrator.latency_model import PositionTable
 from orchestrator.timeline_reader import TimelineReader
 
@@ -44,8 +44,12 @@ class ActiveLinkInfo:
     """Mutable internal state for an active link."""
 
     __slots__ = (
-        "interface_a", "interface_b", "latency_ms",
-        "bandwidth_mbps", "pid_a", "pid_b",
+        "interface_a",
+        "interface_b",
+        "latency_ms",
+        "bandwidth_mbps",
+        "pid_a",
+        "pid_b",
     )
 
     def __init__(
@@ -162,7 +166,9 @@ class RealtimeDispatcher:
             ctx.term()
 
     def _handle_playback_commands(
-        self, poller: zmq.Poller, playback_sock: zmq.Socket,
+        self,
+        poller: zmq.Poller,
+        playback_sock: zmq.Socket,
     ) -> None:
         """Poll for and handle playback control commands."""
         socks = dict(poller.poll(timeout=0))
@@ -187,9 +193,14 @@ class RealtimeDispatcher:
             self._speed_factor = factor
             playback_sock.send(json.dumps({"status": "ok", "speed": factor}).encode())
         elif action == "get_status":
-            playback_sock.send(json.dumps({
-                "paused": self._paused, "speed": self._speed_factor,
-            }).encode())
+            playback_sock.send(
+                json.dumps(
+                    {
+                        "paused": self._paused,
+                        "speed": self._speed_factor,
+                    }
+                ).encode()
+            )
         else:
             playback_sock.send(json.dumps({"error": "unknown action"}).encode())
 
@@ -216,30 +227,34 @@ class RealtimeDispatcher:
                         if len(parts) == 2:
                             plane = int(parts[0])
                             slot = int(parts[1])
-                    positions_list.append({
-                        "node_id": node_id,
-                        "node_type": node_type,
-                        "lat_deg": pos.lat_deg,
-                        "lon_deg": pos.lon_deg,
-                        "alt_km": pos.alt_km,
-                        "vel_x_km_s": pos.vel_x_km_s,
-                        "vel_y_km_s": pos.vel_y_km_s,
-                        "vel_z_km_s": pos.vel_z_km_s,
-                        "plane": plane,
-                        "slot": slot,
-                        "routing_area": None,
-                        "neighbor_count": 0,
-                        "isl_count": 0,
-                        "gnd_count": 0,
-                    })
+                    positions_list.append(
+                        {
+                            "node_id": node_id,
+                            "node_type": node_type,
+                            "lat_deg": pos.lat_deg,
+                            "lon_deg": pos.lon_deg,
+                            "alt_km": pos.alt_km,
+                            "vel_x_km_s": pos.vel_x_km_s,
+                            "vel_y_km_s": pos.vel_y_km_s,
+                            "vel_z_km_s": pos.vel_z_km_s,
+                            "plane": plane,
+                            "slot": slot,
+                            "routing_area": None,
+                            "neighbor_count": 0,
+                            "isl_count": 0,
+                            "gnd_count": 0,
+                        }
+                    )
                 position_data = {
                     "sim_time": snap.sim_time.isoformat(),
                     "positions": positions_list,
                 }
-                ome_pub_sock.send(encode_message(
-                    TOPIC_POSITION_EVENT,
-                    json.dumps(position_data).encode(),
-                ))
+                ome_pub_sock.send(
+                    encode_message(
+                        TOPIC_POSITION_EVENT,
+                        json.dumps(position_data).encode(),
+                    )
+                )
 
         # Phase 2: Visibility events — link_downs first, then link_ups.
         # Processing downs before ups prevents transient states where a ground
@@ -299,8 +314,10 @@ class RealtimeDispatcher:
             latency = 3.0
 
         self._active_links[pair] = ActiveLinkInfo(
-            interface_a=ifaces[0], interface_b=ifaces[1],
-            latency_ms=latency, bandwidth_mbps=bandwidth,
+            interface_a=ifaces[0],
+            interface_b=ifaces[1],
+            latency_ms=latency,
+            bandwidth_mbps=bandwidth,
             pid_a=self._pid_map.get(vis.node_a, 0),
             pid_b=self._pid_map.get(vis.node_b, 0),
         )
@@ -310,6 +327,7 @@ class RealtimeDispatcher:
         if info.pid_a and info.pid_b:
             try:
                 from orchestrator import link_manager
+
                 is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
                 if is_gs_link:
                     # Bridge attach — GS gnd0 is always UP
@@ -332,12 +350,16 @@ class RealtimeDispatcher:
             except Exception as exc:
                 log.warning(f"Link kernel setup failed for {pair}: {exc}")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         event = LinkUp(
-            sim_time=vis.sim_time, wall_time=now,
-            node_a=vis.node_a, node_b=vis.node_b,
-            interface_a=ifaces[0], interface_b=ifaces[1],
-            latency_ms=latency, bandwidth_mbps=bandwidth,
+            sim_time=vis.sim_time,
+            wall_time=now,
+            node_a=vis.node_a,
+            node_b=vis.node_b,
+            interface_a=ifaces[0],
+            interface_b=ifaces[1],
+            latency_ms=latency,
+            bandwidth_mbps=bandwidth,
             reason="vis_gained",
         )
         pub_sock.send(encode_message(TOPIC_LINK_UP, event.model_dump_json().encode()))
@@ -351,6 +373,7 @@ class RealtimeDispatcher:
         if info.pid_a and info.pid_b:
             try:
                 from orchestrator import link_manager
+
                 is_gs_link = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
                 if is_gs_link:
                     gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
@@ -372,11 +395,14 @@ class RealtimeDispatcher:
                 log.warning(f"Link kernel teardown failed for {pair}: {exc}")
 
         self._last_latencies.pop(pair, None)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         event = LinkDown(
-            sim_time=vis.sim_time, wall_time=now,
-            node_a=vis.node_a, node_b=vis.node_b,
-            interface_a=info.interface_a, interface_b=info.interface_b,
+            sim_time=vis.sim_time,
+            wall_time=now,
+            node_a=vis.node_a,
+            node_b=vis.node_b,
+            interface_a=info.interface_a,
+            interface_b=info.interface_b,
             reason="vis_lost",
         )
         pub_sock.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
@@ -384,7 +410,8 @@ class RealtimeDispatcher:
     def _teardown_remaining_links(self, pub_sock: zmq.Socket) -> None:
         """Detach active GS links when the dispatcher exits."""
         gs_pairs = [
-            pair for pair in self._active_links
+            pair
+            for pair in self._active_links
             if pair[0].startswith("gs-") or pair[1].startswith("gs-")
         ]
         if not gs_pairs:
@@ -392,7 +419,7 @@ class RealtimeDispatcher:
         log.info(f"Tearing down {len(gs_pairs)} remaining GS links")
         for pair in gs_pairs:
             fake_vis = VisibilityEvent(
-                sim_time=datetime.now(timezone.utc),
+                sim_time=datetime.now(UTC),
                 node_a=pair[0],
                 node_b=pair[1],
                 visible=False,
@@ -407,9 +434,10 @@ class RealtimeDispatcher:
         """Recompute and apply latency updates for all active links."""
         active_set = set(self._active_links.keys())
         updates = self._position_table.get_links_needing_update(
-            active_set, self._last_latencies,
+            active_set,
+            self._last_latencies,
         )
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for node_a, node_b, new_lat, range_km in updates:
             pair = (node_a, node_b)
             info = self._active_links.get(pair)
@@ -419,6 +447,7 @@ class RealtimeDispatcher:
             if info.pid_a and info.pid_b:
                 try:
                     from orchestrator import link_manager
+
                     is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
                     if is_gs:
                         gs_id = node_a if node_a.startswith("gs-") else node_b
@@ -439,10 +468,16 @@ class RealtimeDispatcher:
             self._last_latencies[pair] = new_lat
 
             event = LatencyUpdate(
-                sim_time=now, wall_time=now,
-                node_a=node_a, node_b=node_b,
-                latency_ms=new_lat, range_km=range_km,
+                sim_time=now,
+                wall_time=now,
+                node_a=node_a,
+                node_b=node_b,
+                latency_ms=new_lat,
+                range_km=range_km,
             )
-            pub_sock.send(encode_message(
-                TOPIC_LATENCY_UPDATE, event.model_dump_json().encode(),
-            ))
+            pub_sock.send(
+                encode_message(
+                    TOPIC_LATENCY_UPDATE,
+                    event.model_dump_json().encode(),
+                )
+            )

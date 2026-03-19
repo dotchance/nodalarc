@@ -16,12 +16,11 @@ import sqlite3
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
 import zmq
-
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.db.queries import (
     insert_adapter_event,
@@ -29,22 +28,25 @@ from nodalarc.db.queries import (
     insert_probe_result,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.metrics import AdapterEvent, ConvergenceResult, ProbeResult
+from nodalarc.models.metrics import (
+    ConvergenceResult,
+    ProbeResult,
+    TraceRequest,
+    TraceResponse,
+)
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
-from nodalarc.models.metrics import TraceRequest, TraceResponse
 from nodalarc.platform import get_platform_config
 from nodalarc.zmq_channels import (
-    mi_convergence_gate_bind,
-    mi_events_bind,
-    mi_trace_bind,
-    ome_events_connect,
-    to_events_connect,
     TOPIC_ADAPTER_EVENT,
     TOPIC_CONVERGENCE_RESULT,
     TOPIC_PROBE_RESULT,
     encode_message,
+    mi_convergence_gate_bind,
+    mi_events_bind,
+    mi_trace_bind,
 )
+
 from measurement.adapters import create_adapter
 from measurement.convergence_gate import ConvergenceGate
 
@@ -58,11 +60,19 @@ def _discover_pods(namespace: str | None = None) -> list[dict[str, str]]:
     try:
         result = subprocess.run(
             [
-                "kubectl", "get", "pods", "-n", namespace,
-                "-l", "nodalarc.io/node-id",
-                "-o", "json",
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                namespace,
+                "-l",
+                "nodalarc.io/node-id",
+                "-o",
+                "json",
             ],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode != 0:
             log.warning(f"Pod discovery failed: {result.stderr}")
@@ -71,12 +81,14 @@ def _discover_pods(namespace: str | None = None) -> list[dict[str, str]]:
         pods = []
         for item in data.get("items", []):
             labels = item.get("metadata", {}).get("labels", {})
-            pods.append({
-                "node_id": labels.get("nodalarc.io/node-id", ""),
-                "pod_name": item["metadata"]["name"],
-                "role": labels.get("nodalarc.io/role", ""),
-                "pod_ip": item.get("status", {}).get("podIP", ""),
-            })
+            pods.append(
+                {
+                    "node_id": labels.get("nodalarc.io/node-id", ""),
+                    "pod_name": item["metadata"]["name"],
+                    "role": labels.get("nodalarc.io/role", ""),
+                    "pod_ip": item.get("status", {}).get("podIP", ""),
+                }
+            )
         return pods
     except Exception as exc:
         log.warning(f"Pod discovery error: {exc}")
@@ -89,7 +101,7 @@ class MIService:
     def __init__(
         self,
         session: SessionConfig,
-        gs_file: GroundStationFile,
+        gs_file: GroundStationFile,  # noqa: F821
         stack_config: RoutingStackConfig,
         db_path: str,
         namespace: str | None = None,
@@ -139,12 +151,11 @@ class MIService:
             if pod["node_id"] and pod["role"] in ("satellite", "ground_station"):
                 try:
                     self._adapter.start(
-                        pod["node_id"], pod["pod_ip"],
+                        pod["node_id"],
+                        pod["pod_ip"],
                     )
                 except Exception as exc:
-                    log.warning(
-                        f"Failed to start adapter for {pod['node_id']}: {exc}"
-                    )
+                    log.warning(f"Failed to start adapter for {pod['node_id']}: {exc}")
 
     def _start_flow_manager(self) -> None:
         """Initialize and configure flow manager."""
@@ -194,10 +205,12 @@ class MIService:
 
                     # Publish to ZMQ
                     try:
-                        self._pub_sock.send(encode_message(
-                            TOPIC_ADAPTER_EVENT,
-                            event.model_dump_json().encode(),
-                        ))
+                        self._pub_sock.send(
+                            encode_message(
+                                TOPIC_ADAPTER_EVENT,
+                                event.model_dump_json().encode(),
+                            )
+                        )
                     except Exception as exc:
                         log.debug(f"ZMQ publish failed: {exc}")
 
@@ -206,7 +219,7 @@ class MIService:
                 try:
                     results = self._flow_manager.collect_results()
                     for r in results:
-                        now = datetime.now(timezone.utc)
+                        now = datetime.now(UTC)
                         probe_result = ProbeResult(
                             sim_time=now,
                             wall_time=now,
@@ -225,10 +238,12 @@ class MIService:
                                 insert_probe_result(self._db_conn, probe_result)
                             except Exception as exc:
                                 log.warning(f"DB probe insert failed: {exc}")
-                        self._pub_sock.send(encode_message(
-                            TOPIC_PROBE_RESULT,
-                            probe_result.model_dump_json().encode(),
-                        ))
+                        self._pub_sock.send(
+                            encode_message(
+                                TOPIC_PROBE_RESULT,
+                                probe_result.model_dump_json().encode(),
+                            )
+                        )
                 except Exception as exc:
                     log.warning(f"Probe result collection failed: {exc}")
 
@@ -260,9 +275,12 @@ class MIService:
                             log.warning(f"DB convergence insert failed: {exc}")
 
                     # Publish
-                    self._pub_sock.send(encode_message(
-                        TOPIC_CONVERGENCE_RESULT, response,
-                    ))
+                    self._pub_sock.send(
+                        encode_message(
+                            TOPIC_CONVERGENCE_RESULT,
+                            response,
+                        )
+                    )
 
                     sock.send(response)
         except Exception as exc:
@@ -292,9 +310,10 @@ class MIService:
                     except Exception as exc:
                         log.warning(f"Trace request error: {exc}")
                         resp = TraceResponse(
-                            src_node=req.src_node if 'req' in dir() else "",
-                            dst_node=req.dst_node if 'req' in dir() else "",
-                            hops=[], success=False,
+                            src_node=req.src_node if "req" in dir() else "",
+                            dst_node=req.dst_node if "req" in dir() else "",
+                            hops=[],
+                            success=False,
                             error=str(exc),
                         )
                     sock.send(resp.model_dump_json().encode())
@@ -318,7 +337,8 @@ class MIService:
             return TraceResponse(
                 src_node=req.src_node,
                 dst_node=req.dst_node,
-                hops=[], success=False,
+                hops=[],
+                success=False,
                 error=str(exc),
             )
 
@@ -370,6 +390,7 @@ def main() -> None:
     args = parser.parse_args()
 
     from nodalarc.platform import init_platform_config
+
     init_platform_config(Path(args.platform_config))
 
     # Load configs
@@ -377,6 +398,7 @@ def main() -> None:
     session = SessionConfig.model_validate(raw)
 
     from ome.constellation_loader import load_ground_stations
+
     gs_file = load_ground_stations(session.ground_stations)
 
     if session.routing.stack is not None:
@@ -385,6 +407,7 @@ def main() -> None:
         stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
     else:
         from nodalarc.stack_resolver import resolve_stack
+
         resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
         stack_config = RoutingStackConfig(
             name=f"{session.routing.protocol}-{'-'.join(session.routing.extensions) or 'plain'}",

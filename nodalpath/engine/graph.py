@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from nodalpath.models.topology import TopologySnapshot, TopologyEdge
+from nodalpath.models.topology import TopologySnapshot
 
 
 @dataclass
 class GraphEdge:
     """A weighted directed edge in the computation graph."""
-    dst: str                              # destination node_id
-    latency_ms: float                     # physical propagation delay
+
+    dst: str  # destination node_id
+    latency_ms: float  # physical propagation delay
     src_interface: str
     dst_interface: str
     bandwidth_mbps: float
@@ -18,6 +19,7 @@ class GraphEdge:
 @dataclass
 class TopologyGraph:
     """Adjacency list graph built from a TopologySnapshot."""
+
     adjacency: dict[str, list[GraphEdge]] = field(default_factory=dict)
     node_sids: dict[str, int] = field(default_factory=dict)
     node_loopbacks: dict[str, str] = field(default_factory=dict)
@@ -47,20 +49,24 @@ def build_graph(snapshot: TopologySnapshot) -> TopologyGraph:
         if edge.link_type == "terrestrial":
             continue
         # Forward direction
-        graph.adjacency[edge.src_node_id].append(GraphEdge(
-            dst=edge.dst_node_id,
-            latency_ms=edge.latency_ms,
-            src_interface=edge.src_interface,
-            dst_interface=edge.dst_interface,
-            bandwidth_mbps=edge.bandwidth_mbps,
-        ))
+        graph.adjacency[edge.src_node_id].append(
+            GraphEdge(
+                dst=edge.dst_node_id,
+                latency_ms=edge.latency_ms,
+                src_interface=edge.src_interface,
+                dst_interface=edge.dst_interface,
+                bandwidth_mbps=edge.bandwidth_mbps,
+            )
+        )
         # Reverse direction
-        graph.adjacency[edge.dst_node_id].append(GraphEdge(
-            dst=edge.src_node_id,
-            latency_ms=edge.latency_ms,
-            src_interface=edge.dst_interface,
-            dst_interface=edge.src_interface,
-            bandwidth_mbps=edge.bandwidth_mbps,
-        ))
+        graph.adjacency[edge.dst_node_id].append(
+            GraphEdge(
+                dst=edge.src_node_id,
+                latency_ms=edge.latency_ms,
+                src_interface=edge.dst_interface,
+                dst_interface=edge.src_interface,
+                bandwidth_mbps=edge.bandwidth_mbps,
+            )
+        )
 
     return graph

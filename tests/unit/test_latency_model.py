@@ -1,10 +1,9 @@
 """Test latency model — speed-of-light, position table, threshold detection."""
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from nodalarc.models.events import NodePosition, TimelinePositionSnapshot
+
 from orchestrator.latency_model import (
     PositionTable,
     compute_latency_ms,
@@ -42,11 +41,15 @@ class TestPositionTable:
         nodes = {}
         for nid, (lat, lon, alt) in positions.items():
             nodes[nid] = NodePosition(
-                lat_deg=lat, lon_deg=lon, alt_km=alt,
-                vel_x_km_s=0.0, vel_y_km_s=0.0, vel_z_km_s=0.0,
+                lat_deg=lat,
+                lon_deg=lon,
+                alt_km=alt,
+                vel_x_km_s=0.0,
+                vel_y_km_s=0.0,
+                vel_z_km_s=0.0,
             )
         return TimelinePositionSnapshot(
-            sim_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             positions=nodes,
         )
 
@@ -65,10 +68,12 @@ class TestPositionTable:
     def test_link_latency_between_nodes(self):
         table = PositionTable()
         # Two sats at same altitude, different longitudes on equator
-        snap = self._make_snapshot({
-            "sat-A": (0.0, 0.0, 550.0),
-            "sat-B": (0.0, 10.0, 550.0),  # ~10 degrees apart
-        })
+        snap = self._make_snapshot(
+            {
+                "sat-A": (0.0, 0.0, 550.0),
+                "sat-B": (0.0, 10.0, 550.0),  # ~10 degrees apart
+            }
+        )
         table.update_from_snapshot(snap)
         lat = table.compute_link_latency("sat-A", "sat-B")
         assert lat is not None
@@ -84,20 +89,26 @@ class TestThresholdDetection:
         nodes = {}
         for nid, (lat, lon, alt) in positions.items():
             nodes[nid] = NodePosition(
-                lat_deg=lat, lon_deg=lon, alt_km=alt,
-                vel_x_km_s=0.0, vel_y_km_s=0.0, vel_z_km_s=0.0,
+                lat_deg=lat,
+                lon_deg=lon,
+                alt_km=alt,
+                vel_x_km_s=0.0,
+                vel_y_km_s=0.0,
+                vel_z_km_s=0.0,
             )
         return TimelinePositionSnapshot(
-            sim_time=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             positions=nodes,
         )
 
     def test_threshold_triggers_update(self):
         table = PositionTable()
-        snap = self._make_snapshot({
-            "sat-A": (0.0, 0.0, 550.0),
-            "sat-B": (0.0, 10.0, 550.0),
-        })
+        snap = self._make_snapshot(
+            {
+                "sat-A": (0.0, 0.0, 550.0),
+                "sat-B": (0.0, 10.0, 550.0),
+            }
+        )
         table.update_from_snapshot(snap)
 
         active = {("sat-A", "sat-B")}
@@ -112,10 +123,12 @@ class TestThresholdDetection:
 
     def test_threshold_suppresses_small_change(self):
         table = PositionTable()
-        snap = self._make_snapshot({
-            "sat-A": (0.0, 0.0, 550.0),
-            "sat-B": (0.0, 10.0, 550.0),
-        })
+        snap = self._make_snapshot(
+            {
+                "sat-A": (0.0, 0.0, 550.0),
+                "sat-B": (0.0, 10.0, 550.0),
+            }
+        )
         table.update_from_snapshot(snap)
 
         active = {("sat-A", "sat-B")}
@@ -130,10 +143,12 @@ class TestThresholdDetection:
 
     def test_threshold_detects_large_change(self):
         table = PositionTable()
-        snap1 = self._make_snapshot({
-            "sat-A": (0.0, 0.0, 550.0),
-            "sat-B": (0.0, 10.0, 550.0),
-        })
+        snap1 = self._make_snapshot(
+            {
+                "sat-A": (0.0, 0.0, 550.0),
+                "sat-B": (0.0, 10.0, 550.0),
+            }
+        )
         table.update_from_snapshot(snap1)
 
         active = {("sat-A", "sat-B")}
@@ -142,10 +157,12 @@ class TestThresholdDetection:
         last = {("sat-A", "sat-B"): lat1}
 
         # Move sat-B significantly
-        snap2 = self._make_snapshot({
-            "sat-A": (0.0, 0.0, 550.0),
-            "sat-B": (0.0, 20.0, 550.0),
-        })
+        snap2 = self._make_snapshot(
+            {
+                "sat-A": (0.0, 0.0, 550.0),
+                "sat-B": (0.0, 20.0, 550.0),
+            }
+        )
         table.update_from_snapshot(snap2)
         updates2 = table.get_links_needing_update(active, last, threshold_ms=0.1)
         assert len(updates2) == 1

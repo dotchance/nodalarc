@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from nodalarc.models.link_events import LinkDown, LinkUp
+
 from nodalpath.integration.deviation import DeviationDetector
 from nodalpath.models.almanac import AlmanacEntry, ForwardingTable
 from nodalpath.orchestrator.almanac_store import AlmanacStore
@@ -17,8 +18,8 @@ def _make_link_down(
     sim_time: datetime | None = None,
 ) -> LinkDown:
     return LinkDown(
-        sim_time=sim_time or datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
-        wall_time=datetime.now(timezone.utc),
+        sim_time=sim_time or datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
+        wall_time=datetime.now(UTC),
         node_a=node_a,
         node_b=node_b,
         interface_a="isl0",
@@ -34,8 +35,8 @@ def _make_link_up(
     sim_time: datetime | None = None,
 ) -> LinkUp:
     return LinkUp(
-        sim_time=sim_time or datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
-        wall_time=datetime.now(timezone.utc),
+        sim_time=sim_time or datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
+        wall_time=datetime.now(UTC),
         node_a=node_a,
         node_b=node_b,
         interface_a="isl0",
@@ -111,7 +112,8 @@ class TestDeviationDetectorLinkDown:
         # Only sat-P00S00 has a forwarding table
         det = _build_detector_with_entry(node_ids=["sat-P00S00"])
         event = _make_link_down(
-            node_a="sat-P00S00", node_b="sat-P00S01",
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
             reason="scenario_inject_down",
         )
         assert det.check_link_down(event) is False
@@ -121,7 +123,7 @@ class TestDeviationDetectorLinkDown:
         # Event at earlier time with no almanac entry
         event = _make_link_down(
             reason="scenario_inject_down",
-            sim_time=datetime(2026, 3, 1, 14, 0, 0, tzinfo=timezone.utc),
+            sim_time=datetime(2026, 3, 1, 14, 0, 0, tzinfo=UTC),
         )
         assert det.check_link_down(event) is False
 

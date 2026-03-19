@@ -138,7 +138,9 @@ class PlatformConfig(BaseModel):
 
     @property
     def to_scenario_inject_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_scenario_inject_port}"
+        return (
+            f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_scenario_inject_port}"
+        )
 
     @property
     def mi_trace_bind(self) -> str:
@@ -194,9 +196,7 @@ def get_platform_config() -> PlatformConfig:
     Raises RuntimeError if init_platform_config() has not been called.
     """
     if _config is None:
-        raise RuntimeError(
-            "PlatformConfig not initialized. Call init_platform_config() first."
-        )
+        raise RuntimeError("PlatformConfig not initialized. Call init_platform_config() first.")
     return _config
 
 

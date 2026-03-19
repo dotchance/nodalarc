@@ -4,9 +4,9 @@ Verifies VS-API StateSnapshot can be constructed and serialized correctly.
 """
 
 import json
+from datetime import UTC
 
 import pytest
-
 from nodalarc.models.vs_api import (
     LinkState,
     NetworkHealth,
@@ -19,11 +19,11 @@ pytestmark = pytest.mark.integration
 
 def test_vs_api_state_snapshot_schema():
     """Verify StateSnapshot model can be constructed and serialized."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     snapshot = StateSnapshot(
-        sim_time=datetime.now(timezone.utc),
-        wall_time=datetime.now(timezone.utc),
+        sim_time=datetime.now(UTC),
+        wall_time=datetime.now(UTC),
         schema_version=1,
         nodes=[
             NodeState(
@@ -76,14 +76,14 @@ def test_vs_api_state_snapshot_schema():
 
 def test_vs_api_state_management():
     """Test VS-API in-memory state update functions."""
+
     from vs_api.main import (
         _build_snapshot,
         _state,
         _state_lock,
-        _update_link_up,
         _update_link_down,
+        _update_link_up,
     )
-    from datetime import datetime, timezone
 
     # Reset state
     with _state_lock:
@@ -91,13 +91,15 @@ def test_vs_api_state_management():
         _state["nodes"].clear()
         _state["recent_events"].clear()
 
-    _update_link_up({
-        "node_a": "sat-P00S00",
-        "node_b": "sat-P00S01",
-        "latency_ms": 5.0,
-        "bandwidth_mbps": 1000,
-        "reason": "vis_gained",
-    })
+    _update_link_up(
+        {
+            "node_a": "sat-P00S00",
+            "node_b": "sat-P00S01",
+            "latency_ms": 5.0,
+            "bandwidth_mbps": 1000,
+            "reason": "vis_gained",
+        }
+    )
 
     snapshot = _build_snapshot()
     assert len(snapshot["links"]) == 1

@@ -5,12 +5,10 @@ the unified templates with matching resolved variables, and assert functionally
 identical output (normalized blank lines — FRR is whitespace-insensitive).
 """
 
-import re
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
-
 from nodalarc.stack_resolver import resolve_stack
 
 
@@ -53,6 +51,7 @@ _BASE_VARS = {
 def _load_legacy_stack_vars(stack_name: str) -> dict:
     """Load template_variables from a legacy stack.yaml and merge with base vars."""
     import yaml
+
     stack_dir = Path(f"configs/routing-stacks/{stack_name}")
     raw = yaml.safe_load((stack_dir / "stack.yaml").read_text())
     stack_vars = raw["stack"].get("template_variables", {})
@@ -92,6 +91,7 @@ class TestTemplateParity:
 
         # Load the template file list from the legacy stack
         import yaml
+
         stack_dir = Path(f"configs/routing-stacks/{stack_name}")
         raw = yaml.safe_load((stack_dir / "stack.yaml").read_text())
         legacy_templates = raw["stack"].get("config_templates", [])
@@ -109,6 +109,7 @@ class TestTemplateParity:
     def test_daemon_list_matches(self, stack_name: str):
         """Verify resolved daemons match the legacy stack.yaml daemons."""
         import yaml
+
         protocol, extensions = LEGACY_STACKS[stack_name]
         resolved = resolve_stack(protocol, extensions)
 
@@ -145,6 +146,7 @@ class TestGroundStationParity:
 
         legacy_gs_vars = dict(gs_vars)
         import yaml
+
         stack_dir = Path(f"configs/routing-stacks/{stack_name}")
         raw = yaml.safe_load((stack_dir / "stack.yaml").read_text())
         legacy_gs_vars.update(raw["stack"].get("template_variables", {}))

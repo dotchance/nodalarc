@@ -20,7 +20,6 @@ from nodalarc.models.constellation import (
     ConstellationConfig,
     ExplicitConstellation,
     ParametricConstellation,
-    TLEConstellation,
 )
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig
@@ -42,7 +41,7 @@ def _constellation_dims(
 
 def _isl_bandwidth(constellation: ConstellationConfig) -> float:
     """Extract default ISL bandwidth_mbps from constellation terminals."""
-    if isinstance(constellation, (ParametricConstellation, ExplicitConstellation)):
+    if isinstance(constellation, ParametricConstellation | ExplicitConstellation):
         for term in constellation.default_terminals.isl:
             return term.bandwidth_mbps
     return 1000.0
@@ -50,7 +49,7 @@ def _isl_bandwidth(constellation: ConstellationConfig) -> float:
 
 def _ground_terminal_count(constellation: ConstellationConfig) -> int:
     """Extract total ground terminal count from constellation."""
-    if isinstance(constellation, (ParametricConstellation, ExplicitConstellation)):
+    if isinstance(constellation, ParametricConstellation | ExplicitConstellation):
         return sum(t.count for t in constellation.default_terminals.ground)
     return 1
 
@@ -204,7 +203,9 @@ def build_template_vars(
 
     # Build loopback map for peer IP resolution (used by static routes)
     loopback_map = _build_loopback_map(
-        constellation, ground_stations, addressing,
+        constellation,
+        ground_stations,
+        addressing,
     )
 
     # Derive node_id
@@ -223,14 +224,16 @@ def build_template_vars(
         result.update(config_overrides)
 
     # Core variables (always override config_overrides)
-    result.update({
-        "node_id": node_id,
-        "hostname": node_id,
-        "node_type": node_type,
-        "area_id": area_assignments.get(node_id, ""),
-        "mgmt_interface": "eth0",
-        "compression_factor": session.time.compression,
-    })
+    result.update(
+        {
+            "node_id": node_id,
+            "hostname": node_id,
+            "node_type": node_type,
+            "area_id": area_assignments.get(node_id, ""),
+            "mgmt_interface": "eth0",
+            "compression_factor": session.time.compression,
+        }
+    )
 
     bandwidth = _isl_bandwidth(constellation)
     gnd_count = _ground_terminal_count(constellation)
@@ -242,15 +245,16 @@ def build_template_vars(
         result["ipv4_loopback"] = addressing.sat_ipv4(plane, slot)
         result["ipv6_loopback"] = addressing.sat_ipv6(plane, slot)
         result["interface_info"] = _build_interface_info(
-            node_neighbors, area_assignments, node_id, bandwidth,
+            node_neighbors,
+            area_assignments,
+            node_id,
+            bandwidth,
             loopback_map=loopback_map,
         )
         result["isl_count"] = len(node_neighbors)
         result["isl_interfaces"] = addressing.isl_interfaces(len(node_neighbors))
         result["gnd_interfaces"] = addressing.gnd_interfaces(gnd_count)
-        result["neighbors"] = {
-            na.interface: na.peer_node_id for na in node_neighbors
-        }
+        result["neighbors"] = {na.interface: na.peer_node_id for na in node_neighbors}
 
     elif node_type == "ground_station":
         result["gs_name"] = gs_name
@@ -264,17 +268,18 @@ def build_template_vars(
         result["neighbors"] = {}
 
         station = next(
-            (s for s in ground_stations.stations if s.name == gs_name), None,
+            (s for s in ground_stations.stations if s.name == gs_name),
+            None,
         )
         if station:
             terrestrial_prefixes = _resolve_terrestrial_prefixes(
-                station, ground_stations, gs_index,
+                station,
+                ground_stations,
+                gs_index,
             )
             result["terrestrial_prefixes"] = terrestrial_prefixes
             if terrestrial_prefixes:
-                result["terr0_metric"] = max(
-                    tp["metric"] for tp in terrestrial_prefixes
-                )
+                result["terr0_metric"] = max(tp["metric"] for tp in terrestrial_prefixes)
         else:
             result["terrestrial_prefixes"] = []
 

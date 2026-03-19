@@ -17,7 +17,6 @@ import socket
 import struct
 import threading
 import time
-from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -46,8 +45,10 @@ PROBE_PACKET_SIZE = struct.calcsize(PROBE_PACKET_FMT)
 
 # --- Request/Response Models ---
 
+
 class FlowConfig(BaseModel):
     """Probe flow configuration."""
+
     flow_id: str
     dst_ip: str
     protocol: str = "udp"
@@ -58,6 +59,7 @@ class FlowConfig(BaseModel):
 
 class FlowStatus(BaseModel):
     """Status of a probe flow."""
+
     flow_id: str
     dst_ip: str
     probe_type: str
@@ -68,6 +70,7 @@ class FlowStatus(BaseModel):
 
 class ProbeResults(BaseModel):
     """Accumulated probe results."""
+
     flow_id: str
     packets_sent: int
     packets_received: int
@@ -79,11 +82,13 @@ class ProbeResults(BaseModel):
 
 class BurstRequest(BaseModel):
     """Request for a synchronous probe burst."""
+
     count: int = 10
     interval_ms: int = 200
 
 
 # --- Flow State ---
+
 
 class _FlowState:
     """Internal state for a running probe flow."""
@@ -124,9 +129,7 @@ class _FlowState:
         avg = sum(lats) / len(lats)
         jitter = 0.0
         if len(lats) > 1:
-            jitter = sum(
-                abs(lats[i] - lats[i - 1]) for i in range(1, len(lats))
-            ) / (len(lats) - 1)
+            jitter = sum(abs(lats[i] - lats[i - 1]) for i in range(1, len(lats))) / (len(lats) - 1)
 
         return ProbeResults(
             flow_id=self.config.flow_id,
@@ -145,6 +148,7 @@ _lock = threading.Lock()
 
 
 # --- UDP probe sender/receiver ---
+
 
 def _send_udp_probe(
     dst_ip: str,
@@ -195,11 +199,13 @@ def _run_continuous_probe(flow_id: str) -> None:
                 data, addr = sock.recvfrom(PROBE_PACKET_SIZE + 64)
                 recv_ts = time.monotonic()
                 if len(data) >= PROBE_PACKET_SIZE:
-                    reply_seq, reply_send_ts = struct.unpack(PROBE_PACKET_FMT, data[:PROBE_PACKET_SIZE])
+                    reply_seq, reply_send_ts = struct.unpack(
+                        PROBE_PACKET_FMT, data[:PROBE_PACKET_SIZE]
+                    )
                     rtt_ms = (recv_ts - send_ts) * 1000
                     state.packets_received += 1
                     state.latencies.append(rtt_ms)
-            except socket.timeout:
+            except TimeoutError:
                 pass  # No reply — packet lost
 
             seq += 1
@@ -245,7 +251,7 @@ def _run_burst_probe(
                     rtt_ms = (recv_ts - send_ts) * 1000
                     received += 1
                     latencies.append(rtt_ms)
-            except socket.timeout:
+            except TimeoutError:
                 pass
 
             if seq < count - 1:
@@ -267,9 +273,9 @@ def _run_burst_probe(
     avg = sum(latencies) / len(latencies)
     jitter = 0.0
     if len(latencies) > 1:
-        jitter = sum(
-            abs(latencies[i] - latencies[i - 1]) for i in range(1, len(latencies))
-        ) / (len(latencies) - 1)
+        jitter = sum(abs(latencies[i] - latencies[i - 1]) for i in range(1, len(latencies))) / (
+            len(latencies) - 1
+        )
 
     return ProbeResults(
         flow_id="burst",
@@ -301,7 +307,7 @@ def _udp_echo_server() -> None:
         try:
             data, addr = sock.recvfrom(PROBE_PACKET_SIZE + 64)
             sock.sendto(data, addr)
-        except socket.timeout:
+        except TimeoutError:
             continue
         except Exception as exc:
             if not _echo_stop.is_set():
@@ -317,12 +323,15 @@ def _start_echo_server() -> None:
         return
     _echo_stop.clear()
     _echo_thread = threading.Thread(
-        target=_udp_echo_server, daemon=True, name="probe-echo",
+        target=_udp_echo_server,
+        daemon=True,
+        name="probe-echo",
     )
     _echo_thread.start()
 
 
 # --- REST Endpoints ---
+
 
 @app.post("/flows", status_code=201)
 def create_flow(config: FlowConfig) -> dict[str, str]:
@@ -407,5 +416,6 @@ def burst(flow_id: str, req: BurstRequest) -> ProbeResults:
 if __name__ == "__main__":
     import uvicorn
     from nodalarc.zmq_channels import probe_daemon_port
+
     logging.basicConfig(level=logging.INFO)
     uvicorn.run(app, host="0.0.0.0", port=probe_daemon_port())

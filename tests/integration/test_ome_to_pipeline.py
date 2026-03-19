@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from nodalarc.models.events import (
     ClockTick,
     TimelinePositionSnapshot,
@@ -27,6 +26,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 def four_node_session_path():
     """Create a temporary session config for custom-example constellation."""
     import tempfile
+
     import yaml
 
     session = {
@@ -40,7 +40,10 @@ def four_node_session_path():
         "time": {"step_seconds": 10},
     }
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,
+        mode="w",
+        suffix=".yaml",
+        dir=str(PROJECT_ROOT),
+        delete=False,
     ) as f:
         yaml.dump(session, f)
         return f.name
@@ -58,6 +61,7 @@ def sample_session_path():
 def polar_seam_session_path():
     """Create a temporary session config for iridium-66."""
     import tempfile
+
     import yaml
 
     session = {
@@ -71,7 +75,10 @@ def polar_seam_session_path():
         "time": {"step_seconds": 10},
     }
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,
+        mode="w",
+        suffix=".yaml",
+        dir=str(PROJECT_ROOT),
+        delete=False,
     ) as f:
         yaml.dump(session, f)
         return f.name
@@ -80,6 +87,7 @@ def polar_seam_session_path():
 @pytest.fixture
 def four_node_timeline(four_node_session_path, tmp_path):
     from ome.main import run as ome_run
+
     path = ome_run(four_node_session_path, str(tmp_path))
     Path(four_node_session_path).unlink(missing_ok=True)
     return path
@@ -88,12 +96,14 @@ def four_node_timeline(four_node_session_path, tmp_path):
 @pytest.fixture
 def sample_timeline(sample_session_path, tmp_path):
     from ome.main import run as ome_run
+
     return ome_run(sample_session_path, str(tmp_path))
 
 
 @pytest.fixture
 def polar_seam_timeline(polar_seam_session_path, tmp_path):
     from ome.main import run as ome_run
+
     path = ome_run(polar_seam_session_path, str(tmp_path))
     Path(polar_seam_session_path).unlink(missing_ok=True)
     return path
@@ -139,9 +149,9 @@ class TestFourNodePipeline:
         """custom-example has ISL visibility events (4 sats, 2 planes)."""
         events = _load_events(four_node_timeline)
         isl_vis = [
-            e for e in events
-            if e["event_type"] == "VisibilityEvent"
-            and e["data"]["elevation_deg"] is None
+            e
+            for e in events
+            if e["event_type"] == "VisibilityEvent" and e["data"]["elevation_deg"] is None
         ]
         assert len(isl_vis) > 0
 
@@ -166,7 +176,8 @@ class TestStarlinkMiniTerminalExhaustion:
         """
         events = _load_events(sample_timeline)
         gs_exhaustion = [
-            e for e in events
+            e
+            for e in events
             if e["event_type"] == "VisibilityEvent"
             and e["data"]["visible"]
             and not e["data"]["scheduled"]
@@ -186,9 +197,9 @@ class TestPolarSeamDropouts:
         """
         events = _load_events(polar_seam_timeline)
         isl_vis = [
-            e for e in events
-            if e["event_type"] == "VisibilityEvent"
-            and e["data"]["elevation_deg"] is None
+            e
+            for e in events
+            if e["event_type"] == "VisibilityEvent" and e["data"]["elevation_deg"] is None
         ]
         # There should be ISL state changes (visible=True then visible=False)
         visible_isls = [e for e in isl_vis if e["data"]["visible"]]

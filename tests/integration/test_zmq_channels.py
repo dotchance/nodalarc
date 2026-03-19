@@ -12,16 +12,7 @@ import time
 
 import pytest
 import zmq
-
 from nodalarc.zmq_channels import (
-    mi_convergence_gate_port,
-    mi_events_port,
-    ome_events_port,
-    probe_daemon_port,
-    to_events_port,
-    to_scenario_inject_port,
-    vs_api_http_port,
-    vf_static_port,
     TOPIC_ADAPTER_EVENT,
     TOPIC_CLOCK_TICK,
     TOPIC_CONVERGENCE_RESULT,
@@ -33,6 +24,14 @@ from nodalarc.zmq_channels import (
     TOPIC_VISIBILITY_EVENT,
     decode_message,
     encode_message,
+    mi_convergence_gate_port,
+    mi_events_port,
+    ome_events_port,
+    probe_daemon_port,
+    to_events_port,
+    to_scenario_inject_port,
+    vf_static_port,
+    vs_api_http_port,
 )
 
 pytestmark = pytest.mark.integration
@@ -48,6 +47,7 @@ ALL_TOPICS = [
     TOPIC_PROBE_RESULT,
     TOPIC_ADAPTER_EVENT,
 ]
+
 
 def _all_ports() -> list[int]:
     return [

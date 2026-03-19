@@ -21,7 +21,7 @@ class TimelineReader:
     def __init__(self, path: Path, epsilon_s: float = 0.1) -> None:
         self._path = path
         self._epsilon_s = epsilon_s
-        self._file = open(path, "r")
+        self._file = open(path)
         self._pending: list[dict] = []
 
     def next_batch(self, timeout_s: float = 5.0) -> list[dict] | None:
@@ -45,8 +45,7 @@ class TimelineReader:
 
             if (
                 self._pending
-                and abs(record["timestamp_s"] - self._pending[0]["timestamp_s"])
-                >= self._epsilon_s
+                and abs(record["timestamp_s"] - self._pending[0]["timestamp_s"]) >= self._epsilon_s
             ):
                 # New timestamp group — flush current batch, keep this record for next
                 batch = list(self._pending)

@@ -15,16 +15,15 @@ import logging
 import os
 import signal
 import socket
-import subprocess
-import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import yaml
-
 from nodalarc.models.session import SessionConfig
 
 log = logging.getLogger(__name__)
+
+import contextlib
 
 from nodalarc.platform import get_platform_config
 
@@ -47,20 +46,25 @@ def _daemon_request(req: dict, timeout: float | None = None) -> dict:
                 break
             buf += chunk
             if b"\n" in buf:
-                line = buf[:buf.index(b"\n")]
+                line = buf[: buf.index(b"\n")]
                 return json.loads(line)
         return {"ok": False, "error": "No response from deploy daemon"}
     except FileNotFoundError:
-        return {"ok": False, "error": f"Deploy daemon not running (socket {deploy_socket} not found)"}
+        return {
+            "ok": False,
+            "error": f"Deploy daemon not running (socket {deploy_socket} not found)",
+        }
     except ConnectionRefusedError:
         return {"ok": False, "error": "Deploy daemon connection refused"}
-    except socket.timeout:
+    except TimeoutError:
         return {"ok": False, "error": "Deploy daemon request timed out"}
     finally:
         sock.close()
 
 
-def _daemon_deploy_streaming(session_path: str, status_callback: Callable[[str], None] | None = None) -> dict:
+def _daemon_deploy_streaming(
+    session_path: str, status_callback: Callable[[str], None] | None = None
+) -> dict:
     """Run deploy via daemon with streaming progress updates."""
     cfg = get_platform_config()
     deploy_socket = cfg.deploy_daemon_unix_socket_path
@@ -83,7 +87,7 @@ def _daemon_deploy_streaming(session_path: str, status_callback: Callable[[str],
             while b"\n" in buf:
                 idx = buf.index(b"\n")
                 line_bytes = buf[:idx]
-                buf = buf[idx + 1:]
+                buf = buf[idx + 1 :]
                 msg = json.loads(line_bytes)
 
                 if msg.get("type") == "progress":
@@ -96,7 +100,7 @@ def _daemon_deploy_streaming(session_path: str, status_callback: Callable[[str],
                         if status_callback:
                             if " Step " in line:
                                 i = line.index(" Step ")
-                                status_callback(line[i + 1:])
+                                status_callback(line[i + 1 :])
                                 veth_count = 0
                                 veth_total = 0
                             elif "Waiting for" in line:
@@ -105,17 +109,19 @@ def _daemon_deploy_streaming(session_path: str, status_callback: Callable[[str],
                             elif "Helm install" in line:
                                 status_callback("Helm install running")
                             elif "All " in line and " pods Running" in line:
-                                status_callback(line[line.index("All "):])
+                                status_callback(line[line.index("All ") :])
                             elif "veth pairs to create" in line:
-                                try:
-                                    veth_total = int(line.split("veth pairs")[0].strip().split()[-1])
-                                except (ValueError, IndexError):
-                                    pass
+                                with contextlib.suppress(ValueError, IndexError):
+                                    veth_total = int(
+                                        line.split("veth pairs")[0].strip().split()[-1]
+                                    )
                             elif "Created " in line and " veth" in line:
                                 veth_count += 1
                                 if veth_total > 0:
                                     display_count = min(veth_count, veth_total)
-                                    status_callback(f"Creating connections {display_count} of {veth_total}")
+                                    status_callback(
+                                        f"Creating connections {display_count} of {veth_total}"
+                                    )
                                 else:
                                     status_callback(f"Creating connections ({veth_count})")
                 elif "ok" in msg:
@@ -123,13 +129,17 @@ def _daemon_deploy_streaming(session_path: str, status_callback: Callable[[str],
 
         return {"ok": False, "error": "Connection closed without final response"}
     except FileNotFoundError:
-        return {"ok": False, "error": f"Deploy daemon not running (socket {deploy_socket} not found)"}
+        return {
+            "ok": False,
+            "error": f"Deploy daemon not running (socket {deploy_socket} not found)",
+        }
     except ConnectionRefusedError:
         return {"ok": False, "error": "Deploy daemon connection refused"}
-    except socket.timeout:
+    except TimeoutError:
         return {"ok": False, "error": "Deploy daemon request timed out"}
     finally:
         sock.close()
+
 
 # Maximum number of old session directories to keep
 _MAX_KEPT_SESSIONS = 5
@@ -189,24 +199,27 @@ class SessionManager:
                 if session.routing.stack is not None:
                     routing_label = Path(session.routing.stack).name
                 else:
-                    ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+                    ext_str = (
+                        "-".join(session.routing.extensions)
+                        if session.routing.extensions
+                        else "plain"
+                    )
                     routing_label = f"{session.routing.protocol}-{ext_str}"
-                results.append({
-                    "name": session.session.name,
-                    "file": str(yaml_path),
-                    "constellation": Path(session.constellation).stem,
-                    "routing_stack": routing_label,
-                })
+                results.append(
+                    {
+                        "name": session.session.name,
+                        "file": str(yaml_path),
+                        "constellation": Path(session.constellation).stem,
+                        "routing_stack": routing_label,
+                    }
+                )
             except Exception as exc:
                 log.warning(f"Failed to parse session {yaml_path}: {exc}")
         return results
 
     def list_sessions(self) -> list[dict]:
         """Return available sessions with active flag on current session."""
-        return [
-            {**s, "active": s["file"] == self._current_session_file}
-            for s in self._available
-        ]
+        return [{**s, "active": s["file"] == self._current_session_file} for s in self._available]
 
     def set_active(self, session_file: str) -> None:
         """Mark a session file as the currently active session."""

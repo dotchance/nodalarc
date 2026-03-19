@@ -1,9 +1,5 @@
 """Test visibility computation — LOS, range, elevation, scheduling."""
 
-import math
-
-import pytest
-
 from ome.propagator import (
     GeoPosition,
     Vec3,
@@ -11,7 +7,6 @@ from ome.propagator import (
     geodetic_to_ecef,
     propagate_eci,
     propagate_keplerian,
-    orbital_period,
 )
 from ome.visibility import (
     GroundVisibility,
@@ -26,7 +21,6 @@ from ome.visibility import (
     schedule_ground_links,
     schedule_isl_terminals,
 )
-from nodalarc.constants import EARTH_RADIUS_KM
 
 EPOCH = 1735689600.0
 
@@ -157,11 +151,15 @@ class TestIslVisibility:
         pos_a = geodetic_to_ecef(geo_a)
         pos_b = geodetic_to_ecef(geo_b)
         result = check_isl_visibility(
-            pos_a, Vec3(0, 0, 0), pos_b, Vec3(0, 0, 0),
+            pos_a,
+            Vec3(0, 0, 0),
+            pos_b,
+            Vec3(0, 0, 0),
             max_range_km=5016.0,
             polar_seam_enabled=True,
             latitude_threshold_deg=75.0,
-            geo_a=geo_a, geo_b=geo_b,
+            geo_a=geo_a,
+            geo_b=geo_b,
         )
         assert not result.visible
         assert result.reason == "polar_seam"
@@ -200,8 +198,8 @@ class TestAngularVelocity:
         # Separated along X, velocities along Y → perpendicular to LOS
         pos1 = Vec3(6921.0, 0.0, 0.0)
         vel1 = Vec3(0.0, v, 0.0)
-        pos2 = Vec3(7121.0, 0.0, 0.0)   # 200 km apart in X
-        vel2 = Vec3(0.0, -v, 0.0)        # Counter-rotating in Y
+        pos2 = Vec3(7121.0, 0.0, 0.0)  # 200 km apart in X
+        vel2 = Vec3(0.0, -v, 0.0)  # Counter-rotating in Y
 
         ang_vel = compute_angular_velocity(pos1, vel1, pos2, vel2)
         # Relative velocity = (0, 2v, 0) entirely perpendicular to LOS (along X)
@@ -216,7 +214,9 @@ class TestGroundLinkScheduling:
             GroundVisibility("sat-B", True, 45.0, 800.0),
             GroundVisibility("sat-C", True, 30.0, 1200.0),
         ]
-        results = schedule_ground_links("gs-test", visible, terminal_count=1, policy="highest-elevation")
+        results = schedule_ground_links(
+            "gs-test", visible, terminal_count=1, policy="highest-elevation"
+        )
         assert len(results) == 3
         assert results[0].scheduled is True
         assert results[0].node_b == "sat-A"  # Highest elevation
@@ -240,7 +240,9 @@ class TestGroundLinkScheduling:
             GroundVisibility("sat-B", True, 45.0, 800.0),
             GroundVisibility("sat-C", True, 30.0, 1200.0),
         ]
-        results = schedule_ground_links("gs-test", visible, terminal_count=2, policy="highest-elevation")
+        results = schedule_ground_links(
+            "gs-test", visible, terminal_count=2, policy="highest-elevation"
+        )
         scheduled = [r for r in results if r.scheduled]
         assert len(scheduled) == 2
 
@@ -261,9 +263,9 @@ class TestIslTerminalScheduling:
     def test_priority_ordering(self):
         feasible = [
             ("peer-C", 3, 1000.0),  # cross-left
-            ("peer-A", 0, 500.0),   # intra-fwd
-            ("peer-B", 1, 600.0),   # intra-aft
-            ("peer-D", 2, 800.0),   # cross-right
+            ("peer-A", 0, 500.0),  # intra-fwd
+            ("peer-B", 1, 600.0),  # intra-aft
+            ("peer-D", 2, 800.0),  # cross-right
         ]
         results = schedule_isl_terminals("sat-test", feasible, terminal_count=2)
         assert len(results) == 4

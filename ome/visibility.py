@@ -16,17 +16,18 @@ from __future__ import annotations
 import math
 from typing import NamedTuple
 
+from nodalarc.constants import WGS84_A, WGS84_B
+
 from ome.propagator import (
     GeoPosition,
     Vec3,
     distance_km,
-    geodetic_to_ecef,
 )
-from nodalarc.constants import EARTH_RADIUS_KM, WGS84_A, WGS84_B
 
 
 class VisibilityResult(NamedTuple):
     """Result of a visibility check between two nodes."""
+
     visible: bool
     range_km: float
     reason: str  # "ok", "los_blocked", "range_exceeded", "field_of_regard", "elevation_below_min", "tracking_exceeded"
@@ -34,6 +35,7 @@ class VisibilityResult(NamedTuple):
 
 class GroundVisibility(NamedTuple):
     """Ground station to satellite visibility details."""
+
     sat_id: str
     visible: bool
     elevation_deg: float
@@ -42,6 +44,7 @@ class GroundVisibility(NamedTuple):
 
 class IslVisibility(NamedTuple):
     """ISL visibility between two satellites."""
+
     node_a: str
     node_b: str
     visible: bool
@@ -52,6 +55,7 @@ class IslVisibility(NamedTuple):
 
 class ScheduledLink(NamedTuple):
     """A link that has been scheduled (terminal allocated)."""
+
     node_a: str
     node_b: str
     scheduled: bool  # True if terminal allocated, False if visible but unscheduled
@@ -61,6 +65,7 @@ class ScheduledLink(NamedTuple):
 # ---------------------------------------------------------------------------
 # Core geometric functions
 # ---------------------------------------------------------------------------
+
 
 def has_line_of_sight(pos_a: Vec3, pos_b: Vec3) -> bool:
     """Check if two points have line of sight (not occluded by Earth).
@@ -143,8 +148,10 @@ def compute_elevation_angle(
 
 
 def compute_angular_velocity(
-    pos_a: Vec3, vel_a: Vec3,
-    pos_b: Vec3, vel_b: Vec3,
+    pos_a: Vec3,
+    vel_a: Vec3,
+    pos_b: Vec3,
+    vel_b: Vec3,
 ) -> float:
     """Compute angular velocity between two satellites in deg/s.
 
@@ -187,9 +194,12 @@ def compute_angular_velocity(
 # Field of regard
 # ---------------------------------------------------------------------------
 
+
 def check_field_of_regard(
-    pos_a: Vec3, vel_a: Vec3,
-    pos_b: Vec3, vel_b: Vec3,
+    pos_a: Vec3,
+    vel_a: Vec3,
+    pos_b: Vec3,
+    vel_b: Vec3,
     field_of_regard_deg: float,
 ) -> bool:
     """Check if both satellites can see each other within their field of regard.
@@ -225,8 +235,7 @@ def check_field_of_regard(
     zenith_a_y = pos_a.y / r_a_mag
     zenith_a_z = pos_a.z / r_a_mag
 
-    cos_zenith_a = max(-1.0, min(1.0,
-        los_x * zenith_a_x + los_y * zenith_a_y + los_z * zenith_a_z))
+    cos_zenith_a = max(-1.0, min(1.0, los_x * zenith_a_x + los_y * zenith_a_y + los_z * zenith_a_z))
     zenith_angle_a = math.acos(cos_zenith_a)
     elevation_a = abs(zenith_angle_a - math.pi / 2.0)  # deviation from horizontal
     if elevation_a > half_angle_rad:
@@ -240,23 +249,24 @@ def check_field_of_regard(
     zenith_b_y = pos_b.y / r_b_mag
     zenith_b_z = pos_b.z / r_b_mag
 
-    cos_zenith_b = max(-1.0, min(1.0,
-        -los_x * zenith_b_x - los_y * zenith_b_y - los_z * zenith_b_z))
+    cos_zenith_b = max(
+        -1.0, min(1.0, -los_x * zenith_b_x - los_y * zenith_b_y - los_z * zenith_b_z)
+    )
     zenith_angle_b = math.acos(cos_zenith_b)
     elevation_b = abs(zenith_angle_b - math.pi / 2.0)
-    if elevation_b > half_angle_rad:
-        return False
-
-    return True
+    return not elevation_b > half_angle_rad
 
 
 # ---------------------------------------------------------------------------
 # High-level visibility checks
 # ---------------------------------------------------------------------------
 
+
 def check_isl_visibility(
-    pos_a: Vec3, vel_a: Vec3,
-    pos_b: Vec3, vel_b: Vec3,
+    pos_a: Vec3,
+    vel_a: Vec3,
+    pos_b: Vec3,
+    vel_b: Vec3,
     max_range_km: float,
     max_tracking_rate_deg_s: float | None = None,
     field_of_regard_deg: float = 360.0,
@@ -280,7 +290,7 @@ def check_isl_visibility(
         return IslVisibility("", "", False, range_km, 0.0, "range_exceeded")
 
     # 3. Field of regard
-    if field_of_regard_deg < 360.0:
+    if field_of_regard_deg < 360.0:  # noqa: SIM102
         if not check_field_of_regard(pos_a, vel_a, pos_b, vel_b, field_of_regard_deg):
             return IslVisibility("", "", False, range_km, 0.0, "field_of_regard")
 
@@ -290,8 +300,11 @@ def check_isl_visibility(
         return IslVisibility("", "", False, range_km, ang_vel, "tracking_exceeded")
 
     # 5. Polar seam hard latitude cutoff
-    if polar_seam_enabled and geo_a is not None and geo_b is not None:
-        if abs(geo_a.lat_deg) > latitude_threshold_deg or abs(geo_b.lat_deg) > latitude_threshold_deg:
+    if polar_seam_enabled and geo_a is not None and geo_b is not None:  # noqa: SIM102
+        if (
+            abs(geo_a.lat_deg) > latitude_threshold_deg
+            or abs(geo_b.lat_deg) > latitude_threshold_deg
+        ):
             # Only applies to cross-plane ISLs — caller handles this
             return IslVisibility("", "", False, range_km, ang_vel, "polar_seam")
 
@@ -323,6 +336,7 @@ def check_ground_visibility(
 # ---------------------------------------------------------------------------
 # Scheduling
 # ---------------------------------------------------------------------------
+
 
 def schedule_ground_links(
     gs_name: str,
@@ -358,12 +372,14 @@ def schedule_ground_links(
     results: list[ScheduledLink] = []
     for i, v in enumerate(vis):
         scheduled = i < terminal_count
-        results.append(ScheduledLink(
-            node_a=gs_name,
-            node_b=v.sat_id,
-            scheduled=scheduled,
-            range_km=v.range_km,
-        ))
+        results.append(
+            ScheduledLink(
+                node_a=gs_name,
+                node_b=v.sat_id,
+                scheduled=scheduled,
+                range_km=v.range_km,
+            )
+        )
 
     return results
 
@@ -387,14 +403,16 @@ def schedule_isl_terminals(
     sorted_isls = sorted(feasible_isls, key=lambda x: x[1])
 
     results: list[ScheduledLink] = []
-    for i, (peer_id, priority, range_km) in enumerate(sorted_isls):
+    for i, (peer_id, _priority, range_km) in enumerate(sorted_isls):
         scheduled = i < terminal_count
-        results.append(ScheduledLink(
-            node_a=node_id,
-            node_b=peer_id,
-            scheduled=scheduled,
-            range_km=range_km,
-        ))
+        results.append(
+            ScheduledLink(
+                node_a=node_id,
+                node_b=peer_id,
+                scheduled=scheduled,
+                range_km=range_km,
+            )
+        )
 
     return results
 
@@ -409,7 +427,7 @@ def enforce_symmetric_scheduling(
     """
     # Build lookup: (node_a, node_b) -> is_scheduled
     scheduled_pairs: set[tuple[str, str]] = set()
-    for node_id, links in all_schedules.items():
+    for _node_id, links in all_schedules.items():
         for link in links:
             if link.scheduled:
                 scheduled_pairs.add((link.node_a, link.node_b))
@@ -429,9 +447,14 @@ def enforce_symmetric_scheduling(
         new_links: list[ScheduledLink] = []
         for link in links:
             if (link.node_a, link.node_b) in to_unschedule:
-                new_links.append(ScheduledLink(
-                    link.node_a, link.node_b, False, link.range_km,
-                ))
+                new_links.append(
+                    ScheduledLink(
+                        link.node_a,
+                        link.node_b,
+                        False,
+                        link.range_km,
+                    )
+                )
             else:
                 new_links.append(link)
         result[node_id] = new_links

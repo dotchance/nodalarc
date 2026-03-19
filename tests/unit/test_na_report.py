@@ -7,26 +7,26 @@ run each report type, verify expected strings in output.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
 from nodalarc.db.queries import (
     insert_convergence_result,
-    insert_link_up,
     insert_link_down,
+    insert_link_up,
     insert_probe_result,
     set_metadata,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.link_events import LinkUp, LinkDown
+from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.metrics import ConvergenceResult, ProbeResult
+
 from tools.na_report import (
-    report_summary,
     report_convergence,
     report_link_events,
     report_probe_results,
+    report_summary,
     run_report,
 )
 
@@ -43,70 +43,131 @@ def session_db(tmp_path: Path) -> str:
     set_metadata(conn, "constellation", "custom-example")
     set_metadata(conn, "routing_stack", "frr-isis")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Link events
-    insert_link_up(conn, LinkUp(
-        sim_time=now, wall_time=now,
-        node_a="sat-P00S00", node_b="sat-P00S01",
-        interface_a="isl0", interface_b="isl0",
-        latency_ms=3.5, bandwidth_mbps=1000.0,
-        reason="vis_gained",
-    ))
-    insert_link_up(conn, LinkUp(
-        sim_time=now, wall_time=now,
-        node_a="sat-P00S00", node_b="sat-P01S00",
-        interface_a="isl1", interface_b="isl1",
-        latency_ms=12.0, bandwidth_mbps=1000.0,
-        reason="vis_gained",
-    ))
-    insert_link_down(conn, LinkDown(
-        sim_time=now, wall_time=now,
-        node_a="sat-P00S00", node_b="sat-P00S01",
-        interface_a="isl0", interface_b="isl0",
-        reason="vis_lost",
-    ))
+    insert_link_up(
+        conn,
+        LinkUp(
+            sim_time=now,
+            wall_time=now,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            interface_a="isl0",
+            interface_b="isl0",
+            latency_ms=3.5,
+            bandwidth_mbps=1000.0,
+            reason="vis_gained",
+        ),
+    )
+    insert_link_up(
+        conn,
+        LinkUp(
+            sim_time=now,
+            wall_time=now,
+            node_a="sat-P00S00",
+            node_b="sat-P01S00",
+            interface_a="isl1",
+            interface_b="isl1",
+            latency_ms=12.0,
+            bandwidth_mbps=1000.0,
+            reason="vis_gained",
+        ),
+    )
+    insert_link_down(
+        conn,
+        LinkDown(
+            sim_time=now,
+            wall_time=now,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            interface_a="isl0",
+            interface_b="isl0",
+            reason="vis_lost",
+        ),
+    )
 
     # Convergence events
-    insert_convergence_result(conn, ConvergenceResult(
-        event_id="conv-001",
-        sim_time_start=now, sim_time_end=now,
-        wall_time_start=now, wall_time_end=now,
-        converged=True, duration_ms=120.5,
-        packets_lost=2, packets_sent=100,
-        triggering_link_event_id=1,
-    ))
-    insert_convergence_result(conn, ConvergenceResult(
-        event_id="conv-002",
-        sim_time_start=now, sim_time_end=now,
-        wall_time_start=now, wall_time_end=now,
-        converged=True, duration_ms=85.0,
-        packets_lost=0, packets_sent=100,
-        triggering_link_event_id=3,
-    ))
+    insert_convergence_result(
+        conn,
+        ConvergenceResult(
+            event_id="conv-001",
+            sim_time_start=now,
+            sim_time_end=now,
+            wall_time_start=now,
+            wall_time_end=now,
+            converged=True,
+            duration_ms=120.5,
+            packets_lost=2,
+            packets_sent=100,
+            triggering_link_event_id=1,
+        ),
+    )
+    insert_convergence_result(
+        conn,
+        ConvergenceResult(
+            event_id="conv-002",
+            sim_time_start=now,
+            sim_time_end=now,
+            wall_time_start=now,
+            wall_time_end=now,
+            converged=True,
+            duration_ms=85.0,
+            packets_lost=0,
+            packets_sent=100,
+            triggering_link_event_id=3,
+        ),
+    )
 
     # Probe results
-    insert_probe_result(conn, ProbeResult(
-        sim_time=now, wall_time=now,
-        flow_id="flow-alpha", src_node="sat-P00S00", dst_node="sat-P01S01",
-        packets_sent=50, packets_received=48,
-        latency_min_ms=10.0, latency_max_ms=25.0,
-        latency_avg_ms=15.0, jitter_ms=2.5,
-    ))
-    insert_probe_result(conn, ProbeResult(
-        sim_time=now, wall_time=now,
-        flow_id="flow-alpha", src_node="sat-P00S00", dst_node="sat-P01S01",
-        packets_sent=50, packets_received=50,
-        latency_min_ms=9.0, latency_max_ms=22.0,
-        latency_avg_ms=14.0, jitter_ms=2.0,
-    ))
-    insert_probe_result(conn, ProbeResult(
-        sim_time=now, wall_time=now,
-        flow_id="flow-beta", src_node="sat-P00S01", dst_node="sat-P01S00",
-        packets_sent=100, packets_received=95,
-        latency_min_ms=20.0, latency_max_ms=40.0,
-        latency_avg_ms=30.0, jitter_ms=5.0,
-    ))
+    insert_probe_result(
+        conn,
+        ProbeResult(
+            sim_time=now,
+            wall_time=now,
+            flow_id="flow-alpha",
+            src_node="sat-P00S00",
+            dst_node="sat-P01S01",
+            packets_sent=50,
+            packets_received=48,
+            latency_min_ms=10.0,
+            latency_max_ms=25.0,
+            latency_avg_ms=15.0,
+            jitter_ms=2.5,
+        ),
+    )
+    insert_probe_result(
+        conn,
+        ProbeResult(
+            sim_time=now,
+            wall_time=now,
+            flow_id="flow-alpha",
+            src_node="sat-P00S00",
+            dst_node="sat-P01S01",
+            packets_sent=50,
+            packets_received=50,
+            latency_min_ms=9.0,
+            latency_max_ms=22.0,
+            latency_avg_ms=14.0,
+            jitter_ms=2.0,
+        ),
+    )
+    insert_probe_result(
+        conn,
+        ProbeResult(
+            sim_time=now,
+            wall_time=now,
+            flow_id="flow-beta",
+            src_node="sat-P00S01",
+            dst_node="sat-P01S00",
+            packets_sent=100,
+            packets_received=95,
+            latency_min_ms=20.0,
+            latency_max_ms=40.0,
+            latency_avg_ms=30.0,
+            jitter_ms=5.0,
+        ),
+    )
 
     conn.close()
     return db_path

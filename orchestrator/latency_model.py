@@ -15,7 +15,9 @@ from nodalarc.models.events import TimelinePositionSnapshot
 
 
 def _geodetic_to_ecef(
-    lat_deg: float, lon_deg: float, alt_km: float,
+    lat_deg: float,
+    lon_deg: float,
+    alt_km: float,
 ) -> tuple[float, float, float]:
     """Convert geodetic (lat, lon, alt) to ECEF xyz in km."""
     lat_rad = math.radians(lat_deg)
@@ -63,7 +65,9 @@ class PositionTable:
         """Update positions from a timeline snapshot (geodetic → ECEF)."""
         for node_id, pos in snapshot.positions.items():
             self._positions[node_id] = _geodetic_to_ecef(
-                pos.lat_deg, pos.lon_deg, pos.alt_km,
+                pos.lat_deg,
+                pos.lon_deg,
+                pos.alt_km,
             )
 
     def get_position(self, node_id: str) -> tuple[float, float, float] | None:

@@ -4,8 +4,6 @@ Verifies destination node ID resolves to first IPv4 from terrestrial prefix.
 """
 
 import pytest
-
-from measurement.flow_manager import resolve_dst_ip
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
@@ -22,6 +20,8 @@ from nodalarc.models.session import (
     SessionMeta,
     TimeConfig,
 )
+
+from measurement.flow_manager import resolve_dst_ip
 
 
 def _make_session() -> SessionConfig:
@@ -46,7 +46,10 @@ def _make_gs_file(
     return GroundStationFile(
         default_terminals=[
             GroundTerminalDef(
-                type="optical", count=1, bandwidth_mbps=1000, tracking_capacity=4,
+                type="optical",
+                count=1,
+                bandwidth_mbps=1000,
+                tracking_capacity=4,
             ),
         ],
         default_terrestrial_prefixes=default_template,
@@ -94,7 +97,8 @@ class TestResolveDstIp:
             stations=[
                 GroundStationConfig(
                     name="ashburn",
-                    lat_deg=39.0, lon_deg=-77.5,
+                    lat_deg=39.0,
+                    lon_deg=-77.5,
                     terrestrial_prefixes=[
                         TerrestrialPrefix(prefix="192.168.100.0/24", metric=10),
                     ],
@@ -111,7 +115,8 @@ class TestResolveDstIp:
             stations=[
                 GroundStationConfig(
                     name="tokyo",
-                    lat_deg=35.7, lon_deg=139.7,
+                    lat_deg=35.7,
+                    lon_deg=139.7,
                     terrestrial_prefixes=[
                         TerrestrialPrefix(prefix="fd10::10:0/112", metric=10),
                         TerrestrialPrefix(prefix="10.100.0.0/24", metric=10),

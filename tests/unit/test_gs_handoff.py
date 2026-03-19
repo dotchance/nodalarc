@@ -11,7 +11,8 @@ import json
 import threading
 from unittest.mock import MagicMock
 
-from nodalarc.zmq_channels import decode_message, TOPIC_LINK_DOWN, TOPIC_LINK_UP
+from nodalarc.zmq_channels import TOPIC_LINK_DOWN, decode_message
+
 from orchestrator.realtime_dispatcher import RealtimeDispatcher
 
 
@@ -43,8 +44,14 @@ def _snap_record(timestamp_s, positions):
             "sim_time": f"2026-01-01T00:00:{int(timestamp_s):02d}Z",
             "timestamp_s": timestamp_s,
             "positions": {
-                nid: {"lat_deg": lat, "lon_deg": lon, "alt_km": 550.0,
-                       "vel_x_km_s": 0, "vel_y_km_s": 0, "vel_z_km_s": 0}
+                nid: {
+                    "lat_deg": lat,
+                    "lon_deg": lon,
+                    "alt_km": 550.0,
+                    "vel_x_km_s": 0,
+                    "vel_y_km_s": 0,
+                    "vel_z_km_s": 0,
+                }
                 for nid, (lat, lon) in positions.items()
             },
         },
@@ -53,7 +60,9 @@ def _snap_record(timestamp_s, positions):
 
 def _make_dispatcher(interface_map, bandwidth_map):
     """Create a dispatcher with mock ZMQ for unit testing."""
-    import tempfile, pathlib
+    import pathlib
+    import tempfile
+
     f = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
     f.close()
     return RealtimeDispatcher(
@@ -67,10 +76,7 @@ def _make_dispatcher(interface_map, bandwidth_map):
 
 def _gs_links(active_links):
     """Return the subset of active links involving a ground station."""
-    return {
-        pair for pair in active_links
-        if pair[0].startswith("gs-") or pair[1].startswith("gs-")
-    }
+    return {pair for pair in active_links if pair[0].startswith("gs-") or pair[1].startswith("gs-")}
 
 
 def _decode_events(pub_sock):
@@ -98,16 +104,24 @@ class TestGSHandoff:
         positions = {"gs-test": (0.0, 0.0), "sat-P00S00": (1.0, 1.0)}
 
         # Link up
-        dispatcher._process_batch([
-            _snap_record(0, positions),
-            _vis_record(0, "gs-test", "sat-P00S00", True, True, 40),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _snap_record(0, positions),
+                _vis_record(0, "gs-test", "sat-P00S00", True, True, 40),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
         assert len(_gs_links(dispatcher._active_links)) == 1
 
         # Terminal deallocated (scheduled=False)
-        dispatcher._process_batch([
-            _vis_record(3, "gs-test", "sat-P00S00", True, False, 20),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _vis_record(3, "gs-test", "sat-P00S00", True, False, 20),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
 
         assert len(_gs_links(dispatcher._active_links)) == 0
 
@@ -122,15 +136,23 @@ class TestGSHandoff:
 
         positions = {"gs-test": (0.0, 0.0), "sat-P00S00": (1.0, 1.0)}
 
-        dispatcher._process_batch([
-            _snap_record(0, positions),
-            _vis_record(0, "gs-test", "sat-P00S00", True, True, 40),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _snap_record(0, positions),
+                _vis_record(0, "gs-test", "sat-P00S00", True, True, 40),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
         pub_sock.reset_mock()
 
-        dispatcher._process_batch([
-            _vis_record(3, "gs-test", "sat-P00S00", True, False, 20),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _vis_record(3, "gs-test", "sat-P00S00", True, False, 20),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
 
         events = _decode_events(pub_sock)
         downs = [d for t, d in events if t == TOPIC_LINK_DOWN]
@@ -150,15 +172,23 @@ class TestGSHandoff:
 
         positions = {"sat-P00S00": (0.0, 0.0), "sat-P00S01": (0.0, 30.0)}
 
-        dispatcher._process_batch([
-            _snap_record(0, positions),
-            _vis_record(0, "sat-P00S00", "sat-P00S01", True, True),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _snap_record(0, positions),
+                _vis_record(0, "sat-P00S00", "sat-P00S01", True, True),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
         assert len(dispatcher._active_links) == 1
 
-        dispatcher._process_batch([
-            _vis_record(3, "sat-P00S00", "sat-P00S01", True, False),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _vis_record(3, "sat-P00S00", "sat-P00S01", True, False),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
 
         # ISL must still be active
         assert len(dispatcher._active_links) == 1
@@ -179,24 +209,40 @@ class TestGSHandoff:
         positions.update({sid: (float(i), float(i)) for i, sid in enumerate(sat_ids)})
 
         # Initial snapshot
-        dispatcher._process_batch([
-            _snap_record(0, positions),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _snap_record(0, positions),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
 
         # Sequential handoffs: each satellite takes over from the previous
         for i in range(n_sats):
             batch = [_snap_record(float((i + 1) * 10), positions)]
             if i > 0:
                 # Deallocate previous
-                batch.append(_vis_record(
-                    float((i + 1) * 10), gs, sat_ids[i - 1],
-                    visible=True, scheduled=False, elevation=10.0,
-                ))
+                batch.append(
+                    _vis_record(
+                        float((i + 1) * 10),
+                        gs,
+                        sat_ids[i - 1],
+                        visible=True,
+                        scheduled=False,
+                        elevation=10.0,
+                    )
+                )
             # Allocate current
-            batch.append(_vis_record(
-                float((i + 1) * 10), gs, sat_ids[i],
-                visible=True, scheduled=True, elevation=60.0,
-            ))
+            batch.append(
+                _vis_record(
+                    float((i + 1) * 10),
+                    gs,
+                    sat_ids[i],
+                    visible=True,
+                    scheduled=True,
+                    elevation=60.0,
+                )
+            )
             dispatcher._process_batch(batch, pub_sock, MagicMock())
 
         # Exactly 1 GS link active (the last scheduled satellite)
@@ -216,16 +262,24 @@ class TestGSHandoff:
 
         positions = {"gs-test": (0.0, 0.0), "sat-P00S00": (1.0, 1.0)}
 
-        dispatcher._process_batch([
-            _snap_record(0, positions),
-            _vis_record(0, "gs-test", "sat-P00S00", True, True, 40),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _snap_record(0, positions),
+                _vis_record(0, "gs-test", "sat-P00S00", True, True, 40),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
         assert len(_gs_links(dispatcher._active_links)) == 1
 
         # Satellite deallocated, nothing replaces it
-        dispatcher._process_batch([
-            _vis_record(10, "gs-test", "sat-P00S00", True, False, 10),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _vis_record(10, "gs-test", "sat-P00S00", True, False, 10),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
 
         assert len(_gs_links(dispatcher._active_links)) == 0
 
@@ -246,32 +300,41 @@ class TestGSHandoff:
         pub_sock = MagicMock()
 
         positions = {
-            gs_a: (0.0, 0.0), gs_b: (10.0, 10.0),
-            sat_a1: (1.0, 1.0), sat_a2: (2.0, 2.0),
-            sat_b1: (11.0, 11.0), sat_b2: (12.0, 12.0),
+            gs_a: (0.0, 0.0),
+            gs_b: (10.0, 10.0),
+            sat_a1: (1.0, 1.0),
+            sat_a2: (2.0, 2.0),
+            sat_b1: (11.0, 11.0),
+            sat_b2: (12.0, 12.0),
         }
 
         # Both GS get initial satellite
-        dispatcher._process_batch([
-            _snap_record(0, positions),
-            _vis_record(0, gs_a, sat_a1, True, True, 40),
-            _vis_record(0, gs_b, sat_b1, True, True, 40),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _snap_record(0, positions),
+                _vis_record(0, gs_a, sat_a1, True, True, 40),
+                _vis_record(0, gs_b, sat_b1, True, True, 40),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
         assert len(_gs_links(dispatcher._active_links)) == 2
 
         # Both handoff simultaneously
-        dispatcher._process_batch([
-            _snap_record(10, positions),
-            _vis_record(10, gs_a, sat_a1, True, False, 15),
-            _vis_record(10, gs_a, sat_a2, True, True, 60),
-            _vis_record(10, gs_b, sat_b1, True, False, 15),
-            _vis_record(10, gs_b, sat_b2, True, True, 60),
-        ], pub_sock, MagicMock())
+        dispatcher._process_batch(
+            [
+                _snap_record(10, positions),
+                _vis_record(10, gs_a, sat_a1, True, False, 15),
+                _vis_record(10, gs_a, sat_a2, True, True, 60),
+                _vis_record(10, gs_b, sat_b1, True, False, 15),
+                _vis_record(10, gs_b, sat_b2, True, True, 60),
+            ],
+            pub_sock,
+            MagicMock(),
+        )
 
         gs_active = _gs_links(dispatcher._active_links)
-        assert len(gs_active) == 2, (
-            f"Each GS should have exactly 1 link, got {gs_active}"
-        )
+        assert len(gs_active) == 2, f"Each GS should have exactly 1 link, got {gs_active}"
         # Verify it's the NEW satellites, not the old ones
         active_sats = set()
         for pair in gs_active:

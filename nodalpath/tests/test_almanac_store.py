@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-from nodalpath.models.almanac import AlmanacEntry, ForwardingTable, LabelBinding, IngressRule
+from nodalpath.models.almanac import AlmanacEntry, ForwardingTable, IngressRule
 from nodalpath.orchestrator.almanac_store import AlmanacStore
 
 
@@ -19,16 +17,22 @@ def _make_entry(sim_time: str, node_ids: list[str] | None = None) -> AlmanacEntr
     for nid in node_ids:
         ler_rules = []
         if nid.startswith("gs-"):
-            ler_rules.append(IngressRule(
-                dst_prefix="172.16.1.0/24", push_label=16001, out_interface="gnd0",
-            ))
-        tables.append(ForwardingTable(
-            node_id=nid,
-            topology_state_id=f"ts-{sim_time}",
-            sim_time=sim_time,
-            lsr_bindings=[],
-            ler_ingress_rules=ler_rules,
-        ))
+            ler_rules.append(
+                IngressRule(
+                    dst_prefix="172.16.1.0/24",
+                    push_label=16001,
+                    out_interface="gnd0",
+                )
+            )
+        tables.append(
+            ForwardingTable(
+                node_id=nid,
+                topology_state_id=f"ts-{sim_time}",
+                sim_time=sim_time,
+                lsr_bindings=[],
+                ler_ingress_rules=ler_rules,
+            )
+        )
     return AlmanacEntry(
         topology_state_id=f"ts-{sim_time}",
         sim_time=sim_time,

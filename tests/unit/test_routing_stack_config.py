@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import yaml
-
 from nodalarc.models.routing_stack import RoutingStackConfig
 
 

@@ -6,9 +6,9 @@ Supports three modes via discriminated union on the `mode` field:
 - tle: TLE file with optional filtering
 """
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Tag, field_validator, model_validator
+from pydantic import BaseModel, Discriminator, Tag, field_validator, model_validator
 
 
 class OrbitalElements(BaseModel):

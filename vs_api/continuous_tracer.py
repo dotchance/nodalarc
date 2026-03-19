@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import socket
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 from nodalarc.models.path import (
     LiveTraceDirection,
@@ -32,6 +33,7 @@ from nodalarc.models.path import (
 from nodalarc.models.vs_api import TracedPath
 from nodalarc.platform import PlatformConfig
 from nodalarc.tracepath_parser import parse_tracepath
+
 from nodalpath.models.topology import TopologyNode
 from vs_api.timeline_scanner import TimelineScanner
 
@@ -90,10 +92,8 @@ class ContinuousTracer:
         """Stop the trace loop."""
         if self._task is not None:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
         self._latest = None
 
@@ -112,9 +112,13 @@ class ContinuousTracer:
             traced_nodes = {h.node_id for h in self._latest.forward.hops}
             traced_nodes |= {h.node_id for h in self._latest.reverse.hops}
         # Always retrace if src/dst is involved, or if no path yet
-        if (node_a in (self._src, self._dst) or node_b in (self._src, self._dst)
-                or node_a in traced_nodes or node_b in traced_nodes
-                or self._latest is None):
+        if (
+            node_a in (self._src, self._dst)
+            or node_b in (self._src, self._dst)
+            or node_a in traced_nodes
+            or node_b in traced_nodes
+            or self._latest is None
+        ):
             self._retrace_event.set()
 
     @property
@@ -168,13 +172,16 @@ class ContinuousTracer:
         while True:
             try:
                 sim_time = self._get_sim_time()
-                now = datetime.now(timezone.utc).isoformat()
+                now = datetime.now(UTC).isoformat()
 
                 if self._trace_mode == "cspf":
                     result = await self._trace_cspf(sim_time, now)
                 else:
                     result = await loop.run_in_executor(
-                        None, self._trace_tracepath, sim_time, now,
+                        None,
+                        self._trace_tracepath,
+                        sim_time,
+                        now,
                     )
 
                 if result is not None:
@@ -190,7 +197,7 @@ class ContinuousTracer:
 
                 # Adaptive sleep — wake early if a topology change is signalled
                 interval = self._config.trace_interval_seconds
-                if result and result.path_valid_seconds is not None:
+                if result and result.path_valid_seconds is not None:  # noqa: SIM102
                     if result.path_valid_seconds < self._config.trace_fast_window_seconds:
                         interval = self._config.trace_interval_fast_seconds
 
@@ -202,9 +209,12 @@ class ContinuousTracer:
                 try:
                     await asyncio.wait_for(self._retrace_event.wait(), timeout=interval)
                     # Woke early from topology change — wait for OSPF convergence
-                    log.info("Topology change detected, waiting %.1fs for convergence", self._convergence_delay_s)
+                    log.info(
+                        "Topology change detected, waiting %.1fs for convergence",
+                        self._convergence_delay_s,
+                    )
                     await asyncio.sleep(self._convergence_delay_s)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass  # Normal interval elapsed
 
             except asyncio.CancelledError:
@@ -219,11 +229,13 @@ class ContinuousTracer:
         Uses tracepath -n -b. No source binding needed — once the IGP
         converges, FRR routes are more specific than the K3s default route.
         """
-        return self._daemon_request({
-            "action": "tracepath",
-            "pod": pod,
-            "target": target,
-        })
+        return self._daemon_request(
+            {
+                "action": "tracepath",
+                "pod": pod,
+                "target": target,
+            }
+        )
 
     def _trace_tracepath(self, sim_time: str, now: str) -> LiveTraceResult | None:
         """Run forward + reverse tracepath concurrently, then enrich."""
@@ -235,10 +247,14 @@ class ContinuousTracer:
         # Run forward and reverse concurrently (spec line 358)
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             fwd_future = pool.submit(
-                self._run_tracepath, self._src.lower(), dst_node.loopback_ipv4,
+                self._run_tracepath,
+                self._src.lower(),
+                dst_node.loopback_ipv4,
             )
             rev_future = pool.submit(
-                self._run_tracepath, self._dst.lower(), src_node.loopback_ipv4,
+                self._run_tracepath,
+                self._dst.lower(),
+                src_node.loopback_ipv4,
             )
             fwd_resp = fwd_future.result()
             rev_resp = rev_future.result()
@@ -247,11 +263,19 @@ class ContinuousTracer:
         rev_stdout = rev_resp.get("stdout", "")
 
         if not fwd_stdout and not fwd_resp.get("ok", True):
-            log.warning("Forward tracepath %s→%s failed: %s",
-                        self._src, self._dst, fwd_resp.get("error", "unknown"))
+            log.warning(
+                "Forward tracepath %s→%s failed: %s",
+                self._src,
+                self._dst,
+                fwd_resp.get("error", "unknown"),
+            )
         if not rev_stdout and not rev_resp.get("ok", True):
-            log.warning("Reverse tracepath %s→%s failed: %s",
-                        self._dst, self._src, rev_resp.get("error", "unknown"))
+            log.warning(
+                "Reverse tracepath %s→%s failed: %s",
+                self._dst,
+                self._src,
+                rev_resp.get("error", "unknown"),
+            )
 
         # Parse with tracepath parser
         fwd_parsed = parse_tracepath(fwd_stdout)
@@ -267,14 +291,16 @@ class ContinuousTracer:
         all_links = fwd_links + rev_links
         all_queries = self._build_delay_queries(all_links)
         if all_queries:
-            delay_resp = self._daemon_request({
-                "action": "read_link_delays",
-                "queries": all_queries,
-            })
+            delay_resp = self._daemon_request(
+                {
+                    "action": "read_link_delays",
+                    "queries": all_queries,
+                }
+            )
             delays = delay_resp.get("delays", [])
             self._apply_delays(all_links, delays)
-            fwd_links = all_links[:len(fwd_links)]
-            rev_links = all_links[len(fwd_links):]
+            fwd_links = all_links[: len(fwd_links)]
+            rev_links = all_links[len(fwd_links) :]
 
         # Path validity — spec line 258: path_valid_until is ISO 8601 sim_time
         path_valid_until: str | None = None
@@ -327,12 +353,12 @@ class ContinuousTracer:
     async def _trace_cspf(self, sim_time: str, now: str) -> LiveTraceResult | None:
         """Run CSPF path derivation via NodalPath HTTP API."""
         import httpx
-
         from nodalarc.platform import get_platform_config
+
         cfg = get_platform_config()
         # NodalPath may run in a K8s container (NodePort 31100) or on the host (port 3100)
         np_host = cfg.zmq_connect_host_for("nodalpath")
-        if np_host == cfg.zmq_connect_host:
+        if np_host == cfg.zmq_connect_host:  # noqa: SIM108
             # Fallback to global host → NodalPath is on the host or via NodePort
             # Try NodePort first (31100), fall back to direct port (3100)
             np_port = 31100
@@ -342,10 +368,14 @@ class ContinuousTracer:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 fwd_resp, rev_resp = await asyncio.gather(
-                    client.get(f"http://{np_host}:{np_port}/api/v1/path",
-                               params={"src": self._src, "dst": self._dst}),
-                    client.get(f"http://{np_host}:{np_port}/api/v1/path",
-                               params={"src": self._dst, "dst": self._src}),
+                    client.get(
+                        f"http://{np_host}:{np_port}/api/v1/path",
+                        params={"src": self._src, "dst": self._dst},
+                    ),
+                    client.get(
+                        f"http://{np_host}:{np_port}/api/v1/path",
+                        params={"src": self._dst, "dst": self._src},
+                    ),
                 )
         except Exception as exc:
             log.warning("CSPF trace failed: %s", exc)
@@ -392,14 +422,16 @@ class ContinuousTracer:
         multiple times (retries at the same TTL).  We take the first
         entry with a valid, resolvable IP at each hop_num.
         """
-        hops: list[PathHop] = [PathHop(
-            node_id=src_node.node_id,
-            node_type=src_node.node_type,
-            sid=src_node.sid,
-            rtt_ms=0.0,
-        )]
+        hops: list[PathHop] = [
+            PathHop(
+                node_id=src_node.node_id,
+                node_type=src_node.node_type,
+                sid=src_node.sid,
+                rtt_ms=0.0,
+            )
+        ]
         # Collect the first resolvable IP per hop_num
-        best_per_hop: dict[int, TracepathHop] = {}
+        best_per_hop: dict[int, TracepathHop] = {}  # noqa: F821
         for th in parsed.hops:
             if th.ip is None:
                 continue
@@ -414,13 +446,15 @@ class ContinuousTracer:
             if node_id == src_node.node_id:
                 continue
             node = self._node_registry[node_id]
-            hops.append(PathHop(
-                node_id=node_id,
-                node_type=node.node_type,
-                sid=node.sid,
-                rtt_ms=round(th.rtt_ms, 3) if th.rtt_ms is not None else None,
-                responding_ip=th.ip,
-            ))
+            hops.append(
+                PathHop(
+                    node_id=node_id,
+                    node_type=node.node_type,
+                    sid=node.sid,
+                    rtt_ms=round(th.rtt_ms, 3) if th.rtt_ms is not None else None,
+                    responding_ip=th.ip,
+                )
+            )
         return hops
 
     def _build_links(self, hops: list[PathHop]) -> list[LiveTraceLink]:
@@ -433,17 +467,16 @@ class ContinuousTracer:
             iface = ""
             link_type = None
             if iface_pair:
-                if a == key[0]:
-                    iface = iface_pair[0]
-                else:
-                    iface = iface_pair[1]
+                iface = iface_pair[0] if a == key[0] else iface_pair[1]
                 link_type = "ground" if a.startswith("gs-") or b.startswith("gs-") else "isl"
-            links.append(LiveTraceLink(
-                from_node=a,
-                to_node=b,
-                interface=iface,
-                link_type=link_type,
-            ))
+            links.append(
+                LiveTraceLink(
+                    from_node=a,
+                    to_node=b,
+                    interface=iface,
+                    link_type=link_type,
+                )
+            )
         return links
 
     def _build_delay_queries(self, links: list[LiveTraceLink]) -> list[dict]:
@@ -513,13 +546,17 @@ class ContinuousTracer:
             if isinstance(h, dict) and isinstance(h_next, dict):
                 from_id = h.get("node_id", "")
                 to_id = h_next.get("node_id", "")
-                links.append(LiveTraceLink(
-                    from_node=from_id,
-                    to_node=to_id,
-                    interface=h.get("out_interface", ""),
-                    netem_delay_ms=h.get("latency_to_next_ms"),
-                    link_type="ground" if from_id.startswith("gs-") or to_id.startswith("gs-") else "isl",
-                ))
+                links.append(
+                    LiveTraceLink(
+                        from_node=from_id,
+                        to_node=to_id,
+                        interface=h.get("out_interface", ""),
+                        netem_delay_ms=h.get("latency_to_next_ms"),
+                        link_type="ground"
+                        if from_id.startswith("gs-") or to_id.startswith("gs-")
+                        else "isl",
+                    )
+                )
         return links
 
     def _daemon_request(self, req: dict) -> dict:
@@ -536,7 +573,7 @@ class ContinuousTracer:
                     break
                 buf += chunk
                 if b"\n" in buf:
-                    return json.loads(buf[:buf.index(b"\n")])
+                    return json.loads(buf[: buf.index(b"\n")])
             return {"ok": False, "error": "No response from deploy daemon"}
         except FileNotFoundError:
             return {"ok": False, "error": "Deploy daemon not running"}
@@ -544,7 +581,7 @@ class ContinuousTracer:
             return {"ok": False, "error": "Deploy daemon connection refused"}
         except PermissionError:
             return {"ok": False, "error": "Deploy daemon socket permission denied"}
-        except socket.timeout:
+        except TimeoutError:
             return {"ok": False, "error": "Daemon request timed out"}
         except OSError as exc:
             return {"ok": False, "error": f"Daemon socket error: {exc}"}

@@ -10,12 +10,10 @@ Verifies:
 from __future__ import annotations
 
 import json
-import tempfile
 import threading
 import time
+from datetime import UTC
 from pathlib import Path
-
-import pytest
 
 from ome.event_stream import (
     TimelineEvent,
@@ -32,10 +30,14 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 def _load_session_fixtures():
     """Load custom-example constellation fixtures for testing."""
-    import yaml
-    from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
     from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
     from nodalarc.models.session import SessionConfig
+
+    from ome.constellation_loader import (
+        expand_constellation,
+        load_constellation,
+        load_ground_stations,
+    )
 
     # Build an inline session config referencing custom-example + us-conus
     session_data = {
@@ -59,7 +61,12 @@ def _load_session_fixtures():
     period = orbital_period(first_alt)
 
     from datetime import datetime
-    epoch_unix = datetime.fromisoformat(session.time.start_time).timestamp() if session.time.start_time else 1704067200.0
+
+    epoch_unix = (
+        datetime.fromisoformat(session.time.start_time).timestamp()
+        if session.time.start_time
+        else 1704067200.0
+    )
 
     return {
         "satellites": satellites,
@@ -143,8 +150,7 @@ class TestBoundaryState:
         # Window 2 timestamps start at period, not 0
         min_ts2 = min(e.timestamp_s for e in events2)
         assert min_ts2 >= fix["period"] - 1.0, (
-            f"Window 2 timestamps should start at ~{fix['period']:.0f}s, "
-            f"got {min_ts2:.1f}s"
+            f"Window 2 timestamps should start at ~{fix['period']:.0f}s, got {min_ts2:.1f}s"
         )
 
         # Window 2 should have fewer initial visibility events because
@@ -183,17 +189,15 @@ class TestBoundaryState:
 
         # Get the first batch of vis events in window 2 (at timestamp_offset)
         boundary_vis = [
-            e for e in events2
-            if e.event_type == "VisibilityEvent"
-            and abs(e.timestamp_s - fix["period"]) < 1.0
+            e
+            for e in events2
+            if e.event_type == "VisibilityEvent" and abs(e.timestamp_s - fix["period"]) < 1.0
         ]
 
         # For links that were (visible, scheduled) at end of window 1,
         # window 2 should NOT emit another (visible, scheduled) at t=period
         # because the initial state already knows they're up
-        isl_up_at_end = {
-            pair for pair, (vis, sched) in isl1.items() if vis and sched
-        }
+        isl_up_at_end = {pair for pair, (vis, sched) in isl1.items() if vis and sched}
         for ev in boundary_vis:
             pair = (ev.data.node_a, ev.data.node_b)
             if pair in isl_up_at_end:
@@ -202,8 +206,7 @@ class TestBoundaryState:
                 new_state = (ev.data.visible, ev.data.scheduled)
                 old_state = isl1.get(pair, (False, False))
                 assert new_state != old_state, (
-                    f"Duplicate event at boundary for {pair}: "
-                    f"old={old_state}, new={new_state}"
+                    f"Duplicate event at boundary for {pair}: old={old_state}, new={new_state}"
                 )
 
     def test_timestamp_offset_applied(self):
@@ -271,10 +274,15 @@ class TestGSVisibilityShift:
                 if e.event_type == "VisibilityEvent":
                     a, b = e.data.node_a, e.data.node_b
                     if a.startswith("gs-") or b.startswith("gs-"):
-                        result.append((
-                            a, b, e.data.visible, e.data.scheduled,
-                            round(e.timestamp_s - base_ts),
-                        ))
+                        result.append(
+                            (
+                                a,
+                                b,
+                                e.data.visible,
+                                e.data.scheduled,
+                                round(e.timestamp_s - base_ts),
+                            )
+                        )
             return result
 
         gs1_events = _gs_vis_events(events1)
@@ -354,7 +362,10 @@ class TestTimelineReader:
             def _append():
                 time.sleep(0.2)
                 with open(timeline, "a") as f:
-                    f.write(json.dumps({"timestamp_s": 1.0, "event_type": "ClockTick", "data": {}}) + "\n")
+                    f.write(
+                        json.dumps({"timestamp_s": 1.0, "event_type": "ClockTick", "data": {}})
+                        + "\n"
+                    )
                     f.flush()
 
             t = threading.Thread(target=_append)
@@ -374,7 +385,7 @@ class TestTimelineReader:
         records = [
             {"timestamp_s": 0.0, "event_type": "A", "data": {}},
             {"timestamp_s": 0.05, "event_type": "B", "data": {}},  # Within epsilon (0.1)
-            {"timestamp_s": 1.0, "event_type": "C", "data": {}},   # New group
+            {"timestamp_s": 1.0, "event_type": "C", "data": {}},  # New group
         ]
         with open(timeline, "w") as f:
             for r in records:
@@ -398,15 +409,22 @@ class TestAppendTimeline:
 
     def test_append_creates_file(self, tmp_path):
         """append_timeline_jsonl creates the file if it doesn't exist."""
+        from datetime import datetime
+
         from nodalarc.models.events import ClockTick
-        from datetime import datetime, timezone
 
         out = tmp_path / "new.jsonl"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         events = [
-            TimelineEvent(0.0, "ClockTick", ClockTick(
-                sim_time=now, wall_time=now, compression_ratio=1.0,
-            )),
+            TimelineEvent(
+                0.0,
+                "ClockTick",
+                ClockTick(
+                    sim_time=now,
+                    wall_time=now,
+                    compression_ratio=1.0,
+                ),
+            ),
         ]
         append_timeline_jsonl(events, out)
         assert out.exists()
@@ -419,20 +437,33 @@ class TestAppendTimeline:
 
     def test_append_adds_to_existing(self, tmp_path):
         """append_timeline_jsonl appends without overwriting."""
+        from datetime import datetime
+
         from nodalarc.models.events import ClockTick
-        from datetime import datetime, timezone
 
         out = tmp_path / "existing.jsonl"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         events1 = [
-            TimelineEvent(0.0, "ClockTick", ClockTick(
-                sim_time=now, wall_time=now, compression_ratio=1.0,
-            )),
+            TimelineEvent(
+                0.0,
+                "ClockTick",
+                ClockTick(
+                    sim_time=now,
+                    wall_time=now,
+                    compression_ratio=1.0,
+                ),
+            ),
         ]
         events2 = [
-            TimelineEvent(1.0, "ClockTick", ClockTick(
-                sim_time=now, wall_time=now, compression_ratio=1.0,
-            )),
+            TimelineEvent(
+                1.0,
+                "ClockTick",
+                ClockTick(
+                    sim_time=now,
+                    wall_time=now,
+                    compression_ratio=1.0,
+                ),
+            ),
         ]
 
         # Write first, then append
@@ -446,21 +477,34 @@ class TestAppendTimeline:
 
     def test_write_then_read_roundtrip(self, tmp_path):
         """Events written and appended can be read back by TimelineReader."""
+        from datetime import datetime
+
         from nodalarc.models.events import ClockTick
-        from datetime import datetime, timezone
 
         out = tmp_path / "roundtrip.jsonl"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         events1 = [
-            TimelineEvent(0.0, "ClockTick", ClockTick(
-                sim_time=now, wall_time=now, compression_ratio=1.0,
-            )),
+            TimelineEvent(
+                0.0,
+                "ClockTick",
+                ClockTick(
+                    sim_time=now,
+                    wall_time=now,
+                    compression_ratio=1.0,
+                ),
+            ),
         ]
         events2 = [
-            TimelineEvent(1.0, "ClockTick", ClockTick(
-                sim_time=now, wall_time=now, compression_ratio=1.0,
-            )),
+            TimelineEvent(
+                1.0,
+                "ClockTick",
+                ClockTick(
+                    sim_time=now,
+                    wall_time=now,
+                    compression_ratio=1.0,
+                ),
+            ),
         ]
 
         write_timeline_jsonl(events1, out)

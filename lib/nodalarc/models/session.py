@@ -43,7 +43,9 @@ class AreaAssignmentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_strategy_fields(self):
-        if self.strategy == "stripe" and (self.planes_per_stripe is None or self.planes_per_stripe <= 0):
+        if self.strategy == "stripe" and (
+            self.planes_per_stripe is None or self.planes_per_stripe <= 0
+        ):
             raise ValueError("strategy 'stripe' requires planes_per_stripe > 0")
         if self.strategy == "explicit" and not self.assignments:
             raise ValueError("strategy 'explicit' requires assignments list")
@@ -129,7 +131,9 @@ class SessionConfig(BaseModel):
     session: SessionMeta
     constellation: str  # Path to constellation file
     ground_stations: str | list[str]  # Set name, path to GS file, or list of station names
-    default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None  # For direct station lists
+    default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = (
+        None  # For direct station lists
+    )
     addressing: AddressingConfig = AddressingConfig()
     routing: RoutingConfig
     time: TimeConfig = TimeConfig()

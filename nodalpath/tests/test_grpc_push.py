@@ -40,7 +40,10 @@ def _make_table(
 class TestBuildForwardingUpdate:
     def test_swap_produces_swap_action(self):
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table(bindings=[binding])
         update = build_forwarding_update(table, "state-1", "2026-03-01T14:30:00Z")
@@ -53,7 +56,10 @@ class TestBuildForwardingUpdate:
 
     def test_pop_produces_pop_action_with_zero_out_label(self):
         binding = LabelBinding(
-            in_label=16001, action="pop", out_label=None, out_interface="gnd0",
+            in_label=16001,
+            action="pop",
+            out_label=None,
+            out_interface="gnd0",
         )
         table = _make_table(bindings=[binding])
         update = build_forwarding_update(table, "state-1", "2026-03-01T14:30:00Z")
@@ -64,7 +70,10 @@ class TestBuildForwardingUpdate:
 
     def test_push_action_skipped_with_warning(self, caplog):
         binding = LabelBinding(
-            in_label=16001, action="push", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="push",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table(bindings=[binding])
         with caplog.at_level(logging.WARNING):
@@ -74,7 +83,9 @@ class TestBuildForwardingUpdate:
 
     def test_ingress_rule_mapped_to_ingress_entry(self):
         rule = IngressRule(
-            dst_prefix="172.16.0.0/24", push_label=16001, out_interface="gnd0",
+            dst_prefix="172.16.0.0/24",
+            push_label=16001,
+            out_interface="gnd0",
         )
         table = _make_table(rules=[rule])
         update = build_forwarding_update(table, "state-1", "2026-03-01T14:30:00Z")
@@ -85,21 +96,30 @@ class TestBuildForwardingUpdate:
         assert entry.out_interface == "gnd0"
 
     def test_topology_state_id_and_sim_time_propagated(self):
-        table = _make_table(bindings=[
-            LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
-        ])
+        table = _make_table(
+            bindings=[
+                LabelBinding(in_label=100, action="swap", out_label=200, out_interface="isl0"),
+            ]
+        )
         update = build_forwarding_update(table, "topo-42", "2026-06-15T12:00:00Z")
         assert update.topology_state_id == "topo-42"
         assert update.sim_time == "2026-06-15T12:00:00Z"
 
     def test_backup_fields_zeroed_when_none(self):
         binding = LabelBinding(
-            in_label=100, action="swap", out_label=200, out_interface="isl0",
-            backup_out_label=None, backup_out_interface=None,
+            in_label=100,
+            action="swap",
+            out_label=200,
+            out_interface="isl0",
+            backup_out_label=None,
+            backup_out_interface=None,
         )
         rule = IngressRule(
-            dst_prefix="10.0.0.0/8", push_label=100, out_interface="gnd0",
-            backup_push_label=None, backup_out_interface=None,
+            dst_prefix="10.0.0.0/8",
+            push_label=100,
+            out_interface="gnd0",
+            backup_push_label=None,
+            backup_out_interface=None,
         )
         table = _make_table(bindings=[binding], rules=[rule])
         update = build_forwarding_update(table, "s", "t")
@@ -146,12 +166,17 @@ class TestPushForwardingTable:
         # Stub service responds
         mock_stub_cls = MagicMock()
         mock_response = PushResponse(
-            success=True, error_message="", entries_installed=5, apply_time_ms=1.5,
+            success=True,
+            error_message="",
+            entries_installed=5,
+            apply_time_ms=1.5,
         )
         mock_stub_instance = MagicMock()
         mock_stub_instance.UpdateForwardingTable.return_value = mock_response
 
-        with patch("nodalpath.push.grpc_push.ForwardingServiceStub", return_value=mock_stub_instance):
+        with patch(
+            "nodalpath.push.grpc_push.ForwardingServiceStub", return_value=mock_stub_instance
+        ):
             result = push_forwarding_table("sat-P00S00", "10.42.0.10", self._make_update())
 
         assert result.success is True
@@ -174,7 +199,9 @@ class TestPushForwardingTable:
         mock_grpc_mod.RpcError = grpc.RpcError
         mock_grpc_mod.FutureTimeoutError = grpc.FutureTimeoutError
 
-        with patch("nodalpath.push.grpc_push.ForwardingServiceStub", return_value=mock_stub_instance):
+        with patch(
+            "nodalpath.push.grpc_push.ForwardingServiceStub", return_value=mock_stub_instance
+        ):
             result = push_forwarding_table("sat-P00S00", "10.42.0.10", self._make_update())
 
         assert result.success is False
@@ -221,12 +248,17 @@ class TestPushForwardingTable:
         mock_grpc_mod.channel_ready_future.return_value = mock_future
 
         mock_response = PushResponse(
-            success=False, error_message="route conflict", entries_installed=0, apply_time_ms=0.0,
+            success=False,
+            error_message="route conflict",
+            entries_installed=0,
+            apply_time_ms=0.0,
         )
         mock_stub_instance = MagicMock()
         mock_stub_instance.UpdateForwardingTable.return_value = mock_response
 
-        with patch("nodalpath.push.grpc_push.ForwardingServiceStub", return_value=mock_stub_instance):
+        with patch(
+            "nodalpath.push.grpc_push.ForwardingServiceStub", return_value=mock_stub_instance
+        ):
             result = push_forwarding_table("sat-P00S00", "10.42.0.10", self._make_update())
 
         assert result.success is False

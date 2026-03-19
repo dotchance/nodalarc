@@ -311,11 +311,16 @@ def main() -> None:
         description="Nodal Arc Cross-Session Comparison Tool",
     )
     parser.add_argument(
-        "--sessions", nargs="+", required=True, metavar="DB",
+        "--sessions",
+        nargs="+",
+        required=True,
+        metavar="DB",
         help="Paths to session SQLite databases (min 2)",
     )
     parser.add_argument(
-        "--report", choices=REPORT_TYPES, default="summary",
+        "--report",
+        choices=REPORT_TYPES,
+        default="summary",
         help="Report type (default: summary)",
     )
     args = parser.parse_args()

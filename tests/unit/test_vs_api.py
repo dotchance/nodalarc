@@ -2,31 +2,36 @@
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
+from nodalarc.db.queries import (
+    insert_convergence_result,
+    insert_link_up,
+    insert_snapshot,
+    query_nearest_snapshot,
+)
 from nodalarc.db.schema import create_tables
-from nodalarc.db.queries import insert_link_up, insert_convergence_result, insert_snapshot, query_nearest_snapshot
 from nodalarc.models.link_events import LinkUp
 from nodalarc.models.metrics import ConvergenceResult
 from nodalarc.models.vs_api import (
     LinkState,
     NetworkHealth,
     NodeState,
-    RecentEvent,
     StateSnapshot,
 )
+
 from vs_api.main import (
+    _add_recent_event,
+    _build_snapshot,
+    _gs_elevation_map,
+    _link_key,
     _state,
     _state_lock,
-    _build_snapshot,
-    _update_position,
-    _update_link_up,
-    _update_link_down,
-    _update_latency,
     _update_convergence,
-    _add_recent_event,
-    _link_key,
-    _gs_elevation_map,
+    _update_latency,
+    _update_link_down,
+    _update_link_up,
+    _update_position,
 )
 
 
@@ -42,7 +47,7 @@ def _reset_state():
             "unreachable_flows": 0,
             "last_convergence_ms": None,
         }
-        _state["sim_time"] = datetime.now(timezone.utc).isoformat()
+        _state["sim_time"] = datetime.now(UTC).isoformat()
 
 
 class TestUpdatePosition:
@@ -54,27 +59,29 @@ class TestUpdatePosition:
 
     def test_satellite_position_update(self):
         """Satellite nodes get lat/lon/alt and produce valid NodeState in snapshot."""
-        _update_position({
-            "sim_time": "2026-01-01T00:00:00Z",
-            "positions": [
-                {
-                    "node_id": "sat-P00S00",
-                    "node_type": "satellite",
-                    "lat_deg": 45.0,
-                    "lon_deg": -120.0,
-                    "alt_km": 550.0,
-                    "vel_x_km_s": 1.0,
-                    "vel_y_km_s": 2.0,
-                    "vel_z_km_s": 3.0,
-                    "plane": 0,
-                    "slot": 0,
-                    "routing_area": "49.0001",
-                    "neighbor_count": 4,
-                    "isl_count": 4,
-                    "gnd_count": 0,
-                },
-            ],
-        })
+        _update_position(
+            {
+                "sim_time": "2026-01-01T00:00:00Z",
+                "positions": [
+                    {
+                        "node_id": "sat-P00S00",
+                        "node_type": "satellite",
+                        "lat_deg": 45.0,
+                        "lon_deg": -120.0,
+                        "alt_km": 550.0,
+                        "vel_x_km_s": 1.0,
+                        "vel_y_km_s": 2.0,
+                        "vel_z_km_s": 3.0,
+                        "plane": 0,
+                        "slot": 0,
+                        "routing_area": "49.0001",
+                        "neighbor_count": 4,
+                        "isl_count": 4,
+                        "gnd_count": 0,
+                    },
+                ],
+            }
+        )
         snapshot = _build_snapshot()
         assert len(snapshot["nodes"]) == 1
         node = snapshot["nodes"][0]
@@ -90,23 +97,25 @@ class TestUpdatePosition:
     def test_satellite_position_changes_on_update(self):
         """Satellite positions update when new snapshot arrives — this is what makes them move."""
         for lon in [0.0, 10.0, 20.0]:
-            _update_position({
-                "sim_time": "2026-01-01T00:00:00Z",
-                "positions": [
-                    {
-                        "node_id": "sat-P00S00",
-                        "node_type": "satellite",
-                        "lat_deg": 0.0,
-                        "lon_deg": lon,
-                        "alt_km": 550.0,
-                        "vel_x_km_s": None,
-                        "vel_y_km_s": None,
-                        "vel_z_km_s": None,
-                        "plane": 0,
-                        "slot": 0,
-                    },
-                ],
-            })
+            _update_position(
+                {
+                    "sim_time": "2026-01-01T00:00:00Z",
+                    "positions": [
+                        {
+                            "node_id": "sat-P00S00",
+                            "node_type": "satellite",
+                            "lat_deg": 0.0,
+                            "lon_deg": lon,
+                            "alt_km": 550.0,
+                            "vel_x_km_s": None,
+                            "vel_y_km_s": None,
+                            "vel_z_km_s": None,
+                            "plane": 0,
+                            "slot": 0,
+                        },
+                    ],
+                }
+            )
         snapshot = _build_snapshot()
         assert snapshot["nodes"][0]["lon_deg"] == 20.0
 
@@ -114,25 +123,27 @@ class TestUpdatePosition:
         """GS nodes get min_elevation_deg from _gs_elevation_map."""
         _gs_elevation_map["gs-hawthorne"] = 25.0
         _gs_elevation_map["gs-mcmurdo"] = 10.0
-        _update_position({
-            "sim_time": "2026-01-01T00:00:00Z",
-            "positions": [
-                {
-                    "node_id": "gs-hawthorne",
-                    "node_type": "ground_station",
-                    "lat_deg": 33.92,
-                    "lon_deg": -118.33,
-                    "alt_km": 0.0,
-                },
-                {
-                    "node_id": "gs-mcmurdo",
-                    "node_type": "ground_station",
-                    "lat_deg": -77.85,
-                    "lon_deg": 166.67,
-                    "alt_km": 0.0,
-                },
-            ],
-        })
+        _update_position(
+            {
+                "sim_time": "2026-01-01T00:00:00Z",
+                "positions": [
+                    {
+                        "node_id": "gs-hawthorne",
+                        "node_type": "ground_station",
+                        "lat_deg": 33.92,
+                        "lon_deg": -118.33,
+                        "alt_km": 0.0,
+                    },
+                    {
+                        "node_id": "gs-mcmurdo",
+                        "node_type": "ground_station",
+                        "lat_deg": -77.85,
+                        "lon_deg": 166.67,
+                        "alt_km": 0.0,
+                    },
+                ],
+            }
+        )
         snapshot = _build_snapshot()
         nodes_by_id = {n["node_id"]: n for n in snapshot["nodes"]}
         assert nodes_by_id["gs-hawthorne"]["min_elevation_deg"] == 25.0
@@ -141,18 +152,20 @@ class TestUpdatePosition:
     def test_satellite_has_no_elevation_field_without_gs_map(self):
         """Satellites never get min_elevation_deg even if GS map is populated."""
         _gs_elevation_map["gs-hawthorne"] = 25.0
-        _update_position({
-            "sim_time": "2026-01-01T00:00:00Z",
-            "positions": [
-                {
-                    "node_id": "sat-P00S00",
-                    "node_type": "satellite",
-                    "lat_deg": 0.0,
-                    "lon_deg": 0.0,
-                    "alt_km": 550.0,
-                },
-            ],
-        })
+        _update_position(
+            {
+                "sim_time": "2026-01-01T00:00:00Z",
+                "positions": [
+                    {
+                        "node_id": "sat-P00S00",
+                        "node_type": "satellite",
+                        "lat_deg": 0.0,
+                        "lon_deg": 0.0,
+                        "alt_km": 550.0,
+                    },
+                ],
+            }
+        )
         snapshot = _build_snapshot()
         assert snapshot["nodes"][0]["min_elevation_deg"] is None
 
@@ -160,17 +173,21 @@ class TestUpdatePosition:
         """All satellites in a position batch get updated, not just the first."""
         positions = []
         for i in range(10):
-            positions.append({
-                "node_id": f"sat-P00S{i:02d}",
-                "node_type": "satellite",
-                "lat_deg": float(i * 10),
-                "lon_deg": float(i * 20),
-                "alt_km": 550.0,
-            })
-        _update_position({
-            "sim_time": "2026-01-01T00:00:00Z",
-            "positions": positions,
-        })
+            positions.append(
+                {
+                    "node_id": f"sat-P00S{i:02d}",
+                    "node_type": "satellite",
+                    "lat_deg": float(i * 10),
+                    "lon_deg": float(i * 20),
+                    "alt_km": 550.0,
+                }
+            )
+        _update_position(
+            {
+                "sim_time": "2026-01-01T00:00:00Z",
+                "positions": positions,
+            }
+        )
         snapshot = _build_snapshot()
         assert len(snapshot["nodes"]) == 10
         nodes_by_id = {n["node_id"]: n for n in snapshot["nodes"]}
@@ -193,32 +210,36 @@ class TestSatelliteMovementSmoke:
     def test_positions_change_between_snapshots(self):
         """Two sequential position updates produce different satellite positions in snapshots."""
         for lon in [10.0, 20.0]:
-            _update_position({
-                "sim_time": f"2026-01-01T00:00:0{int(lon)}Z",
+            _update_position(
+                {
+                    "sim_time": f"2026-01-01T00:00:0{int(lon)}Z",
+                    "positions": [
+                        {
+                            "node_id": "sat-P00S00",
+                            "node_type": "satellite",
+                            "lat_deg": 45.0,
+                            "lon_deg": lon,
+                            "alt_km": 550.0,
+                        },
+                    ],
+                }
+            )
+        snap1_nodes = {n["node_id"]: n for n in _build_snapshot()["nodes"]}
+
+        _update_position(
+            {
+                "sim_time": "2026-01-01T00:00:30Z",
                 "positions": [
                     {
                         "node_id": "sat-P00S00",
                         "node_type": "satellite",
-                        "lat_deg": 45.0,
-                        "lon_deg": lon,
+                        "lat_deg": 46.0,
+                        "lon_deg": 30.0,
                         "alt_km": 550.0,
                     },
                 ],
-            })
-        snap1_nodes = {n["node_id"]: n for n in _build_snapshot()["nodes"]}
-
-        _update_position({
-            "sim_time": "2026-01-01T00:00:30Z",
-            "positions": [
-                {
-                    "node_id": "sat-P00S00",
-                    "node_type": "satellite",
-                    "lat_deg": 46.0,
-                    "lon_deg": 30.0,
-                    "alt_km": 550.0,
-                },
-            ],
-        })
+            }
+        )
         snap2_nodes = {n["node_id"]: n for n in _build_snapshot()["nodes"]}
 
         assert snap1_nodes["sat-P00S00"]["lat_deg"] != snap2_nodes["sat-P00S00"]["lat_deg"]
@@ -228,17 +249,21 @@ class TestSatelliteMovementSmoke:
         """A batch with N satellites produces N satellite nodes in snapshot."""
         positions = []
         for i in range(20):
-            positions.append({
-                "node_id": f"sat-P00S{i:02d}",
-                "node_type": "satellite",
-                "lat_deg": float(i),
-                "lon_deg": float(i * 2),
-                "alt_km": 550.0,
-            })
-        _update_position({
-            "sim_time": "2026-01-01T00:00:00Z",
-            "positions": positions,
-        })
+            positions.append(
+                {
+                    "node_id": f"sat-P00S{i:02d}",
+                    "node_type": "satellite",
+                    "lat_deg": float(i),
+                    "lon_deg": float(i * 2),
+                    "alt_km": 550.0,
+                }
+            )
+        _update_position(
+            {
+                "sim_time": "2026-01-01T00:00:00Z",
+                "positions": positions,
+            }
+        )
         snap = _build_snapshot()
         sat_nodes = [n for n in snap["nodes"] if n["node_type"] == "satellite"]
         assert len(sat_nodes) == 20
@@ -248,33 +273,49 @@ class TestSatelliteMovementSmoke:
 
     def test_position_update_preserves_all_fields(self):
         """Position updates produce NodeState dicts with all required fields."""
-        _update_position({
-            "sim_time": "2026-01-01T00:00:00Z",
-            "positions": [
-                {
-                    "node_id": "sat-P00S00",
-                    "node_type": "satellite",
-                    "lat_deg": 10.0,
-                    "lon_deg": 20.0,
-                    "alt_km": 550.0,
-                    "vel_x_km_s": 1.0,
-                    "vel_y_km_s": 2.0,
-                    "vel_z_km_s": 3.0,
-                    "plane": 0,
-                    "slot": 0,
-                    "routing_area": "49.0001",
-                    "neighbor_count": 4,
-                    "isl_count": 0,
-                    "gnd_count": 0,
-                },
-            ],
-        })
+        _update_position(
+            {
+                "sim_time": "2026-01-01T00:00:00Z",
+                "positions": [
+                    {
+                        "node_id": "sat-P00S00",
+                        "node_type": "satellite",
+                        "lat_deg": 10.0,
+                        "lon_deg": 20.0,
+                        "alt_km": 550.0,
+                        "vel_x_km_s": 1.0,
+                        "vel_y_km_s": 2.0,
+                        "vel_z_km_s": 3.0,
+                        "plane": 0,
+                        "slot": 0,
+                        "routing_area": "49.0001",
+                        "neighbor_count": 4,
+                        "isl_count": 0,
+                        "gnd_count": 0,
+                    },
+                ],
+            }
+        )
         # Add links so _build_snapshot computes isl_count=4, gnd_count=1
         for i in range(4):
-            _update_link_up({"node_a": "sat-P00S00", "node_b": f"sat-P00S0{i+1}",
-                             "reason": "vis_gained", "latency_ms": 5.0, "bandwidth_mbps": 1000.0})
-        _update_link_up({"node_a": "gs-newyork", "node_b": "sat-P00S00",
-                         "reason": "gs_access", "latency_ms": 3.0, "bandwidth_mbps": 1000.0})
+            _update_link_up(
+                {
+                    "node_a": "sat-P00S00",
+                    "node_b": f"sat-P00S0{i + 1}",
+                    "reason": "vis_gained",
+                    "latency_ms": 5.0,
+                    "bandwidth_mbps": 1000.0,
+                }
+            )
+        _update_link_up(
+            {
+                "node_a": "gs-newyork",
+                "node_b": "sat-P00S00",
+                "reason": "gs_access",
+                "latency_ms": 3.0,
+                "bandwidth_mbps": 1000.0,
+            }
+        )
         snap = _build_snapshot()
         node = [n for n in snap["nodes"] if n["node_id"] == "sat-P00S00"][0]
         # All fields must survive the pipeline (no KeyError, no None for required)
@@ -311,65 +352,79 @@ class TestStateSnapshot:
         assert snapshot["network_health"]["status"] == "converged"
 
     def test_snapshot_with_links(self):
-        _update_link_up({
-            "node_a": "sat-P00S00",
-            "node_b": "sat-P00S01",
-            "latency_ms": 5.0,
-            "bandwidth_mbps": 1000,
-            "reason": "vis_gained",
-        })
+        _update_link_up(
+            {
+                "node_a": "sat-P00S00",
+                "node_b": "sat-P00S01",
+                "latency_ms": 5.0,
+                "bandwidth_mbps": 1000,
+                "reason": "vis_gained",
+            }
+        )
         snapshot = _build_snapshot()
         assert len(snapshot["links"]) == 1
         assert snapshot["links"][0]["state"] == "active"
 
     def test_link_down_removes_link(self):
-        _update_link_up({
-            "node_a": "sat-P00S00",
-            "node_b": "sat-P00S01",
-            "latency_ms": 5.0,
-            "bandwidth_mbps": 1000,
-            "reason": "vis_gained",
-        })
-        _update_link_down({
-            "node_a": "sat-P00S00",
-            "node_b": "sat-P00S01",
-        })
+        _update_link_up(
+            {
+                "node_a": "sat-P00S00",
+                "node_b": "sat-P00S01",
+                "latency_ms": 5.0,
+                "bandwidth_mbps": 1000,
+                "reason": "vis_gained",
+            }
+        )
+        _update_link_down(
+            {
+                "node_a": "sat-P00S00",
+                "node_b": "sat-P00S01",
+            }
+        )
         snapshot = _build_snapshot()
         assert len(snapshot["links"]) == 0
 
     def test_latency_update(self):
-        _update_link_up({
-            "node_a": "sat-P00S00",
-            "node_b": "sat-P00S01",
-            "latency_ms": 5.0,
-            "bandwidth_mbps": 1000,
-            "reason": "vis_gained",
-        })
-        _update_latency({
-            "node_a": "sat-P00S00",
-            "node_b": "sat-P00S01",
-            "latency_ms": 10.0,
-            "range_km": 3000.0,
-        })
+        _update_link_up(
+            {
+                "node_a": "sat-P00S00",
+                "node_b": "sat-P00S01",
+                "latency_ms": 5.0,
+                "bandwidth_mbps": 1000,
+                "reason": "vis_gained",
+            }
+        )
+        _update_latency(
+            {
+                "node_a": "sat-P00S00",
+                "node_b": "sat-P00S01",
+                "latency_ms": 10.0,
+                "range_km": 3000.0,
+            }
+        )
         snapshot = _build_snapshot()
         assert snapshot["links"][0]["latency_ms"] == 10.0
         assert snapshot["links"][0]["range_km"] == 3000.0
 
     def test_latency_update_reversed_node_order(self):
         """Latency update with nodes in reversed order should still match."""
-        _update_link_up({
-            "node_a": "sat-P00S00",
-            "node_b": "sat-P00S01",
-            "latency_ms": 5.0,
-            "bandwidth_mbps": 1000,
-            "reason": "vis_gained",
-        })
-        _update_latency({
-            "node_a": "sat-P00S01",
-            "node_b": "sat-P00S00",
-            "latency_ms": 12.0,
-            "range_km": 3500.0,
-        })
+        _update_link_up(
+            {
+                "node_a": "sat-P00S00",
+                "node_b": "sat-P00S01",
+                "latency_ms": 5.0,
+                "bandwidth_mbps": 1000,
+                "reason": "vis_gained",
+            }
+        )
+        _update_latency(
+            {
+                "node_a": "sat-P00S01",
+                "node_b": "sat-P00S00",
+                "latency_ms": 12.0,
+                "range_km": 3500.0,
+            }
+        )
         snapshot = _build_snapshot()
         assert snapshot["links"][0]["latency_ms"] == 12.0
 
@@ -381,22 +436,28 @@ class TestRecentEvents:
         _reset_state()
 
     def test_add_event(self):
-        _add_recent_event({
-            "sim_time": datetime.now(timezone.utc).isoformat(),
-            "node_a": "sat-P00S00",
-            "reason": "test event",
-        }, "link_up")
+        _add_recent_event(
+            {
+                "sim_time": datetime.now(UTC).isoformat(),
+                "node_a": "sat-P00S00",
+                "reason": "test event",
+            },
+            "link_up",
+        )
         snapshot = _build_snapshot()
         assert len(snapshot["recent_events"]) == 1
         assert snapshot["recent_events"][0]["event_type"] == "link_up"
 
     def test_cap_at_50(self):
         for i in range(60):
-            _add_recent_event({
-                "sim_time": datetime.now(timezone.utc).isoformat(),
-                "node_a": f"sat-P00S{i:02d}",
-                "reason": f"event {i}",
-            }, "test")
+            _add_recent_event(
+                {
+                    "sim_time": datetime.now(UTC).isoformat(),
+                    "node_a": f"sat-P00S{i:02d}",
+                    "reason": f"event {i}",
+                },
+                "test",
+            )
         with _state_lock:
             assert len(_state["recent_events"]) == 50
 
@@ -423,26 +484,39 @@ class TestSnapshotModel:
     """Test StateSnapshot Pydantic model serialization."""
 
     def test_full_snapshot_round_trip(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         snapshot = StateSnapshot(
             sim_time=now,
             wall_time=now,
             schema_version=1,
             nodes=[
                 NodeState(
-                    node_id="sat-P00S00", node_type="satellite",
-                    lat_deg=0.0, lon_deg=0.0, alt_km=550.0,
-                    vel_x_km_s=None, vel_y_km_s=None, vel_z_km_s=None,
-                    plane=0, slot=0, routing_area="49.0001",
-                    neighbor_count=2, isl_count=2, gnd_count=0,
+                    node_id="sat-P00S00",
+                    node_type="satellite",
+                    lat_deg=0.0,
+                    lon_deg=0.0,
+                    alt_km=550.0,
+                    vel_x_km_s=None,
+                    vel_y_km_s=None,
+                    vel_z_km_s=None,
+                    plane=0,
+                    slot=0,
+                    routing_area="49.0001",
+                    neighbor_count=2,
+                    isl_count=2,
+                    gnd_count=0,
                 ),
             ],
             links=[
                 LinkState(
-                    node_a="sat-P00S00", node_b="sat-P00S01",
-                    state="active", link_type="intra_plane_isl",
-                    link_reason="vis_gained", latency_ms=5.0,
-                    bandwidth_mbps=1000.0, range_km=1500.0,
+                    node_a="sat-P00S00",
+                    node_b="sat-P00S01",
+                    state="active",
+                    link_type="intra_plane_isl",
+                    link_reason="vis_gained",
+                    latency_ms=5.0,
+                    bandwidth_mbps=1000.0,
+                    range_km=1500.0,
                     traffic_load_pct=None,
                 ),
             ],
@@ -450,8 +524,10 @@ class TestSnapshotModel:
             active_flows=[],
             recent_events=[],
             network_health=NetworkHealth(
-                status="converged", converging_since_ms=None,
-                unreachable_flows=0, last_convergence_ms=150.0,
+                status="converged",
+                converging_since_ms=None,
+                unreachable_flows=0,
+                last_convergence_ms=150.0,
             ),
         )
 
@@ -463,18 +539,26 @@ class TestSnapshotModel:
         assert parsed["network_health"]["status"] == "converged"
 
     def test_snapshot_is_frozen(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         snapshot = StateSnapshot(
-            sim_time=now, wall_time=now, schema_version=1,
-            nodes=[], links=[], traced_paths=[], active_flows=[],
+            sim_time=now,
+            wall_time=now,
+            schema_version=1,
+            nodes=[],
+            links=[],
+            traced_paths=[],
+            active_flows=[],
             recent_events=[],
             network_health=NetworkHealth(
-                status="converged", converging_since_ms=None,
-                unreachable_flows=0, last_convergence_ms=None,
+                status="converged",
+                converging_since_ms=None,
+                unreachable_flows=0,
+                last_convergence_ms=None,
             ),
         )
         # Frozen model — should not allow mutation
         import pydantic
+
         try:
             snapshot.schema_version = 2
             assert False, "Should have raised"
@@ -487,15 +571,21 @@ class TestSQLiteQueries:
 
     def test_query_link_events(self):
         from nodalarc.db.queries import query_link_events
+
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         event = LinkUp(
-            sim_time=now, wall_time=now,
-            node_a="sat-P00S00", node_b="sat-P00S01",
-            interface_a="isl0", interface_b="isl0",
-            latency_ms=5.0, bandwidth_mbps=1000, reason="vis_gained",
+            sim_time=now,
+            wall_time=now,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            interface_a="isl0",
+            interface_b="isl0",
+            latency_ms=5.0,
+            bandwidth_mbps=1000,
+            reason="vis_gained",
         )
         insert_link_up(conn, event)
 
@@ -506,15 +596,21 @@ class TestSQLiteQueries:
 
     def test_query_convergence_events(self):
         from nodalarc.db.queries import query_convergence_events
+
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         result = ConvergenceResult(
-            event_id="test-001", converged=True, duration_ms=100.0,
-            packets_lost=0, packets_sent=10,
-            sim_time_start=now, sim_time_end=now,
-            wall_time_start=now, wall_time_end=now,
+            event_id="test-001",
+            converged=True,
+            duration_ms=100.0,
+            packets_lost=0,
+            packets_sent=10,
+            sim_time_start=now,
+            sim_time_end=now,
+            wall_time_start=now,
+            wall_time_end=now,
         )
         insert_convergence_result(conn, result)
 
@@ -568,8 +664,9 @@ class TestSnapshotStorage:
         """Query time before all snapshots returns the earliest one."""
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
-        insert_snapshot(conn, "2025-01-01T00:01:00", "2025-01-01T00:01:00",
-                        json.dumps({"id": "only"}))
+        insert_snapshot(
+            conn, "2025-01-01T00:01:00", "2025-01-01T00:01:00", json.dumps({"id": "only"})
+        )
         result = query_nearest_snapshot(conn, "2025-01-01T00:00:00")
         assert result is not None
         assert json.loads(result["snapshot_json"])["id"] == "only"
@@ -579,8 +676,9 @@ class TestSnapshotStorage:
         """Query time after all snapshots returns the latest one."""
         conn = sqlite3.connect(":memory:")
         create_tables(conn)
-        insert_snapshot(conn, "2025-01-01T00:00:00", "2025-01-01T00:00:00",
-                        json.dumps({"id": "only"}))
+        insert_snapshot(
+            conn, "2025-01-01T00:00:00", "2025-01-01T00:00:00", json.dumps({"id": "only"})
+        )
         result = query_nearest_snapshot(conn, "2025-01-01T00:05:00")
         assert result is not None
         assert json.loads(result["snapshot_json"])["id"] == "only"

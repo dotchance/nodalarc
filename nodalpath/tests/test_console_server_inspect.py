@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from nodalpath.console.server import build_app
@@ -47,8 +45,8 @@ def _make_run(
         run_id=run_id,
         trigger=trigger,
         topology_state_id="state-1",
-        started_at=datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc),
-        completed_at=datetime(2026, 3, 1, 14, 30, 1, tzinfo=timezone.utc),
+        started_at=datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 3, 1, 14, 30, 1, tzinfo=UTC),
         node_results=results or [],
     )
     return run
@@ -92,9 +90,11 @@ class TestInspectRunsEmpty:
 class TestInspectRunsPopulated:
     def test_returns_run_summaries(self):
         inspector = _mock_inspector()
-        run = _make_run(results=[
-            NodeInspectionResult(node_id="sat-P00S00", reachable=True),
-        ])
+        run = _make_run(
+            results=[
+                NodeInspectionResult(node_id="sat-P00S00", reachable=True),
+            ]
+        )
         inspector.recent_runs.return_value = [run]
         app = build_app(_state(), node_inspector=inspector)
         client = TestClient(app)
@@ -109,21 +109,23 @@ class TestInspectRunsPopulated:
 class TestInspectRunById:
     def test_returns_full_detail(self):
         inspector = _mock_inspector()
-        run = _make_run(results=[
-            NodeInspectionResult(
-                node_id="sat-P00S00",
-                reachable=True,
-                binding_diffs=[
-                    BindingDiff(
-                        in_label=100,
-                        kind=BindingDiffKind.MISSING,
-                        planned_action="swap",
-                        planned_out_label=200,
-                        planned_out_interface="isl0",
-                    ),
-                ],
-            ),
-        ])
+        run = _make_run(
+            results=[
+                NodeInspectionResult(
+                    node_id="sat-P00S00",
+                    reachable=True,
+                    binding_diffs=[
+                        BindingDiff(
+                            in_label=100,
+                            kind=BindingDiffKind.MISSING,
+                            planned_action="swap",
+                            planned_out_label=200,
+                            planned_out_interface="isl0",
+                        ),
+                    ],
+                ),
+            ]
+        )
         inspector.get_run.return_value = run
         app = build_app(_state(), node_inspector=inspector)
         client = TestClient(app)

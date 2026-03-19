@@ -55,28 +55,35 @@ from __future__ import annotations
 import logging
 
 from nodalpath.engine.graph import TopologyGraph
+from nodalpath.models.almanac import IngressRule, LabelBinding
 from nodalpath.models.path import ComputedPath
-from nodalpath.models.almanac import LabelBinding, IngressRule
 
 log = logging.getLogger(__name__)
 
 
 # --- SID range accessors ---
 
+
 def _srgb_base() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().satellite_sid_range_start
+
 
 def _gs_sid_base() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().ground_station_sid_range_start
+
 
 def _adj_sid_base() -> int:
     from nodalpath.platform import get_nodalpath_config
+
     return get_nodalpath_config().adjacency_sid_range_start
 
 
 # --- Node SID computation (unchanged from original) ---
+
 
 def compute_sid(
     node_id: str,
@@ -145,7 +152,9 @@ def build_adjacency_sid_map(
                 continue
             iface_idx = _IFACE_INDEX.get(iface_name)
             if iface_idx is None:
-                log.warning("Unknown interface name %s on %s, skipping adj-SID", iface_name, node_id)
+                log.warning(
+                    "Unknown interface name %s on %s, skipping adj-SID", iface_name, node_id
+                )
                 continue
             adj_map[key] = compute_adjacency_sid(node_idx, iface_idx)
 
@@ -153,6 +162,7 @@ def build_adjacency_sid_map(
 
 
 # --- Label stack assembly ---
+
 
 def path_to_label_stack(
     path: ComputedPath,
@@ -171,7 +181,7 @@ def path_to_label_stack(
 
     stack: list[int] = []
     for i, hop in enumerate(path.hops[1:], start=1):
-        is_egress = (i == len(path.hops) - 1)
+        is_egress = i == len(path.hops) - 1
         if is_egress:
             # Bottom of stack: egress node SID (deliver locally)
             stack.append(hop.sid)
@@ -182,7 +192,9 @@ def path_to_label_stack(
             if adj_sid is None:
                 log.warning(
                     "No adjacency SID for %s:%s in path %s, falling back to node SID",
-                    hop.node_id, hop.out_interface, path.path_id,
+                    hop.node_id,
+                    hop.out_interface,
+                    path.path_id,
                 )
                 stack.append(hop.sid)
             else:
@@ -192,6 +204,7 @@ def path_to_label_stack(
 
 
 # --- LSR binding generation ---
+
 
 def build_lsr_bindings(
     node_id: str,
@@ -214,12 +227,14 @@ def build_lsr_bindings(
 
     # Node SID POP (egress: deliver locally via loopback)
     if node_sid is not None:
-        bindings.append(LabelBinding(
-            in_label=node_sid,
-            action="pop",
-            out_label=None,
-            out_interface="lo",
-        ))
+        bindings.append(
+            LabelBinding(
+                in_label=node_sid,
+                action="pop",
+                out_label=None,
+                out_interface="lo",
+            )
+        )
 
     # Adjacency SID POPs (transit: forward out the specific interface)
     if adj_sid_map is not None:
@@ -230,12 +245,14 @@ def build_lsr_bindings(
             if adj_sid in seen_adj:
                 continue
             seen_adj.add(adj_sid)
-            bindings.append(LabelBinding(
-                in_label=adj_sid,
-                action="pop",
-                out_label=None,
-                out_interface=iface_name,
-            ))
+            bindings.append(
+                LabelBinding(
+                    in_label=adj_sid,
+                    action="pop",
+                    out_label=None,
+                    out_interface=iface_name,
+                )
+            )
 
     return bindings
 
@@ -294,11 +311,13 @@ def build_ler_ingress_rules(
             sr_stack = list(best_path.label_stack)
 
         push_label = sr_stack[0] if sr_stack else 0
-        rules.append(IngressRule(
-            dst_prefix=pfx,
-            push_label=push_label,
-            out_interface=out_interface,
-            label_stack=sr_stack,
-        ))
+        rules.append(
+            IngressRule(
+                dst_prefix=pfx,
+                push_label=push_label,
+                out_interface=out_interface,
+                label_stack=sr_stack,
+            )
+        )
 
     return rules

@@ -6,8 +6,6 @@ discriminated union dispatches correctly.
 """
 
 import pytest
-from pydantic import TypeAdapter, ValidationError
-
 from nodalarc.models.scenario import (
     InjectLinkDownStep,
     InjectLinkUpStep,
@@ -19,6 +17,7 @@ from nodalarc.models.scenario import (
     WaitConvergeStep,
     WaitStep,
 )
+from pydantic import TypeAdapter, ValidationError
 
 step_adapter = TypeAdapter(ScenarioStep)
 
@@ -30,29 +29,35 @@ class TestActionTypeValidation:
         assert step.duration_s == 30.0
 
     def test_inject_link_down_step(self):
-        step = step_adapter.validate_python({
-            "action": "inject_link_down",
-            "node_a": "sat-P00S00",
-            "node_b": "sat-P00S01",
-        })
+        step = step_adapter.validate_python(
+            {
+                "action": "inject_link_down",
+                "node_a": "sat-P00S00",
+                "node_b": "sat-P00S01",
+            }
+        )
         assert isinstance(step, InjectLinkDownStep)
         assert step.node_a == "sat-P00S00"
         assert step.node_b == "sat-P00S01"
         assert step.reason == "scenario_inject_down"
 
     def test_inject_link_up_step(self):
-        step = step_adapter.validate_python({
-            "action": "inject_link_up",
-            "node_a": "sat-P00S00",
-            "node_b": "sat-P00S01",
-        })
+        step = step_adapter.validate_python(
+            {
+                "action": "inject_link_up",
+                "node_a": "sat-P00S00",
+                "node_b": "sat-P00S01",
+            }
+        )
         assert isinstance(step, InjectLinkUpStep)
 
     def test_inject_satellite_loss_step(self):
-        step = step_adapter.validate_python({
-            "action": "inject_satellite_loss",
-            "node": "sat-P02S03",
-        })
+        step = step_adapter.validate_python(
+            {
+                "action": "inject_satellite_loss",
+                "node": "sat-P02S03",
+            }
+        )
         assert isinstance(step, InjectSatelliteLossStep)
         assert step.node == "sat-P02S03"
 
@@ -62,9 +67,12 @@ class TestActionTypeValidation:
         assert step.timeout_s == 30.0
 
     def test_wait_converge_custom_timeout(self):
-        step = step_adapter.validate_python({
-            "action": "wait_converge", "timeout_s": 60.0,
-        })
+        step = step_adapter.validate_python(
+            {
+                "action": "wait_converge",
+                "timeout_s": 60.0,
+            }
+        )
         assert step.timeout_s == 60.0
 
     def test_measure_step(self):
@@ -73,11 +81,13 @@ class TestActionTypeValidation:
         assert step.duration_s == 15.0
 
     def test_reconfig_step(self):
-        step = step_adapter.validate_python({
-            "action": "reconfig",
-            "target": "plane:3",
-            "set_values": {"metric_type": "wide"},
-        })
+        step = step_adapter.validate_python(
+            {
+                "action": "reconfig",
+                "target": "plane:3",
+                "set_values": {"metric_type": "wide"},
+            }
+        )
         assert isinstance(step, ReconfigStep)
         assert step.target == "plane:3"
         assert step.set_values["metric_type"] == "wide"
@@ -96,17 +106,21 @@ class TestInvalidActionRejected:
 class TestMissingRequiredFields:
     def test_inject_link_down_missing_node_a(self):
         with pytest.raises(ValidationError):
-            step_adapter.validate_python({
-                "action": "inject_link_down",
-                "node_b": "sat-P00S01",
-            })
+            step_adapter.validate_python(
+                {
+                    "action": "inject_link_down",
+                    "node_b": "sat-P00S01",
+                }
+            )
 
     def test_inject_link_down_missing_node_b(self):
         with pytest.raises(ValidationError):
-            step_adapter.validate_python({
-                "action": "inject_link_down",
-                "node_a": "sat-P00S00",
-            })
+            step_adapter.validate_python(
+                {
+                    "action": "inject_link_down",
+                    "node_a": "sat-P00S00",
+                }
+            )
 
     def test_inject_satellite_loss_missing_node(self):
         with pytest.raises(ValidationError):
@@ -190,6 +204,7 @@ class TestDiscriminatedUnionDispatch:
     def test_scenario_from_yaml_fixture(self):
         """Load the isl-failure scenario YAML and verify step dispatch."""
         from pathlib import Path
+
         import yaml
 
         fixture = Path(__file__).parent.parent.parent / "configs/scenarios/isl-failure.yaml"
@@ -201,8 +216,13 @@ class TestDiscriminatedUnionDispatch:
         assert len(config.steps) == 7
 
         expected_types = [
-            WaitStep, InjectLinkDownStep, WaitConvergeStep, MeasureStep,
-            InjectLinkUpStep, WaitConvergeStep, MeasureStep,
+            WaitStep,
+            InjectLinkDownStep,
+            WaitConvergeStep,
+            MeasureStep,
+            InjectLinkUpStep,
+            WaitConvergeStep,
+            MeasureStep,
         ]
         for step, expected in zip(config.steps, expected_types):
             assert isinstance(step, expected)

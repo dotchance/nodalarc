@@ -3,15 +3,14 @@ from __future__ import annotations
 import time
 
 from nodalpath.engine.graph import build_graph
-from nodalpath.engine.pathcomp import compute_all_paths
 from nodalpath.engine.labels import (
     build_adjacency_sid_map,
-    build_lsr_bindings,
     build_ler_ingress_rules,
-    path_to_label_stack,
+    build_lsr_bindings,
 )
-from nodalpath.models.topology import TopologySnapshot
+from nodalpath.engine.pathcomp import compute_all_paths
 from nodalpath.models.almanac import AlmanacEntry, ForwardingTable
+from nodalpath.models.topology import TopologySnapshot
 
 
 def compute_almanac_entry(
@@ -58,16 +57,22 @@ def compute_almanac_entry(
     for node_id in graph.adjacency:
         lsr_bindings = build_lsr_bindings(node_id, paths, graph, adj_sid_map)
         ler_ingress_rules = build_ler_ingress_rules(
-            node_id, paths, graph, prefix_map, adj_sid_map,
+            node_id,
+            paths,
+            graph,
+            prefix_map,
+            adj_sid_map,
         )
 
-        forwarding_tables.append(ForwardingTable(
-            node_id=node_id,
-            topology_state_id=topology_state_id,
-            sim_time=snapshot.sim_time,
-            lsr_bindings=lsr_bindings,
-            ler_ingress_rules=ler_ingress_rules,
-        ))
+        forwarding_tables.append(
+            ForwardingTable(
+                node_id=node_id,
+                topology_state_id=topology_state_id,
+                sim_time=snapshot.sim_time,
+                lsr_bindings=lsr_bindings,
+                ler_ingress_rules=ler_ingress_rules,
+            )
+        )
 
     t1 = time.monotonic()
     computation_time_ms = (t1 - t0) * 1000.0

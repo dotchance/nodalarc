@@ -10,7 +10,7 @@ import logging
 import re
 import subprocess
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from nodalarc.models.metrics import AdapterEvent
 
@@ -144,11 +144,21 @@ class FrrOspfAdapter:
 
         result = subprocess.run(
             [
-                "kubectl", "exec", "-n", state.namespace, state.pod_name,
-                "-c", "frr", "--",
-                "vtysh", "-c", f"show ip route {dst_ip}",
+                "kubectl",
+                "exec",
+                "-n",
+                state.namespace,
+                state.pod_name,
+                "-c",
+                "frr",
+                "--",
+                "vtysh",
+                "-c",
+                f"show ip route {dst_ip}",
             ],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             log.warning(f"trace_path failed for {node_id}: {result.stderr}")
@@ -173,11 +183,21 @@ class FrrOspfAdapter:
         try:
             result = subprocess.run(
                 [
-                    "kubectl", "exec", "-n", state.namespace, state.pod_name,
-                    "-c", "frr", "--",
-                    "vtysh", "-c", "show ip ospf neighbor",
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    state.namespace,
+                    state.pod_name,
+                    "-c",
+                    "frr",
+                    "--",
+                    "vtysh",
+                    "-c",
+                    "show ip ospf neighbor",
                 ],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
         except subprocess.TimeoutExpired:
             log.warning(f"OSPF neighbor poll timed out for {node_id}")
@@ -188,7 +208,7 @@ class FrrOspfAdapter:
             return
 
         current = parse_ospf_neighbors(result.stdout)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         with self._lock:
             prev = state.last_neighbors
@@ -197,50 +217,60 @@ class FrrOspfAdapter:
             for key, info in current.items():
                 prev_info = prev.get(key)
                 if prev_info is None and _is_full_state(info["state"]):
-                    state.events.append(AdapterEvent(
-                        sim_time=now,
-                        wall_time=now,
-                        node_id=node_id,
-                        event_type="adjacency_up",
-                        event_data={
-                            "source": "vtysh_poll",
-                            "router_id": info["router_id"],
-                            "interface": info["interface"],
-                            "state": info["state"],
-                        },
-                    ))
-                elif prev_info and not _is_full_state(prev_info["state"]) and _is_full_state(info["state"]):
-                    state.events.append(AdapterEvent(
-                        sim_time=now,
-                        wall_time=now,
-                        node_id=node_id,
-                        event_type="adjacency_up",
-                        event_data={
-                            "source": "vtysh_poll",
-                            "router_id": info["router_id"],
-                            "interface": info["interface"],
-                            "state": info["state"],
-                            "previous_state": prev_info["state"],
-                        },
-                    ))
+                    state.events.append(
+                        AdapterEvent(
+                            sim_time=now,
+                            wall_time=now,
+                            node_id=node_id,
+                            event_type="adjacency_up",
+                            event_data={
+                                "source": "vtysh_poll",
+                                "router_id": info["router_id"],
+                                "interface": info["interface"],
+                                "state": info["state"],
+                            },
+                        )
+                    )
+                elif (
+                    prev_info
+                    and not _is_full_state(prev_info["state"])
+                    and _is_full_state(info["state"])
+                ):
+                    state.events.append(
+                        AdapterEvent(
+                            sim_time=now,
+                            wall_time=now,
+                            node_id=node_id,
+                            event_type="adjacency_up",
+                            event_data={
+                                "source": "vtysh_poll",
+                                "router_id": info["router_id"],
+                                "interface": info["interface"],
+                                "state": info["state"],
+                                "previous_state": prev_info["state"],
+                            },
+                        )
+                    )
 
             # Lost adjacencies (was Full, now gone or not Full)
             for key, info in prev.items():
                 if _is_full_state(info["state"]):
                     cur_info = current.get(key)
                     if cur_info is None or not _is_full_state(cur_info["state"]):
-                        state.events.append(AdapterEvent(
-                            sim_time=now,
-                            wall_time=now,
-                            node_id=node_id,
-                            event_type="adjacency_down",
-                            event_data={
-                                "source": "vtysh_poll",
-                                "router_id": info["router_id"],
-                                "interface": info["interface"],
-                                "previous_state": info["state"],
-                            },
-                        ))
+                        state.events.append(
+                            AdapterEvent(
+                                sim_time=now,
+                                wall_time=now,
+                                node_id=node_id,
+                                event_type="adjacency_down",
+                                event_data={
+                                    "source": "vtysh_poll",
+                                    "router_id": info["router_id"],
+                                    "interface": info["interface"],
+                                    "previous_state": info["state"],
+                                },
+                            )
+                        )
 
             state.last_neighbors = current
 
@@ -254,9 +284,17 @@ class FrrOspfAdapter:
         try:
             proc = subprocess.Popen(
                 [
-                    "kubectl", "exec", "-n", state.namespace, state.pod_name,
-                    "-c", "frr", "--",
-                    "tail", "-f", "/var/log/frr/ospfd.log",
+                    "kubectl",
+                    "exec",
+                    "-n",
+                    state.namespace,
+                    state.pod_name,
+                    "-c",
+                    "frr",
+                    "--",
+                    "tail",
+                    "-f",
+                    "/var/log/frr/ospfd.log",
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -269,21 +307,23 @@ class FrrOspfAdapter:
                 if parsed is None:
                     continue
 
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 with self._lock:
                     s = self._nodes.get(node_id)
                     if s is None:
                         break
-                    s.events.append(AdapterEvent(
-                        sim_time=now,
-                        wall_time=now,
-                        node_id=node_id,
-                        event_type=parsed["type"],
-                        event_data={
-                            "source": "syslog_parse",
-                            "detail": parsed["detail"],
-                        },
-                    ))
+                    s.events.append(
+                        AdapterEvent(
+                            sim_time=now,
+                            wall_time=now,
+                            node_id=node_id,
+                            event_type=parsed["type"],
+                            event_data={
+                                "source": "syslog_parse",
+                                "detail": parsed["detail"],
+                            },
+                        )
+                    )
 
         except Exception as exc:
             log.warning(f"OSPF log tailer for {node_id} failed: {exc}")
@@ -293,9 +333,14 @@ class _NodeState:
     """Per-node tracking state for the OSPF adapter."""
 
     __slots__ = (
-        "node_id", "management_ip", "_pod_name", "_namespace",
-        "last_neighbors", "events",
-        "log_thread", "tail_proc",
+        "node_id",
+        "management_ip",
+        "_pod_name",
+        "_namespace",
+        "last_neighbors",
+        "events",
+        "log_thread",
+        "tail_proc",
     )
 
     def __init__(self, node_id: str, management_ip: str) -> None:
@@ -325,11 +370,18 @@ class _NodeState:
         try:
             result = subprocess.run(
                 [
-                    "kubectl", "get", "pods", "--all-namespaces",
-                    "--field-selector", f"status.podIP={self.management_ip}",
-                    "-o", "jsonpath={.items[0].metadata.namespace} {.items[0].metadata.name}",
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "--all-namespaces",
+                    "--field-selector",
+                    f"status.podIP={self.management_ip}",
+                    "-o",
+                    "jsonpath={.items[0].metadata.namespace} {.items[0].metadata.name}",
                 ],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0 and result.stdout.strip():
                 parts = result.stdout.strip().split()

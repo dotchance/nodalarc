@@ -5,16 +5,19 @@ from __future__ import annotations
 import logging
 
 from nodalarc.models.link_events import LinkDown, LinkUp
+
 from nodalpath.orchestrator.almanac_store import AlmanacStore
 
 log = logging.getLogger(__name__)
 
 
-DEVIATION_REASONS = frozenset({
-    "scenario_inject_down",
-    "satellite_loss",
-    "scenario_reconciliation",
-})
+DEVIATION_REASONS = frozenset(
+    {
+        "scenario_inject_down",
+        "satellite_loss",
+        "scenario_reconciliation",
+    }
+)
 
 
 class DeviationDetector:
@@ -54,10 +57,12 @@ class DeviationDetector:
         if pair_a and pair_b:
             self._deviation_count += 1
             log.warning(
-                "Deviation detected: LinkDown %s <-> %s reason=%s at %s "
-                "(almanac state=%s)",
-                event.node_a, event.node_b, event.reason,
-                sim_time_iso, entry.topology_state_id,
+                "Deviation detected: LinkDown %s <-> %s reason=%s at %s (almanac state=%s)",
+                event.node_a,
+                event.node_b,
+                event.reason,
+                sim_time_iso,
+                entry.topology_state_id,
             )
             return True
 

@@ -1,11 +1,13 @@
 """Tests for vs_api GET /api/v1/almanac/status."""
-import pytest
+
 from unittest.mock import AsyncMock, patch
+
 from fastapi.testclient import TestClient
 
 
 def _import_app():
     from vs_api.main import app
+
     return app
 
 
@@ -50,8 +52,11 @@ def test_almanac_status_available_with_data():
 def test_almanac_status_recent_pushes_capped_at_5():
     """Only the first 5 push history entries are returned."""
     fake_snap = {
-        "transition_count": 0, "deviation_count": 0, "recomputation_count": 0,
-        "nodes_in_registry": 5, "push_history": [{"n": i} for i in range(20)],
+        "transition_count": 0,
+        "deviation_count": 0,
+        "recomputation_count": 0,
+        "nodes_in_registry": 5,
+        "push_history": [{"n": i} for i in range(20)],
         "deviation_history": [],
     }
     app = _import_app()
@@ -63,8 +68,12 @@ def test_almanac_status_recent_pushes_capped_at_5():
 def test_almanac_status_empty_histories_do_not_crash():
     """available=true with empty push/deviation lists is fine."""
     fake_snap = {
-        "transition_count": 0, "deviation_count": 0, "recomputation_count": 0,
-        "nodes_in_registry": 0, "push_history": [], "deviation_history": [],
+        "transition_count": 0,
+        "deviation_count": 0,
+        "recomputation_count": 0,
+        "nodes_in_registry": 0,
+        "push_history": [],
+        "deviation_history": [],
     }
     app = _import_app()
     with patch("vs_api.main._fetch_nodalpath_status", new=AsyncMock(return_value=fake_snap)):
@@ -78,9 +87,14 @@ def test_almanac_status_empty_histories_do_not_crash():
 def test_almanac_status_dry_run_field_propagated():
     """dry_run flag passes through correctly."""
     fake_snap = {
-        "dry_run": True, "transport": "vtysh",
-        "transition_count": 0, "deviation_count": 0, "recomputation_count": 0,
-        "nodes_in_registry": 3, "push_history": [], "deviation_history": [],
+        "dry_run": True,
+        "transport": "vtysh",
+        "transition_count": 0,
+        "deviation_count": 0,
+        "recomputation_count": 0,
+        "nodes_in_registry": 3,
+        "push_history": [],
+        "deviation_history": [],
     }
     app = _import_app()
     with patch("vs_api.main._fetch_nodalpath_status", new=AsyncMock(return_value=fake_snap)):

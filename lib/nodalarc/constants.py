@@ -1,7 +1,7 @@
 """Physical constants, WGS84 parameters, and shared enums for Nodal Arc."""
 
-from enum import StrEnum
 import math
+from enum import StrEnum
 
 # Physical constants
 SPEED_OF_LIGHT_KM_S: float = 299_792.458

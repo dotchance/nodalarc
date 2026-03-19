@@ -16,6 +16,7 @@ from nodalarc.stack_resolver import resolve_stack
 
 class ConstellationPreset(BaseModel):
     """Schema for a constellation preset YAML file."""
+
     name: str
     description: str
     satellite_count: int
@@ -56,7 +57,9 @@ def generate_session_yaml(
     """
     warnings: list[str] = []
     if satellite_type:
-        warnings.append(f"Satellite type '{satellite_type}' selected (informational, not yet wired into session config)")
+        warnings.append(
+            f"Satellite type '{satellite_type}' selected (informational, not yet wired into session config)"
+        )
 
     # Load preset
     presets = load_constellation_presets()

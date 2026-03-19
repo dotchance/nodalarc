@@ -2,14 +2,14 @@
 
 import pytest
 import yaml
-from pydantic import ValidationError
-
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
     TerrestrialPrefix,
     TerrestrialPrefixTemplate,
 )
+from pydantic import ValidationError
+
 from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
 
 
@@ -86,7 +86,9 @@ class TestValidationRejections:
     def test_duplicate_station_names_rejected(self):
         with pytest.raises(ValidationError, match="duplicate station names"):
             GroundStationFile(
-                default_terminals=[{"type": "optical", "count": 2, "bandwidth_mbps": 1000, "tracking_capacity": 1}],
+                default_terminals=[
+                    {"type": "optical", "count": 2, "bandwidth_mbps": 1000, "tracking_capacity": 1}
+                ],
                 stations=[
                     {"name": "dup", "lat_deg": 0, "lon_deg": 0},
                     {"name": "dup", "lat_deg": 1, "lon_deg": 1},
@@ -96,7 +98,9 @@ class TestValidationRejections:
     def test_empty_stations_rejected(self):
         with pytest.raises(ValidationError, match="at least one station"):
             GroundStationFile(
-                default_terminals=[{"type": "optical", "count": 2, "bandwidth_mbps": 1000, "tracking_capacity": 1}],
+                default_terminals=[
+                    {"type": "optical", "count": 2, "bandwidth_mbps": 1000, "tracking_capacity": 1}
+                ],
                 stations=[],
             )
 

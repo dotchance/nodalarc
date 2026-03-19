@@ -1,17 +1,14 @@
 """Tests for ground station refactoring — individual files, sets, format detection."""
 
 import pytest
-import yaml
-from pydantic import ValidationError
-
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
-    GroundStationIndividualFile,
     GroundStationSetConfig,
-    GroundStationSetFile,
     TerrestrialPrefixTemplate,
 )
+from pydantic import ValidationError
+
 from ome.constellation_loader import (
     load_ground_station_individual,
     load_ground_station_set,
@@ -35,9 +32,18 @@ class TestIndividualStationRoundTrip:
     """Load each individual station file and verify it round-trips."""
 
     STATION_NAMES = [
-        "hawthorne", "ashburn", "frankfurt", "singapore",
-        "sao-paulo", "sydney", "tokyo", "london",
-        "mcmurdo", "svalbard", "fairbanks", "punta-arenas",
+        "hawthorne",
+        "ashburn",
+        "frankfurt",
+        "singapore",
+        "sao-paulo",
+        "sydney",
+        "tokyo",
+        "london",
+        "mcmurdo",
+        "svalbard",
+        "fairbanks",
+        "punta-arenas",
     ]
 
     @pytest.mark.parametrize("name", STATION_NAMES)
@@ -155,8 +161,15 @@ class TestSetResolution:
         gs_file = load_ground_stations_from_set("global")
 
         names = sorted(s.name for s in gs_file.stations)
-        assert names == ["ashburn", "frankfurt", "hawthorne", "mcmurdo",
-                         "sao-paulo", "singapore", "sydney"]
+        assert names == [
+            "ashburn",
+            "frankfurt",
+            "hawthorne",
+            "mcmurdo",
+            "sao-paulo",
+            "singapore",
+            "sydney",
+        ]
 
         # Spot-check coordinates
         hawthorne = next(s for s in gs_file.stations if s.name == "hawthorne")

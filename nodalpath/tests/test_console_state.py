@@ -1,13 +1,13 @@
 """Tests for nodalpath.console.state.ConsoleState."""
+
 import threading
 import time
-import pytest
+
 from nodalpath.console.state import (
     ConsoleState,
-    _max_push_history,
     _max_almanac_history,
-    _max_deviation_history,
     _max_event_log,
+    _max_push_history,
 )
 
 
@@ -17,13 +17,22 @@ def _make_state(**kw) -> ConsoleState:
     return ConsoleState(**defaults)
 
 
-def _push_result(state_id="s1", sim_time="2026-01-01T00:00:00Z",
-                 attempted=3, succeeded=3, failed=0, skipped=0,
-                 duration_ms=12.5, failed_nodes=None):
+def _push_result(
+    state_id="s1",
+    sim_time="2026-01-01T00:00:00Z",
+    attempted=3,
+    succeeded=3,
+    failed=0,
+    skipped=0,
+    duration_ms=12.5,
+    failed_nodes=None,
+):
     """Minimal object mimicking PushResult."""
+
     class R:
         topology_state_id = state_id
         pass
+
     r = R()
     r.sim_time = sim_time
     r.nodes_attempted = attempted
@@ -36,7 +45,9 @@ def _push_result(state_id="s1", sim_time="2026-01-01T00:00:00Z",
 
 
 def test_initial_state_fields():
-    s = _make_state(session_path="/data/sess", transport="vtysh", dry_run=True, nodes_in_registry=10)
+    s = _make_state(
+        session_path="/data/sess", transport="vtysh", dry_run=True, nodes_in_registry=10
+    )
     snap = s.snapshot()
     assert snap["session_path"] == "/data/sess"
     assert snap["transport"] == "vtysh"
@@ -100,7 +111,9 @@ def test_record_push_result_thread_safe():
 
 def test_record_deviation_increments_count_and_event_log():
     s = _make_state()
-    s.record_deviation("2026-01-01T00:01:00Z", "state-1", "sat-P01S03", "sat-P01S04", "scenario_inject_down")
+    s.record_deviation(
+        "2026-01-01T00:01:00Z", "state-1", "sat-P01S03", "sat-P01S04", "scenario_inject_down"
+    )
     snap = s.snapshot()
     assert snap["deviation_count"] == 1
     assert len(snap["deviation_history"]) == 1
@@ -127,19 +140,19 @@ def test_record_recomputation_increments_count_and_event_log():
 
 def test_request_and_consume_recompute_flag():
     s = _make_state()
-    assert s.consume_recompute_request() is False   # no request yet
+    assert s.consume_recompute_request() is False  # no request yet
     s.request_recompute()
-    assert s.consume_recompute_request() is True    # consumed
-    assert s.consume_recompute_request() is False   # already consumed
+    assert s.consume_recompute_request() is True  # consumed
+    assert s.consume_recompute_request() is False  # already consumed
 
 
 def test_snapshot_is_independent_copy():
     s = _make_state()
     s.record_transition("2026-01-01T00:00:00Z", "s1", 10, 10)
     snap1 = s.snapshot()
-    snap1["almanac_history"].clear()                # mutate the returned dict
+    snap1["almanac_history"].clear()  # mutate the returned dict
     snap2 = s.snapshot()
-    assert len(snap2["almanac_history"]) == 1       # original state is unaffected
+    assert len(snap2["almanac_history"]) == 1  # original state is unaffected
 
 
 def test_almanac_history_capped_at_max():
@@ -166,4 +179,7 @@ def test_event_log_newest_first():
     s.record_transition("2026-01-01T00:00:10Z", "second", 2, 2)
     snap = s.snapshot()
     # Newest entry (second) should be first in the returned list
-    assert "second" in snap["event_log"][0]["summary"] or snap["event_log"][0]["details"].get("topology_state_id") == "second"
+    assert (
+        "second" in snap["event_log"][0]["summary"]
+        or snap["event_log"][0]["details"].get("topology_state_id") == "second"
+    )

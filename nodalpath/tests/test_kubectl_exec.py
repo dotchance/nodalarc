@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import json
-import socket
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from nodalpath.push.kubectl_exec import (
-    _default_namespace,
     ExecResult,
     exec_vtysh,
     node_id_to_pod_name,
@@ -55,7 +51,9 @@ class TestExecVtysh:
 
     @patch("nodalpath.push.kubectl_exec.socket.socket")
     def test_failure(self, mock_socket_cls):
-        mock_sock = _make_mock_socket({"ok": False, "stdout": "", "stderr": "error\n", "exit_code": 1})
+        mock_sock = _make_mock_socket(
+            {"ok": False, "stdout": "", "stderr": "error\n", "exit_code": 1}
+        )
         mock_socket_cls.return_value = mock_sock
         result = exec_vtysh("sat-P00S00", "bad command")
         assert result.success is False
@@ -85,7 +83,7 @@ class TestExecVtysh:
     @patch("nodalpath.push.kubectl_exec.socket.socket")
     def test_timeout(self, mock_socket_cls):
         mock_sock = MagicMock()
-        mock_sock.connect.side_effect = socket.timeout("timed out")
+        mock_sock.connect.side_effect = TimeoutError("timed out")
         mock_socket_cls.return_value = mock_sock
         result = exec_vtysh("sat-P00S00", "slow command")
         assert result.success is False
@@ -123,7 +121,12 @@ class TestPushToNodes:
     @patch("nodalpath.push.kubectl_exec.exec_vtysh")
     def test_all_tasks_submitted(self, mock_exec):
         mock_exec.return_value = ExecResult(
-            node_id="x", pod_name="x", success=True, stdout="", stderr="", returncode=0,
+            node_id="x",
+            pod_name="x",
+            success=True,
+            stdout="",
+            stderr="",
+            returncode=0,
         )
         tasks = [
             ("sat-P00S00", "cmd1"),
@@ -138,9 +141,14 @@ class TestPushToNodes:
     def test_results_in_input_order(self, mock_exec):
         def side_effect(node_id, commands, namespace=None, timeout=None):
             return ExecResult(
-                node_id=node_id, pod_name=node_id.lower(),
-                success=True, stdout="", stderr="", returncode=0,
+                node_id=node_id,
+                pod_name=node_id.lower(),
+                success=True,
+                stdout="",
+                stderr="",
+                returncode=0,
             )
+
         mock_exec.side_effect = side_effect
         tasks = [
             ("sat-P00S00", "cmd1"),
@@ -155,13 +163,22 @@ class TestPushToNodes:
         def side_effect(node_id, commands, namespace=None, timeout=None):
             if node_id == "sat-P00S00":
                 return ExecResult(
-                    node_id=node_id, pod_name="sat-p00s00",
-                    success=False, stdout="", stderr="fail", returncode=1,
+                    node_id=node_id,
+                    pod_name="sat-p00s00",
+                    success=False,
+                    stdout="",
+                    stderr="fail",
+                    returncode=1,
                 )
             return ExecResult(
-                node_id=node_id, pod_name=node_id.lower(),
-                success=True, stdout="ok", stderr="", returncode=0,
+                node_id=node_id,
+                pod_name=node_id.lower(),
+                success=True,
+                stdout="ok",
+                stderr="",
+                returncode=0,
             )
+
         mock_exec.side_effect = side_effect
         tasks = [
             ("sat-P00S00", "cmd1"),

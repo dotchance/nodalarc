@@ -24,7 +24,8 @@ import heapq
 from dataclasses import dataclass
 
 from nodalarc.models.path import PathHop
-from nodalpath.engine.graph import TopologyGraph, GraphEdge
+
+from nodalpath.engine.graph import GraphEdge, TopologyGraph
 from nodalpath.models.path import ComputedPath
 
 
@@ -41,6 +42,7 @@ class PathConstraints:
     min_bandwidth_mbps: Links below this bandwidth are pruned from
         the graph before search.
     """
+
     metric: str = "latency"
     max_hops: int = 15
     max_latency_ms: float | None = None
@@ -187,17 +189,19 @@ def dijkstra(
             in_label = sid
             out_label = graph.node_sids[path_nodes[i + 1]]
 
-        hops_list.append(PathHop(
-            node_id=node_id,
-            node_type=node_type,
-            sid=sid,
-            in_label=in_label,
-            out_label=out_label,
-            action=action,
-            in_interface=in_interface,
-            out_interface=out_interface,
-            latency_to_next_ms=latency_to_next,
-        ))
+        hops_list.append(
+            PathHop(
+                node_id=node_id,
+                node_type=node_type,
+                sid=sid,
+                in_label=in_label,
+                out_label=out_label,
+                action=action,
+                in_interface=in_interface,
+                out_interface=out_interface,
+                latency_to_next_ms=latency_to_next,
+            )
+        )
 
     total_latency = sum(e.latency_ms for e in path_edges)
     label_stack = [hop.sid for hop in hops_list[1:]]

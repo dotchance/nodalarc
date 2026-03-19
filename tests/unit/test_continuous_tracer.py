@@ -1,6 +1,7 @@
 """Tests for vs_api/continuous_tracer.py — unit tests for helper methods."""
 
 from nodalarc.models.path import LiveTraceLink, PathHop, TracepathHop, TracepathResult
+
 from nodalpath.models.topology import TopologyNode
 from vs_api.continuous_tracer import ContinuousTracer
 
@@ -14,20 +15,32 @@ def _make_tracer(
     if node_registry is None:
         node_registry = {
             "gs-alpha": TopologyNode(
-                node_id="gs-alpha", node_type="ground_station",
-                sid=24000, loopback_ipv4="10.2.0.1",
+                node_id="gs-alpha",
+                node_type="ground_station",
+                sid=24000,
+                loopback_ipv4="10.2.0.1",
             ),
             "sat-P00S00": TopologyNode(
-                node_id="sat-P00S00", node_type="satellite",
-                sid=16001, loopback_ipv4="10.0.0.1", plane=0, slot=0,
+                node_id="sat-P00S00",
+                node_type="satellite",
+                sid=16001,
+                loopback_ipv4="10.0.0.1",
+                plane=0,
+                slot=0,
             ),
             "sat-P00S01": TopologyNode(
-                node_id="sat-P00S01", node_type="satellite",
-                sid=16002, loopback_ipv4="10.0.0.2", plane=0, slot=1,
+                node_id="sat-P00S01",
+                node_type="satellite",
+                sid=16002,
+                loopback_ipv4="10.0.0.2",
+                plane=0,
+                slot=1,
             ),
             "gs-beta": TopologyNode(
-                node_id="gs-beta", node_type="ground_station",
-                sid=24001, loopback_ipv4="10.2.1.1",
+                node_id="gs-beta",
+                node_type="ground_station",
+                sid=24001,
+                loopback_ipv4="10.2.1.1",
             ),
         }
     if interface_map is None:
@@ -45,6 +58,7 @@ def _make_tracer(
         }
 
     from nodalarc.platform import get_platform_config
+
     config = get_platform_config()
 
     return ContinuousTracer(
@@ -121,6 +135,7 @@ def test_build_delay_queries():
 def test_adaptive_interval():
     """Fast interval when near path change, normal otherwise."""
     from nodalarc.platform import get_platform_config
+
     config = get_platform_config()
 
     # Near path change (5s < 30s window)
@@ -181,8 +196,10 @@ def test_traced_path_conversion():
         asymmetry_detected=False,
     )
     result = LiveTraceResult(
-        src="gs-alpha", dst="gs-beta",
-        forward=fwd, reverse=rev,
+        src="gs-alpha",
+        dst="gs-beta",
+        forward=fwd,
+        reverse=rev,
         traced_at="2026-03-13T10:00:00Z",
         sim_time="2026-03-13T10:00:00Z",
         topology_state_id="abc",
@@ -233,10 +250,10 @@ def test_load_session_context_returns_5_tuple():
     the return type changes.
     """
     import typing
+
     from nodalpath.orchestrator.session_loader import load_session_context
+
     hints = typing.get_type_hints(load_session_context)
     ret = hints["return"]
     args = typing.get_args(ret)
-    assert len(args) == 5, (
-        f"load_session_context should return 5-tuple, got {len(args)}"
-    )
+    assert len(args) == 5, f"load_session_context should return 5-tuple, got {len(args)}"

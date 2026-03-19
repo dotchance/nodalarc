@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from nodalpath.integration.node_inspector import NodeInspector
 from nodalpath.models.almanac import ForwardingTable, LabelBinding
-from nodalpath.models.inspection import InspectionRun, NodeInspectionResult
+from nodalpath.models.inspection import NodeInspectionResult
 
 
 def _make_table(node_id: str = "sat-P00S00") -> ForwardingTable:

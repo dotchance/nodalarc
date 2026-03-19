@@ -1,5 +1,5 @@
 """Tests for ConsoleState topology snapshot functionality."""
-import pytest
+
 from nodalpath.console.state import ConsoleState
 
 
@@ -9,22 +9,40 @@ def _state():
 
 def _topo(state_id="s1", n_sats=2, n_gs=1):
     nodes = [
-        {"node_id": f"sat-P0{i}S00", "node_type": "satellite",
-         "plane": i, "slot": 0, "routing_area": "49.0001",
-         "neighbor_count": 2, "isl_count": 2, "gnd_count": 0, "prefix": None}
+        {
+            "node_id": f"sat-P0{i}S00",
+            "node_type": "satellite",
+            "plane": i,
+            "slot": 0,
+            "routing_area": "49.0001",
+            "neighbor_count": 2,
+            "isl_count": 2,
+            "gnd_count": 0,
+            "prefix": None,
+        }
         for i in range(n_sats)
     ]
     nodes += [
-        {"node_id": "gs-ashburn", "node_type": "ground_station",
-         "plane": None, "slot": None, "routing_area": None,
-         "neighbor_count": 1, "isl_count": 0, "gnd_count": 1, "prefix": "10.0.0.0/24"}
+        {
+            "node_id": "gs-ashburn",
+            "node_type": "ground_station",
+            "plane": None,
+            "slot": None,
+            "routing_area": None,
+            "neighbor_count": 1,
+            "isl_count": 0,
+            "gnd_count": 1,
+            "prefix": "10.0.0.0/24",
+        }
         for _ in range(n_gs)
     ]
     return {
         "topology_state_id": state_id,
         "sim_time": "2026-01-01T00:01:00Z",
         "nodes": nodes,
-        "links": [{"node_a": "sat-P00S00", "node_b": "sat-P01S00", "state": "active", "link_type": "isl"}],
+        "links": [
+            {"node_a": "sat-P00S00", "node_b": "sat-P01S00", "state": "active", "link_type": "isl"}
+        ],
     }
 
 
@@ -59,6 +77,7 @@ def test_record_topology_nodes_structure():
 def test_get_topology_is_thread_safe():
     """Concurrent writes must not corrupt the stored topology."""
     import threading
+
     s = _state()
     errors = []
 
@@ -69,8 +88,10 @@ def test_get_topology_is_thread_safe():
             errors.append(e)
 
     threads = [threading.Thread(target=writer, args=(i,)) for i in range(20)]
-    for t in threads: t.start()
-    for t in threads: t.join()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
     assert errors == []
     topo = s.get_topology()

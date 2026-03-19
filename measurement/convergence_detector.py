@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from nodalarc.models.link_events import LinkDown, LinkUp
@@ -40,17 +40,16 @@ def measure_convergence(
     Returns:
         ConvergenceResult with timing and packet stats
     """
-    start_time = datetime.now(timezone.utc)
+    start_time = datetime.now(UTC)
     start_wall = time.monotonic()
 
     # No flows configured: fixed dwell period, return converged with no measurement
     if not active_flows:
         log.info(
-            f"Convergence {event_id}: no flows configured, "
-            f"dwell {convergence_config.timeout_s}s"
+            f"Convergence {event_id}: no flows configured, dwell {convergence_config.timeout_s}s"
         )
         # No flows = no probes to measure. Return immediately as converged.
-        end_time = datetime.now(timezone.utc)
+        end_time = datetime.now(UTC)
         return ConvergenceResult(
             event_id=event_id,
             converged=True,
@@ -65,12 +64,14 @@ def measure_convergence(
 
     # Determine which flows might be affected
     affected_flows = _find_affected_flows(
-        link_event, active_flows, adapter,
+        link_event,
+        active_flows,
+        adapter,
     )
 
     if not affected_flows:
         log.info(f"Convergence {event_id}: no flows affected by link event")
-        end_time = datetime.now(timezone.utc)
+        end_time = datetime.now(UTC)
         return ConvergenceResult(
             event_id=event_id,
             converged=True,
@@ -105,7 +106,7 @@ def measure_convergence(
 
         if elapsed >= timeout_s:
             log.warning(f"Convergence {event_id}: timeout after {elapsed:.1f}s")
-            end_time = datetime.now(timezone.utc)
+            end_time = datetime.now(UTC)
             return ConvergenceResult(
                 event_id=event_id,
                 converged=False,
@@ -153,7 +154,7 @@ def measure_convergence(
                     f"{consecutive_zero_received} rounds, fast-fail "
                     f"after {duration:.1f}s"
                 )
-                end_time = datetime.now(timezone.utc)
+                end_time = datetime.now(UTC)
                 return ConvergenceResult(
                     event_id=event_id,
                     converged=False,
@@ -174,10 +175,8 @@ def measure_convergence(
                 stable_since = now
             elif now - stable_since >= stability_s:
                 duration = now - start_wall
-                log.info(
-                    f"Convergence {event_id}: converged after {duration:.1f}s"
-                )
-                end_time = datetime.now(timezone.utc)
+                log.info(f"Convergence {event_id}: converged after {duration:.1f}s")
+                end_time = datetime.now(UTC)
                 return ConvergenceResult(
                     event_id=event_id,
                     converged=True,

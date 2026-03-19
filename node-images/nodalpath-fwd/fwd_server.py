@@ -34,22 +34,22 @@ FRR does not install or modify forwarding state in NodalPath sessions.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
-import subprocess
 import socket
+import subprocess
 import threading
 import time
 from concurrent import futures
 
 import grpc
-from pyroute2 import IPRoute
-
 from proto import forwarding_pb2 as pb2
 from proto.forwarding_pb2_grpc import (
     ForwardingServiceServicer,
     add_ForwardingServiceServicer_to_server,
 )
+from pyroute2 import IPRoute
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("fwd-server")
@@ -69,14 +69,14 @@ _lock = threading.Lock()
 _state = {
     "topology_state_id": "",
     "sim_time": "",
-    "lsr_entries": {},   # in_label -> LabelEntry
-    "ler_entries": {},   # dst_prefix -> IngressEntry
+    "lsr_entries": {},  # in_label -> LabelEntry
+    "ler_entries": {},  # dst_prefix -> IngressEntry
     "last_update_ms": 0.0,
     "last_update_time": "",
 }
 # Entries skipped because their interface was DOWN — retried in background
-_pending_lsr: dict[int, object] = {}       # in_label -> LabelEntry
-_pending_ler: dict[str, object] = {}       # dst_prefix -> IngressEntry
+_pending_lsr: dict[int, object] = {}  # in_label -> LabelEntry
+_pending_ler: dict[str, object] = {}  # dst_prefix -> IngressEntry
 
 # Shared IPRoute handle (created once, reused).
 _ipr: IPRoute | None = None
@@ -126,6 +126,7 @@ def _iface_index(iface: str) -> int:
 # MPLS route installation via pyroute2 netlink
 # ---------------------------------------------------------------------------
 
+
 def _install_lsr(entry: pb2.LabelEntry) -> None:
     """Install an LSR entry via netlink.
 
@@ -143,8 +144,11 @@ def _install_lsr(entry: pb2.LabelEntry) -> None:
     elif entry.nexthop_ll:
         via = {"family": socket.AF_INET6, "addr": entry.nexthop_ll}
     else:
-        log.warning("No nexthop_ll for LSR in_label=%d dev %s, using bare oif",
-                     entry.in_label, entry.out_interface)
+        log.warning(
+            "No nexthop_ll for LSR in_label=%d dev %s, using bare oif",
+            entry.in_label,
+            entry.out_interface,
+        )
         via = None
 
     if entry.action == pb2.Action.POP:
@@ -180,10 +184,7 @@ def _install_ler(entry: pb2.IngressEntry) -> None:
     ipr = _get_ipr()
     oif = _iface_index(entry.out_interface)
 
-    if entry.label_stack:
-        labels = list(entry.label_stack)
-    else:
-        labels = [entry.push_label]
+    labels = list(entry.label_stack) if entry.label_stack else [entry.push_label]
 
     dst, prefix_len = entry.dst_prefix.split("/")
 
@@ -203,12 +204,8 @@ def _install_ler(entry: pb2.IngressEntry) -> None:
 def _remove_lsr(in_label: int) -> None:
     """Remove an LSR entry via netlink."""
     ipr = _get_ipr()
-    try:
-        ipr.route("del",
-                   family=AF_MPLS,
-                   dst={"label": in_label, "bos": 1})
-    except Exception:
-        pass
+    with contextlib.suppress(Exception):
+        ipr.route("del", family=AF_MPLS, dst={"label": in_label, "bos": 1})
 
 
 def _remove_ler(entry) -> None:
@@ -216,10 +213,7 @@ def _remove_ler(entry) -> None:
     ipr = _get_ipr()
     try:
         dst, prefix_len = entry.dst_prefix.split("/")
-        ipr.route("del",
-                   table=POLICY_TABLE,
-                   dst=dst,
-                   dst_len=int(prefix_len))
+        ipr.route("del", table=POLICY_TABLE, dst=dst, dst_len=int(prefix_len))
     except Exception:
         pass
 
@@ -227,6 +221,7 @@ def _remove_ler(entry) -> None:
 # ---------------------------------------------------------------------------
 # gRPC ForwardingService implementation
 # ---------------------------------------------------------------------------
+
 
 class ForwardingServiceImpl(ForwardingServiceServicer):
     """gRPC service implementation for kernel MPLS forwarding."""
@@ -267,7 +262,9 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
                     _install_lsr(entry)
                     installed += 1
                 except subprocess.CalledProcessError as exc:
-                    errors.append(f"LSR {in_label}: {exc.stderr.strip() if hasattr(exc, 'stderr') else exc}")
+                    errors.append(
+                        f"LSR {in_label}: {exc.stderr.strip() if hasattr(exc, 'stderr') else exc}"
+                    )
                 except Exception as exc:
                     errors.append(f"LSR {in_label}: {exc}")
 
@@ -282,24 +279,22 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
                     _install_ler(entry)
                     installed += 1
                 except subprocess.CalledProcessError as exc:
-                    errors.append(f"LER {prefix}: {exc.stderr.strip() if hasattr(exc, 'stderr') else exc}")
+                    errors.append(
+                        f"LER {prefix}: {exc.stderr.strip() if hasattr(exc, 'stderr') else exc}"
+                    )
                 except Exception as exc:
                     errors.append(f"LER {prefix}: {exc}")
 
         # REMOVE phase: stale entries
         for in_label in curr_lsr:
             if in_label not in next_lsr:
-                try:
+                with contextlib.suppress(Exception):
                     _remove_lsr(in_label)
-                except Exception:
-                    pass
 
         for prefix, old_entry in curr_ler.items():
             if prefix not in next_ler:
-                try:
+                with contextlib.suppress(Exception):
                     _remove_ler(old_entry)
-                except Exception:
-                    pass
 
         # Update state
         _state["lsr_entries"] = next_lsr
@@ -313,7 +308,12 @@ class ForwardingServiceImpl(ForwardingServiceServicer):
         total = len(next_lsr) + len(next_ler)
         log.info(
             "Applied update %s: %d entries (%d installed, %d skipped-down, %d errors) in %.1fms",
-            request.topology_state_id, total, installed, skipped, len(errors), elapsed,
+            request.topology_state_id,
+            total,
+            installed,
+            skipped,
+            len(errors),
+            elapsed,
         )
 
         success = len(errors) == 0
@@ -369,6 +369,7 @@ def _ler_eq(a, b) -> bool:
 # Background retry for entries skipped due to DOWN interfaces
 # ---------------------------------------------------------------------------
 
+
 def _retry_pending() -> None:
     """Retry entries skipped due to DOWN interfaces.
 
@@ -402,12 +403,17 @@ def _retry_pending() -> None:
                     del _pending_ler[prefix]
             if retried:
                 remaining = len(_pending_lsr) + len(_pending_ler)
-                log.info("Retry: installed %d entries after interface UP (%d still pending)", retried, remaining)
+                log.info(
+                    "Retry: installed %d entries after interface UP (%d still pending)",
+                    retried,
+                    remaining,
+                )
 
 
 # ---------------------------------------------------------------------------
 # Server entry point
 # ---------------------------------------------------------------------------
+
 
 def serve() -> None:
     _ensure_policy_rule()

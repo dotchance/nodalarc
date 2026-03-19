@@ -2,14 +2,13 @@
 
 import pytest
 import yaml
-from pydantic import ValidationError
-
 from nodalarc.models.session import (
     AreaAssignmentConfig,
     SessionConfig,
 )
-from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
+from pydantic import ValidationError
 
+from tests.conftest import FIXTURES_DIR
 
 _SAMPLE_SESSION = {
     "session": {"name": "test-session"},
@@ -22,8 +21,14 @@ _SAMPLE_SESSION = {
     },
     "time": {"step_seconds": 1},
     "traffic_flows": [
-        {"flow_id": "test", "src": "gs-svalbard", "dst": "gs-mcmurdo",
-         "protocol": "udp", "bandwidth_kbps": 100, "probe_type": "continuous"},
+        {
+            "flow_id": "test",
+            "src": "gs-svalbard",
+            "dst": "gs-mcmurdo",
+            "protocol": "udp",
+            "bandwidth_kbps": 100,
+            "probe_type": "continuous",
+        },
     ],
     "convergence": {"stability_period_s": 2.0, "timeout_s": 30.0},
 }

@@ -9,16 +9,12 @@ set on scenario completion reconciles all overridden links.
 
 import json
 import threading
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
-import zmq
-
-from nodalarc.models.events import VisibilityEvent
 from nodalarc.platform import PlatformConfig, init_platform_config, reset_platform_config
+
 from orchestrator.realtime_dispatcher import RealtimeDispatcher
 
 
@@ -26,6 +22,7 @@ from orchestrator.realtime_dispatcher import RealtimeDispatcher
 def _isolated_platform_config():
     """Ensure tests use loopback bind with non-conflicting ports."""
     from tests.unit.test_platform_config import _valid_config_dict
+
     reset_platform_config()
     d = _valid_config_dict()
     d["zmq_bind_host"] = "127.0.0.1"
@@ -136,11 +133,15 @@ class TestDispatcherOverrideIntegration:
         return timeline
 
     def _visibility_record(
-        self, node_a: str, node_b: str, visible: bool, scheduled: bool,
+        self,
+        node_a: str,
+        node_b: str,
+        visible: bool,
+        scheduled: bool,
         timestamp_s: float = 0.0,
     ) -> dict:
         """Create a timeline visibility event record."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return {
             "event_type": "VisibilityEvent",
             "timestamp_s": timestamp_s,
@@ -173,8 +174,6 @@ class TestDispatcherOverrideIntegration:
             bandwidth_map={pair: 1000.0},
             override_set=override_set,
             override_lock=lock,
-            
-            
         )
         dispatcher.run()
 
@@ -187,7 +186,9 @@ class TestDispatcherOverrideIntegration:
         free_pair = ("sat-P00S00", "sat-P01S00")
 
         events = [
-            self._visibility_record(*overridden_pair, visible=True, scheduled=True, timestamp_s=0.0),
+            self._visibility_record(
+                *overridden_pair, visible=True, scheduled=True, timestamp_s=0.0
+            ),
             self._visibility_record(*free_pair, visible=True, scheduled=True, timestamp_s=0.0),
         ]
         timeline = self._make_timeline_jsonl(tmp_path, events)
@@ -204,8 +205,6 @@ class TestDispatcherOverrideIntegration:
             bandwidth_map={overridden_pair: 1000.0, free_pair: 1000.0},
             override_set=override_set,
             override_lock=lock,
-            
-            
         )
         dispatcher.run()
 
@@ -232,8 +231,6 @@ class TestDispatcherOverrideIntegration:
             bandwidth_map={pair: 1000.0},
             override_set=override_set,
             override_lock=lock,
-            
-            
         )
 
         # Remove override before second event processes
@@ -272,8 +269,6 @@ class TestDispatcherOverrideIntegration:
             bandwidth_map={p: 1000.0 for p in pairs},
             override_set=override_set,
             override_lock=lock,
-            
-            
         )
 
         # Clear all overrides before running

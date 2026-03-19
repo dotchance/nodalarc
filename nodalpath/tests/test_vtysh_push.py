@@ -4,19 +4,15 @@ from __future__ import annotations
 
 import logging
 
-import pytest
-
 from nodalpath.models.almanac import ForwardingTable, IngressRule, LabelBinding
 from nodalpath.push.vtysh_push import (
     diff_forwarding_tables,
     forwarding_table_to_vtysh,
     ingress_rule_remove_command,
     ingress_rule_to_command,
-    lsr_binding_remove_command,
     lsr_binding_to_command,
     wrap_in_configure_block,
 )
-
 
 # ---------------------------------------------------------------------------
 # lsr_binding_to_command
@@ -25,14 +21,21 @@ from nodalpath.push.vtysh_push import (
 
 class TestLsrBindingToCommand:
     def test_swap_contains_in_label_nexthop_out_label(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002,
+            in_label=16001,
+            action="swap",
+            out_label=16002,
             out_interface="isl0",
         )
         result = lsr_binding_to_command(
-            binding, "sat-P00S00", push_sid_to_loopback, push_iface_to_peer_loopback,
+            binding,
+            "sat-P00S00",
+            push_sid_to_loopback,
+            push_iface_to_peer_loopback,
         )
         assert "16001" in result
         assert "16002" in result
@@ -41,43 +44,66 @@ class TestLsrBindingToCommand:
         assert "mpls lsp" in result
 
     def test_pop_contains_implicit_null(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         binding = LabelBinding(
-            in_label=16001, action="pop", out_label=None,
+            in_label=16001,
+            action="pop",
+            out_label=None,
             out_interface="isl0",
         )
         result = lsr_binding_to_command(
-            binding, "sat-P00S00", push_sid_to_loopback, push_iface_to_peer_loopback,
+            binding,
+            "sat-P00S00",
+            push_sid_to_loopback,
+            push_iface_to_peer_loopback,
         )
         assert "implicit-null" in result
         # nexthop from iface_to_peer_loopback for (sat-P00S00, isl0)
         assert push_iface_to_peer_loopback[("sat-P00S00", "isl0")] in result
 
     def test_swap_unknown_sid_returns_empty(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback, caplog,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
+        caplog,
     ):
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=99999,
+            in_label=16001,
+            action="swap",
+            out_label=99999,
             out_interface="isl0",
         )
         with caplog.at_level(logging.ERROR):
             result = lsr_binding_to_command(
-                binding, "sat-P00S00", push_sid_to_loopback, push_iface_to_peer_loopback,
+                binding,
+                "sat-P00S00",
+                push_sid_to_loopback,
+                push_iface_to_peer_loopback,
             )
         assert result == ""
         assert "Unknown SID" in caplog.text
 
     def test_pop_unknown_interface_returns_empty(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback, caplog,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
+        caplog,
     ):
         binding = LabelBinding(
-            in_label=16001, action="pop", out_label=None,
+            in_label=16001,
+            action="pop",
+            out_label=None,
             out_interface="nonexistent99",
         )
         with caplog.at_level(logging.ERROR):
             result = lsr_binding_to_command(
-                binding, "sat-P00S00", push_sid_to_loopback, push_iface_to_peer_loopback,
+                binding,
+                "sat-P00S00",
+                push_sid_to_loopback,
+                push_iface_to_peer_loopback,
             )
         assert result == ""
         assert "Unknown interface" in caplog.text
@@ -90,10 +116,13 @@ class TestLsrBindingToCommand:
 
 class TestIngressRuleToCommand:
     def test_contains_prefix_label_nexthop(
-        self, push_iface_to_peer_loopback,
+        self,
+        push_iface_to_peer_loopback,
     ):
         rule = IngressRule(
-            dst_prefix="172.16.1.0/24", push_label=16002, out_interface="gnd0",
+            dst_prefix="172.16.1.0/24",
+            push_label=16002,
+            out_interface="gnd0",
         )
         result = ingress_rule_to_command(rule, "gs-alpha", push_iface_to_peer_loopback)
         assert "ip route" in result
@@ -104,10 +133,14 @@ class TestIngressRuleToCommand:
         assert nexthop in result
 
     def test_unknown_interface_returns_empty(
-        self, push_iface_to_peer_loopback, caplog,
+        self,
+        push_iface_to_peer_loopback,
+        caplog,
     ):
         rule = IngressRule(
-            dst_prefix="172.16.1.0/24", push_label=16002, out_interface="nonexistent0",
+            dst_prefix="172.16.1.0/24",
+            push_label=16002,
+            out_interface="nonexistent0",
         )
         with caplog.at_level(logging.ERROR):
             result = ingress_rule_to_command(rule, "gs-alpha", push_iface_to_peer_loopback)
@@ -115,10 +148,13 @@ class TestIngressRuleToCommand:
         assert "Unknown interface" in caplog.text
 
     def test_remove_contains_no_ip_route(
-        self, push_iface_to_peer_loopback,
+        self,
+        push_iface_to_peer_loopback,
     ):
         rule = IngressRule(
-            dst_prefix="172.16.1.0/24", push_label=16002, out_interface="gnd0",
+            dst_prefix="172.16.1.0/24",
+            push_label=16002,
+            out_interface="gnd0",
         )
         result = ingress_rule_remove_command(rule, "gs-alpha", push_iface_to_peer_loopback)
         assert "no ip route" in result
@@ -153,7 +189,9 @@ class TestWrapInConfigureBlock:
 
 class TestForwardingTableToVtysh:
     def test_satellite_with_bindings(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         table = ForwardingTable(
             node_id="sat-P00S00",
@@ -170,7 +208,9 @@ class TestForwardingTableToVtysh:
         assert "write memory" in result
 
     def test_ground_station_with_ingress_rules(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         table = ForwardingTable(
             node_id="gs-alpha",
@@ -186,7 +226,9 @@ class TestForwardingTableToVtysh:
         assert "172.16.1.0/24" in result
 
     def test_empty_table_returns_empty(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         table = ForwardingTable(
             node_id="sat-P00S00",
@@ -215,7 +257,9 @@ class TestDiffForwardingTables:
         )
 
     def test_identical_tables_returns_empty(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         binding = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
         t1 = self._make_table(bindings=[binding])
@@ -224,7 +268,9 @@ class TestDiffForwardingTables:
         assert result == ""
 
     def test_one_new_binding(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         t1 = self._make_table()
         binding = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
@@ -234,7 +280,9 @@ class TestDiffForwardingTables:
         assert "no mpls lsp" not in result
 
     def test_one_removed_binding(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         binding = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
         t1 = self._make_table(bindings=[binding])
@@ -243,7 +291,9 @@ class TestDiffForwardingTables:
         assert "no mpls lsp 16001" in result
 
     def test_changed_binding_has_removal_and_addition(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         b1 = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
         b2 = LabelBinding(in_label=16001, action="swap", out_label=16003, out_interface="isl1")
@@ -254,7 +304,9 @@ class TestDiffForwardingTables:
         assert "mpls lsp 16001" in result
 
     def test_current_none_returns_full_table(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         binding = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
         t2 = self._make_table(bindings=[binding])
@@ -263,7 +315,9 @@ class TestDiffForwardingTables:
         assert result == full
 
     def test_removals_before_additions(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         b1 = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
         b2 = LabelBinding(in_label=16001, action="swap", out_label=16003, out_interface="isl1")
@@ -275,7 +329,9 @@ class TestDiffForwardingTables:
         assert removal_pos < addition_pos
 
     def test_no_python_repr_in_output(
-        self, push_sid_to_loopback, push_iface_to_peer_loopback,
+        self,
+        push_sid_to_loopback,
+        push_iface_to_peer_loopback,
     ):
         binding = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
         t = self._make_table(bindings=[binding])

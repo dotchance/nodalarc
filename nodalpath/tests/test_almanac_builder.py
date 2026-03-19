@@ -14,9 +14,7 @@ class TestComputeAlmanacEntry:
         entry = compute_almanac_entry(simple_4node_topology, prefix_map_simple)
         for ft in entry.forwarding_tables:
             if ft.node_id.startswith("gs-"):
-                assert len(ft.ler_ingress_rules) > 0, (
-                    f"GS {ft.node_id} should have ingress rules"
-                )
+                assert len(ft.ler_ingress_rules) > 0, f"GS {ft.node_id} should have ingress rules"
 
     def test_satellites_have_lsr_bindings(self, simple_4node_topology, prefix_map_simple):
         entry = compute_almanac_entry(simple_4node_topology, prefix_map_simple)

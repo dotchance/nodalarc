@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
-
 from nodalarc.models.events import (
-    ClockTick,
     TimelinePositionSnapshot,
     VisibilityEvent,
 )
+
 from nodalpath.orchestrator.timeline_reader import read_timeline
 
 
@@ -40,10 +38,12 @@ class TestReadTimeline:
     def test_start_time_filter(self, synthetic_timeline_path: Path) -> None:
         """Records before start_time are excluded."""
         # Filter out t=0 events, keep t=30 and t=60
-        records = list(read_timeline(
-            synthetic_timeline_path,
-            start_time="2026-03-01T14:30:29+00:00",
-        ))
+        records = list(
+            read_timeline(
+                synthetic_timeline_path,
+                start_time="2026-03-01T14:30:29+00:00",
+            )
+        )
         # Should only have events at t=30 and t=60
         assert len(records) == 2
         for r in records:
@@ -52,27 +52,36 @@ class TestReadTimeline:
     def test_end_time_filter(self, synthetic_timeline_path: Path) -> None:
         """Records after end_time are excluded."""
         # Keep only t=0 events
-        records = list(read_timeline(
-            synthetic_timeline_path,
-            end_time="2026-03-01T14:30:00+00:00",
-        ))
+        records = list(
+            read_timeline(
+                synthetic_timeline_path,
+                end_time="2026-03-01T14:30:00+00:00",
+            )
+        )
         # Should have snapshot + 6 visibility events at t=0
         assert len(records) == 7
 
     def test_malformed_line_skipped(self, tmp_path: Path) -> None:
         """Malformed JSON lines are logged and skipped."""
         path = tmp_path / "bad.jsonl"
-        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=timezone.utc)
+        t0 = datetime(2026, 3, 1, 14, 30, 0, tzinfo=UTC)
         good_event = VisibilityEvent(
-            sim_time=t0, node_a="sat-P00S00", node_b="sat-P00S01",
-            visible=True, scheduled=True, range_km=2000.0,
-            elevation_deg=None, terminal_type="optical",
+            sim_time=t0,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            visible=True,
+            scheduled=True,
+            range_km=2000.0,
+            elevation_deg=None,
+            terminal_type="optical",
         )
-        good_record = json.dumps({
-            "timestamp_s": 0.0,
-            "event_type": "VisibilityEvent",
-            "data": good_event.model_dump(mode="json"),
-        })
+        good_record = json.dumps(
+            {
+                "timestamp_s": 0.0,
+                "event_type": "VisibilityEvent",
+                "data": good_event.model_dump(mode="json"),
+            }
+        )
         with open(path, "w") as f:
             f.write("NOT VALID JSON\n")
             f.write(good_record + "\n")
@@ -92,11 +101,13 @@ class TestReadTimeline:
     def test_unknown_event_type_skipped(self, tmp_path: Path) -> None:
         """Unknown event types are skipped with a warning."""
         path = tmp_path / "unknown.jsonl"
-        record = json.dumps({
-            "timestamp_s": 0.0,
-            "event_type": "UnknownEvent",
-            "data": {"foo": "bar"},
-        })
+        record = json.dumps(
+            {
+                "timestamp_s": 0.0,
+                "event_type": "UnknownEvent",
+                "data": {"foo": "bar"},
+            }
+        )
         path.write_text(record + "\n")
         records = list(read_timeline(path))
         assert len(records) == 0

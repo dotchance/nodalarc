@@ -4,15 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from nodalpath.models.almanac import (
     AlmanacEntry,
     ForwardingTable,
     IngressRule,
     LabelBinding,
 )
-from nodalpath.models.topology import TopologyNode
 from nodalpath.push.kubectl_exec import ExecResult
 from nodalpath.push.push_scheduler import PushResult, PushScheduler, PushSchedulerConfig
 
@@ -57,7 +54,9 @@ class TestPushSchedulerInit:
         assert sched._sid_to_loopback[24000] == "10.255.0.1"
 
     def test_iface_to_peer_loopback_both_directions(
-        self, simple_node_registry, simple_interface_map,
+        self,
+        simple_node_registry,
+        simple_interface_map,
     ):
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         # (sat-P00S00, isl0) → sat-P00S01's loopback
@@ -74,15 +73,27 @@ class TestPushSchedulerInit:
 class TestPushEntry:
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_push_to_nodes_called_with_correct_count(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=True, stdout="", stderr="", returncode=0),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=True,
+                stdout="",
+                stderr="",
+                returncode=0,
+            ),
         ]
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -94,19 +105,31 @@ class TestPushEntry:
 
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_identical_entries_skips_push(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
 
         # First push installs
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=True, stdout="", stderr="", returncode=0),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=True,
+                stdout="",
+                stderr="",
+                returncode=0,
+            ),
         ]
         sched.push_entry(entry)
 
@@ -118,12 +141,18 @@ class TestPushEntry:
 
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_dry_run_never_calls_push(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         config = PushSchedulerConfig(dry_run=True)
         sched = PushScheduler(simple_node_registry, simple_interface_map, config=config)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -133,15 +162,27 @@ class TestPushEntry:
 
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_returns_push_result_with_correct_counts(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=True, stdout="", stderr="", returncode=0),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=True,
+                stdout="",
+                stderr="",
+                returncode=0,
+            ),
         ]
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         empty_table = _make_table("sat-P00S01")  # no bindings → skipped
@@ -154,15 +195,27 @@ class TestPushEntry:
 
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_success_updates_installed(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=True, stdout="", stderr="", returncode=0),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=True,
+                stdout="",
+                stderr="",
+                returncode=0,
+            ),
         ]
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -172,15 +225,27 @@ class TestPushEntry:
 
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_failure_does_not_update_installed(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=False, stdout="", stderr="error", returncode=1),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=False,
+                stdout="",
+                stderr="error",
+                returncode=1,
+            ),
         ]
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -189,7 +254,10 @@ class TestPushEntry:
 
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_consecutive_push_diffs_against_installed(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         b1 = LabelBinding(in_label=16001, action="swap", out_label=16002, out_interface="isl0")
@@ -197,8 +265,14 @@ class TestPushEntry:
         e1 = _make_entry([t1], state_id="state-1")
 
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=True, stdout="", stderr="", returncode=0),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=True,
+                stdout="",
+                stderr="",
+                returncode=0,
+            ),
         ]
         sched.push_entry(e1)
 
@@ -209,8 +283,14 @@ class TestPushEntry:
 
         mock_push.reset_mock()
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=True, stdout="", stderr="", returncode=0),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=True,
+                stdout="",
+                stderr="",
+                returncode=0,
+            ),
         ]
         sched.push_entry(e2)
 
@@ -222,15 +302,27 @@ class TestPushEntry:
 
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_failed_nodes_list(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=False, stdout="", stderr="err", returncode=1),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=False,
+                stdout="",
+                stderr="err",
+                returncode=1,
+            ),
         ]
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -239,15 +331,27 @@ class TestPushEntry:
 
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_push_duration_ms_positive(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=True, stdout="", stderr="", returncode=0),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=True,
+                stdout="",
+                stderr="",
+                returncode=0,
+            ),
         ]
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         entry = _make_entry([table])
@@ -256,15 +360,27 @@ class TestPushEntry:
 
     @patch("nodalpath.push.push_scheduler.push_to_nodes")
     def test_results_property(
-        self, mock_push, simple_node_registry, simple_interface_map,
+        self,
+        mock_push,
+        simple_node_registry,
+        simple_interface_map,
     ):
         mock_push.return_value = [
-            ExecResult(node_id="sat-P00S00", pod_name="sat-p00s00",
-                       success=True, stdout="", stderr="", returncode=0),
+            ExecResult(
+                node_id="sat-P00S00",
+                pod_name="sat-p00s00",
+                success=True,
+                stdout="",
+                stderr="",
+                returncode=0,
+            ),
         ]
         sched = PushScheduler(simple_node_registry, simple_interface_map)
         binding = LabelBinding(
-            in_label=16001, action="swap", out_label=16002, out_interface="isl0",
+            in_label=16001,
+            action="swap",
+            out_label=16002,
+            out_interface="isl0",
         )
         table = _make_table("sat-P00S00", bindings=[binding])
         e1 = _make_entry([table], state_id="state-1")
@@ -314,11 +430,17 @@ class TestSlidingWindowIntegration:
     ):
         """SlidingWindow calls push_entry once per transition when scheduler is set."""
         mock_scheduler = MagicMock()
-        mock_scheduler.push_entry = MagicMock(return_value=PushResult(
-            topology_state_id="test", sim_time="2026-03-01T14:30:00Z",
-            nodes_attempted=0, nodes_succeeded=0, nodes_failed=0,
-            nodes_skipped=0, push_duration_ms=0.0,
-        ))
+        mock_scheduler.push_entry = MagicMock(
+            return_value=PushResult(
+                topology_state_id="test",
+                sim_time="2026-03-01T14:30:00Z",
+                nodes_attempted=0,
+                nodes_succeeded=0,
+                nodes_failed=0,
+                nodes_skipped=0,
+                push_duration_ms=0.0,
+            )
+        )
 
         from nodalpath.orchestrator.window import SlidingWindow
 

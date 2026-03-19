@@ -5,11 +5,8 @@ Deploy 2x3 constellation, let MI passively record adjacency events,
 query SQLite to verify adapter_events and link_events tables.
 """
 
-import json
 import sqlite3
-import subprocess
-import time
-from pathlib import Path
+from datetime import UTC
 
 import pytest
 
@@ -46,9 +43,7 @@ def test_mi_records_adapter_events(session_db):
     create_tables(conn)
 
     # Verify tables exist
-    cursor = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    )
+    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     tables = [row[0] for row in cursor.fetchall()]
     assert "adapter_events" in tables
     assert "link_events" in tables
@@ -60,17 +55,18 @@ def test_mi_records_adapter_events(session_db):
 @pytest.mark.requires_root
 def test_adapter_event_schema():
     """Verify adapter_events table can store AdapterEvent records."""
-    from nodalarc.db.schema import create_tables
+    from datetime import datetime
+
     from nodalarc.db.queries import insert_adapter_event, query_adapter_events
+    from nodalarc.db.schema import create_tables
     from nodalarc.models.metrics import AdapterEvent
-    from datetime import datetime, timezone
 
     conn = sqlite3.connect(":memory:")
     create_tables(conn)
 
     event = AdapterEvent(
-        sim_time=datetime.now(timezone.utc),
-        wall_time=datetime.now(timezone.utc),
+        sim_time=datetime.now(UTC),
+        wall_time=datetime.now(UTC),
         node_id="sat-P00S00",
         event_type="adjacency_up",
         event_data={

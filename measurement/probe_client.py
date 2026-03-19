@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import json
 import logging
-import urllib.request
 import urllib.error
+import urllib.request
 from typing import Any
 
 from nodalarc.zmq_channels import probe_daemon_port

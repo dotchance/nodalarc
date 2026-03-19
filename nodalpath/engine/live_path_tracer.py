@@ -22,18 +22,17 @@ import json
 import logging
 import re
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from nodalarc.models.path import PathHop, PathResult
+
 from nodalpath.models.topology import TopologyNode
 
 log = logging.getLogger(__name__)
 
 # Match a hop line containing an IP + RTT, allowing leading stars from
 # timed-out probes when -q >1 (e.g., "  3  *  10.0.0.3  1.000 ms")
-_HOP_RE = re.compile(
-    r"^\s*(\d+)\s+(?:\*\s+)*(\d+\.\d+\.\d+\.\d+)\s+([\d.]+)\s*ms"
-)
+_HOP_RE = re.compile(r"^\s*(\d+)\s+(?:\*\s+)*(\d+\.\d+\.\d+\.\d+)\s+([\d.]+)\s*ms")
 # All-star line: "  3  * *" or "  3  *"
 _STAR_RE = re.compile(r"^\s*(\d+)\s+\*(?:\s+\*)*\s*$")
 
@@ -61,6 +60,7 @@ class LivePathTracer:
             self._ip_to_node[node.loopback_ipv4] = node_id
         if deploy_socket is None:
             from nodalarc.platform import get_platform_config
+
             deploy_socket = get_platform_config().deploy_daemon_unix_socket_path
         self._deploy_socket = deploy_socket
         self._timeout = timeout
@@ -71,18 +71,20 @@ class LivePathTracer:
 
     def trace(self, src: str, dst: str) -> PathResult:
         """Run traceroute from src to dst's loopback IP."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         method = _METHOD_MAP.get(self._trace_mode, "traceroute")
         pipe_mode = self._trace_mode == "sr-pipe"
 
         src_node = self._node_registry.get(src)
         dst_node = self._node_registry.get(dst)
         if src_node is None:
-            return self._unreachable(src, dst, now, method, pipe_mode,
-                                     f"unknown source node: {src}")
+            return self._unreachable(
+                src, dst, now, method, pipe_mode, f"unknown source node: {src}"
+            )
         if dst_node is None:
-            return self._unreachable(src, dst, now, method, pipe_mode,
-                                     f"unknown destination node: {dst}")
+            return self._unreachable(
+                src, dst, now, method, pipe_mode, f"unknown destination node: {dst}"
+            )
 
         req: dict = {
             "action": "traceroute",
@@ -98,16 +100,23 @@ class LivePathTracer:
         # Grab stdout even on daemon-level failures (e.g. timeout with partial output)
         stdout = resp.get("stdout", "")
         if not stdout and not resp.get("ok", False):
-            return self._unreachable(src, dst, now, method, pipe_mode,
-                                     resp.get("error", "traceroute failed"))
+            return self._unreachable(
+                src, dst, now, method, pipe_mode, resp.get("error", "traceroute failed")
+            )
 
         hops = self._parse(stdout, src_node) if stdout else []
 
         if not hops:
             log.warning("traceroute %s -> %s: no hops parsed. raw:\n%s", src, dst, stdout[:500])
-            return self._unreachable(src, dst, now, method, pipe_mode,
-                                     "no hops resolved from traceroute output",
-                                     raw_output=stdout)
+            return self._unreachable(
+                src,
+                dst,
+                now,
+                method,
+                pipe_mode,
+                "no hops resolved from traceroute output",
+                raw_output=stdout,
+            )
 
         # Check reachability: dst appears anywhere in the hop list
         dst_seen = any(h.node_id == dst for h in hops)
@@ -116,7 +125,11 @@ class LivePathTracer:
             hop_ids = [h.node_id for h in hops]
             log.warning(
                 "traceroute %s -> %s: dst not in hops %s (target_ip=%s). raw:\n%s",
-                src, dst, hop_ids, dst_node.loopback_ipv4, stdout[:500],
+                src,
+                dst,
+                hop_ids,
+                dst_node.loopback_ipv4,
+                stdout[:500],
             )
 
         # Total is the last hop's RTT (end-to-end round trip), not a sum
@@ -125,8 +138,13 @@ class LivePathTracer:
             0.0,
         )
         return PathResult(
-            src=src, dst=dst, hops=hops, total_latency_ms=round(last_rtt, 3),
-            method=method, sim_time=now, topology_state_id="",
+            src=src,
+            dst=dst,
+            hops=hops,
+            total_latency_ms=round(last_rtt, 3),
+            method=method,
+            sim_time=now,
+            topology_state_id="",
             reachable=dst_seen,
             unreachable_reason=None if dst_seen else f"traceroute did not reach {dst}",
             pipe_mode=pipe_mode,
@@ -150,12 +168,14 @@ class LivePathTracer:
             return []
 
         # Build hops — start with src (RTT 0)
-        hops: list[PathHop] = [PathHop(
-            node_id=src_node.node_id,
-            node_type=src_node.node_type,
-            sid=src_node.sid,
-            rtt_ms=0.0,
-        )]
+        hops: list[PathHop] = [
+            PathHop(
+                node_id=src_node.node_id,
+                node_type=src_node.node_type,
+                sid=src_node.sid,
+                rtt_ms=0.0,
+            )
+        ]
 
         # Collect first resolvable IP per hop_num (tracepath retries
         # produce multiple entries at the same TTL)
@@ -175,13 +195,15 @@ class LivePathTracer:
             if node_id == src_node.node_id:
                 continue
             node = self._node_registry[node_id]
-            hops.append(PathHop(
-                node_id=node_id,
-                node_type=node.node_type,
-                sid=node.sid,
-                rtt_ms=round(rtt, 3) if rtt is not None else None,
-                responding_ip=ip,
-            ))
+            hops.append(
+                PathHop(
+                    node_id=node_id,
+                    node_type=node.node_type,
+                    sid=node.sid,
+                    rtt_ms=round(rtt, 3) if rtt is not None else None,
+                    responding_ip=ip,
+                )
+            )
 
         return hops
 
@@ -198,26 +220,37 @@ class LivePathTracer:
                     break
                 buf += chunk
                 if b"\n" in buf:
-                    return json.loads(buf[:buf.index(b"\n")])
+                    return json.loads(buf[: buf.index(b"\n")])
             return {"ok": False, "error": "No response from deploy daemon"}
         except FileNotFoundError:
             return {"ok": False, "error": "Deploy daemon not running"}
         except ConnectionRefusedError:
             return {"ok": False, "error": "Deploy daemon connection refused"}
-        except socket.timeout:
+        except TimeoutError:
             return {"ok": False, "error": "Traceroute timed out"}
         finally:
             sock.close()
 
     @staticmethod
     def _unreachable(
-        src: str, dst: str, sim_time: str,
-        method: str, pipe_mode: bool, reason: str,
+        src: str,
+        dst: str,
+        sim_time: str,
+        method: str,
+        pipe_mode: bool,
+        reason: str,
         raw_output: str | None = None,
     ) -> PathResult:
         return PathResult(
-            src=src, dst=dst, hops=[], total_latency_ms=0.0,
-            method=method, sim_time=sim_time, topology_state_id="",
-            reachable=False, unreachable_reason=reason,
-            pipe_mode=pipe_mode, raw_output=raw_output,
+            src=src,
+            dst=dst,
+            hops=[],
+            total_latency_ms=0.0,
+            method=method,
+            sim_time=sim_time,
+            topology_state_id="",
+            reachable=False,
+            unreachable_reason=reason,
+            pipe_mode=pipe_mode,
+            raw_output=raw_output,
         )

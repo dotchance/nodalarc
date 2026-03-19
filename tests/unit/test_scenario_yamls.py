@@ -9,8 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from nodalarc.models.scenario import ScenarioConfig, ScenarioStep
+from nodalarc.models.scenario import ScenarioConfig
 
 SCENARIOS_DIR = Path(__file__).parent.parent.parent / "configs" / "scenarios"
 
@@ -38,8 +37,13 @@ class TestScenarioYAMLValidation:
         config = ScenarioConfig.model_validate(raw["scenario"])
 
         valid_actions = {
-            "wait", "inject_link_down", "inject_link_up",
-            "inject_satellite_loss", "wait_converge", "measure", "reconfig",
+            "wait",
+            "inject_link_down",
+            "inject_link_up",
+            "inject_satellite_loss",
+            "wait_converge",
+            "measure",
+            "reconfig",
         }
         for i, step in enumerate(config.steps):
             assert step.action in valid_actions, (

@@ -4,7 +4,7 @@ import json
 import os
 import signal
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -193,8 +193,10 @@ class TestKillAllSessionProcesses:
         )
         mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
 
-        with patch("vs_api.session_manager._pid_alive", return_value=True), \
-             patch("os.kill") as mock_kill:
+        with (
+            patch("vs_api.session_manager._pid_alive", return_value=True),
+            patch("os.kill") as mock_kill,
+        ):
             killed = mgr.kill_all_session_processes()
             assert killed == 2
             mock_kill.assert_any_call(99999, signal.SIGTERM)

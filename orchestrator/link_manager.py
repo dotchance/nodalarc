@@ -9,6 +9,7 @@ All netlink operations use pyroute2 directly (PRD 13.6).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Naming helpers for ground link infrastructure (15-char Linux limit)
 # ---------------------------------------------------------------------------
+
 
 def _sat_short_id(sat_id: str) -> str:
     """Stable short identifier from satellite ID.
@@ -77,6 +79,7 @@ def discover_pod_pids(
     """
     if namespace is None:
         from nodalarc.platform import get_platform_config
+
         namespace = get_platform_config().kubernetes_namespace
     try:
         kubernetes.config.load_kube_config()
@@ -96,7 +99,9 @@ def discover_pod_pids(
         # crictl inspect → parse JSON → info.pid
         proc = subprocess.run(
             ["crictl", "inspect", raw_id],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         info = json.loads(proc.stdout)
         pid = info["info"]["pid"]
@@ -122,6 +127,7 @@ def create_veth_pair(
     """
     if mtu is None:
         from nodalarc.platform import get_platform_config
+
         mtu = get_platform_config().veth_interface_mtu_bytes
     # Clean up stale interfaces if they exist in the target namespaces
     for pid, ifname in [(pid_a, ifname_a), (pid_b, ifname_b)]:
@@ -200,8 +206,7 @@ def create_dummy_interface(
         idx = ns.link_lookup(ifname=ifname)[0]
         ns.link("set", index=idx, state="up")
         for addr in addresses:
-            ns.addr("add", index=idx, address=addr.split("/")[0],
-                    prefixlen=int(addr.split("/")[1]))
+            ns.addr("add", index=idx, address=addr.split("/")[0], prefixlen=int(addr.split("/")[1]))
     finally:
         ns.close()
     log.info(f"Created dummy {ifname} in ns({pid}) with {len(addresses)} addrs")
@@ -216,12 +221,14 @@ def disable_ipv6_autoconfig(pid: int, ifname: str) -> None:
     for param in ("accept_ra", "autoconf"):
         sysctl_key = f"net.ipv6.conf.{ifname}.{param}"
         result = subprocess.run(
-            ["nsenter", "--target", str(pid), "--net", "--",
-             "sysctl", "-w", f"{sysctl_key}=0"],
-            capture_output=True, text=True,
+            ["nsenter", "--target", str(pid), "--net", "--", "sysctl", "-w", f"{sysctl_key}=0"],
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
-            log.warning(f"Failed to set {param}=0 for {ifname} in ns({pid}): {result.stderr.strip()}")
+            log.warning(
+                f"Failed to set {param}=0 for {ifname} in ns({pid}): {result.stderr.strip()}"
+            )
 
 
 def mac_to_link_local(mac_str: str) -> str:
@@ -233,6 +240,7 @@ def mac_to_link_local(mac_str: str) -> str:
     and for ``via inet6`` in MPLS routes.
     """
     import ipaddress
+
     parts = [int(x, 16) for x in mac_str.split(":")]
     parts[0] ^= 0x02  # flip U/L bit
     eui64 = parts[:3] + [0xFF, 0xFE] + parts[3:]
@@ -246,8 +254,7 @@ def mac_to_link_local(mac_str: str) -> str:
     return str(ipaddress.IPv6Address(raw))
 
 
-def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str,
-                          timeout_ms: int = 500) -> bool:
+def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str, timeout_ms: int = 500) -> bool:
     """Trigger NDP solicitation and wait for the peer to become REACHABLE.
 
     After the TO brings an ISL or ground interface admin UP, call this
@@ -261,7 +268,6 @@ def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str,
     Returns True if resolved within timeout, False otherwise.
     On timeout, logs a warning — the sidecar's retry mechanism handles it.
     """
-    import socket as _socket
     import time as _time
 
     ns_path = f"/proc/{pid}/ns/net"
@@ -280,9 +286,23 @@ def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str,
     # the correct interface. Without it, the kernel may send the NS from
     # a different interface and resolve the wrong neighbor.
     subprocess.run(
-        ["nsenter", "--target", str(pid), "--net", "--",
-         "ping", "-6", "-c", "1", "-W", "1", f"{peer_ll}%{ifname}"],
-        capture_output=True, text=True, timeout=5,
+        [
+            "nsenter",
+            "--target",
+            str(pid),
+            "--net",
+            "--",
+            "ping",
+            "-6",
+            "-c",
+            "1",
+            "-W",
+            "1",
+            f"{peer_ll}%{ifname}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
     )
 
     # Poll neighbor table
@@ -304,13 +324,19 @@ def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str,
                     if state & (NUD_REACHABLE | NUD_STALE):
                         log.debug(
                             "NDP resolved %s on %s in ns(%d) in %.1fms",
-                            peer_ll, ifname, pid, elapsed,
+                            peer_ll,
+                            ifname,
+                            pid,
+                            elapsed,
                         )
                         return True
                     if state & NUD_FAILED:
                         log.error(
                             "NDP FAILED for %s on %s in ns(%d) after %.1fms",
-                            peer_ll, ifname, pid, elapsed,
+                            peer_ll,
+                            ifname,
+                            pid,
+                            elapsed,
                         )
                         return False
         finally:
@@ -319,9 +345,11 @@ def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str,
 
     elapsed = (_time.monotonic() - start) * 1000
     log.warning(
-        "NDP timeout for %s on %s in ns(%d) after %.1fms — "
-        "proceeding, sidecar retry will catch it",
-        peer_ll, ifname, pid, elapsed,
+        "NDP timeout for %s on %s in ns(%d) after %.1fms — proceeding, sidecar retry will catch it",
+        peer_ll,
+        ifname,
+        pid,
+        elapsed,
     )
     return False
 
@@ -375,9 +403,18 @@ def enable_mpls_input(pid: int, ifname: str) -> None:
     /proc/sys read-only inside containers.
     """
     result = subprocess.run(
-        ["nsenter", "--target", str(pid), "--net", "--",
-         "sysctl", "-w", f"net.mpls.conf.{ifname}.input=1"],
-        capture_output=True, text=True,
+        [
+            "nsenter",
+            "--target",
+            str(pid),
+            "--net",
+            "--",
+            "sysctl",
+            "-w",
+            f"net.mpls.conf.{ifname}.input=1",
+        ],
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         log.warning(f"Failed to enable MPLS input for {ifname} in ns({pid}): {result.stderr}")
@@ -434,16 +471,20 @@ def apply_link_shaping(
             raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
         idx = links[0]
         # Remove existing qdiscs (idempotent)
-        try:
+        with contextlib.suppress(Exception):
             ns.tc("del", index=idx, root=True)
-        except Exception:
-            pass
         # Root: tbf for bandwidth shaping (handle 1:0)
-        ns.tc("add", kind="tbf", index=idx, handle=0x00010000,
-              rate=rate_bps, burst=burst, latency=latency_us)
+        ns.tc(
+            "add",
+            kind="tbf",
+            index=idx,
+            handle=0x00010000,
+            rate=rate_bps,
+            burst=burst,
+            latency=latency_us,
+        )
         # Child: netem for delay (under class 1:1)
-        ns.tc("add", kind="netem", index=idx, handle=0x00100000,
-              parent=0x00010001, delay=delay_us)
+        ns.tc("add", kind="netem", index=idx, handle=0x00100000, parent=0x00010001, delay=delay_us)
     finally:
         ns.close()
     log.info(f"Applied shaping on ns({pid})/{ifname}: {delay_ms}ms, {rate_mbps}Mbps")
@@ -457,8 +498,14 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
         links = ns.link_lookup(ifname=ifname)
         if not links:
             raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
-        ns.tc("change", kind="netem", index=links[0], handle=0x00100000,
-              parent=0x00010001, delay=delay_us)
+        ns.tc(
+            "change",
+            kind="netem",
+            index=links[0],
+            handle=0x00100000,
+            parent=0x00010001,
+            delay=delay_us,
+        )
     finally:
         ns.close()
 
@@ -481,6 +528,7 @@ def set_link_metric(
     """
     if namespace is None:
         from nodalarc.platform import get_platform_config
+
         namespace = get_platform_config().kubernetes_namespace
 
     if routing_protocol == "isis":
@@ -492,11 +540,27 @@ def set_link_metric(
 
     env = {**os.environ, "KUBECONFIG": os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")}
     subprocess.run(
-        ["kubectl", "exec", "-n", namespace, pod_name, "-c", "frr", "--",
-         "vtysh", "-c", "configure terminal",
-         "-c", f"interface {ifname}",
-         "-c", metric_cmd],
-        capture_output=True, text=True, timeout=10, env=env,
+        [
+            "kubectl",
+            "exec",
+            "-n",
+            namespace,
+            pod_name,
+            "-c",
+            "frr",
+            "--",
+            "vtysh",
+            "-c",
+            "configure terminal",
+            "-c",
+            f"interface {ifname}",
+            "-c",
+            metric_cmd,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=env,
     )
 
 
@@ -523,6 +587,7 @@ def remove_link_shaping(pid: int, ifname: str) -> None:
 # with a patch cable.
 # ---------------------------------------------------------------------------
 
+
 def create_ground_bridge(
     gs_id: str,
     gs_pid: int,
@@ -540,6 +605,7 @@ def create_ground_bridge(
     """
     if mtu is None:
         from nodalarc.platform import get_platform_config
+
         mtu = get_platform_config().veth_interface_mtu_bytes
 
     gs_port = _gs_bridge_port_name(gs_id)
@@ -610,6 +676,7 @@ def create_satellite_ground_veth(
     """
     if mtu is None:
         from nodalarc.platform import get_platform_config
+
         mtu = get_platform_config().veth_interface_mtu_bytes
 
     host_name = _sat_gnd_host_name(sat_id)
@@ -673,13 +740,34 @@ def _tc_mirred_redirect(src: str, dst: str) -> None:
     )
     subprocess.run(
         ["tc", "qdisc", "add", "dev", src, "ingress"],
-        capture_output=True, check=True,
+        capture_output=True,
+        check=True,
     )
     subprocess.run(
-        ["tc", "filter", "add", "dev", src, "parent", "ffff:",
-         "protocol", "all", "u32", "match", "u32", "0", "0",
-         "action", "mirred", "egress", "redirect", "dev", dst],
-        capture_output=True, check=True,
+        [
+            "tc",
+            "filter",
+            "add",
+            "dev",
+            src,
+            "parent",
+            "ffff:",
+            "protocol",
+            "all",
+            "u32",
+            "match",
+            "u32",
+            "0",
+            "0",
+            "action",
+            "mirred",
+            "egress",
+            "redirect",
+            "dev",
+            dst,
+        ],
+        capture_output=True,
+        check=True,
     )
 
 

@@ -1,8 +1,9 @@
 """Tests for nodalpath.console.server — FastAPI routes and HTML dashboard."""
-import pytest
+
 from fastapi.testclient import TestClient
-from nodalpath.console.state import ConsoleState
+
 from nodalpath.console.server import build_app
+from nodalpath.console.state import ConsoleState
 
 
 def _client(session_path="/tmp/test", transport="grpc", dry_run=False, nodes=5):
@@ -70,10 +71,17 @@ def test_events_endpoint_returns_list():
 
 def test_pushes_endpoint_returns_list():
     client, state = _client()
+
     class FakeResult:
-        topology_state_id = "s1"; sim_time = "2026-01-01T00:00:00Z"
-        nodes_attempted = 3; nodes_succeeded = 3; nodes_failed = 0
-        nodes_skipped = 0; push_duration_ms = 8.0; failed_nodes = []
+        topology_state_id = "s1"
+        sim_time = "2026-01-01T00:00:00Z"
+        nodes_attempted = 3
+        nodes_succeeded = 3
+        nodes_failed = 0
+        nodes_skipped = 0
+        push_duration_ms = 8.0
+        failed_nodes = []
+
     state.record_push_result(FakeResult())
     r = client.get("/api/pushes")
     assert r.status_code == 200
@@ -90,11 +98,11 @@ def test_deviations_endpoint_returns_list():
 
 def test_recompute_queues_flag_and_returns_ok():
     client, state = _client()
-    assert state.consume_recompute_request() is False   # flag not set
+    assert state.consume_recompute_request() is False  # flag not set
     r = client.post("/api/recompute")
     assert r.status_code == 200
     assert r.json().get("ok") is True
-    assert state.consume_recompute_request() is True    # flag was set
+    assert state.consume_recompute_request() is True  # flag was set
 
 
 def test_status_reflects_deviation_count():

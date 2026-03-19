@@ -10,11 +10,8 @@ Verifies:
 
 import math
 
-import pytest
-
 from ome.propagator import Vec3
 from ome.visibility import check_field_of_regard, check_isl_visibility
-
 
 # Orbital velocity at 550 km altitude (approx)
 V_550 = 7.58  # km/s
@@ -140,7 +137,10 @@ class TestFieldOfRegardInPipeline:
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 180)
         result = check_isl_visibility(
-            pos_a, vel_a, pos_b, vel_b,
+            pos_a,
+            vel_a,
+            pos_b,
+            vel_b,
             max_range_km=50000.0,  # Very large to not trigger range check
             field_of_regard_deg=120.0,
         )
@@ -151,7 +151,10 @@ class TestFieldOfRegardInPipeline:
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(31.6, 0)
         result = check_isl_visibility(
-            pos_a, vel_a, pos_b, vel_b,
+            pos_a,
+            vel_a,
+            pos_b,
+            vel_b,
             max_range_km=50000.0,
             field_of_regard_deg=120.0,
         )
@@ -163,7 +166,10 @@ class TestFieldOfRegardInPipeline:
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(0, 32.7)
         result = check_isl_visibility(
-            pos_a, vel_a, pos_b, vel_b,
+            pos_a,
+            vel_a,
+            pos_b,
+            vel_b,
             max_range_km=50000.0,
             field_of_regard_deg=120.0,
         )
@@ -174,7 +180,10 @@ class TestFieldOfRegardInPipeline:
         pos_a, vel_a = _polar_orbit_state(0, 0)
         pos_b, vel_b = _polar_orbit_state(31.6, 0)
         result = check_isl_visibility(
-            pos_a, vel_a, pos_b, vel_b,
+            pos_a,
+            vel_a,
+            pos_b,
+            vel_b,
             max_range_km=50000.0,
             # field_of_regard_deg defaults to 360.0
         )
@@ -238,6 +247,4 @@ class TestFieldOfRegardComparison:
         for lat in [0, 30, 45, 60, 75]:
             f120 = self._count_feasible_cross_plane_links(120.0, lat)
             f160 = self._count_feasible_cross_plane_links(160.0, lat)
-            assert f120 <= f160, (
-                f"At {lat}° lat: 120° FoR ({f120}) should not exceed 160° ({f160})"
-            )
+            assert f120 <= f160, f"At {lat}° lat: 120° FoR ({f120}) should not exceed 160° ({f160})"

@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 import yaml
 import zmq
-
 from nodalarc.models.scenario import (
     InjectLinkDownStep,
     InjectLinkUpStep,
@@ -60,11 +59,15 @@ class MockHandler:
                 raw = self._sock.recv(zmq.NOBLOCK)
                 cmd = json.loads(raw)
                 self.received.append(cmd)
-                self._sock.send(json.dumps({
-                    "status": "ok",
-                    "converged": True,
-                    "duration_ms": 0.0,
-                }).encode())
+                self._sock.send(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "converged": True,
+                            "duration_ms": 0.0,
+                        }
+                    ).encode()
+                )
 
     def stop(self) -> None:
         self._running = False
@@ -133,7 +136,8 @@ class TestScenarioYamlParsing:
 
     def test_satellite_loss_step_validates(self):
         step = InjectSatelliteLossStep(
-            action="inject_satellite_loss", node="sat-P02S03",
+            action="inject_satellite_loss",
+            node="sat-P02S03",
         )
         assert step.node == "sat-P02S03"
 
@@ -268,11 +272,13 @@ class TestScenarioZmqExecution:
         try:
             down = InjectLinkDownStep(
                 action="inject_link_down",
-                node_a="sat-P00S00", node_b="sat-P00S01",
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
             )
             up = InjectLinkUpStep(
                 action="inject_link_up",
-                node_a="sat-P00S00", node_b="sat-P00S01",
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
             )
             _inject_link_down(sock, down)
             _inject_link_up(sock, up)

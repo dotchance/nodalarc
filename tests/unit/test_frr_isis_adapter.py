@@ -1,8 +1,8 @@
 """Unit tests for FRR IS-IS adapter — parse canned vtysh output."""
 
 from measurement.adapters.frr_isis_adapter import (
-    parse_isis_neighbors,
     parse_isis_log_line,
+    parse_isis_neighbors,
 )
 
 
@@ -13,10 +13,7 @@ class TestParseIsisNeighbors:
         assert parse_isis_neighbors("") == {}
 
     def test_header_only(self):
-        output = (
-            "Area NODAL:\n"
-            "  System Id           Interface   L  State        Holdtime SNPA\n"
-        )
+        output = "Area NODAL:\n  System Id           Interface   L  State        Holdtime SNPA\n"
         assert parse_isis_neighbors(output) == {}
 
     def test_single_neighbor_up(self):

@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from nodalpath.models.almanac import AlmanacEntry, ForwardingTable, IngressRule
 from nodalpath.orchestrator.almanac_store import AlmanacStore
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from nodalpath.models.almanac import ForwardingTable, LabelBinding, IngressRule
+from nodalpath.models.almanac import ForwardingTable, IngressRule, LabelBinding
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +28,9 @@ def lsr_binding_to_command(
         if nexthop is None:
             log.error(
                 "Unknown SID %s for swap binding in_label=%d on %s",
-                binding.out_label, binding.in_label, node_id,
+                binding.out_label,
+                binding.in_label,
+                node_id,
             )
             return ""
         return f" mpls lsp {binding.in_label} {nexthop} {binding.out_label}"
@@ -37,7 +39,9 @@ def lsr_binding_to_command(
         if nexthop is None:
             log.error(
                 "Unknown interface (%s, %s) for pop binding in_label=%d",
-                node_id, binding.out_interface, binding.in_label,
+                node_id,
+                binding.out_interface,
+                binding.in_label,
             )
             return ""
         return f" mpls lsp {binding.in_label} {nexthop} implicit-null"
@@ -61,7 +65,9 @@ def ingress_rule_to_command(
     if nexthop is None:
         log.error(
             "Unknown interface (%s, %s) for ingress rule dst_prefix=%s",
-            node_id, rule.out_interface, rule.dst_prefix,
+            node_id,
+            rule.out_interface,
+            rule.dst_prefix,
         )
         return ""
     return f" ip route {rule.dst_prefix} {nexthop} label {rule.push_label}"
@@ -77,7 +83,9 @@ def ingress_rule_remove_command(
     if nexthop is None:
         log.error(
             "Unknown interface (%s, %s) for ingress rule removal dst_prefix=%s",
-            node_id, rule.out_interface, rule.dst_prefix,
+            node_id,
+            rule.out_interface,
+            rule.dst_prefix,
         )
         return ""
     return f" no ip route {rule.dst_prefix} {nexthop}"
@@ -103,7 +111,9 @@ def forwarding_table_to_vtysh(
     """Convert a full ForwardingTable to a vtysh command string."""
     lines: list[str] = []
     for binding in table.lsr_bindings:
-        cmd = lsr_binding_to_command(binding, table.node_id, sid_to_loopback, iface_to_peer_loopback)
+        cmd = lsr_binding_to_command(
+            binding, table.node_id, sid_to_loopback, iface_to_peer_loopback
+        )
         if cmd:
             lines.append(cmd)
     for rule in table.ler_ingress_rules:

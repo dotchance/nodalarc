@@ -793,10 +793,11 @@ def deploy(
             log.warning(f"Failed to remove default route in {node_id}: {result.stderr.strip()}")
     log.info(f"Removed default route from {removed_default}/{len(pid_map)} pods")
 
-    # Save pid_map for orchestrator
+    # Save pid_map as file (host processes) and ConfigMap (K8s pods)
     pid_map_file = data_dir / "pid_map.json"
     pid_map_file.write_text(json.dumps(pid_map))
-    log.info(f"PID map saved to {pid_map_file}")
+    _apply_configmap("nodalarc-pid-map", ns, {"pid_map.json": json.dumps(pid_map)})
+    log.info(f"PID map saved to {pid_map_file} + ConfigMap")
 
     # === Step 8: Start MI ===
     mi_db = str(data_dir / "session.db")
@@ -1003,6 +1004,9 @@ def deploy(
     }
     state_file = data_dir / "session-state.json"
     state_file.write_text(json.dumps(session_state, indent=2))
+    _apply_configmap(
+        "nodalarc-session-state", ns, {"session-state.json": json.dumps(session_state)}
+    )
 
     log.info(f"Session: {session_id}")
     log.info(f"Data directory: {data_dir}")

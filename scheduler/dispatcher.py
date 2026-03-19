@@ -180,6 +180,9 @@ class Dispatcher:
         # Allow subscribers to connect before first publish
         await asyncio.sleep(0.5)
 
+        # Reconciliation on startup: compare checkpoint against Node Agent state
+        await self._reconcile_on_startup(to_pub)
+
         # Query Node Agent to learn which interfaces actually exist.
         # Removes interface_map entries for non-existent interfaces
         # (e.g., isl3 on nodes with only 3 ISL terminals).
@@ -713,13 +716,20 @@ class Dispatcher:
         if self._active_links and position_trajectory:
             await self._update_latencies(to_pub)
 
+        # Write checkpoint after processing FullStateSnapshot
+        if self._active_links:
+            sim_time_iso = sim_time if isinstance(sim_time, str) else datetime.now(UTC).isoformat()
+            asyncio.create_task(self._write_checkpoint(sim_time_iso))
+
     # ------------------------------------------------------------------
-    # Checkpoint (fire-and-forget)
+    # Checkpoint
     # ------------------------------------------------------------------
 
-    async def _write_checkpoint(self, sim_time_iso: str) -> None:
-        """Write sim_time to ConfigMap (non-blocking, fire-and-forget)."""
-        try:
+    _k8s_v1 = None  # Cached K8s API client
+
+    def _get_k8s_v1(self):
+        """Get or create cached K8s CoreV1Api client."""
+        if self._k8s_v1 is None:
             import kubernetes
             import kubernetes.client
             import kubernetes.config
@@ -728,16 +738,27 @@ class Dispatcher:
                 kubernetes.config.load_incluster_config()
             except kubernetes.config.config_exception.ConfigException:
                 kubernetes.config.load_kube_config()
+            self._k8s_v1 = kubernetes.client.CoreV1Api()
+        return self._k8s_v1
 
-            v1 = kubernetes.client.CoreV1Api()
+    async def _write_checkpoint(self, sim_time_iso: str) -> None:
+        """Write sim_time to ConfigMap via merge patch. Fire-and-forget."""
+        try:
+            import kubernetes.client
+
+            v1 = self._get_k8s_v1()
             from nodalarc.platform import get_platform_config
 
             ns = get_platform_config().kubernetes_namespace
+            # Include active link pairs so reconciliation can compare
+            # against Node Agent observed state without recomputing topology.
+            active_pairs = sorted(f"{a}:{b}" for a, b in self._active_links)
             body = {
                 "metadata": {"name": "nodalarc-scheduler-checkpoint"},
                 "data": {
                     "sim_time": sim_time_iso,
                     "updated_at": datetime.now(UTC).isoformat(),
+                    "active_links": json.dumps(active_pairs),
                 },
             }
             try:
@@ -756,4 +777,161 @@ class Dispatcher:
                 else:
                     raise
         except Exception as exc:
-            log.debug("Checkpoint write failed (non-fatal): %s", exc)
+            log.warning("Checkpoint write failed (non-fatal): %s", exc)
+
+    @staticmethod
+    def read_checkpoint() -> dict | None:
+        """Read checkpoint from ConfigMap. Returns {"sim_time": str} or None."""
+        try:
+            import kubernetes
+            import kubernetes.client
+            import kubernetes.config
+
+            try:
+                kubernetes.config.load_incluster_config()
+            except kubernetes.config.config_exception.ConfigException:
+                kubernetes.config.load_kube_config()
+            v1 = kubernetes.client.CoreV1Api()
+            from nodalarc.platform import get_platform_config
+
+            ns = get_platform_config().kubernetes_namespace
+            cm = v1.read_namespaced_config_map("nodalarc-scheduler-checkpoint", ns)
+            return cm.data
+        except kubernetes.client.rest.ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
+        except Exception as exc:
+            log.warning("Checkpoint read failed: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # Reconciliation on startup
+    # ------------------------------------------------------------------
+
+    async def _reconcile_on_startup(self, to_pub) -> None:
+        """Compare checkpoint state against Node Agent observed state.
+
+        On Scheduler restart, the Node Agent still holds its interface state
+        (pods didn't restart). The checkpoint records which links the Scheduler
+        had active before it died. We diff and issue corrective actions.
+        """
+        checkpoint = self.read_checkpoint()
+        if checkpoint is None:
+            log.info("No checkpoint found — fresh start, waiting for FullStateSnapshot")
+            return
+
+        sim_time = checkpoint.get("sim_time", "")
+        active_links_json = checkpoint.get("active_links", "[]")
+        log.info("Checkpoint found: sim_time=%s, reconciling...", sim_time)
+
+        # Expected: link pairs from the checkpoint
+        try:
+            expected_pairs: set[tuple[str, str]] = set()
+            for pair_str in json.loads(active_links_json):
+                parts = pair_str.split(":")
+                if len(parts) == 2:
+                    expected_pairs.add((parts[0], parts[1]))
+        except (json.JSONDecodeError, TypeError):
+            log.warning("Could not parse active_links from checkpoint")
+            expected_pairs = set()
+
+        if not expected_pairs:
+            log.info("Checkpoint has no active links — nothing to reconcile")
+            return
+
+        # Observed: query all Node Agents for current interface state
+        observed_up: set[tuple[str, str]] = set()
+        total_interfaces = 0
+        loop = asyncio.get_running_loop()
+
+        for agent_addr in self._loc.all_agent_addrs():
+            try:
+                stub = self._pool.get_stub(agent_addr)
+                resp = await loop.run_in_executor(
+                    None, stub.GetTopology, node_agent_pb2.GetTopologyRequest()
+                )
+                for iface in resp.interfaces:
+                    total_interfaces += 1
+                    if iface.admin_up:
+                        # Build the link pair key from node_id + interface
+                        # We need to match against interface_map to find the pair
+                        for pair, (iface_a, iface_b) in self._interface_map.items():
+                            if (pair[0] == iface.node_id and iface_a == iface.interface_name) or (
+                                pair[1] == iface.node_id and iface_b == iface.interface_name
+                            ):
+                                observed_up.add(pair)
+                                break
+            except Exception as exc:
+                log.warning("GetTopology failed for %s during reconciliation: %s", agent_addr, exc)
+
+        log.info(
+            "Queried Node Agents: %d interfaces observed, %d links up, %d expected",
+            total_interfaces,
+            len(observed_up),
+            len(expected_pairs),
+        )
+
+        # Diff: expected vs observed
+        to_bring_down = observed_up - expected_pairs
+        to_bring_up = expected_pairs - observed_up
+
+        if to_bring_down:
+            log.info("Reconciliation: bringing down %d unexpected links", len(to_bring_down))
+            down_events = []
+            for pair in to_bring_down:
+                ifaces = self._interface_map.get(pair)
+                if not ifaces:
+                    continue
+                down_events.append(
+                    VisibilityEvent(
+                        sim_time=datetime.fromisoformat(sim_time)
+                        if sim_time
+                        else datetime.now(UTC),
+                        node_a=pair[0],
+                        node_b=pair[1],
+                        visible=False,
+                        scheduled=False,
+                        range_km=0.0,
+                        elevation_deg=None,
+                        terminal_type="optical",
+                    )
+                )
+            if down_events:
+                await self._dispatch_downs(
+                    down_events, sim_time or datetime.now(UTC).isoformat(), to_pub
+                )
+
+        if to_bring_up:
+            log.info("Reconciliation: bringing up %d missing links", len(to_bring_up))
+            up_events = []
+            for pair in to_bring_up:
+                ifaces = self._interface_map.get(pair)
+                if not ifaces:
+                    continue
+                up_events.append(
+                    VisibilityEvent(
+                        sim_time=datetime.fromisoformat(sim_time)
+                        if sim_time
+                        else datetime.now(UTC),
+                        node_a=pair[0],
+                        node_b=pair[1],
+                        visible=True,
+                        scheduled=True,
+                        range_km=0.0,
+                        elevation_deg=None,
+                        terminal_type="optical",
+                    )
+                )
+            if up_events:
+                await self._dispatch_ups(
+                    up_events, sim_time or datetime.now(UTC).isoformat(), to_pub
+                )
+
+        corrective = len(to_bring_down) + len(to_bring_up)
+        log.info(
+            "Reconciliation complete: %d corrective actions (%d down, %d up)",
+            corrective,
+            len(to_bring_down),
+            len(to_bring_up),
+        )

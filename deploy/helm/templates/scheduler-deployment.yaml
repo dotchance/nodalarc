@@ -29,10 +29,13 @@ spec:
             - "/etc/nodalarc/platform.yaml"
           ports:
             - containerPort: 5561
+              hostPort: 5561
               name: to-events
             - containerPort: 5564
+              hostPort: 5564
               name: scenario-inject
             - containerPort: 5566
+              hostPort: 5566
               name: playback
           resources:
             limits:

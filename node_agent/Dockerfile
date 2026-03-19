@@ -30,6 +30,11 @@ RUN pip install --no-cache-dir \
     pydantic>=2.0 pyroute2 grpcio>=1.74 protobuf>=6.31.1 \
     pyyaml kubernetes
 
+# Force gRPC to use the epoll1 poller instead of the C extension's
+# default poller, which has accept4 flag compatibility issues with
+# hostPID containers. The epoll1 engine uses standard accept() syscalls.
+ENV GRPC_POLL_STRATEGY=epoll1
+
 # Add lib/ to Python path so nodalarc package is importable
 ENV PYTHONPATH=/app/lib:/app
 

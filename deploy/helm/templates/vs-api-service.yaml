@@ -6,12 +6,10 @@ metadata:
   labels:
     app: nodalarc-vs-api
 spec:
-  type: NodePort
   selector:
     app: nodalarc-vs-api
   ports:
     - name: http
       port: 8080
       targetPort: 8080
-      nodePort: 30080
       protocol: TCP

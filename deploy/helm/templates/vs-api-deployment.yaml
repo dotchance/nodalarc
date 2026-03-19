@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodalarc-vs-api
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-vs-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodalarc-vs-api
+  template:
+    metadata:
+      labels:
+        app: nodalarc-vs-api
+    spec:
+      serviceAccountName: nodalarc-orchestrator
+      containers:
+        - name: vs-api
+          image: {{ .Values.images.vsApi | default "docker.io/nodalarc/vs-api:latest" }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+            - "--session"
+            - "/etc/nodalarc/session.yaml"
+            - "--db"
+            - "/var/nodalarc/sessions/session.db"
+            - "--port"
+            - "8080"
+            - "--platform-config"
+            - "/etc/nodalarc/platform.yaml"
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: NODAL_API_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: nodalarc-session-state
+                  key: api_key
+                  optional: true
+          resources:
+            limits:
+              memory: {{ .Values.vsApi.memoryLimit | default "512Mi" }}
+              cpu: {{ .Values.vsApi.cpuLimit | default "500m" }}
+          volumeMounts:
+            - name: platform-config
+              mountPath: /etc/nodalarc/platform.yaml
+              subPath: platform.yaml
+            - name: session-config
+              mountPath: /etc/nodalarc/session.yaml
+              subPath: session.yaml
+            - name: constellation-config
+              mountPath: /etc/nodalarc/constellation.yaml
+              subPath: constellation.yaml
+            - name: ground-stations
+              mountPath: /etc/nodalarc/ground-stations.yaml
+              subPath: ground-stations.yaml
+            - name: pid-map
+              mountPath: /etc/nodalarc/state/pid_map.json
+              subPath: pid_map.json
+            - name: session-state
+              mountPath: /etc/nodalarc/state/session-state.json
+              subPath: session-state.json
+            - name: session-db
+              mountPath: /var/nodalarc/sessions
+      volumes:
+        - name: platform-config
+          configMap:
+            name: nodalarc-platform-config
+        - name: session-config
+          configMap:
+            name: nodalarc-session
+        - name: constellation-config
+          configMap:
+            name: nodalarc-constellation
+        - name: ground-stations
+          configMap:
+            name: nodalarc-ground-stations
+        - name: pid-map
+          configMap:
+            name: nodalarc-pid-map
+            optional: true
+        - name: session-state
+          configMap:
+            name: nodalarc-session-state
+            optional: true
+        - name: session-db
+          emptyDir: {}

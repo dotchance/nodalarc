@@ -34,6 +34,26 @@ class AgentPool:
             log.info("Connected to Node Agent at %s", agent_addr)
         return self._stubs[agent_addr]
 
+    def wait_for_agents(self, addrs: list[str], timeout_s: int = 60) -> None:
+        """Wait for all agents to be reachable. Called at Scheduler startup."""
+        import time
+
+        from node_agent.proto import node_agent_pb2
+
+        for addr in addrs:
+            stub = self.get_stub(addr)
+            for attempt in range(timeout_s // 2):
+                try:
+                    stub.GetTopology(node_agent_pb2.GetTopologyRequest(), timeout=2)
+                    log.info("Node Agent at %s is ready", addr)
+                    break
+                except grpc.RpcError:
+                    if attempt % 5 == 0:
+                        log.info("Waiting for Node Agent at %s (attempt %d)...", addr, attempt + 1)
+                    time.sleep(2)
+            else:
+                log.warning("Node Agent at %s did not become ready in %ds", addr, timeout_s)
+
     def close(self) -> None:
         """Close all gRPC channels."""
         for addr, channel in self._channels.items():

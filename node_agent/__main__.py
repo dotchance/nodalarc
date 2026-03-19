@@ -7,6 +7,13 @@ on behalf of the Scheduler.
 
 from __future__ import annotations
 
+# Must be set before importing grpc to avoid accept4 C extension issue
+# in hostPID containers. Forces the epoll1 poller which uses standard
+# accept() instead of accept4 with SOCK_CLOEXEC|SOCK_NONBLOCK flags.
+import os
+
+os.environ.setdefault("GRPC_POLL_STRATEGY", "epoll1")
+
 import argparse
 import logging
 import signal

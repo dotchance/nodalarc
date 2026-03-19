@@ -37,14 +37,32 @@ _BATCH_POOL = ThreadPoolExecutor(max_workers=8)
 
 
 # ---------------------------------------------------------------------------
+# PID resolution — containerized Scheduler sends pid=0, Node Agent resolves
+# ---------------------------------------------------------------------------
+
+
+def _resolve_pid(pid: int, node_id: str, pid_map: dict[str, int]) -> int:
+    """Resolve PID from local map if the Scheduler sent pid=0."""
+    if pid > 0:
+        return pid
+    resolved = pid_map.get(node_id, 0)
+    if resolved == 0:
+        log.warning("Cannot resolve PID for %s (not in local pid_map)", node_id)
+    return resolved
+
+
+# ---------------------------------------------------------------------------
 # Per-link operation functions (called concurrently within batches)
 # ---------------------------------------------------------------------------
 
 
-def _isl_link_down(iface: node_agent_pb2.InterfaceDown) -> str | None:
+def _isl_link_down(
+    iface: node_agent_pb2.InterfaceDown, pid_map: dict[str, int] | None = None
+) -> str | None:
     """Admin-down a single ISL interface. Returns error string or None."""
     try:
-        namespace_ops.set_interface_down(iface.pid, iface.interface_name)
+        pid = _resolve_pid(iface.pid, iface.node_id, pid_map or {})
+        namespace_ops.set_interface_down(pid, iface.interface_name)
         return None
     except Exception as exc:
         msg = f"ISL down failed ns({iface.pid})/{iface.interface_name}: {exc}"
@@ -52,7 +70,9 @@ def _isl_link_down(iface: node_agent_pb2.InterfaceDown) -> str | None:
         return msg
 
 
-def _ground_link_down(iface: node_agent_pb2.InterfaceDown) -> str | None:
+def _ground_link_down(
+    iface: node_agent_pb2.InterfaceDown, pid_map: dict[str, int] | None = None
+) -> str | None:
     """Tear down a ground link. Returns error string or None.
 
     Sequence (matches realtime_dispatcher.py L383-390):
@@ -65,12 +85,15 @@ def _ground_link_down(iface: node_agent_pb2.InterfaceDown) -> str | None:
        d. Bring sat host veth DOWN
     """
     try:
-        if iface.sat_pid:
-            namespace_ops.remove_link_shaping(iface.sat_pid, "gnd0")
-        if iface.gs_pid:
-            namespace_ops.remove_link_shaping(iface.gs_pid, "gnd0")
-        if iface.sat_pid:
-            ground_bridge.detach_from_ground_bridge(iface.gs_id, iface.sat_id, iface.sat_pid)
+        pm = pid_map or {}
+        sat_pid = _resolve_pid(iface.sat_pid, iface.sat_id, pm)
+        gs_pid = _resolve_pid(iface.gs_pid, iface.gs_id, pm)
+        if sat_pid:
+            namespace_ops.remove_link_shaping(sat_pid, "gnd0")
+        if gs_pid:
+            namespace_ops.remove_link_shaping(gs_pid, "gnd0")
+        if sat_pid:
+            ground_bridge.detach_from_ground_bridge(iface.gs_id, iface.sat_id, sat_pid)
         return None
     except Exception as exc:
         msg = f"Ground down failed {iface.gs_id}<->{iface.sat_id}: {exc}"
@@ -78,7 +101,9 @@ def _ground_link_down(iface: node_agent_pb2.InterfaceDown) -> str | None:
         return msg
 
 
-def _ground_link_up(iface: node_agent_pb2.InterfaceUp) -> str | None:
+def _ground_link_up(
+    iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
+) -> str | None:
     """Bring up a ground link with bridge attach + shaping. Returns error or None.
 
     Sequence (matches realtime_dispatcher.py L338-344):
@@ -88,20 +113,21 @@ def _ground_link_up(iface: node_agent_pb2.InterfaceUp) -> str | None:
     4. If peer_mac present: NDP on gnd0 (synchronous, before ACK)
     """
     try:
-        if iface.sat_pid:
-            ground_bridge.attach_to_ground_bridge(iface.gs_id, iface.sat_id, iface.sat_pid)
-        if iface.gs_pid:
+        pm = pid_map or {}
+        sat_pid = _resolve_pid(iface.sat_pid, iface.sat_id, pm)
+        gs_pid = _resolve_pid(iface.gs_pid, iface.gs_id, pm)
+        if sat_pid:
+            ground_bridge.attach_to_ground_bridge(iface.gs_id, iface.sat_id, sat_pid)
+        if gs_pid:
+            namespace_ops.apply_link_shaping(gs_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps)
+        if sat_pid:
             namespace_ops.apply_link_shaping(
-                iface.gs_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps
-            )
-        if iface.sat_pid:
-            namespace_ops.apply_link_shaping(
-                iface.sat_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps
+                sat_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps
             )
         # NDP on gnd0 — synchronous, before ACK
-        if iface.peer_mac and iface.sat_pid:
+        if iface.peer_mac and sat_pid:
             peer_ll = namespace_ops.mac_to_link_local(iface.peer_mac)
-            namespace_ops.trigger_ndp_and_wait(iface.sat_pid, "gnd0", peer_ll)
+            namespace_ops.trigger_ndp_and_wait(sat_pid, "gnd0", peer_ll)
         return None
     except Exception as exc:
         msg = f"Ground up failed {iface.gs_id}<->{iface.sat_id}: {exc}"
@@ -109,21 +135,25 @@ def _ground_link_up(iface: node_agent_pb2.InterfaceUp) -> str | None:
         return msg
 
 
-def _update_latency_entry(entry: node_agent_pb2.LatencyEntry) -> str | None:
+def _update_latency_entry(
+    entry: node_agent_pb2.LatencyEntry, pid_map: dict[str, int] | None = None
+) -> str | None:
     """Update netem delay on a single interface. Returns error or None.
 
     Uses tc "change" — does NOT touch admin state or re-add qdiscs.
     """
     try:
+        pm = pid_map or {}
         if entry.link_type == node_agent_pb2.GROUND:
-            # Ground link: update both GS gnd0 and satellite gnd0
-            if entry.gs_pid:
-                namespace_ops.update_delay(entry.gs_pid, "gnd0", entry.latency_ms)
-            if entry.sat_pid:
-                namespace_ops.update_delay(entry.sat_pid, "gnd0", entry.latency_ms)
+            gs_pid = _resolve_pid(entry.gs_pid, entry.gs_id, pm)
+            sat_pid = _resolve_pid(entry.sat_pid, entry.sat_id, pm)
+            if gs_pid:
+                namespace_ops.update_delay(gs_pid, "gnd0", entry.latency_ms)
+            if sat_pid:
+                namespace_ops.update_delay(sat_pid, "gnd0", entry.latency_ms)
         else:
-            # ISL: update the specific interface
-            namespace_ops.update_delay(entry.pid, entry.interface_name, entry.latency_ms)
+            pid = _resolve_pid(entry.pid, entry.node_id, pm)
+            namespace_ops.update_delay(pid, entry.interface_name, entry.latency_ms)
         return None
     except Exception as exc:
         msg = f"Latency update failed ns({entry.pid})/{entry.interface_name}: {exc}"
@@ -139,6 +169,7 @@ def _update_latency_entry(entry: node_agent_pb2.LatencyEntry) -> str | None:
 def handle_batch_link_down(
     request: node_agent_pb2.BatchLinkDownRequest,
     context: grpc.ServicerContext,
+    pid_map: dict[str, int] | None = None,
 ) -> node_agent_pb2.BatchLinkDownResponse:
     """Handle BatchLinkDown RPC."""
     if request.locality == node_agent_pb2.CROSS_NODE:
@@ -154,11 +185,12 @@ def handle_batch_link_down(
 
     # Submit all operations concurrently
     futures = {}
+    pm = pid_map or {}
     for iface in request.interfaces:
         if iface.link_type == node_agent_pb2.GROUND:
-            fut = _BATCH_POOL.submit(_ground_link_down, iface)
+            fut = _BATCH_POOL.submit(_ground_link_down, iface, pm)
         else:
-            fut = _BATCH_POOL.submit(_isl_link_down, iface)
+            fut = _BATCH_POOL.submit(_isl_link_down, iface, pm)
         futures[fut] = iface
 
     # Collect results — wait for ALL before returning ACK
@@ -195,17 +227,20 @@ def handle_batch_link_down(
     )
 
 
-def _isl_link_up_phase1(iface: node_agent_pb2.InterfaceUp) -> str | None:
+def _isl_link_up_phase1(
+    iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
+) -> str | None:
     """Phase 1 of ISL link-up: admin UP + shaping. No NDP yet.
 
     Returns error string or None.
     """
     try:
+        pid = _resolve_pid(iface.pid, iface.node_id, pid_map or {})
         if iface.peer_mac:
-            namespace_ops.disable_dad(iface.pid, iface.interface_name)
-        namespace_ops.set_interface_up(iface.pid, iface.interface_name)
+            namespace_ops.disable_dad(pid, iface.interface_name)
+        namespace_ops.set_interface_up(pid, iface.interface_name)
         namespace_ops.apply_link_shaping(
-            iface.pid, iface.interface_name, iface.latency_ms, iface.bandwidth_mbps
+            pid, iface.interface_name, iface.latency_ms, iface.bandwidth_mbps
         )
         return None
     except Exception as exc:
@@ -214,7 +249,9 @@ def _isl_link_up_phase1(iface: node_agent_pb2.InterfaceUp) -> str | None:
         return msg
 
 
-def _isl_ndp_phase2(iface: node_agent_pb2.InterfaceUp) -> str | None:
+def _isl_ndp_phase2(
+    iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
+) -> str | None:
     """Phase 2 of ISL link-up: NDP resolution (synchronous).
 
     Called AFTER all interfaces in the batch are admin UP, so the peer's
@@ -231,12 +268,13 @@ def _isl_ndp_phase2(iface: node_agent_pb2.InterfaceUp) -> str | None:
     try:
         import subprocess
 
+        pid = _resolve_pid(iface.pid, iface.node_id, pid_map or {})
         peer_ll = namespace_ops.mac_to_link_local(iface.peer_mac)
         result = subprocess.run(
             [
                 "nsenter",
                 "--target",
-                str(iface.pid),
+                str(pid),
                 "--net",
                 "--",
                 "ping",
@@ -271,6 +309,7 @@ def _isl_ndp_phase2(iface: node_agent_pb2.InterfaceUp) -> str | None:
 def handle_batch_link_up(
     request: node_agent_pb2.BatchLinkUpRequest,
     context: grpc.ServicerContext,
+    pid_map: dict[str, int] | None = None,
 ) -> node_agent_pb2.BatchLinkUpResponse:
     """Handle BatchLinkUp RPC.
 
@@ -304,11 +343,12 @@ def handle_batch_link_up(
     gnd_ifaces = [i for i in request.interfaces if i.link_type == node_agent_pb2.GROUND]
 
     # Phase 1: admin UP + shaping (concurrent for all interfaces)
+    pm = pid_map or {}
     phase1_futures = {}
     for iface in isl_ifaces:
-        phase1_futures[_BATCH_POOL.submit(_isl_link_up_phase1, iface)] = iface
+        phase1_futures[_BATCH_POOL.submit(_isl_link_up_phase1, iface, pm)] = iface
     for iface in gnd_ifaces:
-        phase1_futures[_BATCH_POOL.submit(_ground_link_up, iface)] = iface
+        phase1_futures[_BATCH_POOL.submit(_ground_link_up, iface, pm)] = iface
 
     # Wait for ALL phase 1 to complete
     isl_phase1_ok: list[node_agent_pb2.InterfaceUp] = []
@@ -331,7 +371,7 @@ def handle_batch_link_up(
     if isl_phase1_ok:
         ndp_futures = {}
         for iface in isl_phase1_ok:
-            ndp_futures[_BATCH_POOL.submit(_isl_ndp_phase2, iface)] = iface
+            ndp_futures[_BATCH_POOL.submit(_isl_ndp_phase2, iface, pm)] = iface
 
         for fut in as_completed(ndp_futures):
             iface = ndp_futures[fut]
@@ -376,6 +416,7 @@ def handle_batch_link_up(
 def handle_set_latency(
     request: node_agent_pb2.SetLatencyRequest,
     context: grpc.ServicerContext,
+    pid_map: dict[str, int] | None = None,
 ) -> node_agent_pb2.SetLatencyResponse:
     """Handle SetLatency RPC.
 
@@ -387,7 +428,7 @@ def handle_set_latency(
     updated = 0
 
     for entry in request.entries:
-        err = _update_latency_entry(entry)
+        err = _update_latency_entry(entry, pid_map)
         if err is None:
             updated += 1
         else:

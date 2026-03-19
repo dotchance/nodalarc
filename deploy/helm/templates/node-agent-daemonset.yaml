@@ -18,6 +18,9 @@ spec:
       hostNetwork: true
       hostPID: true
       serviceAccountName: nodalarc-node-agent
+      securityContext:
+        seccompProfile:
+          type: Unconfined
       tolerations:
         - operator: Exists
       containers:

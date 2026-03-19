@@ -180,6 +180,12 @@ class Dispatcher:
         # Allow subscribers to connect before first publish
         await asyncio.sleep(0.5)
 
+        # Wait for Node Agents to be ready before dispatching
+        loop = asyncio.get_running_loop()
+        agent_addrs = self._loc.all_agent_addrs()
+        if agent_addrs:
+            await loop.run_in_executor(None, self._pool.wait_for_agents, agent_addrs)
+
         # Reconciliation on startup: compare checkpoint against Node Agent state
         await self._reconcile_on_startup(to_pub)
 

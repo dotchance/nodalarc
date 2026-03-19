@@ -218,6 +218,14 @@ class DiscreteEventDispatcher:
                 # Poll OME sub with 1s timeout
                 socks = dict(ome_poller.poll(timeout=1000))
                 if ome_sub not in socks:
+                    # No OME data — advance trajectory replay if available.
+                    # This publishes a new position every 1s (the poll timeout),
+                    # giving the VF smooth satellite animation independent of
+                    # the 30s FullStateSnapshot cycle.
+                    if hasattr(self, "_traj_data") and self._traj_data and ome_pub_sock:
+                        idx = self._traj_index % len(self._traj_data)
+                        self._process_batch([self._traj_data[idx]], pub_sock, conv_sock, ome_pub_sock)
+                        self._traj_index += 1
                     continue
 
                 raw = ome_sub.recv(zmq.NOBLOCK)
@@ -239,24 +247,17 @@ class DiscreteEventDispatcher:
                     else:
                         self._update_state_from_snapshot(data)
 
-                    # Replay position snapshots from the trajectory at real-time
-                    # pace. Each FullStateSnapshot cycle (30s wall), advance by
-                    # 30 × compression sim-seconds worth of trajectory positions.
-                    # This gives the VF smooth satellite animation at the correct
-                    # orbital speed.
+                    # Store trajectory for idle-time replay (1 position/second
+                    # during poll timeouts). Initialize index on first receive.
                     trajectory = data.get("position_trajectory", [])
                     if trajectory:
+                        self._traj_data = trajectory
                         if not hasattr(self, "_traj_index"):
                             self._traj_index = 0
-                            self._traj_last_wall = time.monotonic()
-                        wall_elapsed = time.monotonic() - self._traj_last_wall
-                        self._traj_last_wall = time.monotonic()
-                        # Advance by wall_elapsed seconds worth of trajectory
-                        # (step_seconds=1 means 1 trajectory entry per sim-second)
-                        step = max(1, int(wall_elapsed))
+                        # Publish current position immediately
                         idx = self._traj_index % len(trajectory)
                         self._process_batch([trajectory[idx]], pub_sock, conv_sock, ome_pub_sock)
-                        self._traj_index += step
+                        self._traj_index += 1
                     continue
 
                 if topic == b"WindowReady":

@@ -243,10 +243,12 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
             # Publish window events + WindowReady on ZMQ
             publish_window_zmq(events, pub_sock, window)
 
-            # Extract position trajectory and range map from window events.
-            # The trajectory is included in FullStateSnapshot so late subscribers
-            # get orbital positions. Downsample to every 10th snapshot (~10s intervals)
-            # to keep the FullStateSnapshot message size manageable (~500KB vs ~5MB).
+            # Extract position trajectory and VisibilityEvents from window events.
+            # Both are included in FullStateSnapshot so late subscribers get:
+            # 1. Orbital positions (downsampled to ~10s intervals)
+            # 2. Link state changes (all VisibilityEvents preserved)
+            # This lets the orchestrator replay the full window: positions move
+            # AND links go up/down as the topology evolves.
             position_trajectory: list[dict] = []
             last_position_event = None
             link_ranges: dict[tuple[str, str], float] = {}
@@ -264,6 +266,13 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                 elif evt.event_type == "VisibilityEvent":
                     pair = (evt.data.node_a, evt.data.node_b)
                     link_ranges[pair] = evt.data.range_km
+                    # Include ALL visibility events — link transitions must
+                    # be replayed for the topology view to show changes.
+                    position_trajectory.append({
+                        "timestamp_s": evt.timestamp_s,
+                        "event_type": evt.event_type,
+                        "data": evt.data.model_dump(mode="json"),
+                    })
             # Always include the last snapshot
             if last_position_event and (snap_count % 10 != 0):
                 position_trajectory.append({

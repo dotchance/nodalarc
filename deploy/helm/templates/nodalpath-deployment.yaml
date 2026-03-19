@@ -52,7 +52,7 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: {{ .Values.nodalpath.memoryLimit | default "256Mi" }}
+              memory: {{ .Values.nodalpath.memoryLimit | default "512Mi" }}
               cpu: {{ .Values.nodalpath.cpuLimit | default "500m" }}
           volumeMounts:
             - name: session-config

@@ -228,9 +228,6 @@ class DiscreteEventDispatcher:
                     if not initialized:
                         # Cold start: bring up all visible links in a background thread
                         # so the poll loop continues receiving Snapshot events (positions).
-                        # Without this, the NDP sequencing (~1s per link × 60 links)
-                        # blocks the poll loop for minutes, causing ZMQ to drop messages
-                        # and the VF to show "waiting for orbital propagation."
                         import threading
                         cold_start_data = dict(data)
                         def _cold_start_bg():
@@ -240,8 +237,19 @@ class DiscreteEventDispatcher:
                         threading.Thread(target=_cold_start_bg, daemon=True).start()
                         initialized = True
                     else:
-                        # Subsequent: update internal state only, no link commands
                         self._update_state_from_snapshot(data)
+
+                    # Replay one position snapshot from the trajectory per
+                    # FullStateSnapshot cycle. Each cycle advances to the next
+                    # position in the trajectory, giving the VF advancing sim_time
+                    # and changing positions so satellites animate on the globe.
+                    trajectory = data.get("position_trajectory", [])
+                    if trajectory:
+                        if not hasattr(self, "_traj_index"):
+                            self._traj_index = 0
+                        idx = self._traj_index % len(trajectory)
+                        self._process_batch([trajectory[idx]], pub_sock, conv_sock, ome_pub_sock)
+                        self._traj_index += 1
                     continue
 
                 if topic == b"WindowReady":

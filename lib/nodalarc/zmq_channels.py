@@ -69,6 +69,10 @@ def probe_daemon_udp_data_port() -> int:
     return get_platform_config().probe_daemon_udp_data_port
 
 
+def node_agent_grpc_port() -> int:
+    return get_platform_config().node_agent_grpc_port
+
+
 # --- Socket address accessor functions ---
 
 

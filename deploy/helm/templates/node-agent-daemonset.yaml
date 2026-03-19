@@ -40,6 +40,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: CONTAINER_RUNTIME_ENDPOINT
+              value: unix:///run/k3s/containerd/containerd.sock
           resources:
             limits:
               memory: {{ .Values.nodeAgent.memoryLimit | default "256Mi" }}
@@ -49,7 +51,7 @@ spec:
               mountPath: /etc/nodalarc/platform.yaml
               subPath: platform.yaml
             - name: containerd-sock
-              mountPath: /run/containerd/containerd.sock
+              mountPath: /run/k3s/containerd/containerd.sock
               readOnly: true
       volumes:
         - name: platform-config
@@ -57,5 +59,5 @@ spec:
             name: nodalarc-platform-config
         - name: containerd-sock
           hostPath:
-            path: /run/containerd/containerd.sock
+            path: /run/k3s/containerd/containerd.sock
             type: Socket

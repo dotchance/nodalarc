@@ -443,6 +443,15 @@ def handle_get_topology(
     interfaces: list[node_agent_pb2.InterfaceState] = []
     pids = pid_map or {}
 
+    # If pid_map is empty, try fresh discovery (handles startup timing)
+    if not pids:
+        try:
+            from node_agent.pid_discovery import discover_local_pod_pids
+
+            pids = discover_local_pod_pids()
+        except Exception as exc:
+            log.warning("GetTopology: PID discovery failed: %s", exc)
+
     for node_id, pid in pids.items():
         try:
             ns = NetNS(f"/proc/{pid}/ns/net")

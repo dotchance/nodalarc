@@ -1,6 +1,6 @@
 session:
-  name: starlink-early-44-isis-sr
-constellation: configs/constellations/starlink-early-44.yaml
+  name: kuiper-50-isis-sr
+constellation: configs/constellations/kuiper-50.yaml
 ground_stations: configs/ground-stations/sets/global.yaml
 routing:
   protocol: isis

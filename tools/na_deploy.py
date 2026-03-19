@@ -327,6 +327,8 @@ def deploy(session_path: str, skip_vsapi: bool = False, skip_teardown: bool = Fa
         helm_values["hostZmq"] = {"enabled": True, "hostIP": host_ip}
     if not host_ome:
         helm_values["ome"] = {"enabled": True}
+    # Only deploy probe sidecars when MI is enabled
+    helm_values["probeEnabled"] = session.mi.enabled if session.mi else False
     values_file = data_dir / "helm-values.yaml"
     values_file.write_text(yaml.dump(helm_values))
 
@@ -668,9 +670,9 @@ def deploy(session_path: str, skip_vsapi: bool = False, skip_teardown: bool = Fa
     # === Step 8: Start MI ===
     mi_db = str(data_dir / "session.db")
     mi_proc = None
-    _mi_adapter = resolved.mi_adapter if resolved else stack_config.mi_adapter
-    if _mi_adapter is not None:
-        log.info("Step 8: Start MI service")
+    mi_enabled = session.mi.enabled if session.mi else False
+    if mi_enabled:
+        log.info("Step 8: Start MI service (adapter=%s)", session.mi.adapter)
         mi_log = open(data_dir / "mi.log", "w")
         mi_proc = subprocess.Popen(
             [sys.executable, "-m", "measurement.mi_main",
@@ -681,7 +683,7 @@ def deploy(session_path: str, skip_vsapi: bool = False, skip_teardown: bool = Fa
         )
         log.info(f"MI service PID: {mi_proc.pid}")
     else:
-        log.info("Step 8: Skip MI service (no mi_adapter for this stack)")
+        log.info("Step 8: MI disabled, skipping")
 
     # === Step 9: Configure probe flows ===
     log.info("Step 9: Configure probe flows (skipped in Phase 1B)")

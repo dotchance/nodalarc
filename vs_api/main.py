@@ -428,9 +428,14 @@ async def _zmq_subscriber() -> None:
     to_sub.connect(to_events_connect())
     to_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
-    mi_sub = _zmq_ctx.socket(zmq.SUB)
-    mi_sub.connect(mi_events_connect())
-    mi_sub.setsockopt(zmq.SUBSCRIBE, b"")
+    # MI subscription is conditional — only connect if MI is enabled
+    mi_sub = None
+    if _session_config and _session_config.mi and _session_config.mi.enabled:
+        mi_sub = _zmq_ctx.socket(zmq.SUB)
+        mi_sub.connect(mi_events_connect())
+        mi_sub.setsockopt(zmq.SUBSCRIBE, b"")
+    else:
+        log.info("MI not configured — skipping MI metrics subscription")
 
     np_sub = _zmq_ctx.socket(zmq.SUB)
     np_sub.connect(nodalpath_events_connect())
@@ -439,13 +444,14 @@ async def _zmq_subscriber() -> None:
     poller = zmq.asyncio.Poller()
     poller.register(ome_sub, zmq.POLLIN)
     poller.register(to_sub, zmq.POLLIN)
-    poller.register(mi_sub, zmq.POLLIN)
+    if mi_sub is not None:
+        poller.register(mi_sub, zmq.POLLIN)
     poller.register(np_sub, zmq.POLLIN)
 
     log.info(
         "VS-API ZMQ subscriber started (asyncio) — connecting to "
-        f"OME={ome_events_connect()} TO={to_events_connect()} MI={mi_events_connect()} "
-        f"NP={nodalpath_events_connect()}"
+        f"OME={ome_events_connect()} TO={to_events_connect()} "
+        f"MI={'enabled' if mi_sub else 'disabled'} NP={nodalpath_events_connect()}"
     )
 
     msg_count = 0
@@ -464,7 +470,7 @@ async def _zmq_subscriber() -> None:
                 log.info(f"ZMQ subscriber status: {msg_count} messages received so far")
                 last_status_time = now_mono
 
-            for sock in [ome_sub, to_sub, mi_sub, np_sub]:
+            for sock in [s for s in [ome_sub, to_sub, mi_sub, np_sub] if s is not None]:
                 if sock not in socks:
                     continue
                 raw = await sock.recv(zmq.NOBLOCK)
@@ -509,7 +515,8 @@ async def _zmq_subscriber() -> None:
         log.info(f"ZMQ subscriber exiting (total messages: {msg_count})")
         ome_sub.close()
         to_sub.close()
-        mi_sub.close()
+        if mi_sub is not None:
+            mi_sub.close()
         np_sub.close()
 
 

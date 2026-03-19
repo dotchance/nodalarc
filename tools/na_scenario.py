@@ -141,11 +141,15 @@ def run_scenario(scenario_path: str, session_path: str | None = None) -> None:
     to_sock.setsockopt(zmq.RCVTIMEO, 10_000)
     to_sock.setsockopt(zmq.SNDTIMEO, 5_000)
 
-    # REQ socket to MI convergence gate (port 5563)
-    mi_sock = ctx.socket(zmq.REQ)
-    mi_sock.connect(mi_convergence_gate_connect())
-    mi_sock.setsockopt(zmq.RCVTIMEO, 120_000)
-    mi_sock.setsockopt(zmq.SNDTIMEO, 5_000)
+    # REQ socket to MI convergence gate (port 5563) — only if MI is configured
+    mi_sock = None
+    session_data = yaml.safe_load(Path(session_path).read_text())
+    mi_block = session_data.get("mi", {})
+    if mi_block.get("enabled", False):
+        mi_sock = ctx.socket(zmq.REQ)
+        mi_sock.connect(mi_convergence_gate_connect())
+        mi_sock.setsockopt(zmq.RCVTIMEO, 120_000)
+        mi_sock.setsockopt(zmq.SNDTIMEO, 5_000)
 
     try:
         for i, step in enumerate(scenario.steps):
@@ -161,9 +165,15 @@ def run_scenario(scenario_path: str, session_path: str | None = None) -> None:
                 case InjectSatelliteLossStep():
                     _inject_satellite_loss(to_sock, step)
                 case WaitConvergeStep():
-                    _wait_converge(mi_sock, step)
+                    if mi_sock is None:
+                        log.warning("wait_converge: MI not configured — skipping, treating as converged")
+                    else:
+                        _wait_converge(mi_sock, step)
                 case MeasureStep():
-                    _measure(mi_sock, step)
+                    if mi_sock is None:
+                        log.warning("measure: MI not configured — skipping measurement step")
+                    else:
+                        _measure(mi_sock, step)
                 case ReconfigStep():
                     _reconfig(step, session_path)
 

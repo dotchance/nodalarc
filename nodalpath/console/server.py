@@ -369,13 +369,15 @@ def build_app(
         """Proxy a request to the VS-API server."""
         import httpx
         from nodalarc.platform import get_platform_config
-        vs_port = get_platform_config().vs_api_http_port
-        url = f"http://127.0.0.1:{vs_port}{path}"
+        cfg = get_platform_config()
+        vs_host = cfg.zmq_connect_host_for("vs-api")
+        vs_port = cfg.vs_api_http_port
+        url = f"http://{vs_host}:{vs_port}{path}"
         # Fetch VS-API auth token (unauthenticated endpoint)
         headers: dict[str, str] = {}
         try:
             async with httpx.AsyncClient(timeout=3.0) as tc:
-                token_resp = await tc.get(f"http://127.0.0.1:{vs_port}/api/v1/auth/token")
+                token_resp = await tc.get(f"http://{vs_host}:{vs_port}/api/v1/auth/token")
                 if token_resp.status_code == 200:
                     token = token_resp.json().get("token", "")
                     if token:

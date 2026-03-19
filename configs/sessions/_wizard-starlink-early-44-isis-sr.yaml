@@ -10,7 +10,6 @@ routing:
     strategy: flat
     gs_area_id: '49.0001'
 time:
-  mode: discrete-event
   step_seconds: 1
 traffic_flows:
 - flow_id: ashburn-to-frankfurt

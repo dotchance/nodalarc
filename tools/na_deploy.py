@@ -114,7 +114,7 @@ def _apply_configmap(name: str, ns: str, data: dict[str, str]) -> None:
         log.info(f"ConfigMap {name} applied ({len(data)} keys)")
 
 
-def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip_teardown: bool = False, host_nodalpath: bool = False, host_ome: bool = False) -> None:
+def deploy(session_path: str, skip_vsapi: bool = False, skip_teardown: bool = False, host_nodalpath: bool = False, host_ome: bool = False) -> None:
     """Execute the 11-step startup sequence."""
     # === Step 0: Teardown previous session ===
     if not skip_teardown:
@@ -304,7 +304,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
             }
             for nid, vars in node_vars.items() if vars["node_type"] == "ground_station"
         ],
-        "mode": "de" if session.time.mode == "discrete-event" else "rt",
+        "mode": "rt",
         "sessionConfig": session_path,
         "timelineFile": str(timeline_path),
     }
@@ -775,18 +775,14 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
 
     # === Step 11: Begin event dispatch ===
     log.info("Step 11: Begin event dispatch")
-    mode_flag = "de" if session.time.mode == "discrete-event" else "rt"
     to_log = open(data_dir / "orchestrator.log", "w")
     orchestrator_cmd = [
         sys.executable, "-m", "orchestrator.main",
         "--session", session_path,
-        "--mode", mode_flag,
         "--pid-map", str(pid_map_file),
-        "--dwell", str(dwell),
+        "--routing-protocol", routing_protocol,
     ]
     if not host_ome:
-        # ZMQ streaming — orchestrator (host process) subscribes to OME Service.
-        # Host can't resolve K8s Service DNS, so use the Service cluster IP.
         ome_svc_ip = subprocess.run(
             ["kubectl", "get", "svc", "nodalarc-ome", "-n", ns,
              "-o", "jsonpath={.spec.clusterIP}"],
@@ -797,10 +793,7 @@ def deploy(session_path: str, dwell: float = 1.0, skip_vsapi: bool = False, skip
         log.info(f"OME ZMQ endpoint: tcp://{ome_svc_ip}:5560")
         orchestrator_cmd.extend(["--ome-endpoint", f"tcp://{ome_svc_ip}:5560"])
     else:
-        # File-based — orchestrator tails timeline JSONL
         orchestrator_cmd.extend(["--timeline", str(timeline_path)])
-    if _mi_adapter is None:
-        orchestrator_cmd.append("--no-convergence-gate")
     to_proc = subprocess.Popen(
         orchestrator_cmd,
         stdout=to_log,
@@ -888,7 +881,7 @@ def main() -> None:
     logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc deployment tool")
     parser.add_argument("--session", required=True, help="Path to session YAML")
-    parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell between event batches (seconds)")
+
     parser.add_argument("--skip-vsapi", action="store_true", help="Skip VS-API start (step 10)")
     parser.add_argument("--skip-teardown", action="store_true", help="Skip Step 0 teardown (caller already cleaned up)")
     parser.add_argument("--host-nodalpath", action="store_true",
@@ -902,7 +895,7 @@ def main() -> None:
     from nodalarc.platform import init_platform_config
     init_platform_config(Path(args.platform_config))
 
-    deploy(args.session, dwell=args.dwell, skip_vsapi=args.skip_vsapi,
+    deploy(args.session, skip_vsapi=args.skip_vsapi,
            skip_teardown=args.skip_teardown, host_nodalpath=args.host_nodalpath,
            host_ome=args.host_ome)
 

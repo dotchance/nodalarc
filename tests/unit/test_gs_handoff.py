@@ -12,7 +12,7 @@ import threading
 from unittest.mock import MagicMock
 
 from nodalarc.zmq_channels import decode_message, TOPIC_LINK_DOWN, TOPIC_LINK_UP
-from orchestrator.discrete_event_dispatcher import DiscreteEventDispatcher
+from orchestrator.realtime_dispatcher import RealtimeDispatcher
 
 
 def _vis_record(timestamp_s, node_a, node_b, visible, scheduled, elevation=30.0):
@@ -56,14 +56,14 @@ def _make_dispatcher(interface_map, bandwidth_map):
     import tempfile, pathlib
     f = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False)
     f.close()
-    return DiscreteEventDispatcher(
+    return RealtimeDispatcher(
         timeline_path=pathlib.Path(f.name),
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
         override_set=set(),
         override_lock=threading.Lock(),
-        use_convergence_gate=False,
-        dwell_s=0.0,
+        
+        
         max_idle_timeouts=1,
     )
 

@@ -36,7 +36,7 @@ def four_node_timeline(tmp_path):
             "stack": "configs/routing-stacks/frr-isis-sr",
             "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
         },
-        "time": {"mode": "discrete-event", "step_seconds": 1},
+        "time": {"step_seconds": 1},
     }
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,

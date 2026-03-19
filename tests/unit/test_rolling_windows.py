@@ -46,7 +46,7 @@ def _load_session_fixtures():
             "stack": "configs/routing-stacks/frr-isis-sr",
             "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
         },
-        "time": {"mode": "discrete-event", "step_seconds": 10},
+        "time": {"step_seconds": 10},
     }
     session = SessionConfig.model_validate(session_data)
     constellation_config = load_constellation(session.constellation)

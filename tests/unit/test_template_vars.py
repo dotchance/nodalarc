@@ -47,7 +47,7 @@ def flat_session():
             stack="configs/routing-stacks/frr-isis-sr",
             area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
         ),
-        time=TimeConfig(mode="discrete-event", compression=1),
+        time=TimeConfig(compression=1),
     )
 
 
@@ -64,7 +64,7 @@ def stripe_session():
                 strategy="stripe", planes_per_stripe=2, gs_area_id="49.0000",
             ),
         ),
-        time=TimeConfig(mode="discrete-event", compression=5),
+        time=TimeConfig(compression=5),
     )
 
 

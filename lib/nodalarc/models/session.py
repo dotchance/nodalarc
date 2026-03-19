@@ -74,7 +74,6 @@ class RoutingConfig(BaseModel):
 class TimeConfig(BaseModel):
     """Time configuration."""
 
-    mode: str = "realtime"  # "realtime" or "discrete-event"
     compression: int = 1
     start_time: str | None = None  # ISO 8601 (default: now)
     step_seconds: int = 1

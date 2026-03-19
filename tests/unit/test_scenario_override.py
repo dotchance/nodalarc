@@ -19,7 +19,7 @@ import zmq
 
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.platform import PlatformConfig, init_platform_config, reset_platform_config
-from orchestrator.discrete_event_dispatcher import DiscreteEventDispatcher
+from orchestrator.realtime_dispatcher import RealtimeDispatcher
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +125,7 @@ class TestOverrideSet:
 
 class TestDispatcherOverrideIntegration:
     """Tests that the override set actually prevents the dispatcher from
-    acting on OME events — uses the real DiscreteEventDispatcher."""
+    acting on OME events — uses the real RealtimeDispatcher."""
 
     def _make_timeline_jsonl(self, tmp_path: Path, events: list[dict]) -> Path:
         """Write a minimal timeline JSONL file."""
@@ -167,14 +167,14 @@ class TestDispatcherOverrideIntegration:
         override_set: set[tuple[str, str]] = {pair}
         lock = threading.Lock()
 
-        dispatcher = DiscreteEventDispatcher(
+        dispatcher = RealtimeDispatcher(
             timeline_path=timeline,
             interface_map={pair: ("isl0", "isl0")},
             bandwidth_map={pair: 1000.0},
             override_set=override_set,
             override_lock=lock,
-            use_convergence_gate=False,
-            dwell_s=0.0,
+            
+            
             max_idle_timeouts=1,
         )
         dispatcher.run()
@@ -196,7 +196,7 @@ class TestDispatcherOverrideIntegration:
         override_set: set[tuple[str, str]] = {overridden_pair}
         lock = threading.Lock()
 
-        dispatcher = DiscreteEventDispatcher(
+        dispatcher = RealtimeDispatcher(
             timeline_path=timeline,
             interface_map={
                 overridden_pair: ("isl0", "isl0"),
@@ -205,8 +205,8 @@ class TestDispatcherOverrideIntegration:
             bandwidth_map={overridden_pair: 1000.0, free_pair: 1000.0},
             override_set=override_set,
             override_lock=lock,
-            use_convergence_gate=False,
-            dwell_s=0.0,
+            
+            
             max_idle_timeouts=1,
         )
         dispatcher.run()
@@ -228,14 +228,14 @@ class TestDispatcherOverrideIntegration:
         override_set: set[tuple[str, str]] = {pair}
         lock = threading.Lock()
 
-        dispatcher = DiscreteEventDispatcher(
+        dispatcher = RealtimeDispatcher(
             timeline_path=timeline,
             interface_map={pair: ("isl0", "isl0")},
             bandwidth_map={pair: 1000.0},
             override_set=override_set,
             override_lock=lock,
-            use_convergence_gate=False,
-            dwell_s=0.0,
+            
+            
             max_idle_timeouts=1,
         )
 
@@ -269,14 +269,14 @@ class TestDispatcherOverrideIntegration:
         override_set: set[tuple[str, str]] = set(pairs)
         lock = threading.Lock()
 
-        dispatcher = DiscreteEventDispatcher(
+        dispatcher = RealtimeDispatcher(
             timeline_path=timeline,
             interface_map={p: (f"isl{i}", f"isl{i}") for i, p in enumerate(pairs)},
             bandwidth_map={p: 1000.0 for p in pairs},
             override_set=override_set,
             override_lock=lock,
-            use_convergence_gate=False,
-            dwell_s=0.0,
+            
+            
             max_idle_timeouts=1,
         )
 

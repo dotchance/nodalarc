@@ -34,11 +34,35 @@ from nodalarc.zmq_channels import (
     TOPIC_POSITION_EVENT,
     encode_message,
 )
-from orchestrator.discrete_event_dispatcher import ActiveLinkInfo
 from orchestrator.latency_model import PositionTable
 from orchestrator.timeline_reader import TimelineReader
 
 log = logging.getLogger(__name__)
+
+
+class ActiveLinkInfo:
+    """Mutable internal state for an active link."""
+
+    __slots__ = (
+        "interface_a", "interface_b", "latency_ms",
+        "bandwidth_mbps", "pid_a", "pid_b",
+    )
+
+    def __init__(
+        self,
+        interface_a: str,
+        interface_b: str,
+        latency_ms: float,
+        bandwidth_mbps: float,
+        pid_a: int = 0,
+        pid_b: int = 0,
+    ) -> None:
+        self.interface_a = interface_a
+        self.interface_b = interface_b
+        self.latency_ms = latency_ms
+        self.bandwidth_mbps = bandwidth_mbps
+        self.pid_a = pid_a
+        self.pid_b = pid_b
 
 
 class RealtimeDispatcher:

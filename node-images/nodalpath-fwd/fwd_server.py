@@ -173,7 +173,9 @@ def _install_ler(entry: pb2.IngressEntry) -> None:
     """Install an LER ingress entry via netlink.
 
     Pushes the full SR-TE label stack onto IP packets matching the
-    destination prefix and sends out the specified interface.
+    destination prefix. Uses ``via inet6 <peer_ll>`` for L2 resolution,
+    same as LSR routes — the kernel needs a resolved neighbor to
+    construct the outgoing Ethernet frame for MPLS-encapped packets.
     """
     ipr = _get_ipr()
     oif = _iface_index(entry.out_interface)
@@ -185,12 +187,17 @@ def _install_ler(entry: pb2.IngressEntry) -> None:
 
     dst, prefix_len = entry.dst_prefix.split("/")
 
-    ipr.route("replace",
-               table=POLICY_TABLE,
-               dst=dst,
-               dst_len=int(prefix_len),
-               oif=oif,
-               encap={"type": "mpls", "labels": labels})
+    kwargs = {
+        "table": POLICY_TABLE,
+        "dst": dst,
+        "dst_len": int(prefix_len),
+        "oif": oif,
+        "encap": {"type": "mpls", "labels": labels},
+    }
+    if entry.nexthop_ll:
+        kwargs["via"] = {"family": socket.AF_INET6, "addr": entry.nexthop_ll}
+
+    ipr.route("replace", **kwargs)
 
 
 def _remove_lsr(in_label: int) -> None:

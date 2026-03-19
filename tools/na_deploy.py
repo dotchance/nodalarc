@@ -919,7 +919,7 @@ def deploy(
     # The Node Agent listens on port 50100 and executes netlink operations.
     na_log = open(data_dir / "node_agent.log", "w")
     na_proc = subprocess.Popen(
-        [sys.executable, "-m", "node_agent", "--port", "50100"],
+        [sys.executable, "-m", "node_agent", "--port", "50100", "--pid-map", str(pid_map_file)],
         stdout=na_log,
         stderr=na_log,
     )

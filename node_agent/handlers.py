@@ -401,6 +401,30 @@ def handle_set_latency(
     )
 
 
+def _read_psched_tick_factor() -> float:
+    """Read kernel psched parameters for tc delay tick-to-microsecond conversion.
+
+    Returns the factor to convert netem delay ticks to microseconds:
+        delay_us = delay_ticks * factor
+
+    Reads /proc/net/psched which contains: t2us us2t clock_res tick_res
+    The conversion is: delay_us = delay_ticks * us2t / t2us
+    """
+    try:
+        parts = open("/proc/net/psched").read().strip().split()
+        t2us = int(parts[0], 16)
+        us2t = int(parts[1], 16)
+        if t2us > 0:
+            return us2t / t2us
+    except Exception:
+        pass
+    return 1.0  # Fallback: assume ticks = microseconds
+
+
+# Cache the tick factor (constant for the lifetime of the process)
+_TICK_TO_US = _read_psched_tick_factor()
+
+
 def handle_get_topology(
     request: node_agent_pb2.GetTopologyRequest,
     context: grpc.ServicerContext,
@@ -409,9 +433,10 @@ def handle_get_topology(
     """Handle GetTopology RPC — return observed interface state.
 
     Enumerates ISL and ground interfaces in pod namespaces on this node
-    and reports admin/oper state. Used for reconciliation in Phase 5.
+    and reports admin/oper state and current netem delay.
+    Used for reconciliation on Scheduler restart.
 
-    The pid_map is injected by the server (from PID discovery).
+    The pid_map is injected by the server (from PID discovery or --pid-map).
     """
     from pyroute2 import NetNS
 
@@ -426,15 +451,14 @@ def handle_get_topology(
                     ifname = link.get_attr("IFLA_IFNAME")
                     if ifname is None:
                         continue
-                    # Only report ISL and ground interfaces
                     if not (ifname.startswith("isl") or ifname.startswith("gnd")):
                         continue
 
                     flags = link["flags"]
-                    admin_up = bool(flags & 1)  # IFF_UP
-                    oper_up = bool(flags & (1 << 6))  # IFF_RUNNING
+                    admin_up = bool(flags & 0x1)  # IFF_UP
+                    oper_up = bool(flags & 0x40)  # IFF_RUNNING
 
-                    # Read netem delay if tc qdisc exists
+                    # Read netem delay from tc qdisc (pyroute2, no subprocess)
                     current_latency = 0.0
                     try:
                         idx = link["index"]
@@ -443,8 +467,8 @@ def handle_get_topology(
                             if qd.get_attr("TCA_KIND") == "netem":
                                 opts = qd.get_attr("TCA_OPTIONS")
                                 if opts:
-                                    # netem delay stored in microseconds
-                                    delay_us = opts.get("delay", 0)
+                                    delay_ticks = opts.get("delay", 0)
+                                    delay_us = delay_ticks * _TICK_TO_US
                                     current_latency = delay_us / 1000.0
                     except Exception:
                         pass

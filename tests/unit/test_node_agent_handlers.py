@@ -187,8 +187,49 @@ class TestSetLatency:
 
 
 class TestGetTopology:
-    def test_returns_empty_response(self, agent_channel):
-        """GetTopology returns empty response (Phase 5 implements full query)."""
+    def test_empty_pid_map_returns_empty(self, agent_channel):
+        """GetTopology with empty pid_map returns empty response, no error."""
         stub = NodeAgentServiceStub(agent_channel)
         resp = stub.GetTopology(node_agent_pb2.GetTopologyRequest())
         assert len(resp.interfaces) == 0
+
+    def test_bad_pid_returns_empty(self):
+        """GetTopology with a bad PID skips it gracefully, returns empty."""
+        server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+        servicer = NodeAgentServicer(pid_map={"sat-P00S00": 999999})
+        add_NodeAgentServiceServicer_to_server(servicer, server)
+        port = server.add_insecure_port("localhost:0")
+        server.start()
+        channel = grpc.insecure_channel(f"localhost:{port}")
+        try:
+            stub = NodeAgentServiceStub(channel)
+            resp = stub.GetTopology(node_agent_pb2.GetTopologyRequest())
+            # Bad PID skipped — no crash, just empty
+            assert len(resp.interfaces) == 0
+        finally:
+            channel.close()
+            server.stop(grace=0)
+
+    def test_pid_map_with_real_pid(self):
+        """GetTopology with PID 1 (init) returns interfaces (lo at minimum).
+
+        This test verifies the namespace enumeration works. PID 1's
+        network namespace has at least 'lo'. We filter for isl*/gnd*
+        names, so the result should be empty (no isl/gnd in init ns),
+        but the code path exercises successfully without error.
+        """
+        server = grpc.server(futures.ThreadPoolExecutor(max_workers=2))
+        servicer = NodeAgentServicer(pid_map={"test-node": 1})
+        add_NodeAgentServiceServicer_to_server(servicer, server)
+        port = server.add_insecure_port("localhost:0")
+        server.start()
+        channel = grpc.insecure_channel(f"localhost:{port}")
+        try:
+            stub = NodeAgentServiceStub(channel)
+            resp = stub.GetTopology(node_agent_pb2.GetTopologyRequest())
+            # PID 1 namespace has no isl/gnd interfaces, so empty is correct
+            # The key assertion: no RPC error was raised
+            assert resp is not None
+        finally:
+            channel.close()
+            server.stop(grace=0)

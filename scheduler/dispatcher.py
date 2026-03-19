@@ -1,0 +1,730 @@
+"""Scheduler dispatch loop — OME ZMQ subscription, two-phase gRPC dispatch.
+
+Subscribes to OME ZMQ PUB (port 5560) for VisibilityEvent, Snapshot, and
+FullStateSnapshot. Collects events into epsilon-windowed batches by sim_time.
+Dispatches batches as two-phase gRPC: all BatchLinkDown ACKs before any
+BatchLinkUp is sent. Publishes LinkUp/LinkDown/LatencyUpdate on port 5561.
+
+The Scheduler never calls link_manager or pyroute2 directly.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import threading
+from datetime import UTC, datetime
+
+import zmq
+import zmq.asyncio
+from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
+from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.zmq_channels import (
+    TOPIC_LATENCY_UPDATE,
+    TOPIC_LINK_DOWN,
+    TOPIC_LINK_UP,
+    decode_message,
+    encode_message,
+)
+
+from node_agent.proto import node_agent_pb2
+from scheduler.agent_pool import AgentPool
+from scheduler.latency_model import PositionTable
+from scheduler.pod_locator import PodLocationMap
+
+log = logging.getLogger(__name__)
+
+
+class ActiveLinkInfo:
+    """Mutable internal state for an active link (migrated from realtime_dispatcher)."""
+
+    __slots__ = ("interface_a", "interface_b", "latency_ms", "bandwidth_mbps")
+
+    def __init__(
+        self,
+        interface_a: str,
+        interface_b: str,
+        latency_ms: float,
+        bandwidth_mbps: float,
+    ) -> None:
+        self.interface_a = interface_a
+        self.interface_b = interface_b
+        self.latency_ms = latency_ms
+        self.bandwidth_mbps = bandwidth_mbps
+
+
+class Dispatcher:
+    """Two-phase topology dispatcher.
+
+    Subscribes to OME ZMQ, windows events by sim_time, dispatches
+    BatchLinkDown/Up to Node Agents, publishes TO events on port 5561.
+    """
+
+    def __init__(
+        self,
+        ome_endpoint: str,
+        interface_map: dict[tuple[str, str], tuple[str, str]],
+        bandwidth_map: dict[tuple[str, str], float],
+        pod_locator: PodLocationMap,
+        agent_pool: AgentPool,
+        override_set: set[tuple[str, str]],
+        override_lock: threading.Lock,
+        compression_factor: int = 1,
+        latency_update_interval_s: int = 10,
+        epsilon_ms: float = 100.0,
+    ) -> None:
+        self._ome_endpoint = ome_endpoint
+        self._interface_map = interface_map
+        self._bandwidth_map = bandwidth_map
+        self._loc = pod_locator
+        self._pool = agent_pool
+        self._override_set = override_set
+        self._override_lock = override_lock
+        self._compression = max(1, compression_factor)
+        self._latency_interval = latency_update_interval_s
+        self._epsilon_ms = epsilon_ms
+
+        self._position_table = PositionTable()
+        self._active_links: dict[tuple[str, str], ActiveLinkInfo] = {}
+        self._last_latencies: dict[tuple[str, str], float] = {}
+        self._steps_since_latency_update = 0
+        self._current_sim_time: datetime | None = None
+        self._running = False
+
+        # Pairs that failed dispatch and should not be retried.
+        # Populated when BatchLinkUp returns errors like "isl3 not found".
+        self._skip_pairs: set[tuple[str, str]] = set()
+
+    def load_interface_inventory(self) -> None:
+        """Query Node Agent GetTopology to learn which interfaces exist per pod.
+
+        Removes interface_map entries where the interface doesn't exist in the
+        pod (e.g., isl3 on a satellite with only 3 ISL terminals). This prevents
+        dispatching BatchLinkUp for non-existent interfaces.
+        """
+        for agent_addr in self._loc.all_agent_addrs():
+            try:
+                stub = self._pool.get_stub(agent_addr)
+                resp = stub.GetTopology(node_agent_pb2.GetTopologyRequest())
+                observed: dict[str, set[str]] = {}
+                for iface in resp.interfaces:
+                    observed.setdefault(iface.node_id, set()).add(iface.interface_name)
+
+                if not observed:
+                    log.info("GetTopology returned empty — skipping inventory filter")
+                    return
+
+                # Remove interface_map entries where the interface doesn't exist
+                to_remove = []
+                for pair, (iface_a, iface_b) in self._interface_map.items():
+                    node_a, node_b = pair
+                    a_exists = iface_a in observed.get(node_a, set()) if iface_a else True
+                    b_exists = iface_b in observed.get(node_b, set()) if iface_b else True
+                    if not a_exists or not b_exists:
+                        missing = []
+                        if not a_exists:
+                            missing.append(f"{node_a}/{iface_a}")
+                        if not b_exists:
+                            missing.append(f"{node_b}/{iface_b}")
+                        log.warning(
+                            "Removing link %s<->%s from interface_map: %s not found in pod",
+                            node_a,
+                            node_b,
+                            ", ".join(missing),
+                        )
+                        to_remove.append(pair)
+                for pair in to_remove:
+                    del self._interface_map[pair]
+                    self._bandwidth_map.pop(pair, None)
+                if to_remove:
+                    log.info("Filtered %d link pairs with non-existent interfaces", len(to_remove))
+            except Exception as exc:
+                log.warning("Interface inventory query failed: %s", exc)
+
+    async def run(self) -> None:
+        """Main async dispatch loop."""
+        self._running = True
+        ctx = zmq.asyncio.Context()
+
+        # PUB socket for TO events — bound at startup so subscribers
+        # can connect before first event fires (no lazy creation).
+        from nodalarc.zmq_channels import to_events_bind
+
+        to_pub = ctx.socket(zmq.PUB)
+        to_pub.bind(to_events_bind())
+        log.info("TO PUB bound on %s", to_events_bind())
+
+        # The Scheduler does NOT bind the OME port (5560). The OME container
+        # owns that port. VS-API subscribes to OME directly for position data.
+        # The Scheduler publishes ONLY LinkUp/LinkDown/LatencyUpdate on 5561.
+
+        # SUB to OME events
+        ome_sub = ctx.socket(zmq.SUB)
+        ome_sub.connect(self._ome_endpoint)
+        ome_sub.setsockopt(zmq.SUBSCRIBE, b"VisibilityEvent")
+        ome_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
+        ome_sub.setsockopt(zmq.SUBSCRIBE, b"FullStateSnapshot")
+
+        # Allow subscribers to connect before first publish
+        await asyncio.sleep(0.5)
+
+        # Query Node Agent to learn which interfaces actually exist.
+        # Removes interface_map entries for non-existent interfaces
+        # (e.g., isl3 on nodes with only 3 ISL terminals).
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.load_interface_inventory)
+
+        log.info("Scheduler dispatcher started — OME=%s", self._ome_endpoint)
+
+        # Buffered events for epsilon-windowed batching
+        pending_vis: list[VisibilityEvent] = []
+        pending_snaps: list[TimelinePositionSnapshot] = []
+        last_sim_time: datetime | None = None
+
+        poller = zmq.asyncio.Poller()
+        poller.register(ome_sub, zmq.POLLIN)
+
+        try:
+            while self._running:
+                socks = dict(await poller.poll(timeout=500))
+                if ome_sub not in socks:
+                    # Timeout — flush any pending batch
+                    if pending_vis or pending_snaps:
+                        await self._dispatch_batch(pending_vis, pending_snaps, to_pub)
+                        pending_vis.clear()
+                        pending_snaps.clear()
+                    continue
+
+                # Drain all buffered messages
+                while True:
+                    try:
+                        raw = await ome_sub.recv(zmq.NOBLOCK)
+                    except zmq.Again:
+                        break
+
+                    topic, payload = decode_message(raw)
+                    data = json.loads(payload)
+                    # Unwrap OME wrapped format
+                    inner = (
+                        data.get("data", data)
+                        if isinstance(data, dict) and "event_type" in data
+                        else data
+                    )
+
+                    if topic == b"FullStateSnapshot":
+                        await self._handle_full_state_snapshot(inner, to_pub)
+                        continue
+
+                    if topic == b"Snapshot":
+                        snap = TimelinePositionSnapshot.model_validate(inner)
+                        snap_sim = snap.sim_time
+                    elif topic == b"VisibilityEvent":
+                        vis = VisibilityEvent.model_validate(inner)
+                        snap_sim = vis.sim_time
+                    else:
+                        continue
+
+                    # Epsilon windowing: if sim_time changed beyond epsilon,
+                    # flush the pending batch before adding new events.
+                    if last_sim_time is not None and snap_sim != last_sim_time:
+                        delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
+                        if delta_ms > self._epsilon_ms and (pending_vis or pending_snaps):  # noqa: SIM102
+                            await self._dispatch_batch(pending_vis, pending_snaps, to_pub)
+                            pending_vis.clear()
+                            pending_snaps.clear()
+
+                    last_sim_time = snap_sim
+
+                    if topic == b"Snapshot":
+                        pending_snaps.append(snap)
+                    elif topic == b"VisibilityEvent":
+                        pending_vis.append(vis)
+
+        except asyncio.CancelledError:
+            log.info("Dispatcher cancelled")
+        finally:
+            to_pub.close()
+            ome_sub.close()
+            ctx.term()
+            log.info("Dispatcher stopped")
+
+    def stop(self) -> None:
+        self._running = False
+
+    # ------------------------------------------------------------------
+    # Batch dispatch
+    # ------------------------------------------------------------------
+
+    async def _dispatch_batch(
+        self,
+        vis_events: list[VisibilityEvent],
+        snapshots: list[TimelinePositionSnapshot],
+        to_pub: zmq.asyncio.Socket,
+    ) -> None:
+        """Process one epsilon-windowed batch of events."""
+        # Phase 1: Position updates (internal only — no re-publish).
+        # VS-API gets position data from OME directly on port 5560.
+        for snap in snapshots:
+            self._position_table.update_from_snapshot(snap)
+            self._current_sim_time = snap.sim_time
+
+        if not vis_events:
+            # Latency updates only (no topology changes)
+            self._steps_since_latency_update += 1
+            if self._steps_since_latency_update >= self._latency_interval:
+                await self._update_latencies(to_pub)
+                self._steps_since_latency_update = 0
+            return
+
+        # Phase 2: Collect link down/up events
+        sim_time = vis_events[0].sim_time
+        self._current_sim_time = sim_time
+        sim_time_iso = sim_time.isoformat()
+
+        # Filter overrides and classify
+        down_events: list[VisibilityEvent] = []
+        up_events: list[VisibilityEvent] = []
+
+        for vis in vis_events:
+            pair = (vis.node_a, vis.node_b)
+            with self._override_lock:
+                if pair in self._override_set:
+                    continue
+
+            if vis.visible and vis.scheduled:
+                if pair not in self._active_links:
+                    up_events.append(vis)
+            elif not vis.visible:
+                if pair in self._active_links:
+                    down_events.append(vis)
+            elif vis.visible and not vis.scheduled:
+                # Terminal deallocated (GS handoff)
+                is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                if is_gs and pair in self._active_links:
+                    down_events.append(vis)
+
+        # Phase A: All BatchLinkDown — concurrent across agents
+        if down_events:
+            await self._dispatch_downs(down_events, sim_time_iso, to_pub)
+
+        # Phase B: All BatchLinkUp — concurrent across agents
+        # Only AFTER all down ACKs received.
+        if up_events:
+            await self._dispatch_ups(up_events, sim_time_iso, to_pub)
+
+        # Latency updates
+        self._steps_since_latency_update += 1
+        if self._steps_since_latency_update >= self._latency_interval:
+            await self._update_latencies(to_pub)
+            self._steps_since_latency_update = 0
+
+        # Checkpoint (fire-and-forget — don't block event loop)
+        asyncio.create_task(self._write_checkpoint(sim_time_iso))
+
+    # ------------------------------------------------------------------
+    # Two-phase gRPC dispatch
+    # ------------------------------------------------------------------
+
+    async def _dispatch_downs(
+        self,
+        events: list[VisibilityEvent],
+        sim_time_iso: str,
+        to_pub: zmq.asyncio.Socket,
+    ) -> None:
+        """Phase A: BatchLinkDown to all agents concurrently."""
+        # Build per-agent request
+        agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
+
+        for vis in events:
+            pair = (vis.node_a, vis.node_b)
+            info = self._active_links.pop(pair, None)
+            if info is None:
+                continue
+            self._last_latencies.pop(pair, None)
+
+            is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+
+            if is_gs:
+                gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
+                sat_id = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                agent = self._loc.agent_addr(sat_id)
+                agent_ifaces.setdefault(agent, []).append(
+                    node_agent_pb2.InterfaceDown(
+                        node_id=sat_id,
+                        interface_name="gnd0",
+                        pid=self._loc.pid(sat_id),
+                        link_type=node_agent_pb2.GROUND,
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                        gs_pid=self._loc.pid(gs_id),
+                        sat_pid=self._loc.pid(sat_id),
+                    )
+                )
+            else:
+                for nid, ifname in [
+                    (vis.node_a, info.interface_a),
+                    (vis.node_b, info.interface_b),
+                ]:
+                    agent = self._loc.agent_addr(nid)
+                    agent_ifaces.setdefault(agent, []).append(
+                        node_agent_pb2.InterfaceDown(
+                            node_id=nid,
+                            interface_name=ifname,
+                            pid=self._loc.pid(nid),
+                            link_type=node_agent_pb2.ISL,
+                        )
+                    )
+
+            # Publish LinkDown event on port 5561
+            now = datetime.now(UTC)
+            ifaces = self._interface_map.get(pair, ("", ""))
+            event = LinkDown(
+                sim_time=vis.sim_time,
+                wall_time=now,
+                node_a=vis.node_a,
+                node_b=vis.node_b,
+                interface_a=ifaces[0],
+                interface_b=ifaces[1],
+                reason="vis_lost",
+            )
+            to_pub.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
+
+        # Send to all agents concurrently — simultaneity requirement
+        loop = asyncio.get_running_loop()
+        tasks = []
+        for agent_addr, ifaces in agent_ifaces.items():
+            stub = self._pool.get_stub(agent_addr)
+            req = node_agent_pb2.BatchLinkDownRequest(
+                batch_id=f"{sim_time_iso}-down",
+                target_sim_time=sim_time_iso,
+                locality=node_agent_pb2.LOCAL,
+                interfaces=ifaces,
+            )
+            tasks.append(loop.run_in_executor(None, stub.BatchLinkDown, req))
+
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for _i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    log.warning("BatchLinkDown failed for agent: %s", result)
+                else:
+                    log.info(
+                        "BatchLinkDown: %d downed in %.1fms",
+                        result.interfaces_downed,
+                        result.apply_time_ms,
+                    )
+
+    async def _dispatch_ups(
+        self,
+        events: list[VisibilityEvent],
+        sim_time_iso: str,
+        to_pub: zmq.asyncio.Socket,
+    ) -> None:
+        """Phase B: BatchLinkUp to all agents concurrently.
+
+        Called ONLY after all Phase A (down) ACKs are received.
+        """
+        agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
+
+        for vis in events:
+            pair = (vis.node_a, vis.node_b)
+            ifaces = self._interface_map.get(pair)
+            if not ifaces:
+                continue
+
+            bandwidth = self._bandwidth_map.get(pair, 1000.0)
+            latency = self._position_table.compute_link_latency(vis.node_a, vis.node_b)
+            if latency is None:
+                latency = 3.0
+
+            self._active_links[pair] = ActiveLinkInfo(
+                interface_a=ifaces[0],
+                interface_b=ifaces[1],
+                latency_ms=latency,
+                bandwidth_mbps=bandwidth,
+            )
+            self._last_latencies[pair] = latency
+
+            is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+
+            if is_gs:
+                gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
+                sat_id = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                agent = self._loc.agent_addr(sat_id)
+                agent_ifaces.setdefault(agent, []).append(
+                    node_agent_pb2.InterfaceUp(
+                        node_id=sat_id,
+                        interface_name="gnd0",
+                        pid=self._loc.pid(sat_id),
+                        link_type=node_agent_pb2.GROUND,
+                        latency_ms=latency,
+                        bandwidth_mbps=bandwidth,
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                        gs_pid=self._loc.pid(gs_id),
+                        sat_pid=self._loc.pid(sat_id),
+                    )
+                )
+            else:
+                for nid, ifname in [
+                    (vis.node_a, ifaces[0]),
+                    (vis.node_b, ifaces[1]),
+                ]:
+                    agent = self._loc.agent_addr(nid)
+                    agent_ifaces.setdefault(agent, []).append(
+                        node_agent_pb2.InterfaceUp(
+                            node_id=nid,
+                            interface_name=ifname,
+                            pid=self._loc.pid(nid),
+                            link_type=node_agent_pb2.ISL,
+                            latency_ms=latency,
+                            bandwidth_mbps=bandwidth,
+                        )
+                    )
+
+            # Publish LinkUp on port 5561
+            now = datetime.now(UTC)
+            event = LinkUp(
+                sim_time=vis.sim_time,
+                wall_time=now,
+                node_a=vis.node_a,
+                node_b=vis.node_b,
+                interface_a=ifaces[0],
+                interface_b=ifaces[1],
+                latency_ms=latency,
+                bandwidth_mbps=bandwidth,
+                reason="vis_gained",
+            )
+            to_pub.send(encode_message(TOPIC_LINK_UP, event.model_dump_json().encode()))
+
+        # Send to all agents concurrently
+        loop = asyncio.get_running_loop()
+        tasks = []
+        for agent_addr, ifaces in agent_ifaces.items():
+            stub = self._pool.get_stub(agent_addr)
+            req = node_agent_pb2.BatchLinkUpRequest(
+                batch_id=f"{sim_time_iso}-up",
+                target_sim_time=sim_time_iso,
+                locality=node_agent_pb2.LOCAL,
+                interfaces=ifaces,
+            )
+            tasks.append(loop.run_in_executor(None, stub.BatchLinkUp, req))
+
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for _i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    log.warning("BatchLinkUp failed for agent: %s", result)
+                else:
+                    log.info(
+                        "BatchLinkUp: %d upped in %.1fms",
+                        result.interfaces_upped,
+                        result.apply_time_ms,
+                    )
+
+    # ------------------------------------------------------------------
+    # Latency updates
+    # ------------------------------------------------------------------
+
+    async def _update_latencies(self, to_pub: zmq.asyncio.Socket) -> None:
+        """Compute and dispatch latency updates for active links.
+
+        Substrate compensation (R-TO-002A): netem_ms = max(0, target_ms - substrate_ms).
+        In M4 (single node), substrate_ms = 0.0 for all pairs.
+        """
+        # Scale-forward: substrate compensation present but zero in M4
+        substrate_latency: dict[tuple[str, str], float] = {}
+
+        active_set = set(self._active_links.keys())
+        updates = self._position_table.get_links_needing_update(active_set, self._last_latencies)
+        if not updates:
+            return
+
+        agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
+        now = datetime.now(UTC)
+
+        for node_a, node_b, new_lat, range_km in updates:
+            pair = (node_a, node_b)
+            info = self._active_links.get(pair)
+            if not info:
+                continue
+
+            # R-TO-002A substrate compensation
+            substrate_ms = substrate_latency.get(pair, 0.0)
+            netem_ms = max(0.0, new_lat - substrate_ms)
+
+            info.latency_ms = new_lat
+            self._last_latencies[pair] = new_lat
+
+            is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
+
+            if is_gs:
+                gs_id = node_a if node_a.startswith("gs-") else node_b
+                sat_id = node_b if node_a.startswith("gs-") else node_a
+                agent = self._loc.agent_addr(sat_id)
+                agent_entries.setdefault(agent, []).append(
+                    node_agent_pb2.LatencyEntry(
+                        node_id=sat_id,
+                        interface_name="gnd0",
+                        pid=self._loc.pid(sat_id),
+                        latency_ms=netem_ms,
+                        link_type=node_agent_pb2.GROUND,
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                        gs_pid=self._loc.pid(gs_id),
+                        sat_pid=self._loc.pid(sat_id),
+                    )
+                )
+            else:
+                for nid, ifname in [
+                    (node_a, info.interface_a),
+                    (node_b, info.interface_b),
+                ]:
+                    agent = self._loc.agent_addr(nid)
+                    agent_entries.setdefault(agent, []).append(
+                        node_agent_pb2.LatencyEntry(
+                            node_id=nid,
+                            interface_name=ifname,
+                            pid=self._loc.pid(nid),
+                            latency_ms=netem_ms,
+                            link_type=node_agent_pb2.ISL,
+                        )
+                    )
+
+            # Publish LatencyUpdate on port 5561
+            event = LatencyUpdate(
+                sim_time=now,
+                wall_time=now,
+                node_a=node_a,
+                node_b=node_b,
+                latency_ms=new_lat,
+                range_km=range_km,
+            )
+            to_pub.send(encode_message(TOPIC_LATENCY_UPDATE, event.model_dump_json().encode()))
+
+        # Send to agents concurrently
+        loop = asyncio.get_running_loop()
+        tasks = []
+        for agent_addr, entries in agent_entries.items():
+            stub = self._pool.get_stub(agent_addr)
+            req = node_agent_pb2.SetLatencyRequest(entries=entries)
+            tasks.append(loop.run_in_executor(None, stub.SetLatency, req))
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    # ------------------------------------------------------------------
+    # FullStateSnapshot (slow joiner catchup)
+    # ------------------------------------------------------------------
+
+    async def _handle_full_state_snapshot(self, data: dict, to_pub: zmq.asyncio.Socket) -> None:
+        """Initialize link state from OME FullStateSnapshot.
+
+        When the Scheduler starts fresh (or a slow joiner catches up),
+        it receives FullStateSnapshots with the current topology. Links
+        that are active in the snapshot but not in our active_links are
+        dispatched as BatchLinkUp to bring the Node Agent into sync.
+        """
+        sim_time = data.get("sim_time", "")
+        if not data.get("isl_state") and not data.get("gs_state"):
+            return
+
+        # Parse the FullStateSnapshot format:
+        # isl_state: {"node_a:node_b": {"visible": true, "scheduled": true, "range_km": ...}}
+        # gs_state: {"gs_id:sat_id": {"visible": true, "scheduled": true, ...}}
+        isl_state = data.get("isl_state", {})
+        gs_state = data.get("gs_state", {})
+
+        sim_dt = (
+            datetime.fromisoformat(sim_time)
+            if isinstance(sim_time, str) and sim_time
+            else datetime.now(UTC)
+        )
+
+        new_ups: list[VisibilityEvent] = []
+        for pair_key, link in {**isl_state, **gs_state}.items():
+            parts = pair_key.split(":")
+            if len(parts) != 2:
+                continue
+            node_a, node_b = min(parts[0], parts[1]), max(parts[0], parts[1])
+            visible = link.get("visible", False)
+            scheduled = link.get("scheduled", False)
+            pair = (node_a, node_b)
+
+            if visible and scheduled and pair not in self._active_links:
+                ifaces = self._interface_map.get(pair, ("", ""))
+                if not ifaces[0] and not ifaces[1]:
+                    continue
+                new_ups.append(
+                    VisibilityEvent(
+                        sim_time=sim_dt,
+                        node_a=node_a,
+                        node_b=node_b,
+                        visible=True,
+                        scheduled=True,
+                        range_km=link.get("range_km", 0.0),
+                        elevation_deg=link.get("elevation_deg"),
+                        terminal_type=link.get("terminal_type", "optical"),
+                    )
+                )
+
+        if new_ups:
+            log.info(
+                "FullStateSnapshot: %d new links to bring up at %s",
+                len(new_ups),
+                sim_time,
+            )
+            sim_time_iso = sim_time if isinstance(sim_time, str) else datetime.now(UTC).isoformat()
+            await self._dispatch_ups(new_ups, sim_time_iso, to_pub)
+
+        log.info(
+            "FullStateSnapshot: %d total active links at %s",
+            len(self._active_links),
+            sim_time,
+        )
+
+    # ------------------------------------------------------------------
+    # Checkpoint (fire-and-forget)
+    # ------------------------------------------------------------------
+
+    async def _write_checkpoint(self, sim_time_iso: str) -> None:
+        """Write sim_time to ConfigMap (non-blocking, fire-and-forget)."""
+        try:
+            import kubernetes
+            import kubernetes.client
+            import kubernetes.config
+
+            try:
+                kubernetes.config.load_incluster_config()
+            except kubernetes.config.config_exception.ConfigException:
+                kubernetes.config.load_kube_config()
+
+            v1 = kubernetes.client.CoreV1Api()
+            from nodalarc.platform import get_platform_config
+
+            ns = get_platform_config().kubernetes_namespace
+            body = {
+                "metadata": {"name": "nodalarc-scheduler-checkpoint"},
+                "data": {
+                    "sim_time": sim_time_iso,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                },
+            }
+            try:
+                v1.patch_namespaced_config_map("nodalarc-scheduler-checkpoint", ns, body)
+            except kubernetes.client.rest.ApiException as exc:
+                if exc.status == 404:
+                    v1.create_namespaced_config_map(
+                        ns,
+                        kubernetes.client.V1ConfigMap(
+                            metadata=kubernetes.client.V1ObjectMeta(
+                                name="nodalarc-scheduler-checkpoint"
+                            ),
+                            data=body["data"],
+                        ),
+                    )
+                else:
+                    raise
+        except Exception as exc:
+            log.debug("Checkpoint write failed (non-fatal): %s", exc)

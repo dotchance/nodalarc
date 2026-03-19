@@ -23,6 +23,13 @@ log = logging.getLogger(__name__)
 class NodeAgentServicer(NodeAgentServiceServicer):
     """gRPC servicer for the Node Agent DaemonSet."""
 
+    def __init__(self, pid_map: dict[str, int] | None = None) -> None:
+        self._pid_map = pid_map or {}
+
+    def set_pid_map(self, pid_map: dict[str, int]) -> None:
+        """Update the PID map (e.g., after periodic refresh)."""
+        self._pid_map = pid_map
+
     def BatchLinkDown(self, request, context):
         return handle_batch_link_down(request, context)
 
@@ -33,4 +40,4 @@ class NodeAgentServicer(NodeAgentServiceServicer):
         return handle_set_latency(request, context)
 
     def GetTopology(self, request, context):
-        return handle_get_topology(request, context)
+        return handle_get_topology(request, context, pid_map=self._pid_map)

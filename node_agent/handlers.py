@@ -404,12 +404,63 @@ def handle_set_latency(
 def handle_get_topology(
     request: node_agent_pb2.GetTopologyRequest,
     context: grpc.ServicerContext,
+    pid_map: dict[str, int] | None = None,
 ) -> node_agent_pb2.GetTopologyResponse:
     """Handle GetTopology RPC — return observed interface state.
 
-    Enumerates interfaces in known pod namespaces and reports their
-    admin/oper state and current netem delay. Used for reconciliation.
+    Enumerates ISL and ground interfaces in pod namespaces on this node
+    and reports admin/oper state. Used for reconciliation in Phase 5.
+
+    The pid_map is injected by the server (from PID discovery).
     """
-    # TODO(Phase 5): implement full reconciliation query
-    # For now return empty response (no interfaces enumerated)
-    return node_agent_pb2.GetTopologyResponse()
+    from pyroute2 import NetNS
+
+    interfaces: list[node_agent_pb2.InterfaceState] = []
+    pids = pid_map or {}
+
+    for node_id, pid in pids.items():
+        try:
+            ns = NetNS(f"/proc/{pid}/ns/net")
+            try:
+                for link in ns.get_links():
+                    ifname = link.get_attr("IFLA_IFNAME")
+                    if ifname is None:
+                        continue
+                    # Only report ISL and ground interfaces
+                    if not (ifname.startswith("isl") or ifname.startswith("gnd")):
+                        continue
+
+                    flags = link["flags"]
+                    admin_up = bool(flags & 1)  # IFF_UP
+                    oper_up = bool(flags & (1 << 6))  # IFF_RUNNING
+
+                    # Read netem delay if tc qdisc exists
+                    current_latency = 0.0
+                    try:
+                        idx = link["index"]
+                        qdiscs = ns.get_qdiscs(index=idx)
+                        for qd in qdiscs:
+                            if qd.get_attr("TCA_KIND") == "netem":
+                                opts = qd.get_attr("TCA_OPTIONS")
+                                if opts:
+                                    # netem delay stored in microseconds
+                                    delay_us = opts.get("delay", 0)
+                                    current_latency = delay_us / 1000.0
+                    except Exception:
+                        pass
+
+                    interfaces.append(
+                        node_agent_pb2.InterfaceState(
+                            node_id=node_id,
+                            interface_name=ifname,
+                            admin_up=admin_up,
+                            oper_up=oper_up,
+                            current_latency_ms=current_latency,
+                        )
+                    )
+            finally:
+                ns.close()
+        except Exception as exc:
+            log.warning("GetTopology: failed to read ns(%d) for %s: %s", pid, node_id, exc)
+
+    return node_agent_pb2.GetTopologyResponse(interfaces=interfaces)

@@ -59,16 +59,29 @@ def _sat_gnd_host_name(sat_id: str) -> str:
 
 def _tc_mirred_redirect(src: str, dst: str) -> None:
     """Install tc ingress + mirred egress redirect from src to dst."""
-    # Remove stale ingress qdisc (idempotent)
+    # Remove stale ingress qdisc and filters (idempotent).
+    # Must succeed before adding new ingress — the kernel's exclusivity
+    # flag prevents adding a second ingress qdisc.
     subprocess.run(
         ["tc", "qdisc", "del", "dev", src, "ingress"],
         capture_output=True,
     )
-    subprocess.run(
+    result = subprocess.run(
         ["tc", "qdisc", "add", "dev", src, "ingress"],
         capture_output=True,
-        check=True,
+        text=True,
     )
+    if result.returncode != 0:
+        # "Exclusivity flag on" means ingress already exists — retry delete+add
+        if "Exclusivity" in result.stderr or "File exists" in result.stderr:
+            subprocess.run(["tc", "qdisc", "del", "dev", src, "ingress"], capture_output=True)
+            subprocess.run(
+                ["tc", "qdisc", "add", "dev", src, "ingress"],
+                capture_output=True,
+                check=True,
+            )
+        else:
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stderr)
     subprocess.run(
         [
             "tc",

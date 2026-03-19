@@ -142,18 +142,29 @@ class Dispatcher:
             except Exception as exc:
                 log.warning("Interface inventory query failed: %s", exc)
 
-    async def run(self) -> None:
-        """Main async dispatch loop."""
+    async def run(self, external_to_pub: object | None = None) -> None:
+        """Main async dispatch loop.
+
+        Args:
+            external_to_pub: If provided, use this synchronous ZMQ PUB socket
+                (created in the main thread, shared with scenario handler).
+                If None, create and bind a new async PUB socket.
+        """
         self._running = True
         ctx = zmq.asyncio.Context()
 
-        # PUB socket for TO events — bound at startup so subscribers
-        # can connect before first event fires (no lazy creation).
-        from nodalarc.zmq_channels import to_events_bind
+        if external_to_pub is not None:
+            # Wrap the synchronous socket for use in the async loop.
+            # ZMQ sync sockets work fine with send() from asyncio — the send
+            # is non-blocking for PUB sockets (drops if no subscriber).
+            to_pub = external_to_pub
+            log.info("Using external TO PUB socket")
+        else:
+            from nodalarc.zmq_channels import to_events_bind
 
-        to_pub = ctx.socket(zmq.PUB)
-        to_pub.bind(to_events_bind())
-        log.info("TO PUB bound on %s", to_events_bind())
+            to_pub = ctx.socket(zmq.PUB)
+            to_pub.bind(to_events_bind())
+            log.info("TO PUB bound on %s", to_events_bind())
 
         # The Scheduler does NOT bind the OME port (5560). The OME container
         # owns that port. VS-API subscribes to OME directly for position data.
@@ -244,7 +255,8 @@ class Dispatcher:
         except asyncio.CancelledError:
             log.info("Dispatcher cancelled")
         finally:
-            to_pub.close()
+            if external_to_pub is None:
+                to_pub.close()
             ome_sub.close()
             ctx.term()
             log.info("Dispatcher stopped")

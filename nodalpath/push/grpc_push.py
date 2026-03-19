@@ -6,6 +6,8 @@ No connection pooling — the push interval (~seconds) doesn't justify it.
 
 from __future__ import annotations
 
+import hashlib
+import ipaddress
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -23,6 +25,34 @@ from nodalpath.proto import (
 from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
 
 log = logging.getLogger(__name__)
+
+
+def _deterministic_mac(node_id: str, ifname: str) -> str:
+    """Derive the deterministic MAC for a peer interface.
+
+    Must match orchestrator/link_manager.py:deterministic_mac exactly.
+    """
+    digest = hashlib.sha256(f"{node_id}:{ifname}".encode()).digest()
+    return f"02:{digest[0]:02x}:{digest[1]:02x}:{digest[2]:02x}:{digest[3]:02x}:{digest[4]:02x}"
+
+
+def _mac_to_link_local(mac_str: str) -> str:
+    """Derive canonical IPv6 link-local from MAC via EUI-64.
+
+    '02:ee:d2:0a:a9:36' → 'fe80::ee:d2ff:fe0a:a936'
+    """
+    parts = [int(x, 16) for x in mac_str.split(":")]
+    parts[0] ^= 0x02  # flip U/L bit
+    eui64 = parts[:3] + [0xFF, 0xFE] + parts[3:]
+    groups = [
+        f"{eui64[0]:02x}{eui64[1]:02x}",
+        f"{eui64[2]:02x}{eui64[3]:02x}",
+        f"{eui64[4]:02x}{eui64[5]:02x}",
+        f"{eui64[6]:02x}{eui64[7]:02x}",
+    ]
+    raw = "fe80::" + ":".join(groups)
+    return str(ipaddress.IPv6Address(raw))  # canonical form (drop leading zeros)
+
 
 def _default_grpc_port() -> int:
     from nodalarc.platform import get_platform_config
@@ -54,48 +84,58 @@ def build_forwarding_update(
     sim_time: str,
     iface_to_peer_loopback: dict[tuple[str, str], str] | None = None,
     own_loopback: str = "",
+    iface_to_peer_info: dict[tuple[str, str], tuple[str, str]] | None = None,
 ) -> ForwardingTableUpdate:
     """Convert a ForwardingTable to a gRPC ForwardingTableUpdate message.
 
     Always sends the full table — no deltas.
 
-    iface_to_peer_loopback: maps (node_id, interface_name) → peer loopback IP.
-        Used to populate nexthop_ip on each entry so the sidecar can
-        configure FRR's ``mpls lsp`` and ``ip route`` commands with a
-        resolvable nexthop.
+    iface_to_peer_info: maps (node_id, interface_name) → (peer_node_id, peer_iface_name).
+        Used to compute the peer's deterministic MAC and IPv6 link-local
+        for PERMANENT neighbor entries and ``via inet6`` MPLS nexthops.
 
+    iface_to_peer_loopback: maps (node_id, interface_name) → peer loopback IP.
     own_loopback: this node's own loopback IP (for node SID POP → local delivery).
     """
     peer_map = iface_to_peer_loopback or {}
+    peer_info = iface_to_peer_info or {}
     node_id = table.node_id
+
+    def _peer_ll_mac(iface: str) -> tuple[str, str]:
+        """Compute peer's link-local and MAC for an interface."""
+        info = peer_info.get((node_id, iface))
+        if not info:
+            return ("", "")
+        peer_nid, peer_iface = info
+        mac = _deterministic_mac(peer_nid, peer_iface)
+        ll = _mac_to_link_local(mac)
+        return (ll, mac)
 
     lsr_entries: list[LabelEntry] = []
     for binding in table.lsr_bindings:
         if binding.action == "pop":
-            # For node SID POP (out_interface="lo"), nexthop is own loopback
-            # For adjacency SID POP, nexthop is the peer on that interface
             if binding.out_interface == "lo":
-                nexthop = own_loopback
+                ll, mac = "", ""
             else:
-                nexthop = peer_map.get((node_id, binding.out_interface), "")
+                ll, mac = _peer_ll_mac(binding.out_interface)
             entry = LabelEntry(
                 in_label=binding.in_label,
                 action=Action.POP,
                 out_label=0,
                 out_interface=binding.out_interface,
-                nexthop_ip=nexthop,
+                nexthop_ll=ll,
+                nexthop_mac=mac,
             )
             lsr_entries.append(entry)
         elif binding.action == "swap":
-            # SWAP entries are not used in the SR-TE label stack model,
-            # but kept for backward compatibility with the vtysh transport.
-            nexthop = peer_map.get((node_id, binding.out_interface), "")
+            ll, mac = _peer_ll_mac(binding.out_interface)
             entry = LabelEntry(
                 in_label=binding.in_label,
                 action=Action.SWAP,
                 out_label=binding.out_label or 0,
                 out_interface=binding.out_interface,
-                nexthop_ip=nexthop,
+                nexthop_ll=ll,
+                nexthop_mac=mac,
             )
             lsr_entries.append(entry)
         else:
@@ -106,12 +146,13 @@ def build_forwarding_update(
 
     ler_entries: list[IngressEntry] = []
     for rule in table.ler_ingress_rules:
-        nexthop = peer_map.get((node_id, rule.out_interface), "")
+        ll, mac = _peer_ll_mac(rule.out_interface)
         entry = IngressEntry(
             dst_prefix=rule.dst_prefix,
             push_label=rule.push_label,
             out_interface=rule.out_interface,
-            nexthop_ip=nexthop,
+            nexthop_ll=ll,
+            nexthop_mac=mac,
             label_stack=list(getattr(rule, "label_stack", []) or []),
             backup_push_label=rule.backup_push_label or 0,
             backup_out_interface=rule.backup_out_interface or "",

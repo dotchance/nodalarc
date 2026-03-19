@@ -671,11 +671,27 @@ class DiscreteEventDispatcher:
                             link_manager.set_link_metric(gs_id, "gnd0", metric, self._routing_protocol)
                             link_manager.set_link_metric(sat_id, "gnd0", metric, self._routing_protocol)
                             log.info(f"GS link {pair} elevation={vis.elevation_deg:.1f}° → metric {metric}")
+                        # NodalPath: trigger NDP on both sides of the ground link
+                        if self._routing_protocol == "nodalpath" and gs_pid and sat_pid:
+                            gs_mac = link_manager.deterministic_mac(gs_id, "gnd0")
+                            sat_mac = link_manager.deterministic_mac(sat_id, "gnd0")
+                            gs_ll = link_manager.mac_to_link_local(gs_mac)
+                            sat_ll = link_manager.mac_to_link_local(sat_mac)
+                            link_manager.trigger_ndp_and_wait(sat_pid, "gnd0", gs_ll)
+                            link_manager.trigger_ndp_and_wait(gs_pid, "gnd0", sat_ll)
                     else:
                         link_manager.set_interface_up(info.pid_a, ifaces[0])
                         link_manager.set_interface_up(info.pid_b, ifaces[1])
                         link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
                         link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
+                        # NodalPath: trigger NDP so MPLS routes can use via inet6
+                        if self._routing_protocol == "nodalpath":
+                            peer_mac_b = link_manager.deterministic_mac(vis.node_b, ifaces[1])
+                            peer_mac_a = link_manager.deterministic_mac(vis.node_a, ifaces[0])
+                            peer_ll_a = link_manager.mac_to_link_local(peer_mac_b)
+                            peer_ll_b = link_manager.mac_to_link_local(peer_mac_a)
+                            link_manager.trigger_ndp_and_wait(info.pid_a, ifaces[0], peer_ll_a)
+                            link_manager.trigger_ndp_and_wait(info.pid_b, ifaces[1], peer_ll_b)
                     break  # Success
                 except FileNotFoundError as exc:
                     if attempt < 2:

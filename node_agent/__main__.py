@@ -34,6 +34,10 @@ def main() -> None:
         help="Path to platform configuration YAML",
     )
     parser.add_argument("--workers", type=int, default=4, help="gRPC thread pool workers")
+    parser.add_argument(
+        "--pid-map",
+        help="Path to pid_map.json (from na-deploy). If not provided, discovers PIDs from K8s API.",
+    )
     args = parser.parse_args()
 
     # Init platform config if available (non-fatal if missing)
@@ -47,8 +51,23 @@ def main() -> None:
     except Exception:
         port = args.port
 
+    # Load pid_map for GetTopology
+    import json
+
+    pid_map: dict[str, int] = {}
+    if args.pid_map:
+        pid_map = json.loads(Path(args.pid_map).read_text())
+        log.info("Loaded pid_map from %s (%d entries)", args.pid_map, len(pid_map))
+    else:
+        try:
+            from node_agent.pid_discovery import discover_local_pod_pids
+
+            pid_map = discover_local_pod_pids()
+        except Exception as exc:
+            log.warning("PID discovery failed: %s — GetTopology will return empty", exc)
+
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=args.workers))
-    servicer = NodeAgentServicer()
+    servicer = NodeAgentServicer(pid_map=pid_map)
     add_NodeAgentServiceServicer_to_server(servicer, server)
     server.add_insecure_port(f"0.0.0.0:{port}")
     server.start()

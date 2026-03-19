@@ -244,22 +244,33 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
             publish_window_zmq(events, pub_sock, window)
 
             # Extract position trajectory and range map from window events.
-            # The position trajectory is included in FullStateSnapshot so late
-            # subscribers get the complete orbital path, not just the final position.
+            # The trajectory is included in FullStateSnapshot so late subscribers
+            # get orbital positions. Downsample to every 10th snapshot (~10s intervals)
+            # to keep the FullStateSnapshot message size manageable (~500KB vs ~5MB).
             position_trajectory: list[dict] = []
             last_position_event = None
             link_ranges: dict[tuple[str, str], float] = {}
+            snap_count = 0
             for evt in events:
                 if evt.event_type == "Snapshot":
                     last_position_event = evt
-                    position_trajectory.append({
-                        "timestamp_s": evt.timestamp_s,
-                        "event_type": evt.event_type,
-                        "data": evt.data.model_dump(mode="json"),
-                    })
+                    snap_count += 1
+                    if snap_count % 10 == 0 or snap_count == 1:
+                        position_trajectory.append({
+                            "timestamp_s": evt.timestamp_s,
+                            "event_type": evt.event_type,
+                            "data": evt.data.model_dump(mode="json"),
+                        })
                 elif evt.event_type == "VisibilityEvent":
                     pair = (evt.data.node_a, evt.data.node_b)
                     link_ranges[pair] = evt.data.range_km
+            # Always include the last snapshot
+            if last_position_event and (snap_count % 10 != 0):
+                position_trajectory.append({
+                    "timestamp_s": last_position_event.timestamp_s,
+                    "event_type": last_position_event.event_type,
+                    "data": last_position_event.data.model_dump(mode="json"),
+                })
 
             # Compute sim_time for the end of this window
             from datetime import datetime as _dt, timezone as _tz

@@ -7,7 +7,6 @@ routing:
   extensions:
   - sr
 time:
-  mode: discrete-event
   step_seconds: 1
 traffic_flows:
 - flow_id: ashburn-to-frankfurt

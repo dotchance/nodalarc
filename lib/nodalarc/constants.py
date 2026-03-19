@@ -64,7 +64,6 @@ class ConstellationPattern(StrEnum):
 
 class TimeMode(StrEnum):
     REALTIME = "realtime"
-    DISCRETE_EVENT = "discrete-event"
 
 
 # Logging format (Section 13.2)

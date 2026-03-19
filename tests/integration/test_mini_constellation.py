@@ -73,7 +73,7 @@ def _create_custom_session() -> str:
             "stack": "configs/routing-stacks/frr-isis-sr",
             "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
         },
-        "time": {"mode": "discrete-event", "step_seconds": 10},
+        "time": {"step_seconds": 10},
     }
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", dir=str(PROJECT_ROOT), delete=False,

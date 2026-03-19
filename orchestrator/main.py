@@ -1,9 +1,7 @@
 """Topology Orchestrator entry point — orchestration only, no logic.
 
 CLI entry point. Loads configs, initializes subsystems, manages
-scenario override set, starts appropriate dispatcher.
-
-Under 100 lines.
+scenario override set, starts the real-time dispatcher.
 """
 
 from __future__ import annotations
@@ -23,7 +21,6 @@ from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, c
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.session import SessionConfig
 from nodalarc.zmq_channels import to_scenario_inject_bind, encode_message, TOPIC_LINK_DOWN, TOPIC_LINK_UP
-from orchestrator.discrete_event_dispatcher import DiscreteEventDispatcher
 from orchestrator.realtime_dispatcher import RealtimeDispatcher
 
 log = logging.getLogger(__name__)
@@ -118,7 +115,6 @@ def _scenario_handler(
             elif action == "inject_satellite_loss":
                 node = cmd["node"]
                 with override_lock:
-                    # Add override for every link involving this node
                     for pair in list(interface_map.keys()):
                         if node in pair:
                             override_set.add(pair)
@@ -156,11 +152,8 @@ def main() -> None:
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument("--timeline", required=False, help="Path to timeline JSONL (legacy file mode)")
     parser.add_argument("--ome-endpoint", help="ZMQ endpoint for OME events (e.g. tcp://nodalarc-ome:5560)")
-    parser.add_argument("--mode", choices=["de", "rt"], default="de")
     parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
-    parser.add_argument("--dwell", type=float, default=1.0, help="DE mode dwell (seconds)")
-    parser.add_argument("--no-convergence-gate", action="store_true",
-                        help="Disable MI convergence gate (for stacks without MI)")
+    parser.add_argument("--routing-protocol", help="Override routing protocol detection")
     parser.add_argument("--platform-config", default="configs/platform.yaml",
                         help="Path to platform configuration YAML")
     args = parser.parse_args()
@@ -190,11 +183,11 @@ def main() -> None:
     else:
         log.info("No area assignment configured — routing_area will be null for all nodes")
 
-    # Determine routing protocol — use protocol field directly when set,
-    # fall back to daemon inference for legacy stacks
-    if session.routing.protocol is not None:
+    # Determine routing protocol
+    if args.routing_protocol:
+        routing_protocol = args.routing_protocol
+    elif session.routing.protocol is not None:
         routing_protocol = session.routing.protocol
-        log.info(f"Routing protocol: {routing_protocol} (from session.routing.protocol)")
     else:
         from nodalarc.models.routing_stack import RoutingStackConfig
         stack_data = yaml.safe_load(Path(session.routing.stack, "stack.yaml").read_text())
@@ -208,7 +201,7 @@ def main() -> None:
             routing_protocol = "bgp"
         else:
             routing_protocol = "none"
-        log.info(f"Routing protocol: {routing_protocol} (daemons: {daemons})")
+    log.info(f"Routing protocol: {routing_protocol}")
 
     # Load pid_map if provided (from na-deploy step 7)
     pid_map: dict[str, int] = {}
@@ -229,35 +222,20 @@ def main() -> None:
     if not args.timeline and not args.ome_endpoint:
         parser.error("Either --timeline or --ome-endpoint is required")
 
-    if args.mode == "de":
-        dispatcher = DiscreteEventDispatcher(
-            timeline_path=Path(args.timeline) if args.timeline else None,
-            ome_zmq_endpoint=args.ome_endpoint,
-            interface_map=interface_map,
-            bandwidth_map=bandwidth_map,
-            override_set=override_set,
-            override_lock=override_lock,
-            pid_map=pid_map,
-            routing_protocol=routing_protocol,
-            latency_update_interval_s=session.time.latency_update_interval_seconds,
-            dwell_s=args.dwell,
-            area_map=area_map,
-            use_convergence_gate=not args.no_convergence_gate,
-        )
-        dispatcher.run()
-    else:
-        dispatcher = RealtimeDispatcher(
-            timeline_path=Path(args.timeline),
-            interface_map=interface_map,
-            bandwidth_map=bandwidth_map,
-            override_set=override_set,
-            override_lock=override_lock,
-            pid_map=pid_map,
-            routing_protocol=routing_protocol,
-            latency_update_interval_s=session.time.latency_update_interval_seconds,
-            compression_factor=session.time.compression,
-        )
-        dispatcher.run()
+    dispatcher = RealtimeDispatcher(
+        timeline_path=Path(args.timeline) if args.timeline else None,
+        ome_zmq_endpoint=args.ome_endpoint,
+        interface_map=interface_map,
+        bandwidth_map=bandwidth_map,
+        override_set=override_set,
+        override_lock=override_lock,
+        pid_map=pid_map,
+        routing_protocol=routing_protocol,
+        latency_update_interval_s=session.time.latency_update_interval_seconds,
+        compression_factor=session.time.compression,
+        area_map=area_map,
+    )
+    dispatcher.run()
 
 
 if __name__ == "__main__":

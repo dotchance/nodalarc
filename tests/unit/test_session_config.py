@@ -20,7 +20,7 @@ _SAMPLE_SESSION = {
         "extensions": ["sr"],
         "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
     },
-    "time": {"mode": "discrete-event", "step_seconds": 1},
+    "time": {"step_seconds": 1},
     "traffic_flows": [
         {"flow_id": "test", "src": "gs-svalbard", "dst": "gs-mcmurdo",
          "protocol": "udp", "bandwidth_kbps": 100, "probe_type": "continuous"},

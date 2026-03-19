@@ -218,14 +218,26 @@ class DiscreteEventDispatcher:
                 # Poll OME sub with 1s timeout
                 socks = dict(ome_poller.poll(timeout=1000))
                 if ome_sub not in socks:
-                    # No OME data — advance trajectory replay if available.
-                    # This publishes a new position every 1s (the poll timeout),
-                    # giving the VF smooth satellite animation independent of
-                    # the 30s FullStateSnapshot cycle.
+                    # No OME data — replay trajectory at real-time pace.
+                    # The trajectory is downsampled (every Nth snapshot), so
+                    # each entry covers N sim-seconds. Advance one entry per
+                    # N wall-seconds to match real-time orbital speed.
                     if hasattr(self, "_traj_data") and self._traj_data and ome_pub_sock:
-                        idx = self._traj_index % len(self._traj_data)
-                        self._process_batch([self._traj_data[idx]], pub_sock, conv_sock, ome_pub_sock)
-                        self._traj_index += 1
+                        now = time.monotonic()
+                        elapsed = now - self._traj_last_wall
+                        step_interval = getattr(self, "_traj_step_s", 10.0)
+                        if elapsed >= step_interval:
+                            # Collect all events at the current trajectory timestamp
+                            # (multiple VisibilityEvents + one Snapshot can share a timestamp)
+                            idx = self._traj_index % len(self._traj_data)
+                            ts = self._traj_data[idx].get("timestamp_s", 0)
+                            batch = []
+                            while idx < len(self._traj_data) and self._traj_data[idx].get("timestamp_s", -1) == ts:
+                                batch.append(self._traj_data[idx])
+                                idx += 1
+                            self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)
+                            self._traj_index = idx
+                            self._traj_last_wall = now
                     continue
 
                 raw = ome_sub.recv(zmq.NOBLOCK)
@@ -247,13 +259,22 @@ class DiscreteEventDispatcher:
                     else:
                         self._update_state_from_snapshot(data)
 
-                    # Store trajectory for idle-time replay (1 position/second
-                    # during poll timeouts). Initialize index on first receive.
+                    # Store trajectory for idle-time replay. Compute the
+                    # step interval from the trajectory timestamps so replay
+                    # matches real-time orbital speed.
                     trajectory = data.get("position_trajectory", [])
                     if trajectory:
                         self._traj_data = trajectory
                         if not hasattr(self, "_traj_index"):
                             self._traj_index = 0
+                        self._traj_last_wall = time.monotonic()
+                        # Derive step interval from trajectory timestamps
+                        if len(trajectory) >= 2:
+                            t0 = trajectory[0].get("timestamp_s", 0)
+                            t1 = trajectory[1].get("timestamp_s", 0)
+                            self._traj_step_s = max(1.0, t1 - t0)
+                        else:
+                            self._traj_step_s = 10.0
                         # Publish current position immediately
                         idx = self._traj_index % len(trajectory)
                         self._process_batch([trajectory[idx]], pub_sock, conv_sock, ome_pub_sock)

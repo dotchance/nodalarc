@@ -250,17 +250,11 @@ class DiscreteEventDispatcher:
 
                 if topic == b"FullStateSnapshot":
                     if not initialized:
-                        # Cold start: bring up all visible links in a background thread
-                        # so the poll loop continues receiving Snapshot events (positions).
-                        import threading
-                        cold_start_data = dict(data)
-                        def _cold_start_bg():
-                            self._cold_start_from_snapshot(
-                                cold_start_data, pub_sock, conv_sock, ome_pub_sock,
-                            )
-                        threading.Thread(target=_cold_start_bg, daemon=True).start()
+                        self._cold_start_from_snapshot(data, pub_sock, conv_sock, ome_pub_sock)
                         initialized = True
-                    else:
+                    elif not hasattr(self, "_traj_groups"):
+                        # Only update from FullStateSnapshot if NOT replaying trajectory.
+                        # During replay, the trajectory is authoritative for link state.
                         self._update_state_from_snapshot(data)
 
                     # Pre-group trajectory by timestamp for real-time replay.
@@ -338,6 +332,7 @@ class DiscreteEventDispatcher:
         FRR pods are fresh with no routing state. Treat the snapshot as
         authoritative and issue link-up for all visible/scheduled links.
         """
+        self._in_cold_start = True
         sim_time = data.get("sim_time", "")
         isl_state = data.get("isl_state", {})
         gs_state_data = data.get("gs_state", {})
@@ -398,6 +393,7 @@ class DiscreteEventDispatcher:
                 link_count += 1
                 log.info(f"Cold start GS: {gs_id} -> {sat_id}")
 
+        self._in_cold_start = False
         log.info(f"Cold start from FullStateSnapshot: {link_count} links initialized")
 
     def _update_state_from_snapshot(self, data: dict) -> None:
@@ -724,21 +720,43 @@ class DiscreteEventDispatcher:
                             sat_mac = link_manager.deterministic_mac(sat_id, "gnd0")
                             gs_ll = link_manager.mac_to_link_local(gs_mac)
                             sat_ll = link_manager.mac_to_link_local(sat_mac)
-                            link_manager.trigger_ndp_and_wait(sat_pid, "gnd0", gs_ll)
-                            link_manager.trigger_ndp_and_wait(gs_pid, "gnd0", sat_ll)
+                            if getattr(self, '_in_cold_start', False):
+                                import subprocess as _sp
+                                _sp.Popen(["nsenter", "--target", str(sat_pid), "--net", "--",
+                                           "ping", "-6", "-c", "1", "-W", "1", f"{gs_ll}%gnd0"],
+                                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                                _sp.Popen(["nsenter", "--target", str(gs_pid), "--net", "--",
+                                           "ping", "-6", "-c", "1", "-W", "1", f"{sat_ll}%gnd0"],
+                                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                            else:
+                                link_manager.trigger_ndp_and_wait(sat_pid, "gnd0", gs_ll)
+                                link_manager.trigger_ndp_and_wait(gs_pid, "gnd0", sat_ll)
                     else:
                         link_manager.set_interface_up(info.pid_a, ifaces[0])
                         link_manager.set_interface_up(info.pid_b, ifaces[1])
                         link_manager.apply_link_shaping(info.pid_a, ifaces[0], latency, bandwidth)
                         link_manager.apply_link_shaping(info.pid_b, ifaces[1], latency, bandwidth)
-                        # NodalPath: trigger NDP so MPLS routes can use via inet6
+                        # NodalPath: trigger NDP for MPLS via inet6.
+                        # Fire-and-forget during cold start (don't wait — too slow
+                        # for 60+ links). The sidecar retry handles the race.
+                        # During normal operation (individual link-ups), wait for NDP.
                         if self._routing_protocol == "nodalpath":
                             peer_mac_b = link_manager.deterministic_mac(vis.node_b, ifaces[1])
                             peer_mac_a = link_manager.deterministic_mac(vis.node_a, ifaces[0])
                             peer_ll_a = link_manager.mac_to_link_local(peer_mac_b)
                             peer_ll_b = link_manager.mac_to_link_local(peer_mac_a)
-                            link_manager.trigger_ndp_and_wait(info.pid_a, ifaces[0], peer_ll_a)
-                            link_manager.trigger_ndp_and_wait(info.pid_b, ifaces[1], peer_ll_b)
+                            if getattr(self, '_in_cold_start', False):
+                                # Fire-and-forget: trigger NDP but don't wait
+                                import subprocess as _sp
+                                _sp.Popen(["nsenter", "--target", str(info.pid_a), "--net", "--",
+                                           "ping", "-6", "-c", "1", "-W", "1", f"{peer_ll_a}%{ifaces[0]}"],
+                                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                                _sp.Popen(["nsenter", "--target", str(info.pid_b), "--net", "--",
+                                           "ping", "-6", "-c", "1", "-W", "1", f"{peer_ll_b}%{ifaces[1]}"],
+                                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                            else:
+                                link_manager.trigger_ndp_and_wait(info.pid_a, ifaces[0], peer_ll_a)
+                                link_manager.trigger_ndp_and_wait(info.pid_b, ifaces[1], peer_ll_b)
                     break  # Success
                 except FileNotFoundError as exc:
                     if attempt < 2:

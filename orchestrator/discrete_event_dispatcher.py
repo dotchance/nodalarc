@@ -222,21 +222,24 @@ class DiscreteEventDispatcher:
                     # The trajectory is downsampled (every Nth snapshot), so
                     # each entry covers N sim-seconds. Advance one entry per
                     # N wall-seconds to match real-time orbital speed.
-                    if hasattr(self, "_traj_data") and self._traj_data and ome_pub_sock:
+                    if hasattr(self, "_traj_groups") and self._traj_groups and ome_pub_sock:
                         now = time.monotonic()
                         elapsed = now - self._traj_last_wall
-                        step_interval = getattr(self, "_traj_step_s", 10.0)
-                        if elapsed >= step_interval:
-                            # Collect all events at the current trajectory timestamp
-                            # (multiple VisibilityEvents + one Snapshot can share a timestamp)
-                            idx = self._traj_index % len(self._traj_data)
-                            ts = self._traj_data[idx].get("timestamp_s", 0)
-                            batch = []
-                            while idx < len(self._traj_data) and self._traj_data[idx].get("timestamp_s", -1) == ts:
-                                batch.append(self._traj_data[idx])
-                                idx += 1
-                            self._process_batch(batch, pub_sock, conv_sock, ome_pub_sock)
-                            self._traj_index = idx
+                        if elapsed >= self._traj_step_s:
+                            # Process groups until we hit a Snapshot group (position update).
+                            # VisibilityEvent-only groups are consumed instantly so link
+                            # state catches up without delaying position animation.
+                            while self._traj_group_idx < len(self._traj_groups):
+                                gidx = self._traj_group_idx
+                                group = self._traj_groups[gidx]
+                                self._process_batch(group, pub_sock, conv_sock, ome_pub_sock)
+                                self._traj_group_idx += 1
+                                has_snapshot = any(e.get("event_type") == "Snapshot" for e in group)
+                                if has_snapshot:
+                                    break  # Pause until next step interval
+                            # Wrap around when trajectory exhausted
+                            if self._traj_group_idx >= len(self._traj_groups):
+                                self._traj_group_idx = 0
                             self._traj_last_wall = now
                     continue
 
@@ -259,26 +262,22 @@ class DiscreteEventDispatcher:
                     else:
                         self._update_state_from_snapshot(data)
 
-                    # Store trajectory for idle-time replay. Compute the
-                    # step interval from the trajectory timestamps so replay
-                    # matches real-time orbital speed.
+                    # Pre-group trajectory by timestamp for real-time replay.
                     trajectory = data.get("position_trajectory", [])
-                    if trajectory:
-                        self._traj_data = trajectory
-                        if not hasattr(self, "_traj_index"):
-                            self._traj_index = 0
+                    if trajectory and not hasattr(self, "_traj_groups"):
+                        # Group events by timestamp_s
+                        from itertools import groupby
+                        groups = []
+                        for _, g in groupby(trajectory, key=lambda e: e.get("timestamp_s", 0)):
+                            groups.append(list(g))
+                        self._traj_groups = groups
+                        self._traj_group_idx = 0
                         self._traj_last_wall = time.monotonic()
-                        # Derive step interval from trajectory timestamps
-                        if len(trajectory) >= 2:
-                            t0 = trajectory[0].get("timestamp_s", 0)
-                            t1 = trajectory[1].get("timestamp_s", 0)
-                            self._traj_step_s = max(1.0, t1 - t0)
-                        else:
-                            self._traj_step_s = 10.0
-                        # Publish current position immediately
-                        idx = self._traj_index % len(trajectory)
-                        self._process_batch([trajectory[idx]], pub_sock, conv_sock, ome_pub_sock)
-                        self._traj_index += 1
+                        # Step interval from first two Snapshot-containing groups
+                        snap_ts = [g[0].get("timestamp_s", 0) for g in groups
+                                   if any(e.get("event_type") == "Snapshot" for e in g)]
+                        self._traj_step_s = max(1.0, snap_ts[1] - snap_ts[0]) if len(snap_ts) >= 2 else 10.0
+                        log.info(f"Trajectory loaded: {len(groups)} groups, step={self._traj_step_s:.0f}s")
                     continue
 
                 if topic == b"WindowReady":

@@ -78,9 +78,12 @@ def main() -> None:
             log.info("Not running in K8s — wiring watcher disabled")
             return
 
-        from nodalarc.platform import get_platform_config
+        try:
+            from nodalarc.platform import get_platform_config
 
-        ns = get_platform_config().kubernetes_namespace
+            ns = get_platform_config().kubernetes_namespace
+        except RuntimeError:
+            ns = "nodalarc"  # Default namespace if platform config not initialized
         v1 = kubernetes.client.CoreV1Api()
         last_generation = 0
 

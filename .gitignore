@@ -119,3 +119,4 @@ node_modules/
 # Generated proto stubs
 nodalpath/proto/forwarding_pb2.py
 nodalpath/proto/forwarding_pb2_grpc.py
+tests/integration/e2e-evidence/

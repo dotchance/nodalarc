@@ -358,6 +358,24 @@ def write_wiring_manifest(
     return len(isl_pairs)
 
 
+def restart_platform_pods(namespace: str) -> None:
+    """Restart OME, Scheduler, and VS-API pods to pick up new session ConfigMaps.
+
+    Deletes pods — the Deployments recreate them automatically.
+    """
+    kubernetes.config.load_incluster_config()
+    v1 = kubernetes.client.CoreV1Api()
+
+    for label in ["app=nodalarc-ome", "app=nodalarc-scheduler", "app=nodalarc-vs-api"]:
+        pods = v1.list_namespaced_pod(namespace, label_selector=label)
+        for pod in pods.items:
+            try:
+                v1.delete_namespaced_pod(pod.metadata.name, namespace)
+                log.info(f"Restarted {pod.metadata.name}")
+            except kubernetes.client.rest.ApiException:
+                pass
+
+
 def teardown_session(namespace: str) -> None:
     """Clean up session ConfigMaps (pods are garbage-collected via ownerReferences)."""
     kubernetes.config.load_incluster_config()

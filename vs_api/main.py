@@ -670,6 +670,11 @@ async def _zmq_subscriber() -> None:
                                             "reason": "snapshot",
                                         }
                                     )
+                        # Advance sim_time AFTER position extraction — _update_position
+                        # overwrites sim_time with the OME value, so we must set wall
+                        # clock last to ensure the VF sees a changing sim_time.
+                        with _state_lock:
+                            _state["sim_time"] = datetime.now(UTC).isoformat()
 
                 except Exception as exc:
                     log.warning(f"ZMQ message processing error: {exc}")

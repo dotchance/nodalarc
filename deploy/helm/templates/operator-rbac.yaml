@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nodalarc-operator
+  namespace: {{ .Values.namespace }}
+---
+# ClusterRole needed for kopf bootstrapping (CRD discovery, namespace listing)
+# and for watching ConstellationSpec CRDs across the namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nodalarc-operator
+rules:
+  # kopf needs to list CRDs at startup for handler registration
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  # kopf needs namespace listing for its reactor
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  # ConstellationSpec CRD operations
+  - apiGroups: ["nodalarc.io"]
+    resources: ["constellationspecs"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["nodalarc.io"]
+    resources: ["constellationspecs/status"]
+    verbs: ["update", "patch"]
+  # kopf stores its state in events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+  # Pod and ConfigMap management (scoped to nodalarc namespace via RoleBinding below)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "update", "delete", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nodalarc-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nodalarc-operator
+subjects:
+  - kind: ServiceAccount
+    name: nodalarc-operator
+    namespace: {{ .Values.namespace }}

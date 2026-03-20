@@ -1,14 +1,17 @@
 #!/bin/bash
 set -e
 
-# Wait for configs to be copied by na-deploy.
-# na-deploy touches /etc/frr/.config-ready after kubectl cp completes.
+# Wait for FRR config to be available.
+# Two delivery mechanisms (backwards compatible):
+#   1. ConfigMap volume mount (M7 Operator): frr.conf present at pod start
+#   2. Legacy kubectl cp + sentinel: na-deploy touches .config-ready after copy
 READY_FILE="/etc/frr/.config-ready"
+CONFIG_FILE="/etc/frr/frr.conf"
 TIMEOUT=900
 WAITED=0
 
-echo "Waiting for config (sentinel: $READY_FILE)..."
-while [ ! -f "$READY_FILE" ]; do
+echo "Waiting for config (ConfigMap: $CONFIG_FILE or sentinel: $READY_FILE)..."
+while [ ! -f "$CONFIG_FILE" ] && [ ! -f "$READY_FILE" ]; do
     sleep 1
     WAITED=$((WAITED + 1))
     if [ "$WAITED" -ge "$TIMEOUT" ]; then

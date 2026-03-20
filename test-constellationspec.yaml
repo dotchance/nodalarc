@@ -1,0 +1,15 @@
+apiVersion: nodalarc.io/v1alpha1
+kind: ConstellationSpec
+metadata:
+  name: current-session
+  namespace: nodalarc
+spec:
+  constellation: "starlink-early-44"
+  groundStations: "global"
+  routing:
+    protocol: "isis"
+    extensions: ["sr"]
+    areaStrategy: "flat"
+  time:
+    compression: 1
+    stepSeconds: 1

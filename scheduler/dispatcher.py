@@ -778,6 +778,41 @@ class Dispatcher:
                     )
                 )
 
+        # Detect links to bring down: active in Scheduler but not visible+scheduled in snapshot
+        snapshot_active: set[tuple[str, str]] = set()
+        for pair_key, link in {**isl_state, **gs_state}.items():
+            parts = pair_key.split(":")
+            if len(parts) != 2:
+                continue
+            node_a, node_b = min(parts[0], parts[1]), max(parts[0], parts[1])
+            if link.get("visible") and link.get("scheduled"):
+                snapshot_active.add((node_a, node_b))
+
+        new_downs: list[VisibilityEvent] = []
+        for pair in list(self._active_links):
+            if pair not in snapshot_active:
+                new_downs.append(
+                    VisibilityEvent(
+                        sim_time=sim_dt,
+                        node_a=pair[0],
+                        node_b=pair[1],
+                        visible=False,
+                        scheduled=False,
+                        range_km=0.0,
+                        elevation_deg=None,
+                        terminal_type="optical",
+                    )
+                )
+
+        if new_downs:
+            log.info(
+                "FullStateSnapshot: %d links to bring down at %s",
+                len(new_downs),
+                sim_time,
+            )
+            sim_time_iso = sim_time if isinstance(sim_time, str) else datetime.now(UTC).isoformat()
+            await self._dispatch_downs(new_downs, sim_time_iso, to_pub)
+
         if new_ups:
             log.info(
                 "FullStateSnapshot: %d new links to bring up at %s",

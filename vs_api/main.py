@@ -1247,8 +1247,6 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
     MPLS forwarding state, then follows the label chain hop-by-hop
     from src to dst.  Returns None if gRPC is unavailable.
     """
-    import json
-    import socket as sock_mod
 
     import grpc
     from nodalarc.platform import get_platform_config
@@ -1266,34 +1264,18 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
 
     def get_pod_ip(node_id: str) -> str | None:
         try:
-            s = sock_mod.socket(sock_mod.AF_UNIX, sock_mod.SOCK_STREAM)
-            s.settimeout(5)
-            s.connect(deploy_socket)
-            req = (
-                json.dumps(
-                    {
-                        "action": "get_pod_ip",
-                        "pod": node_id.lower(),
-                        "namespace": cfg.kubernetes_namespace,
-                    }
-                )
-                + "\n"
-            )
-            s.sendall(req.encode())
-            buf = b""
-            while True:
-                chunk = s.recv(4096)
-                if not chunk:
-                    return None
-                buf += chunk
-                if b"\n" in buf:
-                    resp = json.loads(buf[: buf.index(b"\n")])
-                    return resp.get("pod_ip") if resp.get("ok") else None
-            return None
+            import kubernetes.client
+            import kubernetes.config
+
+            try:
+                kubernetes.config.load_incluster_config()
+            except kubernetes.config.ConfigException:
+                kubernetes.config.load_kube_config()
+            v1 = kubernetes.client.CoreV1Api()
+            pod = v1.read_namespaced_pod(node_id.lower(), cfg.kubernetes_namespace)
+            return pod.status.pod_ip if pod.status else None
         except Exception:
             return None
-        finally:
-            s.close()
 
     def query_fwd_table(pod_ip: str) -> tuple[list, list] | None:
         """Query a node's live forwarding table via gRPC. Returns (lsr, ler) or None."""

@@ -17,9 +17,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
-import json
 import logging
-import socket
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -55,7 +53,7 @@ class ContinuousTracer:
         get_sim_time: Callable[[], str],
         on_path_change: Callable[[str, str, list[str], list[str]], None] | None = None,
     ) -> None:
-        self._deploy_socket = deploy_socket
+        self._deploy_socket = deploy_socket  # Legacy — no longer used (M7)
         self._node_registry = node_registry
         self._interface_map = interface_map
         self._pid_map = pid_map
@@ -224,18 +222,41 @@ class ContinuousTracer:
                 await asyncio.sleep(self._config.trace_interval_seconds)
 
     def _run_tracepath(self, pod: str, target: str) -> dict:
-        """Run tracepath via deploy daemon.
+        """Run tracepath via kubernetes client exec.
 
         Uses tracepath -n -b. No source binding needed — once the IGP
         converges, FRR routes are more specific than the K3s default route.
         """
-        return self._daemon_request(
-            {
-                "action": "tracepath",
-                "pod": pod,
-                "target": target,
-            }
-        )
+        import kubernetes.client
+        import kubernetes.config
+        import kubernetes.stream
+
+        try:
+            kubernetes.config.load_incluster_config()
+        except kubernetes.config.ConfigException:
+            kubernetes.config.load_kube_config()
+
+        v1 = kubernetes.client.CoreV1Api()
+        ns = self._config.kubernetes_namespace
+
+        try:
+            resp = kubernetes.stream.stream(
+                v1.connect_get_namespaced_pod_exec,
+                pod,
+                ns,
+                container="frr",
+                command=["tracepath", "-n", "-b", target],
+                stderr=True,
+                stdout=True,
+                stdin=False,
+                tty=False,
+                _preload_content=False,
+            )
+            stdout = resp.read_stdout(timeout=30)
+            stderr = resp.read_stderr(timeout=1)
+            return {"ok": True, "stdout": stdout or "", "stderr": stderr or ""}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "stdout": "", "stderr": ""}
 
     def _trace_tracepath(self, sim_time: str, now: str) -> LiveTraceResult | None:
         """Run forward + reverse tracepath concurrently, then enrich."""
@@ -289,18 +310,12 @@ class ContinuousTracer:
         rev_links = self._build_links(rev_hops)
 
         all_links = fwd_links + rev_links
-        all_queries = self._build_delay_queries(all_links)
-        if all_queries:
-            delay_resp = self._daemon_request(
-                {
-                    "action": "read_link_delays",
-                    "queries": all_queries,
-                }
-            )
-            delays = delay_resp.get("delays", [])
-            self._apply_delays(all_links, delays)
-            fwd_links = all_links[: len(fwd_links)]
-            rev_links = all_links[len(fwd_links) :]
+        # TODO post-M7: add ReadLinkDelays to Node Agent ZMQ
+        # protocol and call it here instead of returning 0.0
+        # For now, skip delay enrichment — path/hop info is correct,
+        # only per-link latency values are absent.
+        fwd_links = all_links[: len(fwd_links)]
+        rev_links = all_links[len(fwd_links) :]
 
         # Path validity — spec line 258: path_valid_until is ISO 8601 sim_time
         path_valid_until: str | None = None
@@ -558,32 +573,3 @@ class ContinuousTracer:
                     )
                 )
         return links
-
-    def _daemon_request(self, req: dict) -> dict:
-        """Send a request to the deploy daemon via Unix socket."""
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(90.0)
-        try:
-            sock.connect(self._deploy_socket)
-            sock.sendall((json.dumps(req) + "\n").encode())
-            buf = b""
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-                if b"\n" in buf:
-                    return json.loads(buf[: buf.index(b"\n")])
-            return {"ok": False, "error": "No response from deploy daemon"}
-        except FileNotFoundError:
-            return {"ok": False, "error": "Deploy daemon not running"}
-        except ConnectionRefusedError:
-            return {"ok": False, "error": "Deploy daemon connection refused"}
-        except PermissionError:
-            return {"ok": False, "error": "Deploy daemon socket permission denied"}
-        except TimeoutError:
-            return {"ok": False, "error": "Daemon request timed out"}
-        except OSError as exc:
-            return {"ok": False, "error": f"Daemon socket error: {exc}"}
-        finally:
-            sock.close()

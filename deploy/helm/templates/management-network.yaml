@@ -15,10 +15,16 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    verbs: ["create", "get"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "create", "update", "patch"]
+  - apiGroups: ["nodalarc.io"]
+    resources: ["constellationspecs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["nodalarc.io"]
+    resources: ["constellationspecs/status"]
+    verbs: ["get"]
   # Note: nodes is cluster-scoped — see ClusterRole below
 ---
 apiVersion: rbac.authorization.k8s.io/v1

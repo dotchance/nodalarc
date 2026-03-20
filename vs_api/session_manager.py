@@ -14,131 +14,14 @@ import json
 import logging
 import os
 import signal
-import socket
 from collections.abc import Callable
 from pathlib import Path
 
 import yaml
 from nodalarc.models.session import SessionConfig
-
-log = logging.getLogger(__name__)
-
-import contextlib
-
 from nodalarc.platform import get_platform_config
 
-
-def _daemon_request(req: dict, timeout: float | None = None) -> dict:
-    """Send a request to the deploy daemon and receive the response."""
-    if timeout is None:
-        timeout = get_platform_config().pod_termination_timeout_seconds
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    deploy_socket = get_platform_config().deploy_daemon_unix_socket_path
-    try:
-        sock.connect(deploy_socket)
-        data = json.dumps(req) + "\n"
-        sock.sendall(data.encode())
-        buf = b""
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
-            if b"\n" in buf:
-                line = buf[: buf.index(b"\n")]
-                return json.loads(line)
-        return {"ok": False, "error": "No response from deploy daemon"}
-    except FileNotFoundError:
-        return {
-            "ok": False,
-            "error": f"Deploy daemon not running (socket {deploy_socket} not found)",
-        }
-    except ConnectionRefusedError:
-        return {"ok": False, "error": "Deploy daemon connection refused"}
-    except TimeoutError:
-        return {"ok": False, "error": "Deploy daemon request timed out"}
-    finally:
-        sock.close()
-
-
-def _daemon_deploy_streaming(
-    session_path: str, status_callback: Callable[[str], None] | None = None
-) -> dict:
-    """Run deploy via daemon with streaming progress updates."""
-    cfg = get_platform_config()
-    deploy_socket = cfg.deploy_daemon_unix_socket_path
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(cfg.deploy_daemon_accept_timeout_seconds)
-    try:
-        sock.connect(deploy_socket)
-        req = json.dumps({"action": "deploy_streaming", "session": session_path}) + "\n"
-        sock.sendall(req.encode())
-
-        buf = b""
-        last_lines: list[str] = []
-        veth_count = 0
-        veth_total = 0
-        while True:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
-            while b"\n" in buf:
-                idx = buf.index(b"\n")
-                line_bytes = buf[:idx]
-                buf = buf[idx + 1 :]
-                msg = json.loads(line_bytes)
-
-                if msg.get("type") == "progress":
-                    line = msg.get("line", "")
-                    if line:
-                        last_lines.append(line)
-                        if len(last_lines) > 20:
-                            last_lines.pop(0)
-                        # Extract status from log lines
-                        if status_callback:
-                            if " Step " in line:
-                                i = line.index(" Step ")
-                                status_callback(line[i + 1 :])
-                                veth_count = 0
-                                veth_total = 0
-                            elif "Waiting for" in line:
-                                i = line.index("Waiting for")
-                                status_callback(line[i:])
-                            elif "Helm install" in line:
-                                status_callback("Helm install running")
-                            elif "All " in line and " pods Running" in line:
-                                status_callback(line[line.index("All ") :])
-                            elif "veth pairs to create" in line:
-                                with contextlib.suppress(ValueError, IndexError):
-                                    veth_total = int(
-                                        line.split("veth pairs")[0].strip().split()[-1]
-                                    )
-                            elif "Created " in line and " veth" in line:
-                                veth_count += 1
-                                if veth_total > 0:
-                                    display_count = min(veth_count, veth_total)
-                                    status_callback(
-                                        f"Creating connections {display_count} of {veth_total}"
-                                    )
-                                else:
-                                    status_callback(f"Creating connections ({veth_count})")
-                elif "ok" in msg:
-                    return msg
-
-        return {"ok": False, "error": "Connection closed without final response"}
-    except FileNotFoundError:
-        return {
-            "ok": False,
-            "error": f"Deploy daemon not running (socket {deploy_socket} not found)",
-        }
-    except ConnectionRefusedError:
-        return {"ok": False, "error": "Deploy daemon connection refused"}
-    except TimeoutError:
-        return {"ok": False, "error": "Deploy daemon request timed out"}
-    finally:
-        sock.close()
+log = logging.getLogger(__name__)
 
 
 # Maximum number of old session directories to keep

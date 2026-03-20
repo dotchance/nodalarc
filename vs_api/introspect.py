@@ -60,21 +60,19 @@ def run_vtysh(node_id: str, command: str) -> dict:
     v1 = kubernetes.client.CoreV1Api()
 
     try:
-        resp = kubernetes.stream.stream(
+        stdout = kubernetes.stream.stream(
             v1.connect_get_namespaced_pod_exec,
             pod_name,
             namespace,
             container="frr",
             command=["vtysh", "-c", command],
-            stderr=True,
+            stderr=False,
             stdout=True,
             stdin=False,
             tty=False,
-            _preload_content=False,
         )
-        stdout = resp.read_stdout(timeout=cfg.vs_api_introspect_command_timeout_seconds)
-        stderr = resp.read_stderr(timeout=1)
-        exit_code = resp.returncode if hasattr(resp, "returncode") else 0
+        stderr = ""
+        exit_code = 0
     except kubernetes.client.rest.ApiException as e:
         return {
             "node_id": node_id,

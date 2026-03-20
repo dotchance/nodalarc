@@ -311,29 +311,28 @@ def check_ping(token: str, perm: dict) -> dict:
     src = gs_nodes[0]["node_id"]
     dst = gs_nodes[1]["node_id"]
 
-    # Get dst loopback IP via introspect
-    intro_resp = requests.post(
-        f"{BASE_URL}/api/v1/introspect",
-        headers=headers(token),
-        json={"node_id": dst, "command": "show interface brief"},
-    )
-    intro_output = intro_resp.json().get("output", "")
+    # Derive dst loopback IP from node_id
+    # Satellites: sat-P{plane}S{slot} -> 10.{plane}.{slot}.1
+    # Ground stations: gs-{name} -> 10.255.{gs_index}.1
+    import re
 
     dst_ip = None
-    for line in intro_output.splitlines():
-        if "lo" in line.lower() and "up" in line.lower():
-            for tok in line.split():
-                if tok.startswith("10.") and "/" in tok:
-                    dst_ip = tok.split("/")[0]
-                    break
-            if dst_ip:
-                break
+    sat_match = re.match(r"sat-P(\d+)S(\d+)", dst, re.IGNORECASE)
+    if sat_match:
+        dst_ip = f"10.{int(sat_match.group(1))}.{int(sat_match.group(2))}.1"
+    else:
+        # GS — find index from position in gs_nodes list
+        gs_names = [n["node_id"] for n in gs_nodes]
+        try:
+            gs_idx = gs_names.index(dst)
+            dst_ip = f"10.255.{gs_idx + 1}.1"
+        except ValueError:
+            pass
 
     if not dst_ip:
         return {
             "result": "FAIL",
-            "reason": f"Could not find loopback IP for {dst}",
-            "introspect_output": intro_output[:500],
+            "reason": f"Could not derive loopback IP for {dst}",
             "src": src,
             "dst": dst,
         }

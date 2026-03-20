@@ -1,0 +1,124 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: constellationspecs.nodalarc.io
+spec:
+  group: nodalarc.io
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - constellation
+                - groundStations
+                - routing
+              properties:
+                constellation:
+                  type: string
+                  description: Constellation preset name or config path.
+                groundStations:
+                  type: string
+                  description: Ground station set name or config path.
+                routing:
+                  type: object
+                  required:
+                    - protocol
+                  properties:
+                    protocol:
+                      type: string
+                      enum:
+                        - isis
+                        - ospf
+                        - nodalpath
+                    extensions:
+                      type: array
+                      items:
+                        type: string
+                      default: []
+                    areaStrategy:
+                      type: string
+                      default: flat
+                    stack:
+                      type: string
+                      description: Legacy stack path — bypass protocol resolution.
+                    configOverrides:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                      default: {}
+                time:
+                  type: object
+                  properties:
+                    compression:
+                      type: integer
+                      default: 1
+                    startTime:
+                      type: string
+                    stepSeconds:
+                      type: integer
+                      default: 1
+                  default: {}
+                satelliteType:
+                  type: string
+                  default: ""
+                mi:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                  default: {}
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Rendering
+                    - Creating
+                    - Wiring
+                    - Ready
+                    - Error
+                    - Terminating
+                message:
+                  type: string
+                sessionId:
+                  type: string
+                podCount:
+                  type: integer
+                readyPods:
+                  type: integer
+                wiredPods:
+                  type: integer
+                lastTransitionTime:
+                  type: string
+                observedGeneration:
+                  type: integer
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Ready
+          type: string
+          jsonPath: .status.readyPods
+        - name: Pods
+          type: string
+          jsonPath: .status.podCount
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: constellationspecs
+    singular: constellationspec
+    kind: ConstellationSpec
+    shortNames:
+      - cs

@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodalarc-operator
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodalarc-operator
+  template:
+    metadata:
+      labels:
+        app: nodalarc-operator
+    spec:
+      serviceAccountName: nodalarc-operator
+      containers:
+        - name: operator
+          image: {{ .Values.images.operator | default "nodalarc/operator:latest" }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+              name: health
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            limits:
+              memory: 256Mi
+              cpu: 250m
+          volumeMounts:
+            - name: platform-config
+              mountPath: /etc/nodalarc/platform.yaml
+              subPath: platform.yaml
+      volumes:
+        - name: platform-config
+          configMap:
+            name: nodalarc-platform-config

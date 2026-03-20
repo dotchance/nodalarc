@@ -353,16 +353,22 @@ class Dispatcher:
         sim_time_iso: str,
         to_pub: zmq.asyncio.Socket,
     ) -> None:
-        """Phase A: BatchLinkDown to all agents concurrently."""
-        # Build per-agent request
+        """Phase A: BatchLinkDown to all agents concurrently.
+
+        Links are removed from _active_links ONLY after the Node Agent
+        confirms success. If BatchLinkDown fails, links stay in
+        _active_links — they are still up as far as we know.
+        """
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
+        # Pending removals: (pair -> (info, vis)) — committed only on success
+        pending: dict[tuple[str, str], tuple[ActiveLinkInfo, VisibilityEvent]] = {}
 
         for vis in events:
             pair = (vis.node_a, vis.node_b)
-            info = self._active_links.pop(pair, None)
+            info = self._active_links.get(pair)
             if info is None:
                 continue
-            self._last_latencies.pop(pair, None)
+            pending[pair] = (info, vis)
 
             is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
 
@@ -397,20 +403,6 @@ class Dispatcher:
                         )
                     )
 
-            # Publish LinkDown event on port 5561
-            now = datetime.now(UTC)
-            ifaces = self._interface_map.get(pair, ("", ""))
-            event = LinkDown(
-                sim_time=vis.sim_time,
-                wall_time=now,
-                node_a=vis.node_a,
-                node_b=vis.node_b,
-                interface_a=ifaces[0],
-                interface_b=ifaces[1],
-                reason="vis_lost",
-            )
-            to_pub.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
-
         # Send to all agents concurrently — simultaneity requirement
         loop = asyncio.get_running_loop()
         tasks = []
@@ -424,17 +416,46 @@ class Dispatcher:
             )
             tasks.append(loop.run_in_executor(None, stub.batch_link_down, req))
 
+        all_success = True
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for _i, result in enumerate(results):
                 if isinstance(result, Exception):
                     log.warning("BatchLinkDown failed for agent: %s", result)
+                    all_success = False
+                elif not result.success:
+                    log.warning("BatchLinkDown partial failure: %s", result.error_message[:200])
+                    all_success = False
                 else:
                     log.info(
                         "BatchLinkDown: %d downed in %.1fms",
                         result.interfaces_downed,
                         result.apply_time_ms,
                     )
+
+        # Commit removals and publish ZMQ only on success.
+        # On failure, links stay in _active_links — still up as far as we know.
+        if all_success:
+            for pair, (_info, vis) in pending.items():
+                self._active_links.pop(pair, None)
+                self._last_latencies.pop(pair, None)
+                ifaces = self._interface_map.get(pair, ("", ""))
+                now = datetime.now(UTC)
+                event = LinkDown(
+                    sim_time=vis.sim_time,
+                    wall_time=now,
+                    node_a=vis.node_a,
+                    node_b=vis.node_b,
+                    interface_a=ifaces[0],
+                    interface_b=ifaces[1],
+                    reason="vis_lost",
+                )
+                to_pub.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
+        else:
+            log.warning(
+                "BatchLinkDown failed — %d links remain in active_links (still up)",
+                len(pending),
+            )
 
     async def _dispatch_ups(
         self,
@@ -445,8 +466,14 @@ class Dispatcher:
         """Phase B: BatchLinkUp to all agents concurrently.
 
         Called ONLY after all Phase A (down) ACKs are received.
+
+        Links are added to _active_links ONLY after the Node Agent
+        confirms success. If BatchLinkUp fails, the links stay out of
+        _active_links so the next FullStateSnapshot will retry them.
         """
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
+        # Pending links: added to _active_links only on success
+        pending: dict[tuple[str, str], tuple[ActiveLinkInfo, VisibilityEvent]] = {}
 
         for vis in events:
             pair = (vis.node_a, vis.node_b)
@@ -459,13 +486,15 @@ class Dispatcher:
             if latency is None:
                 latency = 3.0
 
-            self._active_links[pair] = ActiveLinkInfo(
-                interface_a=ifaces[0],
-                interface_b=ifaces[1],
-                latency_ms=latency,
-                bandwidth_mbps=bandwidth,
+            pending[pair] = (
+                ActiveLinkInfo(
+                    interface_a=ifaces[0],
+                    interface_b=ifaces[1],
+                    latency_ms=latency,
+                    bandwidth_mbps=bandwidth,
+                ),
+                vis,
             )
-            self._last_latencies[pair] = latency
 
             is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
 
@@ -504,21 +533,6 @@ class Dispatcher:
                         )
                     )
 
-            # Publish LinkUp on port 5561
-            now = datetime.now(UTC)
-            event = LinkUp(
-                sim_time=vis.sim_time,
-                wall_time=now,
-                node_a=vis.node_a,
-                node_b=vis.node_b,
-                interface_a=ifaces[0],
-                interface_b=ifaces[1],
-                latency_ms=latency,
-                bandwidth_mbps=bandwidth,
-                reason="vis_gained",
-            )
-            to_pub.send(encode_message(TOPIC_LINK_UP, event.model_dump_json().encode()))
-
         # Send to all agents concurrently
         loop = asyncio.get_running_loop()
         tasks = []
@@ -532,17 +546,54 @@ class Dispatcher:
             )
             tasks.append(loop.run_in_executor(None, stub.batch_link_up, req))
 
+        all_success = True
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for _i, result in enumerate(results):
                 if isinstance(result, Exception):
                     log.warning("BatchLinkUp failed for agent: %s", result)
+                    all_success = False
+                elif not result.success:
+                    log.warning(
+                        "BatchLinkUp partial failure: %d/%d upped: %s",
+                        result.interfaces_upped,
+                        result.interfaces_upped + len(result.error_message.split(";")),
+                        result.error_message[:200],
+                    )
+                    all_success = False
                 else:
                     log.info(
                         "BatchLinkUp: %d upped in %.1fms",
                         result.interfaces_upped,
                         result.apply_time_ms,
                     )
+
+        # Commit to _active_links and publish ZMQ only on success.
+        # On failure, links stay out of _active_links so the next
+        # FullStateSnapshot retries them.
+        if all_success:
+            for pair, (info, vis) in pending.items():
+                self._active_links[pair] = info
+                self._last_latencies[pair] = info.latency_ms
+                ifaces = self._interface_map.get(pair, ("", ""))
+                now = datetime.now(UTC)
+                event = LinkUp(
+                    sim_time=vis.sim_time,
+                    wall_time=now,
+                    node_a=vis.node_a,
+                    node_b=vis.node_b,
+                    interface_a=ifaces[0],
+                    interface_b=ifaces[1],
+                    latency_ms=info.latency_ms,
+                    bandwidth_mbps=info.bandwidth_mbps,
+                    reason="vis_gained",
+                )
+                to_pub.send(encode_message(TOPIC_LINK_UP, event.model_dump_json().encode()))
+        else:
+            log.warning(
+                "BatchLinkUp failed — %d links NOT added to active_links (will retry on next snapshot)",
+                len(pending),
+            )
 
     # ------------------------------------------------------------------
     # Latency updates

@@ -11,6 +11,7 @@ import kubernetes
 from nodalarc_operator.session_deployer import (
     check_pods_ready,
     deploy_session,
+    restart_platform_pods,
     teardown_session,
     write_pod_ips_configmap,
     write_wiring_manifest,
@@ -94,6 +95,11 @@ async def on_create(spec, name, namespace, meta, **_):
         raise kopf.PermanentError(f"Deploy failed: {exc}") from exc
 
     _update_status(name, namespace, result)
+
+    # Restart platform pods to pick up new session ConfigMaps
+    # (OME, Scheduler, VS-API need the session config to operate)
+    await loop.run_in_executor(None, restart_platform_pods, namespace)
+    log.info("Restarted platform pods for new session")
 
     # Wait for pods to reach Running
     if result.get("phase") == "Creating":

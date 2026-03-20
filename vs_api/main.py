@@ -2085,31 +2085,39 @@ def main() -> None:
         _session_file = args.session
 
         # Load session metadata for snapshot enrichment
-        session_data = yaml.safe_load(Path(args.session).read_text())
-        session = SessionConfig.model_validate(session_data)
-        if session.routing.stack is not None:
-            _routing_stack = Path(session.routing.stack).name
+        # Handle missing/empty ConfigMap mount (Operator creates session later)
+        session_path = Path(args.session)
+        if not session_path.is_file():
+            log.info(f"Session config not found at {args.session} — starting in idle mode")
+            session_data = None
         else:
-            ext_str = (
-                "-".join(session.routing.extensions) if session.routing.extensions else "plain"
-            )
-            _routing_stack = f"{session.routing.protocol}-{ext_str}"
-        _constellation_name = Path(session.constellation).stem
-        _gs_elevation_map = _load_gs_elevation_map(session)
-        _beam_falloff_exponent = _load_beam_falloff_exponent(session)
-        # Mark session active. Use the original session file path from the
-        # session-state ConfigMap (if mounted) so it matches the sessions list.
-        _active_path = args.session
-        try:
-            _state_mount = Path("/etc/nodalarc/state/session-state.json")
-            if _state_mount.exists():
-                _ss = json.loads(_state_mount.read_text())
-                if _ss.get("session_config"):
-                    _active_path = _ss["session_config"]
-        except Exception:
-            pass
-        _session_manager.set_active(_active_path)
-        _session_manager._status = "ready"
+            session_data = yaml.safe_load(session_path.read_text())
+        if session_data:
+            session = SessionConfig.model_validate(session_data)
+            if session.routing.stack is not None:
+                _routing_stack = Path(session.routing.stack).name
+            else:
+                ext_str = (
+                    "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+                )
+                _routing_stack = f"{session.routing.protocol}-{ext_str}"
+            _constellation_name = Path(session.constellation).stem
+            _gs_elevation_map = _load_gs_elevation_map(session)
+            _beam_falloff_exponent = _load_beam_falloff_exponent(session)
+            # Mark session active
+            _active_path = args.session
+            try:
+                _state_mount = Path("/etc/nodalarc/state/session-state.json")
+                if _state_mount.exists():
+                    _ss = json.loads(_state_mount.read_text())
+                    if _ss.get("session_config"):
+                        _active_path = _ss["session_config"]
+            except Exception:
+                pass
+            _session_manager.set_active(_active_path)
+            _session_manager._status = "ready"
+        else:
+            log.info("No session loaded — VS-API starting in idle mode")
 
         # Ensure tables exist
         conn = sqlite3.connect(args.db)

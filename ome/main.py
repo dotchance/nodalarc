@@ -188,8 +188,12 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
     """
     _start_health_server()
 
-    # Load session config (same as run())
-    data = yaml.safe_load(Path(session_path).read_text())
+    # Wait for session config to appear (Operator creates it after CRD apply)
+    session_file = Path(session_path)
+    while not session_file.is_file():
+        logging.info(f"Waiting for session config at {session_path}...")
+        time.sleep(5)
+    data = yaml.safe_load(session_file.read_text())
     session = SessionConfig.model_validate(data)
 
     constellation_config = load_constellation(session.constellation)

@@ -190,21 +190,95 @@ async def on_resume(spec, name, namespace, meta, status, **_):
     phase = status.get("phase", "")
     log.info(f"Resuming ConstellationSpec '{name}', current phase: {phase}")
 
-    if phase in ("Ready", "Wiring"):
+    if phase == "Wiring":
+        # Check if wiring completed while we were away
+        loop = asyncio.get_running_loop()
+        total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
+        kubernetes.config.load_incluster_config()
+        v1 = kubernetes.client.CoreV1Api()
+        try:
+            cm = await loop.run_in_executor(
+                None,
+                v1.read_namespaced_config_map,
+                "nodalarc-wiring-status",
+                namespace,
+            )
+            wired_count = len(cm.data) if cm.data else 0
+            if wired_count >= total:
+                _update_status(
+                    name,
+                    namespace,
+                    {
+                        "phase": "Ready",
+                        "readyPods": ready,
+                        "podCount": total,
+                        "wiredPods": wired_count,
+                        "message": f"Session ready: {total} pods, {wired_count} wired.",
+                    },
+                )
+                log.info(f"Operator resume: advanced Wiring → Ready ({wired_count} wired)")
+                return
+        except kubernetes.client.rest.ApiException:
+            pass
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Wiring",
+                "readyPods": ready,
+                "podCount": total,
+                "message": f"{ready}/{total} pods running, wiring in progress",
+            },
+        )
+        log.info(f"Operator resume: {ready}/{total} pods, still Wiring")
+    elif phase == "Ready":
         loop = asyncio.get_running_loop()
         total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
         _update_status(
             name,
             namespace,
             {
-                "phase": phase,
+                "phase": "Ready",
                 "readyPods": ready,
                 "podCount": total,
-                "message": f"{ready}/{total} pods running after Operator restart",
+                "message": f"{ready}/{total} pods running",
             },
         )
-        log.info(f"Operator resume: {ready}/{total} pods running, phase={phase}")
+        log.info(f"Operator resume: {ready}/{total} pods running, phase=Ready")
     elif phase == "Error":
         log.info(f"Operator resume: session in Error state: {status.get('message', '')}")
     elif not phase:
         log.info("Operator resume: no phase set, session may need re-deployment")
+
+
+@kopf.timer("constellationspecs", group="nodalarc.io", interval=10.0, idle=10)
+async def wiring_check(name, namespace, status, **_):
+    """Periodically check if wiring completed and advance Wiring → Ready."""
+    phase = status.get("phase", "")
+    if phase != "Wiring":
+        return
+
+    loop = asyncio.get_running_loop()
+    kubernetes.config.load_incluster_config()
+    v1 = kubernetes.client.CoreV1Api()
+    try:
+        cm = await loop.run_in_executor(
+            None, v1.read_namespaced_config_map, "nodalarc-wiring-status", namespace
+        )
+        wired_count = len(cm.data) if cm.data else 0
+        total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
+        if wired_count >= total and total > 0:
+            _update_status(
+                name,
+                namespace,
+                {
+                    "phase": "Ready",
+                    "readyPods": ready,
+                    "podCount": total,
+                    "wiredPods": wired_count,
+                    "message": f"Session ready: {total} pods, {wired_count} wired.",
+                },
+            )
+            log.info(f"Timer: advanced Wiring → Ready ({wired_count} wired)")
+    except kubernetes.client.rest.ApiException:
+        pass  # Wiring status not yet written

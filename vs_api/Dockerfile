@@ -15,7 +15,8 @@ WORKDIR /app
 # Install Python dependencies
 RUN pip install --no-cache-dir \
     pydantic>=2.0 pyzmq pyyaml fastapi uvicorn httpx>=0.28.1 \
-    websockets>=16.0 grpcio>=1.74 protobuf>=6.31.1 numpy
+    websockets>=16.0 grpcio>=1.74 protobuf>=6.31.1 numpy \
+    kubernetes
 
 # Add lib/ to Python path so nodalarc package is importable
 ENV PYTHONPATH=/app/lib:/app

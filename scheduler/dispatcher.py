@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from datetime import UTC, datetime
 
 import zmq
@@ -172,6 +173,8 @@ class Dispatcher:
 
         # SUB to OME events
         ome_sub = ctx.socket(zmq.SUB)
+        ome_sub.setsockopt(zmq.RECONNECT_IVL, 1000)
+        ome_sub.setsockopt(zmq.RECONNECT_IVL_MAX, 10000)
         ome_sub.connect(self._ome_endpoint)
         ome_sub.setsockopt(zmq.SUBSCRIBE, b"VisibilityEvent")
         ome_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
@@ -207,6 +210,7 @@ class Dispatcher:
 
         poller = zmq.asyncio.Poller()
         poller.register(ome_sub, zmq.POLLIN)
+        last_ome_msg_time = time.monotonic()
 
         try:
             while self._running:
@@ -217,6 +221,17 @@ class Dispatcher:
                         await self._dispatch_batch(pending_vis, pending_snaps, to_pub)
                         pending_vis.clear()
                         pending_snaps.clear()
+                    # Watchdog: if no OME messages for 15s, re-run R-OME-008 catch-up
+                    if time.monotonic() - last_ome_msg_time > 15.0:
+                        log.warning(
+                            "No OME messages for 15s — forcing reconnect + R-OME-008 catch-up"
+                        )
+                        ome_sub.disconnect(self._ome_endpoint)
+                        ome_sub.connect(self._ome_endpoint)
+                        new_st = await self._ome_catchup(to_pub)
+                        if new_st:
+                            catchup_sim_time = new_st
+                        last_ome_msg_time = time.monotonic()
                     continue
 
                 # Drain all buffered messages
@@ -228,6 +243,7 @@ class Dispatcher:
 
                     topic, payload = decode_message(raw)
                     data = json.loads(payload)
+                    last_ome_msg_time = time.monotonic()
                     # Unwrap OME wrapped format
                     inner = (
                         data.get("data", data)
@@ -880,19 +896,24 @@ class Dispatcher:
 
         Returns the last sim_time from the catch-up (for deduplication),
         or None if catch-up failed.
+
+        The REQ/REP exchange runs in a thread pool to avoid blocking the
+        asyncio event loop (which would starve the SUB socket).
         """
-        try:
+
+        def _sync_catchup() -> dict | None:
+            """Synchronous REQ/REP to port 5568 — runs in thread pool."""
+            import zmq as _zmq
             from nodalarc.platform import get_platform_config
 
             catchup_addr = get_platform_config().ome_catchup_connect
-            import zmq as _zmq
-
-            sock = _zmq.Context().socket(_zmq.REQ)
-            sock.setsockopt(_zmq.RCVTIMEO, 30000)  # 30s — OME may be computing window 1
+            ctx = _zmq.Context()
+            sock = ctx.socket(_zmq.REQ)
+            sock.setsockopt(_zmq.RCVTIMEO, 20000)
             sock.setsockopt(_zmq.SNDTIMEO, 5000)
+            sock.setsockopt(_zmq.LINGER, 0)
             sock.connect(catchup_addr)
 
-            # Use checkpoint sim_time as since_sim_time if available
             checkpoint = self.read_checkpoint()
             req: dict = {"request": "current_window"}
             if checkpoint and checkpoint.get("sim_time"):
@@ -900,9 +921,17 @@ class Dispatcher:
 
             sock.send_json(req)
             resp = sock.recv_json()
-            events = resp.get("events", [])
             sock.close()
+            ctx.term()
+            return resp
 
+        try:
+            loop = asyncio.get_running_loop()
+            resp = await loop.run_in_executor(None, _sync_catchup)
+            if resp is None:
+                return None
+
+            events = resp.get("events", [])
             log.info(
                 "OME catch-up: %d events from window %d",
                 len(events),

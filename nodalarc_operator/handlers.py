@@ -13,6 +13,7 @@ from nodalarc_operator.session_deployer import (
     deploy_session,
     teardown_session,
     write_pod_ips_configmap,
+    write_wiring_manifest,
 )
 
 log = logging.getLogger(__name__)
@@ -67,8 +68,16 @@ async def on_create(spec, name, namespace, meta, **_):
         "blockOwnerDeletion": True,
     }
 
-    # Deploy session (blocking — run in executor to not block kopf)
+    # Wait for any old session pods to finish terminating
     loop = asyncio.get_running_loop()
+    for _ in range(60):
+        total, _ = await loop.run_in_executor(None, check_pods_ready, namespace)
+        if total == 0:
+            break
+        log.info(f"Waiting for {total} old session pods to terminate...")
+        await asyncio.sleep(2)
+
+    # Deploy session (blocking — run in executor to not block kopf)
     try:
         result = await loop.run_in_executor(
             None, deploy_session, dict(spec), name, namespace, owner_ref
@@ -109,7 +118,10 @@ async def on_create(spec, name, namespace, meta, **_):
         # Write pod-IPs ConfigMap (needs running pods)
         await loop.run_in_executor(None, write_pod_ips_configmap, namespace)
 
-        # For 7a: set Wiring phase (7b will advance to Ready)
+        # Write topology wiring manifest for Node Agent (7b)
+        await loop.run_in_executor(None, write_wiring_manifest, dict(spec), namespace, owner_ref)
+
+        # Set Wiring phase — Node Agent will read manifest and wire data plane
         _update_status(
             name,
             namespace,

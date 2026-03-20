@@ -35,9 +35,10 @@ RUN pip install --no-cache-dir \
 # Add lib/ to Python path so nodalarc package is importable
 ENV PYTHONPATH=/app/lib:/app
 
-# Copy shared library and node_agent module
+# Copy shared library, node_agent, and orchestrator (for wiring functions)
 COPY lib/ lib/
 COPY node_agent/ node_agent/
+COPY orchestrator/ orchestrator/
 
 # gRPC listen port
 EXPOSE 50100

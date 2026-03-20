@@ -14,7 +14,7 @@ from typing import Any
 import kubernetes
 import yaml
 from jinja2 import Environment, FileSystemLoader
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
+from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
 from nodalarc.models.session import SessionConfig
 from nodalarc.platform import get_platform_config
 from nodalarc.stack_resolver import resolve_stack
@@ -190,6 +190,156 @@ def deploy_session(
         "wiredPods": 0,
         "message": f"Created {created_pods} pods, waiting for Running",
     }
+
+
+def write_wiring_manifest(
+    spec: dict,
+    namespace: str,
+    owner_ref: dict | None = None,
+) -> int:
+    """Generate and write the topology wiring manifest ConfigMap.
+
+    Called after pods are Running. The Node Agent watches this ConfigMap
+    and executes all data plane wiring operations.
+
+    Returns the number of ISL links in the manifest.
+    """
+    import json as _json
+
+    kubernetes.config.load_incluster_config()
+    v1 = kubernetes.client.CoreV1Api()
+
+    # Re-parse spec to get constellation/addressing/neighbors
+    session_yaml = _spec_to_session_yaml(spec)
+    session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
+    constellation = load_constellation(session.constellation)
+    gs_file = load_ground_stations(session.ground_stations)
+    satellites = expand_constellation(constellation)
+    addressing = AddressingScheme(session.addressing)
+    neighbors = assign_isl_neighbors(constellation, addressing)
+    by_node = neighbors_by_node(neighbors)
+
+    resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
+    segment_routing = resolved.segment_routing
+    ttl_propagation = resolved.ttl_propagation or "pipe"
+
+    mpls_labels = str(get_platform_config().mpls_kernel_max_platform_labels)
+
+    # Build per-node wiring spec
+    nodes: dict[str, Any] = {}
+
+    # Satellites
+    for sat in satellites:
+        node_id = addressing.sat_id(sat.plane, sat.slot)
+        node_assignments = by_node.get(node_id, [])
+        isl_interfaces = []
+        for na in node_assignments:
+            isl_interfaces.append(
+                {
+                    "name": na.interface,
+                    "peer_node": na.peer_node_id,
+                    "peer_iface": "",  # filled below
+                }
+            )
+        # Resolve peer interfaces
+        for iface in isl_interfaces:
+            peer_assignments = by_node.get(iface["peer_node"], [])
+            for pa in peer_assignments:
+                if pa.peer_node_id == node_id:
+                    iface["peer_iface"] = pa.interface
+                    break
+
+        nodes[node_id] = {
+            "node_type": "satellite",
+            "plane": sat.plane,
+            "slot": sat.slot,
+            "sysctls": {
+                "net.ipv6.conf.all.forwarding": "1",
+                "net.mpls.platform_labels": mpls_labels,
+                "net.ipv4.conf.all.rp_filter": "0",
+                "net.ipv4.conf.default.rp_filter": "0",
+            },
+            "isl_interfaces": isl_interfaces,
+            "gnd_interfaces": [{"name": "gnd0"}],
+            "mpls_enable": True,
+            "segment_routing": segment_routing,
+            "ttl_propagation": ttl_propagation,
+            "mtu": 9000,
+            "remove_default_route": True,
+        }
+        if segment_routing:
+            ttl_val = "0" if ttl_propagation == "pipe" else "1"
+            nodes[node_id]["sysctls"]["net.mpls.ip_ttl_propagate"] = ttl_val
+
+    # Ground stations
+    ground_bridges: dict[str, dict] = {}
+    for i, station in enumerate(gs_file.stations):
+        gs_id = addressing.gs_id(station.name)
+
+        # Terrestrial prefix addresses
+        addrs = []
+        if station.terrestrial_prefixes:
+            for tp in station.terrestrial_prefixes:
+                addrs.append(tp.prefix)
+        elif gs_file.default_terrestrial_prefixes:
+            tpl = gs_file.default_terrestrial_prefixes
+            addrs.append(tpl.ipv4_template.format(gs_index=i))
+            addrs.append(tpl.ipv6_template.format(gs_index=i))
+
+        nodes[gs_id] = {
+            "node_type": "ground_station",
+            "gs_name": station.name,
+            "gs_index": i,
+            "sysctls": {
+                "net.ipv6.conf.all.forwarding": "1",
+                "net.mpls.platform_labels": mpls_labels,
+                "net.ipv4.conf.all.rp_filter": "0",
+                "net.ipv4.conf.default.rp_filter": "0",
+            },
+            "isl_interfaces": [],
+            "gnd_interfaces": [{"name": "gnd0"}],
+            "terrestrial": {"addresses": addrs},
+            "mpls_enable": True,
+            "segment_routing": segment_routing,
+            "ttl_propagation": ttl_propagation,
+            "mtu": 9000,
+            "remove_default_route": True,
+        }
+        if segment_routing:
+            ttl_val = "0" if ttl_propagation == "pipe" else "1"
+            nodes[gs_id]["sysctls"]["net.mpls.ip_ttl_propagate"] = ttl_val
+
+        # All satellites are potential GS peers
+        ground_bridges[gs_id] = {
+            "satellites": [addressing.sat_id(s.plane, s.slot) for s in satellites],
+        }
+
+    # Count unique ISL links
+    isl_pairs: set[tuple[str, str]] = set()
+    for node_id, assignments in by_node.items():
+        for na in assignments:
+            isl_pairs.add((min(node_id, na.peer_node_id), max(node_id, na.peer_node_id)))
+
+    manifest = {
+        "session_id": spec.get("_session_id", "operator-session"),
+        "generation": int(datetime.now(UTC).timestamp()),
+        "nodes": nodes,
+        "ground_bridges": ground_bridges,
+        "isl_link_count": len(isl_pairs),
+    }
+
+    _create_or_update_configmap(
+        v1,
+        "nodalarc-topology-wiring",
+        namespace,
+        {"manifest.json": _json.dumps(manifest)},
+        owner_ref,
+    )
+    log.info(
+        f"Wrote topology wiring manifest: {len(nodes)} nodes, "
+        f"{len(isl_pairs)} ISL links, {len(ground_bridges)} ground bridges"
+    )
+    return len(isl_pairs)
 
 
 def teardown_session(namespace: str) -> None:
@@ -437,7 +587,7 @@ def _create_session_pod(
         volume_mounts=[
             kubernetes.client.V1VolumeMount(
                 name="frr-config",
-                mount_path="/etc/frr",
+                mount_path="/etc/frr-config",
             ),
         ],
     )

@@ -398,16 +398,24 @@ class SessionManager:
         clear_state_fn: Callable[[], None],
         update_globals_fn: Callable[[str, str], None],
     ) -> None:
-        """Tear down current session and deploy new one (blocking — run in executor).
+        """Tear down current session and deploy new one via ConstellationSpec CRD.
+
+        Replaces the deploy daemon approach with direct K8s API calls:
+        1. Delete existing ConstellationSpec CR (Operator tears down)
+        2. Apply new ConstellationSpec CR (Operator deploys)
+        3. Poll CR status until Ready
 
         Args:
             session_path: Path to the new session YAML file.
             clear_state_fn: Callback to reset VS-API in-memory state.
             update_globals_fn: Callback(session_path, new_db_path) to update VS-API globals.
         """
-        # Rescan so newly added session files are recognized
+        import time
+
+        import kubernetes.client
+        import kubernetes.config
+
         self.rescan()
-        # Validate session_path against scanned sessions — reject unknown paths
         if session_path not in self._valid_session_files():
             self._status = "error"
             self._status_detail = f"Unknown session: {Path(session_path).name}"
@@ -415,114 +423,121 @@ class SessionManager:
             return
 
         try:
+            kubernetes.config.load_incluster_config()
+        except kubernetes.config.ConfigException:
+            kubernetes.config.load_kube_config()
+
+        api = kubernetes.client.CustomObjectsApi()
+        cfg = get_platform_config()
+        ns = cfg.kubernetes_namespace
+
+        try:
             self._status = "switching"
             self._status_detail = "Tearing down current session"
-            log.info(f"Session switch: tearing down, deploying {session_path}")
+            log.info(f"Session switch: deploying {session_path} via CRD")
 
-            # === Teardown: kill ALL session processes via deploy daemon (has root) ===
-            self._status_detail = "Stopping all session processes"
-            kill_resp = _daemon_request({"action": "kill_processes", "exclude_vsapi": True})
-            if kill_resp.get("ok"):
-                killed = kill_resp.get("killed", 0)
-                if killed:
-                    log.info(f"Killed {killed} session process(es) via deploy daemon")
-            else:
-                log.warning(f"kill_processes via daemon failed: {kill_resp.get('error')}")
-                # Fallback to direct kill (works if processes are same user)
-                killed = self.kill_all_session_processes()
-                if killed:
-                    log.info(f"Killed {killed} session process(es) via direct signal")
-
-            # === Teardown: uninstall ANY existing helm releases via deploy daemon ===
-            self._status_detail = "Checking for existing helm releases"
-            resp = _daemon_request({"action": "helm_list"})
-            if resp.get("ok"):
-                releases = resp.get("releases", [])
-            else:
-                log.warning(f"helm_list via daemon failed: {resp.get('error')}")
-                releases = []
-
-            for release in releases:
-                self._status_detail = f"Uninstalling helm release {release}"
-                log.info(f"Uninstalling stale helm release: {release}")
-                _daemon_request({"action": "helm_uninstall", "release": release}, timeout=60)
-
-            if releases:
-                self._status_detail = "Waiting for existing emulation pods to stop"
-                _daemon_request({"action": "kubectl_wait"}, timeout=90)
+            # === Delete existing ConstellationSpec CR ===
+            try:
+                api.delete_namespaced_custom_object(
+                    group="nodalarc.io",
+                    version="v1alpha1",
+                    namespace=ns,
+                    plural="constellationspecs",
+                    name="current-session",
+                )
+                log.info("Deleted existing ConstellationSpec CR")
+                # Wait for pods to terminate
+                self._status_detail = "Waiting for old session to terminate"
+                v1 = kubernetes.client.CoreV1Api()
+                for _ in range(60):
+                    pods = v1.list_namespaced_pod(ns, label_selector="nodalarc.io/node-id")
+                    if len(pods.items) == 0:
+                        break
+                    time.sleep(2)
+            except kubernetes.client.rest.ApiException as e:
+                if e.status != 404:
+                    raise
 
             # === Clear VS-API state ===
             self._status_detail = "Clearing in-memory state"
             clear_state_fn()
 
-            # === Deploy new session via deploy daemon (streaming) ===
-            self._status_detail = "Starting deployment"
-            deploy_result = _daemon_deploy_streaming(
-                session_path,
-                status_callback=lambda s: setattr(self, "_status_detail", s),
-            )
-            if not deploy_result.get("ok"):
-                raise RuntimeError(deploy_result.get("error", "Deploy failed"))
-
-            # === Find new session-state.json ===
-            self._status_detail = "Locating new session data"
+            # === Parse session YAML and build ConstellationSpec CR ===
+            self._status_detail = "Building constellation spec"
             raw = yaml.safe_load(Path(session_path).read_text())
             session_cfg = SessionConfig.model_validate(raw)
-            data_base = Path(session_cfg.session.data_dir)
 
-            # Find newest subdirectory (the one just created)
-            if data_base.is_dir():
-                subdirs = sorted(
-                    [d for d in data_base.iterdir() if d.is_dir()],
-                    key=lambda d: d.stat().st_mtime,
-                    reverse=True,
+            # Extract constellation name from path
+            constellation_name = Path(session_cfg.constellation).stem
+            gs_name = (
+                Path(session_cfg.ground_stations).stem
+                if isinstance(session_cfg.ground_stations, str)
+                else "global"
+            )
+
+            routing = session_cfg.routing
+            cr_body = {
+                "apiVersion": "nodalarc.io/v1alpha1",
+                "kind": "ConstellationSpec",
+                "metadata": {"name": "current-session", "namespace": ns},
+                "spec": {
+                    "constellation": constellation_name,
+                    "groundStations": gs_name,
+                    "routing": {
+                        "protocol": routing.protocol or "isis",
+                        "extensions": routing.extensions or [],
+                        "areaStrategy": (
+                            routing.area_assignment.strategy if routing.area_assignment else "flat"
+                        ),
+                    },
+                    "time": {
+                        "compression": session_cfg.time.compression,
+                        "stepSeconds": session_cfg.time.step_seconds,
+                    },
+                },
+            }
+            if routing.stack:
+                cr_body["spec"]["routing"]["stack"] = routing.stack
+
+            # === Apply ConstellationSpec CR ===
+            self._status_detail = "Deploying constellation"
+            api.create_namespaced_custom_object(
+                group="nodalarc.io",
+                version="v1alpha1",
+                namespace=ns,
+                plural="constellationspecs",
+                body=cr_body,
+            )
+            log.info(f"Applied ConstellationSpec CR for {constellation_name}")
+
+            # === Poll CR status until Ready ===
+            self._status_detail = "Waiting for constellation to deploy"
+            for _ in range(300):  # 5 minutes max
+                cr = api.get_namespaced_custom_object(
+                    group="nodalarc.io",
+                    version="v1alpha1",
+                    namespace=ns,
+                    plural="constellationspecs",
+                    name="current-session",
                 )
-                new_data_dir = None
-                for d in subdirs:
-                    if (d / "session-state.json").exists():
-                        new_data_dir = d
-                        break
-
-                if new_data_dir is None:
-                    raise RuntimeError(f"No session-state.json found under {data_base}")
-
-                new_state = json.loads((new_data_dir / "session-state.json").read_text())
-                new_db_path = new_state["db_path"]
-            else:
-                raise RuntimeError(f"Data directory not found: {data_base}")
+                phase = cr.get("status", {}).get("phase", "")
+                message = cr.get("status", {}).get("message", "")
+                self._status_detail = message or f"Phase: {phase}"
+                if phase == "Ready":
+                    break
+                if phase == "Error":
+                    raise RuntimeError(f"Operator error: {message}")
+                time.sleep(1)
 
             # === Update VS-API globals ===
             self._status_detail = "Updating VS-API configuration"
-            update_globals_fn(session_path, new_db_path)
+            update_globals_fn(session_path, "")
 
             # === Update internal state ===
-            self._current_data_dir = new_data_dir
             self._current_session_file = session_path
             self._status = "ready"
             self._status_detail = ""
             log.info(f"Session switch complete: {session_path}")
-
-            # === Cleanup stale wizard-generated session YAMLs ===
-            try:
-                keep = {Path(session_path).resolve()}
-                # Also keep the previous active session file (in case switch is partial)
-                if self._current_session_file:
-                    keep.add(Path(self._current_session_file).resolve())
-                for wf in self._sessions_dir.glob("_wizard-*.yaml"):
-                    if wf.resolve() not in keep:
-                        wf.unlink()
-                        log.info(f"Cleaned up stale wizard session: {wf.name}")
-                self.rescan()
-            except Exception as exc:
-                log.warning(f"Wizard YAML cleanup failed (non-fatal): {exc}")
-
-            # === Cleanup old session directories (non-blocking, best-effort) ===
-            try:
-                cleaned = self.cleanup_old_sessions()
-                if cleaned:
-                    log.info(f"Cleaned up {cleaned} old session directory(ies)")
-            except Exception as exc:
-                log.warning(f"Session cleanup failed (non-fatal): {exc}")
 
         except Exception as exc:
             self._status = "error"

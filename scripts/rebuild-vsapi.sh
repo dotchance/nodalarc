@@ -49,4 +49,14 @@ else
 fi
 
 echo ""
+echo "=== Step 6: Integration tests (mandatory gate) ==="
+cd "$(dirname "$0")/.."
+if .venv/bin/pytest tests/integration/test_zmq_reliability.py tests/integration/test_satellite_motion.py -v; then
+    echo "REBUILD OK — satellites moving"
+else
+    echo "REBUILD FAILED — satellites not moving. Do not proceed."
+    exit 1
+fi
+
+echo ""
 echo "=== Done ==="

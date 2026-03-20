@@ -17,7 +17,7 @@ import secrets
 import sqlite3
 import sys
 import threading
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -249,8 +249,6 @@ _db_path: str = ""
 _session_file: str = ""  # Path to the active session YAML
 _routing_stack: str | None = None
 _constellation_name: str | None = None
-_ws_clients: list[WebSocket] = []
-_ws_lock = asyncio.Lock()
 _session_manager: SessionManager | None = None
 _gs_elevation_map: dict[str, float] = {}  # node_id -> min_elevation_deg
 _beam_falloff_exponent: float = 2.0
@@ -274,9 +272,51 @@ _almanac_lock = threading.Lock()
 
 
 def _update_position(event_data: dict) -> None:
-    """Update node positions from PositionEvent."""
+    """Update node positions from PositionEvent.
+
+    Handles two formats:
+    - Per-node (PRD PositionEvent): top-level node_id, lat_deg, lon_deg, etc.
+    - Batch (FullStateSnapshot catch-up): positions list of node dicts.
+    """
     with _state_lock:
         _state["sim_time"] = event_data.get("sim_time", _state["sim_time"])
+
+        # Per-node format (PRD PositionEvent schema)
+        if "node_id" in event_data:
+            import re
+
+            node_id = event_data["node_id"]
+            existing = _state["nodes"].get(node_id, {})
+
+            # Derive plane/slot from node_id if not already set
+            if "plane" not in existing or existing["plane"] is None:
+                m = re.match(r"sat-P(\d+)S(\d+)", node_id)
+                if m:
+                    existing["plane"] = int(m.group(1))
+                    existing["slot"] = int(m.group(2))
+                    existing["node_type"] = "satellite"
+                else:
+                    existing.setdefault("node_type", "ground_station")
+
+            existing.update(
+                {
+                    "node_id": node_id,
+                    "lat_deg": event_data.get("lat_deg", existing.get("lat_deg", 0.0)),
+                    "lon_deg": event_data.get("lon_deg", existing.get("lon_deg", 0.0)),
+                    "alt_km": event_data.get("alt_km", existing.get("alt_km", 0.0)),
+                    "vel_x_km_s": event_data.get("vel_x_km_s", existing.get("vel_x_km_s")),
+                    "vel_y_km_s": event_data.get("vel_y_km_s", existing.get("vel_y_km_s")),
+                    "vel_z_km_s": event_data.get("vel_z_km_s", existing.get("vel_z_km_s")),
+                }
+            )
+            if node_id in _gs_elevation_map:
+                existing["min_elevation_deg"] = _gs_elevation_map[node_id]
+            if existing.get("node_type") == "satellite":
+                existing["beam_falloff_exponent"] = _beam_falloff_exponent
+            _state["nodes"][node_id] = existing
+            return
+
+        # Batch format (FullStateSnapshot catch-up positions list)
         for node in event_data.get("positions", []):
             node_id = node.get("node_id", "")
             if not node_id:
@@ -471,11 +511,16 @@ async def _zmq_subscriber() -> None:
     global _zmq_ctx
     _zmq_ctx = zmq.asyncio.Context()
 
+    ome_addr = ome_events_connect()
     ome_sub = _zmq_ctx.socket(zmq.SUB)
-    ome_sub.connect(ome_events_connect())
+    ome_sub.setsockopt(zmq.RECONNECT_IVL, 1000)
+    ome_sub.setsockopt(zmq.RECONNECT_IVL_MAX, 10000)
+    ome_sub.connect(ome_addr)
     ome_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
     to_sub = _zmq_ctx.socket(zmq.SUB)
+    to_sub.setsockopt(zmq.RECONNECT_IVL, 1000)
+    to_sub.setsockopt(zmq.RECONNECT_IVL_MAX, 10000)
     _connect_scheduler_events(to_sub)
     to_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
@@ -496,66 +541,73 @@ async def _zmq_subscriber() -> None:
     np_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
     # R-OME-008: On-connect catch-up — get current window events immediately
-    catchup_sim_time = None
-    try:
-        from nodalarc.platform import get_platform_config as _get_cfg
+    def _do_ome_catchup() -> str | None:
+        """Call R-OME-008 catch-up endpoint. Returns last sim_time or None."""
+        _ctx = None
+        catchup_sock = None
+        try:
+            from nodalarc.platform import get_platform_config as _get_cfg
 
-        catchup_addr = _get_cfg().ome_catchup_connect
-        catchup_events = []
-        # Single attempt with 20s timeout. If OME is still computing
-        # window 1, this will time out and we fall back to FullStateSnapshot.
-        _ctx = zmq.Context()
-        catchup_sock = _ctx.socket(zmq.REQ)
-        catchup_sock.setsockopt(zmq.RCVTIMEO, 20000)
-        catchup_sock.setsockopt(zmq.SNDTIMEO, 5000)
-        catchup_sock.connect(catchup_addr)
-        catchup_sock.send_json({"request": "current_window"})
-        resp = catchup_sock.recv_json()
-        catchup_events = resp.get("events", [])
-        catchup_sock.close()
-        _ctx.term()
-        log.info(
-            "OME catch-up: received %d events (window %d)",
-            len(catchup_events),
-            resp.get("window", 0),
-        )
-        for evt in catchup_events:
-            topic_str = evt.get("event_type", "")
-            data = evt.get("data", {})
-            if topic_str == "Snapshot":
-                # Extract positions from Snapshot events
-                _update_position(
-                    {
-                        "sim_time": data.get("sim_time", ""),
-                        "positions": [
-                            {
-                                "node_id": nid,
-                                "lat_deg": pos.get("lat_deg", 0),
-                                "lon_deg": pos.get("lon_deg", 0),
-                                "alt_km": pos.get("alt_km", 0),
-                                "node_type": "ground_station"
-                                if nid.startswith("gs-")
-                                else "satellite",
-                                "plane": pos.get("plane"),
-                                "slot": pos.get("slot"),
-                            }
-                            for nid, pos in data.get("positions", {}).items()
-                        ],
-                    }
-                )
-            elif topic_str == "VisibilityEvent":
-                if data.get("visible") and data.get("scheduled"):
-                    _update_link_up(data)
-                elif not data.get("visible"):
-                    _update_link_down(data)
-            # Track last sim_time for deduplication
-            st = data.get("sim_time", "")
-            if st and (catchup_sim_time is None or st > catchup_sim_time):
-                catchup_sim_time = st
-        catchup_sock.close()
-        log.info("OME catch-up complete: last_sim_time=%s", catchup_sim_time)
-    except Exception as exc:
-        log.warning("OME catch-up failed (will rely on FullStateSnapshot): %s", exc)
+            catchup_addr = _get_cfg().ome_catchup_connect
+            _ctx = zmq.Context()
+            catchup_sock = _ctx.socket(zmq.REQ)
+            catchup_sock.setsockopt(zmq.RCVTIMEO, 20000)
+            catchup_sock.setsockopt(zmq.SNDTIMEO, 5000)
+            catchup_sock.setsockopt(zmq.LINGER, 0)
+            catchup_sock.connect(catchup_addr)
+            catchup_sock.send_json({"request": "current_window"})
+            resp = catchup_sock.recv_json()
+            catchup_events = resp.get("events", [])
+            catchup_sock.close()
+            _ctx.term()
+            log.info(
+                "OME catch-up: received %d events (window %d)",
+                len(catchup_events),
+                resp.get("window", 0),
+            )
+            last_st = None
+            for evt in catchup_events:
+                topic_str = evt.get("event_type", "")
+                data = evt.get("data", {})
+                if topic_str == "Snapshot":
+                    _update_position(
+                        {
+                            "sim_time": data.get("sim_time", ""),
+                            "positions": [
+                                {
+                                    "node_id": nid,
+                                    "lat_deg": pos.get("lat_deg", 0),
+                                    "lon_deg": pos.get("lon_deg", 0),
+                                    "alt_km": pos.get("alt_km", 0),
+                                    "node_type": "ground_station"
+                                    if nid.startswith("gs-")
+                                    else "satellite",
+                                    "plane": pos.get("plane"),
+                                    "slot": pos.get("slot"),
+                                }
+                                for nid, pos in data.get("positions", {}).items()
+                            ],
+                        }
+                    )
+                elif topic_str == "VisibilityEvent":
+                    if data.get("visible") and data.get("scheduled"):
+                        _update_link_up(data)
+                    elif not data.get("visible"):
+                        _update_link_down(data)
+                st = data.get("sim_time", "")
+                if st and (last_st is None or st > last_st):
+                    last_st = st
+            log.info("OME catch-up complete: last_sim_time=%s", last_st)
+            return last_st
+        except Exception as exc:
+            log.warning("OME catch-up failed (will rely on FullStateSnapshot): %s", exc)
+            if catchup_sock is not None:
+                catchup_sock.close(linger=0)
+            if _ctx is not None:
+                _ctx.term()
+            return None
+
+    catchup_sim_time = _do_ome_catchup()
 
     poller = zmq.asyncio.Poller()
     poller.register(ome_sub, zmq.POLLIN)
@@ -572,6 +624,7 @@ async def _zmq_subscriber() -> None:
 
     msg_count = 0
     last_status_time = _time.monotonic()
+    last_ome_msg_time = _time.monotonic()
     try:
         while True:
             try:
@@ -586,6 +639,16 @@ async def _zmq_subscriber() -> None:
                 log.info(f"ZMQ subscriber status: {msg_count} messages received so far")
                 last_status_time = now_mono
 
+            # Watchdog: if no OME messages for 15s, force reconnect + R-OME-008 catch-up
+            if now_mono - last_ome_msg_time > 15.0:
+                log.warning("No OME messages for 15s — forcing reconnect + R-OME-008 catch-up")
+                ome_sub.disconnect(ome_addr)
+                ome_sub.connect(ome_addr)
+                new_st = _do_ome_catchup()
+                if new_st:
+                    catchup_sim_time = new_st
+                last_ome_msg_time = _time.monotonic()
+
             for sock in [s for s in [ome_sub, to_sub, mi_sub, np_sub] if s is not None]:
                 if sock not in socks:
                     continue
@@ -594,10 +657,15 @@ async def _zmq_subscriber() -> None:
                     topic, payload = decode_message(raw)
                     data = json.loads(payload)
                     msg_count += 1
+                    if sock is ome_sub:
+                        last_ome_msg_time = _time.monotonic()
 
                     # R-OME-008 deduplication: skip events already processed from catch-up
                     # Always process FullStateSnapshot (periodic heartbeat with position data)
-                    if catchup_sim_time and topic != b"FullStateSnapshot":
+                    if catchup_sim_time and topic not in (
+                        b"FullStateSnapshot",
+                        TOPIC_POSITION_EVENT,
+                    ):
                         evt_st = data.get("sim_time", "")
                         if evt_st and evt_st <= catchup_sim_time:
                             continue
@@ -670,11 +738,6 @@ async def _zmq_subscriber() -> None:
                                             "reason": "snapshot",
                                         }
                                     )
-                        # Advance sim_time AFTER position extraction — _update_position
-                        # overwrites sim_time with the OME value, so we must set wall
-                        # clock last to ensure the VF sees a changing sim_time.
-                        with _state_lock:
-                            _state["sim_time"] = datetime.now(UTC).isoformat()
 
                 except Exception as exc:
                     log.warning(f"ZMQ message processing error: {exc}")
@@ -983,19 +1046,14 @@ def _restore_state_from_db(db_path: str) -> bool:
 
 
 async def _ws_broadcaster() -> None:
-    """Broadcast StateSnapshot to WebSocket clients at ~10Hz.
-
-    Also records snapshots to SQLite every ~10 seconds for historical playback.
-    """
+    """Record StateSnapshot to SQLite every ~10 seconds for historical playback."""
     tick = 0
     while True:
         await asyncio.sleep(0.1)
-        snapshot = _build_snapshot()
-
-        # Store snapshot every 100 ticks (~10 seconds) for historical playback
         tick += 1
         if tick % 100 == 0 and _db_path:
             try:
+                snapshot = _build_snapshot()
                 conn = sqlite3.connect(_db_path)
                 insert_snapshot(
                     conn,
@@ -1007,20 +1065,10 @@ async def _ws_broadcaster() -> None:
             except Exception as exc:
                 log.warning(f"Failed to store snapshot: {exc}")
 
-        async with _ws_lock:
-            dead = []
-            for ws in _ws_clients:
-                try:
-                    await ws.send_json(snapshot)
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                _ws_clients.remove(ws)
-
 
 @app.websocket("/ws/v1/state")
 async def ws_state(websocket: WebSocket) -> None:
-    """WebSocket endpoint — full state snapshots at ~1Hz."""
+    """WebSocket endpoint — push state snapshots at ~1Hz from this handler."""
     # Authenticate via ?token= query parameter when API key is set
     ws_ip = websocket.client.host if websocket.client else "unknown"
     if _API_KEY:
@@ -1029,36 +1077,20 @@ async def ws_state(websocket: WebSocket) -> None:
             _audit_log.warning(f"WS_AUTH_FAIL ip={ws_ip}")
             await websocket.close(code=4401, reason="Unauthorized")
             return
-    # Kick existing connections — single-user mode (one active browser at a time)
-    async with _ws_lock:
-        for old_ws in list(_ws_clients):
-            with suppress(Exception):
-                await old_ws.close(code=4409, reason="Session taken over by another browser")
-            _ws_clients.remove(old_ws)
-            _audit_log.info(f"WS_KICKED ip={ws_ip}")
     await websocket.accept()
-    async with _ws_lock:
-        _ws_clients.append(websocket)
-    _audit_log.info(f"WS_CONNECT ip={ws_ip} active={len(_ws_clients)}")
-
-    # Send initial snapshot immediately
-    try:
-        snapshot = _build_snapshot()
-        await websocket.send_json(snapshot)
-    except Exception:
-        pass
+    _audit_log.info(f"WS_CONNECT ip={ws_ip}")
 
     try:
         while True:
-            # Keep connection alive — client sends nothing
-            await websocket.receive_text()
+            snapshot = _build_snapshot()
+            await websocket.send_json(snapshot)
+            await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         pass
+    except Exception as exc:
+        log.warning(f"WS send error for {ws_ip}: {type(exc).__name__} {exc}")
     finally:
-        async with _ws_lock:
-            if websocket in _ws_clients:
-                _ws_clients.remove(websocket)
-        _audit_log.info(f"WS_DISCONNECT ip={ws_ip} active={len(_ws_clients)}")
+        _audit_log.info(f"WS_DISCONNECT ip={ws_ip}")
 
 
 @app.get("/api/v1/state", dependencies=[Depends(_require_api_key)])

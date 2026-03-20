@@ -10,6 +10,7 @@ Under 100 lines.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import time
 from datetime import UTC, datetime
@@ -233,7 +234,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
 
     # ZMQ PUB socket — primary delivery mechanism
     import zmq
-    from nodalarc.zmq_channels import ome_events_bind
+    from nodalarc.zmq_channels import TOPIC_POSITION_EVENT, encode_message, ome_events_bind
 
     ctx = zmq.Context()
     pub_sock = ctx.socket(zmq.PUB)
@@ -329,49 +330,22 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
             # Service any pending catch-up requests immediately
             _handle_catchup_requests(catchup_sock, _catchup_buffer)
 
-            # Extract position trajectory and VisibilityEvents from window events.
-            # Both are included in FullStateSnapshot so late subscribers get:
-            # 1. Orbital positions (downsampled to ~10s intervals)
-            # 2. Link state changes (all VisibilityEvents preserved)
-            # This lets the orchestrator replay the full window: positions move
-            # AND links go up/down as the topology evolves.
-            position_trajectory: list[dict] = []
-            last_position_event = None
+            # Build link_ranges and current position snapshot for FullStateSnapshot.
+            # Only the LAST Snapshot is included — current positions, not full trajectory.
+            # Full trajectory replay is served by R-OME-008 catch-up (port 5568).
             link_ranges: dict[tuple[str, str], float] = {}
-            snap_count = 0
+            last_snapshot_entry: dict | None = None
             for evt in events:
-                if evt.event_type == "Snapshot":
-                    last_position_event = evt
-                    snap_count += 1
-                    if snap_count % 10 == 0 or snap_count == 1:
-                        position_trajectory.append(
-                            {
-                                "timestamp_s": evt.timestamp_s,
-                                "event_type": evt.event_type,
-                                "data": evt.data.model_dump(mode="json"),
-                            }
-                        )
-                elif evt.event_type == "VisibilityEvent":
+                if evt.event_type == "VisibilityEvent":
                     pair = (evt.data.node_a, evt.data.node_b)
                     link_ranges[pair] = evt.data.range_km
-                    # Include ALL visibility events — link transitions must
-                    # be replayed for the topology view to show changes.
-                    position_trajectory.append(
-                        {
-                            "timestamp_s": evt.timestamp_s,
-                            "event_type": evt.event_type,
-                            "data": evt.data.model_dump(mode="json"),
-                        }
-                    )
-            # Always include the last snapshot
-            if last_position_event and (snap_count % 10 != 0):
-                position_trajectory.append(
-                    {
-                        "timestamp_s": last_position_event.timestamp_s,
-                        "event_type": last_position_event.event_type,
-                        "data": last_position_event.data.model_dump(mode="json"),
+                elif evt.event_type == "Snapshot":
+                    last_snapshot_entry = {
+                        "timestamp_s": evt.timestamp_s,
+                        "event_type": evt.event_type,
+                        "data": evt.data.model_dump(mode="json"),
                     }
-                )
+            position_trajectory = [last_snapshot_entry] if last_snapshot_entry else []
 
             # Compute sim_time for the end of this window
             from datetime import datetime as _dt
@@ -379,7 +353,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
             window_end_epoch = epoch_for_next + period
             sim_time_iso = _dt.fromtimestamp(window_end_epoch, tz=UTC).isoformat()
 
-            # Publish FullStateSnapshot at window boundary (includes position trajectory)
+            # Publish FullStateSnapshot at window boundary (link state + current positions)
             publish_full_state_snapshot(
                 pub_sock,
                 isl_state,
@@ -400,27 +374,86 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
 
             epoch_for_next += period
 
-            # Two independent timers: window pacing + periodic FullStateSnapshot every 30s
-            window_duration = period * 0.5 / compression
-            while True:
-                elapsed = time.monotonic() - window_start
-                if elapsed >= window_duration:
-                    break
-                # R-OME-008: poll catch-up REP socket (non-blocking)
-                _handle_catchup_requests(catchup_sock, _catchup_buffer)
+            # R-OME-006: Paced PositionEvent publication through precomputed Snapshots.
+            # Instead of sleeping the full inter-window duration with static snapshots,
+            # pace through Snapshot events at wall-clock × compression so subscribers
+            # (VS-API) see positions advancing continuously.
+            window_duration = period / compression
+            snapshot_events = [
+                e for e in _catchup_buffer.get("events", []) if e.get("event_type") == "Snapshot"
+            ]
 
-                # Publish periodic FullStateSnapshot every 30s during inter-window sleep
-                if time.monotonic() - last_snapshot_wall >= 30.0:
-                    publish_full_state_snapshot(
-                        pub_sock,
-                        isl_state,
-                        gs_state,
-                        sim_time_iso,
-                        link_ranges,
-                        position_trajectory=position_trajectory,
-                    )
-                    last_snapshot_wall = time.monotonic()
-                time.sleep(min(1.0, window_duration - elapsed))
+            if snapshot_events:
+                first_ts = snapshot_events[0]["timestamp_s"]
+                last_ts = snapshot_events[-1]["timestamp_s"]
+                sim_span = last_ts - first_ts if last_ts > first_ts else 1.0
+                pace = window_duration / sim_span
+                logging.info(
+                    f"OME pacing: {len(snapshot_events)} snapshots over "
+                    f"{window_duration:.0f}s wall ({pace:.3f}s/tick)"
+                )
+
+                for snap in snapshot_events:
+                    sim_offset = snap["timestamp_s"] - first_ts
+                    wall_target = window_start + sim_offset * pace
+
+                    # Sleep in ≤1s chunks for catchup REP responsiveness
+                    while True:
+                        now = time.monotonic()
+                        if now >= wall_target:
+                            break
+                        if now >= window_start + window_duration:
+                            break
+                        time.sleep(min(wall_target - now, 1.0))
+                        _handle_catchup_requests(catchup_sock, _catchup_buffer)
+
+                    if time.monotonic() >= window_start + window_duration:
+                        break
+
+                    # Convert positions dict → list for _update_position()
+                    snap_data = snap.get("data", {})
+                    positions_dict = snap_data.get("positions", {})
+                    position_list = [
+                        {
+                            "node_id": nid,
+                            "node_type": "ground_station" if nid.startswith("gs-") else "satellite",
+                            "lat_deg": p.get("lat_deg", 0.0),
+                            "lon_deg": p.get("lon_deg", 0.0),
+                            "alt_km": p.get("alt_km", 0.0),
+                            "vel_x_km_s": p.get("vel_x_km_s", 0.0),
+                            "vel_y_km_s": p.get("vel_y_km_s", 0.0),
+                            "vel_z_km_s": p.get("vel_z_km_s", 0.0),
+                        }
+                        for nid, p in positions_dict.items()
+                    ]
+
+                    sim_time_str = snap_data.get("sim_time", "")
+                    for node in position_list:
+                        payload = json.dumps(
+                            {
+                                "sim_time": sim_time_str,
+                                "node_id": node["node_id"],
+                                "lat_deg": node["lat_deg"],
+                                "lon_deg": node["lon_deg"],
+                                "alt_km": node["alt_km"],
+                                "vel_x_km_s": node["vel_x_km_s"],
+                                "vel_y_km_s": node["vel_y_km_s"],
+                                "vel_z_km_s": node["vel_z_km_s"],
+                            }
+                        ).encode()
+                        pub_sock.send(encode_message(TOPIC_POSITION_EVENT, payload))
+
+                    # FullStateSnapshot every 30s (for link state catch-up)
+                    if time.monotonic() - last_snapshot_wall >= 30.0:
+                        publish_full_state_snapshot(
+                            pub_sock,
+                            isl_state,
+                            gs_state,
+                            sim_time_iso,
+                            link_ranges,
+                            position_trajectory=position_trajectory,
+                        )
+                        last_snapshot_wall = time.monotonic()
 
             window_start = time.monotonic()
     except KeyboardInterrupt:

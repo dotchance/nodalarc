@@ -132,7 +132,41 @@ async def on_create(spec, name, namespace, meta, **_):
                 "message": f"All {pod_count} pods running. Awaiting data plane wiring.",
             },
         )
-        log.info(f"Session deployed: {pod_count} pods running")
+        log.info(f"Session deployed: {pod_count} pods running, waiting for wiring")
+
+        # Wait for Node Agent to write wiring-complete status
+        kubernetes.config.load_incluster_config()
+        v1 = kubernetes.client.CoreV1Api()
+        for _i in range(120):  # 2 minutes max
+            try:
+                cm = await loop.run_in_executor(
+                    None,
+                    v1.read_namespaced_config_map,
+                    "nodalarc-wiring-status",
+                    namespace,
+                )
+                wired_count = len(cm.data) if cm.data else 0
+                if wired_count >= pod_count:
+                    _update_status(
+                        name,
+                        namespace,
+                        {
+                            "phase": "Ready",
+                            "readyPods": pod_count,
+                            "podCount": pod_count,
+                            "wiredPods": wired_count,
+                            "message": f"Session ready: {pod_count} pods, {wired_count} wired.",
+                        },
+                    )
+                    log.info(f"Session ready: {wired_count}/{pod_count} nodes wired")
+                    return
+            except kubernetes.client.rest.ApiException as e:
+                if e.status != 404:
+                    log.warning(f"Wiring status check error: {e}")
+            await asyncio.sleep(1)
+
+        # Timeout — stay in Wiring phase
+        log.warning("Wiring not complete after 120s, staying in Wiring phase")
 
 
 @kopf.on.delete("constellationspecs", group="nodalarc.io")

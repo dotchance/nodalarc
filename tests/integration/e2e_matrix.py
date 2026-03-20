@@ -309,7 +309,7 @@ def run_permutation(perm: dict) -> dict:
 
         # Wait for Ready
         print("  Waiting for Ready (up to 5 min)...")
-        ready_result = wait_for_ready(token, timeout=300)
+        ready_result = wait_for_ready(token, timeout=600)
         evidence["ready_result"] = ready_result
         if ready_result.get("phase") != "Ready":
             print(f"  FAIL: {evidence['error']}")

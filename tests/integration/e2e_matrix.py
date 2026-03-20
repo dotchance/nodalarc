@@ -150,29 +150,37 @@ def deploy_session(token: str, yaml_str: str) -> dict:
 
 
 def wait_for_ready(token: str, timeout: int = 300) -> dict:
-    """Wait for session_status to transition through switching → ready."""
-    # First wait for switching to start (up to 30s)
-    for _ in range(30):
-        try:
-            resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-            status = resp.json().get("session_status", "")
-            if status == "switching":
-                break
-        except Exception:
-            pass
-        time.sleep(1)
+    """Wait for CR status to reach Ready — checks K8s directly."""
+    import subprocess
 
-    # Then wait for ready or error
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-            state = resp.json()
-            session_status = state.get("session_status", "")
-            if session_status == "ready":
-                return {"phase": "Ready", "nodes": len(state.get("nodes", []))}
-            if session_status == "error":
-                return {"phase": "Error", "detail": state.get("session_status_detail", "")}
+            result = subprocess.run(
+                f"{KUBECTL} get constellationspec current-session -n nodalarc "
+                "-o jsonpath={.status.phase}".split(),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            phase = result.stdout.strip()
+            if phase == "Ready":
+                # Also check VS-API has nodes
+                try:
+                    resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
+                    nodes = resp.json().get("nodes", [])
+                    return {"phase": "Ready", "nodes": len(nodes)}
+                except Exception:
+                    return {"phase": "Ready", "nodes": 0}
+            if phase == "Error":
+                result2 = subprocess.run(
+                    f"{KUBECTL} get constellationspec current-session -n nodalarc "
+                    "-o jsonpath={.status.message}".split(),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                return {"phase": "Error", "detail": result2.stdout.strip()}
         except Exception:
             pass
         time.sleep(5)
@@ -268,12 +276,20 @@ def run_permutation(perm: dict) -> dict:
         token = get_token()
 
         # Wait for any in-progress switch to finish before starting
+        import subprocess
+
         for _wait in range(60):
-            resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-            status = resp.json().get("session_status", "idle")
-            if status not in ("switching",):
+            result = subprocess.run(
+                f"{KUBECTL} get constellationspec current-session -n nodalarc "
+                "-o jsonpath={{.status.phase}}".split(),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            phase = result.stdout.strip()
+            if phase not in ("Pending", "Rendering", "Creating", "Wiring"):
                 break
-            print(f"  Waiting for previous switch to finish (status={status})...")
+            print(f"  Waiting for previous deploy to finish (phase={phase})...")
             time.sleep(5)
 
         # Generate session YAML

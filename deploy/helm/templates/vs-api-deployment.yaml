@@ -72,12 +72,15 @@ spec:
         - name: session-config
           configMap:
             name: nodalarc-session
+            optional: true
         - name: constellation-config
           configMap:
             name: nodalarc-constellation
+            optional: true
         - name: ground-stations
           configMap:
             name: nodalarc-ground-stations
+            optional: true
         - name: pid-map
           configMap:
             name: nodalarc-pid-map

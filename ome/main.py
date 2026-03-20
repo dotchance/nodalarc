@@ -13,6 +13,43 @@ import argparse
 import logging
 import time
 from datetime import UTC, datetime
+
+
+def _handle_catchup_requests(catchup_sock, catchup_buffer: dict) -> None:
+    """Poll and respond to R-OME-008 CatchupRequests (non-blocking)."""
+    import zmq
+
+    try:
+        if not catchup_sock.poll(timeout=0):
+            return
+        raw = catchup_sock.recv_json(zmq.NOBLOCK)
+        since = raw.get("since_sim_time")
+        resp_events = catchup_buffer["events"]
+        if since:
+            resp_events = [e for e in resp_events if e.get("data", {}).get("sim_time", "") >= since]
+        catchup_sock.send_json(
+            {
+                "window": catchup_buffer["window"],
+                "window_start_sim_time": catchup_buffer["window_start"],
+                "window_end_sim_time": catchup_buffer["window_end"],
+                "events": resp_events,
+            }
+        )
+        logging.info(
+            "OME catch-up: served %d events (since=%s)",
+            len(resp_events),
+            since or "all",
+        )
+    except zmq.Again:
+        pass
+    except Exception as exc:
+        logging.warning("OME catch-up error: %s", exc)
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            catchup_sock.send_json({"error": str(exc), "events": []})
+
+
 from pathlib import Path
 
 import yaml
@@ -202,7 +239,17 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
     pub_sock = ctx.socket(zmq.PUB)
     pub_sock.bind(ome_events_bind())
     logging.info(f"OME ZMQ PUB bound to {ome_events_bind()}")
-    # No sleep after bind — FullStateSnapshot handles subscriber catchup
+
+    # R-OME-008: REP socket for on-connect catch-up
+    from nodalarc.platform import get_platform_config
+
+    catchup_sock = ctx.socket(zmq.REP)
+    catchup_bind = get_platform_config().ome_catchup_bind
+    catchup_sock.bind(catchup_bind)
+    logging.info(f"OME catch-up REP bound to {catchup_bind}")
+
+    # Retained window buffer for catch-up (R-OME-008)
+    _catchup_buffer: dict = {"window": 0, "events": [], "window_start": "", "window_end": ""}
 
     # Optional file output for debugging/development
     out_path = None
@@ -255,6 +302,32 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
 
             # Publish window events + WindowReady on ZMQ
             publish_window_zmq(events, pub_sock, window)
+
+            # R-OME-008: retain window events for catch-up requests.
+            # Serialize once, serve many times.
+            from datetime import datetime as _dt_buf
+
+            _catchup_buffer["window"] = window
+            _catchup_buffer["window_start"] = _dt_buf.fromtimestamp(
+                epoch_for_next, tz=UTC
+            ).isoformat()
+            _catchup_buffer["window_end"] = _dt_buf.fromtimestamp(
+                epoch_for_next + period, tz=UTC
+            ).isoformat()
+            _catchup_buffer["events"] = [
+                {
+                    "timestamp_s": evt.timestamp_s,
+                    "event_type": evt.event_type,
+                    "data": evt.data.model_dump(mode="json"),
+                }
+                for evt in events
+            ]
+            logging.info(
+                f"OME catch-up buffer: {len(_catchup_buffer['events'])} events for window {window}"
+            )
+
+            # Service any pending catch-up requests immediately
+            _handle_catchup_requests(catchup_sock, _catchup_buffer)
 
             # Extract position trajectory and VisibilityEvents from window events.
             # Both are included in FullStateSnapshot so late subscribers get:
@@ -333,6 +406,9 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                 elapsed = time.monotonic() - window_start
                 if elapsed >= window_duration:
                     break
+                # R-OME-008: poll catch-up REP socket (non-blocking)
+                _handle_catchup_requests(catchup_sock, _catchup_buffer)
+
                 # Publish periodic FullStateSnapshot every 30s during inter-window sleep
                 if time.monotonic() - last_snapshot_wall >= 30.0:
                     publish_full_state_snapshot(

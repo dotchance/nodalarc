@@ -495,6 +495,68 @@ async def _zmq_subscriber() -> None:
     np_sub.connect(nodalpath_events_connect())
     np_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
+    # R-OME-008: On-connect catch-up — get current window events immediately
+    catchup_sim_time = None
+    try:
+        from nodalarc.platform import get_platform_config as _get_cfg
+
+        catchup_addr = _get_cfg().ome_catchup_connect
+        catchup_events = []
+        # Single attempt with 20s timeout. If OME is still computing
+        # window 1, this will time out and we fall back to FullStateSnapshot.
+        _ctx = zmq.Context()
+        catchup_sock = _ctx.socket(zmq.REQ)
+        catchup_sock.setsockopt(zmq.RCVTIMEO, 20000)
+        catchup_sock.setsockopt(zmq.SNDTIMEO, 5000)
+        catchup_sock.connect(catchup_addr)
+        catchup_sock.send_json({"request": "current_window"})
+        resp = catchup_sock.recv_json()
+        catchup_events = resp.get("events", [])
+        catchup_sock.close()
+        _ctx.term()
+        log.info(
+            "OME catch-up: received %d events (window %d)",
+            len(catchup_events),
+            resp.get("window", 0),
+        )
+        for evt in catchup_events:
+            topic_str = evt.get("event_type", "")
+            data = evt.get("data", {})
+            if topic_str == "Snapshot":
+                # Extract positions from Snapshot events
+                _update_position(
+                    {
+                        "sim_time": data.get("sim_time", ""),
+                        "positions": [
+                            {
+                                "node_id": nid,
+                                "lat_deg": pos.get("lat_deg", 0),
+                                "lon_deg": pos.get("lon_deg", 0),
+                                "alt_km": pos.get("alt_km", 0),
+                                "node_type": "ground_station"
+                                if nid.startswith("gs-")
+                                else "satellite",
+                                "plane": pos.get("plane"),
+                                "slot": pos.get("slot"),
+                            }
+                            for nid, pos in data.get("positions", {}).items()
+                        ],
+                    }
+                )
+            elif topic_str == "VisibilityEvent":
+                if data.get("visible") and data.get("scheduled"):
+                    _update_link_up(data)
+                elif not data.get("visible"):
+                    _update_link_down(data)
+            # Track last sim_time for deduplication
+            st = data.get("sim_time", "")
+            if st and (catchup_sim_time is None or st > catchup_sim_time):
+                catchup_sim_time = st
+        catchup_sock.close()
+        log.info("OME catch-up complete: last_sim_time=%s", catchup_sim_time)
+    except Exception as exc:
+        log.warning("OME catch-up failed (will rely on FullStateSnapshot): %s", exc)
+
     poller = zmq.asyncio.Poller()
     poller.register(ome_sub, zmq.POLLIN)
     poller.register(to_sub, zmq.POLLIN)
@@ -533,6 +595,13 @@ async def _zmq_subscriber() -> None:
                     data = json.loads(payload)
                     msg_count += 1
 
+                    # R-OME-008 deduplication: skip events already processed from catch-up
+                    # Always process FullStateSnapshot (periodic heartbeat with position data)
+                    if catchup_sim_time and topic != b"FullStateSnapshot":
+                        evt_st = data.get("sim_time", "")
+                        if evt_st and evt_st <= catchup_sim_time:
+                            continue
+
                     if msg_count <= 5 or msg_count % 100 == 0:
                         log.info(
                             f"ZMQ message #{msg_count}: topic={topic} payload_bytes={len(payload)}"
@@ -557,6 +626,50 @@ async def _zmq_subscriber() -> None:
                         pass  # Probe results don't update snapshot state directly
                     elif topic == TOPIC_ALMANAC_EVENT:
                         _update_almanac_state(data)
+                    elif topic == b"FullStateSnapshot":
+                        # Extract positions from the last Snapshot in trajectory
+                        traj = data.get("position_trajectory", [])
+                        if traj:
+                            last = traj[-1]
+                            if last.get("event_type") == "Snapshot":
+                                snap_data = last.get("data", {})
+                                positions = snap_data.get("positions", {})
+                                _update_position(
+                                    {
+                                        "sim_time": snap_data.get("sim_time", ""),
+                                        "positions": [
+                                            {
+                                                "node_id": nid,
+                                                "lat_deg": p.get("lat_deg", 0),
+                                                "lon_deg": p.get("lon_deg", 0),
+                                                "alt_km": p.get("alt_km", 0),
+                                                "node_type": "ground_station"
+                                                if nid.startswith("gs-")
+                                                else "satellite",
+                                                "plane": p.get("plane"),
+                                                "slot": p.get("slot"),
+                                            }
+                                            for nid, p in positions.items()
+                                        ],
+                                    }
+                                )
+                        # Extract link state
+                        for pair_key, link in {
+                            **data.get("isl_state", {}),
+                            **data.get("gs_state", {}),
+                        }.items():
+                            if link.get("visible") and link.get("scheduled"):
+                                parts = pair_key.split(":")
+                                if len(parts) == 2:
+                                    _update_link_up(
+                                        {
+                                            "node_a": min(parts[0], parts[1]),
+                                            "node_b": max(parts[0], parts[1]),
+                                            "latency_ms": 0,
+                                            "bandwidth_mbps": 0,
+                                            "reason": "snapshot",
+                                        }
+                                    )
 
                 except Exception as exc:
                     log.warning(f"ZMQ message processing error: {exc}")

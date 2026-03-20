@@ -375,89 +375,92 @@ def main():
     print(f"E2E Matrix starting at {datetime.now(UTC).isoformat()}")
     print(f"PID: {os.getpid()}")
 
-    # ---------------------------------------------------------------
-    # CLEAN ALL PREVIOUS EVIDENCE. NON-NEGOTIABLE.
-    # This prevents using stale results from prior runs.
-    # ---------------------------------------------------------------
+    # Clean ALL previous evidence. Every run starts clean.
     evidence_root = Path("tests/integration/e2e-evidence")
     if evidence_root.exists():
         shutil.rmtree(evidence_root)
         print(f"Deleted previous evidence at {evidence_root}")
 
-    evidence_dir = evidence_root
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    evidence_dir = evidence_root / ts
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write a run token that proves this script actually executed.
-    # The token includes PID and wall-clock time. It is checked at
-    # the end. If the token file does not match, the run is invalid.
-    run_start = datetime.now(UTC)
-    run_token = f"{run_start.strftime('%Y%m%d-%H%M%S')}-pid{os.getpid()}"
-    (evidence_dir / ".run_token").write_text(run_token)
-    print(f"Run token: {run_token}")
-    print(f"Evidence directory: {evidence_dir}")
-    print()
+    # PID file: signals "running" to external pollers
+    pid_file = evidence_root / ".running"
+    pid_file.write_text(str(os.getpid()))
 
-    results = []
-    passed = 0
-    failed = 0
+    try:
+        run_start = datetime.now(UTC)
+        run_token = f"{run_start.strftime('%Y%m%d-%H%M%S')}-pid{os.getpid()}"
+        (evidence_dir / ".run_token").write_text(run_token)
+        print(f"Run token: {run_token}")
+        print(f"Evidence directory: {evidence_dir}")
+        print()
 
-    for perm in MATRIX:
-        evidence = run_permutation(perm)
-        results.append(evidence)
+        results = []
+        passed = 0
+        failed = 0
 
-        # Write per-permutation evidence immediately
-        eid = perm["id"]
-        label = evidence.get("label", "unknown")
-        evidence_file = evidence_dir / f"perm-{eid:02d}-{label}.json"
-        evidence_file.write_text(json.dumps(evidence, indent=2))
+        for perm in MATRIX:
+            evidence = run_permutation(perm)
+            results.append(evidence)
 
-        if evidence["result"] == "PASS":
-            passed += 1
-        else:
-            failed += 1
+            # Write per-permutation evidence immediately
+            eid = perm["id"]
+            label = evidence.get("label", "unknown")
+            evidence_file = evidence_dir / f"perm-{eid:02d}-{label}.json"
+            evidence_file.write_text(json.dumps(evidence, indent=2))
 
-    # Write summary
-    run_end = datetime.now(UTC)
-    duration_s = (run_end - run_start).total_seconds()
-    summary = {
-        "run_token": run_token,
-        "start_time": run_start.isoformat(),
-        "end_time": run_end.isoformat(),
-        "duration_s": round(duration_s, 1),
-        "total": len(MATRIX),
-        "passed": passed,
-        "failed": failed,
-        "results": [
-            {"id": r["id"], "label": r.get("label"), "result": r["result"]} for r in results
-        ],
-    }
-    (evidence_dir / "matrix-summary.json").write_text(json.dumps(summary, indent=2))
+            if evidence["result"] == "PASS":
+                passed += 1
+            else:
+                failed += 1
 
-    # ---------------------------------------------------------------
-    # VALIDATE EVIDENCE IS FROM THIS RUN
-    # ---------------------------------------------------------------
-    token_file = evidence_dir / ".run_token"
-    if not token_file.exists():
-        print("FATAL: .run_token missing from evidence directory")
-        sys.exit(2)
-    stored_token = token_file.read_text().strip()
-    if stored_token != run_token:
-        print(f"FATAL: run_token mismatch: expected {run_token}, got {stored_token}")
-        sys.exit(2)
+        # Write summary
+        run_end = datetime.now(UTC)
+        duration_s = (run_end - run_start).total_seconds()
+        summary = {
+            "run_token": run_token,
+            "start_time": run_start.isoformat(),
+            "end_time": run_end.isoformat(),
+            "duration_s": round(duration_s, 1),
+            "total": len(MATRIX),
+            "passed": passed,
+            "failed": failed,
+            "results": [
+                {"id": r["id"], "label": r.get("label"), "result": r["result"]} for r in results
+            ],
+        }
+        (evidence_dir / "matrix-summary.json").write_text(json.dumps(summary, indent=2))
 
-    # Print final summary
-    print()
-    print("=" * 60)
-    print(f"E2E Matrix: {passed}/{len(MATRIX)} passed, {failed}/{len(MATRIX)} failed")
-    print(f"Duration: {duration_s:.0f}s")
-    print(f"Run token: {run_token}")
-    print("=" * 60)
-    for r in results:
-        status = r.get("result", "?")
-        tag = "PASS" if status == "PASS" else "FAIL" if status == "FAIL" else status
-        print(f"  [{r['id']:2d}] {tag:8s} {r.get('label', '')}")
-    print(f"\nEvidence: {evidence_dir}/")
-    print(f"Summary:  {evidence_dir}/matrix-summary.json")
+        # Validate evidence is from this run
+        token_file = evidence_dir / ".run_token"
+        if not token_file.exists():
+            print("FATAL: .run_token missing from evidence directory")
+            sys.exit(2)
+        stored_token = token_file.read_text().strip()
+        if stored_token != run_token:
+            print(f"FATAL: run_token mismatch: expected {run_token}, got {stored_token}")
+            sys.exit(2)
+
+        # Print final summary
+        print()
+        print("=" * 60)
+        print(f"E2E Matrix: {passed}/{len(MATRIX)} passed, {failed}/{len(MATRIX)} failed")
+        print(f"Duration: {duration_s:.0f}s")
+        print(f"Run token: {run_token}")
+        print("=" * 60)
+        for r in results:
+            status = r.get("result", "?")
+            tag = "PASS" if status == "PASS" else "FAIL" if status == "FAIL" else status
+            print(f"  [{r['id']:2d}] {tag:8s} {r.get('label', '')}")
+        print(f"\nEvidence: {evidence_dir}/")
+        print(f"Summary:  {evidence_dir}/matrix-summary.json")
+
+    finally:
+        # Always remove PID file, even on crash
+        if pid_file.exists():
+            pid_file.unlink()
 
     sys.exit(0 if failed == 0 else 1)
 

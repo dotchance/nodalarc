@@ -2118,6 +2118,31 @@ def main() -> None:
             _session_manager._status = "ready"
         else:
             log.info("No session loaded — VS-API starting in idle mode")
+            # Check if Operator has an active session (CR with phase Ready/Wiring)
+            try:
+                import kubernetes.client
+                import kubernetes.config
+
+                try:
+                    kubernetes.config.load_incluster_config()
+                except kubernetes.config.ConfigException:
+                    kubernetes.config.load_kube_config()
+                api = kubernetes.client.CustomObjectsApi()
+                cr = api.get_namespaced_custom_object(
+                    group="nodalarc.io",
+                    version="v1alpha1",
+                    namespace=get_platform_config().kubernetes_namespace,
+                    plural="constellationspecs",
+                    name="current-session",
+                )
+                phase = cr.get("status", {}).get("phase", "")
+                if phase in ("Ready", "Wiring", "Creating"):
+                    log.info(
+                        f"Active ConstellationSpec CR found (phase={phase}) — setting status to ready"
+                    )
+                    _session_manager._status = "ready"
+            except Exception:
+                pass  # No CR exists — stay idle
 
         # Ensure tables exist
         conn = sqlite3.connect(args.db)

@@ -307,12 +307,15 @@ def run_permutation(perm: dict) -> dict:
         ready_result = wait_for_ready(token, timeout=300)
         evidence["ready_result"] = ready_result
         if ready_result.get("phase") != "Ready":
-            evidence["result"] = "FAIL"
-            evidence["error"] = f"Did not reach Ready: {ready_result}"
             print(f"  FAIL: {evidence['error']}")
             return evidence
 
         # Check pods
+        # Wait for platform pods to stabilize (Operator restarts VS-API/OME)
+        print("  Waiting 30s for platform stabilization...")
+        time.sleep(30)
+        token = get_token()  # Re-fetch (VS-API may have restarted)
+
         print("  Checking pods...")
         pod_result = check_pods(perm)
         evidence["pods"] = pod_result

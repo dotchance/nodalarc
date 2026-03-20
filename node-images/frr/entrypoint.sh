@@ -39,10 +39,16 @@ for daemon in mgmtd zebra isisd ospfd pathd staticd; do
     if [ -n "$enabled" ]; then
         mkdir -p "/etc/service/${daemon}"
         # mgmtd doesn't take -f config file; zebra/staticd use -A for listen address
+        # Use unified frr.conf if present (M7 Operator), else per-daemon config
         if [ "$daemon" = "mgmtd" ]; then
             cat > "/etc/service/${daemon}/run" <<RUNEOF
 #!/bin/bash
 exec /usr/lib/frr/${daemon}
+RUNEOF
+        elif [ -f /etc/frr/frr.conf ]; then
+            cat > "/etc/service/${daemon}/run" <<RUNEOF
+#!/bin/bash
+exec /usr/lib/frr/${daemon} -f /etc/frr/frr.conf -A 127.0.0.1
 RUNEOF
         else
             cat > "/etc/service/${daemon}/run" <<RUNEOF

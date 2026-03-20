@@ -140,6 +140,16 @@ def deploy_session(
                 )
                 + "\n"
             )
+        # Create unified frr.conf combining all daemon configs
+        # FRR 10.x with mgmtd needs a single config for proper interface merging
+        frr_conf_parts = []
+        for name_key in ("zebra.conf", "isisd.conf", "ospfd.conf", "pathd.conf", "staticd.conf"):
+            if name_key in configs:
+                frr_conf_parts.append(f"! === {name_key} ===")
+                frr_conf_parts.append(configs[name_key])
+        if frr_conf_parts:
+            configs["frr.conf"] = "\n".join(frr_conf_parts) + "\n"
+
         rendered_configs[node_id] = configs
 
     # --- Step 6: Create per-node FRR config ConfigMaps ---
@@ -419,14 +429,16 @@ def _spec_to_session_yaml(spec: dict) -> str:
             "protocol": routing.get("protocol", "isis"),
             "extensions": routing.get("extensions", []),
             "config_overrides": routing.get("configOverrides", {}),
+            "area_assignment": {
+                "strategy": routing.get("areaStrategy", "flat"),
+                "gs_area_id": "49.0001",
+            },
         },
         "time": {
             "compression": time_cfg.get("compression", 1),
             "step_seconds": time_cfg.get("stepSeconds", 1),
         },
-        "addressing": {
-            "area_assignment": routing.get("areaStrategy", "flat"),
-        },
+        "addressing": {},
     }
     if routing.get("stack"):
         session_dict["routing"]["stack"] = routing["stack"]

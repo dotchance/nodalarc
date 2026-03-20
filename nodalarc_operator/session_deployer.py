@@ -626,9 +626,7 @@ def _create_session_pod(
         security_context=kubernetes.client.V1SecurityContext(
             capabilities=kubernetes.client.V1Capabilities(add=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"])
         ),
-        resources=kubernetes.client.V1ResourceRequirements(
-            limits={"memory": "128Mi", "cpu": "100m"}
-        ),
+        resources=kubernetes.client.V1ResourceRequirements(limits={"memory": "60Mi", "cpu": "50m"}),
         volume_mounts=[
             kubernetes.client.V1VolumeMount(
                 name="frr-config",
@@ -659,7 +657,7 @@ def _create_session_pod(
                 )
             ),
             resources=kubernetes.client.V1ResourceRequirements(
-                limits={"memory": "128Mi", "cpu": "100m"}
+                limits={"memory": "60Mi", "cpu": "50m"}
             ),
         )
         if sidecar_env:

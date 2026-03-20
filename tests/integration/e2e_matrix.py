@@ -251,12 +251,24 @@ def check_websocket(token: str) -> dict:
     nodes = t2_resp.json().get("nodes", [])
     sats = [n for n in nodes if n.get("node_id", "").startswith("sat-")]
     plane_ok = all(isinstance(s.get("plane"), int) for s in sats)
+
+    # Retry plane/slot check — PositionEvents may not have reached all nodes yet
+    retries = 0
+    while not plane_ok and retries < 3:
+        time.sleep(10)
+        retry_resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
+        nodes = retry_resp.json().get("nodes", [])
+        sats = [n for n in nodes if n.get("node_id", "").startswith("sat-")]
+        plane_ok = all(isinstance(s.get("plane"), int) for s in sats)
+        retries += 1
+
     return {
         "sim_time_1": t1[:19],
         "sim_time_2": t2[:19],
         "advancing": t1 != t2,
         "node_count": len(nodes),
         "plane_slot_ok": plane_ok,
+        "plane_slot_retries": retries,
     }
 
 

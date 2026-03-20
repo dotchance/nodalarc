@@ -329,8 +329,24 @@ class SessionManager:
                     name="current-session",
                 )
                 log.info("Deleted existing ConstellationSpec CR")
+                # Wait for CR to be fully deleted (avoid 409 Conflict on recreate)
+                self._status_detail = "Waiting for old CR to finalize"
+                for _ in range(60):
+                    try:
+                        api.get_namespaced_custom_object(
+                            group="nodalarc.io",
+                            version="v1alpha1",
+                            namespace=ns,
+                            plural="constellationspecs",
+                            name="current-session",
+                        )
+                        time.sleep(2)  # Still exists, wait
+                    except kubernetes.client.rest.ApiException as get_e:
+                        if get_e.status == 404:
+                            break  # Gone
+                        raise
                 # Wait for pods to terminate
-                self._status_detail = "Waiting for old session to terminate"
+                self._status_detail = "Waiting for old session pods to terminate"
                 v1 = kubernetes.client.CoreV1Api()
                 for _ in range(60):
                     pods = v1.list_namespaced_pod(ns, label_selector="nodalarc.io/node-id")

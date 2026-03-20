@@ -2083,7 +2083,18 @@ def main() -> None:
         _constellation_name = Path(session.constellation).stem
         _gs_elevation_map = _load_gs_elevation_map(session)
         _beam_falloff_exponent = _load_beam_falloff_exponent(session)
-        _session_manager.set_active(args.session)
+        # Mark session active. Use the original session file path from the
+        # session-state ConfigMap (if mounted) so it matches the sessions list.
+        _active_path = args.session
+        try:
+            _state_mount = Path("/etc/nodalarc/state/session-state.json")
+            if _state_mount.exists():
+                _ss = json.loads(_state_mount.read_text())
+                if _ss.get("session_config"):
+                    _active_path = _ss["session_config"]
+        except Exception:
+            pass
+        _session_manager.set_active(_active_path)
         _session_manager._status = "ready"
 
         # Ensure tables exist

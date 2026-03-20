@@ -224,10 +224,14 @@ def teardown_session(namespace: str) -> None:
 
 
 def check_pods_ready(namespace: str) -> tuple[int, int]:
-    """Count total and ready session pods. Returns (total, ready)."""
+    """Count total and ready session pods. Returns (total, ready).
+
+    Matches pods with nodalarc.io/node-id label (present on both
+    Operator-created and na_deploy-created session pods).
+    """
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
-    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/session")
+    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     total = len(pods.items)
     ready = sum(1 for p in pods.items if p.status and p.status.phase == "Running")
     return total, ready
@@ -237,7 +241,7 @@ def write_pod_ips_configmap(namespace: str) -> None:
     """Write nodalarc-pod-ips ConfigMap from running session pods."""
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
-    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/session")
+    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     data = {}
     for pod in pods.items:
         node_id = pod.metadata.labels.get("nodalarc.io/node-id", "")

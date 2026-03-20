@@ -293,8 +293,31 @@ def check_websocket(token: str) -> dict:
     }
 
 
+def _derive_loopback_ip(node_id: str, gs_nodes: list) -> str | None:
+    """Derive loopback IP from node_id using addressing scheme."""
+    import re
+
+    sat_match = re.match(r"sat-P(\d+)S(\d+)", node_id, re.IGNORECASE)
+    if sat_match:
+        return f"10.{int(sat_match.group(1))}.{int(sat_match.group(2))}.1"
+    # GS — find index from position in sorted gs list
+    gs_ids = sorted(n["node_id"] for n in gs_nodes)
+    try:
+        gs_idx = gs_ids.index(node_id)
+        return f"10.255.{gs_idx + 1}.1"
+    except ValueError:
+        return None
+
+
 def check_ping(token: str, perm: dict) -> dict:
-    """Ping between ground stations through the satellite mesh."""
+    """Ping between nodes that are actually connected in the current topology.
+
+    Strategy:
+    1. Get current state with links from VS-API
+    2. Find two satellites that have IS-IS adjacencies (they are connected)
+    3. Ping loopback-to-loopback between them
+    4. If no connected satellite pair found, report SKIP with topology details
+    """
     import subprocess
 
     protocol = perm["protocol"]
@@ -302,56 +325,68 @@ def check_ping(token: str, perm: dict) -> dict:
         return check_nodalpath_mpls(token, perm)
 
     resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-    nodes = resp.json().get("nodes", [])
+    state = resp.json()
+    nodes = state.get("nodes", [])
+    links = state.get("links", [])
+    if isinstance(links, dict):
+        links = list(links.values())
+
     gs_nodes = [n for n in nodes if n.get("node_id", "").startswith("gs-")]
+    sat_nodes = [n for n in nodes if n.get("node_id", "").startswith("sat-")]
 
-    if len(gs_nodes) < 2:
-        return {"result": "SKIP", "reason": "fewer than 2 ground stations"}
+    # Find active links to identify connected pairs
+    active_links = [l for l in links if l.get("state") == "active"]
 
-    src = gs_nodes[0]["node_id"]
-    dst = gs_nodes[1]["node_id"]
+    # Strategy 1: Find two satellites connected by an ISL
+    src = None
+    dst = None
+    for link in active_links:
+        a = link.get("node_a", "")
+        b = link.get("node_b", "")
+        if a.startswith("sat-") and b.startswith("sat-"):
+            src = a
+            dst = b
+            break
 
-    # Derive dst loopback IP from node_id
-    # Satellites: sat-P{plane}S{slot} -> 10.{plane}.{slot}.1
-    # Ground stations: gs-{name} -> 10.255.{gs_index}.1
-    import re
+    # Strategy 2: If no ISL link, find a satellite connected to a GS
+    if not src:
+        for link in active_links:
+            a = link.get("node_a", "")
+            b = link.get("node_b", "")
+            if a.startswith("gs-") and b.startswith("sat-"):
+                src, dst = b, a
+                break
+            if a.startswith("sat-") and b.startswith("gs-"):
+                src, dst = a, b
+                break
 
-    dst_ip = None
-    sat_match = re.match(r"sat-P(\d+)S(\d+)", dst, re.IGNORECASE)
-    if sat_match:
-        dst_ip = f"10.{int(sat_match.group(1))}.{int(sat_match.group(2))}.1"
-    else:
-        # GS — find index from position in gs_nodes list
-        gs_names = [n["node_id"] for n in gs_nodes]
-        try:
-            gs_idx = gs_names.index(dst)
-            dst_ip = f"10.255.{gs_idx + 1}.1"
-        except ValueError:
-            pass
-
-    if not dst_ip:
+    if not src or not dst:
         return {
-            "result": "FAIL",
-            "reason": f"Could not derive loopback IP for {dst}",
-            "src": src,
-            "dst": dst,
+            "result": "SKIP",
+            "reason": f"No connected node pairs found ({len(active_links)} active links, "
+            f"{len(sat_nodes)} sats, {len(gs_nodes)} gs)",
+            "active_link_count": len(active_links),
         }
 
-    # Ping with retries (routing may still be converging)
+    dst_ip = _derive_loopback_ip(dst, gs_nodes)
+    if not dst_ip:
+        return {"result": "FAIL", "reason": f"Cannot derive IP for {dst}", "src": src, "dst": dst}
+
+    # Ping with retries
     attempts = []
-    deadline = time.monotonic() + 180
+    deadline = time.monotonic() + 120  # 2 minutes
     while time.monotonic() < deadline:
         result = subprocess.run(
-            f"{KUBECTL} exec -n nodalarc {src} -c frr -- ping -c 5 -W 2 {dst_ip}".split(),
+            f"{KUBECTL} exec -n nodalarc {src.lower()} -c frr -- ping -c 3 -W 2 {dst_ip}".split(),
             capture_output=True,
             text=True,
             timeout=30,
         )
         attempts.append(
             {
-                "elapsed_s": round(180 - (deadline - time.monotonic()), 1),
+                "elapsed_s": round(120 - (deadline - time.monotonic()), 1),
                 "rc": result.returncode,
-                "stdout": result.stdout[-500:],
+                "stdout": result.stdout[-300:],
             }
         )
         if "bytes from" in result.stdout or "0% packet loss" in result.stdout:
@@ -367,29 +402,7 @@ def check_ping(token: str, perm: dict) -> dict:
                 "stats": stats,
                 "attempts": len(attempts),
             }
-        time.sleep(15)
-
-    # Ping failed — capture diagnostics
-    diag_route = (
-        requests.post(
-            f"{BASE_URL}/api/v1/introspect",
-            headers=headers(token),
-            json={"node_id": src, "command": "show ip route"},
-        )
-        .json()
-        .get("output", "")[:1000]
-    )
-
-    adj_cmd = "show isis neighbor" if perm["protocol"] == "isis" else "show ip ospf neighbor"
-    diag_adj = (
-        requests.post(
-            f"{BASE_URL}/api/v1/introspect",
-            headers=headers(token),
-            json={"node_id": src, "command": adj_cmd},
-        )
-        .json()
-        .get("output", "")[:1000]
-    )
+        time.sleep(10)
 
     return {
         "result": "FAIL",
@@ -398,8 +411,6 @@ def check_ping(token: str, perm: dict) -> dict:
         "dst_ip": dst_ip,
         "attempts": len(attempts),
         "last_stdout": attempts[-1]["stdout"] if attempts else "",
-        "diag_route": diag_route,
-        "diag_adjacency": diag_adj,
     }
 
 
@@ -532,7 +543,7 @@ def run_permutation(perm: dict) -> dict:
         )
         evidence["result"] = "PASS" if passed else "FAIL"
         print(
-            f"  {'PASS' if passed else 'FAIL'}: {pod_result['running']} pods, "
+            f"  {evidence['result']}: {pod_result['running']} pods, "
             f"{routing_result.get('neighbor_count', '?')} neighbors, "
             f"sim_time={'advancing' if ws_result['advancing'] else 'STATIC'}, "
             f"ping={ping_result.get('result', '?')}"

@@ -32,6 +32,9 @@ spec:
             - containerPort: 5560
               name: zmq-events
               protocol: TCP
+            - containerPort: 5568
+              name: zmq-catchup
+              protocol: TCP
           readinessProbe:
             httpGet:
               path: /

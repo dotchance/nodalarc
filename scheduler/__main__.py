@@ -97,7 +97,14 @@ def main() -> None:
 
     init_platform_config(Path(args.platform_config))
 
-    data = yaml.safe_load(Path(args.session).read_text())
+    # Wait for session config to appear (Operator creates it after CRD apply)
+    import time as _time
+
+    session_file = Path(args.session)
+    while not session_file.is_file():
+        log.info("Waiting for session config at %s...", args.session)
+        _time.sleep(5)
+    data = yaml.safe_load(session_file.read_text())
     session = SessionConfig.model_validate(data)
     addressing = AddressingScheme(session.addressing)
     interface_map, bandwidth_map = _build_interface_map(session, addressing)

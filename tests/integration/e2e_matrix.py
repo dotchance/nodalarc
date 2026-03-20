@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import UTC, datetime
@@ -20,7 +21,6 @@ import requests
 
 VS_API_HOST = os.environ.get("VS_API_HOST", "192.168.10.202:8080")
 BASE_URL = f"http://{VS_API_HOST}"
-EVIDENCE_DIR = Path("tests/integration/e2e-evidence")
 KUBECTL = "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 
 MATRIX = [
@@ -371,7 +371,21 @@ def run_permutation(perm: dict) -> dict:
 
 
 def main():
-    EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    # Clean ALL previous evidence. Every run starts clean.
+    # This prevents using stale results from prior runs.
+    evidence_root = Path("tests/integration/e2e-evidence")
+    if evidence_root.exists():
+        shutil.rmtree(evidence_root)
+
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    evidence_dir = evidence_root / ts
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write run token. This proves the script actually executed.
+    run_token = f"{ts}-{os.getpid()}"
+    (evidence_dir / ".run_token").write_text(run_token)
+    print(f"Run token: {run_token}")
+    print(f"Evidence directory: {evidence_dir}")
 
     results = []
     passed = 0
@@ -383,7 +397,7 @@ def main():
 
         # Write per-permutation evidence
         eid = perm["id"]
-        evidence_file = EVIDENCE_DIR / f"perm-{eid:02d}-{evidence.get('label', 'unknown')}.json"
+        evidence_file = evidence_dir / f"perm-{eid:02d}-{evidence.get('label', 'unknown')}.json"
         evidence_file.write_text(json.dumps(evidence, indent=2))
 
         if evidence["result"] == "PASS":
@@ -397,16 +411,24 @@ def main():
         "total": len(MATRIX),
         "passed": passed,
         "failed": failed,
+        "run_token": run_token,
         "results": [
             {"id": r["id"], "label": r.get("label"), "result": r["result"]} for r in results
         ],
     }
-    (EVIDENCE_DIR / "matrix-summary.json").write_text(json.dumps(summary, indent=2))
+    (evidence_dir / "matrix-summary.json").write_text(json.dumps(summary, indent=2))
 
     print(f"\n{'=' * 60}")
     print(f"E2E Matrix: {passed}/{len(MATRIX)} passed, {failed} failed")
-    print(f"Evidence: {EVIDENCE_DIR}/")
+    print(f"Evidence: {evidence_dir}/")
     print(f"{'=' * 60}")
+
+    # Validate this run produced fresh evidence
+    token_file = evidence_dir / ".run_token"
+    if not token_file.exists() or token_file.read_text() != run_token:
+        print("FATAL: Evidence directory tampered with or stale")
+        sys.exit(2)
+    print(f"Run token verified: {run_token}")
 
     sys.exit(0 if failed == 0 else 1)
 

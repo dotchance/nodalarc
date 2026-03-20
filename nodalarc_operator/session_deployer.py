@@ -422,6 +422,18 @@ def write_pod_ips_configmap(namespace: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _build_area_assignment(routing: dict) -> dict:
+    """Build area_assignment config from routing spec."""
+    strategy = routing.get("areaStrategy", "flat")
+    result: dict[str, Any] = {
+        "strategy": strategy,
+        "gs_area_id": "49.0001",
+    }
+    if strategy == "stripe":
+        result["planes_per_stripe"] = routing.get("planesPerStripe", 1)
+    return result
+
+
 def _spec_to_session_yaml(spec: dict) -> str:
     """Convert ConstellationSpec CR spec to a SessionConfig-compatible YAML string."""
     routing = spec.get("routing", {})
@@ -435,10 +447,7 @@ def _spec_to_session_yaml(spec: dict) -> str:
             "protocol": routing.get("protocol", "isis"),
             "extensions": routing.get("extensions", []),
             "config_overrides": routing.get("configOverrides", {}),
-            "area_assignment": {
-                "strategy": routing.get("areaStrategy", "flat"),
-                "gs_area_id": "49.0001",
-            },
+            "area_assignment": _build_area_assignment(routing),
         },
         "time": {
             "compression": time_cfg.get("compression", 1),

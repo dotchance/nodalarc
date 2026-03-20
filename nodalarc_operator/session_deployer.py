@@ -627,7 +627,7 @@ def _create_session_pod(
             capabilities=kubernetes.client.V1Capabilities(add=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"])
         ),
         resources=kubernetes.client.V1ResourceRequirements(
-            limits={"memory": "256Mi", "cpu": "250m"}
+            limits={"memory": "128Mi", "cpu": "100m"}
         ),
         volume_mounts=[
             kubernetes.client.V1VolumeMount(
@@ -659,7 +659,7 @@ def _create_session_pod(
                 )
             ),
             resources=kubernetes.client.V1ResourceRequirements(
-                limits={"memory": "256Mi", "cpu": "250m"}
+                limits={"memory": "128Mi", "cpu": "100m"}
             ),
         )
         if sidecar_env:

@@ -488,6 +488,8 @@ def run_permutation(perm: dict) -> dict:
         ready_result = wait_for_ready(token, timeout=600)
         evidence["ready_result"] = ready_result
         if ready_result.get("phase") != "Ready":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Did not reach Ready: {ready_result}"
             print(f"  FAIL: {evidence['error']}")
             return evidence
 

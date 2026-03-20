@@ -134,21 +134,27 @@ def deploy_session(
             configs[dest_name] = rendered
         # Generate daemons file
         if resolved.daemons:
+            # mgmtd is always required in FRR 10.x — it manages config loading
+            enabled = set(resolved.daemons) | {"mgmtd"}
             configs["daemons"] = (
-                "\n".join(
-                    f"{d}={'yes' if d in resolved.daemons else 'no'}" for d in _ALL_FRR_DAEMONS
-                )
-                + "\n"
+                "\n".join(f"{d}={'yes' if d in enabled else 'no'}" for d in _ALL_FRR_DAEMONS) + "\n"
             )
-        # Create unified frr.conf combining all daemon configs
-        # FRR 10.x with mgmtd needs a single config for proper interface merging
+        # Create unified frr.conf combining all daemon configs.
+        # FRR's config parser treats blank lines inside blocks as implicit "exit",
+        # so we must strip consecutive blank lines from Jinja2 output.
         frr_conf_parts = []
         for name_key in ("zebra.conf", "isisd.conf", "ospfd.conf", "pathd.conf", "staticd.conf"):
             if name_key in configs:
                 frr_conf_parts.append(f"! === {name_key} ===")
                 frr_conf_parts.append(configs[name_key])
         if frr_conf_parts:
-            configs["frr.conf"] = "\n".join(frr_conf_parts) + "\n"
+            raw = "\n".join(frr_conf_parts)
+            # Remove blank lines — FRR's config parser interprets blank lines
+            # inside interface/router blocks as implicit "exit" commands.
+            # Jinja2 {% if %} blocks produce blank lines that break parsing.
+            lines = raw.splitlines()
+            cleaned_lines = [line for line in lines if line.strip() != ""]
+            configs["frr.conf"] = "\n".join(cleaned_lines) + "\n"
 
         rendered_configs[node_id] = configs
 

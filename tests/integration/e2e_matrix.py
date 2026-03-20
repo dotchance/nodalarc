@@ -228,7 +228,11 @@ def check_routing(token: str, perm: dict) -> dict:
     """Check routing convergence via introspect."""
     protocol = perm["protocol"]
     if protocol == "nodalpath":
-        return {"protocol": "nodalpath", "check": "skipped"}
+        return {
+            "protocol": "nodalpath",
+            "check": "deferred_to_ping",
+            "reason": "MPLS table checked in ping step",
+        }
 
     # Pick first satellite
     resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
@@ -286,6 +290,149 @@ def check_websocket(token: str) -> dict:
         "node_count": len(nodes),
         "plane_slot_ok": plane_ok,
         "plane_slot_retries": retries,
+    }
+
+
+def check_ping(token: str, perm: dict) -> dict:
+    """Ping between ground stations through the satellite mesh."""
+    import subprocess
+
+    protocol = perm["protocol"]
+    if protocol == "nodalpath":
+        return check_nodalpath_mpls(token, perm)
+
+    resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
+    nodes = resp.json().get("nodes", [])
+    gs_nodes = [n for n in nodes if n.get("node_id", "").startswith("gs-")]
+
+    if len(gs_nodes) < 2:
+        return {"result": "SKIP", "reason": "fewer than 2 ground stations"}
+
+    src = gs_nodes[0]["node_id"]
+    dst = gs_nodes[1]["node_id"]
+
+    # Get dst loopback IP via introspect
+    intro_resp = requests.post(
+        f"{BASE_URL}/api/v1/introspect",
+        headers=headers(token),
+        json={"node_id": dst, "command": "show interface brief"},
+    )
+    intro_output = intro_resp.json().get("output", "")
+
+    dst_ip = None
+    for line in intro_output.splitlines():
+        if "lo" in line.lower() and "up" in line.lower():
+            for tok in line.split():
+                if tok.startswith("10.") and "/" in tok:
+                    dst_ip = tok.split("/")[0]
+                    break
+            if dst_ip:
+                break
+
+    if not dst_ip:
+        return {
+            "result": "FAIL",
+            "reason": f"Could not find loopback IP for {dst}",
+            "introspect_output": intro_output[:500],
+            "src": src,
+            "dst": dst,
+        }
+
+    # Ping with retries (routing may still be converging)
+    attempts = []
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            f"{KUBECTL} exec -n nodalarc {src} -c frr -- ping -c 5 -W 2 {dst_ip}".split(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        attempts.append(
+            {
+                "elapsed_s": round(180 - (deadline - time.monotonic()), 1),
+                "rc": result.returncode,
+                "stdout": result.stdout[-500:],
+            }
+        )
+        if "bytes from" in result.stdout or "0% packet loss" in result.stdout:
+            stats = ""
+            for line in result.stdout.splitlines():
+                if "packets transmitted" in line:
+                    stats = line.strip()
+            return {
+                "result": "PASS",
+                "src": src,
+                "dst": dst,
+                "dst_ip": dst_ip,
+                "stats": stats,
+                "attempts": len(attempts),
+            }
+        time.sleep(15)
+
+    # Ping failed — capture diagnostics
+    diag_route = (
+        requests.post(
+            f"{BASE_URL}/api/v1/introspect",
+            headers=headers(token),
+            json={"node_id": src, "command": "show ip route"},
+        )
+        .json()
+        .get("output", "")[:1000]
+    )
+
+    adj_cmd = "show isis neighbor" if perm["protocol"] == "isis" else "show ip ospf neighbor"
+    diag_adj = (
+        requests.post(
+            f"{BASE_URL}/api/v1/introspect",
+            headers=headers(token),
+            json={"node_id": src, "command": adj_cmd},
+        )
+        .json()
+        .get("output", "")[:1000]
+    )
+
+    return {
+        "result": "FAIL",
+        "src": src,
+        "dst": dst,
+        "dst_ip": dst_ip,
+        "attempts": len(attempts),
+        "last_stdout": attempts[-1]["stdout"] if attempts else "",
+        "diag_route": diag_route,
+        "diag_adjacency": diag_adj,
+    }
+
+
+def check_nodalpath_mpls(token: str, perm: dict) -> dict:
+    """Check MPLS table entries for NodalPath sessions."""
+    deadline = time.monotonic() + 120
+    attempts = 0
+    output = ""
+    while time.monotonic() < deadline:
+        resp = requests.post(
+            f"{BASE_URL}/api/v1/introspect",
+            headers=headers(token),
+            json={"node_id": "sat-p00s00", "command": "show mpls table"},
+        )
+        output = resp.json().get("output", "")
+        mpls_lines = len([l for l in output.splitlines() if l.strip()])
+        attempts += 1
+        if mpls_lines > 0:
+            return {
+                "result": "PASS",
+                "protocol": "nodalpath",
+                "mpls_entries": mpls_lines,
+                "attempts": attempts,
+            }
+        time.sleep(15)
+
+    return {
+        "result": "FAIL",
+        "protocol": "nodalpath",
+        "mpls_entries": 0,
+        "attempts": attempts,
+        "last_output": output[:500],
     }
 
 
@@ -364,18 +511,30 @@ def run_permutation(perm: dict) -> dict:
         ws_result = check_websocket(token)
         evidence["websocket"] = ws_result
 
+        # Check GS-to-GS ping (or MPLS for NodalPath)
+        print("  Checking GS-to-GS connectivity...")
+        ping_result = check_ping(token, perm)
+        evidence["ping"] = ping_result
+        print(
+            f"  Ping: {ping_result.get('result', '?')}"
+            f" ({ping_result.get('src', '?')} -> {ping_result.get('dst', '?')})"
+        )
+
         # Determine pass/fail
+        ping_ok = ping_result.get("result") in ("PASS", "SKIP")
         passed = (
             ready_result.get("phase") == "Ready"
             and pod_result["running"] == pod_result["total"]
             and ws_result["advancing"]
             and ws_result["plane_slot_ok"]
+            and ping_ok
         )
         evidence["result"] = "PASS" if passed else "FAIL"
         print(
             f"  {'PASS' if passed else 'FAIL'}: {pod_result['running']} pods, "
             f"{routing_result.get('neighbor_count', '?')} neighbors, "
-            f"sim_time={'advancing' if ws_result['advancing'] else 'STATIC'}"
+            f"sim_time={'advancing' if ws_result['advancing'] else 'STATIC'}, "
+            f"ping={ping_result.get('result', '?')}"
         )
 
     except Exception as exc:

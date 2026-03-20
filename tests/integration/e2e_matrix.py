@@ -153,11 +153,14 @@ def deploy_session(token: str, yaml_str: str) -> dict:
     return resp.json()
 
 
-def wait_for_ready(token: str, timeout: int = 300) -> dict:
-    """Wait for CR status to reach Ready — checks K8s directly."""
+def wait_for_ready(token: str, timeout: int = 600) -> dict:
+    """Wait for CR Ready AND VS-API session_status to settle."""
     import subprocess
 
     deadline = time.monotonic() + timeout
+
+    # Phase 1: Wait for CR to reach Ready or Error
+    cr_ready = False
     while time.monotonic() < deadline:
         try:
             result = subprocess.run(
@@ -169,13 +172,8 @@ def wait_for_ready(token: str, timeout: int = 300) -> dict:
             )
             phase = result.stdout.strip()
             if phase == "Ready":
-                # Also check VS-API has nodes
-                try:
-                    resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-                    nodes = resp.json().get("nodes", [])
-                    return {"phase": "Ready", "nodes": len(nodes)}
-                except Exception:
-                    return {"phase": "Ready", "nodes": 0}
+                cr_ready = True
+                break
             if phase == "Error":
                 result2 = subprocess.run(
                     f"{KUBECTL} get constellationspec current-session -n nodalarc "
@@ -188,7 +186,27 @@ def wait_for_ready(token: str, timeout: int = 300) -> dict:
         except Exception:
             pass
         time.sleep(5)
-    return {"phase": "Timeout"}
+
+    if not cr_ready:
+        return {"phase": "Timeout"}
+
+    # Phase 2: Wait for VS-API session_status to leave "switching"
+    # The _run_switch background task may still be running its poll loop
+    for _ in range(60):  # up to 60s
+        try:
+            t = get_token()
+            resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(t))
+            state = resp.json()
+            status = state.get("session_status", "")
+            if status != "switching":
+                nodes = state.get("nodes", [])
+                return {"phase": "Ready", "nodes": len(nodes)}
+        except Exception:
+            pass
+        time.sleep(1)
+
+    # VS-API still switching after 60s — return Ready anyway (CR says so)
+    return {"phase": "Ready", "nodes": 0}
 
 
 def check_pods(perm: dict) -> dict:

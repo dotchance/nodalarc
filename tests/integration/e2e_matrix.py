@@ -112,9 +112,14 @@ MATRIX = [
 ]
 
 
-def get_token() -> str:
-    resp = requests.get(f"{BASE_URL}/api/v1/auth/token")
-    return resp.json()["token"]
+def get_token(retries: int = 12, delay: float = 5.0) -> str:
+    for _attempt in range(retries):
+        try:
+            resp = requests.get(f"{BASE_URL}/api/v1/auth/token", timeout=5)
+            return resp.json()["token"]
+        except Exception:
+            time.sleep(delay)
+    raise RuntimeError(f"VS-API not reachable after {retries * delay}s")
 
 
 def headers(token: str) -> dict:

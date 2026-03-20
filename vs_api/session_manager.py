@@ -411,6 +411,7 @@ class SessionManager:
 
             # === Poll CR status until Ready ===
             self._status_detail = "Waiting for constellation to deploy"
+            cr_ready = False
             for _ in range(300):  # 5 minutes max
                 cr = api.get_namespaced_custom_object(
                     group="nodalarc.io",
@@ -423,10 +424,18 @@ class SessionManager:
                 message = cr.get("status", {}).get("message", "")
                 self._status_detail = message or f"Phase: {phase}"
                 if phase == "Ready":
+                    cr_ready = True
                     break
                 if phase == "Error":
                     raise RuntimeError(f"Operator error: {message}")
                 time.sleep(1)
+
+            if not cr_ready:
+                # CR never reached Ready within timeout — set error, don't claim ready
+                self._status = "error"
+                self._status_detail = "Deploy timed out waiting for CR Ready"
+                log.warning("Session switch timed out waiting for CR Ready")
+                return
 
             # === Update VS-API globals ===
             self._status_detail = "Updating VS-API configuration"

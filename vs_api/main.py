@@ -2017,14 +2017,21 @@ def introspect(body: dict) -> dict:
 
 async def _run_switch(session_path: str) -> None:
     """Run session switch in thread executor (blocking subprocess calls)."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(
-        None,
-        _session_manager.switch,
-        session_path,
-        _clear_state,
-        _update_session_globals,
-    )
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            _session_manager.switch,
+            session_path,
+            _clear_state,
+            _update_session_globals,
+        )
+    except Exception as exc:
+        # Safety net: reset status if switch() raised without setting it
+        if _session_manager and _session_manager.status == "switching":
+            _session_manager._status = "error"
+            _session_manager._status_detail = f"Unhandled: {exc}"
+            log.error("_run_switch safety net caught: %s", exc)
 
 
 def main() -> None:

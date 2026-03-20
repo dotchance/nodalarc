@@ -195,6 +195,9 @@ class Dispatcher:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self.load_interface_inventory)
 
+        # R-OME-008: On-connect catch-up — get current window events
+        catchup_sim_time = await self._ome_catchup(to_pub)
+
         log.info("Scheduler dispatcher started — OME=%s", self._ome_endpoint)
 
         # Buffered events for epsilon-windowed batching
@@ -231,6 +234,12 @@ class Dispatcher:
                         if isinstance(data, dict) and "event_type" in data
                         else data
                     )
+
+                    # R-OME-008 deduplication: skip events already from catch-up
+                    if catchup_sim_time:
+                        evt_st = inner.get("sim_time", "")
+                        if isinstance(evt_st, str) and evt_st and evt_st <= catchup_sim_time:
+                            continue
 
                     if topic == b"FullStateSnapshot":
                         await self._handle_full_state_snapshot(inner, to_pub)
@@ -865,6 +874,63 @@ class Dispatcher:
     # ------------------------------------------------------------------
     # Reconciliation on startup
     # ------------------------------------------------------------------
+
+    async def _ome_catchup(self, to_pub) -> str | None:
+        """R-OME-008: Request current window events from OME catch-up endpoint.
+
+        Returns the last sim_time from the catch-up (for deduplication),
+        or None if catch-up failed.
+        """
+        try:
+            from nodalarc.platform import get_platform_config
+
+            catchup_addr = get_platform_config().ome_catchup_connect
+            import zmq as _zmq
+
+            sock = _zmq.Context().socket(_zmq.REQ)
+            sock.setsockopt(_zmq.RCVTIMEO, 30000)  # 30s — OME may be computing window 1
+            sock.setsockopt(_zmq.SNDTIMEO, 5000)
+            sock.connect(catchup_addr)
+
+            # Use checkpoint sim_time as since_sim_time if available
+            checkpoint = self.read_checkpoint()
+            req: dict = {"request": "current_window"}
+            if checkpoint and checkpoint.get("sim_time"):
+                req["since_sim_time"] = checkpoint["sim_time"]
+
+            sock.send_json(req)
+            resp = sock.recv_json()
+            events = resp.get("events", [])
+            sock.close()
+
+            log.info(
+                "OME catch-up: %d events from window %d",
+                len(events),
+                resp.get("window", 0),
+            )
+
+            last_st = None
+            for evt in events:
+                data = evt.get("data", {})
+                evt_type = evt.get("event_type", "")
+                if evt_type == "Snapshot":
+                    snap = TimelinePositionSnapshot.model_validate(data)
+                    self._position_table.update_from_snapshot(snap)
+                    self._current_sim_time = snap.sim_time
+                elif evt_type == "VisibilityEvent":
+                    vis = VisibilityEvent.model_validate(data)
+                    self._current_sim_time = vis.sim_time
+                st = data.get("sim_time", "")
+                if isinstance(st, str) and st:
+                    last_st = st
+                elif hasattr(st, "isoformat"):
+                    last_st = st.isoformat()
+
+            log.info("OME catch-up complete: last_sim_time=%s", last_st)
+            return last_st
+        except Exception as exc:
+            log.warning("OME catch-up failed (will use FullStateSnapshot): %s", exc)
+            return None
 
     async def _reconcile_on_startup(self, to_pub) -> None:
         """Compare checkpoint state against Node Agent observed state.

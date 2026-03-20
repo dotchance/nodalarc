@@ -32,6 +32,7 @@ class PlatformConfig(BaseModel):
     zmq_mi_trace_port: int
     zmq_playback_control_port: int
     zmq_nodalpath_events_port: int
+    zmq_ome_catchup_port: int = 5568
 
     # HTTP/WebSocket service ports
     vs_api_http_port: int
@@ -118,6 +119,14 @@ class PlatformConfig(BaseModel):
     @property
     def to_events_connect(self) -> str:
         return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_events_port}"
+
+    @property
+    def ome_catchup_bind(self) -> str:
+        return f"tcp://{self.zmq_bind_host}:{self.zmq_ome_catchup_port}"
+
+    @property
+    def ome_catchup_connect(self) -> str:
+        return f"tcp://{self.zmq_connect_host_for('ome')}:{self.zmq_ome_catchup_port}"
 
     @property
     def scheduler_events_hostname(self) -> str:

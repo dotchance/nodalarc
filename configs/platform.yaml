@@ -62,6 +62,10 @@ platform:
   # Messages: AlmanacEvent (path_computed, table_pushed, deviation)
   zmq_nodalpath_events_port: 5567
 
+  # Port: OME on-connect catch-up (REP/REQ) — R-OME-008
+  # Subscribers send CatchupRequest, receive current window event sequence
+  zmq_ome_catchup_port: 5568
+
   # ── HTTP and WebSocket Service Ports ────────────────────────────────
 
   # VS-API FastAPI server — serves WebSocket state snapshots at ~1Hz

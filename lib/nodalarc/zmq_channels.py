@@ -73,6 +73,10 @@ def node_agent_grpc_port() -> int:
     return get_platform_config().node_agent_grpc_port
 
 
+def ome_catchup_port() -> int:
+    return get_platform_config().zmq_ome_catchup_port
+
+
 # --- Socket address accessor functions ---
 
 

@@ -104,7 +104,7 @@ async def on_create(spec, name, namespace, meta, **_):
     # Wait for pods to reach Running
     if result.get("phase") == "Creating":
         pod_count = result.get("podCount", 0)
-        for i in range(300):  # 5 minutes max
+        for i in range(600):  # 10 minutes max
             total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
             if i % 10 == 0:
                 _update_status(

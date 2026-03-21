@@ -77,8 +77,8 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
 
 def _resolve_nodalpath() -> ResolvedStack:
     return ResolvedStack(
-        daemons=[],
-        template_files=[],
+        daemons=["zebra", "staticd"],
+        template_files=[_DAEMON_TEMPLATES["zebra"], _DAEMON_TEMPLATES["staticd"]],
         template_variables={"grpc_port": 50051},
         image="nodalpath-fwd:latest",
         mi_adapter=None,

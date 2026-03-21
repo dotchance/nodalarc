@@ -43,7 +43,6 @@ class ContinuousTracer:
 
     def __init__(
         self,
-        deploy_socket: str,
         node_registry: dict[str, TopologyNode],
         interface_map: dict[tuple[str, str], tuple[str, str]],
         pid_map: dict[str, int],
@@ -53,7 +52,6 @@ class ContinuousTracer:
         get_sim_time: Callable[[], str],
         on_path_change: Callable[[str, str, list[str], list[str]], None] | None = None,
     ) -> None:
-        self._deploy_socket = deploy_socket  # Legacy — no longer used (M7)
         self._node_registry = node_registry
         self._interface_map = interface_map
         self._pid_map = pid_map

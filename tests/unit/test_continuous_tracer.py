@@ -62,7 +62,6 @@ def _make_tracer(
     config = get_platform_config()
 
     return ContinuousTracer(
-        deploy_socket="/tmp/test-deploy.sock",
         node_registry=node_registry,
         interface_map=interface_map,
         pid_map=pid_map,

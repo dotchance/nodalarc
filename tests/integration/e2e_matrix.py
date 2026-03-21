@@ -165,10 +165,11 @@ def wait_for_ready(token: str, timeout: int = 600) -> dict:
         try:
             result = subprocess.run(
                 f"{KUBECTL} get constellationspec current-session -n nodalarc "
-                "-o jsonpath={.status.phase}".split(),
+                "-o jsonpath={.status.phase}",
                 capture_output=True,
                 text=True,
                 timeout=10,
+                shell=True,
             )
             phase = result.stdout.strip()
             if phase == "Ready":
@@ -177,10 +178,11 @@ def wait_for_ready(token: str, timeout: int = 600) -> dict:
             if phase == "Error":
                 result2 = subprocess.run(
                     f"{KUBECTL} get constellationspec current-session -n nodalarc "
-                    "-o jsonpath={.status.message}".split(),
+                    "-o jsonpath={.status.message}",
                     capture_output=True,
                     text=True,
                     timeout=10,
+                    shell=True,
                 )
                 return {"phase": "Error", "detail": result2.stdout.strip()}
         except Exception:
@@ -214,9 +216,10 @@ def check_pods(perm: dict) -> dict:
     import subprocess
 
     result = subprocess.run(
-        f"{KUBECTL} get pods -n nodalarc -l nodalarc.io/node-id --no-headers".split(),
+        f"{KUBECTL} get pods -n nodalarc -l nodalarc.io/node-id --no-headers",
         capture_output=True,
         text=True,
+        shell=True,
     )
     lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
     total = len(lines)
@@ -377,10 +380,11 @@ def check_ping(token: str, perm: dict) -> dict:
     deadline = time.monotonic() + 120  # 2 minutes
     while time.monotonic() < deadline:
         result = subprocess.run(
-            f"{KUBECTL} exec -n nodalarc {src.lower()} -c frr -- ping -c 3 -W 2 {dst_ip}".split(),
+            f"{KUBECTL} exec -n nodalarc {src.lower()} -c frr -- ping -c 3 -W 2 {dst_ip}",
             capture_output=True,
             text=True,
             timeout=30,
+            shell=True,
         )
         attempts.append(
             {
@@ -472,10 +476,11 @@ def run_permutation(perm: dict) -> dict:
         for _wait in range(60):
             result = subprocess.run(
                 f"{KUBECTL} get constellationspec current-session -n nodalarc "
-                "-o jsonpath={{.status.phase}}".split(),
+                "-o 'jsonpath={{.status.phase}}'",
                 capture_output=True,
                 text=True,
                 timeout=10,
+                shell=True,
             )
             phase = result.stdout.strip()
             if phase not in ("Pending", "Rendering", "Creating", "Wiring"):

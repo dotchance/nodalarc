@@ -744,7 +744,7 @@ class TestOspfConfig:
             slot=0,
         )
         rendered = _render_template("frr-ospf-te", "ospfd.conf.j2", vars)
-        assert "passive-interface eth0" in rendered
+        assert "ip ospf passive" in rendered
 
     def test_ospf_cross_area_in_backbone(
         self, stripe_session, starlink_config, gs_file, addressing, ospf_stack

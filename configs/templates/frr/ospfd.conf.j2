@@ -10,12 +10,11 @@ router ospf
 {% set hello_interval = 1 %}
 {% set dead_interval = 3 %}
  timers throttle spf 50 50 1000
- passive-interface lo
- passive-interface eth0
 exit
 
 interface lo
  ip ospf area {{ area_id }}
+ ip ospf passive
 exit
 
 {% for iface_name, info in interface_info.items() %}

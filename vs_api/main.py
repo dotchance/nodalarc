@@ -1253,9 +1253,8 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
 
     cfg = get_platform_config()
     grpc_port = cfg.nodalpath_fwd_grpc_port
-    deploy_socket = cfg.deploy_daemon_unix_socket_path
 
-    # Build node_id -> pod_ip map via deploy daemon
+    # Build node_id -> pod_ip map via K8s API
     node_ids = {n["node_id"] for n in nodes}
     prefix_by_node: dict[str, str] = {}
     for n in nodes:
@@ -1731,7 +1730,6 @@ def _create_continuous_tracer() -> ContinuousTracer:
                 trace_mode = "cspf"
 
     return ContinuousTracer(
-        deploy_socket=cfg.deploy_daemon_unix_socket_path,
         node_registry=node_registry,
         interface_map=interface_map,
         pid_map=pid_map,

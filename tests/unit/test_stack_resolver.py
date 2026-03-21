@@ -82,8 +82,8 @@ class TestOSPFSR:
 class TestNodalPath:
     def test_nodalpath(self):
         r = resolve_stack("nodalpath", [])
-        assert r.daemons == []
-        assert r.template_files == []
+        assert r.daemons == ["zebra", "staticd"]
+        assert len(r.template_files) == 2
         assert r.image == "nodalpath-fwd:latest"
         assert r.transport == "grpc"
         assert r.mi_adapter is None

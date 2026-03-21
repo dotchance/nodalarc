@@ -11,10 +11,11 @@ giving it access to all pod network namespaces on this node.
 from __future__ import annotations
 
 import logging
-import subprocess
+from pathlib import Path
 
 import kubernetes.client
 import kubernetes.config
+from pyroute2 import NetNS
 
 from node_agent.pid_discovery import discover_local_pod_pids
 from orchestrator.link_manager import (
@@ -59,20 +60,19 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
 
     wired: dict[str, str] = {}
 
-    # Phase 1: Set sysctls in each pod namespace
+    # Phase 1: Set sysctls in each pod namespace (via /proc/{pid}/root/proc/sys/)
     for node_id, node_spec in nodes.items():
         pid = pid_map.get(node_id, 0)
         if pid == 0:
             log.warning(f"No PID for {node_id}, skipping sysctls")
             continue
         for key, value in node_spec.get("sysctls", {}).items():
-            result = subprocess.run(
-                ["nsenter", "--target", str(pid), "--net", "--", "sysctl", "-w", f"{key}={value}"],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                log.warning(f"sysctl {key}={value} failed in {node_id}: {result.stderr.strip()}")
+            # net.ipv6.conf.all.forwarding → /proc/{pid}/root/proc/sys/net/ipv6/conf/all/forwarding
+            sysctl_path = Path(f"/proc/{pid}/root/proc/sys") / key.replace(".", "/")
+            try:
+                sysctl_path.write_text(str(value))
+            except OSError as exc:
+                log.warning(f"sysctl {key}={value} failed in {node_id}: {exc}")
     log.info(f"Phase 1: sysctls set for {len(nodes)} nodes")
 
     # Phase 2: Create ISL veth pairs (deduplicate A→B and B→A)
@@ -167,19 +167,25 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
                 log.warning(f"terr0 creation failed for {node_id}: {exc}")
     log.info("Phase 6: terr0 dummy interfaces created")
 
-    # Phase 7: Remove default route from each pod
+    # Phase 7: Remove default route from each pod (pyroute2)
     removed = 0
     for node_id in nodes:
         pid = pid_map.get(node_id, 0)
         if pid == 0:
             continue
-        result = subprocess.run(
-            ["nsenter", "--target", str(pid), "--net", "--", "ip", "route", "del", "default"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            removed += 1
+        try:
+            ns = NetNS(f"/proc/{pid}/ns/net")
+            try:
+                # Get all IPv4 routes with dst_len=0 (default routes)
+                for route in ns.get_routes(family=2):
+                    if route.get_attr("RTA_DST") is None and route["dst_len"] == 0:
+                        ns.route("del", dst="0.0.0.0/0", gateway=route.get_attr("RTA_GATEWAY"))
+                        removed += 1
+                        break
+            finally:
+                ns.close()
+        except Exception as exc:
+            log.warning(f"Default route removal failed for {node_id}: {exc}")
     log.info(f"Phase 7: removed default route from {removed} pods")
 
     # Mark all nodes as wired

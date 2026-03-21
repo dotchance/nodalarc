@@ -422,18 +422,22 @@ def check_nodalpath_mpls(token: str, perm: dict) -> dict:
     """Check MPLS route entries for NodalPath sessions.
 
     NodalPath installs MPLS routes in the kernel via pyroute2 (not through FRR),
-    so we check 'ip -f mpls route show' instead of 'show mpls table'.
+    so we check 'ip -f mpls route show' via kubectl exec (not vtysh introspect).
     """
+    import subprocess
+
     deadline = time.monotonic() + 120
     attempts = 0
     output = ""
     while time.monotonic() < deadline:
-        resp = requests.post(
-            f"{BASE_URL}/api/v1/introspect",
-            headers=headers(token),
-            json={"node_id": "sat-p00s00", "command": "ip -f mpls route show"},
+        result = subprocess.run(
+            f"{KUBECTL} exec -n nodalarc sat-p00s00 -c frr -- ip -f mpls route show",
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=True,
         )
-        output = resp.json().get("output", "")
+        output = result.stdout
         mpls_lines = len([l for l in output.splitlines() if l.strip()])
         attempts += 1
         if mpls_lines > 0:

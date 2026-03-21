@@ -195,6 +195,7 @@ def build_template_vars(
             sats_per_plane=spp,
             addressing=addressing,
             gs_names=gs_names,
+            protocol=session.routing.protocol or "isis",
         )
 
     # Compute ISL neighbors

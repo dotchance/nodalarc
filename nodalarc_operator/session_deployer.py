@@ -441,11 +441,19 @@ def write_pod_ips_configmap(namespace: str) -> None:
 
 
 def _build_area_assignment(routing: dict) -> dict:
-    """Build area_assignment config from routing spec."""
+    """Build area_assignment config from routing spec.
+
+    OSPF uses dotted IP area format (0.0.0.0 for backbone).
+    IS-IS uses NET area format (49.0001).
+    """
     strategy = routing.get("areaStrategy", "flat")
+    protocol = routing.get("protocol", "isis")
+
+    gs_area_id = "0.0.0.0" if protocol == "ospf" else "49.0001"
+
     result: dict[str, Any] = {
         "strategy": strategy,
-        "gs_area_id": "49.0001",
+        "gs_area_id": gs_area_id,
     }
     if strategy == "stripe":
         result["planes_per_stripe"] = routing.get("planesPerStripe", 1)

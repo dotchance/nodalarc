@@ -419,7 +419,11 @@ def check_ping(token: str, perm: dict) -> dict:
 
 
 def check_nodalpath_mpls(token: str, perm: dict) -> dict:
-    """Check MPLS table entries for NodalPath sessions."""
+    """Check MPLS route entries for NodalPath sessions.
+
+    NodalPath installs MPLS routes in the kernel via pyroute2 (not through FRR),
+    so we check 'ip -f mpls route show' instead of 'show mpls table'.
+    """
     deadline = time.monotonic() + 120
     attempts = 0
     output = ""
@@ -427,7 +431,7 @@ def check_nodalpath_mpls(token: str, perm: dict) -> dict:
         resp = requests.post(
             f"{BASE_URL}/api/v1/introspect",
             headers=headers(token),
-            json={"node_id": "sat-p00s00", "command": "show mpls table"},
+            json={"node_id": "sat-p00s00", "command": "ip -f mpls route show"},
         )
         output = resp.json().get("output", "")
         mpls_lines = len([l for l in output.splitlines() if l.strip()])

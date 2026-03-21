@@ -1,6 +1,6 @@
 """Tests for deploy daemon action validation — tracepath, read_netem_delay, read_link_delays."""
 
-from tools.deploy_daemon import (
+from tools.legacy.deploy_daemon import (
     _handle_read_link_delays,
     _handle_read_netem_delay,
     _handle_tracepath,

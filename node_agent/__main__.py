@@ -85,6 +85,7 @@ def main() -> None:
         except RuntimeError:
             ns = "nodalarc"  # Default namespace if platform config not initialized
         v1 = kubernetes.client.CoreV1Api()
+        last_session_id = ""
         last_generation = 0
 
         while True:
@@ -92,20 +93,29 @@ def main() -> None:
                 cm = v1.read_namespaced_config_map("nodalarc-topology-wiring", ns)
                 manifest_json = cm.data.get("manifest.json", "{}")
                 manifest = json.loads(manifest_json)
+                session_id = manifest.get("session_id", "")
                 generation = manifest.get("generation", 0)
-                if generation > last_generation:
+                # Re-wire if session changed OR generation increased
+                if session_id != last_session_id or generation > last_generation:
                     log.info(
-                        f"Wiring manifest generation {generation} detected "
+                        f"Wiring manifest session={session_id} gen={generation} "
                         f"({len(manifest.get('nodes', {}))} nodes)"
                     )
                     from node_agent.wiring import execute_wiring, write_wiring_status
 
                     wired = execute_wiring(manifest, namespace=ns)
                     write_wiring_status(wired, namespace=ns)
+                    last_session_id = session_id
                     last_generation = generation
                     log.info(f"Wiring complete: {len(wired)} nodes wired")
             except kubernetes.client.rest.ApiException as e:
-                if e.status != 404:
+                if e.status == 404:
+                    # Session torn down — reset so next session triggers wiring
+                    if last_session_id:
+                        log.info("Wiring manifest removed — reset for next session")
+                        last_session_id = ""
+                        last_generation = 0
+                else:
                     log.warning(f"Wiring watcher error: {e}")
             except Exception as exc:
                 log.warning(f"Wiring watcher error: {exc}")

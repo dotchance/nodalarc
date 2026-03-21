@@ -12,6 +12,7 @@ from nodalarc_operator.session_deployer import (
     check_pods_ready,
     deploy_session,
     restart_platform_pods,
+    set_nodalpath_mode,
     teardown_session,
     write_pod_ips_configmap,
     write_wiring_manifest,
@@ -96,8 +97,12 @@ async def on_create(spec, name, namespace, meta, **_):
 
     _update_status(name, namespace, result)
 
+    # Set NodalPath mode based on session protocol before restarting
+    protocol = spec.get("routing", {}).get("protocol", "isis")
+    await loop.run_in_executor(None, set_nodalpath_mode, namespace, protocol)
+
     # Restart platform pods to pick up new session ConfigMaps
-    # (OME, Scheduler, VS-API need the session config to operate)
+    # (OME, Scheduler, VS-API, NodalPath need the session config to operate)
     await loop.run_in_executor(None, restart_platform_pods, namespace)
     log.info("Restarted platform pods for new session")
 
@@ -181,6 +186,8 @@ async def on_delete(name, namespace, **_):
     log.info(f"ConstellationSpec '{name}' deleted, tearing down session")
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, teardown_session, namespace)
+    # Reset NodalPath to console mode after session teardown
+    await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
     log.info("Session teardown complete")
 
 

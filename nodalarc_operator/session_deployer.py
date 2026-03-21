@@ -6,6 +6,7 @@ Called by kopf handlers in handlers.py.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -358,8 +359,44 @@ def write_wiring_manifest(
     return len(isl_pairs)
 
 
+def set_nodalpath_mode(namespace: str, protocol: str) -> None:
+    """Patch the NodalPath Deployment to use --mode live for NodalPath sessions,
+    --mode console for all others. Called before restarting the NodalPath pod.
+    """
+    mode = "live" if protocol == "nodalpath" else "console"
+    kubernetes.config.load_incluster_config()
+    apps_v1 = kubernetes.client.AppsV1Api()
+    try:
+        deployments = apps_v1.list_namespaced_deployment(
+            namespace, label_selector="app=nodalarc-nodalpath"
+        )
+        if not deployments.items:
+            log.info("NodalPath deployment not found — skipping mode patch")
+            return
+        deployment = deployments.items[0]
+        deploy_name = deployment.metadata.name
+    except kubernetes.client.rest.ApiException:
+        log.info("NodalPath deployment not found — skipping mode patch")
+        return
+
+    for container in deployment.spec.template.spec.containers:
+        if container.name == "nodalpath":
+            args = list(container.args or [])
+            for i, arg in enumerate(args):
+                if arg == "--mode" and i + 1 < len(args):
+                    if args[i + 1] != mode:
+                        args[i + 1] = mode
+                        container.args = args
+                        apps_v1.patch_namespaced_deployment(deploy_name, namespace, deployment)
+                        log.info(f"NodalPath mode set to {mode}")
+                    else:
+                        log.info(f"NodalPath mode already {mode}")
+                    return
+    log.warning("NodalPath container --mode arg not found in deployment spec")
+
+
 def restart_platform_pods(namespace: str) -> None:
-    """Restart OME, Scheduler, and VS-API pods to pick up new session ConfigMaps.
+    """Restart OME, Scheduler, VS-API, and NodalPath pods to pick up new session ConfigMaps.
 
     Deletes pods — the Deployments recreate them automatically.
     """
@@ -427,17 +464,22 @@ def check_pods_ready(namespace: str) -> tuple[int, int]:
 
 
 def write_pod_ips_configmap(namespace: str) -> None:
-    """Write nodalarc-pod-ips ConfigMap from running session pods."""
+    """Write nodalarc-pod-ips ConfigMap from running session pods.
+
+    Stores the IP map as a single 'pod-ips.json' key so it can be
+    volume-mounted directly as a JSON file by the NodalPath Deployment.
+    """
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
-    data = {}
+    ip_map = {}
     for pod in pods.items:
         node_id = pod.metadata.labels.get("nodalarc.io/node-id", "")
         if node_id and pod.status and pod.status.pod_ip:
-            data[node_id] = pod.status.pod_ip
+            ip_map[node_id] = pod.status.pod_ip
+    data = {"pod-ips.json": json.dumps(ip_map)}
     _create_or_update_configmap(v1, "nodalarc-pod-ips", namespace, data, owner_ref=None)
-    log.info(f"Wrote nodalarc-pod-ips with {len(data)} entries")
+    log.info(f"Wrote nodalarc-pod-ips with {len(ip_map)} entries")
 
 
 # ---------------------------------------------------------------------------

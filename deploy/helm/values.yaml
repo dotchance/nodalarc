@@ -3,29 +3,15 @@ namespace: nodalarc
 
 images:
   frr: docker.io/nodalarc/frr:10
-  probe: docker.io/nodalarc/probe:1
-  orchestrator: docker.io/nodalarc/orchestrator:latest
   ome: docker.io/nodalarc/ome:latest
-  visualization: docker.io/nodalarc/visualization:1
   vf: docker.io/nodalarc/vf:latest
   nodalpath: docker.io/nodalarc/nodalpath:latest
   scheduler: docker.io/nodalarc/scheduler:latest
   nodeAgent: docker.io/nodalarc/node-agent:latest
   vsApi: docker.io/nodalarc/vs-api:latest
+  operator: docker.io/nodalarc/operator:latest
 
 imagePullPolicy: Never  # Local images loaded into K3s containerd directly
-
-satellite:
-  memoryLimit: 128Mi
-  cpuLimit: 100m
-
-groundStation:
-  memoryLimit: 128Mi
-  cpuLimit: 100m
-
-orchestrator:
-  memoryLimit: 512Mi
-  cpuLimit: 500m
 
 ome:
   enabled: false
@@ -33,10 +19,6 @@ ome:
   cpuLimit: "2000m"
   memoryRequest: 512Mi
   memoryLimit: 1Gi
-
-visualization:
-  memoryLimit: 128Mi
-  cpuLimit: 100m
 
 # VF: containerized React SPA served by nginx
 vf:
@@ -51,8 +33,7 @@ nodalpath:
   memoryLimit: 256Mi
   cpuLimit: 500m
 
-# M4: Scheduler replaces the host-side orchestrator.
-# Consumes OME events and dispatches topology changes to Node Agents via gRPC.
+# M4: Scheduler consumes OME events and dispatches topology changes to Node Agents.
 scheduler:
   memoryLimit: 512Mi
   cpuLimit: 500m
@@ -68,16 +49,3 @@ nodeAgent:
 vsApi:
   memoryLimit: 512Mi
   cpuLimit: 500m
-
-# Optional sidecar container (e.g. nodalpath-fwd gRPC daemon)
-# Set by na-deploy when the routing stack specifies a non-FRR image.
-sidecar: null
-
-# Populated by na-deploy from constellation expansion
-satellites: []
-groundStations: []
-
-# Session config (mounted as ConfigMap)
-sessionConfig: ""
-timelineFile: ""
-mode: de

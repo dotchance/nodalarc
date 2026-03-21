@@ -47,7 +47,7 @@ DWELL_ARG=""
 if [ -n "$DWELL" ]; then
     DWELL_ARG="--dwell $DWELL"
 fi
-sudo KUBECONFIG="$KUBECONFIG" "$UV" run python -m tools.na_deploy --session "$SESSION" --skip-teardown $DWELL_ARG
+sudo KUBECONFIG="$KUBECONFIG" "$UV" run python -m tools.legacy.na_deploy --session "$SESSION" --skip-teardown $DWELL_ARG
 
 ELAPSED=$((SECONDS - START_TIME))
 echo ""

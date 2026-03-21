@@ -366,7 +366,12 @@ def restart_platform_pods(namespace: str) -> None:
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
 
-    for label in ["app=nodalarc-ome", "app=nodalarc-scheduler", "app=nodalarc-vs-api"]:
+    for label in [
+        "app=nodalarc-ome",
+        "app=nodalarc-scheduler",
+        "app=nodalarc-vs-api",
+        "app=nodalarc-nodalpath",
+    ]:
         pods = v1.list_namespaced_pod(namespace, label_selector=label)
         for pod in pods.items:
             try:

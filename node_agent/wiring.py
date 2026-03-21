@@ -11,7 +11,6 @@ giving it access to all pod network namespaces on this node.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import kubernetes.client
 import kubernetes.config
@@ -19,6 +18,7 @@ from pyroute2 import NetNS
 
 from node_agent.pid_discovery import discover_local_pod_pids
 from orchestrator.link_manager import (
+    _write_sysctl_in_netns,
     configure_interface,
     create_dummy_interface,
     create_ground_bridge,
@@ -60,19 +60,16 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
 
     wired: dict[str, str] = {}
 
-    # Phase 1: Set sysctls in each pod namespace (via /proc/{pid}/root/proc/sys/)
+    # Phase 1: Set sysctls in each pod namespace (via os.setns)
     for node_id, node_spec in nodes.items():
         pid = pid_map.get(node_id, 0)
         if pid == 0:
             log.warning(f"No PID for {node_id}, skipping sysctls")
             continue
         for key, value in node_spec.get("sysctls", {}).items():
-            # net.ipv6.conf.all.forwarding → /proc/{pid}/root/proc/sys/net/ipv6/conf/all/forwarding
-            sysctl_path = Path(f"/proc/{pid}/root/proc/sys") / key.replace(".", "/")
-            try:
-                sysctl_path.write_text(str(value))
-            except OSError as exc:
-                log.warning(f"sysctl {key}={value} failed in {node_id}: {exc}")
+            err = _write_sysctl_in_netns(pid, key, str(value))
+            if err:
+                log.warning(f"sysctl {key}={value} failed in {node_id}: {err}")
     log.info(f"Phase 1: sysctls set for {len(nodes)} nodes")
 
     # Phase 2: Create ISL veth pairs (deduplicate A→B and B→A)

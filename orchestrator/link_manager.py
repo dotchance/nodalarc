@@ -15,6 +15,8 @@ import json
 import logging
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import kubernetes.client
 import kubernetes.config
@@ -212,23 +214,40 @@ def create_dummy_interface(
     log.info(f"Created dummy {ifname} in ns({pid}) with {len(addresses)} addrs")
 
 
+def _write_sysctl_in_netns(pid: int, sysctl_key: str, value: str) -> str | None:
+    """Write a sysctl value inside a network namespace using os.setns.
+
+    Runs in a separate thread since setns permanently changes the calling
+    thread's namespace. Returns None on success, error string on failure.
+    """
+
+    def _do_write():
+        ns_fd = os.open(f"/proc/{pid}/ns/net", os.O_RDONLY)
+        try:
+            os.setns(ns_fd, os.CLONE_NEWNET)
+        finally:
+            os.close(ns_fd)
+        sysctl_path = Path("/proc/sys") / sysctl_key.replace(".", "/")
+        sysctl_path.write_text(value)
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_do_write).result(timeout=5)
+        return None
+    except Exception as exc:
+        return str(exc)
+
+
 def disable_ipv6_autoconfig(pid: int, ifname: str) -> None:
     """Disable IPv6 autoconfig on an interface (PRD 13.6 step 5).
 
-    Uses nsenter to enter the network namespace because K3s mounts
-    /proc/sys read-only inside containers.
+    Uses os.setns to enter the pod's network namespace and write sysctl
+    values directly — no subprocess/nsenter.
     """
     for param in ("accept_ra", "autoconf"):
-        sysctl_key = f"net.ipv6.conf.{ifname}.{param}"
-        result = subprocess.run(
-            ["nsenter", "--target", str(pid), "--net", "--", "sysctl", "-w", f"{sysctl_key}=0"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            log.warning(
-                f"Failed to set {param}=0 for {ifname} in ns({pid}): {result.stderr.strip()}"
-            )
+        err = _write_sysctl_in_netns(pid, f"net.ipv6.conf.{ifname}.{param}", "0")
+        if err:
+            log.warning(f"Failed to set {param}=0 for {ifname} in ns({pid}): {err}")
 
 
 def mac_to_link_local(mac_str: str) -> str:
@@ -399,25 +418,12 @@ def destroy_veth_pair(pid: int, ifname: str) -> None:
 def enable_mpls_input(pid: int, ifname: str) -> None:
     """Enable MPLS input on an interface inside the namespace.
 
-    Uses nsenter to enter the network namespace because K3s mounts
-    /proc/sys read-only inside containers.
+    Uses os.setns to enter the pod's network namespace and write sysctl
+    values directly — no subprocess/nsenter.
     """
-    result = subprocess.run(
-        [
-            "nsenter",
-            "--target",
-            str(pid),
-            "--net",
-            "--",
-            "sysctl",
-            "-w",
-            f"net.mpls.conf.{ifname}.input=1",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        log.warning(f"Failed to enable MPLS input for {ifname} in ns({pid}): {result.stderr}")
+    err = _write_sysctl_in_netns(pid, f"net.mpls.conf.{ifname}.input", "1")
+    if err:
+        log.warning(f"Failed to enable MPLS input for {ifname} in ns({pid}): {err}")
 
 
 def set_interface_up(pid: int, ifname: str) -> None:

@@ -67,14 +67,14 @@ nodalpath:
   # Maximum time to wait for a single gRPC ForwardingTableUpdate RPC
   # to complete, including TCP channel establishment and the RPC call
   # itself (seconds). Increase for high-latency management networks.
-  grpc_push_timeout_seconds: 10
+  grpc_push_timeout_seconds: 30
 
   # Maximum concurrent gRPC push threads. Each thread opens a channel
   # to one pod and pushes its forwarding table. Higher values reduce
   # total push time for large constellations (e.g., 66 nodes pushed
   # in ~3 batches at 20 workers) but increase network and CPU load
   # on the management network.
-  grpc_push_max_parallel_workers: 20
+  grpc_push_max_parallel_workers: 50
 
   # ── Lookahead Pre-Computation ───────────────────────────────────────
   #

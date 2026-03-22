@@ -1,7 +1,7 @@
 """gRPC transport for pushing forwarding tables to nodalpath-fwd containers.
 
-Each call creates a fresh channel, pushes a full table replacement, and closes.
-No connection pooling — the push interval (~seconds) doesn't justify it.
+Uses a module-level channel cache to reuse gRPC channels across push cycles.
+Channels are created on first use and kept alive with HTTP/2 keepalives.
 """
 
 from __future__ import annotations
@@ -22,6 +22,30 @@ from nodalpath.proto import (
     LabelEntry,
 )
 from nodalpath.proto.forwarding_pb2_grpc import ForwardingServiceStub
+
+# Channel cache — reuse gRPC channels across push cycles to avoid
+# TCP connection storm (51 fresh connections per push × 3 pushes/min).
+_channel_cache: dict[str, grpc.Channel] = {}
+
+
+def _get_channel(target: str) -> grpc.Channel:
+    """Get or create a cached gRPC channel for the given target."""
+    if target in _channel_cache:
+        state = _channel_cache[target].connectivity_state(try_to_connect=False)
+        if state == grpc.ChannelConnectivity.SHUTDOWN:
+            del _channel_cache[target]
+    if target not in _channel_cache:
+        _channel_cache[target] = grpc.insecure_channel(
+            target,
+            options=[
+                ("grpc.keepalive_time_ms", 10000),
+                ("grpc.keepalive_timeout_ms", 5000),
+                ("grpc.http2.max_pings_without_data", 0),
+                ("grpc.http2.min_time_between_pings_ms", 10000),
+            ],
+        )
+    return _channel_cache[target]
+
 
 log = logging.getLogger(__name__)
 
@@ -189,9 +213,8 @@ def push_forwarding_table(
     if timeout is None:
         timeout = _default_timeout()
     target = f"{pod_ip}:{port}"
-    channel = grpc.insecure_channel(target)
+    channel = _get_channel(target)
     try:
-        grpc.channel_ready_future(channel).result(timeout=timeout)
         stub = ForwardingServiceStub(channel)
         response = stub.UpdateForwardingTable(update, timeout=timeout)
         return GrpcExecResult(
@@ -201,15 +224,6 @@ def push_forwarding_table(
             entries_installed=response.entries_installed,
             apply_time_ms=response.apply_time_ms,
             error_message=response.error_message,
-        )
-    except grpc.FutureTimeoutError:
-        return GrpcExecResult(
-            node_id=node_id,
-            pod_ip=pod_ip,
-            success=False,
-            entries_installed=0,
-            apply_time_ms=0.0,
-            error_message=f"Channel not ready after {timeout}s",
         )
     except grpc.RpcError as exc:
         return GrpcExecResult(
@@ -229,8 +243,6 @@ def push_forwarding_table(
             apply_time_ms=0.0,
             error_message=str(exc),
         )
-    finally:
-        channel.close()
 
 
 def push_to_nodes_grpc(

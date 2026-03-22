@@ -22,9 +22,12 @@ def _build_push_scheduler(
     interface_map,
     pod_ip_map: dict[str, str] | None = None,
 ) -> PushScheduler:
+    from nodalpath.platform import get_nodalpath_config
+
+    np_cfg = get_nodalpath_config()
     sched_config = PushSchedulerConfig(
         namespace=config.namespace,
-        timeout_seconds=config.push_timeout_seconds,
+        timeout_seconds=np_cfg.grpc_push_timeout_seconds,
         use_incremental_diff=config.use_incremental_diff,
         dry_run=config.dry_run,
         transport=config.transport,

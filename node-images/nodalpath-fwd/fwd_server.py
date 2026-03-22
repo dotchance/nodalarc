@@ -419,7 +419,7 @@ def serve() -> None:
     _ensure_policy_rule()
     threading.Thread(target=_retry_pending, daemon=True).start()
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     add_ForwardingServiceServicer_to_server(ForwardingServiceImpl(), server)
     server.add_insecure_port(f"0.0.0.0:{GRPC_PORT}")
     server.start()

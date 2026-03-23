@@ -79,7 +79,7 @@ def _resolve_nodalpath() -> ResolvedStack:
     return ResolvedStack(
         daemons=["zebra", "staticd"],
         template_files=[_DAEMON_TEMPLATES["zebra"], _DAEMON_TEMPLATES["staticd"]],
-        template_variables={"grpc_port": 50051},
+        template_variables={"grpc_port": 50052},
         image="nodalpath-fwd:latest",
         mi_adapter=None,
         segment_routing=False,
@@ -88,7 +88,7 @@ def _resolve_nodalpath() -> ResolvedStack:
         host_modules=["mpls_router", "mpls_iptunnel"],
         env=[
             {"name": "NODE_ID", "value": "{{ node_id }}"},
-            {"name": "GRPC_PORT", "value": "50051"},
+            {"name": "GRPC_PORT", "value": "50052"},
             {"name": "LOOPBACK_IPV4", "value": "{{ ipv4_loopback }}"},
         ],
         security_context_capabilities=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"],

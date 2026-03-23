@@ -27,7 +27,7 @@ class NodalPathConfig:
 
     # Push
     transport: str = "grpc"  # "grpc" | "vtysh"
-    grpc_port: int = 50051
+    grpc_port: int = 50052
     namespace: str = "nodalarc"
     push_timeout_seconds: int = 10
     use_incremental_diff: bool = True

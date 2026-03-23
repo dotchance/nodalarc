@@ -26,7 +26,7 @@ def _make_inspector(node_ids=None) -> NodeInspector:
     if node_ids is None:
         node_ids = ["sat-P00S00", "sat-P00S01"]
     pod_ip_map = {nid: f"10.42.0.{i}" for i, nid in enumerate(node_ids)}
-    return NodeInspector(pod_ip_map=pod_ip_map, grpc_port=50051, grpc_timeout=5.0)
+    return NodeInspector(pod_ip_map=pod_ip_map, grpc_port=50052, grpc_timeout=5.0)
 
 
 def _run(coro):

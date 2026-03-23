@@ -447,8 +447,9 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                         ).encode()
                         pub_sock.send(encode_message(TOPIC_POSITION_EVENT, payload))
 
-                    # FullStateSnapshot every 30s (for link state catch-up)
-                    if time.monotonic() - last_snapshot_wall >= 30.0:
+                    # FullStateSnapshot at configured interval (for link state catch-up)
+                    snapshot_interval = get_platform_config().ome_full_state_snapshot_interval_s
+                    if time.monotonic() - last_snapshot_wall >= snapshot_interval:
                         publish_full_state_snapshot(
                             pub_sock,
                             isl_state,

@@ -82,6 +82,9 @@ class PlatformConfig(BaseModel):
     trace_interval_fast_seconds: float
     trace_fast_window_seconds: float
 
+    # OME FullStateSnapshot publication interval (seconds)
+    ome_full_state_snapshot_interval_s: int = 10
+
     # System tuning
     host_inotify_max_user_instances: int
     host_file_descriptor_limit: int

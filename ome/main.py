@@ -465,8 +465,17 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                         ).encode()
                         pub_sock.send(encode_message(TOPIC_POSITION_EVENT, payload))
 
-                    # Publish Snapshot clock signal for Scheduler pacing
-                    pub_sock.send(encode_message(b"Snapshot", json.dumps(snap_data).encode()))
+                    # Publish ClockTick for Scheduler pacing (PRD Section 3.2)
+                    from nodalarc.models.events import ClockTick
+
+                    tick = ClockTick(
+                        sim_time=datetime.fromisoformat(sim_time_str)
+                        if sim_time_str
+                        else datetime.now(UTC),
+                        wall_time=datetime.now(UTC),
+                        compression_ratio=float(compression),
+                    )
+                    pub_sock.send(encode_message(b"ClockTick", tick.model_dump_json().encode()))
 
                     # FullStateSnapshot at configured interval (for link state catch-up)
                     snapshot_interval = get_platform_config().ome_full_state_snapshot_interval_s

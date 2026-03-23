@@ -30,12 +30,15 @@ def _handle_catchup_requests(catchup_sock, catchup_buffer: dict) -> None:
         resp_events = catchup_buffer["events"]
         if since:
             resp_events = [e for e in resp_events if e.get("data", {}).get("sim_time", "") >= since]
-        # Cap at current pacing position — don't return future events not yet paced
+        # Cap Snapshot events at pacing position — they are paced one per tick.
+        # VisibilityEvents are published all at once at window computation and
+        # pass through uncapped — they are already on the wire.
         if _current_pacing_sim_time:
             resp_events = [
                 e
                 for e in resp_events
-                if e.get("data", {}).get("sim_time", "") <= _current_pacing_sim_time
+                if e.get("event_type") != "Snapshot"
+                or e.get("data", {}).get("sim_time", "") <= _current_pacing_sim_time
             ]
         catchup_sock.send_json(
             {
@@ -461,6 +464,9 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                             }
                         ).encode()
                         pub_sock.send(encode_message(TOPIC_POSITION_EVENT, payload))
+
+                    # Publish Snapshot clock signal for Scheduler pacing
+                    pub_sock.send(encode_message(b"Snapshot", json.dumps(snap_data).encode()))
 
                     # FullStateSnapshot at configured interval (for link state catch-up)
                     snapshot_interval = get_platform_config().ome_full_state_snapshot_interval_s

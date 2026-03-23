@@ -97,6 +97,10 @@ class Dispatcher:
         # Populated when BatchLinkUp returns errors like "isl3 not found".
         self._skip_pairs: set[tuple[str, str]] = set()
 
+        # VisibilityEvents from catch-up with sim_time > pacing position.
+        # Dispatched as paced Snapshots arrive for their sim_time.
+        self._pending_vis: list[VisibilityEvent] = []
+
     def load_interface_inventory(self) -> None:
         """Query Node Agent GetTopology to learn which interfaces exist per pod.
 
@@ -199,7 +203,7 @@ class Dispatcher:
         await loop.run_in_executor(None, self.load_interface_inventory)
 
         # R-OME-008: On-connect catch-up — get current window events
-        catchup_sim_time = await self._ome_catchup(to_pub)
+        catchup_snap_threshold = await self._ome_catchup(to_pub) or ""
 
         log.info("Scheduler dispatcher started — OME=%s", self._ome_endpoint)
 
@@ -230,7 +234,7 @@ class Dispatcher:
                         ome_sub.connect(self._ome_endpoint)
                         new_st = await self._ome_catchup(to_pub)
                         if new_st:
-                            catchup_sim_time = new_st
+                            catchup_snap_threshold = new_st
                         last_ome_msg_time = time.monotonic()
                     continue
 
@@ -251,10 +255,12 @@ class Dispatcher:
                         else data
                     )
 
-                    # R-OME-008 deduplication: skip events already from catch-up
-                    if catchup_sim_time:
+                    # R-OME-008 deduplication: skip Snapshots already paced.
+                    # VisibilityEvents never arrive on PUB — they are buffered
+                    # in _pending_vis and dispatched via Snapshot pacing.
+                    if catchup_snap_threshold:
                         evt_st = inner.get("sim_time", "")
-                        if isinstance(evt_st, str) and evt_st and evt_st <= catchup_sim_time:
+                        if isinstance(evt_st, str) and evt_st and evt_st <= catchup_snap_threshold:
                             continue
 
                     if topic == b"FullStateSnapshot":
@@ -309,6 +315,15 @@ class Dispatcher:
         to_pub: zmq.asyncio.Socket,
     ) -> None:
         """Process one epsilon-windowed batch of events."""
+        # Phase 0: Drain pending VisibilityEvents that are due at this sim_time.
+        # These were received via catch-up but have future sim_times — they are
+        # dispatched when the pacing Snapshot for their time arrives.
+        if snapshots and self._pending_vis:
+            threshold = max(s.sim_time for s in snapshots)
+            due = [v for v in self._pending_vis if v.sim_time <= threshold]
+            self._pending_vis = [v for v in self._pending_vis if v.sim_time > threshold]
+            vis_events = due + vis_events
+
         # Phase 1: Position updates (internal only — no re-publish).
         # VS-API gets position data from OME directly on port 5560.
         for snap in snapshots:
@@ -969,6 +984,7 @@ class Dispatcher:
             )
 
             last_st = None
+            catchup_vis: list[VisibilityEvent] = []
             for evt in events:
                 data = evt.get("data", {})
                 evt_type = evt.get("event_type", "")
@@ -978,24 +994,54 @@ class Dispatcher:
                     self._current_sim_time = snap.sim_time
                 elif evt_type == "VisibilityEvent":
                     vis = VisibilityEvent.model_validate(data)
-                    self._current_sim_time = vis.sim_time
+                    catchup_vis.append(vis)
                 st = data.get("sim_time", "")
                 if isinstance(st, str) and st:
                     last_st = st
                 elif hasattr(st, "isoformat"):
                     last_st = st.isoformat()
 
-            # Use OME's pacing position as dedup threshold, not last event sim_time.
-            # Events after the pacing cursor haven't been published yet — they are new.
-            pacing_st = resp.get("current_pacing_sim_time")
-            dedup_st = pacing_st if pacing_st else last_st
+            pacing_st = resp.get("current_pacing_sim_time", "")
+
+            # Split VisibilityEvents: past (dispatch now) vs future (buffer for pacing)
+            past_vis = (
+                [v for v in catchup_vis if v.sim_time.isoformat() <= pacing_st]
+                if pacing_st
+                else catchup_vis
+            )
+            future_vis = (
+                [v for v in catchup_vis if v.sim_time.isoformat() > pacing_st] if pacing_st else []
+            )
+            self._pending_vis = sorted(future_vis, key=lambda v: v.sim_time)
+
             log.info(
-                "OME catch-up complete: last_sim_time=%s pacing_sim_time=%s dedup=%s",
+                "OME catch-up complete: last_sim_time=%s pacing_sim_time=%s "
+                "vis_events=%d (past=%d future=%d)",
                 last_st,
                 pacing_st,
-                dedup_st,
+                len(catchup_vis),
+                len(past_vis),
+                len(future_vis),
             )
-            return dedup_st
+
+            # Seed internal _active_links state from past events without dispatching.
+            # The Node Agent already has correct wired state from session deployment.
+            # FullStateSnapshot reconciles against Node Agent actual state via diff.
+            for vis in past_vis:
+                pair = (vis.node_a, vis.node_b)
+                if vis.visible and vis.scheduled:
+                    ifaces = self._interface_map.get(pair)
+                    if ifaces:
+                        self._active_links[pair] = ActiveLinkInfo(
+                            interface_a=ifaces[0],
+                            interface_b=ifaces[1],
+                            latency_ms=3.0,
+                            bandwidth_mbps=self._bandwidth_map.get(pair, 1000.0),
+                        )
+                elif not vis.visible:
+                    self._active_links.pop(pair, None)
+
+            return pacing_st
         except Exception as exc:
             log.warning("OME catch-up failed (will use FullStateSnapshot): %s", exc)
             return None

@@ -73,40 +73,17 @@ from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 def _connect_scheduler_events(zmq_socket) -> None:
     """Connect ZMQ SUB socket to Scheduler events (port 5561).
 
-    Uses headless DNS resolution when available (container deployment):
-    resolves the Service DNS name to individual pod IPs and connects
-    to each one. This supports multi-replica fan-in — a single SUB
-    socket receives from all Scheduler PUB endpoints.
-
-    Falls back to the standard to_events_connect() address when DNS
-    resolution fails (host deployment with localhost).
+    Connects via DNS name directly so ZMQ can re-resolve on reconnect.
+    Do NOT resolve to pod IPs — they become stale when pods restart.
     """
-    import socket as _socket
-
     from nodalarc.platform import get_platform_config
 
     cfg = get_platform_config()
-    hostname = cfg.scheduler_events_hostname
+    hostname = cfg.zmq_connect_host_for("scheduler-events")
     port = cfg.zmq_to_events_port
-
-    # If hostname looks like a K8s service name, try headless DNS resolution
-    if hostname and not hostname.replace(".", "").isdigit():
-        try:
-            results = _socket.getaddrinfo(hostname, port, _socket.AF_INET, _socket.SOCK_STREAM)
-            ips = list({r[4][0] for r in results})
-            if ips:
-                for ip in ips:
-                    addr = f"tcp://{ip}:{port}"
-                    zmq_socket.connect(addr)
-                    log.info("TO SUB connected to %s (headless DNS)", addr)
-                return
-        except _socket.gaierror:
-            pass  # DNS resolution failed — fall back
-
-    # Fallback: single address from platform config
-    addr = to_events_connect()
+    addr = f"tcp://{hostname}:{port}"
     zmq_socket.connect(addr)
-    log.info("TO SUB connected to %s (fallback)", addr)
+    log.info("TO SUB connected to %s", addr)
 
 
 from vs_api.session_manager import SessionManager

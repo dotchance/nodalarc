@@ -95,4 +95,5 @@ spec:
         - name: pod-ips
           configMap:
             name: nodalarc-pod-ips
+            optional: true
 {{- end }}

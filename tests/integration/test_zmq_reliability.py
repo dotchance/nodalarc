@@ -114,13 +114,27 @@ def _get_sim_time() -> str | None:
 
 def test_scheduler_recovers_after_ome_restart():
     """Scheduler must resume publishing on port 5561 after OME restart."""
-    # 1. Confirm Scheduler is publishing
+    # 0. Ensure Scheduler has a fresh start (clears stale dedup state)
+    _kubectl(
+        "delete",
+        "pod",
+        "-n",
+        "nodalarc",
+        "-l",
+        "app=nodalarc-scheduler",
+        "--grace-period=0",
+        "--force",
+    )
+    assert _wait_pod_running("app=nodalarc-scheduler", timeout=25), "Scheduler did not restart"
+    time.sleep(5)  # Wait for K8s endpoint propagation + OME catch-up
+
+    # 1. Confirm Scheduler is publishing (after FullStateSnapshot at 10s interval)
     events_before = _subscribe_port_5561(timeout_s=20)
     assert events_before, "Scheduler is not publishing on port 5561 before test"
 
-    # 2. Restart OME pod
+    # 2. Restart OME pod (don't wait for termination — just delete)
     _kubectl(
-        "delete", "pod", "-n", "nodalarc", "-l", "app=nodalarc-ome", "--wait=true", "--timeout=25s"
+        "delete", "pod", "-n", "nodalarc", "-l", "app=nodalarc-ome", "--grace-period=0", "--force"
     )
 
     # 3. Wait for OME pod Running
@@ -145,9 +159,9 @@ def test_vsapi_recovers_after_ome_restart():
     t2 = _get_sim_time()
     assert t1 and t2 and t1 != t2, f"sim_time not advancing before test: {t1} == {t2}"
 
-    # 2. Restart OME pod
+    # 2. Restart OME pod (don't wait for termination — just delete)
     _kubectl(
-        "delete", "pod", "-n", "nodalarc", "-l", "app=nodalarc-ome", "--wait=true", "--timeout=25s"
+        "delete", "pod", "-n", "nodalarc", "-l", "app=nodalarc-ome", "--grace-period=0", "--force"
     )
 
     # 3. Wait for OME pod Running
@@ -179,8 +193,8 @@ def test_scheduler_uses_catchup_on_start():
         "nodalarc",
         "-l",
         "app=nodalarc-scheduler",
-        "--wait=true",
-        "--timeout=25s",
+        "--grace-period=0",
+        "--force",
     )
 
     # 2. Wait for Scheduler pod Running

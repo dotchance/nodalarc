@@ -218,7 +218,7 @@ async def _run_console(config: NodalPathConfig | None = None) -> None:
     trace_mode: str | None = None
     session_label = "(no session)"
 
-    if config is not None and config.session_path is not None:
+    if config is not None and config.session_path is not None and config.session_path.is_file():
         _raw = yaml.safe_load(config.session_path.read_text())
         session_label = _raw.get("session", {}).get("name", str(config.session_path))
         node_registry, _iface_map, _prefix_map, _bw_map, _static_edges = load_session_context(
@@ -253,6 +253,8 @@ async def _run_console(config: NodalPathConfig | None = None) -> None:
             trace_mode=trace_mode,
         )
         log.info("Live path tracer wired with %d nodes (mode=%s)", len(node_registry), trace_mode)
+    else:
+        log.info("No session config present — starting in console mode, waiting for session deploy")
 
     console_state = ConsoleState(
         session_path=session_label,

@@ -181,7 +181,7 @@ class Dispatcher:
         ome_sub.setsockopt(zmq.RECONNECT_IVL_MAX, 10000)
         ome_sub.connect(self._ome_endpoint)
         ome_sub.setsockopt(zmq.SUBSCRIBE, b"VisibilityEvent")
-        ome_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
+        ome_sub.setsockopt(zmq.SUBSCRIBE, b"ClockTick")
         ome_sub.setsockopt(zmq.SUBSCRIBE, b"FullStateSnapshot")
 
         # Allow subscribers to connect before first publish
@@ -267,9 +267,11 @@ class Dispatcher:
                         await self._handle_full_state_snapshot(inner, to_pub)
                         continue
 
-                    if topic == b"Snapshot":
-                        snap = TimelinePositionSnapshot.model_validate(inner)
-                        snap_sim = snap.sim_time
+                    if topic == b"ClockTick":
+                        tick_sim_str = inner.get("sim_time", "")
+                        if not tick_sim_str:
+                            continue
+                        snap_sim = datetime.fromisoformat(tick_sim_str)
                     elif topic == b"VisibilityEvent":
                         vis = VisibilityEvent.model_validate(inner)
                         snap_sim = vis.sim_time
@@ -287,8 +289,15 @@ class Dispatcher:
 
                     last_sim_time = snap_sim
 
-                    if topic == b"Snapshot":
-                        pending_snaps.append(snap)
+                    if topic == b"ClockTick":
+                        # ClockTick is a clock signal — drain _pending_vis for due events.
+                        if self._pending_vis:
+                            due = [v for v in self._pending_vis if v.sim_time <= snap_sim]
+                            if due:
+                                self._pending_vis = [
+                                    v for v in self._pending_vis if v.sim_time > snap_sim
+                                ]
+                                pending_vis.extend(due)
                     elif topic == b"VisibilityEvent":
                         pending_vis.append(vis)
 

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nodalarc-platform-config
+  namespace: {{ .Values.namespace }}
+data:
+  platform.yaml: |
+{{ .Files.Get "files/platform.yaml" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nodalarc-nodalpath-config
+  namespace: {{ .Values.namespace }}
+data:
+  nodalpath.yaml: |
+{{ .Files.Get "files/nodalpath.yaml" | indent 4 }}

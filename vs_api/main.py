@@ -695,33 +695,37 @@ async def _zmq_subscriber() -> None:
                     elif topic == TOPIC_ALMANAC_EVENT:
                         _update_almanac_state(data)
                     elif topic == b"FullStateSnapshot":
-                        # Extract positions from the last Snapshot in trajectory
-                        traj = data.get("position_trajectory", [])
-                        if traj:
-                            last = traj[-1]
-                            if last.get("event_type") == "Snapshot":
-                                snap_data = last.get("data", {})
-                                positions = snap_data.get("positions", {})
-                                _update_position(
-                                    {
-                                        "sim_time": snap_data.get("sim_time", ""),
-                                        "positions": [
-                                            {
-                                                "node_id": nid,
-                                                "lat_deg": p.get("lat_deg", 0),
-                                                "lon_deg": p.get("lon_deg", 0),
-                                                "alt_km": p.get("alt_km", 0),
-                                                "node_type": "ground_station"
-                                                if nid.startswith("gs-")
-                                                else "satellite",
-                                                "plane": p.get("plane"),
-                                                "slot": p.get("slot"),
-                                            }
-                                            for nid, p in positions.items()
-                                        ],
-                                    }
-                                )
-                        # Extract link state
+                        # Position data from FullStateSnapshot is end-of-window (future).
+                        # Only use it as initial seed when no PositionEvents have arrived yet.
+                        # Once paced PositionEvents are flowing, ignore snapshot positions
+                        # to avoid teleporting satellites to future positions every 10s.
+                        if not _state["nodes"]:
+                            traj = data.get("position_trajectory", [])
+                            if traj:
+                                last = traj[-1]
+                                if last.get("event_type") == "Snapshot":
+                                    snap_data = last.get("data", {})
+                                    positions = snap_data.get("positions", {})
+                                    _update_position(
+                                        {
+                                            "sim_time": snap_data.get("sim_time", ""),
+                                            "positions": [
+                                                {
+                                                    "node_id": nid,
+                                                    "lat_deg": p.get("lat_deg", 0),
+                                                    "lon_deg": p.get("lon_deg", 0),
+                                                    "alt_km": p.get("alt_km", 0),
+                                                    "node_type": "ground_station"
+                                                    if nid.startswith("gs-")
+                                                    else "satellite",
+                                                    "plane": p.get("plane"),
+                                                    "slot": p.get("slot"),
+                                                }
+                                                for nid, p in positions.items()
+                                            ],
+                                        }
+                                    )
+                        # Extract link state (always — this is what FullStateSnapshot is for)
                         for pair_key, link in {
                             **data.get("isl_state", {}),
                             **data.get("gs_state", {}),
@@ -2120,6 +2124,13 @@ def main() -> None:
             except Exception:
                 pass
             _session_manager.set_active(_active_path)
+            # Resolve mounted path to matching session file in scanned list
+            _loaded_name = session_data.get("session", {}).get("name", "")
+            if _loaded_name:
+                for _s in _session_manager._available:
+                    if _s.get("name") == _loaded_name:
+                        _session_manager.set_active(_s["file"])
+                        break
             _session_manager._status = "ready"
         else:
             log.info("No session loaded — VS-API starting in idle mode")
@@ -2146,6 +2157,16 @@ def main() -> None:
                         f"Active ConstellationSpec CR found (phase={phase}) — setting status to ready"
                     )
                     _session_manager._status = "ready"
+                    # Try to match session name from mounted config
+                    _sp = Path(args.session)
+                    if _sp.is_file():
+                        _sd = yaml.safe_load(_sp.read_text())
+                        _sn = _sd.get("session", {}).get("name", "") if _sd else ""
+                        if _sn:
+                            for _s in _session_manager._available:
+                                if _s.get("name") == _sn:
+                                    _session_manager.set_active(_s["file"])
+                                    break
             except Exception:
                 pass  # No CR exists — stay idle
 

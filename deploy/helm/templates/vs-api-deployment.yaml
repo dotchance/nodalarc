@@ -16,6 +16,8 @@ spec:
         app: nodalarc-vs-api
     spec:
       serviceAccountName: nodalarc-orchestrator
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
       containers:
         - name: vs-api
           image: {{ .Values.images.vsApi | default "docker.io/nodalarc/vs-api:latest" }}

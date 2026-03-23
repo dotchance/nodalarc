@@ -16,6 +16,8 @@ spec:
         app: nodalarc-scheduler
     spec:
       serviceAccountName: nodalarc-orchestrator
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
       containers:
         - name: scheduler
           image: {{ .Values.images.scheduler | default "docker.io/nodalarc/scheduler:latest" }}

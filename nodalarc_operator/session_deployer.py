@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -512,8 +513,13 @@ def _spec_to_session_yaml(spec: dict) -> str:
     routing = spec.get("routing", {})
     time_cfg = spec.get("time", {})
 
+    protocol = routing.get("protocol", "isis")
+    extensions = routing.get("extensions", [])
+    ext_str = "-".join(extensions) if extensions else "plain"
+    session_name = f"{spec['constellation']}-{protocol}-{ext_str}"
+
     session_dict: dict[str, Any] = {
-        "session": {"name": "operator-session"},
+        "session": {"name": session_name},
         "constellation": f"configs/constellations/{spec['constellation']}.yaml",
         "ground_stations": f"configs/ground-stations/sets/{spec['groundStations']}.yaml",
         "routing": {
@@ -745,6 +751,7 @@ def _create_session_pod(
             owner_references=[owner_ref],
         ),
         spec=kubernetes.client.V1PodSpec(
+            node_name=os.environ.get("SESSION_NODE_NAME") or None,
             containers=containers,
             volumes=volumes,
             restart_policy="Never",

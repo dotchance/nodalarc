@@ -16,6 +16,8 @@ spec:
         app: nodalarc-operator
     spec:
       serviceAccountName: nodalarc-operator
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
       containers:
         - name: operator
           image: {{ .Values.images.operator | default "nodalarc/operator:latest" }}
@@ -36,6 +38,9 @@ spec:
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 30
+          env:
+            - name: SESSION_NODE_NAME
+              value: {{ .Values.sessionNodeName | default "nodal" | quote }}
           resources:
             limits:
               memory: 256Mi

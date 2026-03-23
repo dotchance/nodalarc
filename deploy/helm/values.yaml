@@ -49,3 +49,10 @@ nodeAgent:
 vsApi:
   memoryLimit: 512Mi
   cpuLimit: 500m
+
+# Node where session pods (satellites, ground stations) are created.
+# All session pods must land on the same node until M9 (CROSS_NODE ISL).
+sessionNodeName: "nodal"
+
+# K8s node hostname for platform pods.
+controlPlaneNode: "nodal"

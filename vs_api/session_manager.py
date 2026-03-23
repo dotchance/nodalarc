@@ -102,7 +102,26 @@ class SessionManager:
 
     def list_sessions(self) -> list[dict]:
         """Return available sessions with active flag on current session."""
-        return [{**s, "active": s["file"] == self._current_session_file} for s in self._available]
+        result = [{**s, "active": s["file"] == self._current_session_file} for s in self._available]
+        # If session is ready but no file match (Operator-deployed session), match by name
+        if (
+            self._status == "ready"
+            and not any(s["active"] for s in result)
+            and self._current_session_file
+        ):
+            try:
+                import yaml
+
+                raw = Path(self._current_session_file).read_text()
+                name = yaml.safe_load(raw).get("session", {}).get("name", "")
+                if name:
+                    for s in result:
+                        if s["name"] == name:
+                            s["active"] = True
+                            break
+            except Exception:
+                pass
+        return result
 
     def set_active(self, session_file: str) -> None:
         """Mark a session file as the currently active session."""

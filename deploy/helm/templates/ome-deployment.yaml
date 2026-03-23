@@ -16,6 +16,8 @@ spec:
       labels:
         app: nodalarc-ome
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
       containers:
         - name: ome
           image: {{ .Values.images.ome }}

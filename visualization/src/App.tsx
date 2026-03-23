@@ -57,29 +57,28 @@ function AppInner() {
   const [showCatalog, setShowCatalog] = useState(true);
   const [hasEverDeployed, setHasEverDeployed] = useState(false);
 
-  const activeSession = sessions.find((s) => s.active);
-  const activeSessionId = activeSession
-    ? activeSession.file.replace("configs/sessions/", "").replace(".yaml", "")
-    : null;
-  const activeSessionName = activeSession?.name ?? null;
+  const sessionStatus = snapshot?.session_status ?? "idle";
+  const hasActiveSession = sessionStatus === "ready" || sessionStatus === "switching";
+  const activeSessionName = snapshot?.constellation_name ?? null;
 
-  // If VS-API already has an active session (e.g. after HMR reload), allow closing catalog
+  // If VS-API already has an active session (e.g. after page reload), close wizard
   useEffect(() => {
-    if (activeSessionId && !hasEverDeployed) {
+    if (hasActiveSession && !hasEverDeployed) {
       setHasEverDeployed(true);
+      setShowCatalog(false);
     }
-  }, [activeSessionId, hasEverDeployed]);
+  }, [hasActiveSession, hasEverDeployed]);
 
   const handleDeploy = useCallback((sessionId: string) => {
-    // If clicking the already-running session, just close the catalog
-    if (sessionId === activeSessionId) {
+    // If a session is already running, just close the catalog
+    if (hasActiveSession) {
       setShowCatalog(false);
       return;
     }
     switchSession(`configs/sessions/${sessionId}.yaml`);
     setShowCatalog(false);
     setHasEverDeployed(true);
-  }, [switchSession, activeSessionId]);
+  }, [switchSession, hasActiveSession]);
 
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
   const [colorMode, setColorMode] = useState<ColorMode>("area");

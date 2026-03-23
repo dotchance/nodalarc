@@ -18,6 +18,8 @@ spec:
       hostNetwork: true
       hostPID: true
       serviceAccountName: nodalarc-node-agent
+      nodeSelector:
+        nodalarc.io/node-agent: "true"
       securityContext:
         seccompProfile:
           type: Unconfined

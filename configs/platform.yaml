@@ -219,6 +219,13 @@ platform:
   zmq_bind_host: "0.0.0.0"
   zmq_connect_host: "127.0.0.1"
 
+  # Per-service overrides for K8s — connect to Service DNS names.
+  zmq_connect_hosts:
+    ome: "nodalarc-ome"
+    orchestrator: "nodalarc-scheduler-control"
+    scheduler-events: "nodalarc-scheduler-events"
+    nodalpath: "nodalpath"
+
   # ── System Tuning ───────────────────────────────────────────────────
   # Applied by na-deploy to the host before pod creation.
 

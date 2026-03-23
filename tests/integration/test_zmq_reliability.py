@@ -23,14 +23,18 @@ KUBECTL = os.environ.get("KUBECTL", "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml k
 
 
 def _kubectl(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        KUBECTL.split() + list(args),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        return subprocess.run(
+            KUBECTL.split() + list(args),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"kubectl {' '.join(args)} timed out after 30s")
 
 
-def _wait_pod_running(label: str, timeout: int = 60) -> bool:
+def _wait_pod_running(label: str, timeout: int = 25) -> bool:
     """Wait for a pod matching the label to be Running."""
     for _ in range(timeout):
         result = _kubectl("get", "pods", "-n", "nodalarc", "-l", label, "--no-headers")
@@ -68,7 +72,7 @@ def _get_scheduler_endpoint() -> str:
     return f"tcp://{ip}:5561" if ip else "tcp://127.0.0.1:5561"
 
 
-def _subscribe_port_5561(timeout_s: int = 60) -> dict[str, int]:
+def _subscribe_port_5561(timeout_s: int = 20) -> dict[str, int]:
     """Subscribe to Scheduler events on port 5561, return topic counts."""
     import collections
 
@@ -111,24 +115,24 @@ def _get_sim_time() -> str | None:
 def test_scheduler_recovers_after_ome_restart():
     """Scheduler must resume publishing on port 5561 after OME restart."""
     # 1. Confirm Scheduler is publishing
-    events_before = _subscribe_port_5561(timeout_s=60)
+    events_before = _subscribe_port_5561(timeout_s=20)
     assert events_before, "Scheduler is not publishing on port 5561 before test"
 
     # 2. Restart OME pod
     _kubectl(
-        "delete", "pod", "-n", "nodalarc", "-l", "app=nodalarc-ome", "--wait=true", "--timeout=60s"
+        "delete", "pod", "-n", "nodalarc", "-l", "app=nodalarc-ome", "--wait=true", "--timeout=25s"
     )
 
     # 3. Wait for OME pod Running
-    assert _wait_pod_running("app=nodalarc-ome", timeout=60), "OME pod did not restart"
+    assert _wait_pod_running("app=nodalarc-ome", timeout=25), "OME pod did not restart"
 
     # 4. Wait for OME window computation + pacing to start
-    time.sleep(20)
+    time.sleep(15)
 
-    # 5. Scheduler must resume publishing within 60s of OME ready
-    events_after = _subscribe_port_5561(timeout_s=60)
+    # 5. Scheduler must resume publishing within 20s of OME ready
+    events_after = _subscribe_port_5561(timeout_s=20)
     assert events_after, (
-        "Scheduler did not resume publishing on port 5561 within 60s of OME restart. "
+        "Scheduler did not resume publishing on port 5561 within 20s of OME restart. "
         f"Events: {events_after}"
     )
 
@@ -143,17 +147,17 @@ def test_vsapi_recovers_after_ome_restart():
 
     # 2. Restart OME pod
     _kubectl(
-        "delete", "pod", "-n", "nodalarc", "-l", "app=nodalarc-ome", "--wait=true", "--timeout=60s"
+        "delete", "pod", "-n", "nodalarc", "-l", "app=nodalarc-ome", "--wait=true", "--timeout=25s"
     )
 
     # 3. Wait for OME pod Running
-    assert _wait_pod_running("app=nodalarc-ome", timeout=60), "OME pod did not restart"
+    assert _wait_pod_running("app=nodalarc-ome", timeout=25), "OME pod did not restart"
 
     # 4. Wait for OME window computation
-    time.sleep(20)
+    time.sleep(15)
 
-    # 5. sim_time must resume advancing within 60s
-    deadline = time.monotonic() + 60
+    # 5. sim_time must resume advancing within 20s
+    deadline = time.monotonic() + 20
     recovered = False
     while time.monotonic() < deadline:
         ta = _get_sim_time()
@@ -162,11 +166,11 @@ def test_vsapi_recovers_after_ome_restart():
         if ta and tb and ta != tb:
             recovered = True
             break
-    assert recovered, "VS-API sim_time did not resume advancing within 60s of OME restart"
+    assert recovered, "VS-API sim_time did not resume advancing within 20s of OME restart"
 
 
 def test_scheduler_uses_catchup_on_start():
-    """Scheduler must publish events within 30s of starting via R-OME-008 catch-up."""
+    """Scheduler must publish events within 20s of starting via R-OME-008 catch-up."""
     # 1. Restart Scheduler pod
     _kubectl(
         "delete",
@@ -176,14 +180,14 @@ def test_scheduler_uses_catchup_on_start():
         "-l",
         "app=nodalarc-scheduler",
         "--wait=true",
-        "--timeout=60s",
+        "--timeout=25s",
     )
 
     # 2. Wait for Scheduler pod Running
-    assert _wait_pod_running("app=nodalarc-scheduler", timeout=60), "Scheduler pod did not restart"
+    assert _wait_pod_running("app=nodalarc-scheduler", timeout=25), "Scheduler pod did not restart"
 
-    # 3. Events must appear within 30s (catch-up, not waiting for FullStateSnapshot)
-    events = _subscribe_port_5561(timeout_s=30)
+    # 3. Events must appear within 20s (catch-up, not waiting for FullStateSnapshot)
+    events = _subscribe_port_5561(timeout_s=20)
     assert events, (
         "Scheduler did not publish events within 30s of startup. "
         "R-OME-008 catch-up may not be working."

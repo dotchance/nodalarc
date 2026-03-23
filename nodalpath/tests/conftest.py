@@ -29,7 +29,7 @@ def _init_platform_configs():
         vs_api_http_port=8080,
         vf_static_file_server_port=8081,
         nodalpath_console_http_port=3100,
-        nodalpath_fwd_grpc_port=50051,
+        nodalpath_fwd_grpc_port=50052,
         nodalpath_fwd_netconf_port=830,
         probe_daemon_http_api_port=9100,
         probe_daemon_udp_data_port=19100,

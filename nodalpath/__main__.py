@@ -322,7 +322,7 @@ def main() -> None:
     parser.add_argument("--almanac-output", help="Almanac JSONL output path (enables persistence)")
     parser.add_argument("--no-lookahead", action="store_true", help="Disable lookahead worker")
     parser.add_argument("--transport", choices=["grpc", "vtysh"], default="grpc")
-    parser.add_argument("--grpc-port", type=int, default=50051)
+    parser.add_argument("--grpc-port", type=int, default=50052)
     parser.add_argument("--namespace", default="nodalarc")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(

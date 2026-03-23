@@ -44,7 +44,7 @@ class PushSchedulerConfig:
     use_incremental_diff: bool = True
     dry_run: bool = False
     transport: str = "vtysh"
-    grpc_port: int = 50051
+    grpc_port: int = 50052
 
 
 @dataclass

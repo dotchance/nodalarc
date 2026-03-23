@@ -54,8 +54,9 @@ from pyroute2 import IPRoute
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("fwd-server")
 
-GRPC_PORT = int(os.environ.get("GRPC_PORT", "50051"))
+GRPC_PORT = int(os.environ.get("GRPC_PORT", "50052"))
 NODE_ID = os.environ.get("NODE_ID", "unknown")
+LOOPBACK_IPV4 = os.environ.get("LOOPBACK_IPV4", "127.0.0.1")
 
 # Linux AF_MPLS constant (not in Python's socket module)
 AF_MPLS = 28
@@ -421,9 +422,9 @@ def serve() -> None:
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     add_ForwardingServiceServicer_to_server(ForwardingServiceImpl(), server)
-    server.add_insecure_port(f"0.0.0.0:{GRPC_PORT}")
+    server.add_insecure_port(f"{LOOPBACK_IPV4}:{GRPC_PORT}")
     server.start()
-    log.info("ForwardingService listening on port %d (node: %s)", GRPC_PORT, NODE_ID)
+    log.info("ForwardingService listening on %s:%d (node: %s)", LOOPBACK_IPV4, GRPC_PORT, NODE_ID)
     server.wait_for_termination()
 
 

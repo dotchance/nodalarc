@@ -30,7 +30,7 @@ class NodeInspector:
     def __init__(
         self,
         pod_ip_map: dict[str, str],
-        grpc_port: int = 50051,
+        grpc_port: int = 50052,
         grpc_timeout: float = 10.0,
     ) -> None:
         self._pod_ip_map = dict(pod_ip_map)

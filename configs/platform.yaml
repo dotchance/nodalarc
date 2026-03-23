@@ -88,7 +88,7 @@ platform:
   # gRPC ForwardingService inside nodalpath-fwd sidecar containers.
   # NodalPath pushes MPLS forwarding tables to each pod on this port.
   # Protocol: gRPC (HTTP/2). One channel per push, no connection pooling.
-  nodalpath_fwd_grpc_port: 50051
+  nodalpath_fwd_grpc_port: 50052
 
   # NETCONF stub inside nodalpath-fwd containers. Responds to hello
   # only — satisfies NEBULA liveness probes. Not used for config.

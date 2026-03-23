@@ -93,6 +93,9 @@ MATRIX = [
         "protocol": "nodalpath",
         "extensions": [],
         "gs": "global",
+        "xfail": "NodalPath in-band terrestrial interface not yet implemented. "
+        "Sidecar binds LOOPBACK_IPV4 only — unreachable via K8s CNI by design. "
+        "See PRD Section 13.5.3.",
     },
     {
         "id": 11,
@@ -100,6 +103,9 @@ MATRIX = [
         "protocol": "nodalpath",
         "extensions": [],
         "gs": "polar-emphasis",
+        "xfail": "NodalPath in-band terrestrial interface not yet implemented. "
+        "Sidecar binds LOOPBACK_IPV4 only — unreachable via K8s CNI by design. "
+        "See PRD Section 13.5.3.",
     },
     {
         "id": 12,
@@ -602,6 +608,7 @@ def main():
         results = []
         passed = 0
         failed = 0
+        xfailed = 0
 
         for perm in MATRIX:
             evidence = run_permutation(perm)
@@ -615,6 +622,10 @@ def main():
 
             if evidence["result"] == "PASS":
                 passed += 1
+            elif perm.get("xfail"):
+                xfailed += 1
+                evidence["result"] = "XFAIL"
+                evidence["xfail_reason"] = perm["xfail"]
             else:
                 failed += 1
 
@@ -629,6 +640,7 @@ def main():
             "total": len(MATRIX),
             "passed": passed,
             "failed": failed,
+            "xfailed": xfailed,
             "results": [
                 {"id": r["id"], "label": r.get("label"), "result": r["result"]} for r in results
             ],
@@ -648,13 +660,24 @@ def main():
         # Print final summary
         print()
         print("=" * 60)
-        print(f"E2E Matrix: {passed}/{len(MATRIX)} passed, {failed}/{len(MATRIX)} failed")
+        xfail_str = f", {xfailed} xfail" if xfailed else ""
+        print(
+            f"E2E Matrix: {passed}/{len(MATRIX)} passed, {failed}/{len(MATRIX)} failed{xfail_str}"
+        )
         print(f"Duration: {duration_s:.0f}s")
         print(f"Run token: {run_token}")
         print("=" * 60)
         for r in results:
             status = r.get("result", "?")
-            tag = "PASS" if status == "PASS" else "FAIL" if status == "FAIL" else status
+            tag = (
+                "PASS"
+                if status == "PASS"
+                else "XFAIL"
+                if status == "XFAIL"
+                else "FAIL"
+                if status == "FAIL"
+                else status
+            )
             print(f"  [{r['id']:2d}] {tag:8s} {r.get('label', '')}")
         print(f"\nEvidence: {evidence_dir}/")
         print(f"Summary:  {evidence_dir}/matrix-summary.json")

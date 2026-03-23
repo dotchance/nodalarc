@@ -833,11 +833,6 @@ class Dispatcher:
         if self._active_links and position_trajectory:
             await self._update_latencies(to_pub)
 
-        # Write checkpoint after processing FullStateSnapshot
-        if self._active_links:
-            sim_time_iso = sim_time if isinstance(sim_time, str) else datetime.now(UTC).isoformat()
-            asyncio.create_task(self._write_checkpoint(sim_time_iso))
-
     # ------------------------------------------------------------------
     # Checkpoint
     # ------------------------------------------------------------------

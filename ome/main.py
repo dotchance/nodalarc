@@ -15,6 +15,8 @@ import logging
 import time
 from datetime import UTC, datetime
 
+_current_pacing_sim_time: str = ""
+
 
 def _handle_catchup_requests(catchup_sock, catchup_buffer: dict) -> None:
     """Poll and respond to R-OME-008 CatchupRequests (non-blocking)."""
@@ -28,11 +30,19 @@ def _handle_catchup_requests(catchup_sock, catchup_buffer: dict) -> None:
         resp_events = catchup_buffer["events"]
         if since:
             resp_events = [e for e in resp_events if e.get("data", {}).get("sim_time", "") >= since]
+        # Cap at current pacing position — don't return future events not yet paced
+        if _current_pacing_sim_time:
+            resp_events = [
+                e
+                for e in resp_events
+                if e.get("data", {}).get("sim_time", "") <= _current_pacing_sim_time
+            ]
         catchup_sock.send_json(
             {
                 "window": catchup_buffer["window"],
                 "window_start_sim_time": catchup_buffer["window_start"],
                 "window_end_sim_time": catchup_buffer["window_end"],
+                "current_pacing_sim_time": _current_pacing_sim_time,
                 "events": resp_events,
             }
         )
@@ -186,6 +196,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
     continuously and a .ready sentinel signals when the first window is
     available for the dispatcher to start tailing.
     """
+    global _current_pacing_sim_time
     _start_health_server()
 
     # Wait for session config to appear (Operator creates it after CRD apply)
@@ -327,6 +338,9 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                 }
                 for evt in events
             ]
+            # Initialize pacing position to window start so catch-up callers
+            # before pacing begins get a valid threshold (not empty string).
+            _current_pacing_sim_time = _catchup_buffer["window_start"]
             logging.info(
                 f"OME catch-up buffer: {len(_catchup_buffer['events'])} events for window {window}"
             )
@@ -432,6 +446,7 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                     ]
 
                     sim_time_str = snap_data.get("sim_time", "")
+                    _current_pacing_sim_time = sim_time_str
                     for node in position_list:
                         payload = json.dumps(
                             {

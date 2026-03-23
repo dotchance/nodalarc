@@ -985,8 +985,17 @@ class Dispatcher:
                 elif hasattr(st, "isoformat"):
                     last_st = st.isoformat()
 
-            log.info("OME catch-up complete: last_sim_time=%s", last_st)
-            return last_st
+            # Use OME's pacing position as dedup threshold, not last event sim_time.
+            # Events after the pacing cursor haven't been published yet — they are new.
+            pacing_st = resp.get("current_pacing_sim_time")
+            dedup_st = pacing_st if pacing_st else last_st
+            log.info(
+                "OME catch-up complete: last_sim_time=%s pacing_sim_time=%s dedup=%s",
+                last_st,
+                pacing_st,
+                dedup_st,
+            )
+            return dedup_st
         except Exception as exc:
             log.warning("OME catch-up failed (will use FullStateSnapshot): %s", exc)
             return None

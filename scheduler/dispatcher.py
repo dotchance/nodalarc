@@ -454,22 +454,21 @@ class Dispatcher:
                     successful_agents.add(addr)
 
         # Commit removals and publish TO events per-link for successful agents
-        for pair, (_info, vis) in pending.items():
+        for pair, (link_info, vis) in pending.items():
             # Check if at least one node's agent succeeded
             agent_a = self._loc.agent_addr(vis.node_a)
             agent_b = self._loc.agent_addr(vis.node_b)
             if agent_a in successful_agents or agent_b in successful_agents:
                 self._active_links.pop(pair, None)
                 self._last_latencies.pop(pair, None)
-                ifaces = self._interface_map.get(pair, ("", ""))
                 now = datetime.now(UTC)
                 event = LinkDown(
                     sim_time=vis.sim_time,
                     wall_time=now,
                     node_a=vis.node_a,
                     node_b=vis.node_b,
-                    interface_a=ifaces[0],
-                    interface_b=ifaces[1],
+                    interface_a=link_info.interface_a,
+                    interface_b=link_info.interface_b,
                     reason="vis_lost",
                 )
                 to_pub.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
@@ -494,9 +493,15 @@ class Dispatcher:
 
         for vis in events:
             pair = (vis.node_a, vis.node_b)
-            ifaces = self._interface_map.get(pair)
-            if not ifaces:
-                continue
+            is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+
+            # GS links use gnd0/gnd0 — not in _interface_map (which is ISL-only)
+            if is_gs:
+                ifaces = ("gnd0", "gnd0")
+            else:
+                ifaces = self._interface_map.get(pair)
+                if not ifaces:
+                    continue
 
             bandwidth = self._bandwidth_map.get(pair, 1000.0)
             latency = self._position_table.compute_link_latency(vis.node_a, vis.node_b)
@@ -512,8 +517,6 @@ class Dispatcher:
                 ),
                 vis,
             )
-
-            is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
 
             if is_gs:
                 gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
@@ -594,15 +597,14 @@ class Dispatcher:
             if agent_a in successful_agents or agent_b in successful_agents:
                 self._active_links[pair] = info
                 self._last_latencies[pair] = info.latency_ms
-                ifaces = self._interface_map.get(pair, ("", ""))
                 now = datetime.now(UTC)
                 event = LinkUp(
                     sim_time=vis.sim_time,
                     wall_time=now,
                     node_a=vis.node_a,
                     node_b=vis.node_b,
-                    interface_a=ifaces[0],
-                    interface_b=ifaces[1],
+                    interface_a=info.interface_a,
+                    interface_b=info.interface_b,
                     latency_ms=info.latency_ms,
                     bandwidth_mbps=info.bandwidth_mbps,
                     reason="vis_gained",

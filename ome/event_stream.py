@@ -154,9 +154,10 @@ def precompute_timeline_window(
             gs_min_elevations[node_id] = (
                 station.min_elevation_deg or gs_file.default_min_elevation_deg or 25.0
             )
-            gs_terminal_counts[node_id] = (
-                sum(t.count for t in station.terminals) if station.terminals else default_gs_count
-            )
+            # Scheduling limit = number of gnd interfaces on the GS pod.
+            # Currently always 1 (gnd0 only). When multi-gnd support is added,
+            # this should be derived from the wiring manifest's gnd_interfaces list.
+            gs_terminal_counts[node_id] = 1
             gs_policies[node_id] = station.scheduling_policy or default_gs_policy
 
     # Track ISL state: (node_a, node_b) -> (visible, scheduled)

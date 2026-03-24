@@ -25,7 +25,6 @@ from orchestrator.link_manager import (
     create_satellite_ground_veth,
     create_veth_pair,
     enable_mpls_input,
-    set_interface_up,
 )
 
 log = logging.getLogger(__name__)
@@ -120,6 +119,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
     log.info("Phase 3: MPLS input enabled on ISL interfaces")
 
     # Phase 4: Create ground bridges and GS gnd0 interfaces
+    # PRD v0.40 Section 13.6: gnd0 starts admin DOWN — no satellite connected at session start.
     for gs_id, _bridge_spec in ground_bridges.items():
         gs_pid = pid_map.get(gs_id, 0)
         if gs_pid == 0:
@@ -129,7 +129,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             create_ground_bridge(gs_id, gs_pid)
             configure_interface(gs_pid, "gnd0", gs_id)
             enable_mpls_input(gs_pid, "gnd0")
-            set_interface_up(gs_pid, "gnd0")
+            # gnd0 stays DOWN — brought UP by LinkUp handler when satellite rises
         except Exception as exc:
             log.warning(f"Ground bridge setup failed for {gs_id}: {exc}")
     log.info(f"Phase 4: created {len(ground_bridges)} ground bridges")

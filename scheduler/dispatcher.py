@@ -101,52 +101,6 @@ class Dispatcher:
         # Set from catch-up response current_sim_time.
         self._dedup_threshold: str = ""
 
-    def load_interface_inventory(self) -> None:
-        """Query Node Agent GetTopology to learn which interfaces exist per pod.
-
-        Removes interface_map entries where the interface doesn't exist in the
-        pod (e.g., isl3 on a satellite with only 3 ISL terminals). This prevents
-        dispatching BatchLinkUp for non-existent interfaces.
-        """
-        for agent_addr in self._loc.all_agent_addrs():
-            try:
-                stub = self._pool.get_stub(agent_addr)
-                resp = stub.get_topology(node_agent_pb2.GetTopologyRequest())
-                observed: dict[str, set[str]] = {}
-                for iface in resp.interfaces:
-                    observed.setdefault(iface.node_id, set()).add(iface.interface_name)
-
-                if not observed:
-                    log.info("GetTopology returned empty — skipping inventory filter")
-                    return
-
-                # Remove interface_map entries where the interface doesn't exist
-                to_remove = []
-                for pair, (iface_a, iface_b) in self._interface_map.items():
-                    node_a, node_b = pair
-                    a_exists = iface_a in observed.get(node_a, set()) if iface_a else True
-                    b_exists = iface_b in observed.get(node_b, set()) if iface_b else True
-                    if not a_exists or not b_exists:
-                        missing = []
-                        if not a_exists:
-                            missing.append(f"{node_a}/{iface_a}")
-                        if not b_exists:
-                            missing.append(f"{node_b}/{iface_b}")
-                        log.warning(
-                            "Removing link %s<->%s from interface_map: %s not found in pod",
-                            node_a,
-                            node_b,
-                            ", ".join(missing),
-                        )
-                        to_remove.append(pair)
-                for pair in to_remove:
-                    del self._interface_map[pair]
-                    self._bandwidth_map.pop(pair, None)
-                if to_remove:
-                    log.info("Filtered %d link pairs with non-existent interfaces", len(to_remove))
-            except Exception as exc:
-                log.warning("Interface inventory query failed: %s", exc)
-
     async def run(self, external_to_pub: object | None = None) -> None:
         """Main async dispatch loop.
 
@@ -187,18 +141,8 @@ class Dispatcher:
 
         await asyncio.sleep(0.5)
 
-        # Wait for Node Agents to be ready
-        loop = asyncio.get_running_loop()
-        agent_addrs = self._loc.all_agent_addrs()
-        if agent_addrs:
-            await loop.run_in_executor(None, self._pool.wait_for_agents, agent_addrs)
-
         # Reconciliation on startup
         await self._reconcile_on_startup(to_pub)
-
-        # Interface inventory
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self.load_interface_inventory)
 
         # R-OME-008: catch-up — VisibilityEvents only from rolling log
         await self._ome_catchup(to_pub)

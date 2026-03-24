@@ -99,31 +99,49 @@ def _resolve_terrestrial_prefixes(
     station,
     gs_file: GroundStationFile,
     gs_index: int,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], bool, int]:
     """Resolve terrestrial prefixes for a ground station.
 
     Each prefix includes both the network prefix (for routing announcements)
     and the host_address (for interface configuration).
+
+    Default route prefixes (0.0.0.0/0, ::/0) are NOT included in the prefix
+    list — they are not interface addresses. Instead, they set the
+    default_route flag and metric for IGP default-information originate.
+
+    Returns:
+        (prefix_list, has_default_route, default_route_metric)
     """
-    prefixes: list[tuple[str, int]] = []
+    import ipaddress
+
+    raw_prefixes: list[tuple[str, int]] = []
     if station.terrestrial_prefixes:
-        prefixes = [(tp.prefix, tp.metric) for tp in station.terrestrial_prefixes]
+        raw_prefixes = [(tp.prefix, tp.metric) for tp in station.terrestrial_prefixes]
     else:
         tpl = gs_file.default_terrestrial_prefixes
         if tpl is None:
-            return []
+            return [], False, 0
         ipv4 = tpl.ipv4_template.format(gs_index=gs_index)
         ipv6 = tpl.ipv6_template.format(gs_index=gs_index)
-        prefixes = [(ipv4, tpl.metric), (ipv6, tpl.metric)]
+        raw_prefixes = [(ipv4, tpl.metric), (ipv6, tpl.metric)]
 
-    return [
-        {
-            "prefix": pfx,
-            "host_address": _host_address_from_prefix(pfx),
-            "metric": metric,
-        }
-        for pfx, metric in prefixes
-    ]
+    result = []
+    has_default_route = False
+    default_route_metric = 100
+    for pfx, metric in raw_prefixes:
+        net = ipaddress.ip_network(pfx, strict=False)
+        if net.prefixlen == 0:
+            has_default_route = True
+            default_route_metric = metric
+            continue
+        result.append(
+            {
+                "prefix": pfx,
+                "host_address": _host_address_from_prefix(pfx),
+                "metric": metric,
+            }
+        )
+    return result, has_default_route, default_route_metric
 
 
 def _build_loopback_map(
@@ -273,7 +291,7 @@ def build_template_vars(
             None,
         )
         if station:
-            terrestrial_prefixes = _resolve_terrestrial_prefixes(
+            terrestrial_prefixes, has_default, default_metric = _resolve_terrestrial_prefixes(
                 station,
                 ground_stations,
                 gs_index,
@@ -281,7 +299,11 @@ def build_template_vars(
             result["terrestrial_prefixes"] = terrestrial_prefixes
             if terrestrial_prefixes:
                 result["terr0_metric"] = max(tp["metric"] for tp in terrestrial_prefixes)
+            result["terr0_default_route"] = has_default
+            result["terr0_default_metric"] = default_metric
         else:
             result["terrestrial_prefixes"] = []
+            result["terr0_default_route"] = False
+            result["terr0_default_metric"] = 0
 
     return result

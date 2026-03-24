@@ -304,15 +304,25 @@ def write_wiring_manifest(
     for i, station in enumerate(gs_file.stations):
         gs_id = addressing.gs_id(station.name)
 
-        # Terrestrial prefix addresses
+        # Terrestrial prefix addresses — use host addresses, skip default routes
+        import ipaddress as _ipaddress
+
         addrs = []
+        raw_prefixes: list[str] = []
         if station.terrestrial_prefixes:
-            for tp in station.terrestrial_prefixes:
-                addrs.append(tp.prefix)
+            raw_prefixes = [tp.prefix for tp in station.terrestrial_prefixes]
         elif gs_file.default_terrestrial_prefixes:
             tpl = gs_file.default_terrestrial_prefixes
-            addrs.append(tpl.ipv4_template.format(gs_index=i))
-            addrs.append(tpl.ipv6_template.format(gs_index=i))
+            raw_prefixes = [
+                tpl.ipv4_template.format(gs_index=i),
+                tpl.ipv6_template.format(gs_index=i),
+            ]
+        for pfx in raw_prefixes:
+            net = _ipaddress.ip_network(pfx, strict=False)
+            if net.prefixlen == 0:
+                continue  # default route — not an interface address
+            host = net.network_address + 1
+            addrs.append(f"{host}/{net.prefixlen}")
 
         nodes[gs_id] = {
             "node_type": "ground_station",

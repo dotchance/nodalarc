@@ -349,6 +349,11 @@ function AppInner() {
             Waiting for orbital propagation — satellites will begin moving shortly
           </div>
         )}
+        {snapshot?.stale && (
+          <div className="connection-banner" style={{ background: "rgba(200, 60, 60, 0.85)" }}>
+            STALE DATA — waiting for upstream update
+          </div>
+        )}
         <div
           className={viewMode === "split" ? "split-pane" : "full-pane"}
           style={{ display: viewMode === "topology" ? "none" : undefined }}

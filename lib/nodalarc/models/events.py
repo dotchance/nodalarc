@@ -65,13 +65,22 @@ class VisibilityEvent(BaseModel):
 
 
 class ClockTick(BaseModel):
-    """Periodic time marker emitted every step_seconds."""
+    """Pacing clock signal — published once per tick during pacing."""
 
     model_config = ConfigDict(frozen=True)
 
     sim_time: datetime
     wall_time: datetime
     compression_ratio: float
+
+
+class HeartbeatTick(BaseModel):
+    """Liveness signal during window computation — does NOT advance sim_time."""
+
+    model_config = ConfigDict(frozen=True)
+
+    wall_time: datetime
+    status: str  # "computing" or "ready"
 
 
 class TimelinePositionSnapshot(BaseModel):

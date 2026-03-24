@@ -38,7 +38,7 @@ COPY configs/satellite-types/ configs/satellite-types/
 COPY configs/ground-stations/ configs/ground-stations/
 COPY configs/constellations/ configs/constellations/
 
-# ZMQ PUB port + scenario inject + playback control
-EXPOSE 5561 5564 5566
+# ZMQ PUB port + scenario inject + playback control + link catchup
+EXPOSE 5561 5564 5566 5569
 
 ENTRYPOINT ["python", "-m", "scheduler"]

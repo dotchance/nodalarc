@@ -77,6 +77,18 @@ def ome_catchup_port() -> int:
     return get_platform_config().zmq_ome_catchup_port
 
 
+def to_link_catchup_port() -> int:
+    return get_platform_config().zmq_to_link_catchup_port
+
+
+def to_link_catchup_bind() -> str:
+    return get_platform_config().to_link_catchup_bind
+
+
+def to_link_catchup_connect() -> str:
+    return get_platform_config().to_link_catchup_connect
+
+
 # --- Socket address accessor functions ---
 
 

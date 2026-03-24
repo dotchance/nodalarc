@@ -43,3 +43,9 @@ interface terr0
  ip ospf passive
 exit
 {% endif %}
+
+{% if node_type == "ground_station" and terr0_default_route | default(false) %}
+router ospf
+ default-information originate always metric {{ terr0_default_metric | default(100) }}
+exit
+{% endif %}

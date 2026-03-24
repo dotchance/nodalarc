@@ -56,3 +56,9 @@ interface terr0
  isis metric {{ terr0_metric | default(10) }}
 exit
 {% endif %}
+
+{% if node_type == "ground_station" and terr0_default_route | default(false) %}
+router isis NODAL
+ default-information originate ipv4 level-2 always metric {{ terr0_default_metric | default(100) }}
+exit
+{% endif %}

@@ -318,11 +318,13 @@ class TestGroundStationVars:
             gs_name="hawthorne",
         )
         prefixes = result["terrestrial_prefixes"]
-        assert len(prefixes) == 2  # Unique /24 + default route
+        assert len(prefixes) == 1  # Unique /24 only — default route is separate
         assert prefixes[0]["prefix"] == "172.16.1.0/24"
+        assert prefixes[0]["host_address"] == "172.16.1.1/24"
         assert prefixes[0]["metric"] == 10
-        assert prefixes[1]["prefix"] == "0.0.0.0/0"
-        assert prefixes[1]["metric"] == 100
+        # Default route is now a separate flag, not in prefix list
+        assert result["terr0_default_route"] is True
+        assert result["terr0_default_metric"] == 100
 
     def test_gs_terrestrial_prefix_per_station_override(
         self, stripe_session, starlink_config, gs_file, addressing

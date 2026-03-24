@@ -99,16 +99,40 @@ def _ground_link_down(
         return msg
 
 
+def _toggle_gnd0_admin_state(pid: int, label: str) -> None:
+    """Toggle gnd0 down→up inside a pod namespace to trigger routing daemon hello.
+
+    PRD Section 13.6: host-side tc mirred manipulation is invisible to the
+    pod's kernel. The admin toggle forces RTM_NEWLINK events that trigger
+    FRR's interface state handler, causing immediate hello exchange on the
+    new link. Without this, the routing daemon is blind to handoffs until
+    its hold timer expires.
+    """
+    from pyroute2 import NetNS
+
+    ns = NetNS(f"/proc/{pid}/ns/net")
+    try:
+        gnd_idx = ns.link_lookup(ifname="gnd0")
+        if gnd_idx:
+            ns.link("set", index=gnd_idx[0], state="down")
+            ns.link("set", index=gnd_idx[0], state="up")
+            log.debug("Toggled gnd0 admin state in %s ns(%d)", label, pid)
+    finally:
+        ns.close()
+
+
 def _ground_link_up(
     iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
 ) -> str | None:
     """Bring up a ground link with bridge attach + shaping. Returns error or None.
 
-    Sequence (matches realtime_dispatcher.py L338-344):
+    PRD Section 13.6 handoff sequence:
     1. attach_to_ground_bridge (host veths UP, sat gnd0 UP, mirred redirect)
     2. Apply tc shaping on GS gnd0
     3. Apply tc shaping on satellite gnd0
-    4. If peer_mac present: NDP on gnd0 (synchronous, before ACK)
+    4. Toggle gnd0 admin state down→up in both GS and satellite pods
+       (triggers routing daemon hello — PRD 13.6 required fix)
+    5. If peer_mac present: NDP on gnd0 (synchronous, before ACK)
     """
     try:
         pm = pid_map or {}
@@ -122,6 +146,11 @@ def _ground_link_up(
             namespace_ops.apply_link_shaping(
                 sat_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps
             )
+        # PRD 13.6 Step 4: toggle gnd0 admin state to trigger routing hello
+        if gs_pid:
+            _toggle_gnd0_admin_state(gs_pid, iface.gs_id)
+        if sat_pid:
+            _toggle_gnd0_admin_state(sat_pid, iface.sat_id)
         # NDP on gnd0 — synchronous, before ACK
         if iface.peer_mac and sat_pid:
             peer_ll = namespace_ops.mac_to_link_local(iface.peer_mac)

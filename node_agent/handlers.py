@@ -73,14 +73,11 @@ def _ground_link_down(
 ) -> str | None:
     """Tear down a ground link. Returns error string or None.
 
-    Sequence (matches realtime_dispatcher.py L383-390):
-    1. Remove tc shaping (netem/tbf) from satellite gnd0
-    2. Remove tc shaping (netem/tbf) from GS gnd0
-    3. Detach via ground_bridge.detach_from_ground_bridge which:
-       a. Remove tc mirred redirect from GS host veth
-       b. Remove tc mirred redirect from sat host veth
-       c. Bring satellite gnd0 DOWN
-       d. Bring sat host veth DOWN
+    PRD v0.40 Section 13.6 LinkDown sequence:
+    1. Remove tc mirred redirect from host-side veths
+    2. Bring satellite gnd0 DOWN
+    3. Bring gnd0 admin DOWN inside GS pod — FRR sees carrier loss,
+       tears down adjacency immediately
     """
     try:
         pm = pid_map or {}
@@ -92,6 +89,9 @@ def _ground_link_down(
             namespace_ops.remove_link_shaping(gs_pid, "gnd0")
         if sat_pid:
             ground_bridge.detach_from_ground_bridge(iface.gs_id, iface.sat_id, sat_pid)
+        # PRD v0.40 13.6 Step 3: bring gnd0 DOWN inside GS pod
+        if gs_pid:
+            _set_gnd0_admin(gs_pid, iface.gs_id, "down")
         return None
     except Exception as exc:
         msg = f"Ground down failed {iface.gs_id}<->{iface.sat_id}: {exc}"
@@ -99,14 +99,12 @@ def _ground_link_down(
         return msg
 
 
-def _toggle_gnd0_admin_state(pid: int, label: str) -> None:
-    """Toggle gnd0 down→up inside a pod namespace to trigger routing daemon hello.
+def _set_gnd0_admin(pid: int, label: str, state: str) -> None:
+    """Set gnd0 admin state inside a pod namespace.
 
-    PRD Section 13.6: host-side tc mirred manipulation is invisible to the
-    pod's kernel. The admin toggle forces RTM_NEWLINK events that trigger
-    FRR's interface state handler, causing immediate hello exchange on the
-    new link. Without this, the routing daemon is blind to handoffs until
-    its hold timer expires.
+    PRD v0.40 Section 13.6: gnd0 carrier state mirrors satellite visibility.
+    DOWN when no satellite is overhead, UP when connected. This generates
+    correct RTM_NEWLINK events so FRR reacts immediately to link changes.
     """
     from pyroute2 import NetNS
 
@@ -114,9 +112,8 @@ def _toggle_gnd0_admin_state(pid: int, label: str) -> None:
     try:
         gnd_idx = ns.link_lookup(ifname="gnd0")
         if gnd_idx:
-            ns.link("set", index=gnd_idx[0], state="down")
-            ns.link("set", index=gnd_idx[0], state="up")
-            log.debug("Toggled gnd0 admin state in %s ns(%d)", label, pid)
+            ns.link("set", index=gnd_idx[0], state=state)
+            log.debug("Set gnd0 admin %s in %s ns(%d)", state, label, pid)
     finally:
         ns.close()
 
@@ -126,12 +123,11 @@ def _ground_link_up(
 ) -> str | None:
     """Bring up a ground link with bridge attach + shaping. Returns error or None.
 
-    PRD Section 13.6 handoff sequence:
+    PRD v0.40 Section 13.6 LinkUp sequence:
     1. attach_to_ground_bridge (host veths UP, sat gnd0 UP, mirred redirect)
     2. Apply tc shaping on GS gnd0
     3. Apply tc shaping on satellite gnd0
-    4. Toggle gnd0 admin state down→up in both GS and satellite pods
-       (triggers routing daemon hello — PRD 13.6 required fix)
+    4. Bring gnd0 admin UP inside GS pod — FRR sees carrier, sends hellos
     5. If peer_mac present: NDP on gnd0 (synchronous, before ACK)
     """
     try:
@@ -146,11 +142,9 @@ def _ground_link_up(
             namespace_ops.apply_link_shaping(
                 sat_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps
             )
-        # PRD 13.6 Step 4: toggle gnd0 admin state to trigger routing hello
+        # PRD v0.40 13.6 Step 3: bring gnd0 UP inside GS pod
         if gs_pid:
-            _toggle_gnd0_admin_state(gs_pid, iface.gs_id)
-        if sat_pid:
-            _toggle_gnd0_admin_state(sat_pid, iface.sat_id)
+            _set_gnd0_admin(gs_pid, iface.gs_id, "up")
         # NDP on gnd0 — synchronous, before ACK
         if iface.peer_mac and sat_pid:
             peer_ll = namespace_ops.mac_to_link_local(iface.peer_mac)

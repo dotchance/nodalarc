@@ -72,12 +72,25 @@ async def on_create(spec, name, namespace, meta, **_):
 
     # Wait for any old session pods to finish terminating
     loop = asyncio.get_running_loop()
+    old_pods_clear = False
     for _ in range(60):
         total, _ = await loop.run_in_executor(None, check_pods_ready, namespace)
         if total == 0:
+            old_pods_clear = True
             break
         log.info(f"Waiting for {total} old session pods to terminate...")
         await asyncio.sleep(2)
+    if not old_pods_clear:
+        log.error("Old session pods did not terminate within 120s — aborting deploy")
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Error",
+                "message": "Timeout waiting for old session pods to terminate",
+            },
+        )
+        raise kopf.PermanentError("Old session pods did not terminate within 120s")
 
     # Deploy session (blocking — run in executor to not block kopf)
     try:
@@ -109,6 +122,7 @@ async def on_create(spec, name, namespace, meta, **_):
     # Wait for pods to reach Running
     if result.get("phase") == "Creating":
         pod_count = result.get("podCount", 0)
+        all_pods_ready = False
         for i in range(600):  # 10 minutes max
             total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
             if i % 10 == 0:
@@ -123,8 +137,23 @@ async def on_create(spec, name, namespace, meta, **_):
                     },
                 )
             if ready >= pod_count:
+                all_pods_ready = True
                 break
             await asyncio.sleep(1)
+        if not all_pods_ready:
+            log.error(
+                f"Session pods did not reach Running within 600s "
+                f"({ready}/{pod_count} ready) — aborting"
+            )
+            _update_status(
+                name,
+                namespace,
+                {
+                    "phase": "Error",
+                    "message": f"Timeout: {ready}/{pod_count} pods Running after 600s",
+                },
+            )
+            raise kopf.PermanentError(f"Session pods did not reach Running: {ready}/{pod_count}")
 
         # Write pod-IPs ConfigMap (needs running pods)
         await loop.run_in_executor(None, write_pod_ips_configmap, namespace)

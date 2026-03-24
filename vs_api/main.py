@@ -540,7 +540,12 @@ async def _zmq_subscriber() -> None:
 
     # R-TO-009: Seed link state from Scheduler catch-up endpoint (port 5569)
     def _do_link_catchup() -> int:
-        """Query R-TO-009 for current link state. Returns count of links seeded."""
+        """Query R-TO-009 for current link state. Reconciles _state["links"].
+
+        Returns count of links in authoritative state, or -1 on failure.
+        Adds links present in the Scheduler but missing from VS-API state.
+        Removes stale links present in VS-API state but absent from Scheduler.
+        """
         from nodalarc.zmq_channels import to_link_catchup_connect
 
         _lctx = zmq.Context()
@@ -553,12 +558,28 @@ async def _zmq_subscriber() -> None:
             _lsock.send_json({"request": "current_links"})
             resp = _lsock.recv_json()
             links = resp.get("active_links", [])
+
+            # Build authoritative key set from Scheduler response
+            authoritative_keys: set[str] = set()
             for link in links:
+                node_a = link.get("node_a", "")
+                node_b = link.get("node_b", "")
+                key = _link_key(node_a, node_b)
+                authoritative_keys.add(key)
                 _update_link_up(link)
+
+            # Remove stale links not in Scheduler's active set
+            with _state_lock:
+                stale_keys = [k for k in _state["links"] if k not in authoritative_keys]
+                for k in stale_keys:
+                    del _state["links"][k]
+            if stale_keys:
+                log.info("R-TO-009 reconcile: removed %d stale links", len(stale_keys))
+
             return len(links)
         except Exception as exc:
             log.warning("R-TO-009 link catch-up failed: %s", exc)
-            return 0
+            return -1
         finally:
             _lsock.close()
             _lctx.term()
@@ -628,9 +649,9 @@ async def _zmq_subscriber() -> None:
             # R-TO-009 periodic poll: re-query Scheduler link state every 10s
             if now_mono - last_link_poll_time >= _LINK_POLL_INTERVAL_S:
                 count = _do_link_catchup()
-                if count > 0:
+                if count >= 0:
+                    # Successful poll — Scheduler is reachable, link state is authoritative
                     _last_link_event_wall_time = _time.monotonic()
-                    log.debug("R-TO-009 periodic poll: %d links", count)
                 last_link_poll_time = now_mono
 
             for sock in [s for s in [ome_sub, to_sub, mi_sub, np_sub] if s is not None]:

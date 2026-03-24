@@ -227,6 +227,16 @@ def write_wiring_manifest(
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
 
+    # R-OPS-003 Step 4: Delete stale wiring-status before writing new manifest.
+    # Without this, the Node Agent sees old wiring-status as "current" and
+    # hits Case B (no-op) instead of Case A (wire from scratch).
+    try:
+        v1.delete_namespaced_config_map("nodalarc-wiring-status", namespace)
+        log.info("Deleted stale nodalarc-wiring-status")
+    except kubernetes.client.rest.ApiException as e:
+        if e.status != 404:
+            raise
+
     # Re-parse spec to get constellation/addressing/neighbors
     session_yaml = _spec_to_session_yaml(spec)
     session = SessionConfig.model_validate(yaml.safe_load(session_yaml))

@@ -13,7 +13,13 @@ import logging
 import signal
 from pathlib import Path
 
+from node_agent.reconcile import (
+    clean_nodalarc_kernel_state,
+    get_actual_nodalarc_interfaces,
+    wiring_status_is_current,
+)
 from node_agent.server import NodeAgentServer
+from node_agent.wiring import execute_wiring, write_wiring_status
 
 log = logging.getLogger(__name__)
 
@@ -85,40 +91,71 @@ def main() -> None:
         except RuntimeError:
             ns = "nodalarc"  # Default namespace if platform config not initialized
         v1 = kubernetes.client.CoreV1Api()
-        last_session_id = ""
-        last_generation = 0
+        last_resource_version = ""
 
         while True:
             try:
                 cm = v1.read_namespaced_config_map("nodalarc-topology-wiring", ns)
+                rv = cm.metadata.resource_version or ""
+
+                # Only reconcile when ConfigMap actually changes
+                if rv == last_resource_version:
+                    time.sleep(5)
+                    continue
+                last_resource_version = rv
+
                 manifest_json = cm.data.get("manifest.json", "{}")
                 manifest = json.loads(manifest_json)
-                session_id = manifest.get("session_id", "")
-                generation = manifest.get("generation", 0)
-                # Re-wire if session changed OR generation increased
-                if session_id != last_session_id or generation > last_generation:
-                    log.info(
-                        f"Wiring manifest session={session_id} gen={generation} "
-                        f"({len(manifest.get('nodes', {}))} nodes)"
-                    )
-                    from node_agent.wiring import execute_wiring, write_wiring_status
+                nodes = manifest.get("nodes", {})
 
-                    wired = execute_wiring(manifest, namespace=ns)
-                    write_wiring_status(wired, namespace=ns)
-                    last_session_id = session_id
-                    last_generation = generation
-                    log.info(f"Wiring complete: {len(wired)} nodes wired")
+                if not nodes:
+                    time.sleep(5)
+                    continue
+
+                # Case B: wiring-status exists and covers all manifest nodes
+                if wiring_status_is_current(v1, ns, nodes):
+                    log.info(
+                        "Wiring verified — status matches manifest (%d nodes), no-op",
+                        len(nodes),
+                    )
+                    time.sleep(5)
+                    continue
+
+                # Case A or C: check kernel state
+                actual = get_actual_nodalarc_interfaces()
+
+                if not actual:
+                    # Case A: no kernel state — wire from scratch
+                    log.info(
+                        "No kernel state — wiring from scratch (%d nodes)",
+                        len(nodes),
+                    )
+                else:
+                    # Case C: kernel state exists but wiring-status absent/stale
+                    log.warning(
+                        "Kernel state diverged (%d interfaces, stale wiring-status)"
+                        " — cleaning and re-wiring",
+                        len(actual),
+                    )
+                    cleaned = clean_nodalarc_kernel_state()
+                    log.info("Cleaned %d stale kernel interfaces", cleaned)
+
+                wired = execute_wiring(manifest, namespace=ns)
+                write_wiring_status(wired, namespace=ns)
+                log.info("Wiring complete: %d nodes wired", len(wired))
+
             except kubernetes.client.rest.ApiException as e:
                 if e.status == 404:
-                    # Session torn down — reset so next session triggers wiring
-                    if last_session_id:
-                        log.info("Wiring manifest removed — reset for next session")
-                        last_session_id = ""
-                        last_generation = 0
+                    if last_resource_version:
+                        log.info("Wiring manifest removed — cleaning kernel state")
+                        actual = get_actual_nodalarc_interfaces()
+                        if actual:
+                            clean_nodalarc_kernel_state()
+                        last_resource_version = ""
                 else:
-                    log.warning(f"Wiring watcher error: {e}")
+                    log.warning("Wiring watcher error: %s", e)
             except Exception as exc:
-                log.warning(f"Wiring watcher error: {exc}")
+                log.warning("Wiring watcher error: %s", exc)
             time.sleep(5)
 
     wiring_thread = threading.Thread(target=_wiring_watcher, daemon=True)

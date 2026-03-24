@@ -14,7 +14,6 @@ images:
 imagePullPolicy: Never  # Local images loaded into K3s containerd directly
 
 ome:
-  enabled: false
   cpuRequest: 500m
   cpuLimit: "2000m"
   memoryRequest: 512Mi
@@ -27,7 +26,6 @@ vf:
   vsApiHost: ""  # Set to host IP (e.g., 192.168.10.202) for external access
 
 nodalpath:
-  enabled: false
   mode: console
   transport: grpc
   memoryLimit: 256Mi

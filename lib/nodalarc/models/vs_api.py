@@ -23,10 +23,10 @@ class NodeState(BaseModel):
     vel_z_km_s: float | None
     plane: int | None  # None for ground stations
     slot: int | None
-    routing_area: str | None
-    neighbor_count: int
-    isl_count: int
-    gnd_count: int
+    routing_area: str | None = None
+    neighbor_count: int = 0
+    isl_count: int = 0
+    gnd_count: int = 0
     prefix: str | None = None  # Ground station advertised prefix
     min_elevation_deg: float | None = None  # Ground stations only
     beam_falloff_exponent: float | None = None  # Satellites only, from satellite type
@@ -127,3 +127,4 @@ class StateSnapshot(BaseModel):
     session_status_detail: str | None = None
     playback_paused: bool = False
     playback_speed: float = 1.0
+    stale: bool = False

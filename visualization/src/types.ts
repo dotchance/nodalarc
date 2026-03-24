@@ -89,6 +89,7 @@ export interface StateSnapshot {
   session_status_detail: string | null;
   playback_paused: boolean;
   playback_speed: number;
+  stale: boolean;
 }
 
 export interface SessionInfo {

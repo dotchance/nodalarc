@@ -55,7 +55,6 @@ from nodalarc.zmq_channels import (
     TOPIC_LATENCY_UPDATE,
     TOPIC_LINK_DOWN,
     TOPIC_LINK_UP,
-    TOPIC_POSITION_EVENT,
     TOPIC_PROBE_RESULT,
     decode_message,
     mi_events_connect,
@@ -232,6 +231,11 @@ _beam_falloff_exponent: float = 2.0
 _playback_paused: bool = False
 _playback_speed: float = 1.0
 
+# Stale tracking per streaming architecture v1.2 Section 3.5
+_STALE_THRESHOLD_S: float = 15.0
+_last_snapshot_wall_time: float = 0.0  # monotonic time of last Snapshot
+_last_link_event_wall_time: float = 0.0  # monotonic time of last LinkUp/Down
+
 # Continuous tracer state
 _continuous_tracer: ContinuousTracer | None = None
 
@@ -249,11 +253,11 @@ _almanac_lock = threading.Lock()
 
 
 def _update_position(event_data: dict) -> None:
-    """Update node positions from PositionEvent.
+    """Update node positions from Snapshot or R-TO-009 catch-up.
 
     Handles two formats:
-    - Per-node (PRD PositionEvent): top-level node_id, lat_deg, lon_deg, etc.
-    - Batch (FullStateSnapshot catch-up): positions list of node dicts.
+    - Per-node: top-level node_id, lat_deg, lon_deg, etc.
+    - Batch (Snapshot): positions dict/list of node dicts.
     """
     with _state_lock:
         _state["sim_time"] = event_data.get("sim_time", _state["sim_time"])
@@ -293,27 +297,38 @@ def _update_position(event_data: dict) -> None:
             _state["nodes"][node_id] = existing
             return
 
-        # Batch format (FullStateSnapshot catch-up positions list)
-        for node in event_data.get("positions", []):
-            node_id = node.get("node_id", "")
+        # Batch format — supports both:
+        # - Snapshot dict: {"positions": {"node_id": {lat_deg, ...}}}
+        # - Legacy list: {"positions": [{"node_id": "...", lat_deg, ...}]}
+        raw_positions = event_data.get("positions", {})
+        if isinstance(raw_positions, dict):
+            items = raw_positions.items()
+        else:
+            items = [(n.get("node_id", ""), n) for n in raw_positions]
+        for node_id, node in items:
             if not node_id:
                 continue
+            # Derive plane/slot from node_id (e.g. "sat-P00S05" → plane=0, slot=5)
+            import re
+
+            plane_val = node.get("plane")
+            slot_val = node.get("slot")
+            if plane_val is None and node_id.startswith("sat-"):
+                m = re.match(r"sat-P(\d+)S(\d+)", node_id)
+                if m:
+                    plane_val = int(m.group(1))
+                    slot_val = int(m.group(2))
             node_dict = {
                 "node_id": node_id,
-                "node_type": node.get("node_type", "satellite"),
+                "node_type": "ground_station" if node_id.startswith("gs-") else "satellite",
                 "lat_deg": node.get("lat_deg", 0.0),
                 "lon_deg": node.get("lon_deg", 0.0),
                 "alt_km": node.get("alt_km", 0.0),
                 "vel_x_km_s": node.get("vel_x_km_s"),
                 "vel_y_km_s": node.get("vel_y_km_s"),
                 "vel_z_km_s": node.get("vel_z_km_s"),
-                "plane": node.get("plane"),
-                "slot": node.get("slot"),
-                "routing_area": node.get("routing_area"),
-                "neighbor_count": node.get("neighbor_count", 0),
-                "isl_count": node.get("isl_count", 0),
-                "gnd_count": node.get("gnd_count", 0),
-                "prefix": node.get("prefix"),
+                "plane": plane_val,
+                "slot": slot_val,
             }
             if node_id in _gs_elevation_map:
                 node_dict["min_elevation_deg"] = _gs_elevation_map[node_id]
@@ -412,6 +427,18 @@ def _update_almanac_state(event_data: dict) -> None:
             _almanac_state["recomputation_count"] = _almanac_state.get("recomputation_count", 0) + 1
 
 
+def _is_stale() -> bool:
+    """Check if position or link data is stale per streaming architecture v1.2 Section 3.5."""
+    now = _time.monotonic()
+    # Don't report stale until we've received at least one message of each type
+    if _last_snapshot_wall_time == 0.0 or _last_link_event_wall_time == 0.0:
+        return False
+    return (
+        now - _last_snapshot_wall_time > _STALE_THRESHOLD_S
+        or now - _last_link_event_wall_time > _STALE_THRESHOLD_S
+    )
+
+
 def _build_snapshot() -> dict:
     """Build a StateSnapshot dict from current state."""
     with _state_lock:
@@ -474,6 +501,7 @@ def _build_snapshot() -> dict:
             session_status_detail=_session_manager.status_detail if _session_manager else None,
             playback_paused=_playback_paused,
             playback_speed=_playback_speed,
+            stale=_is_stale(),
         )
         return json.loads(snapshot.model_dump_json())
 
@@ -484,57 +512,68 @@ _zmq_ctx: zmq.asyncio.Context | None = None
 
 
 async def _zmq_subscriber() -> None:
-    """Async ZMQ subscriber: subscribe to all ZMQ PUB sockets."""
+    """Async ZMQ subscriber per streaming architecture v1.2 Section 3.5.
+
+    Two independent state domains:
+    - Positions: from OME Snapshot on port 5560 (replace-in-place, no dedup)
+    - Link state: from Scheduler LinkUp/LinkDown on port 5561 + R-TO-009 poll
+    """
     global _zmq_ctx
     _zmq_ctx = zmq.asyncio.Context()
 
+    # OME SUB: Snapshot only (positions)
     ome_addr = ome_events_connect()
     ome_sub = _zmq_ctx.socket(zmq.SUB)
     ome_sub.setsockopt(zmq.RECONNECT_IVL, 1000)
     ome_sub.setsockopt(zmq.RECONNECT_IVL_MAX, 10000)
     ome_sub.connect(ome_addr)
-    ome_sub.setsockopt(zmq.SUBSCRIBE, b"")
+    ome_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
 
+    # Scheduler SUB: LinkUp, LinkDown, LatencyUpdate
     to_sub = _zmq_ctx.socket(zmq.SUB)
     to_sub.setsockopt(zmq.RECONNECT_IVL, 1000)
     to_sub.setsockopt(zmq.RECONNECT_IVL_MAX, 10000)
     _connect_scheduler_events(to_sub)
-    to_sub.setsockopt(zmq.SUBSCRIBE, b"")
+    to_sub.setsockopt(zmq.SUBSCRIBE, b"LinkUp")
+    to_sub.setsockopt(zmq.SUBSCRIBE, b"LinkDown")
+    to_sub.setsockopt(zmq.SUBSCRIBE, b"LatencyUpdate")
 
     # R-TO-009: Seed link state from Scheduler catch-up endpoint (port 5569)
-    # Retry until Scheduler has seeded its _active_links from catch-up.
-    def _do_link_catchup() -> None:
-        import time as _time
-
+    def _do_link_catchup() -> int:
+        """Query R-TO-009 for current link state. Returns count of links seeded."""
         from nodalarc.zmq_channels import to_link_catchup_connect
 
-        deadline = _time.monotonic() + 30
-        while _time.monotonic() < deadline:
-            _lctx = zmq.Context()
-            _lsock = _lctx.socket(zmq.REQ)
-            _lsock.setsockopt(zmq.RCVTIMEO, 5000)
-            _lsock.setsockopt(zmq.SNDTIMEO, 5000)
-            _lsock.setsockopt(zmq.LINGER, 0)
-            _lsock.connect(to_link_catchup_connect())
-            try:
-                _lsock.send_json({"request": "current_links"})
-                resp = _lsock.recv_json()
-                links = resp.get("active_links", [])
-                if links:
-                    for link in links:
-                        _update_link_up(link)
-                    log.info("R-TO-009 link catch-up: seeded %d links", len(links))
-                    return
-                log.info("R-TO-009 link catch-up: 0 links (Scheduler not ready), retrying...")
-            except Exception as exc:
-                log.warning("R-TO-009 link catch-up failed: %s, retrying...", exc)
-            finally:
-                _lsock.close()
-                _lctx.term()
-            _time.sleep(3)
-        log.warning("R-TO-009 link catch-up: gave up after 30s")
+        _lctx = zmq.Context()
+        _lsock = _lctx.socket(zmq.REQ)
+        _lsock.setsockopt(zmq.RCVTIMEO, 5000)
+        _lsock.setsockopt(zmq.SNDTIMEO, 5000)
+        _lsock.setsockopt(zmq.LINGER, 0)
+        _lsock.connect(to_link_catchup_connect())
+        try:
+            _lsock.send_json({"request": "current_links"})
+            resp = _lsock.recv_json()
+            links = resp.get("active_links", [])
+            for link in links:
+                _update_link_up(link)
+            return len(links)
+        except Exception as exc:
+            log.warning("R-TO-009 link catch-up failed: %s", exc)
+            return 0
+        finally:
+            _lsock.close()
+            _lctx.term()
 
-    _do_link_catchup()
+    # Retry seed until Scheduler is ready (up to 30s)
+    deadline = _time.monotonic() + 30
+    while _time.monotonic() < deadline:
+        count = _do_link_catchup()
+        if count > 0:
+            log.info("R-TO-009 link catch-up: seeded %d links", count)
+            break
+        log.info("R-TO-009 link catch-up: 0 links (Scheduler not ready), retrying...")
+        _time.sleep(3)
+    else:
+        log.warning("R-TO-009 link catch-up: gave up after 30s")
 
     # MI subscription is conditional — only connect if MI is enabled
     mi_sub = None
@@ -552,75 +591,6 @@ async def _zmq_subscriber() -> None:
     np_sub.connect(nodalpath_events_connect())
     np_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
-    # R-OME-008: On-connect catch-up — get current window events immediately
-    def _do_ome_catchup() -> str | None:
-        """Call R-OME-008 catch-up endpoint. Returns last sim_time or None."""
-        _ctx = None
-        catchup_sock = None
-        try:
-            from nodalarc.platform import get_platform_config as _get_cfg
-
-            catchup_addr = _get_cfg().ome_catchup_connect
-            _ctx = zmq.Context()
-            catchup_sock = _ctx.socket(zmq.REQ)
-            catchup_sock.setsockopt(zmq.RCVTIMEO, 20000)
-            catchup_sock.setsockopt(zmq.SNDTIMEO, 5000)
-            catchup_sock.setsockopt(zmq.LINGER, 0)
-            catchup_sock.connect(catchup_addr)
-            catchup_sock.send_json({"request": "current_window"})
-            resp = catchup_sock.recv_json()
-            catchup_events = resp.get("events", [])
-            catchup_sock.close()
-            _ctx.term()
-            log.info(
-                "OME catch-up: received %d events (window %d)",
-                len(catchup_events),
-                resp.get("window", 0),
-            )
-            last_st = None
-            for evt in catchup_events:
-                topic_str = evt.get("event_type", "")
-                data = evt.get("data", {})
-                if topic_str == "Snapshot":
-                    _update_position(
-                        {
-                            "sim_time": data.get("sim_time", ""),
-                            "positions": [
-                                {
-                                    "node_id": nid,
-                                    "lat_deg": pos.get("lat_deg", 0),
-                                    "lon_deg": pos.get("lon_deg", 0),
-                                    "alt_km": pos.get("alt_km", 0),
-                                    "node_type": "ground_station"
-                                    if nid.startswith("gs-")
-                                    else "satellite",
-                                    "plane": pos.get("plane"),
-                                    "slot": pos.get("slot"),
-                                }
-                                for nid, pos in data.get("positions", {}).items()
-                            ],
-                        }
-                    )
-                elif topic_str == "VisibilityEvent":
-                    if data.get("visible") and data.get("scheduled"):
-                        _update_link_up(data)
-                    elif not data.get("visible"):
-                        _update_link_down(data)
-                st = data.get("sim_time", "")
-                if st and (last_st is None or st > last_st):
-                    last_st = st
-            log.info("OME catch-up complete: last_sim_time=%s", last_st)
-            return last_st
-        except Exception as exc:
-            log.warning("OME catch-up failed (will rely on FullStateSnapshot): %s", exc)
-            if catchup_sock is not None:
-                catchup_sock.close(linger=0)
-            if _ctx is not None:
-                _ctx.term()
-            return None
-
-    catchup_sim_time = _do_ome_catchup()
-
     poller = zmq.asyncio.Poller()
     poller.register(ome_sub, zmq.POLLIN)
     poller.register(to_sub, zmq.POLLIN)
@@ -634,9 +604,12 @@ async def _zmq_subscriber() -> None:
         f"MI={'enabled' if mi_sub else 'disabled'} NP={nodalpath_events_connect()}"
     )
 
+    global _last_snapshot_wall_time, _last_link_event_wall_time
     msg_count = 0
     last_status_time = _time.monotonic()
-    last_ome_msg_time = _time.monotonic()
+    last_link_poll_time = _time.monotonic()
+    _LINK_POLL_INTERVAL_S = 10.0  # R-TO-009 periodic poll per spec Section 3.5
+
     try:
         while True:
             try:
@@ -645,21 +618,20 @@ async def _zmq_subscriber() -> None:
                 log.error(f"ZMQ poller error: {e}")
                 break
 
-            # Periodic status log (every 30s)
             now_mono = _time.monotonic()
+
+            # Periodic status log (every 30s)
             if now_mono - last_status_time >= 30:
-                log.info(f"ZMQ subscriber status: {msg_count} messages received so far")
+                log.info(f"ZMQ subscriber status: {msg_count} msgs, stale={_is_stale()}")
                 last_status_time = now_mono
 
-            # Watchdog: if no OME messages for 15s, force reconnect + R-OME-008 catch-up
-            if now_mono - last_ome_msg_time > 15.0:
-                log.warning("No OME messages for 15s — forcing reconnect + R-OME-008 catch-up")
-                ome_sub.disconnect(ome_addr)
-                ome_sub.connect(ome_addr)
-                new_st = _do_ome_catchup()
-                if new_st:
-                    catchup_sim_time = new_st
-                last_ome_msg_time = _time.monotonic()
+            # R-TO-009 periodic poll: re-query Scheduler link state every 10s
+            if now_mono - last_link_poll_time >= _LINK_POLL_INTERVAL_S:
+                count = _do_link_catchup()
+                if count > 0:
+                    _last_link_event_wall_time = _time.monotonic()
+                    log.debug("R-TO-009 periodic poll: %d links", count)
+                last_link_poll_time = now_mono
 
             for sock in [s for s in [ome_sub, to_sub, mi_sub, np_sub] if s is not None]:
                 if sock not in socks:
@@ -669,40 +641,28 @@ async def _zmq_subscriber() -> None:
                     topic, payload = decode_message(raw)
                     data = json.loads(payload)
                     msg_count += 1
-                    if sock is ome_sub:
-                        last_ome_msg_time = _time.monotonic()
-
-                    # R-OME-008 deduplication: skip OME events already processed from catch-up.
-                    # Only applies to ome_sub — TO events (LinkUp/LinkDown) from the Scheduler
-                    # must never be deduped by the OME catch-up sim_time.
-                    if (
-                        sock is ome_sub
-                        and catchup_sim_time
-                        and topic
-                        not in (
-                            b"FullStateSnapshot",
-                            TOPIC_POSITION_EVENT,
-                        )
-                    ):
-                        evt_st = data.get("sim_time", "")
-                        if evt_st and evt_st <= catchup_sim_time:
-                            continue
 
                     if msg_count <= 5 or msg_count % 100 == 0:
                         log.info(
                             f"ZMQ message #{msg_count}: topic={topic} payload_bytes={len(payload)}"
                         )
 
-                    if topic == TOPIC_POSITION_EVENT:
+                    # OME Snapshot → position update (replace-in-place, no dedup)
+                    if topic == b"Snapshot":
                         _update_position(data)
+                        _last_snapshot_wall_time = _time.monotonic()
+                    # Scheduler link events → link state update
                     elif topic == TOPIC_LINK_UP:
                         _update_link_up(data)
                         _add_recent_event(data, "link_up")
+                        _last_link_event_wall_time = _time.monotonic()
                     elif topic == TOPIC_LINK_DOWN:
                         _update_link_down(data)
                         _add_recent_event(data, "link_down")
+                        _last_link_event_wall_time = _time.monotonic()
                     elif topic == TOPIC_LATENCY_UPDATE:
                         _update_latency(data)
+                    # MI events
                     elif topic == TOPIC_CONVERGENCE_RESULT:
                         _update_convergence(data)
                         _add_recent_event(data, "convergence")
@@ -710,42 +670,9 @@ async def _zmq_subscriber() -> None:
                         _add_recent_event(data, data.get("event_type", "adapter"))
                     elif topic == TOPIC_PROBE_RESULT:
                         pass  # Probe results don't update snapshot state directly
+                    # NodalPath events
                     elif topic == TOPIC_ALMANAC_EVENT:
                         _update_almanac_state(data)
-                    elif topic == b"FullStateSnapshot" and not _state["nodes"]:
-                        # Position data from FullStateSnapshot is end-of-window (future).
-                        # Only use it as initial seed when no PositionEvents have arrived yet.
-                        # Once paced PositionEvents are flowing, ignore snapshot positions
-                        # to avoid teleporting satellites to future positions every 10s.
-                        traj = data.get("position_trajectory", [])
-                        if traj:
-                            last = traj[-1]
-                            if last.get("event_type") == "Snapshot":
-                                snap_data = last.get("data", {})
-                                positions = snap_data.get("positions", {})
-                                _update_position(
-                                    {
-                                        "sim_time": snap_data.get("sim_time", ""),
-                                        "positions": [
-                                            {
-                                                "node_id": nid,
-                                                "lat_deg": p.get("lat_deg", 0),
-                                                "lon_deg": p.get("lon_deg", 0),
-                                                "alt_km": p.get("alt_km", 0),
-                                                "node_type": "ground_station"
-                                                if nid.startswith("gs-")
-                                                else "satellite",
-                                                "plane": p.get("plane"),
-                                                "slot": p.get("slot"),
-                                            }
-                                            for nid, p in positions.items()
-                                        ],
-                                    }
-                                )
-                # FullStateSnapshot link state intentionally NOT used here.
-                # R-TO-009: VS-API seeds links from Scheduler port 5569
-                # catch-up endpoint. FullStateSnapshot carries end-of-window
-                # state and must never be used for link initialization.
 
                 except Exception as exc:
                     log.warning(f"ZMQ message processing error: {exc}")

@@ -46,6 +46,8 @@ def _handle_catchup_requests(catchup_sock, catchup_buffer: dict) -> None:
                 "window_start_sim_time": catchup_buffer["window_start"],
                 "window_end_sim_time": catchup_buffer["window_end"],
                 "current_pacing_sim_time": _current_pacing_sim_time,
+                "window_start_isl_state": catchup_buffer.get("window_start_isl_state", {}),
+                "window_start_gs_state": catchup_buffer.get("window_start_gs_state", {}),
                 "events": resp_events,
             }
         )
@@ -304,6 +306,9 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
         while True:
             window += 1
             logging.info(f"OME continuous: computing window {window} (period={period:.0f}s)")
+            # Capture window-start link state BEFORE computing (for catch-up baseline)
+            window_start_isl = dict(isl_state) if isl_state else {}
+            window_start_gs = dict(gs_state) if gs_state else {}
             events, isl_state, gs_state = precompute_timeline_window(
                 **_common_args,
                 epoch_unix=epoch_for_next,
@@ -341,6 +346,17 @@ def run_continuous(session_path: str, output_dir: str | None = None) -> None:
                 }
                 for evt in events
             ]
+            # Window-start link state baseline for catch-up consumers.
+            # VisibilityEvents are change-only — links active at window start
+            # with no changes generate zero events. Consumers need this baseline.
+            _catchup_buffer["window_start_isl_state"] = {
+                f"{a}:{b}": {"visible": v, "scheduled": s}
+                for (a, b), (v, s) in window_start_isl.items()
+            }
+            _catchup_buffer["window_start_gs_state"] = {
+                f"{a}:{b}": {"visible": v, "scheduled": s}
+                for (a, b), (v, s) in window_start_gs.items()
+            }
             # Initialize pacing position to window start so catch-up callers
             # before pacing begins get a valid threshold (not empty string).
             _current_pacing_sim_time = _catchup_buffer["window_start"]

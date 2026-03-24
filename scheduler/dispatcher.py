@@ -101,6 +101,10 @@ class Dispatcher:
         # Dispatched as paced Snapshots arrive for their sim_time.
         self._pending_vis: list[VisibilityEvent] = []
 
+        # True once catch-up has seeded _active_links from VisibilityEvents.
+        # When True, FullStateSnapshot must not override paced link state.
+        self._link_state_seeded: bool = False
+
     def load_interface_inventory(self) -> None:
         """Query Node Agent GetTopology to learn which interfaces exist per pod.
 
@@ -465,27 +469,32 @@ class Dispatcher:
             )
             tasks.append(loop.run_in_executor(None, stub.batch_link_down, req))
 
-        all_success = True
+        # Track which agents succeeded
+        successful_agents: set[str] = set()
+        agent_addrs_list = list(agent_ifaces.keys())
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            for _i, result in enumerate(results):
+            for i, result in enumerate(results):
+                addr = agent_addrs_list[i]
                 if isinstance(result, Exception):
-                    log.warning("BatchLinkDown failed for agent: %s", result)
-                    all_success = False
+                    log.warning("BatchLinkDown failed for agent %s: %s", addr, result)
                 elif not result.success:
                     log.warning("BatchLinkDown partial failure: %s", result.error_message[:200])
-                    all_success = False
+                    successful_agents.add(addr)  # Partial = some succeeded
                 else:
                     log.info(
                         "BatchLinkDown: %d downed in %.1fms",
                         result.interfaces_downed,
                         result.apply_time_ms,
                     )
+                    successful_agents.add(addr)
 
-        # Commit removals and publish ZMQ only on success.
-        # On failure, links stay in _active_links — still up as far as we know.
-        if all_success:
-            for pair, (_info, vis) in pending.items():
+        # Commit removals and publish TO events per-link for successful agents
+        for pair, (_info, vis) in pending.items():
+            # Check if at least one node's agent succeeded
+            agent_a = self._loc.agent_addr(vis.node_a)
+            agent_b = self._loc.agent_addr(vis.node_b)
+            if agent_a in successful_agents or agent_b in successful_agents:
                 self._active_links.pop(pair, None)
                 self._last_latencies.pop(pair, None)
                 ifaces = self._interface_map.get(pair, ("", ""))
@@ -500,11 +509,6 @@ class Dispatcher:
                     reason="vis_lost",
                 )
                 to_pub.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
-        else:
-            log.warning(
-                "BatchLinkDown failed — %d links remain in active_links (still up)",
-                len(pending),
-            )
 
     async def _dispatch_ups(
         self,
@@ -595,33 +599,35 @@ class Dispatcher:
             )
             tasks.append(loop.run_in_executor(None, stub.batch_link_up, req))
 
-        all_success = True
+        # Track which agents succeeded (full or partial)
+        successful_agents: set[str] = set()
+        agent_addrs_list = list(agent_ifaces.keys())
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            for _i, result in enumerate(results):
+            for i, result in enumerate(results):
+                addr = agent_addrs_list[i]
                 if isinstance(result, Exception):
-                    log.warning("BatchLinkUp failed for agent: %s", result)
-                    all_success = False
+                    log.warning("BatchLinkUp failed for agent %s: %s", addr, result)
                 elif not result.success:
                     log.warning(
-                        "BatchLinkUp partial failure: %d/%d upped: %s",
+                        "BatchLinkUp partial failure: %d upped: %s",
                         result.interfaces_upped,
-                        result.interfaces_upped + len(result.error_message.split(";")),
                         result.error_message[:200],
                     )
-                    all_success = False
+                    successful_agents.add(addr)  # Partial = some succeeded
                 else:
                     log.info(
                         "BatchLinkUp: %d upped in %.1fms",
                         result.interfaces_upped,
                         result.apply_time_ms,
                     )
+                    successful_agents.add(addr)
 
-        # Commit to _active_links and publish ZMQ only on success.
-        # On failure, links stay out of _active_links so the next
-        # FullStateSnapshot retries them.
-        if all_success:
-            for pair, (info, vis) in pending.items():
+        # Commit to _active_links and publish TO events per-link for successful agents
+        for pair, (info, vis) in pending.items():
+            agent_a = self._loc.agent_addr(vis.node_a)
+            agent_b = self._loc.agent_addr(vis.node_b)
+            if agent_a in successful_agents or agent_b in successful_agents:
                 self._active_links[pair] = info
                 self._last_latencies[pair] = info.latency_ms
                 ifaces = self._interface_map.get(pair, ("", ""))
@@ -638,11 +644,6 @@ class Dispatcher:
                     reason="vis_gained",
                 )
                 to_pub.send(encode_message(TOPIC_LINK_UP, event.model_dump_json().encode()))
-        else:
-            log.warning(
-                "BatchLinkUp failed — %d links NOT added to active_links (will retry on next snapshot)",
-                len(pending),
-            )
 
     # ------------------------------------------------------------------
     # Latency updates
@@ -749,6 +750,23 @@ class Dispatcher:
         """
         sim_time = data.get("sim_time", "")
         if not data.get("isl_state") and not data.get("gs_state"):
+            return
+
+        if self._link_state_seeded:
+            # Catch-up has seeded paced link state. FullStateSnapshot carries
+            # end-of-window state and must not override paced state.
+            # Only update position table (for latency calculations) and return.
+            position_trajectory = data.get("position_trajectory", [])
+            if position_trajectory:
+                last_snap = position_trajectory[-1]
+                if last_snap.get("event_type") == "Snapshot":
+                    snap = TimelinePositionSnapshot.model_validate(last_snap.get("data", {}))
+                    self._position_table.update_from_snapshot(snap)
+            log.info(
+                "FullStateSnapshot: %d total active links at %s (seeded — skip reconciliation)",
+                len(self._active_links),
+                sim_time,
+            )
             return
 
         # Update position table from the latest position in the trajectory.
@@ -1033,22 +1051,63 @@ class Dispatcher:
                 len(future_vis),
             )
 
-            # Seed internal _active_links state from past events without dispatching.
-            # The Node Agent already has correct wired state from session deployment.
-            # FullStateSnapshot reconciles against Node Agent actual state via diff.
+            # Seed baseline from window-start link state.
+            # VisibilityEvents are change-only — links active at window start
+            # with no changes generate zero events. This baseline captures them.
+            start_isl = resp.get("window_start_isl_state", {})
+            start_gs = resp.get("window_start_gs_state", {})
+            for pair_key, state in {**start_isl, **start_gs}.items():
+                parts = pair_key.split(":")
+                if len(parts) != 2:
+                    continue
+                node_a, node_b = min(parts[0], parts[1]), max(parts[0], parts[1])
+                pair = (node_a, node_b)
+                if state.get("visible") and state.get("scheduled"):
+                    is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
+                    if is_gs:
+                        iface_a, iface_b = "gnd0", "gnd0"
+                    else:
+                        ifaces = self._interface_map.get(pair)
+                        if not ifaces:
+                            continue
+                        iface_a, iface_b = ifaces
+                    self._active_links[pair] = ActiveLinkInfo(
+                        interface_a=iface_a,
+                        interface_b=iface_b,
+                        latency_ms=3.0,
+                        bandwidth_mbps=self._bandwidth_map.get(pair, 1000.0),
+                    )
+
+            log.info(
+                "Baseline from window-start state: %d links (%d ISL, %d GS)",
+                len(self._active_links),
+                sum(1 for (a, _) in self._active_links if not a.startswith("gs-")),
+                sum(1 for (a, _) in self._active_links if a.startswith("gs-")),
+            )
+
+            # Apply past VisibilityEvents as deltas on top of baseline
             for vis in past_vis:
                 pair = (vis.node_a, vis.node_b)
                 if vis.visible and vis.scheduled:
-                    ifaces = self._interface_map.get(pair)
-                    if ifaces:
-                        self._active_links[pair] = ActiveLinkInfo(
-                            interface_a=ifaces[0],
-                            interface_b=ifaces[1],
-                            latency_ms=3.0,
-                            bandwidth_mbps=self._bandwidth_map.get(pair, 1000.0),
-                        )
+                    is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                    if is_gs:
+                        iface_a, iface_b = "gnd0", "gnd0"
+                    else:
+                        ifaces = self._interface_map.get(pair)
+                        if not ifaces:
+                            continue
+                        iface_a, iface_b = ifaces
+                    self._active_links[pair] = ActiveLinkInfo(
+                        interface_a=iface_a,
+                        interface_b=iface_b,
+                        latency_ms=3.0,
+                        bandwidth_mbps=self._bandwidth_map.get(pair, 1000.0),
+                    )
                 elif not vis.visible:
                     self._active_links.pop(pair, None)
+
+            if past_vis or future_vis or start_isl or start_gs:
+                self._link_state_seeded = True
 
             return pacing_st
         except Exception as exc:

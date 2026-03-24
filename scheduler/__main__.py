@@ -23,6 +23,7 @@ from nodalarc.models.session import SessionConfig
 
 from scheduler.agent_pool import AgentPool
 from scheduler.dispatcher import Dispatcher
+from scheduler.link_catchup import run_link_catchup_handler
 from scheduler.pod_locator import PodLocationMap
 from scheduler.scenario_handler import run_scenario_handler
 
@@ -179,6 +180,14 @@ def main() -> None:
         daemon=True,
     )
     scenario_thread.start()
+
+    # R-TO-009: Link state catch-up endpoint (port 5569)
+    link_catchup_thread = threading.Thread(
+        target=run_link_catchup_handler,
+        args=(dispatcher._active_links,),
+        daemon=True,
+    )
+    link_catchup_thread.start()
 
     try:
         asyncio.run(dispatcher.run(external_to_pub=to_pub))

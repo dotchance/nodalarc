@@ -82,7 +82,7 @@ def _tc_mirred_redirect(src: str, dst: str) -> None:
             )
         else:
             raise subprocess.CalledProcessError(result.returncode, result.args, result.stderr)
-    subprocess.run(
+    result = subprocess.run(
         [
             "tc",
             "filter",
@@ -106,8 +106,10 @@ def _tc_mirred_redirect(src: str, dst: str) -> None:
             dst,
         ],
         capture_output=True,
-        check=True,
+        text=True,
     )
+    if result.returncode != 0 and "File exists" not in result.stderr:
+        raise subprocess.CalledProcessError(result.returncode, result.args, result.stderr)
 
 
 def _tc_mirred_remove(ifname: str) -> None:

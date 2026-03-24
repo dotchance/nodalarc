@@ -501,6 +501,41 @@ async def _zmq_subscriber() -> None:
     _connect_scheduler_events(to_sub)
     to_sub.setsockopt(zmq.SUBSCRIBE, b"")
 
+    # R-TO-009: Seed link state from Scheduler catch-up endpoint (port 5569)
+    # Retry until Scheduler has seeded its _active_links from catch-up.
+    def _do_link_catchup() -> None:
+        import time as _time
+
+        from nodalarc.zmq_channels import to_link_catchup_connect
+
+        deadline = _time.monotonic() + 30
+        while _time.monotonic() < deadline:
+            _lctx = zmq.Context()
+            _lsock = _lctx.socket(zmq.REQ)
+            _lsock.setsockopt(zmq.RCVTIMEO, 5000)
+            _lsock.setsockopt(zmq.SNDTIMEO, 5000)
+            _lsock.setsockopt(zmq.LINGER, 0)
+            _lsock.connect(to_link_catchup_connect())
+            try:
+                _lsock.send_json({"request": "current_links"})
+                resp = _lsock.recv_json()
+                links = resp.get("active_links", [])
+                if links:
+                    for link in links:
+                        _update_link_up(link)
+                    log.info("R-TO-009 link catch-up: seeded %d links", len(links))
+                    return
+                log.info("R-TO-009 link catch-up: 0 links (Scheduler not ready), retrying...")
+            except Exception as exc:
+                log.warning("R-TO-009 link catch-up failed: %s, retrying...", exc)
+            finally:
+                _lsock.close()
+                _lctx.term()
+            _time.sleep(3)
+        log.warning("R-TO-009 link catch-up: gave up after 30s")
+
+    _do_link_catchup()
+
     # MI subscription is conditional — only connect if MI is enabled
     mi_sub = None
     try:
@@ -637,11 +672,17 @@ async def _zmq_subscriber() -> None:
                     if sock is ome_sub:
                         last_ome_msg_time = _time.monotonic()
 
-                    # R-OME-008 deduplication: skip events already processed from catch-up
-                    # Always process FullStateSnapshot (periodic heartbeat with position data)
-                    if catchup_sim_time and topic not in (
-                        b"FullStateSnapshot",
-                        TOPIC_POSITION_EVENT,
+                    # R-OME-008 deduplication: skip OME events already processed from catch-up.
+                    # Only applies to ome_sub — TO events (LinkUp/LinkDown) from the Scheduler
+                    # must never be deduped by the OME catch-up sim_time.
+                    if (
+                        sock is ome_sub
+                        and catchup_sim_time
+                        and topic
+                        not in (
+                            b"FullStateSnapshot",
+                            TOPIC_POSITION_EVENT,
+                        )
                     ):
                         evt_st = data.get("sim_time", "")
                         if evt_st and evt_st <= catchup_sim_time:
@@ -671,54 +712,40 @@ async def _zmq_subscriber() -> None:
                         pass  # Probe results don't update snapshot state directly
                     elif topic == TOPIC_ALMANAC_EVENT:
                         _update_almanac_state(data)
-                    elif topic == b"FullStateSnapshot":
+                    elif topic == b"FullStateSnapshot" and not _state["nodes"]:
                         # Position data from FullStateSnapshot is end-of-window (future).
                         # Only use it as initial seed when no PositionEvents have arrived yet.
                         # Once paced PositionEvents are flowing, ignore snapshot positions
                         # to avoid teleporting satellites to future positions every 10s.
-                        if not _state["nodes"]:
-                            traj = data.get("position_trajectory", [])
-                            if traj:
-                                last = traj[-1]
-                                if last.get("event_type") == "Snapshot":
-                                    snap_data = last.get("data", {})
-                                    positions = snap_data.get("positions", {})
-                                    _update_position(
-                                        {
-                                            "sim_time": snap_data.get("sim_time", ""),
-                                            "positions": [
-                                                {
-                                                    "node_id": nid,
-                                                    "lat_deg": p.get("lat_deg", 0),
-                                                    "lon_deg": p.get("lon_deg", 0),
-                                                    "alt_km": p.get("alt_km", 0),
-                                                    "node_type": "ground_station"
-                                                    if nid.startswith("gs-")
-                                                    else "satellite",
-                                                    "plane": p.get("plane"),
-                                                    "slot": p.get("slot"),
-                                                }
-                                                for nid, p in positions.items()
-                                            ],
-                                        }
-                                    )
-                        # Extract link state (always — this is what FullStateSnapshot is for)
-                        for pair_key, link in {
-                            **data.get("isl_state", {}),
-                            **data.get("gs_state", {}),
-                        }.items():
-                            if link.get("visible") and link.get("scheduled"):
-                                parts = pair_key.split(":")
-                                if len(parts) == 2:
-                                    _update_link_up(
-                                        {
-                                            "node_a": min(parts[0], parts[1]),
-                                            "node_b": max(parts[0], parts[1]),
-                                            "latency_ms": 0,
-                                            "bandwidth_mbps": 0,
-                                            "reason": "snapshot",
-                                        }
-                                    )
+                        traj = data.get("position_trajectory", [])
+                        if traj:
+                            last = traj[-1]
+                            if last.get("event_type") == "Snapshot":
+                                snap_data = last.get("data", {})
+                                positions = snap_data.get("positions", {})
+                                _update_position(
+                                    {
+                                        "sim_time": snap_data.get("sim_time", ""),
+                                        "positions": [
+                                            {
+                                                "node_id": nid,
+                                                "lat_deg": p.get("lat_deg", 0),
+                                                "lon_deg": p.get("lon_deg", 0),
+                                                "alt_km": p.get("alt_km", 0),
+                                                "node_type": "ground_station"
+                                                if nid.startswith("gs-")
+                                                else "satellite",
+                                                "plane": p.get("plane"),
+                                                "slot": p.get("slot"),
+                                            }
+                                            for nid, p in positions.items()
+                                        ],
+                                    }
+                                )
+                # FullStateSnapshot link state intentionally NOT used here.
+                # R-TO-009: VS-API seeds links from Scheduler port 5569
+                # catch-up endpoint. FullStateSnapshot carries end-of-window
+                # state and must never be used for link initialization.
 
                 except Exception as exc:
                     log.warning(f"ZMQ message processing error: {exc}")

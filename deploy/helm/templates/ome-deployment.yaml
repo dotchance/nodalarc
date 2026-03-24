@@ -1,4 +1,3 @@
-{{- if .Values.ome.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -86,4 +85,3 @@ spec:
           configMap:
             name: nodalarc-ground-stations
             optional: true
-{{- end }}

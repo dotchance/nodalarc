@@ -1,4 +1,3 @@
-{{- if .Values.nodalpath.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -98,4 +97,3 @@ spec:
           configMap:
             name: nodalarc-pod-ips
             optional: true
-{{- end }}

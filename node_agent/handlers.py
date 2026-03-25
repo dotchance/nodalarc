@@ -73,11 +73,14 @@ def _ground_link_down(
 ) -> str | None:
     """Tear down a ground link. Returns error string or None.
 
-    PRD v0.40 Section 13.6 LinkDown sequence:
+    PRD v0.42 Section 13.6 LinkDown sequence:
     1. Remove tc mirred redirect from host-side veths
-    2. Bring satellite gnd0 DOWN
-    3. Bring gnd0 admin DOWN inside GS pod — FRR sees carrier loss,
-       tears down adjacency immediately
+    2. Bring satellite host-side veth DOWN — carrier drops on GS gnd0
+       automatically (UP → LOWERLAYERDOWN), FRR tears down adjacency
+    3. Bring satellite gnd0 DOWN
+
+    No explicit admin state manipulation on GS gnd0 — host-side veth state
+    drives carrier which drives FRR behavior.
     """
     try:
         pm = pid_map or {}
@@ -89,9 +92,6 @@ def _ground_link_down(
             namespace_ops.remove_link_shaping(gs_pid, "gnd0")
         if sat_pid:
             ground_bridge.detach_from_ground_bridge(iface.gs_id, iface.sat_id, sat_pid)
-        # PRD v0.40 13.6 Step 3: bring gnd0 DOWN inside GS pod
-        if gs_pid:
-            _set_gnd0_admin(gs_pid, iface.gs_id, "down")
         return None
     except Exception as exc:
         msg = f"Ground down failed {iface.gs_id}<->{iface.sat_id}: {exc}"
@@ -99,36 +99,20 @@ def _ground_link_down(
         return msg
 
 
-def _set_gnd0_admin(pid: int, label: str, state: str) -> None:
-    """Set gnd0 admin state inside a pod namespace.
-
-    PRD v0.40 Section 13.6: gnd0 carrier state mirrors satellite visibility.
-    DOWN when no satellite is overhead, UP when connected. This generates
-    correct RTM_NEWLINK events so FRR reacts immediately to link changes.
-    """
-    from pyroute2 import NetNS
-
-    ns = NetNS(f"/proc/{pid}/ns/net")
-    try:
-        gnd_idx = ns.link_lookup(ifname="gnd0")
-        if gnd_idx:
-            ns.link("set", index=gnd_idx[0], state=state)
-            log.debug("Set gnd0 admin %s in %s ns(%d)", state, label, pid)
-    finally:
-        ns.close()
-
-
 def _ground_link_up(
     iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
 ) -> str | None:
     """Bring up a ground link with bridge attach + shaping. Returns error or None.
 
-    PRD v0.40 Section 13.6 LinkUp sequence:
+    PRD v0.42 Section 13.6 LinkUp sequence:
     1. attach_to_ground_bridge (host veths UP, sat gnd0 UP, mirred redirect)
+       — carrier arrives on GS gnd0 automatically (LOWERLAYERDOWN → UP)
     2. Apply tc shaping on GS gnd0
     3. Apply tc shaping on satellite gnd0
-    4. Bring gnd0 admin UP inside GS pod — FRR sees carrier, sends hellos
-    5. If peer_mac present: NDP on gnd0 (synchronous, before ACK)
+    4. If peer_mac present: NDP on gnd0 (synchronous, before ACK)
+
+    No explicit admin state manipulation on GS gnd0 — host-side veth state
+    drives carrier which drives FRR behavior.
     """
     try:
         pm = pid_map or {}
@@ -142,9 +126,6 @@ def _ground_link_up(
             namespace_ops.apply_link_shaping(
                 sat_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps
             )
-        # PRD v0.40 13.6 Step 3: bring gnd0 UP inside GS pod
-        if gs_pid:
-            _set_gnd0_admin(gs_pid, iface.gs_id, "up")
         # NDP on gnd0 — synchronous, before ACK
         if iface.peer_mac and sat_pid:
             peer_ll = namespace_ops.mac_to_link_local(iface.peer_mac)

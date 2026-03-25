@@ -31,7 +31,7 @@ exit
 
 {% for iface in gnd_interfaces %}
 interface {{ iface }}
- ip ospf area {{ area_id }}
+ ip ospf area 0.0.0.0
  ip ospf network point-to-point
  ip ospf cost 10
  ip ospf hello-interval {{ hello_interval }}

@@ -8,7 +8,7 @@ log file /var/log/frr/isisd.log informational
 {% elif node_type == "ground_station" %}
 {# System-ID for ground stations: 00ff prefix with gs_index #}
 {% set system_id = "00ff.%04x.0002" | format(gs_index) %}
-{% set sid_index = 8000 + gs_index %}
+{% set sid_index = gs_sid_offset + gs_index %}
 {% endif %}
 
 router isis NODAL

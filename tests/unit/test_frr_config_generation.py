@@ -78,8 +78,9 @@ def stripe_session():
 
 @pytest.fixture
 def isis_stack():
-    raw = yaml.safe_load((STACKS_DIR / "frr-isis-sr/stack.yaml").read_text())
-    return RoutingStackConfig.model_validate(raw["stack"])
+    from nodalarc.stack_resolver import resolve_stack
+
+    return resolve_stack("isis", ["sr"])
 
 
 def _render_template(stack_dir: str, template_name: str, vars: dict) -> str:
@@ -617,8 +618,8 @@ class TestIsisGroundStation:
             gs_index=0,
         )
         rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        # GS SID index = 8000 + gs_index = 8000
-        assert "index 8000" in rendered
+        # GS SID index = gs_sid_offset + gs_index = 7900 + 0 = 7900
+        assert "index 7900" in rendered
 
     def test_gs_terrestrial_interface_passive(
         self, flat_session, four_node_config, gs_file, addressing, isis_stack

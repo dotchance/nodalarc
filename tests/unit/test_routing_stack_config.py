@@ -1,9 +1,10 @@
-"""Tests for RoutingStackConfig — segment_routing and ttl_propagation fields."""
+"""Tests for RoutingStackConfig and ResolvedStack — segment_routing, sysctls, SID derivation."""
 
 from pathlib import Path
 
 import yaml
 from nodalarc.models.routing_stack import RoutingStackConfig
+from nodalarc.stack_resolver import resolve_stack
 
 
 def _load_stack(name: str) -> RoutingStackConfig:
@@ -15,25 +16,25 @@ def _load_stack(name: str) -> RoutingStackConfig:
 def test_frr_isis_sr_has_segment_routing():
     cfg = _load_stack("frr-isis-sr")
     assert cfg.segment_routing is True
-    assert cfg.ttl_propagation == "uniform"
+    # ttl_propagation is now derived by the resolver, not stored in stack.yaml
+    resolved = resolve_stack("isis", ["sr"])
+    assert resolved.ttl_propagation == "pipe"
+    assert resolved.sysctls["net.mpls.ip_ttl_propagate"] == "0"
 
 
 def test_frr_static_sr_has_segment_routing():
     cfg = _load_stack("frr-static-sr")
     assert cfg.segment_routing is True
-    assert cfg.ttl_propagation == "uniform"
 
 
 def test_frr_ospf_te_no_segment_routing():
     cfg = _load_stack("frr-ospf-te")
     assert cfg.segment_routing is False
-    assert cfg.ttl_propagation is None
 
 
 def test_nodalpath_fwd_no_segment_routing():
     cfg = _load_stack("nodalpath-fwd")
     assert cfg.segment_routing is False
-    assert cfg.ttl_propagation is None
 
 
 def test_defaults_when_fields_omitted():

@@ -47,15 +47,38 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
         log.warning("Empty wiring manifest — nothing to wire")
         return {}
 
-    # Discover PIDs for all session pods on this node
-    pid_map = discover_local_pod_pids(namespace)
-    if not pid_map:
-        # Retry once after 3 seconds
-        import time
+    # Discover PIDs for all session pods on this node.
+    # Retry until ALL expected pods have non-zero PIDs. Pods may not have
+    # container_statuses populated immediately after reaching Running state.
+    import time
 
-        time.sleep(3)
-        pid_map = discover_local_pod_pids(namespace)
-    log.info(f"PID discovery: {len(pid_map)} pods found")
+    expected_nodes = set(nodes.keys())
+    pid_map: dict[str, int] = {}
+    max_attempts = 30
+
+    for attempt in range(1, max_attempts + 1):
+        fresh = discover_local_pod_pids(namespace)
+        pid_map.update(fresh)
+        missing = expected_nodes - set(pid_map.keys())
+        if not missing:
+            break
+        if attempt % 5 == 1:
+            log.info(
+                "PID discovery attempt %d: %d/%d found, %d missing",
+                attempt,
+                len(pid_map),
+                len(expected_nodes),
+                len(missing),
+            )
+        time.sleep(2)
+
+    missing = expected_nodes - set(pid_map.keys())
+    if missing:
+        for nid in sorted(missing):
+            log.warning(
+                "PID=0 after %d attempts for %s — wiring will skip this pod", max_attempts, nid
+            )
+    log.info("PID discovery: %d/%d pods found", len(pid_map), len(expected_nodes))
 
     wired: dict[str, str] = {}
 
@@ -119,7 +142,10 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
     log.info("Phase 3: MPLS input enabled on ISL interfaces")
 
     # Phase 4: Create ground bridges and GS gnd0 interfaces
-    # PRD v0.40 Section 13.6: gnd0 starts admin DOWN — no satellite connected at session start.
+    # PRD v0.42 Section 13.6: gnd0 initial state is LOWERLAYERDOWN — FRR zebra
+    # brings admin UP at config load, no carrier because host-side veth is down.
+    # No explicit admin state manipulation needed. Host-side veth UP on LinkUp
+    # gives gnd0 carrier automatically.
     for gs_id, _bridge_spec in ground_bridges.items():
         gs_pid = pid_map.get(gs_id, 0)
         if gs_pid == 0:
@@ -129,7 +155,6 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             create_ground_bridge(gs_id, gs_pid)
             configure_interface(gs_pid, "gnd0", gs_id)
             enable_mpls_input(gs_pid, "gnd0")
-            # gnd0 stays DOWN — brought UP by LinkUp handler when satellite rises
         except Exception as exc:
             log.warning(f"Ground bridge setup failed for {gs_id}: {exc}")
     log.info(f"Phase 4: created {len(ground_bridges)} ground bridges")

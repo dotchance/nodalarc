@@ -606,6 +606,18 @@ export function SessionWizard({
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
+            {wizard.state.protocol === "ospf" && wizard.state.areaStrategy !== "flat" && (
+              <div className="wizard-warning" style={{
+                marginTop: 8, padding: "8px 12px", background: "rgba(200, 160, 40, 0.15)",
+                border: "1px solid rgba(200, 160, 40, 0.4)", borderRadius: 4, fontSize: 12,
+                color: "var(--text-dim, #aaa)", lineHeight: 1.4,
+              }}>
+                OSPF multi-area with dynamic constellation topologies may experience
+                backbone (area 0) non-contiguity when cross-plane ISLs drop at polar
+                latitudes. This can cause inter-area routing failures. IS-IS does not
+                have this limitation. Use flat area strategy for reliable OSPF connectivity.
+              </div>
+            )}
           </div>
           <div className="wizard-nav">
             <button className="wizard-nav-btn" onClick={wizard.goBack}>Back</button>

@@ -250,9 +250,17 @@ class ContinuousTracer:
                 tty=False,
                 _preload_content=False,
             )
-            stdout = resp.read_stdout(timeout=30)
-            stderr = resp.read_stderr(timeout=1)
-            return {"ok": True, "stdout": stdout or "", "stderr": stderr or ""}
+            stdout = ""
+            stderr = ""
+            while resp.is_open():
+                resp.update(timeout=5)
+                chunk = resp.read_stdout()
+                if chunk:
+                    stdout += chunk
+                err_chunk = resp.read_stderr()
+                if err_chunk:
+                    stderr += err_chunk
+            return {"ok": True, "stdout": stdout, "stderr": stderr}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "stdout": "", "stderr": ""}
 

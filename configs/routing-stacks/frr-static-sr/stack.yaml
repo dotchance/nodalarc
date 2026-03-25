@@ -11,7 +11,6 @@ stack:
       dst: /etc/frr/staticd.conf
   template_variables: {}
   segment_routing: true
-  ttl_propagation: uniform
   mi_adapter: frr_static_adapter
   max_compression: 1
   reconfigure_command: "vtysh -f {config_path}"

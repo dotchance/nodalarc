@@ -17,7 +17,6 @@ stack:
     srgb_end: 23999
     reference_bandwidth: 10000
   segment_routing: true
-  ttl_propagation: uniform
   mi_adapter: frr_isis_adapter
   max_compression: 10
   reconfigure_command: "vtysh -f {config_path}"

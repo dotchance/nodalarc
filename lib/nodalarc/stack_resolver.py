@@ -2,9 +2,13 @@
 
 Replaces the need for per-stack directories when deploying via the wizard.
 Legacy deploys using routing.stack still load from stack.yaml directly.
+
+The resolver is the single source of truth for per-permutation configuration:
+sysctls, template variables, derived SID ranges, and constraint validation.
+The deployer and templates are pure pass-through — no protocol-aware logic.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
 
@@ -15,9 +19,19 @@ class TemplateFile(NamedTuple):
     dst: str
 
 
+# Must exceed the maximum number of ground stations in any constellation.
+# GS SID indices are allocated from (srgb_size - GS_SID_HEADROOM) upward.
+GS_SID_HEADROOM = 100
+
+
 @dataclass(frozen=True)
 class ResolvedStack:
-    """Fully resolved routing stack — everything na_deploy needs."""
+    """Fully resolved routing stack — everything the deployer needs.
+
+    The deployer merges base platform sysctls (forwarding, rp_filter) with
+    the stack-provided sysctls and writes them to the wiring manifest.
+    The deployer never interprets stack fields to derive sysctls.
+    """
 
     daemons: list[str]
     template_files: list[TemplateFile]
@@ -25,13 +39,23 @@ class ResolvedStack:
     image: str
     mi_adapter: str | None
     segment_routing: bool
-    ttl_propagation: str | None
-    transport: str | None
-    host_modules: list[str]
-    env: list[dict[str, str]]
-    security_context_capabilities: list[str]
-    reconfigure_command: str | None
-    max_compression: int
+    sysctls: dict[str, str] = field(default_factory=dict)
+    transport: str | None = None
+    host_modules: list[str] = field(default_factory=list)
+    env: list[dict[str, str]] = field(default_factory=list)
+    security_context_capabilities: list[str] = field(default_factory=list)
+    reconfigure_command: str | None = None
+    max_compression: int = 10
+
+    @property
+    def ttl_propagation(self) -> str | None:
+        """Derive ttl_propagation from sysctls for backward compatibility."""
+        val = self.sysctls.get("net.mpls.ip_ttl_propagate")
+        if val == "0":
+            return "pipe"
+        elif val == "1":
+            return "uniform"
+        return None
 
 
 # Daemon-to-template mapping for FRR stacks
@@ -43,6 +67,84 @@ _DAEMON_TEMPLATES: dict[str, TemplateFile] = {
     "pathd": TemplateFile("pathd.conf.j2", "/etc/frr/pathd.conf"),
     "staticd": TemplateFile("staticd.conf.j2", "/etc/frr/staticd.conf"),
 }
+
+
+def _derive_sr_variables(srgb_start: int, srgb_end: int) -> dict[str, Any]:
+    """Derive all SR-related template variables from the SRGB range.
+
+    Returns template variables including gs_sid_offset, validated against
+    the SRGB size. Raises ValueError if constraints are violated.
+    """
+    srgb_size = srgb_end - srgb_start + 1
+    gs_sid_offset = srgb_size - GS_SID_HEADROOM
+
+    if gs_sid_offset <= 0:
+        raise ValueError(f"SRGB too small ({srgb_size}) for GS_SID_HEADROOM ({GS_SID_HEADROOM})")
+
+    return {
+        "sr_enabled": True,
+        "srgb_start": srgb_start,
+        "srgb_end": srgb_end,
+        "gs_sid_offset": gs_sid_offset,
+    }
+
+
+def _sr_sysctls(mpls_labels: str = "100000") -> dict[str, str]:
+    """Kernel sysctls required for SR-MPLS forwarding.
+
+    ip_ttl_propagate=0 (pipe mode): MPLS TTL starts at 255 regardless of
+    IP TTL. Required for tracepath/traceroute to work through MPLS tunnels.
+    Uniform mode copies IP TTL into MPLS TTL, causing tracepath probes
+    (TTL=1) to expire at the first MPLS transit hop.
+    """
+    return {
+        "net.mpls.platform_labels": mpls_labels,
+        "net.mpls.ip_ttl_propagate": "0",
+    }
+
+
+def _mpls_sysctls(mpls_labels: str = "100000") -> dict[str, str]:
+    """Kernel sysctls for MPLS forwarding without SR (e.g., LDP)."""
+    return {
+        "net.mpls.platform_labels": mpls_labels,
+    }
+
+
+def validate_constellation_constraints(
+    resolved: ResolvedStack,
+    num_planes: int,
+    max_slots_per_plane: int,
+    num_ground_stations: int,
+) -> None:
+    """Validate stack × constellation constraints.
+
+    Called by the Operator after constellation expansion, before template
+    rendering. Raises ValueError if the constellation is too large for
+    the stack's SRGB or SID scheme.
+    """
+    tv = resolved.template_variables
+    if not resolved.segment_routing:
+        return
+
+    gs_sid_offset = tv.get("gs_sid_offset", 0)
+    srgb_start = tv.get("srgb_start", 0)
+    srgb_end = tv.get("srgb_end", 0)
+    srgb_size = srgb_end - srgb_start + 1
+
+    # Satellite SID scheme: plane * 100 + slot + 1
+    max_sat_sid = num_planes * 100 + max_slots_per_plane
+    if max_sat_sid >= gs_sid_offset:
+        raise ValueError(
+            f"Satellite SID range ({max_sat_sid}) overlaps GS SID offset "
+            f"({gs_sid_offset}). Increase SRGB or reduce constellation size."
+        )
+
+    max_gs_sid = gs_sid_offset + num_ground_stations
+    if max_gs_sid > srgb_size:
+        raise ValueError(
+            f"GS SID range ({gs_sid_offset}..{max_gs_sid}) exceeds SRGB size "
+            f"({srgb_size}). Increase SRGB range or reduce ground stations."
+        )
 
 
 def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
@@ -83,7 +185,7 @@ def _resolve_nodalpath() -> ResolvedStack:
         image="nodalpath-fwd:latest",
         mi_adapter=None,
         segment_routing=False,
-        ttl_propagation=None,
+        sysctls=_sr_sysctls(),
         transport="grpc",
         host_modules=["mpls_router", "mpls_iptunnel"],
         env=[
@@ -92,7 +194,6 @@ def _resolve_nodalpath() -> ResolvedStack:
             {"name": "LOOPBACK_IPV4", "value": "{{ ipv4_loopback }}"},
         ],
         security_context_capabilities=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"],
-        reconfigure_command=None,
         max_compression=10,
     )
 
@@ -104,20 +205,20 @@ def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:
         "reference_bandwidth": 10000,
     }
     segment_routing = False
-    ttl_propagation = None
+    sysctls: dict[str, str] = {}
 
     if "sr" in ext_set:
         daemons.append("pathd")
-        template_vars["sr_enabled"] = True
-        template_vars["srgb_start"] = 16000
-        template_vars["srgb_end"] = 23999
+        template_vars.update(_derive_sr_variables(16000, 23999))
         segment_routing = True
-        ttl_propagation = "uniform"
+        sysctls = _sr_sysctls()
     if "te" in ext_set:
         template_vars["te_enabled"] = True
     if "mpls" in ext_set:
         daemons.append("ldpd")
         template_vars["mpls_enabled"] = True
+        if not sysctls:
+            sysctls = _mpls_sysctls()
 
     templates = [_DAEMON_TEMPLATES[d] for d in daemons]
 
@@ -128,13 +229,8 @@ def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:
         image="nodalarc/frr:10",
         mi_adapter="frr_ospf_adapter",
         segment_routing=segment_routing,
-        ttl_propagation=ttl_propagation,
-        transport=None,
-        host_modules=[],
-        env=[],
-        security_context_capabilities=[],
+        sysctls=sysctls,
         reconfigure_command="vtysh -f {config_path}",
-        max_compression=10,
     )
 
 
@@ -145,20 +241,20 @@ def _resolve_isis(ext_set: set[str]) -> ResolvedStack:
         "reference_bandwidth": 10000,
     }
     segment_routing = False
-    ttl_propagation = None
+    sysctls: dict[str, str] = {}
 
     if "sr" in ext_set:
         daemons.append("pathd")
-        template_vars["sr_enabled"] = True
-        template_vars["srgb_start"] = 16000
-        template_vars["srgb_end"] = 23999
+        template_vars.update(_derive_sr_variables(16000, 23999))
         segment_routing = True
-        ttl_propagation = "uniform"
+        sysctls = _sr_sysctls()
     if "te" in ext_set:
         template_vars["te_enabled"] = True
     if "mpls" in ext_set:
         daemons.append("ldpd")
         template_vars["mpls_enabled"] = True
+        if not sysctls:
+            sysctls = _mpls_sysctls()
 
     templates = [_DAEMON_TEMPLATES[d] for d in daemons]
 
@@ -169,11 +265,6 @@ def _resolve_isis(ext_set: set[str]) -> ResolvedStack:
         image="nodalarc/frr:10",
         mi_adapter="frr_isis_adapter",
         segment_routing=segment_routing,
-        ttl_propagation=ttl_propagation,
-        transport=None,
-        host_modules=[],
-        env=[],
-        security_context_capabilities=[],
+        sysctls=sysctls,
         reconfigure_command="vtysh -f {config_path}",
-        max_compression=10,
     )

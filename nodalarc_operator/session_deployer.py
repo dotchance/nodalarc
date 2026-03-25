@@ -249,9 +249,27 @@ def write_wiring_manifest(
 
     resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
     segment_routing = resolved.segment_routing
-    ttl_propagation = resolved.ttl_propagation or "pipe"
 
-    mpls_labels = str(get_platform_config().mpls_kernel_max_platform_labels)
+    # Validate stack × constellation constraints before building manifest
+    from nodalarc.stack_resolver import validate_constellation_constraints
+
+    num_planes = max((s.plane for s in satellites), default=0) + 1
+    max_slot = max((s.slot for s in satellites), default=0)
+    validate_constellation_constraints(
+        resolved,
+        num_planes=num_planes,
+        max_slots_per_plane=max_slot,
+        num_ground_stations=len(gs_file.stations),
+    )
+
+    # Platform-level sysctls (protocol-agnostic) merged with stack-provided sysctls.
+    # The deployer never interprets stack fields to derive sysctls.
+    base_sysctls = {
+        "net.ipv6.conf.all.forwarding": "1",
+        "net.ipv4.conf.all.rp_filter": "0",
+        "net.ipv4.conf.default.rp_filter": "0",
+    }
+    node_sysctls = {**base_sysctls, **resolved.sysctls}
 
     # Build per-node wiring spec
     nodes: dict[str, Any] = {}
@@ -281,23 +299,14 @@ def write_wiring_manifest(
             "node_type": "satellite",
             "plane": sat.plane,
             "slot": sat.slot,
-            "sysctls": {
-                "net.ipv6.conf.all.forwarding": "1",
-                "net.mpls.platform_labels": mpls_labels,
-                "net.ipv4.conf.all.rp_filter": "0",
-                "net.ipv4.conf.default.rp_filter": "0",
-            },
+            "sysctls": dict(node_sysctls),
             "isl_interfaces": isl_interfaces,
             "gnd_interfaces": [{"name": "gnd0"}],
             "mpls_enable": True,
             "segment_routing": segment_routing,
-            "ttl_propagation": ttl_propagation,
             "mtu": 9000,
             "remove_default_route": True,
         }
-        if segment_routing:
-            ttl_val = "0" if ttl_propagation == "pipe" else "1"
-            nodes[node_id]["sysctls"]["net.mpls.ip_ttl_propagate"] = ttl_val
 
     # Ground stations
     ground_bridges: dict[str, dict] = {}
@@ -328,24 +337,15 @@ def write_wiring_manifest(
             "node_type": "ground_station",
             "gs_name": station.name,
             "gs_index": i,
-            "sysctls": {
-                "net.ipv6.conf.all.forwarding": "1",
-                "net.mpls.platform_labels": mpls_labels,
-                "net.ipv4.conf.all.rp_filter": "0",
-                "net.ipv4.conf.default.rp_filter": "0",
-            },
+            "sysctls": dict(node_sysctls),
             "isl_interfaces": [],
             "gnd_interfaces": [{"name": "gnd0"}],
             "terrestrial": {"addresses": addrs},
             "mpls_enable": True,
             "segment_routing": segment_routing,
-            "ttl_propagation": ttl_propagation,
             "mtu": 9000,
             "remove_default_route": True,
         }
-        if segment_routing:
-            ttl_val = "0" if ttl_propagation == "pipe" else "1"
-            nodes[gs_id]["sysctls"]["net.mpls.ip_ttl_propagate"] = ttl_val
 
         # All satellites are potential GS peers
         ground_bridges[gs_id] = {

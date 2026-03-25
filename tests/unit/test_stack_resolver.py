@@ -49,10 +49,12 @@ class TestISIS:
         r = resolve_stack("isis", ["sr"])
         assert r.daemons == ["zebra", "isisd", "pathd"]
         assert r.segment_routing is True
-        assert r.ttl_propagation == "uniform"
+        assert r.ttl_propagation == "pipe"
+        assert r.sysctls["net.mpls.ip_ttl_propagate"] == "0"
         assert r.template_variables["sr_enabled"] is True
         assert r.template_variables["srgb_start"] == 16000
         assert r.template_variables["srgb_end"] == 23999
+        assert r.template_variables["gs_sid_offset"] == 7900
         template_srcs = [t.src for t in r.template_files]
         assert "pathd.conf.j2" in template_srcs
 
@@ -74,9 +76,11 @@ class TestOSPFSR:
         r = resolve_stack("ospf", ["sr"])
         assert "pathd" in r.daemons
         assert r.segment_routing is True
-        assert r.ttl_propagation == "uniform"
+        assert r.ttl_propagation == "pipe"
+        assert r.sysctls["net.mpls.ip_ttl_propagate"] == "0"
         assert r.template_variables["sr_enabled"] is True
         assert r.template_variables["srgb_start"] == 16000
+        assert r.template_variables["gs_sid_offset"] == 7900
 
 
 class TestNodalPath:

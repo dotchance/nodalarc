@@ -343,6 +343,7 @@ def _update_link_up(event_data: dict) -> None:
     node_b = event_data.get("node_b", "")
     key = _link_key(node_a, node_b)
     with _state_lock:
+        is_new = key not in _state["links"]
         _state["links"][key] = {
             "node_a": node_a,
             "node_b": node_b,
@@ -354,8 +355,8 @@ def _update_link_up(event_data: dict) -> None:
             "range_km": 0.0,
             "traffic_load_pct": None,
         }
-    # Wake continuous tracer to re-trace after convergence
-    if _continuous_tracer is not None:
+    # Only notify tracer on actual state change, not R-TO-009 poll refresh
+    if is_new and _continuous_tracer is not None:
         _continuous_tracer.notify_topology_change(node_a, node_b)
 
 

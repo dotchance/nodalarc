@@ -1,0 +1,17 @@
+ground_station_set:
+  name: continuous-coverage
+  description: "8 stations for guaranteed 2+ simultaneous GS connectivity with coverage-88 constellation (OME-verified)"
+  default_min_elevation_deg: 15
+  stations:
+    - frankfurt
+    - tokyo
+    - hawthorne
+    - ashburn
+    - santiago
+    - sydney
+    - sao-paulo
+    - mumbai
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10

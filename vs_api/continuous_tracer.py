@@ -102,18 +102,18 @@ class ContinuousTracer:
         """
         if not self.active:
             return
-        # Only wake if the change involves a node in the current trace path
+        # Only wake if the change involves src, dst, or a node in the current path.
+        # Do NOT retrace on every topology change when no result exists yet —
+        # that causes starvation because ISL links cycle continuously.
         traced_nodes: set[str] = set()
         if self._latest is not None:
             traced_nodes = {h.node_id for h in self._latest.forward.hops}
             traced_nodes |= {h.node_id for h in self._latest.reverse.hops}
-        # Always retrace if src/dst is involved, or if no path yet
         if (
             node_a in (self._src, self._dst)
             or node_b in (self._src, self._dst)
             or node_a in traced_nodes
             or node_b in traced_nodes
-            or self._latest is None
         ):
             self._retrace_event.set()
 
@@ -220,10 +220,10 @@ class ContinuousTracer:
                 await asyncio.sleep(self._config.trace_interval_seconds)
 
     def _run_tracepath(self, pod: str, target: str) -> dict:
-        """Run tracepath via kubernetes client exec.
+        """Run ICMP traceroute via kubernetes client exec.
 
-        Uses tracepath -n -b. No source binding needed — once the IGP
-        converges, FRR routes are more specific than the K3s default route.
+        Uses traceroute -I (ICMP) with 250ms per-hop timeout, 1 query per hop.
+        Output is in traceroute format — the tracepath parser handles both.
         """
         import kubernetes.client
         import kubernetes.config
@@ -243,7 +243,7 @@ class ContinuousTracer:
                 pod,
                 ns,
                 container="frr",
-                command=["tracepath", "-n", "-b", target],
+                command=["traceroute", "-I", "-n", "-w", "0.25", "-q", "1", "-m", "30", target],
                 stderr=True,
                 stdout=True,
                 stdin=False,
@@ -260,9 +260,37 @@ class ContinuousTracer:
                 err_chunk = resp.read_stderr()
                 if err_chunk:
                     stderr += err_chunk
+            # Convert traceroute output to tracepath format for the parser
+            stdout = self._traceroute_to_tracepath(stdout, target)
             return {"ok": True, "stdout": stdout, "stderr": stderr}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "stdout": "", "stderr": ""}
+
+    @staticmethod
+    def _traceroute_to_tracepath(traceroute_output: str, target: str) -> str:
+        """Convert traceroute output to tracepath format for the existing parser.
+
+        traceroute: ' 1  10.0.0.1  5.123 ms'  or  ' 1  *'
+        tracepath:  ' 1:  10.0.0.1  5.123ms reached'
+        """
+        import re
+
+        lines = []
+        last_hop = 0
+        for line in traceroute_output.splitlines():
+            if line.startswith("traceroute to"):
+                continue
+            m = re.match(r"^\s*(\d+)\s+(\d+\.\d+\.\d+\.\d+)\s+([\d.]+)\s+ms", line)
+            if m:
+                hop_num = int(m.group(1))
+                ip = m.group(2)
+                rtt = m.group(3)
+                reached = " reached" if ip == target else ""
+                lines.append(f" {hop_num}:  {ip}  {rtt}ms{reached}")
+                last_hop = hop_num
+        if last_hop > 0:
+            lines.append(f"     Resume: pmtu 9000 hops {last_hop} back {last_hop}")
+        return "\n".join(lines) + "\n"
 
     def _trace_tracepath(self, sim_time: str, now: str) -> LiveTraceResult | None:
         """Run forward + reverse tracepath concurrently, then enrich."""

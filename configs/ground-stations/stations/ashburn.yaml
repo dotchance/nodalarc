@@ -3,6 +3,7 @@ ground_station:
   lat_deg: 39.04
   lon_deg: -77.49
   alt_m: 100
+  min_elevation_deg: 15
   terminals:
     - type: optical
       count: 2

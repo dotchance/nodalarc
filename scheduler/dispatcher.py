@@ -141,10 +141,8 @@ class Dispatcher:
 
         await asyncio.sleep(0.5)
 
-        # Reconciliation on startup
-        await self._reconcile_on_startup(to_pub)
-
-        # R-OME-008: catch-up — VisibilityEvents only from rolling log
+        # R-OME-008: catch-up — VisibilityEvents only from rolling log.
+        # Catch-up is authoritative. No separate reconciliation step.
         await self._ome_catchup(to_pub)
 
         log.info("Scheduler dispatcher started — OME=%s", self._ome_endpoint)
@@ -755,10 +753,11 @@ class Dispatcher:
             sock.setsockopt(_zmq.LINGER, 0)
             sock.connect(catchup_addr)
 
-            checkpoint = self.read_checkpoint()
+            # Always request all events — the rolling log covers one orbital
+            # period and is small enough to replay from the start. Using a
+            # checkpoint offset can miss events if the OME restarted and its
+            # current pacing position is behind the checkpoint sim_time.
             req: dict = {"request": "events_since"}
-            if checkpoint and checkpoint.get("sim_time"):
-                req["since_sim_time"] = checkpoint["sim_time"]
 
             sock.send_json(req)
             resp = sock.recv_json()
@@ -781,7 +780,14 @@ class Dispatcher:
                 current_sim[:19] if current_sim else "none",
             )
 
+            # Catch-up is authoritative — start from empty.
+            # Checkpoint provides since_sim_time offset only, not state.
+            self._active_links.clear()
+
             # Apply all VisibilityEvents in sim_time order to _active_links
+            added = 0
+            removed = 0
+            skipped_no_iface = 0
             for evt in events:
                 vis = VisibilityEvent.model_validate(evt)
                 pair = (vis.node_a, vis.node_b)
@@ -792,6 +798,7 @@ class Dispatcher:
                     else:
                         ifaces = self._interface_map.get(pair)
                         if not ifaces:
+                            skipped_no_iface += 1
                             continue
                         iface_a, iface_b = ifaces
                     self._active_links[pair] = ActiveLinkInfo(
@@ -800,8 +807,19 @@ class Dispatcher:
                         latency_ms=3.0,
                         bandwidth_mbps=self._bandwidth_map.get(pair, 1000.0),
                     )
+                    added += 1
                 elif not vis.visible:
+                    if pair in self._active_links:
+                        removed += 1
                     self._active_links.pop(pair, None)
+            log.info(
+                "Catch-up applied: %d added, %d removed, %d skipped (no iface), "
+                "interface_map=%d pairs",
+                added,
+                removed,
+                skipped_no_iface,
+                len(self._interface_map),
+            )
 
             # Set dedup threshold
             self._dedup_threshold = current_sim

@@ -1,8 +1,8 @@
 ground_station:
-  name: singapore
-  lat_deg: 1.35
-  lon_deg: 103.82
-  alt_m: 15
+  name: santiago
+  lat_deg: -33.45
+  lon_deg: -70.67
+  alt_m: 520
   min_elevation_deg: 15
   terminals:
     - type: optical
@@ -10,7 +10,7 @@ ground_station:
       bandwidth_mbps: 1000
       tracking_capacity: 1
   terrestrial_prefixes:
-    - prefix: "172.16.6.0/24"
+    - prefix: "172.16.11.0/24"
       metric: 10
     - prefix: "0.0.0.0/0"
       metric: 100

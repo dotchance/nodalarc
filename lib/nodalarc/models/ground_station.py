@@ -131,6 +131,8 @@ class GroundStationSetConfig(BaseModel):
     description: str | None = None
     stations: list[str]
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None
+    default_min_elevation_deg: float | None = None
+    default_scheduling_policy: str | None = None
 
     @model_validator(mode="after")
     def _validate_set(self):

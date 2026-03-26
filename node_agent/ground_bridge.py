@@ -192,12 +192,17 @@ def detach_from_ground_bridge(
     finally:
         ns.close()
 
-    # Bring host veth DOWN
+    # Bring satellite host veth and GS bridge port DOWN.
+    # GS bridge port DOWN drops carrier on gnd0 inside the GS pod
+    # (gnd0 transitions UP → LOWERLAYERDOWN), triggering immediate
+    # FRR adjacency teardown. Matches attach_to_ground_bridge which
+    # brings both UP.
     ipr = IPRoute()
     try:
-        host_idx = ipr.link_lookup(ifname=host_veth)
-        if host_idx:
-            ipr.link("set", index=host_idx[0], state="down")
+        for name in (host_veth, gs_port):
+            idx = ipr.link_lookup(ifname=name)
+            if idx:
+                ipr.link("set", index=idx[0], state="down")
     finally:
         ipr.close()
 

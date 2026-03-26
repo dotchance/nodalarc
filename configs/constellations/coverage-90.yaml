@@ -1,0 +1,22 @@
+# Coverage-90 — continuous dual ground station coverage constellation.
+#
+# 6 planes × 15 satellites = 90 total, 550 km altitude, 53° inclination.
+# Walker-delta pattern. Designed to guarantee 2+ ground stations connected
+# simultaneously when paired with the dual-hemisphere ground station set
+# (Frankfurt, Tokyo, Santiago, Sydney). The 60° RAAN spacing ensures at
+# least one plane crosses each hemisphere's mid-latitude band at all times.
+# Co-rotating planes at moderate inclination produce stable ISLs with no
+# polar seam effects.
+
+mode: parametric
+name: coverage-90
+satellite_type: starlink-v2
+orbit:
+  altitude_km: 550
+  inclination_deg: 53
+  pattern: walker-delta
+planes:
+  count: 6
+  raan_spacing_deg: 60
+  sats_per_plane: 15
+  phase_offset_deg: 4.0

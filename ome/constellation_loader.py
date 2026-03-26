@@ -238,16 +238,19 @@ _DEFAULT_SCHEDULING_POLICY = "highest-elevation"
 def _build_gs_file_from_stations(
     stations: list[GroundStationConfig],
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None,
+    default_min_elevation_deg: float | None = None,
+    default_scheduling_policy: str | None = None,
 ) -> GroundStationFile:
     """Build a GroundStationFile from a list of individual station configs.
 
     Bridges the new individual/set formats to the monolithic format that
-    the rest of the system expects.
+    the rest of the system expects. Set-level defaults override the code
+    defaults; per-station values override set-level defaults.
     """
     return GroundStationFile(
         default_terminals=_DEFAULT_GS_TERMINALS,
-        default_min_elevation_deg=_DEFAULT_MIN_ELEVATION_DEG,
-        default_scheduling_policy=_DEFAULT_SCHEDULING_POLICY,
+        default_min_elevation_deg=default_min_elevation_deg or _DEFAULT_MIN_ELEVATION_DEG,
+        default_scheduling_policy=default_scheduling_policy or _DEFAULT_SCHEDULING_POLICY,
         default_terrestrial_prefixes=default_terrestrial_prefixes,
         stations=stations,
     )
@@ -265,7 +268,12 @@ def load_ground_stations_from_set(
     for station_name in gs_set.stations:
         station = load_ground_station_individual(station_name)
         stations.append(station)
-    return _build_gs_file_from_stations(stations, gs_set.default_terrestrial_prefixes)
+    return _build_gs_file_from_stations(
+        stations,
+        gs_set.default_terrestrial_prefixes,
+        gs_set.default_min_elevation_deg,
+        gs_set.default_scheduling_policy,
+    )
 
 
 def load_ground_stations_from_list(
@@ -302,7 +310,12 @@ def load_ground_stations(path: str | Path | list[str]) -> GroundStationFile:
         if "ground_station_set" in data:
             gs_set = GroundStationSetConfig.model_validate(data["ground_station_set"])
             stations = [load_ground_station_individual(n) for n in gs_set.stations]
-            return _build_gs_file_from_stations(stations, gs_set.default_terrestrial_prefixes)
+            return _build_gs_file_from_stations(
+                stations,
+                gs_set.default_terrestrial_prefixes,
+                gs_set.default_min_elevation_deg,
+                gs_set.default_scheduling_policy,
+            )
 
     # Legacy monolithic format
     return GroundStationFile.model_validate(data)

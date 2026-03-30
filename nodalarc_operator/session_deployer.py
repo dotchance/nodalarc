@@ -511,8 +511,7 @@ def teardown_session(namespace: str) -> None:
         "configs/ground-stations/_ephemeral/*",
     ]:
         for f in glob.glob(pattern):
-            with suppress(OSError):
-                Path(f).unlink(missing_ok=True)
+            Path(f).unlink(missing_ok=True)
     log.info("Cleaned up ephemeral config files")
 
 

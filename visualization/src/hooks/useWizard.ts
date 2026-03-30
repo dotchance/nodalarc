@@ -1,24 +1,28 @@
-/** Wizard state management hook. */
+/** Wizard orchestrator — composes data, navigation, and API hooks.
+ *
+ * This is a thin composition layer. Each concern lives in its own hook:
+ * - useWizardData: fetches presets, satellite types, GS sets, stations
+ * - useWizardNav: step navigation (goToStep, goBack, goToReview)
+ * - useWizardApi: generate, deploy, preview-coverage API calls
+ */
 
-import { useState, useCallback, useEffect } from "react";
-import { REST_URL, authHeaders } from "../config";
+import { useState, useCallback } from "react";
 import type {
   ConstellationPreset,
   Protocol,
-  ExtensionRules,
   SatelliteTypePreset,
   GroundStationSet,
-  AvailableStation,
-  WizardStep,
   LegacyWizardState,
+  WizardStep,
 } from "../catalog/wizardTypes";
+import { useWizardData } from "./useWizardData";
+import { useWizardNav } from "./useWizardNav";
+import { useWizardApi } from "./useWizardApi";
 
 export function useWizard() {
-  const [presets, setPresets] = useState<ConstellationPreset[]>([]);
-  const [rules, setRules] = useState<ExtensionRules | null>(null);
-  const [satelliteTypes, setSatelliteTypes] = useState<SatelliteTypePreset[]>([]);
-  const [groundStationSets, setGroundStationSets] = useState<GroundStationSet[]>([]);
-  const [availableStations, setAvailableStations] = useState<AvailableStation[]>([]);
+  const data = useWizardData();
+  const api = useWizardApi();
+
   const [state, setState] = useState<LegacyWizardState>({
     step: "satellite-type",
     satelliteType: null,
@@ -28,202 +32,97 @@ export function useWizard() {
     extensions: [],
     areaStrategy: "flat",
   });
-  const [generating, setGenerating] = useState(false);
-  const [deploying, setDeploying] = useState(false);
-  const [generatedYaml, setGeneratedYaml] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  // Fetch presets, extension rules, satellite types, and ground station sets on mount
-  useEffect(() => {
-    fetch(`${REST_URL}/api/v1/presets/constellations`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: ConstellationPreset[]) => setPresets(data))
-      .catch(() => {});
+  const nav = useWizardNav(setState);
 
-    fetch(`${REST_URL}/api/v1/wizard/extensions`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: ExtensionRules) => setRules(data))
-      .catch(() => {});
-
-    fetch(`${REST_URL}/api/v1/presets/satellite-types`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: SatelliteTypePreset[]) => setSatelliteTypes(data))
-      .catch(() => {});
-
-    fetch(`${REST_URL}/api/v1/presets/ground-stations`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: GroundStationSet[]) => setGroundStationSets(data))
-      .catch(() => {});
-
-    fetch(`${REST_URL}/api/v1/presets/ground-stations/stations`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: AvailableStation[]) => setAvailableStations(data))
-      .catch(() => {});
-  }, []);
+  // --- Selection callbacks (update state + advance step) ---
 
   const selectSatelliteType = useCallback((preset: SatelliteTypePreset) => {
     setState((s) => ({ ...s, satelliteType: preset, step: "ground-stations" }));
-    setGeneratedYaml(null);
-    setError(null);
-  }, []);
+    api.clearYaml();
+    api.clearError();
+  }, [api]);
 
   const selectGroundStationSet = useCallback((set: GroundStationSet) => {
     setState((s) => ({ ...s, groundStationSet: set, step: "constellation" }));
-    setGeneratedYaml(null);
-    setError(null);
-  }, []);
+    api.clearYaml();
+    api.clearError();
+  }, [api]);
 
   const selectCustomGroundStations = useCallback((stationNames: string[]) => {
     const customSet: GroundStationSet = {
       name: "custom",
       description: `Custom selection: ${stationNames.length} stations`,
       stations: stationNames,
-      file: "",  // empty = pass as list[str] instead of file path
+      file: null,
     };
     setState((s) => ({ ...s, groundStationSet: customSet, step: "constellation" }));
-    setGeneratedYaml(null);
-    setError(null);
-  }, []);
+    api.clearYaml();
+    api.clearError();
+  }, [api]);
 
   const selectConstellation = useCallback((preset: ConstellationPreset) => {
     setState((s) => ({ ...s, constellation: preset, step: "protocol" }));
-    setGeneratedYaml(null);
-    setError(null);
-  }, []);
+    api.clearYaml();
+    api.clearError();
+  }, [api]);
 
   const selectProtocol = useCallback((protocol: Protocol) => {
     setState((s) => {
       const nextStep: WizardStep = protocol === "nodalpath" ? "review" : "extensions";
       return { ...s, protocol, extensions: [], step: nextStep };
     });
-    setGeneratedYaml(null);
-    setError(null);
-  }, []);
+    api.clearYaml();
+    api.clearError();
+  }, [api]);
 
   const toggleExtension = useCallback((ext: string) => {
     setState((s) => {
       const has = s.extensions.includes(ext);
       let next = has ? s.extensions.filter((e) => e !== ext) : [...s.extensions, ext];
-      // If removing TE, also remove MPLS (MPLS requires TE)
       if (has && ext === "te") {
         next = next.filter((e) => e !== "mpls");
       }
-      // If adding MPLS, also add TE
       if (!has && ext === "mpls" && !next.includes("te")) {
         next.push("te");
       }
       return { ...s, extensions: next };
     });
-    setGeneratedYaml(null);
-  }, []);
+    api.clearYaml();
+  }, [api]);
 
   const setAreaStrategy = useCallback((strategy: string) => {
     setState((s) => ({ ...s, areaStrategy: strategy }));
-    setGeneratedYaml(null);
-  }, []);
+    api.clearYaml();
+  }, [api]);
 
-  const goToStep = useCallback((step: WizardStep) => {
-    setState((s) => ({ ...s, step }));
-  }, []);
+  // --- Extension constraint checks ---
 
-  const goBack = useCallback(() => {
-    setState((s) => {
-      if (s.step === "ground-stations") return { ...s, step: "satellite-type" };
-      if (s.step === "constellation") return { ...s, step: "ground-stations" };
-      if (s.step === "protocol") return { ...s, step: "constellation" };
-      if (s.step === "extensions") return { ...s, step: "protocol" };
-      if (s.step === "review") {
-        return { ...s, step: s.protocol === "nodalpath" ? "protocol" : "extensions" };
-      }
-      return s;
-    });
-  }, []);
-
-  const goToReview = useCallback(() => {
-    setState((s) => ({ ...s, step: "review" }));
-  }, []);
-
-  /** Check if an extension is allowed for the current protocol. */
   const isExtensionAllowed = useCallback(
     (ext: string): boolean => {
-      if (!rules || !state.protocol) return false;
-      const protoRules = rules.protocols[state.protocol];
+      if (!data.rules || !state.protocol) return false;
+      const protoRules = data.rules.protocols[state.protocol];
       if (!protoRules) return false;
       return protoRules.extensions.includes(ext);
     },
-    [rules, state.protocol],
+    [data.rules, state.protocol],
   );
 
-  /** Check if an extension's dependencies are met. */
   const isExtensionEnabled = useCallback(
     (ext: string): boolean => {
       if (!isExtensionAllowed(ext)) return false;
-      if (!rules || !state.protocol) return false;
-      const protoRules = rules.protocols[state.protocol];
+      if (!data.rules || !state.protocol) return false;
+      const protoRules = data.rules.protocols[state.protocol];
       const deps = protoRules?.constraints[ext];
       if (!deps) return true;
       return deps.every((d) => state.extensions.includes(d));
     },
-    [rules, state.protocol, state.extensions, isExtensionAllowed],
+    [data.rules, state.protocol, state.extensions, isExtensionAllowed],
   );
 
-  const generate = useCallback(async () => {
-    if (!state.constellation || !state.protocol) return;
-    setGenerating(true);
-    setError(null);
-    try {
-      const resp = await fetch(`${REST_URL}/api/v1/session/generate`, {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-          constellation: state.constellation.name,
-          protocol: state.protocol,
-          extensions: state.extensions,
-          area_strategy: state.areaStrategy,
-          ground_stations: state.groundStationSet?.file
-            ? state.groundStationSet.file
-            : state.groundStationSet?.stations ?? undefined,
-          satellite_type: state.satelliteType?.name ?? undefined,
-        }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) {
-        setError(data.error || "Generation failed");
-      } else {
-        setGeneratedYaml(data.yaml);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Generation failed");
-    } finally {
-      setGenerating(false);
-    }
-  }, [state]);
+  // --- API wrappers that pass current state ---
 
-  const deploy = useCallback(
-    async (yaml: string): Promise<boolean> => {
-      setDeploying(true);
-      setError(null);
-      try {
-        const resp = await fetch(`${REST_URL}/api/v1/session/deploy`, {
-          method: "POST",
-          headers: authHeaders({ "Content-Type": "application/json" }),
-          body: JSON.stringify({ yaml }),
-        });
-        const data = await resp.json();
-        if (!resp.ok) {
-          setError(data.error || "Deploy failed");
-          return false;
-        }
-        return true;
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Deploy failed");
-        return false;
-      } finally {
-        setDeploying(false);
-      }
-    },
-    [],
-  );
+  const generate = useCallback(() => api.generate(state), [api, state]);
 
   const reset = useCallback(() => {
     setState({
@@ -235,21 +134,24 @@ export function useWizard() {
       extensions: [],
       areaStrategy: "flat",
     });
-    setGeneratedYaml(null);
-    setError(null);
-  }, []);
+    api.clearYaml();
+    api.clearError();
+  }, [api]);
 
   return {
-    presets,
-    rules,
-    satelliteTypes,
-    groundStationSets,
-    availableStations,
+    // Data
+    presets: data.presets,
+    rules: data.rules,
+    satelliteTypes: data.satelliteTypes,
+    groundStationSets: data.groundStationSets,
+    availableStations: data.availableStations,
+    // State
     state,
-    generating,
-    deploying,
-    generatedYaml,
-    error,
+    generating: api.generating,
+    deploying: api.deploying,
+    generatedYaml: api.generatedYaml,
+    error: api.error,
+    // Selection
     selectSatelliteType,
     selectGroundStationSet,
     selectCustomGroundStations,
@@ -257,13 +159,16 @@ export function useWizard() {
     selectProtocol,
     toggleExtension,
     setAreaStrategy,
-    goToStep,
-    goBack,
-    goToReview,
+    // Navigation
+    goToStep: nav.goToStep,
+    goBack: nav.goBack,
+    goToReview: nav.goToReview,
+    // Extension checks
     isExtensionAllowed,
     isExtensionEnabled,
+    // API
     generate,
-    deploy,
+    deploy: api.deploy,
     reset,
   };
 }

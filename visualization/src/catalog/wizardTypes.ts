@@ -77,9 +77,17 @@ export interface CoveragePreviewResult {
     feasibility_pct: number;
     min_active: number;
     max_active: number;
+    failure_reasons?: {
+      range_exceeded: number;
+      tracking_exceeded: number;
+      field_of_regard: number;
+      los_blocked: number;
+      polar_seam: number;
+      terminal_exhausted: number;
+    };
   };
   ground_stations: {
-    per_station: Record<string, { coverage_pct: number; longest_gap_s: number }>;
+    per_station: Record<string, { coverage_pct: number; longest_gap_s: number; reason?: string | null }>;
     simultaneous_min: number;
     simultaneous_max: number;
     simultaneous_mean: number;
@@ -122,6 +130,7 @@ export interface WizardState {
 
 /** @deprecated Use WizardPhase instead. */
 export type WizardStep =
+  | "selections"
   | "satellite-type"
   | "ground-stations"
   | "constellation"

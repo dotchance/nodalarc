@@ -10,8 +10,6 @@
 
 import { useCallback } from "react";
 import type {
-  WizardPhase,
-  ActiveCard,
   WizardState,
   LegacyWizardState,
   WizardStep,
@@ -33,29 +31,14 @@ export function canReview(state: LegacyWizardState): boolean {
   return state.protocol !== null;
 }
 
-/** Map legacy linear step to the step after it. */
-const NEXT_STEP: Record<WizardStep, WizardStep> = {
-  "satellite-type": "ground-stations",
-  "ground-stations": "constellation",
-  constellation: "protocol",
-  protocol: "extensions",
-  extensions: "review",
-  review: "review",
-};
-
-/** Map legacy linear step to the step before it. */
-const PREV_STEP: Record<WizardStep, WizardStep> = {
-  "satellite-type": "satellite-type",
-  "ground-stations": "satellite-type",
-  constellation: "ground-stations",
-  protocol: "constellation",
+/** Map step to the step before it for back navigation. */
+const PREV_STEP: Partial<Record<WizardStep, WizardStep>> = {
+  protocol: "selections",
   extensions: "protocol",
   review: "extensions",
 };
 
-/** Hook providing navigation actions for the legacy linear wizard.
- *  Will be replaced with phase-based navigation when the step group
- *  model is wired into SessionWizard. */
+/** Hook providing navigation actions for the wizard. */
 export function useWizardNav(
   setState: React.Dispatch<React.SetStateAction<LegacyWizardState>>,
 ) {
@@ -71,7 +54,9 @@ export function useWizardNav(
       if (s.step === "review" && s.protocol === "nodalpath") {
         return { ...s, step: "protocol" as WizardStep };
       }
-      return { ...s, step: PREV_STEP[s.step] };
+      const prev = PREV_STEP[s.step];
+      if (prev) return { ...s, step: prev };
+      return s;
     });
   }, [setState]);
 

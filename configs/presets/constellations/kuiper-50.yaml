@@ -5,10 +5,3 @@ constellation: configs/constellations/kuiper-50.yaml
 ground_stations: configs/ground-stations/sets/global.yaml
 time:
   step_seconds: 1
-traffic_flows:
-  - flow_id: ashburn-to-frankfurt
-    src: gs-ashburn
-    dst: gs-frankfurt
-    protocol: udp
-    bandwidth_kbps: 100
-    probe_type: continuous

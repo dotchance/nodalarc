@@ -5,10 +5,3 @@ constellation: configs/constellations/oneweb-60.yaml
 ground_stations: configs/ground-stations/sets/polar-emphasis.yaml
 time:
   step_seconds: 1
-traffic_flows:
-  - flow_id: svalbard-to-mcmurdo
-    src: gs-svalbard
-    dst: gs-mcmurdo
-    protocol: udp
-    bandwidth_kbps: 100
-    probe_type: continuous

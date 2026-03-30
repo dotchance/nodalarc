@@ -1,17 +1,15 @@
 /** Session wizard — shell that composes extracted panels.
  *
- * Each panel is a focused component under 300 lines.
- * This file handles: step indicator, upload shortcut, error display,
- * step routing, and deploy/download actions.
+ * Step Group A: SelectionCards (constellation, satellite type, GS — any order)
+ * Step Group B: Protocol, Extensions, Review (linear after preview)
  */
 
 import { useState, useCallback, useRef } from "react";
 import { useWizard } from "../hooks/useWizard";
-import type { Protocol, WizardStep } from "./wizardTypes";
+import type { WizardStep } from "./wizardTypes";
 import type { SessionInfo } from "../types";
-import { SatelliteTypePanel } from "./SatelliteTypePanel";
-import { GroundStationPanel } from "./GroundStationPanel";
-import { ConstellationPanel } from "./ConstellationPanel";
+import { SelectionCards } from "./SelectionCards";
+import { CoveragePreview } from "./CoveragePreview";
 import { ProtocolSelection, ExtensionsPanel } from "./ProtocolPanel";
 import { ReviewPanel } from "./ReviewPanel";
 
@@ -23,22 +21,10 @@ interface SessionWizardProps {
   onFallbackDeploy: (id: string) => void;
 }
 
-const STEP_LABELS: Record<WizardStep, string> = {
-  "satellite-type": "Satellite",
-  "ground-stations": "Ground Stations",
-  constellation: "Constellation",
-  protocol: "Protocol",
-  extensions: "Options",
-  review: "Review",
-};
-
-const STEP_ORDER: WizardStep[] = [
-  "satellite-type",
-  "ground-stations",
-  "constellation",
-  "protocol",
-  "extensions",
-  "review",
+const GROUP_B_STEPS: { id: WizardStep; label: string }[] = [
+  { id: "protocol", label: "Protocol" },
+  { id: "extensions", label: "Options" },
+  { id: "review", label: "Review" },
 ];
 
 export function SessionWizard({
@@ -51,6 +37,11 @@ export function SessionWizard({
   const wizard = useWizard();
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const isGroupA = wizard.state.step === "selections"
+    || wizard.state.step === "satellite-type"
+    || wizard.state.step === "ground-stations"
+    || wizard.state.step === "constellation";
 
   const handleDeploy = useCallback(async () => {
     if (!wizard.generatedYaml) {
@@ -93,26 +84,41 @@ export function SessionWizard({
     URL.revokeObjectURL(url);
   }, [wizard]);
 
-  const stepIdx = STEP_ORDER.indexOf(wizard.state.step);
+  const allGroupASelected =
+    wizard.state.constellation !== null &&
+    wizard.state.satelliteType !== null &&
+    wizard.state.groundStationSet !== null;
 
   return (
     <div className="catalog-overlay">
       <h1 className="catalog-header">NODAL ARC</h1>
       <p className="catalog-subtitle">Orbital Network Emulation Lab</p>
 
-      {/* Step indicator */}
+      {/* Step indicator — simplified for group model */}
       <div className="wizard-steps">
-        {STEP_ORDER.map((step, i) => (
-          <button
-            key={step}
-            className={`wizard-step-pill ${wizard.state.step === step ? "wizard-step-pill--active" : ""} ${i < stepIdx ? "wizard-step-pill--done" : ""}`}
-            onClick={() => i < stepIdx && wizard.goToStep(step)}
-            disabled={i > stepIdx}
-          >
-            <span className="wizard-step-num">{i + 1}</span>
-            {STEP_LABELS[step]}
-          </button>
-        ))}
+        <button
+          className={`wizard-step-pill ${isGroupA ? "wizard-step-pill--active" : "wizard-step-pill--done"}`}
+          onClick={() => isGroupA ? undefined : wizard.goToStep("selections" as WizardStep)}
+        >
+          <span className="wizard-step-num">1</span>
+          Configuration
+        </button>
+        {GROUP_B_STEPS.map(({ id, label }, i) => {
+          const isActive = wizard.state.step === id;
+          const groupBIdx = GROUP_B_STEPS.findIndex((s) => s.id === wizard.state.step);
+          const isDone = !isGroupA && groupBIdx > i;
+          return (
+            <button
+              key={id}
+              className={`wizard-step-pill ${isActive ? "wizard-step-pill--active" : ""} ${isDone ? "wizard-step-pill--done" : ""}`}
+              onClick={() => isDone && wizard.goToStep(id)}
+              disabled={isGroupA || (!isActive && !isDone)}
+            >
+              <span className="wizard-step-num">{i + 2}</span>
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Upload shortcut — always visible, bypasses wizard */}
@@ -123,54 +129,40 @@ export function SessionWizard({
       {uploadError && <div className="wizard-error">{uploadError}</div>}
       {wizard.error && <div className="wizard-error">{wizard.error}</div>}
 
-      {/* Step 1: Satellite Type */}
-      {wizard.state.step === "satellite-type" && (
-        <div className="wizard-panel">
-          <h2 className="wizard-panel-title">Select Satellite Type</h2>
-          <SatelliteTypePanel
-            satelliteTypes={wizard.satelliteTypes}
-            selected={wizard.state.satelliteType}
-            onSelect={wizard.selectSatelliteType}
-          />
-        </div>
+      {/* Step Group A: Selection Cards */}
+      {isGroupA && !wizard.coveragePreview && (
+        <SelectionCards
+          presets={wizard.presets}
+          satelliteTypes={wizard.satelliteTypes}
+          groundStationSets={wizard.groundStationSets}
+          availableStations={wizard.availableStations}
+          constellation={wizard.state.constellation}
+          satelliteType={wizard.state.satelliteType}
+          groundStationSet={wizard.state.groundStationSet}
+          onSelectConstellation={wizard.selectConstellation}
+          onSelectSatelliteType={wizard.selectSatelliteType}
+          onSelectGroundStationSet={wizard.selectGroundStationSet}
+          onSelectCustomGroundStations={wizard.selectCustomGroundStations}
+          onPreview={wizard.previewCoverage}
+          onContinueWithoutPreview={wizard.continueToProtocol}
+          canPreview={allGroupASelected}
+          previewing={wizard.previewing}
+          fallbackSessions={fallbackSessions}
+          deploying={deploying}
+          onFallbackDeploy={onFallbackDeploy}
+        />
       )}
 
-      {/* Step 2: Ground Station Set */}
-      {wizard.state.step === "ground-stations" && (
-        <div className="wizard-panel">
-          <h2 className="wizard-panel-title">Select Ground Station Set</h2>
-          <GroundStationPanel
-            groundStationSets={wizard.groundStationSets}
-            availableStations={wizard.availableStations}
-            selected={wizard.state.groundStationSet}
-            onSelectSet={wizard.selectGroundStationSet}
-            onSelectCustom={wizard.selectCustomGroundStations}
-          />
-          <div className="wizard-nav">
-            <button className="wizard-nav-btn" onClick={wizard.goBack}>Back</button>
-          </div>
-        </div>
+      {/* Coverage Preview Results */}
+      {isGroupA && wizard.coveragePreview && (
+        <CoveragePreview
+          result={wizard.coveragePreview}
+          onContinue={wizard.continueToProtocol}
+          onBack={wizard.clearPreview}
+        />
       )}
 
-      {/* Step 3: Constellation */}
-      {wizard.state.step === "constellation" && (
-        <div className="wizard-panel">
-          <h2 className="wizard-panel-title">Select Constellation</h2>
-          <ConstellationPanel
-            presets={wizard.presets}
-            selected={wizard.state.constellation}
-            onSelect={wizard.selectConstellation}
-            fallbackSessions={fallbackSessions}
-            deploying={deploying}
-            onFallbackDeploy={onFallbackDeploy}
-          />
-          <div className="wizard-nav">
-            <button className="wizard-nav-btn" onClick={wizard.goBack}>Back</button>
-          </div>
-        </div>
-      )}
-
-      {/* Step 4: Protocol */}
+      {/* Step Group B: Protocol */}
       {wizard.state.step === "protocol" && (
         <div className="wizard-panel">
           <h2 className="wizard-panel-title">Select Routing Protocol</h2>
@@ -179,12 +171,14 @@ export function SessionWizard({
             onSelect={wizard.selectProtocol}
           />
           <div className="wizard-nav">
-            <button className="wizard-nav-btn" onClick={wizard.goBack}>Back</button>
+            <button className="wizard-nav-btn" onClick={() => wizard.goToStep("selections" as WizardStep)}>
+              Back to Configuration
+            </button>
           </div>
         </div>
       )}
 
-      {/* Step 5: Extensions + Area Strategy */}
+      {/* Step Group B: Extensions + Area Strategy */}
       {wizard.state.step === "extensions" && (
         <div className="wizard-panel">
           <h2 className="wizard-panel-title">Extensions &amp; Area Strategy</h2>
@@ -207,7 +201,7 @@ export function SessionWizard({
         </div>
       )}
 
-      {/* Step 6: Review & Deploy */}
+      {/* Step Group B: Review & Deploy */}
       {wizard.state.step === "review" && (
         <ReviewPanel
           state={wizard.state}

@@ -27,6 +27,7 @@ export function useWizardApi() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearYaml = useCallback(() => setGeneratedYaml(null), []);
+  const clearPreview = useCallback(() => setCoveragePreview(null), []);
 
   const generate = useCallback(
     async (state: LegacyWizardState) => {
@@ -130,6 +131,7 @@ export function useWizardApi() {
     error,
     clearError,
     clearYaml,
+    clearPreview,
     generate,
     deploy,
     previewCoverage,

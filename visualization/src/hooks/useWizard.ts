@@ -24,7 +24,7 @@ export function useWizard() {
   const api = useWizardApi();
 
   const [state, setState] = useState<LegacyWizardState>({
-    step: "satellite-type",
+    step: "selections" as WizardStep,
     satelliteType: null,
     groundStationSet: null,
     constellation: null,
@@ -38,13 +38,13 @@ export function useWizard() {
   // --- Selection callbacks (update state + advance step) ---
 
   const selectSatelliteType = useCallback((preset: SatelliteTypePreset) => {
-    setState((s) => ({ ...s, satelliteType: preset, step: "ground-stations" }));
+    setState((s) => ({ ...s, satelliteType: preset }));
     api.clearYaml();
     api.clearError();
   }, [api]);
 
   const selectGroundStationSet = useCallback((set: GroundStationSet) => {
-    setState((s) => ({ ...s, groundStationSet: set, step: "constellation" }));
+    setState((s) => ({ ...s, groundStationSet: set }));
     api.clearYaml();
     api.clearError();
   }, [api]);
@@ -56,16 +56,21 @@ export function useWizard() {
       stations: stationNames,
       file: null,
     };
-    setState((s) => ({ ...s, groundStationSet: customSet, step: "constellation" }));
+    setState((s) => ({ ...s, groundStationSet: customSet }));
     api.clearYaml();
     api.clearError();
   }, [api]);
 
   const selectConstellation = useCallback((preset: ConstellationPreset) => {
-    setState((s) => ({ ...s, constellation: preset, step: "protocol" }));
+    setState((s) => ({ ...s, constellation: preset }));
     api.clearYaml();
     api.clearError();
   }, [api]);
+
+  /** Advance from selections to protocol step (after preview or skip). */
+  const continueToProtocol = useCallback(() => {
+    setState((s) => ({ ...s, step: "protocol" as WizardStep }));
+  }, []);
 
   const selectProtocol = useCallback((protocol: Protocol) => {
     setState((s) => {
@@ -124,9 +129,11 @@ export function useWizard() {
 
   const generate = useCallback(() => api.generate(state), [api, state]);
 
+  const previewCoverage = useCallback(() => api.previewCoverage(state), [api, state]);
+
   const reset = useCallback(() => {
     setState({
-      step: "satellite-type",
+      step: "selections" as WizardStep,
       satelliteType: null,
       groundStationSet: null,
       constellation: null,
@@ -169,6 +176,11 @@ export function useWizard() {
     // API
     generate,
     deploy: api.deploy,
+    previewCoverage,
+    previewing: api.previewing,
+    coveragePreview: api.coveragePreview,
+    clearPreview: api.clearPreview,
+    continueToProtocol,
     reset,
   };
 }

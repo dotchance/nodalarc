@@ -126,11 +126,23 @@ class TerrestrialLinkConfig(BaseModel):
 
 class SessionConfig(BaseModel):
     """Top-level session configuration — the single YAML file
-    that defines an entire deployment."""
+    that defines an entire deployment.
+
+    ``constellation`` accepts either a file path (str) or an inline
+    constellation definition (dict).  Same for ``ground_stations``
+    which additionally accepts a list of station name strings.
+
+    ``satellite_type`` is the wizard's independent satellite-type
+    selection.  When set and ``constellation`` is a file path, the
+    deployer merges the two at session-creation time.  When
+    ``constellation`` is already an inline dict it is assumed to
+    contain the intended satellite type and this field is ignored.
+    """
 
     session: SessionMeta
-    constellation: str  # Path to constellation file
-    ground_stations: str | list[str]  # Set name, path to GS file, or list of station names
+    constellation: str | dict  # Path to constellation file OR inline definition
+    ground_stations: str | list[str] | dict  # Set name, path, station list, OR inline GS definition
+    satellite_type: str | None = None  # Override satellite type (independent of constellation)
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = (
         None  # For direct station lists
     )

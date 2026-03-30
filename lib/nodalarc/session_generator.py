@@ -1,7 +1,13 @@
 """Session generator — produces session YAML from wizard selections.
 
-Takes a constellation preset name, protocol, extensions, and area strategy,
-and produces a valid session YAML string.
+Takes independent wizard choices (constellation geometry, satellite type,
+ground stations, protocol, extensions) and produces a valid session YAML.
+
+Satellite type and constellation are fully orthogonal — the user can
+combine any orbital geometry with any terminal hardware.  When the
+satellite type differs from the constellation's built-in type, the
+generator produces an inline constellation definition with the
+satellite_type field replaced.
 """
 
 from pathlib import Path
@@ -42,6 +48,26 @@ def load_constellation_presets() -> dict[str, ConstellationPreset]:
     return presets
 
 
+def merge_constellation_with_satellite_type(
+    constellation_path: str,
+    satellite_type: str,
+) -> dict:
+    """Load a constellation file and replace its satellite_type field.
+
+    Returns the merged constellation as a plain dict suitable for
+    embedding inline in a session YAML.
+    """
+    data = yaml.safe_load(Path(constellation_path).read_text())
+    if not isinstance(data, dict):
+        raise ValueError(f"Constellation file is not a dict: {constellation_path}")
+    # Replace satellite_type with the wizard's selection
+    data["satellite_type"] = satellite_type
+    # Remove resolved default_terminals if present — force re-resolution
+    # from the new satellite_type at load time
+    data.pop("default_terminals", None)
+    return data
+
+
 def generate_session_yaml(
     constellation: str,
     protocol: str,
@@ -49,30 +75,76 @@ def generate_session_yaml(
     area_strategy: str = "flat",
     ground_stations: str | list[str] | None = None,
     satellite_type: str | None = None,
+    custom_constellation: dict | None = None,
+    custom_ground_stations: list[dict] | None = None,
 ) -> tuple[str, list[str]]:
     """Generate a session YAML from wizard selections.
 
-    Returns (yaml_str, warnings).
+    Args:
+        constellation: Preset name (used for orbital geometry and defaults).
+        protocol: Routing protocol ("ospf", "isis", "nodalpath", etc.).
+        extensions: Protocol extensions (["te", "mpls", "sr"]).
+        area_strategy: Area assignment strategy.
+        ground_stations: GS set file path, list of station names, or None
+            (uses preset default).
+        satellite_type: Independent satellite type selection. When set and
+            different from the constellation's built-in type, produces an
+            inline merged constellation definition.
+        custom_constellation: Inline constellation dict (advanced mode).
+            When provided, ``constellation`` preset is used only for name
+            and defaults (time, traffic_flows).
+        custom_ground_stations: List of inline station dicts (advanced mode).
+
+    Returns:
+        (yaml_str, warnings).
     Raises ValueError for invalid combinations.
     """
     warnings: list[str] = []
-    if satellite_type:
-        warnings.append(
-            f"Satellite type '{satellite_type}' selected (informational, not yet wired into session config)"
-        )
 
-    # Load preset
+    # Load preset for defaults (name, time, traffic_flows, GS path)
     presets = load_constellation_presets()
     if constellation not in presets:
         raise ValueError(f"Unknown constellation preset: {constellation}")
     preset = presets[constellation]
 
-    # Validate combo early
+    # Validate routing combo early
     resolve_stack(protocol, extensions)
 
     # Build session name
     ext_suffix = "-".join(extensions) if extensions else "plain"
     session_name = f"{constellation}-{protocol}-{ext_suffix}"
+
+    # --- Resolve constellation definition ---
+    if custom_constellation is not None:
+        # Advanced mode: user-provided inline constellation
+        constellation_value: str | dict = custom_constellation
+    elif satellite_type:
+        # Quick mode with satellite type override: merge geometry + type
+        built_in_type = _read_constellation_satellite_type(preset.constellation)
+        if built_in_type and built_in_type != satellite_type:
+            constellation_value = merge_constellation_with_satellite_type(
+                preset.constellation, satellite_type
+            )
+            warnings.append(
+                f"Constellation '{constellation}' uses '{built_in_type}' terminals — "
+                f"overriding with '{satellite_type}'"
+            )
+        else:
+            # Same type or no built-in — use file path directly
+            constellation_value = preset.constellation
+    else:
+        constellation_value = preset.constellation
+
+    # --- Resolve ground stations ---
+    if custom_ground_stations is not None:
+        gs_value: str | list[str] | dict = {
+            "default_terminals": [
+                {"type": "optical", "count": 1, "bandwidth_mbps": 1000, "tracking_capacity": 1}
+            ],
+            "stations": custom_ground_stations,
+        }
+    else:
+        gs_value = ground_stations or preset.ground_stations
 
     # Build area assignment
     area_assignment: dict[str, Any] | None = None
@@ -89,13 +161,16 @@ def generate_session_yaml(
     # Build session dict
     session_dict: dict[str, Any] = {
         "session": {"name": session_name},
-        "constellation": preset.constellation,
-        "ground_stations": ground_stations or preset.ground_stations,
+        "constellation": constellation_value,
+        "ground_stations": gs_value,
         "routing": {
             "protocol": protocol,
             "extensions": extensions,
         },
     }
+
+    if satellite_type:
+        session_dict["satellite_type"] = satellite_type
 
     if area_assignment:
         session_dict["routing"]["area_assignment"] = area_assignment
@@ -112,3 +187,14 @@ def generate_session_yaml(
 
     yaml_str = yaml.dump(session_dict, default_flow_style=False, sort_keys=False)
     return yaml_str, warnings
+
+
+def _read_constellation_satellite_type(constellation_path: str) -> str | None:
+    """Read the satellite_type field from a constellation YAML without full parsing."""
+    try:
+        data = yaml.safe_load(Path(constellation_path).read_text())
+        if isinstance(data, dict):
+            return data.get("satellite_type")
+    except Exception:
+        pass
+    return None

@@ -78,8 +78,42 @@ def deploy_session(
     session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
 
     # --- Step 2: Load constellation and ground stations ---
-    constellation = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
+    # Handle inline constellation dicts: write to ephemeral file, then load
+    constellation_source = session.constellation
+    if isinstance(constellation_source, dict):
+        eph_dir = Path("configs/constellations/_ephemeral")
+        eph_dir.mkdir(parents=True, exist_ok=True)
+        eph_path = eph_dir / f"{session_id}.yaml"
+        eph_path.write_text(yaml.dump(constellation_source, default_flow_style=False))
+        log.info(f"Wrote ephemeral constellation: {eph_path}")
+        constellation_source = str(eph_path)
+    elif session.satellite_type:
+        # Satellite type override on a file-path constellation
+        from nodalarc.session_generator import merge_constellation_with_satellite_type
+
+        merged = merge_constellation_with_satellite_type(
+            constellation_source, session.satellite_type
+        )
+        eph_dir = Path("configs/constellations/_ephemeral")
+        eph_dir.mkdir(parents=True, exist_ok=True)
+        eph_path = eph_dir / f"{session_id}.yaml"
+        eph_path.write_text(yaml.dump(merged, default_flow_style=False))
+        log.info(f"Wrote ephemeral constellation (satellite_type override): {eph_path}")
+        constellation_source = str(eph_path)
+
+    constellation = load_constellation(constellation_source)
+
+    # Handle inline ground station dicts
+    gs_source = session.ground_stations
+    if isinstance(gs_source, dict):
+        eph_dir = Path("configs/ground-stations/_ephemeral")
+        eph_dir.mkdir(parents=True, exist_ok=True)
+        eph_path = eph_dir / f"{session_id}.yaml"
+        eph_path.write_text(yaml.dump(gs_source, default_flow_style=False))
+        log.info(f"Wrote ephemeral ground stations: {eph_path}")
+        gs_source = str(eph_path)
+
+    gs_file = load_ground_stations(gs_source)
     satellites = expand_constellation(constellation)
     if not satellites:
         return {"phase": "Error", "message": "No satellites in constellation"}
@@ -468,6 +502,18 @@ def teardown_session(namespace: str) -> None:
         with suppress(kubernetes.client.rest.ApiException):
             v1.delete_namespaced_config_map(cm.metadata.name, namespace)
     log.info(f"Cleaned up {len(cms.items)} FRR config ConfigMaps")
+
+    # Clean up ephemeral constellation and ground station files
+    import glob
+
+    for pattern in [
+        "configs/constellations/_ephemeral/*",
+        "configs/ground-stations/_ephemeral/*",
+    ]:
+        for f in glob.glob(pattern):
+            with suppress(OSError):
+                Path(f).unlink(missing_ok=True)
+    log.info("Cleaned up ephemeral config files")
 
 
 def check_pods_ready(namespace: str) -> tuple[int, int]:

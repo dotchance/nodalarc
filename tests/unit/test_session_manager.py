@@ -29,7 +29,7 @@ session:
 constellation: configs/constellations/custom-example.yaml
 ground_stations: configs/ground-stations/default.yaml
 routing:
-  stack: configs/routing-stacks/isis
+  protocol: isis
   area_assignment:
     strategy: flat
 """)
@@ -295,7 +295,7 @@ session:
 constellation: configs/constellations/custom-example.yaml
 ground_stations: configs/ground-stations/default.yaml
 routing:
-  stack: configs/routing-stacks/isis
+  protocol: isis
   area_assignment:
     strategy: flat
 """)

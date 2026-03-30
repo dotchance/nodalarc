@@ -3,6 +3,7 @@ session:
 constellation: configs/constellations/starlink-early-44.yaml
 ground_stations: configs/ground-stations/sets/global.yaml
 routing:
-  stack: configs/routing-stacks/frr-isis-sr
+  protocol: isis
+  extensions: [sr]
   area_assignment:
     strategy: stripe

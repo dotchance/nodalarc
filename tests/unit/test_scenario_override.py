@@ -174,6 +174,7 @@ class TestDispatcherOverrideIntegration:
             bandwidth_map={pair: 1000.0},
             override_set=override_set,
             override_lock=lock,
+            run_once=True,
         )
         dispatcher.run()
 
@@ -205,6 +206,7 @@ class TestDispatcherOverrideIntegration:
             bandwidth_map={overridden_pair: 1000.0, free_pair: 1000.0},
             override_set=override_set,
             override_lock=lock,
+            run_once=True,
         )
         dispatcher.run()
 
@@ -231,13 +233,10 @@ class TestDispatcherOverrideIntegration:
             bandwidth_map={pair: 1000.0},
             override_set=override_set,
             override_lock=lock,
+            run_once=True,
         )
 
-        # Remove override before second event processes
-        # Since DE dispatcher is synchronous, we remove after first batch
-        # by clearing before run (the first event will still be blocked,
-        # then we clear before second batch — but DE processes all at once)
-        # Instead: clear immediately so second event is processed
+        # Clear override before run so second event is not blocked
         with lock:
             override_set.clear()
 
@@ -269,6 +268,7 @@ class TestDispatcherOverrideIntegration:
             bandwidth_map={p: 1000.0 for p in pairs},
             override_set=override_set,
             override_lock=lock,
+            run_once=True,
         )
 
         # Clear all overrides before running

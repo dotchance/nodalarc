@@ -120,3 +120,9 @@ node_modules/
 nodalpath/proto/forwarding_pb2.py
 nodalpath/proto/forwarding_pb2_grpc.py
 tests/integration/e2e-evidence/
+
+# Ephemeral session configs (wizard-generated, cleaned on teardown)
+configs/constellations/_ephemeral/*
+configs/ground-stations/_ephemeral/*
+!configs/constellations/_ephemeral/.gitkeep
+!configs/ground-stations/_ephemeral/.gitkeep

@@ -31,7 +31,8 @@ def _make_session() -> SessionConfig:
         ground_stations="configs/ground-stations/sets/us-conus.yaml",
         addressing=AddressingConfig(),
         routing=RoutingConfig(
-            stack="configs/routing-stacks/frr-isis-sr",
+            protocol="isis",
+            extensions=["sr"],
             area_assignment=AreaAssignmentConfig(strategy="flat"),
         ),
         time=TimeConfig(),

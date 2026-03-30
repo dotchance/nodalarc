@@ -72,7 +72,8 @@ def _create_custom_session() -> str:
         "constellation": "configs/constellations/custom-example.yaml",
         "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
         "routing": {
-            "stack": "configs/routing-stacks/frr-isis-sr",
+            "protocol": "isis",
+            "extensions": ["sr"],
             "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
         },
         "time": {"step_seconds": 10},

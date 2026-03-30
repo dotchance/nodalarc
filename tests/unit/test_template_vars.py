@@ -45,7 +45,8 @@ def flat_session():
         constellation="configs/constellations/custom-example.yaml",
         ground_stations="configs/ground-stations/sets/global.yaml",
         routing=RoutingConfig(
-            stack="configs/routing-stacks/frr-isis-sr",
+            protocol="isis",
+            extensions=["sr"],
             area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
         ),
         time=TimeConfig(compression=1),
@@ -60,7 +61,8 @@ def stripe_session():
         constellation="configs/constellations/starlink-early-44.yaml",
         ground_stations="configs/ground-stations/sets/global.yaml",
         routing=RoutingConfig(
-            stack="configs/routing-stacks/frr-isis-sr",
+            protocol="isis",
+            extensions=["sr"],
             area_assignment=AreaAssignmentConfig(
                 strategy="stripe",
                 planes_per_stripe=2,

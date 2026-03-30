@@ -83,6 +83,7 @@ class RealtimeDispatcher:
         latency_update_interval_s: int = 10,
         compression_factor: int = 1,
         timeline_path: Path | None = None,
+        run_once: bool = False,
     ) -> None:
         self._timeline_path = timeline_path
         self._interface_map = interface_map
@@ -93,6 +94,7 @@ class RealtimeDispatcher:
         self._routing_protocol = routing_protocol
         self._latency_update_interval_s = latency_update_interval_s
         self._compression_factor = max(1, compression_factor)
+        self._run_once = run_once
 
         self._position_table = PositionTable()
         self._active_links: dict[tuple[str, str], ActiveLinkInfo] = {}
@@ -140,8 +142,11 @@ class RealtimeDispatcher:
                     time.sleep(0.1)
                     continue
 
-                batch = reader.next_batch(timeout_s=10.0)
+                batch = reader.next_batch(timeout_s=1.0 if self._run_once else 10.0)
                 if batch is None:
+                    if self._run_once:
+                        log.debug("run_once: timeline exhausted, returning")
+                        return
                     log.debug("Waiting for OME window...")
                     continue
 

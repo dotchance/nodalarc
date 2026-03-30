@@ -3,10 +3,8 @@
 import re
 
 import pytest
-import yaml
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import (
     AreaAssignmentConfig,
     RoutingConfig,
@@ -14,12 +12,13 @@ from nodalarc.models.session import (
     SessionMeta,
     TimeConfig,
 )
+from nodalarc.stack_resolver import resolve_stack
 from nodalarc.template_vars import build_template_vars
 
 from ome.constellation_loader import load_constellation
 from tests.conftest import CONFIGS_DIR
 
-STACKS_DIR = CONFIGS_DIR / "routing-stacks"
+TEMPLATES_DIR = CONFIGS_DIR / "templates" / "frr"
 
 
 @pytest.fixture
@@ -51,7 +50,8 @@ def flat_session():
         constellation="configs/constellations/custom-example.yaml",
         ground_stations="configs/ground-stations/sets/global.yaml",
         routing=RoutingConfig(
-            stack="configs/routing-stacks/frr-isis-sr",
+            protocol="isis",
+            extensions=["sr"],
             area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
         ),
         time=TimeConfig(compression=1),
@@ -65,7 +65,8 @@ def stripe_session():
         constellation="configs/constellations/starlink-early-44.yaml",
         ground_stations="configs/ground-stations/sets/global.yaml",
         routing=RoutingConfig(
-            stack="configs/routing-stacks/frr-isis-sr",
+            protocol="isis",
+            extensions=["sr"],
             area_assignment=AreaAssignmentConfig(
                 strategy="stripe",
                 planes_per_stripe=2,
@@ -83,10 +84,10 @@ def isis_stack():
     return resolve_stack("isis", ["sr"])
 
 
-def _render_template(stack_dir: str, template_name: str, vars: dict) -> str:
-    """Render a Jinja2 template from a stack directory."""
+def _render_template(_stack_dir: str, template_name: str, vars: dict) -> str:
+    """Render a Jinja2 template from the unified templates directory."""
     env = Environment(
-        loader=FileSystemLoader(str(STACKS_DIR / stack_dir)),
+        loader=FileSystemLoader(str(TEMPLATES_DIR)),
         keep_trailing_newline=True,
     )
     tpl = env.get_template(template_name)
@@ -679,8 +680,7 @@ class TestIsisGroundStation:
 
 @pytest.fixture
 def ospf_stack():
-    raw = yaml.safe_load((STACKS_DIR / "frr-ospf-te/stack.yaml").read_text())
-    return RoutingStackConfig.model_validate(raw["stack"])
+    return resolve_stack("ospf", ["te"])
 
 
 def _get_ospf_vars(session, constellation, gs_file, addressing, ospf_stack, **kwargs):
@@ -936,237 +936,6 @@ class TestOspfAbrSatellite:
         assert "ip ospf dead-interval" in rendered
 
 
-# ===================================================================
-# Static SR Template Tests
-# ===================================================================
-
-
-@pytest.fixture
-def static_stack():
-    raw = yaml.safe_load((STACKS_DIR / "frr-static-sr/stack.yaml").read_text())
-    return RoutingStackConfig.model_validate(raw["stack"])
-
-
-def _get_static_vars(session, constellation, gs_file, addressing, static_stack, **kwargs):
-    overrides = dict(static_stack.template_variables)
-    if "config_overrides" in kwargs:
-        overrides.update(kwargs.pop("config_overrides"))
-    return build_template_vars(
-        session=session,
-        constellation=constellation,
-        ground_stations=gs_file,
-        addressing=addressing,
-        config_overrides=overrides,
-        **kwargs,
-    )
-
-
-class TestStaticSrSatellite:
-    """Static SR config for an intra-area satellite node."""
-
-    def test_no_igp_configuration(
-        self, flat_session, four_node_config, gs_file, addressing, static_stack
-    ):
-        """Static SR zebra has no IGP stanzas."""
-        vars = _get_static_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-static-sr", "zebra.conf.j2", vars)
-        assert "router isis" not in rendered
-        assert "router ospf" not in rendered
-        assert "hostname" in rendered
-        assert "ip forwarding" in rendered
-
-    def test_static_routes_to_isl_neighbors(
-        self, flat_session, four_node_config, gs_file, addressing, static_stack
-    ):
-        """staticd has static routes to each ISL neighbor's loopback."""
-        vars = _get_static_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-static-sr", "staticd.conf.j2", vars)
-        # Plane 0, slot 0 has ISL neighbors; verify static routes
-        for iface_name, info in vars["interface_info"].items():
-            expected_route = f"ip route {info['peer_loopback_ipv4']}/32 {iface_name}"
-            assert expected_route in rendered, f"Missing static route: {expected_route}"
-
-    def test_static_route_count_matches_isl_count(
-        self, flat_session, four_node_config, gs_file, addressing, static_stack
-    ):
-        vars = _get_static_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-static-sr", "staticd.conf.j2", vars)
-        route_count = rendered.count("ip route ")
-        assert route_count == len(vars["interface_info"])
-
-    def test_peer_loopback_ipv4_in_interface_info(
-        self, flat_session, four_node_config, gs_file, addressing, static_stack
-    ):
-        """interface_info entries include peer_loopback_ipv4."""
-        vars = _get_static_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        for iface_name, info in vars["interface_info"].items():
-            assert "peer_loopback_ipv4" in info, f"{iface_name} missing peer_loopback_ipv4"
-
-    def test_isl_interfaces_unnumbered(
-        self, flat_session, four_node_config, gs_file, addressing, static_stack
-    ):
-        """ISL interfaces borrow the loopback IP (no unique per-interface IPs)."""
-        vars = _get_static_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="satellite",
-            plane=0,
-            slot=0,
-        )
-        rendered = _render_template("frr-static-sr", "zebra.conf.j2", vars)
-        loopback = vars["ipv4_loopback"]
-        # Every ISL interface should use the loopback IP
-        for iface in vars["isl_interfaces"]:
-            # Find the interface block and check its IP
-            block_start = rendered.find(f"interface {iface}")
-            assert block_start != -1
-            block_end = rendered.find("exit", block_start)
-            block = rendered[block_start:block_end]
-            assert f"ip address {loopback}/32" in block
-
-
-class TestStaticSrAbrSatellite:
-    """Static SR config for a cross-area ABR satellite."""
-
-    def test_abr_static_routes_present(
-        self, stripe_session, starlink_config, gs_file, addressing, static_stack
-    ):
-        vars = _get_static_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="satellite",
-            plane=1,
-            slot=5,
-        )
-        rendered = _render_template("frr-static-sr", "staticd.conf.j2", vars)
-        assert "ip route " in rendered
-
-    def test_abr_has_cross_area_peers(
-        self, stripe_session, starlink_config, gs_file, addressing, static_stack
-    ):
-        """ABR satellite routes include peers in different areas."""
-        vars = _get_static_vars(
-            stripe_session,
-            starlink_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="satellite",
-            plane=1,
-            slot=5,
-        )
-        has_cross = any(info["cross_area"] for info in vars["interface_info"].values())
-        assert has_cross
-
-
-class TestStaticSrGroundStation:
-    """Static SR config for a ground station node."""
-
-    def test_gs_no_static_routes(
-        self, flat_session, four_node_config, gs_file, addressing, static_stack
-    ):
-        """GS has no ISL interfaces, so no static routes in staticd."""
-        vars = _get_static_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-static-sr", "staticd.conf.j2", vars)
-        assert "ip route " not in rendered
-
-    def test_gs_zebra_has_terrestrial(
-        self, flat_session, four_node_config, gs_file, addressing, static_stack
-    ):
-        vars = _get_static_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-static-sr", "zebra.conf.j2", vars)
-        assert "interface terr0" in rendered
-        assert "172.16.1.1/24" in rendered
-
-    def test_gs_zebra_no_igp(
-        self, flat_session, four_node_config, gs_file, addressing, static_stack
-    ):
-        vars = _get_static_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-static-sr", "zebra.conf.j2", vars)
-        assert "router isis" not in rendered
-        assert "router ospf" not in rendered
-
-    def test_gs_forwarding_enabled(
-        self, flat_session, four_node_config, gs_file, addressing, static_stack
-    ):
-        vars = _get_static_vars(
-            flat_session,
-            four_node_config,
-            gs_file,
-            addressing,
-            static_stack,
-            node_type="ground_station",
-            gs_name="hawthorne",
-            gs_index=0,
-        )
-        rendered = _render_template("frr-static-sr", "zebra.conf.j2", vars)
-        assert "ip forwarding" in rendered
+# Static SR tests removed — frr-static-sr was a legacy stack with no
+# stack resolver path. The static-sr routing stack is not exposed in
+# the wizard and has no production deployment path.

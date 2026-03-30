@@ -190,14 +190,18 @@ class SatelliteNode:
         self.ground_terminal_count = ground_terminal_count
 
 
-def load_constellation(path: str | Path) -> ConstellationConfig:
-    """Load and validate constellation YAML.
+def load_constellation(source: str | Path | dict) -> ConstellationConfig:
+    """Load and validate a constellation definition.
 
+    Accepts either a file path (str/Path) or an inline dict.
     If the constellation references a satellite_type, resolves it and
     populates default_terminals so downstream code works unchanged.
     """
-    data = yaml.safe_load(Path(path).read_text())
-    config = adapter.validate_python(data)
+    if isinstance(source, dict):
+        config = adapter.validate_python(source)
+    else:
+        data = yaml.safe_load(Path(source).read_text())
+        config = adapter.validate_python(data)
     resolve_constellation_terminals(config)
     return config
 
@@ -291,17 +295,22 @@ def load_ground_stations_from_list(
     return _build_gs_file_from_stations(stations, default_terrestrial_prefixes)
 
 
-def load_ground_stations(path: str | Path | list[str]) -> GroundStationFile:
+def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStationFile:
     """Load and validate ground stations.
 
     Accepts:
     - str/Path: YAML file path (set, individual, or legacy format)
     - list[str]: list of individual station names to load directly
+    - dict: inline GroundStationFile definition (for self-contained session YAML)
     """
-    if isinstance(path, list):
-        return load_ground_stations_from_list(path)
+    if isinstance(source, list):
+        return load_ground_stations_from_list(source)
 
-    data = yaml.safe_load(Path(path).read_text())
+    if isinstance(source, dict):
+        # Inline definition — validate directly as GroundStationFile
+        return GroundStationFile.model_validate(source)
+
+    data = yaml.safe_load(Path(source).read_text())
 
     if isinstance(data, dict):
         if "ground_station" in data:

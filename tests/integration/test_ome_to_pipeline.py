@@ -34,7 +34,8 @@ def four_node_session_path():
         "constellation": "configs/constellations/custom-example.yaml",
         "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
         "routing": {
-            "stack": "configs/routing-stacks/frr-isis-sr",
+            "protocol": "isis",
+            "extensions": ["sr"],
             "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
         },
         "time": {"step_seconds": 10},
@@ -69,7 +70,8 @@ def polar_seam_session_path():
         "constellation": "configs/constellations/iridium-66.yaml",
         "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
         "routing": {
-            "stack": "configs/routing-stacks/frr-isis-sr",
+            "protocol": "isis",
+            "extensions": ["sr"],
             "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
         },
         "time": {"step_seconds": 10},

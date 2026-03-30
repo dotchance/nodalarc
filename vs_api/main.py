@@ -1892,6 +1892,8 @@ def generate_session(body: dict) -> dict:
     area_strategy = body.get("area_strategy", "flat")
     ground_stations = body.get("ground_stations")
     satellite_type = body.get("satellite_type")
+    custom_constellation = body.get("custom_constellation")
+    custom_ground_stations = body.get("custom_ground_stations")
     if not constellation or not protocol:
         return JSONResponse(
             status_code=400, content={"error": "constellation and protocol are required"}
@@ -1904,10 +1906,38 @@ def generate_session(body: dict) -> dict:
             area_strategy=area_strategy,
             ground_stations=ground_stations,
             satellite_type=satellite_type,
+            custom_constellation=custom_constellation,
+            custom_ground_stations=custom_ground_stations,
         )
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
     return {"yaml": yaml_str, "warnings": warnings}
+
+
+@app.post("/api/v1/session/preview-coverage", dependencies=[Depends(_require_api_key)])
+async def preview_coverage(body: dict) -> dict:
+    """Run OME coverage preview for the given combination.
+
+    Accepts constellation (name or inline dict), satellite_type (name),
+    and ground_stations (set name, station list, or inline dict).
+    Computes visibility at 10-second steps for one orbital period.
+    Returns ISL/GS coverage statistics and warnings.
+    """
+    from nodalarc.coverage_preview import compute_coverage_preview
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            compute_coverage_preview,
+            body.get("constellation"),
+            body.get("satellite_type"),
+            body.get("ground_stations"),
+        )
+    except Exception as exc:
+        log.warning("Coverage preview failed: %s", exc)
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    return result.model_dump()
 
 
 @app.post("/api/v1/session/deploy", dependencies=[Depends(_require_api_key)])
@@ -1932,6 +1962,58 @@ async def deploy_generated_session(body: dict) -> dict:
     session_file.write_text(yaml_str)
 
     # Rescan and deploy
+    if _session_manager is None:
+        return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
+    if _session_manager.status == "switching":
+        return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
+    _session_manager.rescan()
+    asyncio.create_task(_run_switch(str(session_file)))
+    return {"status": "switching", "session_file": str(session_file)}
+
+
+@app.post("/api/v1/session/deploy-from-yaml", dependencies=[Depends(_require_api_key)])
+async def deploy_from_yaml(body: dict) -> dict:
+    """Deploy a self-contained session YAML (e.g., downloaded from a previous session).
+
+    Extracts inline constellation/ground-station definitions, writes
+    ephemeral files, and deploys identically to the wizard path.
+    """
+    from pathlib import Path
+
+    import yaml as _yaml
+
+    yaml_str = body.get("yaml", "")
+    if not yaml_str:
+        return JSONResponse(status_code=400, content={"error": "yaml field required"})
+    try:
+        raw = _yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"error": f"Invalid session YAML: {exc}"})
+
+    # Extract inline definitions → write ephemeral files → rewrite as paths
+    session_name = session.session.name
+    modified = dict(raw)
+
+    if isinstance(session.constellation, dict):
+        eph_dir = Path("configs/constellations/_ephemeral")
+        eph_dir.mkdir(parents=True, exist_ok=True)
+        eph_path = eph_dir / f"{session_name}.yaml"
+        eph_path.write_text(_yaml.dump(session.constellation, default_flow_style=False))
+        modified["constellation"] = str(eph_path)
+
+    if isinstance(session.ground_stations, dict):
+        eph_dir = Path("configs/ground-stations/_ephemeral")
+        eph_dir.mkdir(parents=True, exist_ok=True)
+        eph_path = eph_dir / f"{session_name}.yaml"
+        eph_path.write_text(_yaml.dump(session.ground_stations, default_flow_style=False))
+        modified["ground_stations"] = str(eph_path)
+
+    # Write modified session YAML (inline defs replaced with ephemeral file paths)
+    sessions_dir = Path("configs/sessions")
+    session_file = sessions_dir / f"_wizard-{session_name}.yaml"
+    session_file.write_text(_yaml.dump(modified, default_flow_style=False))
+
     if _session_manager is None:
         return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
     if _session_manager.status == "switching":

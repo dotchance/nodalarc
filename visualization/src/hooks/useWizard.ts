@@ -10,7 +10,7 @@ import type {
   GroundStationSet,
   AvailableStation,
   WizardStep,
-  WizardState,
+  LegacyWizardState,
 } from "../catalog/wizardTypes";
 
 export function useWizard() {
@@ -19,7 +19,7 @@ export function useWizard() {
   const [satelliteTypes, setSatelliteTypes] = useState<SatelliteTypePreset[]>([]);
   const [groundStationSets, setGroundStationSets] = useState<GroundStationSet[]>([]);
   const [availableStations, setAvailableStations] = useState<AvailableStation[]>([]);
-  const [state, setState] = useState<WizardState>({
+  const [state, setState] = useState<LegacyWizardState>({
     step: "satellite-type",
     satelliteType: null,
     groundStationSet: null,

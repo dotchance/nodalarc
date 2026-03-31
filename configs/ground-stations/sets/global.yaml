@@ -1,6 +1,6 @@
 ground_station_set:
   name: global
-  description: "General-purpose global coverage"
+  description: "7 stations across 6 continents including McMurdo (Antarctica). Requires high-inclination constellation for polar station visibility."
   stations:
     - hawthorne
     - ashburn

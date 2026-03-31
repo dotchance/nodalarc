@@ -73,8 +73,10 @@ def deploy_session(
 
     session_id = f"{name}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
-    # --- Step 1: Parse spec into SessionConfig ---
-    session_yaml = _spec_to_session_yaml(spec)
+    # --- Step 1: Parse session YAML from the CRD spec ---
+    session_yaml = spec.get("sessionYaml")
+    if not session_yaml:
+        return {"phase": "Error", "message": "spec.sessionYaml is required"}
     session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
 
     # --- Step 2: Load constellation and ground stations ---
@@ -201,7 +203,15 @@ def deploy_session(
     log.info(f"Created {len(rendered_configs)} FRR config ConfigMaps")
 
     # --- Step 7: Create session-level ConfigMaps ---
-    _create_session_configmaps(v1, session, session_yaml, namespace, owner_ref)
+    _create_session_configmaps(
+        v1,
+        session,
+        session_yaml,
+        constellation_source if isinstance(constellation_source, str) else None,
+        gs_source if isinstance(gs_source, str) else None,
+        namespace,
+        owner_ref,
+    )
 
     # --- Step 8: Create session pods ---
     sidecar_config = _build_sidecar_config(resolved)
@@ -271,8 +281,8 @@ def write_wiring_manifest(
         if e.status != 404:
             raise
 
-    # Re-parse spec to get constellation/addressing/neighbors
-    session_yaml = _spec_to_session_yaml(spec)
+    # Parse session from CRD spec
+    session_yaml = spec.get("sessionYaml", "")
     session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
     constellation = load_constellation(session.constellation)
     gs_file = load_ground_stations(session.ground_stations)
@@ -553,62 +563,8 @@ def write_pod_ips_configmap(namespace: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _build_area_assignment(routing: dict) -> dict:
-    """Build area_assignment config from routing spec.
-
-    OSPF uses dotted IP area format (0.0.0.0 for backbone).
-    IS-IS uses NET area format (49.0001).
-    """
-    strategy = routing.get("areaStrategy", "flat")
-    protocol = routing.get("protocol", "isis")
-
-    gs_area_id = "0.0.0.0" if protocol == "ospf" else "49.0001"
-
-    result: dict[str, Any] = {
-        "strategy": strategy,
-        "gs_area_id": gs_area_id,
-    }
-    if strategy == "stripe":
-        result["planes_per_stripe"] = routing.get("planesPerStripe", 1)
-    return result
-
-
-def _spec_to_session_yaml(spec: dict) -> str:
-    """Convert ConstellationSpec CR spec to a SessionConfig-compatible YAML string."""
-    routing = spec.get("routing", {})
-    time_cfg = spec.get("time", {})
-
-    protocol = routing.get("protocol", "isis")
-    extensions = routing.get("extensions", [])
-    ext_str = "-".join(extensions) if extensions else "plain"
-    session_name = f"{spec['constellation']}-{protocol}-{ext_str}"
-
-    session_dict: dict[str, Any] = {
-        "session": {"name": session_name},
-        "constellation": f"configs/constellations/{spec['constellation']}.yaml",
-        "ground_stations": f"configs/ground-stations/sets/{spec['groundStations']}.yaml",
-        "routing": {
-            "protocol": routing.get("protocol", "isis"),
-            "extensions": routing.get("extensions", []),
-            "config_overrides": routing.get("configOverrides", {}),
-            "area_assignment": _build_area_assignment(routing),
-        },
-        "time": {
-            "compression": time_cfg.get("compression", 1),
-            "step_seconds": time_cfg.get("stepSeconds", 1),
-        },
-        "addressing": {},
-    }
-    if routing.get("stack"):
-        session_dict["routing"]["stack"] = routing["stack"]
-    if time_cfg.get("startTime"):
-        session_dict["time"]["start_time"] = time_cfg["startTime"]
-    if spec.get("satelliteType"):
-        session_dict["satellite_type"] = spec["satelliteType"]
-    if spec.get("mi", {}).get("enabled"):
-        session_dict["mi"] = {"enabled": True}
-
-    return yaml.dump(session_dict, default_flow_style=False)
+# _spec_to_session_yaml and _build_area_assignment removed.
+# The CRD carries spec.sessionFile — the Operator reads it directly.
 
 
 def _create_or_update_configmap(
@@ -645,6 +601,8 @@ def _create_session_configmaps(
     v1: kubernetes.client.CoreV1Api,
     session: SessionConfig,
     session_yaml: str,
+    constellation_path: str | None,
+    gs_path: str | None,
     namespace: str,
     owner_ref: dict,
 ) -> None:
@@ -662,26 +620,27 @@ def _create_session_configmaps(
         owner_ref,
     )
 
-    # Constellation YAML
-    constellation_path = Path(session.constellation)
-    if constellation_path.exists():
-        _create_or_update_configmap(
-            v1,
-            "nodalarc-constellation",
-            namespace,
-            {"constellation.yaml": constellation_path.read_text()},
-            owner_ref,
-        )
+    # Constellation YAML ConfigMap
+    if constellation_path:
+        const_p = Path(constellation_path)
+        if const_p.exists():
+            _create_or_update_configmap(
+                v1,
+                "nodalarc-constellation",
+                namespace,
+                {"constellation.yaml": const_p.read_text()},
+                owner_ref,
+            )
 
-    # Ground stations
-    if isinstance(session.ground_stations, str):
-        gs_path = Path(session.ground_stations)
-        if gs_path.exists():
+    # Ground stations ConfigMap
+    if gs_path:
+        gs_p = Path(gs_path)
+        if gs_p.exists():
             _create_or_update_configmap(
                 v1,
                 "nodalarc-ground-stations",
                 namespace,
-                {"ground-stations.yaml": gs_path.read_text()},
+                {"ground-stations.yaml": gs_p.read_text()},
                 owner_ref,
             )
 

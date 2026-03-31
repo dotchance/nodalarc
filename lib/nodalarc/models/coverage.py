@@ -52,6 +52,22 @@ class GsPreview(BaseModel):
     max_gap_s: float
 
 
+class CoverageInsight(BaseModel):
+    """A single insight about the constellation configuration.
+
+    Severity levels:
+    - "info": expected physics behavior, normal operation (e.g., Earth occlusion, range limits)
+    - "note": topology characteristic worth knowing (e.g., full mesh, terminal allocation)
+    - "warning": potential issue that may affect routing (e.g., tracking rate dropouts, coverage gaps)
+    - "error": configuration problem that will prevent connectivity (e.g., no cross-plane links, station beyond visibility)
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    severity: str  # "info", "note", "warning", "error"
+    message: str
+
+
 class CoveragePreviewResult(BaseModel):
     """Complete coverage preview result."""
 
@@ -61,4 +77,4 @@ class CoveragePreviewResult(BaseModel):
     preview_step_s: int
     isl: IslPreview
     ground_stations: GsPreview
-    warnings: list[str]
+    warnings: list[CoverageInsight]

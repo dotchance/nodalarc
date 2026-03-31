@@ -23,96 +23,119 @@ BASE_URL = f"http://{VS_API_HOST}"
 KUBECTL = "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 
 MATRIX = [
+    # --- Library presets (constellation file path + GS set file path) ---
     {
         "id": 1,
         "constellation": "starlink-early-44",
         "protocol": "isis",
         "extensions": ["sr"],
-        "gs": "global",
+        "gs": "configs/ground-stations/sets/global.yaml",
     },
     {
         "id": 2,
         "constellation": "starlink-early-44",
         "protocol": "ospf",
         "extensions": [],
-        "gs": "global",
+        "gs": "configs/ground-stations/sets/global.yaml",
     },
     {
         "id": 3,
         "constellation": "iridium-small-36",
         "protocol": "isis",
         "extensions": ["sr"],
-        "gs": "polar-emphasis",
+        "gs": "configs/ground-stations/sets/polar-emphasis.yaml",
     },
     {
         "id": 4,
         "constellation": "iridium-small-36",
         "protocol": "ospf",
         "extensions": ["te"],
-        "gs": "global",
+        "gs": "configs/ground-stations/sets/global.yaml",
     },
     {
         "id": 5,
         "constellation": "kuiper-50",
         "protocol": "isis",
         "extensions": ["sr"],
-        "gs": "transatlantic",
+        "gs": "configs/ground-stations/sets/transatlantic.yaml",
     },
     {
         "id": 6,
         "constellation": "kuiper-50",
         "protocol": "ospf",
         "extensions": ["te", "mpls"],
-        "gs": "global",
+        "gs": "configs/ground-stations/sets/global.yaml",
     },
     {
         "id": 7,
         "constellation": "oneweb-60",
         "protocol": "isis",
         "extensions": ["sr"],
-        "gs": "us-conus",
+        "gs": "configs/ground-stations/sets/us-conus.yaml",
     },
     {
         "id": 8,
         "constellation": "oneweb-60",
         "protocol": "ospf",
         "extensions": [],
-        "gs": "transpacific",
+        "gs": "configs/ground-stations/sets/transpacific.yaml",
     },
     {
         "id": 9,
         "constellation": "starlink-early-44",
         "protocol": "isis",
         "extensions": ["sr"],
-        "gs": "global",
+        "gs": "configs/ground-stations/sets/global.yaml",
         "area": "stripe",
     },
+    # --- Satellite type override (orthogonal selection) ---
     {
         "id": 10,
         "constellation": "starlink-early-44",
-        "protocol": "nodalpath",
-        "extensions": [],
-        "gs": "global",
-        "xfail": "NodalPath in-band terrestrial interface not yet implemented. "
-        "Sidecar binds LOOPBACK_IPV4 only — unreachable via K8s CNI by design. "
-        "See PRD Section 13.5.3.",
+        "protocol": "isis",
+        "extensions": ["te"],
+        "gs": "configs/ground-stations/sets/transatlantic.yaml",
+        "satellite_type": "iridium-next",
     },
+    # --- Custom inline constellation (wizard advanced mode) ---
     {
         "id": 11,
-        "constellation": "iridium-small-36",
-        "protocol": "nodalpath",
-        "extensions": [],
-        "gs": "polar-emphasis",
-        "xfail": "NodalPath in-band terrestrial interface not yet implemented. "
-        "Sidecar binds LOOPBACK_IPV4 only — unreachable via K8s CNI by design. "
-        "See PRD Section 13.5.3.",
+        "constellation": "starlink-early-44",  # preset for defaults
+        "protocol": "isis",
+        "extensions": ["te"],
+        "gs": ["london", "ashburn", "frankfurt"],
+        "custom_constellation": {
+            "mode": "parametric",
+            "name": "custom-sda-t1",
+            "satellite_type": "starlink-v2",
+            "orbit": {"altitude_km": 1000, "inclination_deg": 80, "pattern": "walker-star"},
+            "planes": {
+                "count": 6,
+                "sats_per_plane": 10,
+                "raan_spacing_deg": 60,
+                "phase_offset_deg": 6,
+            },
+            "polar_seam": {"enabled": True, "latitude_threshold_deg": 70},
+        },
     },
+    # --- Large library constellation ---
     {
         "id": 12,
         "constellation": "iridium-66",
         "protocol": "isis",
         "extensions": ["sr"],
-        "gs": "global",
+        "gs": "configs/ground-stations/sets/global.yaml",
+    },
+    # --- NodalPath (xfail — in-band terrestrial interface not implemented) ---
+    {
+        "id": 13,
+        "constellation": "starlink-early-44",
+        "protocol": "nodalpath",
+        "extensions": [],
+        "gs": "configs/ground-stations/sets/global.yaml",
+        "xfail": "NodalPath in-band terrestrial interface not yet implemented. "
+        "Sidecar binds LOOPBACK_IPV4 only — unreachable via K8s CNI by design. "
+        "See PRD Section 13.5.3.",
     },
 ]
 
@@ -141,6 +164,10 @@ def generate_session(token: str, perm: dict) -> str:
     }
     if perm.get("area"):
         body["area_strategy"] = perm["area"]
+    if perm.get("satellite_type"):
+        body["satellite_type"] = perm["satellite_type"]
+    if perm.get("custom_constellation"):
+        body["custom_constellation"] = perm["custom_constellation"]
     resp = requests.post(f"{BASE_URL}/api/v1/session/generate", headers=headers(token), json=body)
     if resp.status_code != 200:
         raise RuntimeError(f"Generate failed: {resp.status_code} {resp.text}")

@@ -1,8 +1,7 @@
 /** Coverage preview results display.
  *
- * Shows ISL feasibility with failure breakdown, per-GS coverage
- * with diagnostic reasons, and plain-English warnings.
- * Always allows continuing to deploy.
+ * ISL feasibility shown in green when healthy. Insights colored by
+ * severity: info (neutral), note (blue), warning (amber), error (red).
  */
 
 import type { CoveragePreviewResult } from "./wizardTypes";
@@ -13,88 +12,59 @@ interface CoveragePreviewProps {
   onBack: () => void;
 }
 
-/** Render the ISL failure reason breakdown as a stacked bar description. */
-function IslFailureBreakdown({ reasons }: { reasons: NonNullable<CoveragePreviewResult["isl"]["failure_reasons"]> }) {
-  const total =
-    reasons.range_exceeded +
-    reasons.tracking_exceeded +
-    reasons.los_blocked +
-    reasons.field_of_regard +
-    reasons.polar_seam +
-    reasons.terminal_exhausted;
+/** Color for ISL feasibility percentage. */
+function feasibilityColor(pct: number): string {
+  if (pct >= 95) return "var(--accent-green, #44cc66)";
+  if (pct >= 70) return "var(--accent-teal, #00ccbb)";
+  if (pct >= 40) return "var(--text-primary, #ddd)";
+  return "var(--accent-red, #ff4444)";
+}
 
-  if (total === 0) return null;
+/** Severity → CSS class mapping. */
+function severityClass(severity: string): string {
+  switch (severity) {
+    case "info": return "wizard-insight--info";
+    case "note": return "wizard-insight--note";
+    case "warning": return "wizard-insight--warning";
+    case "error": return "wizard-insight--error";
+    default: return "wizard-insight--note";
+  }
+}
 
-  const items: { label: string; count: number; explanation: string }[] = [];
+/** Severity → label. */
+function severityLabel(severity: string): string {
+  switch (severity) {
+    case "info": return "\u2139\ufe0f";
+    case "note": return "\u2139\ufe0f";
+    case "warning": return "\u26a0\ufe0f";
+    case "error": return "\u274c";
+    default: return "";
+  }
+}
 
-  if (reasons.range_exceeded > 0) {
-    items.push({
-      label: "Range exceeded",
-      count: reasons.range_exceeded,
-      explanation: "Satellite pairs are further apart than the terminal's maximum range",
-    });
+/** Render a single insight (supports both old string format and new typed format). */
+function Insight({ item }: { item: { severity: string; message: string } | string }) {
+  if (typeof item === "string") {
+    return <div className="wizard-insight wizard-insight--note">{item}</div>;
   }
-  if (reasons.tracking_exceeded > 0) {
-    items.push({
-      label: "Tracking rate exceeded",
-      count: reasons.tracking_exceeded,
-      explanation: "Cross-plane angular velocity exceeds the terminal's slew rate limit (typically at high latitudes)",
-    });
-  }
-  if (reasons.los_blocked > 0) {
-    items.push({
-      label: "Earth occlusion",
-      count: reasons.los_blocked,
-      explanation: "Satellites on opposite sides of Earth — line of sight blocked by the planet",
-    });
-  }
-  if (reasons.field_of_regard > 0) {
-    items.push({
-      label: "Field of regard",
-      count: reasons.field_of_regard,
-      explanation: "Peer satellite is outside the terminal's pointing cone",
-    });
-  }
-  if (reasons.polar_seam > 0) {
-    items.push({
-      label: "Polar seam cutoff",
-      count: reasons.polar_seam,
-      explanation: "Hard latitude cutoff disables cross-plane ISLs at polar latitudes",
-    });
-  }
-  if (reasons.terminal_exhausted > 0) {
-    items.push({
-      label: "Terminals exhausted",
-      count: reasons.terminal_exhausted,
-      explanation: "All ISL terminals allocated to higher-priority peers",
-    });
-  }
-
   return (
-    <div className="wizard-preview-failure-breakdown">
-      <h4 className="wizard-preview-breakdown-title">Why ISLs fail to form:</h4>
-      {items.map(({ label, count, explanation }) => {
-        const pct = ((count / total) * 100).toFixed(0);
-        return (
-          <div key={label} className="wizard-preview-failure-row">
-            <div className="wizard-preview-failure-bar-bg">
-              <div
-                className="wizard-preview-failure-bar"
-                style={{ width: `${(count / total) * 100}%` }}
-              />
-            </div>
-            <span className="wizard-preview-failure-pct">{pct}%</span>
-            <span className="wizard-preview-failure-label">{label}</span>
-            <span className="wizard-preview-failure-explain">{explanation}</span>
-          </div>
-        );
-      })}
+    <div className={`wizard-insight ${severityClass(item.severity)}`}>
+      <span className="wizard-insight-icon">{severityLabel(item.severity)}</span>
+      <span>{item.message}</span>
     </div>
   );
 }
 
 export function CoveragePreview({ result, onContinue, onBack }: CoveragePreviewProps) {
   const { isl, ground_stations: gs } = result;
+  const fColor = feasibilityColor(isl.feasibility_pct);
+
+  // Split insights by severity for ordering: errors first, then warnings, then notes/info
+  const errors = result.warnings.filter((w) => typeof w !== "string" && w.severity === "error");
+  const warnings = result.warnings.filter((w) => typeof w !== "string" && w.severity === "warning");
+  const notes = result.warnings.filter(
+    (w) => typeof w === "string" || w.severity === "info" || w.severity === "note",
+  );
 
   return (
     <div className="wizard-panel">
@@ -109,17 +79,22 @@ export function CoveragePreview({ result, onContinue, onBack }: CoveragePreviewP
         <h3 className="wizard-section-title">ISL Links</h3>
         <div className="wizard-preview-stats">
           <div className="wizard-preview-stat">
-            <span className="wizard-preview-stat-value">{isl.formed_at_least_once}</span>
-            <span className="wizard-preview-stat-label">of {isl.total_possible} ISLs form ({isl.feasibility_pct.toFixed(0)}%)</span>
+            <span className="wizard-preview-stat-value" style={{ color: fColor }}>
+              {isl.feasibility_pct.toFixed(0)}%
+            </span>
+            <span className="wizard-preview-stat-label">
+              {isl.formed_at_least_once} of {isl.total_possible} ISLs form
+            </span>
           </div>
           <div className="wizard-preview-stat">
-            <span className="wizard-preview-stat-value">{isl.min_active}&ndash;{isl.max_active}</span>
-            <span className="wizard-preview-stat-label">active simultaneously</span>
+            <span className="wizard-preview-stat-value">{isl.min_active}</span>
+            <span className="wizard-preview-stat-label">min active ISL links</span>
+          </div>
+          <div className="wizard-preview-stat">
+            <span className="wizard-preview-stat-value">{isl.max_active}</span>
+            <span className="wizard-preview-stat-label">max active ISL links</span>
           </div>
         </div>
-
-        {/* ISL failure reason breakdown — the "WHY" */}
-        {isl.failure_reasons && <IslFailureBreakdown reasons={isl.failure_reasons} />}
       </div>
 
       {/* GS section */}
@@ -156,12 +131,12 @@ export function CoveragePreview({ result, onContinue, onBack }: CoveragePreviewP
         </div>
       </div>
 
-      {/* General warnings */}
+      {/* Insights — errors first, then warnings, then notes/info */}
       {result.warnings.length > 0 && (
-        <div className="wizard-preview-warnings">
-          {result.warnings.map((w, i) => (
-            <div key={i} className="wizard-preview-warning">{w}</div>
-          ))}
+        <div className="wizard-preview-insights">
+          {errors.map((w, i) => <Insight key={`e${i}`} item={w} />)}
+          {warnings.map((w, i) => <Insight key={`w${i}`} item={w} />)}
+          {notes.map((w, i) => <Insight key={`n${i}`} item={w} />)}
         </div>
       )}
 

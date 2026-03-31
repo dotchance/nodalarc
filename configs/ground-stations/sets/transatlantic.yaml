@@ -1,6 +1,6 @@
 ground_station_set:
   name: transatlantic
-  description: "For studying cross-Atlantic forwarding paths"
+  description: "3 stations: Ashburn (US East), London, Frankfurt. For studying cross-Atlantic forwarding paths between North America and Europe."
   stations:
     - ashburn
     - london

@@ -88,11 +88,15 @@ class SessionManager:
                         else "plain"
                     )
                     routing_label = f"{session.routing.protocol}-{ext_str}"
+                if isinstance(session.constellation, dict):
+                    const_label = session.constellation.get("name", "custom")
+                else:
+                    const_label = Path(session.constellation).stem
                 results.append(
                     {
                         "name": session.session.name,
                         "file": str(yaml_path),
-                        "constellation": Path(session.constellation).stem,
+                        "constellation": const_label,
                         "routing_stack": routing_label,
                     }
                 )
@@ -380,42 +384,19 @@ class SessionManager:
             self._status_detail = "Clearing in-memory state"
             clear_state_fn()
 
-            # === Parse session YAML and build ConstellationSpec CR ===
+            # === Build ConstellationSpec CR with session YAML content ===
+            # The CRD carries the complete session YAML so both pods can
+            # read it without shared filesystem access.
             self._status_detail = "Building constellation spec"
-            raw = yaml.safe_load(Path(session_path).read_text())
-            session_cfg = SessionConfig.model_validate(raw)
-
-            # Extract constellation name from path
-            constellation_name = Path(session_cfg.constellation).stem
-            gs_name = (
-                Path(session_cfg.ground_stations).stem
-                if isinstance(session_cfg.ground_stations, str)
-                else "global"
-            )
-
-            routing = session_cfg.routing
+            session_yaml_content = Path(session_path).read_text()
             cr_body = {
                 "apiVersion": "nodalarc.io/v1alpha1",
                 "kind": "ConstellationSpec",
                 "metadata": {"name": "current-session", "namespace": ns},
                 "spec": {
-                    "constellation": constellation_name,
-                    "groundStations": gs_name,
-                    "routing": {
-                        "protocol": routing.protocol or "isis",
-                        "extensions": routing.extensions or [],
-                        "areaStrategy": (
-                            routing.area_assignment.strategy if routing.area_assignment else "flat"
-                        ),
-                    },
-                    "time": {
-                        "compression": session_cfg.time.compression,
-                        "stepSeconds": session_cfg.time.step_seconds,
-                    },
+                    "sessionYaml": session_yaml_content,
                 },
             }
-            if routing.stack:
-                cr_body["spec"]["routing"]["stack"] = routing.stack
 
             # === Apply ConstellationSpec CR ===
             self._status_detail = "Deploying constellation"
@@ -426,7 +407,7 @@ class SessionManager:
                 plural="constellationspecs",
                 body=cr_body,
             )
-            log.info(f"Applied ConstellationSpec CR for {constellation_name}")
+            log.info(f"Applied ConstellationSpec CR for {session_path}")
 
             # === Poll CR status until Ready ===
             self._status_detail = "Waiting for constellation to deploy"

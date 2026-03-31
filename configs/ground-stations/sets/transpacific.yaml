@@ -1,6 +1,6 @@
 ground_station_set:
   name: transpacific
-  description: "For studying cross-Pacific forwarding paths"
+  description: "3 stations: Hawthorne (US West), Tokyo, Sydney. For studying cross-Pacific forwarding paths between North America, Asia, and Oceania."
   stations:
     - hawthorne
     - tokyo

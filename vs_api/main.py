@@ -904,10 +904,13 @@ def _load_beam_falloff_exponent(session: SessionConfig) -> float:
     """Load beam_falloff_exponent from the constellation's satellite type."""
     from ome.constellation_loader import load_constellation, load_satellite_type
 
-    constellation_path = Path(session.constellation)
-    if not constellation_path.exists():
-        return 2.0
-    config = load_constellation(constellation_path)
+    if isinstance(session.constellation, dict):
+        config = load_constellation(session.constellation)
+    else:
+        constellation_path = Path(session.constellation)
+        if not constellation_path.exists():
+            return 2.0
+        config = load_constellation(constellation_path)
     sat_type_name = getattr(config, "satellite_type", None)
     if not sat_type_name:
         return 2.0
@@ -934,7 +937,10 @@ def _update_session_globals(session_path: str, new_db_path: str) -> None:
     else:
         ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
         _routing_stack = f"{session.routing.protocol}-{ext_str}"
-    _constellation_name = Path(session.constellation).stem
+    if isinstance(session.constellation, dict):
+        _constellation_name = session.constellation.get("name", "custom")
+    else:
+        _constellation_name = Path(session.constellation).stem
     _db_path = new_db_path
     _gs_elevation_map = _load_gs_elevation_map(session)
     _beam_falloff_exponent = _load_beam_falloff_exponent(session)
@@ -2145,7 +2151,10 @@ def main() -> None:
                     "-".join(session.routing.extensions) if session.routing.extensions else "plain"
                 )
                 _routing_stack = f"{session.routing.protocol}-{ext_str}"
-            _constellation_name = Path(session.constellation).stem
+            if isinstance(session.constellation, dict):
+                _constellation_name = session.constellation.get("name", "custom")
+            else:
+                _constellation_name = Path(session.constellation).stem
             _gs_elevation_map = _load_gs_elevation_map(session)
             _beam_falloff_exponent = _load_beam_falloff_exponent(session)
             # Mark session active

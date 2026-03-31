@@ -1,12 +1,9 @@
-# Coverage-88 — continuous multi-ground-station coverage constellation.
+# Coverage-88 — 8 planes × 11 satellites = 88 total.
 #
-# 8 planes × 11 satellites = 88 total, 550 km altitude, 53° inclination.
-# Walker-delta pattern with 45° RAAN spacing. Designed for guaranteed
-# 2+ ground stations connected simultaneously when paired with the
-# continuous-coverage ground station set (8 stations, 15° min elevation).
-#
-# OME-verified coverage: minimum 4 GS connected at all times across a
-# full orbital period. Mean 6.95 GS connected.
+# 550 km altitude, 53° inclination, Walker-delta pattern with 45° RAAN
+# spacing. When paired with the global-8 ground station set at 15° min
+# elevation, OME preview shows minimum 4 GS connected simultaneously
+# across a full orbital period. Coverage varies with different GS sets.
 
 mode: parametric
 name: coverage-88

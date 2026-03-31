@@ -1,6 +1,6 @@
 ground_station_set:
   name: polar-emphasis
-  description: "Optimized for polar and near-polar constellations"
+  description: "6 stations with high-latitude sites (Svalbard 78°N, McMurdo 78°S, Fairbanks 65°N). Best paired with near-polar constellations (86°+ inclination)."
   stations:
     - svalbard
     - mcmurdo

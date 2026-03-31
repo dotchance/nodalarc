@@ -93,7 +93,7 @@ export interface CoveragePreviewResult {
     simultaneous_mean: number;
     max_gap_s: number;
   };
-  warnings: string[];
+  warnings: Array<{ severity: string; message: string } | string>;
 }
 
 // --- Step model ---

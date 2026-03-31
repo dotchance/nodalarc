@@ -17,64 +17,11 @@ spec:
             spec:
               type: object
               required:
-                - constellation
-                - groundStations
-                - routing
+                - sessionYaml
               properties:
-                constellation:
+                sessionYaml:
                   type: string
-                  description: Constellation preset name or config path.
-                groundStations:
-                  type: string
-                  description: Ground station set name or config path.
-                routing:
-                  type: object
-                  required:
-                    - protocol
-                  properties:
-                    protocol:
-                      type: string
-                      enum:
-                        - isis
-                        - ospf
-                        - nodalpath
-                    extensions:
-                      type: array
-                      items:
-                        type: string
-                      default: []
-                    areaStrategy:
-                      type: string
-                      default: flat
-                    stack:
-                      type: string
-                      description: Legacy stack path — bypass protocol resolution.
-                    configOverrides:
-                      type: object
-                      x-kubernetes-preserve-unknown-fields: true
-                      default: {}
-                time:
-                  type: object
-                  properties:
-                    compression:
-                      type: integer
-                      default: 1
-                    startTime:
-                      type: string
-                    stepSeconds:
-                      type: integer
-                      default: 1
-                  default: {}
-                satelliteType:
-                  type: string
-                  default: ""
-                mi:
-                  type: object
-                  properties:
-                    enabled:
-                      type: boolean
-                      default: false
-                  default: {}
+                  description: Complete session YAML content. The Operator parses this directly.
             status:
               type: object
               properties:

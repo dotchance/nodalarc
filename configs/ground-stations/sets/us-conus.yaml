@@ -1,6 +1,6 @@
 ground_station_set:
   name: us-conus
-  description: "Minimal US-only deployment"
+  description: "2 stations: Hawthorne (US West) and Ashburn (US East). Minimal deployment for testing US-only connectivity."
   stations:
     - hawthorne
     - ashburn

@@ -101,11 +101,11 @@ def generate_session_yaml(
     """
     warnings: list[str] = []
 
-    # Load preset for defaults (name, time, traffic_flows, GS path)
+    # Load preset for defaults — optional when custom_constellation is provided
     presets = load_constellation_presets()
-    if constellation not in presets:
+    preset = presets.get(constellation)
+    if preset is None and custom_constellation is None:
         raise ValueError(f"Unknown constellation preset: {constellation}")
-    preset = presets[constellation]
 
     # Validate routing combo early
     resolve_stack(protocol, extensions)
@@ -116,10 +116,15 @@ def generate_session_yaml(
 
     # --- Resolve constellation definition ---
     if custom_constellation is not None:
-        # Advanced mode: user-provided inline constellation
+        # Custom or real-world geometry preset: inline constellation dict
         constellation_value: str | dict = custom_constellation
-    elif satellite_type:
-        # Quick mode with satellite type override: merge geometry + type
+        if satellite_type and isinstance(custom_constellation, dict):
+            custom_constellation = dict(custom_constellation)
+            custom_constellation["satellite_type"] = satellite_type
+            custom_constellation.pop("default_terminals", None)
+            constellation_value = custom_constellation
+    elif preset is not None and satellite_type:
+        # Library preset with satellite type override
         built_in_type = _read_constellation_satellite_type(preset.constellation)
         if built_in_type and built_in_type != satellite_type:
             constellation_value = merge_constellation_with_satellite_type(
@@ -130,10 +135,11 @@ def generate_session_yaml(
                 f"overriding with '{satellite_type}'"
             )
         else:
-            # Same type or no built-in — use file path directly
             constellation_value = preset.constellation
-    else:
+    elif preset is not None:
         constellation_value = preset.constellation
+    else:
+        raise ValueError("No constellation source: provide a preset name or custom_constellation")
 
     # --- Resolve ground stations ---
     if custom_ground_stations is not None:
@@ -143,8 +149,14 @@ def generate_session_yaml(
             ],
             "stations": custom_ground_stations,
         }
+    elif ground_stations:
+        gs_value = ground_stations
+    elif preset is not None:
+        gs_value = preset.ground_stations
     else:
-        gs_value = ground_stations or preset.ground_stations
+        raise ValueError(
+            "No ground station source: provide ground_stations or a preset with defaults"
+        )
 
     # Build area assignment
     area_assignment: dict[str, Any] | None = None
@@ -175,11 +187,11 @@ def generate_session_yaml(
     if area_assignment:
         session_dict["routing"]["area_assignment"] = area_assignment
 
-    if preset.time:
+    if preset and preset.time:
         session_dict["time"] = preset.time
-    if preset.traffic_flows:
+    if preset and preset.traffic_flows:
         session_dict["traffic_flows"] = preset.traffic_flows
-    if preset.convergence:
+    if preset and preset.convergence:
         session_dict["convergence"] = preset.convergence
 
     # Validate through Pydantic

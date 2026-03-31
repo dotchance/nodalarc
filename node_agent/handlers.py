@@ -477,7 +477,9 @@ def handle_get_topology(
 
     The pid_map is injected by the server (from PID discovery or --pid-map).
     """
-    from pyroute2 import NetNS
+    from pyroute2 import IPRoute
+
+    from node_agent.namespace_ops import _in_namespace
 
     interfaces: list[node_agent_pb2.InterfaceState] = []
     pids = pid_map or {}
@@ -493,9 +495,10 @@ def handle_get_topology(
 
     for node_id, pid in pids.items():
         try:
-            ns = NetNS(f"/proc/{pid}/ns/net")
-            try:
-                for link in ns.get_links():
+
+            def _read_interfaces(ipr: IPRoute, _node_id: str = node_id) -> list:
+                result = []
+                for link in ipr.get_links():
                     ifname = link.get_attr("IFLA_IFNAME")
                     if ifname is None:
                         continue
@@ -503,14 +506,13 @@ def handle_get_topology(
                         continue
 
                     flags = link["flags"]
-                    admin_up = bool(flags & 0x1)  # IFF_UP
-                    oper_up = bool(flags & 0x40)  # IFF_RUNNING
+                    admin_up = bool(flags & 0x1)
+                    oper_up = bool(flags & 0x40)
 
-                    # Read netem delay from tc qdisc (pyroute2, no subprocess)
                     current_latency = 0.0
                     try:
                         idx = link["index"]
-                        qdiscs = ns.get_qdiscs(index=idx)
+                        qdiscs = ipr.get_qdiscs(index=idx)
                         for qd in qdiscs:
                             if qd.get_attr("TCA_KIND") == "netem":
                                 opts = qd.get_attr("TCA_OPTIONS")
@@ -521,17 +523,18 @@ def handle_get_topology(
                     except Exception:
                         pass
 
-                    interfaces.append(
+                    result.append(
                         node_agent_pb2.InterfaceState(
-                            node_id=node_id,
+                            node_id=_node_id,
                             interface_name=ifname,
                             admin_up=admin_up,
                             oper_up=oper_up,
                             current_latency_ms=current_latency,
                         )
                     )
-            finally:
-                ns.close()
+                return result
+
+            interfaces.extend(_in_namespace(pid, _read_interfaces))
         except Exception as exc:
             log.warning("GetTopology: failed to read ns(%d) for %s: %s", pid, node_id, exc)
 

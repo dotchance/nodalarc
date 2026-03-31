@@ -17,7 +17,9 @@ from __future__ import annotations
 import logging
 import subprocess
 
-from pyroute2 import IPRoute, NetNS
+from pyroute2 import IPRoute
+
+from node_agent.namespace_ops import _in_namespace
 
 log = logging.getLogger(__name__)
 
@@ -150,14 +152,13 @@ def attach_to_ground_bridge(
         ipr.close()
 
     # Bring satellite gnd0 UP
-    ns = NetNS(f"/proc/{sat_pid}/ns/net")
-    try:
-        gnd_idx = ns.link_lookup(ifname="gnd0")
+    def _up_gnd0(ipr: IPRoute) -> None:
+        gnd_idx = ipr.link_lookup(ifname="gnd0")
         if not gnd_idx:
             raise FileNotFoundError(f"gnd0 not found in sat ns({sat_pid})")
-        ns.link("set", index=gnd_idx[0], state="up")
-    finally:
-        ns.close()
+        ipr.link("set", index=gnd_idx[0], state="up")
+
+    _in_namespace(sat_pid, _up_gnd0)
 
     # Bidirectional tc mirred redirect between host-side veths
     _tc_mirred_redirect(gs_port, host_veth)
@@ -184,13 +185,12 @@ def detach_from_ground_bridge(
     _tc_mirred_remove(host_veth)
 
     # Bring satellite gnd0 DOWN
-    ns = NetNS(f"/proc/{sat_pid}/ns/net")
-    try:
-        gnd_idx = ns.link_lookup(ifname="gnd0")
+    def _down_gnd0(ipr: IPRoute) -> None:
+        gnd_idx = ipr.link_lookup(ifname="gnd0")
         if gnd_idx:
-            ns.link("set", index=gnd_idx[0], state="down")
-    finally:
-        ns.close()
+            ipr.link("set", index=gnd_idx[0], state="down")
+
+    _in_namespace(sat_pid, _down_gnd0)
 
     # Bring satellite host veth and GS bridge port DOWN.
     # GS bridge port DOWN drops carrier on gnd0 inside the GS pod

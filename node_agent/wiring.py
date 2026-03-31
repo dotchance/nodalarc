@@ -14,7 +14,7 @@ import logging
 
 import kubernetes.client
 import kubernetes.config
-from pyroute2 import NetNS
+from pyroute2 import IPRoute
 
 from node_agent.pid_discovery import discover_local_pod_pids
 from orchestrator.link_manager import (
@@ -189,23 +189,25 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
                 log.warning(f"terr0 creation failed for {node_id}: {exc}")
     log.info("Phase 6: terr0 dummy interfaces created")
 
-    # Phase 7: Remove default route from each pod (pyroute2)
+    # Phase 7: Remove default route from each pod (setns + IPRoute)
+    from node_agent.namespace_ops import _in_namespace
+
     removed = 0
     for node_id in nodes:
         pid = pid_map.get(node_id, 0)
         if pid == 0:
             continue
         try:
-            ns = NetNS(f"/proc/{pid}/ns/net")
-            try:
-                # Get all IPv4 routes with dst_len=0 (default routes)
-                for route in ns.get_routes(family=2):
+
+            def _remove_default(ipr: IPRoute, _pid: int = pid) -> bool:
+                for route in ipr.get_routes(family=2):
                     if route.get_attr("RTA_DST") is None and route["dst_len"] == 0:
-                        ns.route("del", dst="0.0.0.0/0", gateway=route.get_attr("RTA_GATEWAY"))
-                        removed += 1
-                        break
-            finally:
-                ns.close()
+                        ipr.route("del", dst="0.0.0.0/0", gateway=route.get_attr("RTA_GATEWAY"))
+                        return True
+                return False
+
+            if _in_namespace(pid, _remove_default):
+                removed += 1
         except Exception as exc:
             log.warning(f"Default route removal failed for {node_id}: {exc}")
     log.info(f"Phase 7: removed default route from {removed} pods")

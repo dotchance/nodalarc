@@ -1,24 +1,85 @@
 """Namespace netlink operations — runtime subset of link_manager.py.
 
-Functions copied verbatim from orchestrator/link_manager.py for use
-by the Node Agent DaemonSet. The originals remain in link_manager.py
-for na_deploy Step 7 (deploy-time operations).
+All namespace entry uses _in_namespace() which calls setns() directly
+instead of pyroute2's NetNS(). This avoids fork() in a multi-threaded
+process — see docs/node-agent-fork-issue.md for the full analysis.
 
-Only runtime operations are included here: admin up/down, tc shaping,
-NDP resolution. Deploy-time operations (create_veth_pair, create_ground_bridge,
-create_satellite_ground_veth, etc.) stay in link_manager.py.
+Never use pyroute2 NetNS() directly in the Node Agent.
 """
 
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import hashlib
 import logging
+import os
 import subprocess
+import threading
+from collections.abc import Callable
+from typing import TypeVar
 
-from pyroute2 import NetNS
+from pyroute2 import IPRoute
 
 log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+_libc = ctypes.CDLL("libc.so.6", use_errno=True)
+_CLONE_NEWNET = 0x40000000
+
+# Host network namespace fd — opened lazily on first use.
+# With hostPID:true, PID 1 is the host's init process.
+_HOST_NS_FD: int | None = None
+_host_ns_lock = threading.Lock()
+
+# Thread lock: setns changes the calling thread's namespace.
+# Concurrent setns calls from different threads would race.
+_ns_lock = threading.Lock()
+
+
+def _get_host_ns_fd() -> int:
+    """Get the host namespace fd, opening it on first call."""
+    global _HOST_NS_FD
+    if _HOST_NS_FD is not None:
+        return _HOST_NS_FD
+    with _host_ns_lock:
+        if _HOST_NS_FD is not None:
+            return _HOST_NS_FD
+        _HOST_NS_FD = os.open("/proc/1/ns/net", os.O_RDONLY)
+        return _HOST_NS_FD
+
+
+def _in_namespace(pid: int, fn: Callable[[IPRoute], _T]) -> _T:
+    """Execute fn(ipr) inside the network namespace of the given PID.
+
+    Uses setns() syscall to enter the namespace in the current thread,
+    runs the callable with a fresh IPRoute instance, then returns to
+    the host namespace. Thread-safe via _ns_lock.
+
+    This replaces pyroute2's NetNS() which forks a child process —
+    the fork inherits signal handlers and causes the orphaned-child
+    problem documented in docs/node-agent-fork-issue.md.
+    """
+    target_fd = os.open(f"/proc/{pid}/ns/net", os.O_RDONLY)
+    try:
+        with _ns_lock:
+            ret = _libc.setns(target_fd, _CLONE_NEWNET)
+            if ret != 0:
+                errno = ctypes.get_errno()
+                raise OSError(errno, f"setns to ns({pid}) failed: {os.strerror(errno)}")
+            try:
+                ipr = IPRoute()
+                try:
+                    return fn(ipr)
+                finally:
+                    ipr.close()
+            finally:
+                ret = _libc.setns(_get_host_ns_fd(), _CLONE_NEWNET)
+                if ret != 0:
+                    errno = ctypes.get_errno()
+                    log.error("setns back to host failed: %s", os.strerror(errno))
+    finally:
+        os.close(target_fd)
 
 
 # ---------------------------------------------------------------------------
@@ -66,14 +127,14 @@ def deterministic_mac(node_id: str, ifname: str) -> str:
 
 def set_interface_up(pid: int, ifname: str) -> None:
     """Bring an interface up inside a namespace."""
-    ns = NetNS(f"/proc/{pid}/ns/net")
-    try:
-        links = ns.link_lookup(ifname=ifname)
+
+    def _op(ipr: IPRoute) -> None:
+        links = ipr.link_lookup(ifname=ifname)
         if not links:
             raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
-        ns.link("set", index=links[0], state="up")
-    finally:
-        ns.close()
+        ipr.link("set", index=links[0], state="up")
+
+    _in_namespace(pid, _op)
 
 
 def disable_dad(pid: int, ifname: str) -> None:
@@ -105,14 +166,14 @@ def disable_dad(pid: int, ifname: str) -> None:
 
 def set_interface_down(pid: int, ifname: str) -> None:
     """Bring an interface down inside a namespace."""
-    ns = NetNS(f"/proc/{pid}/ns/net")
-    try:
-        links = ns.link_lookup(ifname=ifname)
+
+    def _op(ipr: IPRoute) -> None:
+        links = ipr.link_lookup(ifname=ifname)
         if not links:
             raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
-        ns.link("set", index=links[0], state="down")
-    finally:
-        ns.close()
+        ipr.link("set", index=links[0], state="down")
+
+    _in_namespace(pid, _op)
 
 
 # ---------------------------------------------------------------------------
@@ -134,23 +195,18 @@ def apply_link_shaping(
     PRD Appendix A: tbf root qdisc, netem child.
     """
     rate_bps = int(rate_mbps * 1_000_000)
-    # tbf burst: at least 1 MTU, typically rate / 250 Hz
     burst = max(9000, rate_bps // 250)
-    # tbf latency: buffer time in microseconds
     latency_us = 50000  # 50ms buffer
     delay_us = int(delay_ms * 1000)
 
-    ns = NetNS(f"/proc/{pid}/ns/net")
-    try:
-        links = ns.link_lookup(ifname=ifname)
+    def _op(ipr: IPRoute) -> None:
+        links = ipr.link_lookup(ifname=ifname)
         if not links:
             raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
         idx = links[0]
-        # Remove existing qdiscs (idempotent)
         with contextlib.suppress(Exception):
-            ns.tc("del", index=idx, root=True)
-        # Root: tbf for bandwidth shaping (handle 1:0)
-        ns.tc(
+            ipr.tc("del", index=idx, root=True)
+        ipr.tc(
             "add",
             kind="tbf",
             index=idx,
@@ -159,10 +215,9 @@ def apply_link_shaping(
             burst=burst,
             latency=latency_us,
         )
-        # Child: netem for delay (under class 1:1)
-        ns.tc("add", kind="netem", index=idx, handle=0x00100000, parent=0x00010001, delay=delay_us)
-    finally:
-        ns.close()
+        ipr.tc("add", kind="netem", index=idx, handle=0x00100000, parent=0x00010001, delay=delay_us)
+
+    _in_namespace(pid, _op)
     log.info(f"Applied shaping on ns({pid})/{ifname}: {delay_ms}ms, {rate_mbps}Mbps")
 
 
@@ -173,12 +228,12 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
     exist from apply_link_shaping(). This only modifies the delay parameter.
     """
     delay_us = int(delay_ms * 1000)
-    ns = NetNS(f"/proc/{pid}/ns/net")
-    try:
-        links = ns.link_lookup(ifname=ifname)
+
+    def _op(ipr: IPRoute) -> None:
+        links = ipr.link_lookup(ifname=ifname)
         if not links:
             raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
-        ns.tc(
+        ipr.tc(
             "change",
             kind="netem",
             index=links[0],
@@ -186,20 +241,19 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
             parent=0x00010001,
             delay=delay_us,
         )
-    finally:
-        ns.close()
+
+    _in_namespace(pid, _op)
 
 
 def remove_link_shaping(pid: int, ifname: str) -> None:
     """Remove all tc qdiscs from an interface."""
-    ns = NetNS(f"/proc/{pid}/ns/net")
-    try:
-        idx = ns.link_lookup(ifname=ifname)[0]
-        ns.tc("del", index=idx, root=True)
-    except Exception:
-        pass  # Interface may already be gone or no qdisc set
-    finally:
-        ns.close()
+
+    def _op(ipr: IPRoute) -> None:
+        idx = ipr.link_lookup(ifname=ifname)[0]
+        ipr.tc("del", index=idx, root=True)
+
+    with contextlib.suppress(Exception):
+        _in_namespace(pid, _op)
 
 
 # ---------------------------------------------------------------------------
@@ -215,29 +269,24 @@ def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str, timeout_ms: int = 
     a resolved L2 entry for the peer's link-local, so MPLS routes with
     ``via inet6 <peer_ll>`` can forward immediately.
 
-    Uses a UDP6 connect() to trigger the kernel to send a Neighbor
-    Solicitation, then polls the neighbor table until REACHABLE or STALE.
-
     Returns True if resolved within timeout, False otherwise.
-    On timeout, logs a warning — the sidecar's retry mechanism handles it.
     """
     import time as _time
 
-    ns_path = f"/proc/{pid}/ns/net"
-    ns = NetNS(ns_path)
-    try:
-        iface_links = ns.link_lookup(ifname=ifname)
-        if not iface_links:
-            log.warning("NDP: interface %s not found in ns(%d)", ifname, pid)
-            return False
-        iface_idx = iface_links[0]
-    finally:
-        ns.close()
+    # Get interface index
+    def _get_iface_idx(ipr: IPRoute) -> int:
+        links = ipr.link_lookup(ifname=ifname)
+        if not links:
+            return -1
+        return links[0]
 
-    # Trigger NS by pinging the peer's link-local with %scope format.
-    # The %ifname suffix is required for link-local addresses to bind to
-    # the correct interface. Without it, the kernel may send the NS from
-    # a different interface and resolve the wrong neighbor.
+    iface_idx = _in_namespace(pid, _get_iface_idx)
+    if iface_idx < 0:
+        log.warning("NDP: interface %s not found in ns(%d)", ifname, pid)
+        return False
+
+    # Trigger NS by pinging the peer's link-local via nsenter.
+    # nsenter is a separate process — it doesn't fork from our process.
     subprocess.run(
         [
             "nsenter",
@@ -266,35 +315,37 @@ def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str, timeout_ms: int = 
     NUD_FAILED = 0x20
 
     while _time.monotonic() < deadline:
-        ns = NetNS(ns_path)
-        try:
-            neighbours = ns.get_neighbours(family=10, ifindex=iface_idx)  # AF_INET6=10
-            for n in neighbours:
+
+        def _check_neighbors(ipr: IPRoute) -> int | None:
+            """Returns NUD state if peer found, None otherwise."""
+            for n in ipr.get_neighbours(family=10, ifindex=iface_idx):
                 attrs = dict(n["attrs"])
                 if attrs.get("NDA_DST") == peer_ll:
-                    state = n["state"]
-                    elapsed = (_time.monotonic() - start) * 1000
-                    if state & (NUD_REACHABLE | NUD_STALE):
-                        log.debug(
-                            "NDP resolved %s on %s in ns(%d) in %.1fms",
-                            peer_ll,
-                            ifname,
-                            pid,
-                            elapsed,
-                        )
-                        return True
-                    if state & NUD_FAILED:
-                        log.error(
-                            "NDP FAILED for %s on %s in ns(%d) after %.1fms",
-                            peer_ll,
-                            ifname,
-                            pid,
-                            elapsed,
-                        )
-                        return False
-        finally:
-            ns.close()
-        _time.sleep(0.010)  # 10ms poll
+                    return n["state"]
+            return None
+
+        state = _in_namespace(pid, _check_neighbors)
+        if state is not None:
+            elapsed = (_time.monotonic() - start) * 1000
+            if state & (NUD_REACHABLE | NUD_STALE):
+                log.debug(
+                    "NDP resolved %s on %s in ns(%d) in %.1fms",
+                    peer_ll,
+                    ifname,
+                    pid,
+                    elapsed,
+                )
+                return True
+            if state & NUD_FAILED:
+                log.error(
+                    "NDP FAILED for %s on %s in ns(%d) after %.1fms",
+                    peer_ll,
+                    ifname,
+                    pid,
+                    elapsed,
+                )
+                return False
+        _time.sleep(0.010)
 
     elapsed = (_time.monotonic() - start) * 1000
     log.warning(

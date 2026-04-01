@@ -1,0 +1,55 @@
+# NATS server with JetStream enabled.
+# Single pod in development, Helm values control replica count.
+# M9: replaces all ZMQ PUB/SUB and REQ/REP messaging.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodalarc-nats
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-nats
+spec:
+  replicas: {{ .Values.nats.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: nodalarc-nats
+  template:
+    metadata:
+      labels:
+        app: nodalarc-nats
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
+      containers:
+        - name: nats
+          image: {{ .Values.nats.image | default "nats:2.11-alpine" }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+            - "--jetstream"
+            - "--store_dir=/data"
+            - "--max_mem_store={{ .Values.nats.maxMemStore | default "128Mi" }}"
+            - "--http_port=8222"
+          ports:
+            - containerPort: 4222
+              name: client
+            - containerPort: 8222
+              name: monitoring
+          resources:
+            limits:
+              memory: {{ .Values.nats.memoryLimit | default "256Mi" }}
+              cpu: {{ .Values.nats.cpuLimit | default "500m" }}
+            requests:
+              memory: {{ .Values.nats.memoryRequest | default "128Mi" }}
+              cpu: {{ .Values.nats.cpuRequest | default "100m" }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 2
+            periodSeconds: 5

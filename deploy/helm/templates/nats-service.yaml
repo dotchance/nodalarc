@@ -1,0 +1,20 @@
+# NATS ClusterIP Service — all components connect to nats://nodalarc-nats:4222
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodalarc-nats
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-nats
+spec:
+  selector:
+    app: nodalarc-nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+      protocol: TCP
+    - name: monitoring
+      port: 8222
+      targetPort: 8222
+      protocol: TCP

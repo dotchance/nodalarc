@@ -15,7 +15,6 @@ import logging
 import threading
 
 import nats
-from nodalarc.nats_channels import nats_url
 
 from node_agent.proto import node_agent_pb2
 
@@ -41,98 +40,70 @@ class NodeAgentClient:
         self._lock = threading.Lock()
         log.info("NodeAgentClient target: %s (subject=%s)", addr, self._subject)
 
-    def _get_nc(self) -> nats.NATS:
-        """Get or create NATS connection (lazy, thread-safe).
+    def set_nc(self, nc: nats.NATS) -> None:
+        """Set shared NATS connection (from Scheduler's connection)."""
+        self._nc = nc
 
-        Uses a single connect attempt with timeout — does not retry
-        indefinitely on first connect (unlike the long-lived subscriber
-        connections which use max_reconnect_attempts=-1).
-        """
-        if self._nc is not None:
-            return self._nc
-        with self._lock:
-            if self._nc is not None:
-                return self._nc
-            import asyncio
-
-            loop = asyncio.new_event_loop()
-            # First connect: fail fast with hard timeout wrapper.
-            # nats-py's connect_timeout and allow_reconnect don't reliably
-            # prevent blocking on connection failure. asyncio.wait_for
-            # ensures we don't block longer than 3 seconds.
-            self._nc = loop.run_until_complete(
-                asyncio.wait_for(
-                    nats.connect(
-                        nats_url(),
-                        connect_timeout=2,
-                        allow_reconnect=False,
-                    ),
-                    timeout=3,
-                )
-            )
-            loop.close()
-            return self._nc
-
-    def _request_sync(self, msg_type: bytes, request_bytes: bytes) -> bytes:
-        """Send a NATS request and wait for reply (synchronous wrapper)."""
-        import asyncio
-
-        try:
-            nc = self._get_nc()
-        except Exception as exc:
-            raise ConnectionError(f"NATS connection failed for {self._subject}: {exc}") from exc
-
+    async def _request_async(self, msg_type: bytes, request_bytes: bytes) -> bytes:
+        """Send a NATS request and wait for reply."""
+        if self._nc is None:
+            raise ConnectionError(f"NATS not connected for {self._subject}")
         payload = msg_type + b"\x00" + request_bytes
+        resp = await self._nc.request(self._subject, payload, timeout=30)
+        return resp.data
 
-        async def _do_request():
-            resp = await nc.request(self._subject, payload, timeout=30)
-            return resp.data
-
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(_do_request())
-        finally:
-            loop.close()
-
-    def batch_link_down(
+    async def async_batch_link_down(
         self, request: node_agent_pb2.BatchLinkDownRequest
     ) -> node_agent_pb2.BatchLinkDownResponse:
-        resp_bytes = self._request_sync(b"BatchLinkDown", request.SerializeToString())
+        resp_bytes = await self._request_async(b"BatchLinkDown", request.SerializeToString())
         resp = node_agent_pb2.BatchLinkDownResponse()
         resp.ParseFromString(resp_bytes)
         return resp
 
-    def batch_link_up(
+    async def async_batch_link_up(
         self, request: node_agent_pb2.BatchLinkUpRequest
     ) -> node_agent_pb2.BatchLinkUpResponse:
-        resp_bytes = self._request_sync(b"BatchLinkUp", request.SerializeToString())
+        resp_bytes = await self._request_async(b"BatchLinkUp", request.SerializeToString())
         resp = node_agent_pb2.BatchLinkUpResponse()
         resp.ParseFromString(resp_bytes)
         return resp
 
-    def set_latency(
+    async def async_set_latency(
         self, request: node_agent_pb2.SetLatencyRequest
     ) -> node_agent_pb2.SetLatencyResponse:
-        resp_bytes = self._request_sync(b"SetLatency", request.SerializeToString())
+        resp_bytes = await self._request_async(b"SetLatency", request.SerializeToString())
         resp = node_agent_pb2.SetLatencyResponse()
         resp.ParseFromString(resp_bytes)
         return resp
 
-    def get_topology(
-        self, request: node_agent_pb2.GetTopologyRequest | None = None
-    ) -> node_agent_pb2.GetTopologyResponse:
+    # Sync wrappers for backward compatibility (tests, scenario handler)
+    def batch_link_down(self, request):
+        import asyncio
+
+        return asyncio.get_event_loop().run_until_complete(self.async_batch_link_down(request))
+
+    def batch_link_up(self, request):
+        import asyncio
+
+        return asyncio.get_event_loop().run_until_complete(self.async_batch_link_up(request))
+
+    def set_latency(self, request):
+        import asyncio
+
+        return asyncio.get_event_loop().run_until_complete(self.async_set_latency(request))
+
+    def get_topology(self, request=None):
         if request is None:
             request = node_agent_pb2.GetTopologyRequest()
-        resp_bytes = self._request_sync(b"GetTopology", request.SerializeToString())
-        resp = node_agent_pb2.GetTopologyResponse()
-        resp.ParseFromString(resp_bytes)
-        return resp
+        import asyncio
+
+        async def _do():
+            resp_bytes = await self._request_async(b"GetTopology", request.SerializeToString())
+            resp = node_agent_pb2.GetTopologyResponse()
+            resp.ParseFromString(resp_bytes)
+            return resp
+
+        return asyncio.get_event_loop().run_until_complete(_do())
 
     def close(self) -> None:
-        if self._nc is not None:
-            import asyncio
-
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(self._nc.close())
-            loop.close()
-            self._nc = None
+        pass  # Shared connection — closed by Scheduler

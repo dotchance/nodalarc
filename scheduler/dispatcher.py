@@ -132,6 +132,9 @@ class Dispatcher:
         self._nc = nc
         js = nc.jetstream()
 
+        # Share NATS connection with agent pool for Node Agent dispatch
+        self._pool.set_nc(nc)
+
         log.info("Scheduler NATS connected")
 
         # Subscribe to LinkStateSnapshot — get latest retained message
@@ -147,6 +150,7 @@ class Dispatcher:
                 msg = await sub_snap.next_msg(timeout=5)
                 snapshot = LinkStateSnapshot.model_validate_json(msg.data)
                 self._apply_link_state_snapshot(snapshot)
+                await self._dispatch_snapshot_delta(nc)
                 log.info(
                     "Initial snapshot applied: seq=%d, %d links",
                     snapshot.snapshot_seq,
@@ -197,6 +201,7 @@ class Dispatcher:
         async def _handle_link_state_snapshot(msg):
             snapshot = LinkStateSnapshot.model_validate_json(msg.data)
             self._apply_link_state_snapshot(snapshot)
+            await self._dispatch_snapshot_delta(nc)
 
         # Subscribe to all subjects via JetStream ordered consumers
         subs = []
@@ -299,6 +304,73 @@ class Dispatcher:
             len(self._active_links),
             isl,
             gs,
+        )
+
+        # Compute delta and dispatch to Node Agent
+        new_pairs = set(self._active_links.keys())
+        old_pairs = set(previous.keys())
+        self._snapshot_delta = (new_pairs - old_pairs, old_pairs - new_pairs)
+
+    async def _dispatch_snapshot_delta(self, nc) -> None:
+        """Dispatch BatchLinkUp/Down to Node Agent for snapshot delta.
+
+        Called after _apply_link_state_snapshot. Sends the kernel operations
+        that make the data plane match the snapshot state.
+        """
+        if not hasattr(self, "_snapshot_delta") or self._snapshot_delta is None:
+            return
+
+        added_pairs, removed_pairs = self._snapshot_delta
+        self._snapshot_delta = None
+
+        if not added_pairs and not removed_pairs:
+            return
+
+        sim_time = self._current_sim_time or datetime.now(UTC)
+        sim_iso = sim_time.isoformat()
+
+        # Dispatch downs first, then ups (two-phase ordering)
+        if removed_pairs:
+            down_events = []
+            for pair in removed_pairs:
+                down_events.append(
+                    VisibilityEvent(
+                        sim_time=sim_time,
+                        node_a=pair[0],
+                        node_b=pair[1],
+                        visible=False,
+                        scheduled=False,
+                        range_km=0.0,
+                        elevation_deg=0.0,
+                        terminal_type="optical",
+                    )
+                )
+            await self._dispatch_downs(down_events, sim_iso, nc)
+
+        if added_pairs:
+            up_events = []
+            for pair in added_pairs:
+                info = self._active_links.get(pair)
+                if not info:
+                    continue
+                up_events.append(
+                    VisibilityEvent(
+                        sim_time=sim_time,
+                        node_a=pair[0],
+                        node_b=pair[1],
+                        visible=True,
+                        scheduled=True,
+                        range_km=0.0,
+                        elevation_deg=0.0,
+                        terminal_type="optical",
+                    )
+                )
+            await self._dispatch_ups(up_events, sim_iso, nc)
+
+        log.info(
+            "Snapshot delta dispatched: %d up, %d down",
+            len(added_pairs),
+            len(removed_pairs),
         )
 
     def stop(self) -> None:
@@ -430,7 +502,7 @@ class Dispatcher:
                 locality=node_agent_pb2.LOCAL,
                 interfaces=ifaces,
             )
-            tasks.append(loop.run_in_executor(None, stub.batch_link_down, req))
+            tasks.append(stub.async_batch_link_down(req))
 
         # Track which agents succeeded
         successful_agents: set[str] = set()
@@ -561,7 +633,7 @@ class Dispatcher:
                 locality=node_agent_pb2.LOCAL,
                 interfaces=ifaces,
             )
-            tasks.append(loop.run_in_executor(None, stub.batch_link_up, req))
+            tasks.append(stub.async_batch_link_up(req))
 
         # Track which agents succeeded (full or partial)
         successful_agents: set[str] = set()
@@ -694,7 +766,7 @@ class Dispatcher:
         for agent_addr, entries in agent_entries.items():
             stub = self._pool.get_stub(agent_addr)
             req = node_agent_pb2.SetLatencyRequest(entries=entries)
-            tasks.append(loop.run_in_executor(None, stub.set_latency, req))
+            tasks.append(stub.async_set_latency(req))
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)

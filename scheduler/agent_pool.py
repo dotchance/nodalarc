@@ -1,15 +1,17 @@
-"""ZMQ client pool for Node Agent connections.
+"""NATS client pool for Node Agent connections.
 
 The Scheduler uses this to route BatchLinkDown/Up to the correct agent(s).
 For M4 (single K3s node), there is exactly one agent.
 
-Uses ZMQ DEALER sockets — replaces the gRPC stub pool. The proto
-message definitions are unchanged, only the transport is ZMQ.
+Uses NATS request/reply — each NodeAgentClient shares the Scheduler's
+NATS connection and sends to nodalarc.agent.{hostname}.
 """
 
 from __future__ import annotations
 
 import logging
+
+import nats
 
 from scheduler.node_agent_client import NodeAgentClient
 
@@ -17,41 +19,32 @@ log = logging.getLogger(__name__)
 
 
 class AgentPool:
-    """Manages ZMQ DEALER clients to Node Agent instances.
+    """Manages NATS clients to Node Agent instances.
 
-    Lazily creates clients on first use. Reuses clients for subsequent calls.
+    Lazily creates clients on first use. All clients share one NATS connection.
     """
 
     def __init__(self) -> None:
         self._clients: dict[str, NodeAgentClient] = {}
+        self._nc: nats.NATS | None = None
+
+    def set_nc(self, nc: nats.NATS) -> None:
+        """Set shared NATS connection for all clients."""
+        self._nc = nc
+        for client in self._clients.values():
+            client.set_nc(nc)
 
     def get_stub(self, agent_addr: str) -> NodeAgentClient:
-        """Get or create a ZMQ client for the given agent address."""
+        """Get or create a NATS client for the given agent address."""
         if agent_addr not in self._clients:
-            self._clients[agent_addr] = NodeAgentClient(agent_addr)
+            client = NodeAgentClient(agent_addr)
+            if self._nc is not None:
+                client.set_nc(self._nc)
+            self._clients[agent_addr] = client
         return self._clients[agent_addr]
 
-    def wait_for_agents(self, addrs: list[str], timeout_s: int = 60) -> None:
-        """Wait for all agents to be reachable. Called at Scheduler startup."""
-        import time
-
-        for addr in addrs:
-            client = self.get_stub(addr)
-            for attempt in range(timeout_s // 2):
-                try:
-                    client.get_topology()
-                    log.info("Node Agent at %s is ready", addr)
-                    break
-                except Exception:
-                    if attempt % 5 == 0:
-                        log.info("Waiting for Node Agent at %s (attempt %d)...", addr, attempt + 1)
-                    time.sleep(2)
-            else:
-                log.warning("Node Agent at %s did not become ready in %ds", addr, timeout_s)
-
     def close(self) -> None:
-        """Close all ZMQ clients."""
-        for addr, client in self._clients.items():
+        """Close all clients."""
+        for client in self._clients.values():
             client.close()
-            log.debug("Closed client to %s", addr)
         self._clients.clear()

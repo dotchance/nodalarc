@@ -1,8 +1,8 @@
-"""Node Agent entry point — ZMQ ROUTER server for netlink operations.
+"""Node Agent entry point — NATS request/reply server for netlink operations.
 
-Runs as a DaemonSet on each K3s node. Listens on the configured
-port (default 50100) and executes privileged namespace operations
-on behalf of the Scheduler via ZMQ ROUTER/DEALER transport.
+Runs as a DaemonSet on each K3s node. Subscribes to NATS subject
+nodalarc.agent.{hostname} and executes privileged namespace operations
+on behalf of the Scheduler.
 """
 
 from __future__ import annotations
@@ -30,7 +30,9 @@ def main() -> None:
     logging.basicConfig(format=_LOG_FORMAT, level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="Nodal Arc Node Agent")
-    parser.add_argument("--port", type=int, default=50100, help="ZMQ ROUTER listen port")
+    parser.add_argument(
+        "--port", type=int, default=50100, help="Deprecated — NATS transport. Ignored."
+    )
     parser.add_argument(
         "--platform-config",
         default="configs/platform.yaml",
@@ -42,16 +44,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Init platform config if available (non-fatal if missing)
+    # Init platform config (required for NATS URL)
     try:
         from nodalarc.platform import init_platform_config
 
         init_platform_config(Path(args.platform_config))
-        from nodalarc.zmq_channels import node_agent_grpc_port
-
-        port = node_agent_grpc_port()
     except Exception:
-        port = args.port
+        pass
+    port = args.port  # legacy — kept for logging only
 
     # Load pid_map for GetTopology and PID resolution
     pid_map: dict[str, int] = {}

@@ -478,61 +478,6 @@ def publish_window_zmq(events: list[TimelineEvent], pub_sock, window_num: int) -
     logger.info(f"Published window {window_num}: {len(events)} events on ZMQ")
 
 
-def publish_full_state_snapshot(
-    pub_sock,
-    isl_state: dict[tuple[str, str], tuple[bool, bool]],
-    gs_state: dict[tuple[str, str], tuple[bool, bool]],
-    sim_time_iso: str,
-    link_ranges: dict[tuple[str, str], float] | None = None,
-    position_trajectory: list[dict] | None = None,
-) -> None:
-    """Publish complete link state for subscriber catchup.
-
-    Published every 30 seconds and at window boundaries. Subscribers that
-    miss events (slow joiner, restart) catch up from the next snapshot.
-    This is the solution to the ZMQ slow joiner problem — no sleep after
-    bind, no assumptions about subscriber timing.
-
-    The optional link_ranges dict provides range_km for each link pair,
-    enabling subscribers to compute accurate link latencies even when
-    they missed the VisibilityEvents that originally carried the range.
-    """
-    from nodalarc.zmq_channels import encode_message
-
-    ranges = link_ranges or {}
-
-    # Serialize state dicts with string keys (tuple keys can't be JSON keys)
-    isl_data = {}
-    for (a, b), (visible, scheduled) in isl_state.items():
-        entry: dict[str, Any] = {"visible": visible, "scheduled": scheduled}
-        r = ranges.get((a, b), 0.0)
-        if r > 0:
-            entry["range_km"] = r
-        isl_data[f"{a}:{b}"] = entry
-    gs_data = {}
-    for (a, b), (visible, scheduled) in gs_state.items():
-        entry = {"visible": visible, "scheduled": scheduled}
-        r = ranges.get((a, b), 0.0)
-        if r > 0:
-            entry["range_km"] = r
-        gs_data[f"{a}:{b}"] = entry
-
-    snapshot_dict: dict[str, Any] = {
-        "sim_time": sim_time_iso,
-        "isl_state": isl_data,
-        "gs_state": gs_data,
-    }
-    if position_trajectory:
-        snapshot_dict["position_trajectory"] = position_trajectory
-
-    payload = json.dumps(snapshot_dict).encode()
-    pub_sock.send(encode_message(b"FullStateSnapshot", payload))
-    logger.info(
-        f"Published FullStateSnapshot: {len(isl_data)} ISL + {len(gs_data)} GS pairs"
-        + (f" + {len(position_trajectory)} positions" if position_trajectory else "")
-    )
-
-
 def read_timeline_jsonl(path: Path) -> list[dict]:
     """Read timeline events from JSON Lines file."""
     events = []

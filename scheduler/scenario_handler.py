@@ -127,15 +127,11 @@ def run_scenario_handler(
                 with override_lock:
                     previously_overridden = set(override_set)
                     override_set.clear()
-                # Reconcile: bring back links that should be active per OME state.
-                # Since we don't have direct OME state here, we check if any
-                # previously-overridden pair is NOT in active_links but IS in
-                # interface_map (meaning it could potentially be active). The
-                # actual reconciliation happens on the next FullStateSnapshot —
-                # the Scheduler will see the link is visible+scheduled in the
-                # snapshot and dispatch BatchLinkUp.
+                # Reconcile: previously-overridden pairs will reconcile when the
+                # OME's next VisibilityEvent for each pair arrives. The Scheduler
+                # will see visible+scheduled and dispatch BatchLinkUp.
                 log.info(
-                    "Overrides cleared (%d pairs). Links will reconcile on next FullStateSnapshot.",
+                    "Overrides cleared (%d pairs). Links will reconcile on next OME visibility cycle.",
                     len(previously_overridden),
                 )
                 sock.send(b'{"status":"ok"}')

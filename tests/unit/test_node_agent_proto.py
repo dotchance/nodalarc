@@ -131,8 +131,8 @@ def test_node_agent_grpc_port():
     )
     init_platform_config(cfg)
     try:
-        from nodalarc.zmq_channels import node_agent_grpc_port
+        from nodalarc.platform import get_platform_config
 
-        assert node_agent_grpc_port() == 50100
+        assert get_platform_config().node_agent_grpc_port == 50100
     finally:
         reset_platform_config()

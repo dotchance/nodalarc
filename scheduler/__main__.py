@@ -111,13 +111,13 @@ def main() -> None:
     log.info("Interface map: %d link pairs", len(interface_map))
 
     # Pod location map — canonical node IDs from K8s labels
-    from nodalarc.zmq_channels import node_agent_grpc_port
-
+    # agent_port is legacy — PodLocationMap builds "host:port" strings but
+    # NodeAgentClient extracts hostname and uses NATS subject, not TCP port.
     loc = PodLocationMap()
     if args.pid_map:
-        loc.load_from_pid_map_file(args.pid_map, agent_port=node_agent_grpc_port())
+        loc.load_from_pid_map_file(args.pid_map, agent_port=0)
     else:
-        loc.load_from_k8s_api(agent_port=node_agent_grpc_port())
+        loc.load_from_k8s_api(agent_port=0)
     log.info("Pod locations:\n%s", loc.summary())
 
     # --- Wiring gate: wait for Node Agent to complete wiring ---

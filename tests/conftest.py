@@ -6,7 +6,6 @@ Expanded incrementally as Steps 2-8 add new test needs.
 from pathlib import Path
 
 import pytest
-import zmq
 
 # Path constants — tests load valid configs from configs/, not duplicated fixtures
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -63,11 +62,3 @@ def _init_platform_config():
     init_platform_config(cfg)
     yield
     reset_platform_config()
-
-
-@pytest.fixture
-def zmq_context():
-    """Provide a ZeroMQ context, cleaned up after use."""
-    ctx = zmq.Context()
-    yield ctx
-    ctx.destroy(linger=0)

@@ -46,7 +46,6 @@ class TestBatchLinkDown:
                 node_agent_pb2.InterfaceDown(
                     node_id="sat-P00S00",
                     interface_name="isl0",
-                    pid=999999,
                     link_type=node_agent_pb2.ISL,
                 ),
             ],
@@ -64,13 +63,11 @@ class TestBatchLinkDown:
                 node_agent_pb2.InterfaceDown(
                     node_id="sat-P00S00",
                     interface_name="isl0",
-                    pid=999999,
                     link_type=node_agent_pb2.ISL,
                 ),
                 node_agent_pb2.InterfaceDown(
                     node_id="sat-P00S01",
                     interface_name="isl1",
-                    pid=999998,
                     link_type=node_agent_pb2.ISL,
                 ),
             ],
@@ -107,7 +104,6 @@ class TestBatchLinkUp:
                 node_agent_pb2.InterfaceUp(
                     node_id="sat-P00S00",
                     interface_name="isl0",
-                    pid=999999,
                     link_type=node_agent_pb2.ISL,
                     latency_ms=3.0,
                     bandwidth_mbps=1000.0,
@@ -132,7 +128,6 @@ class TestSetLatency:
                 node_agent_pb2.LatencyEntry(
                     node_id="sat-P00S00",
                     interface_name="isl0",
-                    pid=999999,
                     latency_ms=5.0,
                     link_type=node_agent_pb2.ISL,
                 ),

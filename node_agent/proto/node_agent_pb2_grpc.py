@@ -3,7 +3,7 @@
 
 import grpc
 
-from node_agent.proto import node_agent_pb2 as node__agent__pb2
+from node_agent.proto import node_agent_pb2 as node__agent_dot_proto_dot_node__agent__pb2
 
 GRPC_GENERATED_VERSION = "1.78.0"
 GRPC_VERSION = grpc.__version__
@@ -19,7 +19,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f"The grpc package installed is at version {GRPC_VERSION},"
-        + " but the generated code in node_agent_pb2_grpc.py depends on"
+        + " but the generated code in node_agent/proto/node_agent_pb2_grpc.py depends on"
         + f" grpcio>={GRPC_GENERATED_VERSION}."
         + f" Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}"
         + f" or downgrade your generated code using grpcio-tools<={GRPC_VERSION}."
@@ -30,6 +30,8 @@ class NodeAgentServiceStub:
     """The Node Agent runs as a DaemonSet on each K3s node.
     It executes privileged netlink operations against local pod namespaces.
     The Scheduler sends batched commands; the agent executes them concurrently.
+    PIDs are never supplied by the Scheduler — the Node Agent looks them up
+    internally from its own pid_map (populated during wiring).
     """
 
     def __init__(self, channel):
@@ -40,26 +42,26 @@ class NodeAgentServiceStub:
         """
         self.BatchLinkDown = channel.unary_unary(
             "/nodalarc.node_agent.NodeAgentService/BatchLinkDown",
-            request_serializer=node__agent__pb2.BatchLinkDownRequest.SerializeToString,
-            response_deserializer=node__agent__pb2.BatchLinkDownResponse.FromString,
+            request_serializer=node__agent_dot_proto_dot_node__agent__pb2.BatchLinkDownRequest.SerializeToString,
+            response_deserializer=node__agent_dot_proto_dot_node__agent__pb2.BatchLinkDownResponse.FromString,
             _registered_method=True,
         )
         self.BatchLinkUp = channel.unary_unary(
             "/nodalarc.node_agent.NodeAgentService/BatchLinkUp",
-            request_serializer=node__agent__pb2.BatchLinkUpRequest.SerializeToString,
-            response_deserializer=node__agent__pb2.BatchLinkUpResponse.FromString,
+            request_serializer=node__agent_dot_proto_dot_node__agent__pb2.BatchLinkUpRequest.SerializeToString,
+            response_deserializer=node__agent_dot_proto_dot_node__agent__pb2.BatchLinkUpResponse.FromString,
             _registered_method=True,
         )
         self.SetLatency = channel.unary_unary(
             "/nodalarc.node_agent.NodeAgentService/SetLatency",
-            request_serializer=node__agent__pb2.SetLatencyRequest.SerializeToString,
-            response_deserializer=node__agent__pb2.SetLatencyResponse.FromString,
+            request_serializer=node__agent_dot_proto_dot_node__agent__pb2.SetLatencyRequest.SerializeToString,
+            response_deserializer=node__agent_dot_proto_dot_node__agent__pb2.SetLatencyResponse.FromString,
             _registered_method=True,
         )
         self.GetTopology = channel.unary_unary(
             "/nodalarc.node_agent.NodeAgentService/GetTopology",
-            request_serializer=node__agent__pb2.GetTopologyRequest.SerializeToString,
-            response_deserializer=node__agent__pb2.GetTopologyResponse.FromString,
+            request_serializer=node__agent_dot_proto_dot_node__agent__pb2.GetTopologyRequest.SerializeToString,
+            response_deserializer=node__agent_dot_proto_dot_node__agent__pb2.GetTopologyResponse.FromString,
             _registered_method=True,
         )
 
@@ -68,6 +70,8 @@ class NodeAgentServiceServicer:
     """The Node Agent runs as a DaemonSet on each K3s node.
     It executes privileged netlink operations against local pod namespaces.
     The Scheduler sends batched commands; the agent executes them concurrently.
+    PIDs are never supplied by the Scheduler — the Node Agent looks them up
+    internally from its own pid_map (populated during wiring).
     """
 
     def BatchLinkDown(self, request, context):
@@ -103,23 +107,23 @@ def add_NodeAgentServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
         "BatchLinkDown": grpc.unary_unary_rpc_method_handler(
             servicer.BatchLinkDown,
-            request_deserializer=node__agent__pb2.BatchLinkDownRequest.FromString,
-            response_serializer=node__agent__pb2.BatchLinkDownResponse.SerializeToString,
+            request_deserializer=node__agent_dot_proto_dot_node__agent__pb2.BatchLinkDownRequest.FromString,
+            response_serializer=node__agent_dot_proto_dot_node__agent__pb2.BatchLinkDownResponse.SerializeToString,
         ),
         "BatchLinkUp": grpc.unary_unary_rpc_method_handler(
             servicer.BatchLinkUp,
-            request_deserializer=node__agent__pb2.BatchLinkUpRequest.FromString,
-            response_serializer=node__agent__pb2.BatchLinkUpResponse.SerializeToString,
+            request_deserializer=node__agent_dot_proto_dot_node__agent__pb2.BatchLinkUpRequest.FromString,
+            response_serializer=node__agent_dot_proto_dot_node__agent__pb2.BatchLinkUpResponse.SerializeToString,
         ),
         "SetLatency": grpc.unary_unary_rpc_method_handler(
             servicer.SetLatency,
-            request_deserializer=node__agent__pb2.SetLatencyRequest.FromString,
-            response_serializer=node__agent__pb2.SetLatencyResponse.SerializeToString,
+            request_deserializer=node__agent_dot_proto_dot_node__agent__pb2.SetLatencyRequest.FromString,
+            response_serializer=node__agent_dot_proto_dot_node__agent__pb2.SetLatencyResponse.SerializeToString,
         ),
         "GetTopology": grpc.unary_unary_rpc_method_handler(
             servicer.GetTopology,
-            request_deserializer=node__agent__pb2.GetTopologyRequest.FromString,
-            response_serializer=node__agent__pb2.GetTopologyResponse.SerializeToString,
+            request_deserializer=node__agent_dot_proto_dot_node__agent__pb2.GetTopologyRequest.FromString,
+            response_serializer=node__agent_dot_proto_dot_node__agent__pb2.GetTopologyResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -136,6 +140,8 @@ class NodeAgentService:
     """The Node Agent runs as a DaemonSet on each K3s node.
     It executes privileged netlink operations against local pod namespaces.
     The Scheduler sends batched commands; the agent executes them concurrently.
+    PIDs are never supplied by the Scheduler — the Node Agent looks them up
+    internally from its own pid_map (populated during wiring).
     """
 
     @staticmethod
@@ -155,8 +161,8 @@ class NodeAgentService:
             request,
             target,
             "/nodalarc.node_agent.NodeAgentService/BatchLinkDown",
-            node__agent__pb2.BatchLinkDownRequest.SerializeToString,
-            node__agent__pb2.BatchLinkDownResponse.FromString,
+            node__agent_dot_proto_dot_node__agent__pb2.BatchLinkDownRequest.SerializeToString,
+            node__agent_dot_proto_dot_node__agent__pb2.BatchLinkDownResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -185,8 +191,8 @@ class NodeAgentService:
             request,
             target,
             "/nodalarc.node_agent.NodeAgentService/BatchLinkUp",
-            node__agent__pb2.BatchLinkUpRequest.SerializeToString,
-            node__agent__pb2.BatchLinkUpResponse.FromString,
+            node__agent_dot_proto_dot_node__agent__pb2.BatchLinkUpRequest.SerializeToString,
+            node__agent_dot_proto_dot_node__agent__pb2.BatchLinkUpResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -215,8 +221,8 @@ class NodeAgentService:
             request,
             target,
             "/nodalarc.node_agent.NodeAgentService/SetLatency",
-            node__agent__pb2.SetLatencyRequest.SerializeToString,
-            node__agent__pb2.SetLatencyResponse.FromString,
+            node__agent_dot_proto_dot_node__agent__pb2.SetLatencyRequest.SerializeToString,
+            node__agent_dot_proto_dot_node__agent__pb2.SetLatencyResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -245,8 +251,8 @@ class NodeAgentService:
             request,
             target,
             "/nodalarc.node_agent.NodeAgentService/GetTopology",
-            node__agent__pb2.GetTopologyRequest.SerializeToString,
-            node__agent__pb2.GetTopologyResponse.FromString,
+            node__agent_dot_proto_dot_node__agent__pb2.GetTopologyRequest.SerializeToString,
+            node__agent_dot_proto_dot_node__agent__pb2.GetTopologyResponse.FromString,
             options,
             channel_credentials,
             insecure,

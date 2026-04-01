@@ -16,8 +16,8 @@ imagePullPolicy: Never  # Local images loaded into K3s containerd directly
 ome:
   cpuRequest: 500m
   cpuLimit: "2000m"
-  memoryRequest: 512Mi
-  memoryLimit: 1Gi
+  memoryRequest: 2Gi
+  memoryLimit: 8Gi
 
 # VF: containerized React SPA served by nginx
 vf:

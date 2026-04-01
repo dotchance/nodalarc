@@ -121,6 +121,50 @@ def main() -> None:
         loc.load_from_k8s_api(agent_port=node_agent_grpc_port())
     log.info("Pod locations:\n%s", loc.summary())
 
+    # --- Wiring gate: wait for Node Agent to complete wiring ---
+    # The Scheduler must NOT dispatch OME events until wiring is done.
+    # Signal: nodalarc-wiring-status ConfigMap has one entry per wired node.
+    # Same check the Operator uses (handlers.py:188-189).
+    # K8s config already loaded by loc.load_from_k8s_api() above.
+    import kubernetes.client
+    from nodalarc.platform import get_platform_config
+
+    k8s_v1 = kubernetes.client.CoreV1Api()
+    expected_nodes = set(loc.node_ids)
+    expected_count = len(expected_nodes)
+    ns = get_platform_config().kubernetes_namespace
+    log.info("Wiring gate: waiting for %d nodes", expected_count)
+
+    wiring_deadline = _time.monotonic() + 120
+    while _time.monotonic() < wiring_deadline:
+        try:
+            cm = k8s_v1.read_namespaced_config_map("nodalarc-wiring-status", ns)
+            wired = set(cm.data.keys()) if cm.data else set()
+            if len(wired) >= expected_count:
+                log.info("Wiring gate passed: %d/%d nodes wired", len(wired), expected_count)
+                break
+            if int(_time.monotonic()) % 10 < 2:  # log every ~10s
+                log.info("Wiring in progress: %d/%d", len(wired), expected_count)
+        except kubernetes.client.rest.ApiException as e:
+            if e.status != 404:
+                log.warning("Wiring status check error: %s", e)
+        _time.sleep(2)
+    else:
+        try:
+            cm = k8s_v1.read_namespaced_config_map("nodalarc-wiring-status", ns)
+            wired = set(cm.data.keys()) if cm.data else set()
+        except Exception:
+            wired = set()
+        missing = sorted(expected_nodes - wired)
+        log.error(
+            "Wiring gate TIMEOUT after 120s: %d/%d wired, %d missing: %s",
+            len(wired),
+            expected_count,
+            len(missing),
+            ", ".join(missing[:20])
+            + (f" ... and {len(missing) - 20} more" if len(missing) > 20 else ""),
+        )
+
     # Agent pool
     pool = AgentPool()
 

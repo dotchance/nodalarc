@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 
 log = logging.getLogger(__name__)
 
@@ -34,19 +33,13 @@ class PodLocationMap:
     def __init__(self) -> None:
         # canonical_node_id -> k3s node name
         self._node_of: dict[str, str] = {}
-        # canonical_node_id -> container PID
-        self._pid_of: dict[str, int] = {}
         # k3s node name -> Node Agent gRPC address
         self._agent_addrs: dict[str, str] = {}
 
     @property
     def node_ids(self) -> list[str]:
         """All canonical node IDs."""
-        return list(self._pid_of.keys())
-
-    def pid(self, node_id: str) -> int:
-        """Get PID for a canonical node ID. Returns 0 if unknown."""
-        return self._pid_of.get(node_id, 0)
+        return list(self._node_of.keys())
 
     def k3s_node(self, node_id: str) -> str:
         """Get K3s node name for a canonical node ID."""
@@ -84,17 +77,15 @@ class PodLocationMap:
         with open(path) as f:
             pid_map: dict[str, int] = json.load(f)
 
-        self._pid_of = {nid: int(pid) for nid, pid in pid_map.items()}
-
         # Discover K3s node name — all pods on same node in M4
         k3s_node = _discover_k3s_node()
-        for nid in self._pid_of:
+        for nid in pid_map:
             self._node_of[nid] = k3s_node
         self._agent_addrs[k3s_node] = f"localhost:{agent_port}"
 
         log.info(
             "Loaded %d pods from pid_map, all on node %s, agent=%s",
-            len(self._pid_of),
+            len(pid_map),
             k3s_node,
             self._agent_addrs[k3s_node],
         )
@@ -106,8 +97,9 @@ class PodLocationMap:
     ) -> None:
         """Load pod locations from K8s API.
 
-        Reads canonical node IDs from nodalarc.io/node-id label,
-        K3s node from pod.spec.nodeName, and PIDs via crictl.
+        Reads canonical node IDs from nodalarc.io/node-id label and
+        K3s node from pod.spec.nodeName. PIDs are NOT discovered here —
+        the Node Agent owns PID resolution internally.
 
         Node Agent addresses are derived from the K3s node's InternalIP.
         """
@@ -137,14 +129,6 @@ class PodLocationMap:
             k3s_node = pod.spec.node_name or ""
             self._node_of[node_id] = k3s_node
 
-            # PID discovery via crictl
-            if pod.status and pod.status.container_statuses:
-                container_id = pod.status.container_statuses[0].container_id
-                if container_id:
-                    pid = _crictl_pid(container_id)
-                    if pid > 0:
-                        self._pid_of[node_id] = pid
-
         # Build agent addresses from K3s node InternalIPs
         k3s_nodes = set(self._node_of.values())
         for k3s in k3s_nodes:
@@ -154,7 +138,7 @@ class PodLocationMap:
 
         log.info(
             "Loaded %d pods across %d K3s nodes from API",
-            len(self._pid_of),
+            len(self._node_of),
             len(k3s_nodes),
         )
 
@@ -165,8 +149,7 @@ class PodLocationMap:
             pods = sorted(nid for nid, n in self._node_of.items() if n == k3s)
             lines.append(f"  Node {k3s} -> agent {addr} ({len(pods)} pods)")
             for nid in pods[:5]:
-                pid = self._pid_of.get(nid, 0)
-                lines.append(f"    {nid} PID={pid}")
+                lines.append(f"    {nid}")
             if len(pods) > 5:
                 lines.append(f"    ... and {len(pods) - 5} more")
         return "\n".join(lines)
@@ -177,24 +160,6 @@ def _discover_k3s_node() -> str:
     import socket
 
     return socket.gethostname()
-
-
-def _crictl_pid(container_id: str) -> int:
-    """Get container PID via crictl inspect."""
-    raw_id = container_id.split("://", 1)[-1]
-    try:
-        proc = subprocess.run(
-            ["crictl", "inspect", raw_id],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-        )
-        info = json.loads(proc.stdout)
-        return info["info"]["pid"]
-    except Exception as exc:
-        log.warning("crictl PID discovery failed for %s: %s", raw_id[:12], exc)
-        return 0
 
 
 def _k3s_node_ip(v1, node_name: str) -> str:

@@ -348,7 +348,7 @@ def _update_link_up(event_data: dict) -> None:
             "node_a": node_a,
             "node_b": node_b,
             "state": "active",
-            "link_type": event_data.get("reason", ""),
+            "link_type": _derive_link_type(node_a, node_b),
             "link_reason": event_data.get("reason", ""),
             "latency_ms": event_data.get("latency_ms", 0.0),
             "bandwidth_mbps": event_data.get("bandwidth_mbps", 0.0),
@@ -409,6 +409,23 @@ def _update_convergence(event_data: dict) -> None:
 
 def _link_key(node_a: str, node_b: str) -> str:
     return f"{min(node_a, node_b)}:{max(node_a, node_b)}"
+
+
+def _derive_link_type(node_a: str, node_b: str) -> str:
+    """Derive link type from node IDs.
+
+    Returns: "ground", "intra_plane_isl", or "cross_plane_isl".
+    """
+    if node_a.startswith("gs-") or node_b.startswith("gs-"):
+        return "ground"
+    # Parse plane from sat-P##S## format
+    import re
+
+    ma = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_a)
+    mb = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_b)
+    if ma and mb and ma.group(1) == mb.group(1):
+        return "intra_plane_isl"
+    return "cross_plane_isl"
 
 
 def _update_almanac_state(event_data: dict) -> None:

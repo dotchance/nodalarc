@@ -339,12 +339,9 @@ class Dispatcher:
                     node_agent_pb2.InterfaceDown(
                         node_id=sat_id,
                         interface_name="gnd0",
-                        pid=self._loc.pid(sat_id),
                         link_type=node_agent_pb2.GROUND,
                         gs_id=gs_id,
                         sat_id=sat_id,
-                        gs_pid=self._loc.pid(gs_id),
-                        sat_pid=self._loc.pid(sat_id),
                     )
                 )
             else:
@@ -357,7 +354,6 @@ class Dispatcher:
                         node_agent_pb2.InterfaceDown(
                             node_id=nid,
                             interface_name=ifname,
-                            pid=self._loc.pid(nid),
                             link_type=node_agent_pb2.ISL,
                         )
                     )
@@ -468,14 +464,11 @@ class Dispatcher:
                     node_agent_pb2.InterfaceUp(
                         node_id=sat_id,
                         interface_name="gnd0",
-                        pid=self._loc.pid(sat_id),
                         link_type=node_agent_pb2.GROUND,
                         latency_ms=latency,
                         bandwidth_mbps=bandwidth,
                         gs_id=gs_id,
                         sat_id=sat_id,
-                        gs_pid=self._loc.pid(gs_id),
-                        sat_pid=self._loc.pid(sat_id),
                     )
                 )
             else:
@@ -488,7 +481,6 @@ class Dispatcher:
                         node_agent_pb2.InterfaceUp(
                             node_id=nid,
                             interface_name=ifname,
-                            pid=self._loc.pid(nid),
                             link_type=node_agent_pb2.ISL,
                             latency_ms=latency,
                             bandwidth_mbps=bandwidth,
@@ -597,13 +589,10 @@ class Dispatcher:
                     node_agent_pb2.LatencyEntry(
                         node_id=sat_id,
                         interface_name="gnd0",
-                        pid=self._loc.pid(sat_id),
                         latency_ms=netem_ms,
                         link_type=node_agent_pb2.GROUND,
                         gs_id=gs_id,
                         sat_id=sat_id,
-                        gs_pid=self._loc.pid(gs_id),
-                        sat_pid=self._loc.pid(sat_id),
                     )
                 )
             else:
@@ -616,7 +605,6 @@ class Dispatcher:
                         node_agent_pb2.LatencyEntry(
                             node_id=nid,
                             interface_name=ifname,
-                            pid=self._loc.pid(nid),
                             latency_ms=netem_ms,
                             link_type=node_agent_pb2.ISL,
                         )
@@ -812,6 +800,12 @@ class Dispatcher:
                     if pair in self._active_links:
                         removed += 1
                     self._active_links.pop(pair, None)
+                elif vis.visible and not vis.scheduled:
+                    is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                    if is_gs:
+                        if pair in self._active_links:
+                            removed += 1
+                        self._active_links.pop(pair, None)
             log.info(
                 "Catch-up applied: %d added, %d removed, %d skipped (no iface), "
                 "interface_map=%d pairs",

@@ -37,12 +37,10 @@ def test_message_construction():
     down = node_agent_pb2.InterfaceDown(
         node_id="sat-p00s00",
         interface_name="isl0",
-        pid=12345,
         link_type=node_agent_pb2.ISL,
     )
     assert down.node_id == "sat-p00s00"
     assert down.interface_name == "isl0"
-    assert down.pid == 12345
     assert down.link_type == node_agent_pb2.ISL
 
     req = node_agent_pb2.BatchLinkDownRequest(
@@ -63,7 +61,6 @@ def test_latency_entry():
     entry = node_agent_pb2.LatencyEntry(
         node_id="sat-p00s00",
         interface_name="isl0",
-        pid=12345,
         latency_ms=3.45,
         link_type=node_agent_pb2.ISL,
     )

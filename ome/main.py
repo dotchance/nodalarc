@@ -133,24 +133,71 @@ def _start_health_server(port: int = 8081) -> None:
     logging.info(f"Health server listening on :{port}")
 
 
-async def run_continuous(session_path: str, output_dir: str | None = None) -> None:
-    """Long-lived OME: compute rolling windows, publish on NATS JetStream.
+# ---------------------------------------------------------------------------
+# Producer-consumer architecture: pacing thread + NATS publisher thread
+# ---------------------------------------------------------------------------
 
-    Each window covers one orbital period. Boundary ISL/GS state is carried
-    across windows so link events are seamless. LinkStateSnapshot published
-    every interval_s sim-seconds (R-OME-009).
+
+async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
+    """NATS publisher — runs in its own async event loop in its own thread.
+
+    Consumes (subject, payload) tuples from the queue and publishes to NATS.
+    Handles HeartbeatTick via the queue (pacing thread sends them during
+    window computation). Handles reconnection transparently via nats-py.
+
+    Never touches timing. Never sleeps for pacing. Only I/O.
     """
     import asyncio
+    import queue
 
     import nats
+    from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url
+
+    nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+    logging.info("OME NATS publisher connected to %s", nats_url())
+
+    try:
+        while not shutdown_event.is_set():
+            try:
+                item = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: event_queue.get(timeout=0.1)
+                )
+            except queue.Empty:
+                continue
+
+            if item is None:  # shutdown sentinel
+                break
+
+            subject, payload = item
+            await nc.publish(subject, payload)
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logging.error("NATS publisher error: %s", exc, exc_info=True)
+    finally:
+        await nc.drain()
+        await nc.close()
+        logging.info("NATS publisher stopped")
+
+
+def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
+    """Pacing loop — synchronous, dedicated thread, wall-clock precise.
+
+    Never awaits. Never yields. Never touches NATS.
+    Puts (subject, payload) tuples into the queue.
+    Uses time.sleep() for precise wall-clock timing.
+    Blocks on queue.put() if queue is full (backpressure from publisher).
+    """
+    import queue
+    import threading
+
+    from nodalarc.models.events import ClockTick, HeartbeatTick
     from nodalarc.nats_channels import (
-        NATS_CONNECT_OPTIONS,
         SUBJECT_CLOCK_TICK,
         SUBJECT_HEARTBEAT,
         SUBJECT_LINK_STATE_SNAPSHOT,
         SUBJECT_SNAPSHOT,
         SUBJECT_VISIBILITY_EVENT,
-        nats_url,
     )
     from nodalarc.platform import get_platform_config
 
@@ -158,11 +205,11 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
 
     _start_health_server()
 
-    # Wait for session config to appear (Operator creates it after CRD apply)
+    # Wait for session config (synchronous — blocking is fine in this thread)
     session_file = Path(session_path)
     while not session_file.is_file():
         logging.info("Waiting for session config at %s...", session_path)
-        await asyncio.sleep(5)
+        time.sleep(5)
     data = yaml.safe_load(session_file.read_text())
     session = SessionConfig.model_validate(data)
 
@@ -197,17 +244,15 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
             latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
 
     default_min_elevation = gs_file.default_min_elevation_deg or 25.0
-
     epoch_unix = (
         datetime.fromisoformat(session.time.start_time).timestamp()
         if session.time.start_time
         else time.time()
     )
-
     compression = session.time.compression if session.time.compression else 1
     snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
-    # Build interface map for LinkStateSnapshot (maps pair → (iface_a, iface_b))
+    # Build interface map for LinkStateSnapshot
     from nodalarc.models.addressing import neighbors_by_node
 
     by_node = neighbors_by_node(neighbors)
@@ -227,15 +272,7 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                 elif node_id == pair[1] and not existing[1]:
                     interface_map[pair] = (existing[0], na.interface)
 
-    # Connect to NATS and create JetStream streams
-    nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
-    js = nc.jetstream()
-
-    # Streams are created by the OME init container (nats-box).
-    # The main container starts only after streams exist.
-    logging.info("OME NATS connected to %s", nats_url())
-
-    # Optional file output for debugging/development
+    # Optional file output
     out_path = None
     sentinel = None
     if output_dir:
@@ -243,6 +280,14 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{session.session.name}-timeline.jsonl"
         sentinel = out_path.with_suffix(".ready")
+
+    def _enqueue(subject: str, payload: bytes) -> None:
+        """Put event on queue. Blocks if full (backpressure)."""
+        try:
+            event_queue.put((subject, payload), timeout=5)
+        except queue.Full:
+            logging.warning("Event queue full — backpressure from NATS publisher")
+            event_queue.put((subject, payload))  # blocking wait, no timeout
 
     window = 0
     epoch_for_next = epoch_unix
@@ -265,55 +310,37 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
         default_min_elevation_deg=default_min_elevation,
     )
 
-    from nodalarc.models.events import ClockTick, HeartbeatTick
-
     try:
-        while True:
+        while not shutdown_event.is_set():
             window += 1
             logging.info("OME continuous: computing window %d (period=%.0fs)", window, period)
 
-            # Publish HeartbeatTick every 5s during window computation
-            # so the Scheduler knows the OME is alive and computing.
-            hb_stop = asyncio.Event()
+            # HeartbeatTick during window computation — sent via queue
+            hb_stop = threading.Event()
 
-            async def _heartbeat_loop(stop: asyncio.Event) -> None:
+            def _heartbeat_sender(stop=hb_stop):
                 while not stop.is_set():
                     hb = HeartbeatTick(wall_time=datetime.now(UTC), status="computing")
-                    await nc.publish(SUBJECT_HEARTBEAT, hb.model_dump_json().encode())
-                    try:
-                        await asyncio.wait_for(stop.wait(), timeout=5)
-                        break
-                    except TimeoutError:
-                        pass
+                    _enqueue(SUBJECT_HEARTBEAT, hb.model_dump_json().encode())
+                    stop.wait(5)
 
-            hb_task = asyncio.create_task(_heartbeat_loop(hb_stop))
+            hb_thread = threading.Thread(target=_heartbeat_sender, daemon=True)
+            hb_thread.start()
 
-            # Compute window in executor (CPU-bound, keeps event loop responsive)
-            loop = asyncio.get_running_loop()
-            kw = dict(
-                **_common_args,
-                epoch_unix=epoch_for_next,
-                duration_s=period,
-            )
+            # Compute window (CPU-bound, synchronous)
+            kw = dict(**_common_args, epoch_unix=epoch_for_next, duration_s=period)
             if window > 1:
                 kw["initial_isl_state"] = isl_state
                 kw["initial_gs_state"] = gs_state
                 kw["timestamp_offset"] = period * (window - 1)
 
-            # Save pre-window state for running state initialization during pacing.
-            # precompute_timeline_window returns END-of-window state, but the
-            # snapshot must reflect the CURRENT pacing position. Running state
-            # starts from beginning-of-window and gets updated by each paced event.
             pre_window_isl = dict(isl_state) if isl_state else {}
             pre_window_gs = dict(gs_state) if gs_state else {}
 
-            frozen_kw = dict(kw)  # bind for closure
-            events, isl_state, gs_state = await loop.run_in_executor(
-                None, lambda kw=frozen_kw: precompute_timeline_window(**kw)
-            )
+            events, isl_state, gs_state = precompute_timeline_window(**kw)
 
             hb_stop.set()
-            await hb_task
+            hb_thread.join(timeout=1)
 
             # Write JSONL if --output-dir provided
             if out_path is not None:
@@ -325,7 +352,7 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
 
             epoch_for_next += period
 
-            # Pacing loop: publish events at their sim_time
+            # --- Pacing loop: wall-clock precise event delivery ---
             window_start = time.monotonic()
             window_duration = period / compression
             if not events:
@@ -343,38 +370,34 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                 pace,
             )
 
-            # Track sim_time for snapshot publication
             current_sim_time_iso: str = ""
             last_snapshot_sim_s: float = 0.0
+            running_isl_state = dict(pre_window_isl)
+            running_gs_state = dict(pre_window_gs)
 
-            # Running link state — starts from BEGINNING of window, updated as
-            # each VisibilityEvent is paced. The snapshot reads this, not the
-            # end-of-window state from precompute_timeline_window.
-            running_isl_state: dict[tuple[str, str], tuple[bool, bool]] = dict(pre_window_isl)
-            running_gs_state: dict[tuple[str, str], tuple[bool, bool]] = dict(pre_window_gs)
-
-            # Group events by timestamp_s for per-tick processing
             current_tick_ts: float | None = None
             tick_events: list = []
 
             for evt in events:
+                if shutdown_event.is_set():
+                    break
+
                 if current_tick_ts is not None and evt.timestamp_s != current_tick_ts:
-                    # New tick — sleep until wall target
+                    # Precise wall-clock sleep — blocking, no yield
                     sim_offset = current_tick_ts - first_ts
                     wall_target = window_start + sim_offset * pace
                     now = time.monotonic()
                     if now < wall_target and now < window_start + window_duration:
-                        await asyncio.sleep(min(wall_target - now, 1.0))
+                        time.sleep(wall_target - now)
 
                     if time.monotonic() >= window_start + window_duration:
                         break
 
-                    # Publish all events for this tick
+                    # Enqueue all events for this tick
                     for te in tick_events:
                         payload = te.data.model_dump_json().encode()
                         if te.event_type == "VisibilityEvent":
-                            await nc.publish(SUBJECT_VISIBILITY_EVENT, payload)
-                            # Update running state to match current pacing position
+                            _enqueue(SUBJECT_VISIBILITY_EVENT, payload)
                             vis = te.data
                             pair = (vis.node_a, vis.node_b)
                             is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
@@ -383,10 +406,10 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                             else:
                                 running_isl_state[pair] = (vis.visible, vis.scheduled)
                         elif te.event_type == "Snapshot":
-                            await nc.publish(SUBJECT_SNAPSHOT, payload)
+                            _enqueue(SUBJECT_SNAPSHOT, payload)
                             current_sim_time_iso = te.data.sim_time.isoformat()
 
-                    # Publish ClockTick
+                    # ClockTick
                     ct = ClockTick(
                         sim_time=datetime.fromisoformat(current_sim_time_iso)
                         if current_sim_time_iso
@@ -394,9 +417,9 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                         wall_time=datetime.now(UTC),
                         compression_ratio=float(compression),
                     )
-                    await nc.publish(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
+                    _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
 
-                    # Publish LinkStateSnapshot at interval_s sim-seconds
+                    # LinkStateSnapshot at interval
                     if current_sim_time_iso:
                         current_sim_s = current_tick_ts
                         if current_sim_s - last_snapshot_sim_s >= snapshot_interval_s:
@@ -410,10 +433,7 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                                 seq=snapshot_seq,
                                 interval_s=snapshot_interval_s,
                             )
-                            await nc.publish(
-                                SUBJECT_LINK_STATE_SNAPSHOT,
-                                snap.model_dump_json().encode(),
-                            )
+                            _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, snap.model_dump_json().encode())
                             last_snapshot_sim_s = current_sim_s
 
                     tick_events = []
@@ -422,11 +442,11 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                 tick_events.append(evt)
 
             # Publish final tick
-            if tick_events:
+            if tick_events and not shutdown_event.is_set():
                 for te in tick_events:
                     payload = te.data.model_dump_json().encode()
                     if te.event_type == "VisibilityEvent":
-                        await nc.publish(SUBJECT_VISIBILITY_EVENT, payload)
+                        _enqueue(SUBJECT_VISIBILITY_EVENT, payload)
                         vis = te.data
                         pair = (vis.node_a, vis.node_b)
                         is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
@@ -435,7 +455,7 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                         else:
                             running_isl_state[pair] = (vis.visible, vis.scheduled)
                     elif te.event_type == "Snapshot":
-                        await nc.publish(SUBJECT_SNAPSHOT, payload)
+                        _enqueue(SUBJECT_SNAPSHOT, payload)
                         current_sim_time_iso = te.data.sim_time.isoformat()
 
                 ct = ClockTick(
@@ -445,12 +465,12 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                     wall_time=datetime.now(UTC),
                     compression_ratio=float(compression),
                 )
-                await nc.publish(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
+                _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
 
     except KeyboardInterrupt:
-        logging.info("OME continuous mode interrupted, exiting")
+        logging.info("OME pacing interrupted")
     finally:
-        await nc.close()
+        shutdown_event.set()
 
 
 def main() -> None:
@@ -475,12 +495,43 @@ def main() -> None:
 
     init_platform_config(Path(args.platform_config))
 
-    if args.continuous:
-        import asyncio
-
-        asyncio.run(run_continuous(args.session, args.output_dir))
-    else:
+    if not args.continuous:
         run(args.session, args.output_dir)
+        return
+
+    # --- Continuous mode: producer-consumer with two threads ---
+    import asyncio
+    import queue
+    import signal
+    import threading
+
+    event_queue: queue.Queue = queue.Queue(maxsize=1000)
+    shutdown_event = threading.Event()
+
+    def _signal_handler(signum, frame):
+        logging.info("Shutdown signal received (%d)", signum)
+        shutdown_event.set()
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    # Thread 1: NATS publisher — async event loop, consumes from queue
+    def _publisher_thread():
+        asyncio.run(_nats_publisher_loop(event_queue, shutdown_event))
+
+    pub_thread = threading.Thread(target=_publisher_thread, name="nats-publisher", daemon=True)
+    pub_thread.start()
+
+    # Give publisher time to connect before pacing starts
+    time.sleep(1)
+
+    # Thread 2 (main thread): Pacing — synchronous, time.sleep(), produces to queue
+    _run_pacing(args.session, args.output_dir, event_queue, shutdown_event)
+
+    # Shutdown: send sentinel and wait for publisher to drain
+    event_queue.put(None)
+    pub_thread.join(timeout=10)
+    logging.info("OME stopped")
 
 
 if __name__ == "__main__":

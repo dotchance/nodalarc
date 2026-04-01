@@ -144,7 +144,6 @@ def precompute_timeline_window(
     gs_terminal_counts: dict[str, int] = {}
     gs_policies: dict[str, str] = {}
     if gs_file:
-        default_gs_count = sum(t.count for t in gs_file.default_terminals)
         default_gs_policy = gs_file.default_scheduling_policy or "highest-elevation"
         for _i, station in enumerate(gs_file.stations):
             node_id = addressing.gs_id(station.name)

@@ -2,9 +2,7 @@
 
 Loads configs via YAML + Pydantic, creates AddressingScheme,
 computes ISL neighbor assignments (frozen), calls precompute_timeline(),
-writes JSON Lines output.
-
-Under 100 lines.
+publishes events on NATS JetStream.
 """
 
 from __future__ import annotations

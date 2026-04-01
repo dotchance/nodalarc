@@ -22,120 +22,167 @@ VS_API_HOST = os.environ.get("VS_API_HOST", "192.168.10.202:8080")
 BASE_URL = f"http://{VS_API_HOST}"
 KUBECTL = "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 
+
+# Helper to build inline constellation dicts matching the wizard's geometry presets.
+def _inline(
+    name, alt, inc, pattern, planes, spp, phase, sat_type="starlink-v2", seam=False, seam_lat=70
+):
+    d = {
+        "mode": "parametric",
+        "name": name,
+        "satellite_type": sat_type,
+        "orbit": {"altitude_km": alt, "inclination_deg": inc, "pattern": pattern},
+        "planes": {
+            "count": planes,
+            "sats_per_plane": spp,
+            "raan_spacing_deg": round(360 / planes, 2),
+            "phase_offset_deg": phase,
+        },
+    }
+    if seam:
+        d["polar_seam"] = {"enabled": True, "latitude_threshold_deg": seam_lat}
+    return d
+
+
+# Real-world constellation geometries from the wizard's GEOMETRY_PRESETS
+STARLINK_53 = _inline("starlink-53", 550, 53, "walker-delta", 8, 11, 4.1)
+STARLINK_70 = _inline("starlink-70", 570, 70, "walker-delta", 6, 11, 5.45)
+STARLINK_POLAR = _inline(
+    "starlink-polar", 560, 97.6, "walker-star", 6, 12, 5.0, seam=True, seam_lat=80
+)
+KUIPER_51 = _inline("kuiper-51", 630, 51.9, "walker-delta", 6, 11, 5.45)
+ONEWEB = _inline("oneweb", 1200, 87.9, "walker-star", 6, 10, 6.0, seam=True, seam_lat=75)
+IRIDIUM = _inline(
+    "iridium-next",
+    780,
+    86.4,
+    "walker-star",
+    6,
+    11,
+    5.45,
+    sat_type="iridium-next",
+    seam=True,
+    seam_lat=75,
+)
+TELESAT = _inline("telesat-polar", 1015, 98.98, "walker-star", 6, 13, 4.6, seam=True, seam_lat=80)
+SDA_T1 = _inline("sda-t1", 1000, 80, "walker-star", 6, 10, 6.0, seam=True, seam_lat=70)
+GLOBALSTAR = _inline("globalstar", 1414, 52, "walker-delta", 8, 6, 7.5)
+
 MATRIX = [
-    # --- Library presets (constellation file path + GS set file path) ---
+    # --- Inclined LEO constellations (Walker-delta, no polar seam) ---
     {
         "id": 1,
-        "constellation": "starlink-early-44",
+        "constellation": "starlink-early-44",  # preset for defaults
         "protocol": "isis",
-        "extensions": ["sr"],
-        "gs": "configs/ground-stations/sets/global.yaml",
+        "extensions": ["te"],
+        "gs": "configs/ground-stations/sets/global-8.yaml",
+        "custom_constellation": STARLINK_53,
     },
     {
         "id": 2,
         "constellation": "starlink-early-44",
         "protocol": "ospf",
-        "extensions": [],
-        "gs": "configs/ground-stations/sets/global.yaml",
+        "extensions": ["te"],
+        "gs": "configs/ground-stations/sets/transatlantic.yaml",
+        "custom_constellation": KUIPER_51,
     },
     {
         "id": 3,
-        "constellation": "iridium-small-36",
+        "constellation": "starlink-early-44",
         "protocol": "isis",
-        "extensions": ["sr"],
-        "gs": "configs/ground-stations/sets/polar-emphasis.yaml",
-    },
-    {
-        "id": 4,
-        "constellation": "iridium-small-36",
-        "protocol": "ospf",
-        "extensions": ["te"],
-        "gs": "configs/ground-stations/sets/global.yaml",
-    },
-    {
-        "id": 5,
-        "constellation": "kuiper-50",
-        "protocol": "isis",
-        "extensions": ["sr"],
-        "gs": "configs/ground-stations/sets/transatlantic.yaml",
-    },
-    {
-        "id": 6,
-        "constellation": "kuiper-50",
-        "protocol": "ospf",
-        "extensions": ["te", "mpls"],
-        "gs": "configs/ground-stations/sets/global.yaml",
-    },
-    {
-        "id": 7,
-        "constellation": "oneweb-60",
-        "protocol": "isis",
-        "extensions": ["sr"],
-        "gs": "configs/ground-stations/sets/us-conus.yaml",
-    },
-    {
-        "id": 8,
-        "constellation": "oneweb-60",
-        "protocol": "ospf",
         "extensions": [],
         "gs": "configs/ground-stations/sets/transpacific.yaml",
+        "custom_constellation": GLOBALSTAR,
     },
+    # --- Polar/near-polar constellations (Walker-star, polar seam) ---
     {
-        "id": 9,
+        "id": 4,
         "constellation": "starlink-early-44",
         "protocol": "isis",
         "extensions": ["sr"],
+        "gs": "configs/ground-stations/sets/polar-emphasis.yaml",
+        "custom_constellation": IRIDIUM,
+    },
+    {
+        "id": 5,
+        "constellation": "starlink-early-44",
+        "protocol": "ospf",
+        "extensions": [],
+        "gs": "configs/ground-stations/sets/polar-emphasis.yaml",
+        "custom_constellation": ONEWEB,
+    },
+    {
+        "id": 6,
+        "constellation": "starlink-early-44",
+        "protocol": "isis",
+        "extensions": ["te"],
         "gs": "configs/ground-stations/sets/global.yaml",
-        "area": "stripe",
+        "custom_constellation": TELESAT,
+    },
+    # --- Sun-synchronous / high-inclination ---
+    {
+        "id": 7,
+        "constellation": "starlink-early-44",
+        "protocol": "isis",
+        "extensions": ["te"],
+        "gs": ["ashburn", "frankfurt", "tokyo", "sydney"],
+        "custom_constellation": STARLINK_POLAR,
+    },
+    {
+        "id": 8,
+        "constellation": "starlink-early-44",
+        "protocol": "ospf",
+        "extensions": ["te", "mpls"],
+        "gs": "configs/ground-stations/sets/global-8.yaml",
+        "custom_constellation": SDA_T1,
     },
     # --- Satellite type override (orthogonal selection) ---
     {
-        "id": 10,
+        "id": 9,
         "constellation": "starlink-early-44",
         "protocol": "isis",
         "extensions": ["te"],
         "gs": "configs/ground-stations/sets/transatlantic.yaml",
         "satellite_type": "iridium-next",
+        "custom_constellation": STARLINK_53,
     },
-    # --- Custom inline constellation (wizard advanced mode) ---
+    {
+        "id": 10,
+        "constellation": "starlink-early-44",
+        "protocol": "isis",
+        "extensions": [],
+        "gs": "configs/ground-stations/sets/us-conus.yaml",
+        "satellite_type": "generic-2isl",
+        "custom_constellation": STARLINK_70,
+    },
+    # --- Area strategies ---
     {
         "id": 11,
-        "constellation": "starlink-early-44",  # preset for defaults
+        "constellation": "starlink-early-44",
         "protocol": "isis",
         "extensions": ["te"],
-        "gs": ["london", "ashburn", "frankfurt"],
-        "custom_constellation": {
-            "mode": "parametric",
-            "name": "custom-sda-t1",
-            "satellite_type": "starlink-v2",
-            "orbit": {"altitude_km": 1000, "inclination_deg": 80, "pattern": "walker-star"},
-            "planes": {
-                "count": 6,
-                "sats_per_plane": 10,
-                "raan_spacing_deg": 60,
-                "phase_offset_deg": 6,
-            },
-            "polar_seam": {"enabled": True, "latitude_threshold_deg": 70},
-        },
+        "gs": "configs/ground-stations/sets/global.yaml",
+        "area": "per-plane",
+        "custom_constellation": KUIPER_51,
     },
-    # --- Large library constellation ---
     {
         "id": 12,
-        "constellation": "iridium-66",
-        "protocol": "isis",
-        "extensions": ["sr"],
-        "gs": "configs/ground-stations/sets/global.yaml",
+        "constellation": "starlink-early-44",
+        "protocol": "ospf",
+        "extensions": ["te"],
+        "gs": "configs/ground-stations/sets/global-8.yaml",
+        "area": "stripe",
+        "custom_constellation": STARLINK_53,
     },
-    # --- NodalPath (xfail — in-band terrestrial interface not implemented) ---
+    # --- NodalPath (xfail) ---
     {
         "id": 13,
         "constellation": "starlink-early-44",
         "protocol": "nodalpath",
         "extensions": [],
         "gs": "configs/ground-stations/sets/global.yaml",
-        "xfail": "NodalPath in-band terrestrial interface not yet implemented. "
-        "Sidecar binds LOOPBACK_IPV4 only — unreachable via K8s CNI by design. "
-        "See PRD Section 13.5.3.",
+        "custom_constellation": STARLINK_53,
+        "xfail": "NodalPath in-band terrestrial interface not yet implemented.",
     },
 ]
 

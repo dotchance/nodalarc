@@ -1,0 +1,20 @@
+# Starlink-176 — doubled inclined constellation for scale testing.
+#
+# 16 planes x 11 satellites = 176 total, 550 km altitude, 53 deg inclination.
+# Walker-delta pattern. Doubled from 8-plane (88 sat) lab configuration by
+# adding orbital planes at 22.5 deg RAAN spacing — matches how Starlink
+# actually scaled (72 planes in full shell 1). Phase offset recalculated
+# for Walker Delta F=1: 360/(16*11) = 2.045 deg.
+
+mode: parametric
+name: starlink-176
+satellite_type: starlink-v2
+orbit:
+  altitude_km: 550
+  inclination_deg: 53
+  pattern: walker-delta
+planes:
+  count: 16
+  raan_spacing_deg: 22.5
+  sats_per_plane: 11
+  phase_offset_deg: 2.045

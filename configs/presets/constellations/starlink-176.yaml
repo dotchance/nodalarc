@@ -1,0 +1,7 @@
+name: starlink-176
+description: "16 planes x 11 satellites, 550 km inclined orbit. Doubled 8-plane lab config by adding orbital planes at 22.5 deg RAAN spacing."
+satellite_count: 176
+constellation: configs/constellations/starlink-176.yaml
+ground_stations: configs/ground-stations/sets/global.yaml
+time:
+  step_seconds: 1

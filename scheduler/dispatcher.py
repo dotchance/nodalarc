@@ -61,6 +61,15 @@ class Dispatcher:
 
     Subscribes to OME ZMQ, windows events by sim_time, dispatches
     BatchLinkDown/Up to Node Agents, publishes TO events on port 5561.
+
+    INVARIANT: visible=True, scheduled=False for a GS pair MUST remove the
+    pair from _active_links in ALL code paths that process VisibilityEvents:
+      1. _ome_catchup replay (line ~803)
+      2. _dispatch_batch live (line ~281)
+    _dispatch_ups only processes scheduled=True events — deallocation is
+    handled by _dispatch_batch before _dispatch_ups is called.
+    This bug appeared 3 times. test_ome_scheduler_contract.py verifies both
+    paths. Do not remove that test.
     """
 
     def __init__(

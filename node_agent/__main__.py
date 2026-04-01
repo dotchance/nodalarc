@@ -3,6 +3,16 @@
 Runs as a DaemonSet on each K3s node. Subscribes to NATS subject
 nodalarc.agent.{hostname} and executes privileged namespace operations
 on behalf of the Scheduler.
+
+Startup ordering (enforced, not hoped for):
+  1. Wiring watcher thread starts, waits for topology manifest
+  2. Wiring completes — PIDs discovered, veth pairs created, status written
+  3. Wiring thread signals ready and shares pid_map
+  4. NATS server subscribes and begins accepting requests
+  5. Requests use the wiring thread's pid_map — no rediscovery
+
+This is the same principle as R-TO-010 (Scheduler wiring gate).
+The NATS server must NOT accept requests until wiring is complete.
 """
 
 from __future__ import annotations
@@ -11,6 +21,7 @@ import argparse
 import json
 import logging
 import signal
+import threading
 from pathlib import Path
 
 from node_agent.reconcile import (
@@ -40,7 +51,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--pid-map",
-        help="Path to pid_map.json (from na-deploy). If not provided, discovers PIDs from K8s API.",
+        help="Path to pid_map.json (from na-deploy). If not provided, discovers PIDs during wiring.",
     )
     args = parser.parse_args()
 
@@ -51,28 +62,19 @@ def main() -> None:
         init_platform_config(Path(args.platform_config))
     except Exception:
         pass
-    port = args.port  # legacy — kept for logging only
 
-    # Load pid_map for GetTopology and PID resolution
-    pid_map: dict[str, int] = {}
+    # Shared state between wiring thread and NATS server
+    wiring_ready = threading.Event()
+    shared_pid_map: dict[str, int] = {}
+
+    # If --pid-map provided, skip wiring discovery — use the file directly
     if args.pid_map:
-        pid_map = json.loads(Path(args.pid_map).read_text())
-        log.info("Loaded pid_map from %s (%d entries)", args.pid_map, len(pid_map))
-    else:
-        try:
-            from node_agent.pid_discovery import discover_local_pod_pids
+        shared_pid_map.update(json.loads(Path(args.pid_map).read_text()))
+        log.info("Loaded pid_map from %s (%d entries)", args.pid_map, len(shared_pid_map))
+        wiring_ready.set()
 
-            pid_map = discover_local_pod_pids()
-        except Exception as exc:
-            log.warning("PID discovery failed: %s — will retry lazily on first request", exc)
-
-    server = NodeAgentServer(port=port, pid_map=pid_map)
-
-    # Start wiring watcher in background thread (7b: watches for topology manifest)
-    import threading
-
+    # Wiring watcher thread — discovers PIDs, creates interfaces, signals ready
     def _wiring_watcher():
-        """Poll for nodalarc-topology-wiring ConfigMap and execute wiring."""
         import time
 
         try:
@@ -82,6 +84,7 @@ def main() -> None:
             kubernetes.config.load_incluster_config()
         except Exception:
             log.info("Not running in K8s — wiring watcher disabled")
+            wiring_ready.set()  # Don't block NATS server in non-K8s env
             return
 
         try:
@@ -89,7 +92,7 @@ def main() -> None:
 
             ns = get_platform_config().kubernetes_namespace
         except RuntimeError:
-            ns = "nodalarc"  # Default namespace if platform config not initialized
+            ns = "nodalarc"
         v1 = kubernetes.client.CoreV1Api()
         last_resource_version = ""
 
@@ -98,7 +101,6 @@ def main() -> None:
                 cm = v1.read_namespaced_config_map("nodalarc-topology-wiring", ns)
                 rv = cm.metadata.resource_version or ""
 
-                # Only reconcile when ConfigMap actually changes
                 if rv == last_resource_version:
                     time.sleep(5)
                     continue
@@ -118,23 +120,19 @@ def main() -> None:
                         "Wiring verified — status matches manifest (%d nodes), no-op",
                         len(nodes),
                     )
+                    # Even on no-op, refresh PIDs and signal ready
+                    _refresh_pids(shared_pid_map)
+                    wiring_ready.set()
                     time.sleep(5)
                     continue
 
-                # Case A or C: check kernel state
+                # Case A or C
                 actual = get_actual_nodalarc_interfaces()
-
                 if not actual:
-                    # Case A: no kernel state — wire from scratch
-                    log.info(
-                        "No kernel state — wiring from scratch (%d nodes)",
-                        len(nodes),
-                    )
+                    log.info("No kernel state — wiring from scratch (%d nodes)", len(nodes))
                 else:
-                    # Case C: kernel state exists but wiring-status absent/stale
                     log.warning(
-                        "Kernel state diverged (%d interfaces, stale wiring-status)"
-                        " — cleaning and re-wiring",
+                        "Kernel state diverged (%d interfaces) — cleaning and re-wiring",
                         len(actual),
                     )
                     cleaned = clean_nodalarc_kernel_state()
@@ -143,6 +141,10 @@ def main() -> None:
                 wired = execute_wiring(manifest, namespace=ns)
                 write_wiring_status(wired, namespace=ns)
                 log.info("Wiring complete: %d nodes wired", len(wired))
+
+                # Share PIDs from wiring discovery with the NATS server
+                _refresh_pids(shared_pid_map)
+                wiring_ready.set()
 
             except kubernetes.client.rest.ApiException as e:
                 if e.status == 404:
@@ -161,6 +163,13 @@ def main() -> None:
     wiring_thread = threading.Thread(target=_wiring_watcher, daemon=True)
     wiring_thread.start()
 
+    # Wait for wiring to complete before starting NATS server
+    log.info("Waiting for wiring to complete before accepting NATS requests...")
+    wiring_ready.wait()
+    log.info("Wiring ready — pid_map has %d entries", len(shared_pid_map))
+
+    server = NodeAgentServer(pid_map=shared_pid_map)
+
     def _shutdown(signum, frame):
         log.info("Shutting down (signal %d)...", signum)
         server.stop()
@@ -170,6 +179,23 @@ def main() -> None:
 
     server.run()
     log.info("Node Agent stopped")
+
+
+def _refresh_pids(shared_pid_map: dict[str, int]) -> None:
+    """Refresh the shared pid_map from local pod discovery.
+
+    Called by the wiring thread after wiring completes. The NATS server
+    uses this map directly — no separate discovery needed.
+    """
+    try:
+        from node_agent.pid_discovery import discover_local_pod_pids
+
+        new_pids = discover_local_pod_pids()
+        shared_pid_map.clear()
+        shared_pid_map.update(new_pids)
+        log.info("PID map refreshed: %d pods", len(shared_pid_map))
+    except Exception as exc:
+        log.warning("PID refresh failed: %s", exc)
 
 
 if __name__ == "__main__":

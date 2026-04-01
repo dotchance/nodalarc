@@ -11,7 +11,10 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from nodalarc.models.link_state import LinkStateSnapshot
 
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
@@ -167,33 +170,6 @@ def precompute_timeline_window(
     gs_state: dict[tuple[str, str], tuple[bool, bool]] = (
         dict(initial_gs_state) if initial_gs_state else {}
     )
-
-    # Window boundary bridge: emit absolute GS state for window 2+.
-    # GS pairs that are (visible=True, scheduled=False) at end of window N
-    # carry forward into window N+1 with no state transition — the OME only
-    # emits on change. Without this, the Scheduler never receives the
-    # deallocation event and stale GS links persist forever.
-    # TEMPORARY BRIDGE: replaced by NATS JetStream LinkStateSnapshot in M9.
-    if initial_gs_state:
-        boundary_sim = datetime.fromtimestamp(epoch_unix, tz=UTC)
-        for pair, (vis, sched) in gs_state.items():
-            if vis and not sched:
-                events.append(
-                    TimelineEvent(
-                        timestamp_offset,
-                        "VisibilityEvent",
-                        VisibilityEvent(
-                            sim_time=boundary_sim,
-                            node_a=pair[0],
-                            node_b=pair[1],
-                            visible=True,
-                            scheduled=False,
-                            range_km=0.0,
-                            elevation_deg=0.0,
-                            terminal_type="optical",
-                        ),
-                    )
-                )
 
     steps = int(duration_s / step_seconds)
     for step in range(steps + 1):
@@ -440,43 +416,6 @@ def append_timeline_jsonl(events: list[TimelineEvent], output_path: Path) -> Non
     logger.info(f"Appended {len(events)} events to {output_path}")
 
 
-def publish_window_zmq(events: list[TimelineEvent], pub_sock, window_num: int) -> None:
-    """Publish a window of timeline events on ZMQ PUB socket.
-
-    Interface boundary for ZMQ delivery — same role as write_timeline_jsonl()
-    for file delivery. run_continuous() calls this function, not inline ZMQ code.
-
-    Publishes each event with its event_type as the ZMQ topic, followed by a
-    WindowReady message that signals the batch boundary to the orchestrator.
-    """
-    from nodalarc.zmq_channels import encode_message
-
-    for event in events:
-        topic = event.event_type.encode()
-        payload = json.dumps(
-            {
-                "timestamp_s": event.timestamp_s,
-                "event_type": event.event_type,
-                "data": event.data.model_dump(mode="json"),
-            }
-        ).encode()
-        pub_sock.send(encode_message(topic, payload))
-
-    # Window boundary signal — orchestrator buffers events until this arrives
-    pub_sock.send(
-        encode_message(
-            b"WindowReady",
-            json.dumps(
-                {
-                    "window": window_num,
-                    "event_count": len(events),
-                }
-            ).encode(),
-        )
-    )
-    logger.info(f"Published window {window_num}: {len(events)} events on ZMQ")
-
-
 def read_timeline_jsonl(path: Path) -> list[dict]:
     """Read timeline events from JSON Lines file."""
     events = []
@@ -487,61 +426,97 @@ def read_timeline_jsonl(path: Path) -> list[dict]:
     return events
 
 
-def publish_timeline_zmq(
-    timeline_path: Path,
-    compression_factor: float = 1.0,
-) -> None:
-    """Read pre-computed timeline and publish on ZMQ PUB with timing.
+def build_link_state_snapshot(
+    isl_state: dict[tuple[str, str], tuple[bool, bool]],
+    gs_state: dict[tuple[str, str], tuple[bool, bool]],
+    interface_map: dict[tuple[str, str], tuple[str, str]],
+    latency_map: dict[tuple[str, str], float],
+    sim_time: datetime,
+    seq: int,
+    interval_s: float,
+) -> LinkStateSnapshot:
+    """Build a LinkStateSnapshot from OME internal state.
 
-    Binds to OME_EVENTS_BIND (port 5560). Publishes each event with
-    topic prefix. Paces at wall-clock × compression_factor.
+    Called every interval_s sim-seconds. The snapshot contains the complete
+    admin + carrier state for every link the OME tracks. Routing adjacency
+    is UNKNOWN (requires MI protocol adapter data).
 
-    Used in RT mode to replay a pre-computed timeline.
+    PRD Section 4.1B R-OME-009.
     """
-    import time
-
-    import zmq
-    from nodalarc.zmq_channels import (
-        TOPIC_CLOCK_TICK,
-        TOPIC_VISIBILITY_EVENT,
-        encode_message,
-        ome_events_bind,
+    from nodalarc.models.link_state import (
+        AdminState,
+        CarrierState,
+        LinkState,
+        LinkStateSnapshot,
+        RoutingState,
     )
 
-    ctx = zmq.Context()
-    pub = ctx.socket(zmq.PUB)
-    pub.bind(ome_events_bind())
-    logger.info(f"OME ZMQ publisher bound on {ome_events_bind()}")
+    links: list[LinkState] = []
 
-    # Allow subscribers to connect
-    time.sleep(0.5)
+    # ISL links
+    for pair, (visible, scheduled) in isl_state.items():
+        ifaces = interface_map.get(pair)
+        if not ifaces:
+            continue
+        if visible and scheduled:
+            admin = AdminState.UP
+            carrier = CarrierState.UP
+            lat = latency_map.get(pair)
+        else:
+            admin = AdminState.UP  # wired but not active
+            carrier = CarrierState.DOWN
+            lat = None
+        links.append(
+            LinkState(
+                node_a=pair[0],
+                node_b=pair[1],
+                interface_a=ifaces[0],
+                interface_b=ifaces[1],
+                admin=admin,
+                carrier=carrier,
+                routing=RoutingState.UNKNOWN,
+                latency_ms=lat,
+                bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
+                link_type="isl",
+                sim_time=sim_time,
+            )
+        )
 
-    records = read_timeline_jsonl(timeline_path)
-    if not records:
-        logger.warning("Empty timeline, nothing to publish")
-        pub.close()
-        ctx.term()
-        return
+    # GS links
+    for pair, (visible, scheduled) in gs_state.items():
+        if not (pair[0].startswith("gs-") or pair[1].startswith("gs-")):
+            continue
+        if visible and scheduled:
+            admin = AdminState.UP
+            carrier = CarrierState.UP
+            lat = latency_map.get(pair)
+        elif visible and not scheduled:
+            admin = AdminState.UP
+            carrier = CarrierState.LOWERLAYERDOWN
+            lat = None
+        else:
+            admin = AdminState.UP
+            carrier = CarrierState.DOWN
+            lat = None
+        links.append(
+            LinkState(
+                node_a=pair[0],
+                node_b=pair[1],
+                interface_a="gnd0",
+                interface_b="gnd0",
+                admin=admin,
+                carrier=carrier,
+                routing=RoutingState.UNKNOWN,
+                latency_ms=lat,
+                bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
+                link_type="ground",
+                sim_time=sim_time,
+            )
+        )
 
-    prev_ts = records[0]["timestamp_s"]
-    for record in records:
-        # Pace: sleep for the time delta scaled by compression
-        ts = record["timestamp_s"]
-        delta = (ts - prev_ts) / compression_factor if compression_factor > 0 else 0
-        if delta > 0:
-            time.sleep(delta)
-        prev_ts = ts
-
-        event_type = record["event_type"]
-        payload = json.dumps(record["data"]).encode()
-
-        if event_type == "ClockTick":
-            pub.send(encode_message(TOPIC_CLOCK_TICK, payload))
-        elif event_type == "Snapshot":
-            pub.send(encode_message(b"Snapshot", payload))
-        elif event_type == "VisibilityEvent":
-            pub.send(encode_message(TOPIC_VISIBILITY_EVENT, payload))
-
-    logger.info("OME ZMQ replay complete")
-    pub.close()
-    ctx.term()
+    return LinkStateSnapshot(
+        sim_time=sim_time,
+        snapshot_seq=seq,
+        links=tuple(links),
+        interval_s=interval_s,
+    )

@@ -61,10 +61,17 @@ NATS_CONNECT_OPTIONS: dict = {
 
 
 def nats_url() -> str:
-    """Get NATS server URL from platform config."""
-    from nodalarc.platform import get_platform_config
+    """Get NATS server URL from platform config.
 
-    return get_platform_config().nats_url
+    Falls back to localhost if platform config is not initialized
+    (test environment, development).
+    """
+    try:
+        from nodalarc.platform import get_platform_config
+
+        return get_platform_config().nats_url
+    except RuntimeError:
+        return "nats://localhost:4222"
 
 
 def node_agent_subject(node_id: str) -> str:

@@ -1,18 +1,17 @@
-"""Scenario injection handler — REP socket on port 5564.
+"""Scenario injection handler — NATS request/reply.
 
-Migrated from orchestrator/main.py:91-168. Replaces direct link_manager
-calls with BatchLinkDown/BatchLinkUp gRPC dispatch through the Node Agent.
+Subscribes to nodalarc.scheduler.scenario for scenario injection commands.
+Replaces ZMQ REP on port 5564.
 
 Actions:
   inject_link_down: Add pair to override set, dispatch BatchLinkDown to agent,
-                    publish LinkDown on port 5561.
+                    publish LinkDown on NATS.
   inject_link_up:   Remove pair from override set. The next OME visibility event
                     for this pair will trigger a normal BatchLinkUp if visible.
   inject_satellite_loss: Add all pairs involving a node to override set,
                          dispatch BatchLinkDown for each, publish LinkDown.
-  clear_overrides:  Clear override set. Reconcile: for each previously-overridden
-                    pair, check OME state — if visible+scheduled AND not already
-                    active, dispatch BatchLinkUp to bring it back up.
+  clear_overrides:  Clear override set. Previously-overridden pairs reconcile
+                    when the OME's next VisibilityEvent arrives.
 
 The override set is shared (via threading.Lock) with the Dispatcher, which
 checks it before processing OME visibility events.
@@ -20,17 +19,19 @@ checks it before processing OME visibility events.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
 from datetime import UTC, datetime
 
-import zmq
+import nats
 from nodalarc.models.link_events import LinkDown
-from nodalarc.zmq_channels import (
-    TOPIC_LINK_DOWN,
-    encode_message,
-    to_scenario_inject_bind,
+from nodalarc.nats_channels import (
+    NATS_CONNECT_OPTIONS,
+    SUBJECT_LINK_DOWN,
+    SUBJECT_SCENARIO_INJECT,
+    nats_url,
 )
 
 from node_agent.proto import node_agent_pb2
@@ -41,7 +42,7 @@ log = logging.getLogger(__name__)
 
 
 def run_scenario_handler(
-    to_pub: zmq.Socket,
+    to_pub,  # legacy parameter, ignored — LinkDown published on NATS
     interface_map: dict[tuple[str, str], tuple[str, str]],
     bandwidth_map: dict[tuple[str, str], float],
     override_set: set[tuple[str, str]],
@@ -50,19 +51,38 @@ def run_scenario_handler(
     pod_locator: PodLocationMap,
     agent_pool: AgentPool,
 ) -> None:
-    """Handle scenario injection requests on port 5564.
+    """Handle scenario injection requests via NATS request/reply.
 
-    Runs in a daemon thread. Blocks on ZMQ REP recv().
+    Runs in a daemon thread. Blocks on NATS subscription.
     """
-    ctx = zmq.Context()
-    sock = ctx.socket(zmq.REP)
-    sock.bind(to_scenario_inject_bind())
-    log.info("Scenario handler bound on %s", to_scenario_inject_bind())
+    asyncio.run(
+        _run_scenario_async(
+            interface_map,
+            bandwidth_map,
+            override_set,
+            override_lock,
+            active_links,
+            pod_locator,
+            agent_pool,
+        )
+    )
 
-    try:
-        while True:
-            raw = sock.recv()
-            cmd = json.loads(raw)
+
+async def _run_scenario_async(
+    interface_map: dict[tuple[str, str], tuple[str, str]],
+    bandwidth_map: dict[tuple[str, str], float],
+    override_set: set[tuple[str, str]],
+    override_lock: threading.Lock,
+    active_links: dict,
+    pod_locator: PodLocationMap,
+    agent_pool: AgentPool,
+) -> None:
+    nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+    log.info("Scenario handler NATS connected, subject=%s", SUBJECT_SCENARIO_INJECT)
+
+    async def _handle_request(msg):
+        try:
+            cmd = json.loads(msg.data)
             action = cmd.get("action", "")
             now = datetime.now(UTC)
 
@@ -71,9 +91,7 @@ def run_scenario_handler(
                 pair = (min(pair), max(pair))
                 with override_lock:
                     override_set.add(pair)
-                # Dispatch BatchLinkDown to Node Agent
                 _dispatch_link_down(pair, interface_map, active_links, pod_locator, agent_pool)
-                # Publish LinkDown on port 5561
                 ifaces = interface_map.get(pair, ("", ""))
                 event = LinkDown(
                     sim_time=now,
@@ -84,17 +102,15 @@ def run_scenario_handler(
                     interface_b=ifaces[1],
                     reason="scenario_inject_down",
                 )
-                to_pub.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
-                sock.send(b'{"status":"ok"}')
+                await nc.publish(SUBJECT_LINK_DOWN, event.model_dump_json().encode())
+                await msg.respond(b'{"status":"ok"}')
 
             elif action == "inject_link_up":
                 pair = (cmd["node_a"], cmd["node_b"])
                 pair = (min(pair), max(pair))
                 with override_lock:
                     override_set.discard(pair)
-                # Don't dispatch BatchLinkUp here — the next OME visibility
-                # event will trigger it if the link is visible+scheduled.
-                sock.send(b'{"status":"ok"}')
+                await msg.respond(b'{"status":"ok"}')
 
             elif action == "inject_satellite_loss":
                 node = cmd["node"]
@@ -117,35 +133,37 @@ def run_scenario_handler(
                         interface_b=ifaces[1],
                         reason="satellite_loss",
                     )
-                    to_pub.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
+                    await nc.publish(SUBJECT_LINK_DOWN, event.model_dump_json().encode())
 
                 log.info("Satellite loss injected for %s (%d links)", node, len(downed_pairs))
-                sock.send(b'{"status":"ok"}')
+                await msg.respond(b'{"status":"ok"}')
 
             elif action == "clear_overrides":
-                # Capture overridden pairs before clearing
                 with override_lock:
                     previously_overridden = set(override_set)
                     override_set.clear()
-                # Reconcile: previously-overridden pairs will reconcile when the
-                # OME's next VisibilityEvent for each pair arrives. The Scheduler
-                # will see visible+scheduled and dispatch BatchLinkUp.
                 log.info(
                     "Overrides cleared (%d pairs). Links will reconcile on next OME visibility cycle.",
                     len(previously_overridden),
                 )
-                sock.send(b'{"status":"ok"}')
+                await msg.respond(b'{"status":"ok"}')
 
             else:
-                sock.send(b'{"status":"error","msg":"unknown action"}')
+                await msg.respond(b'{"status":"error","msg":"unknown action"}')
 
-    except KeyboardInterrupt:
+        except Exception as exc:
+            log.error("Scenario handler error: %s", exc, exc_info=True)
+            await msg.respond(json.dumps({"status": "error", "msg": str(exc)}).encode())
+
+    await nc.subscribe(SUBJECT_SCENARIO_INJECT, cb=_handle_request)
+
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except asyncio.CancelledError:
         pass
-    except Exception as exc:
-        log.error("Scenario handler error: %s", exc, exc_info=True)
     finally:
-        sock.close()
-        ctx.term()
+        await nc.close()
 
 
 def _dispatch_link_down(
@@ -158,7 +176,7 @@ def _dispatch_link_down(
     """Dispatch BatchLinkDown for a single link pair via the Node Agent."""
     info = active_links.pop(pair, None)
     if info is None:
-        return  # Link not active — nothing to tear down
+        return
 
     ifaces = interface_map.get(pair, ("", ""))
     is_gs = pair[0].startswith("gs-") or pair[1].startswith("gs-")
@@ -201,7 +219,7 @@ def _dispatch_link_down(
             locality=node_agent_pb2.LOCAL,
             interfaces=interfaces,
         )
-        resp = stub.BatchLinkDown(req)
+        resp = stub.batch_link_down(req)
         if not resp.success:
             log.warning("Scenario BatchLinkDown failed for %s: %s", pair, resp.error_message)
     except Exception as exc:

@@ -1,29 +1,21 @@
-"""Node Agent ZMQ ROUTER server — replaces gRPC transport.
+"""Node Agent NATS server — replaces ZMQ ROUTER transport.
 
-The gRPC C extension is incompatible with hostPID:true containers
-(accept4 SOCK_CLOEXEC|SOCK_NONBLOCK fails intermittently). ZMQ ROUTER/
-DEALER provides the same async request/response pattern without the
-C extension dependency.
-
-Message envelope (ROUTER socket):
-  Frame 0: identity (from ROUTER — pass back unchanged)
-  Frame 1: empty delimiter
-  Frame 2: message type (b"BatchLinkDown", b"BatchLinkUp", etc.)
-  Frame 3: serialized protobuf request bytes
-
-Response:
-  Frame 0: identity (echoed back)
-  Frame 1: empty delimiter
-  Frame 2: serialized protobuf response bytes
+Subscribes to NATS subject nodalarc.agent.{hostname} for batch commands
+from the Scheduler. Uses NATS request/reply — Scheduler publishes a request,
+Node Agent processes the batch (concurrent execution preserved via thread pool),
+and replies with the aggregated result.
 
 Proto message definitions are unchanged — still used for serialization.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import socket
 
-import zmq
+import nats
+from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url
 
 from node_agent.handlers import (
     handle_batch_link_down,
@@ -37,14 +29,13 @@ log = logging.getLogger(__name__)
 
 
 class NodeAgentServer:
-    """ZMQ ROUTER server for the Node Agent DaemonSet."""
+    """NATS request/reply server for the Node Agent DaemonSet."""
 
     def __init__(self, port: int = 50100, pid_map: dict[str, int] | None = None) -> None:
-        self._port = port
+        self._port = port  # kept for backward compat / logging
         self._pid_map = pid_map or {}
         self._running = False
-        self._ctx: zmq.Context | None = None
-        self._sock: zmq.Socket | None = None
+        self._nc: nats.NATS | None = None
 
     def set_pid_map(self, pid_map: dict[str, int]) -> None:
         self._pid_map = pid_map
@@ -53,7 +44,6 @@ class NodeAgentServer:
         """Return pid_map, refreshing if stale (fewer than expected pods)."""
         import time as _time
 
-        # Refresh at most once every 10 seconds to avoid hammering K8s API
         now = _time.monotonic()
         if not hasattr(self, "_last_refresh"):
             self._last_refresh = 0.0
@@ -76,48 +66,66 @@ class NodeAgentServer:
         return self._pid_map
 
     def run(self) -> None:
-        """Run the ZMQ ROUTER poll loop. Blocks until stop() is called."""
+        """Run the NATS request/reply server. Blocks until stop() is called."""
+        asyncio.run(self._run_async())
+
+    async def _run_async(self) -> None:
+        """Async NATS subscription loop."""
         self._running = True
-        self._ctx = zmq.Context()
-        self._sock = self._ctx.socket(zmq.ROUTER)
-        self._sock.bind(f"tcp://0.0.0.0:{self._port}")
-        log.info("NodeAgent ZMQ ROUTER listening on port %d", self._port)
 
-        poller = zmq.Poller()
-        poller.register(self._sock, zmq.POLLIN)
+        nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+        self._nc = nc
 
-        while self._running:
-            socks = dict(poller.poll(timeout=1000))
-            if self._sock not in socks:
-                continue
+        # Subscribe to per-host subject — one Node Agent per K8s node
+        hostname = socket.gethostname()
+        subject = f"nodalarc.agent.{hostname}"
 
-            frames = self._sock.recv_multipart()
-            if len(frames) < 4:
-                log.warning("Malformed message: %d frames", len(frames))
-                continue
-
-            identity = frames[0]
-            # frames[1] is empty delimiter
-            msg_type = frames[2]
-            payload = frames[3]
-
+        async def _handle_request(msg):
+            """Handle a single NATS request — dispatch to handler, reply."""
             try:
-                response_bytes = self._dispatch(msg_type, payload)
+                # Message format: first line is message type, rest is payload
+                # Using a simple header format: type\0payload
+                data = msg.data
+                sep = data.find(b"\x00")
+                if sep < 0:
+                    log.warning("Malformed NATS message: no type separator")
+                    await msg.respond(b"")
+                    return
+
+                msg_type = data[:sep]
+                payload = data[sep + 1 :]
+
+                # Run handler in executor to keep event loop responsive
+                # (handlers do blocking namespace operations)
+                loop = asyncio.get_running_loop()
+                response_bytes = await loop.run_in_executor(None, self._dispatch, msg_type, payload)
+                await msg.respond(response_bytes)
             except Exception as exc:
-                log.error("Handler error for %s: %s", msg_type, exc, exc_info=True)
-                response_bytes = b""
+                log.error("Handler error: %s", exc, exc_info=True)
+                await msg.respond(b"")
 
-            self._sock.send_multipart([identity, b"", response_bytes])
+        sub = await nc.subscribe(subject, cb=_handle_request)
+        log.info("NodeAgent NATS listening on subject %s", subject)
 
-        self._sock.close()
-        self._ctx.term()
-        log.info("NodeAgent ZMQ server stopped")
+        try:
+            while self._running:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await sub.unsubscribe()
+            await nc.close()
+            log.info("NodeAgent NATS server stopped")
 
     def stop(self) -> None:
         self._running = False
 
     def _dispatch(self, msg_type: bytes, payload: bytes) -> bytes:
-        """Dispatch a request to the appropriate handler, return serialized response."""
+        """Dispatch a request to the appropriate handler, return serialized response.
+
+        Runs in a thread pool executor — handlers use concurrent.futures
+        internally for batch parallelism (ThreadPoolExecutor in handlers.py).
+        """
         pid_map = self._ensure_pid_map()
 
         if msg_type == b"BatchLinkDown":

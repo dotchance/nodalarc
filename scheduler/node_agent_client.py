@@ -33,12 +33,9 @@ class NodeAgentClient:
         """Initialize client.
 
         Args:
-            addr: K8s node hostname or legacy "host:port" address.
-                  If contains ":", extracts hostname before the colon.
+            addr: K8s node name (e.g. "nodal"). Used as NATS subject.
         """
-        # Legacy addr format is "192.168.10.202:50100" — extract hostname
-        # For NATS we need the K8s node name, not IP:port
-        self._host = addr.split(":")[0] if ":" in addr else addr
+        self._host = addr
         self._subject = f"nodalarc.agent.{self._host}"
         self._nc: nats.NATS | None = None
         self._lock = threading.Lock()

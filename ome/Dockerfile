@@ -14,7 +14,7 @@ WORKDIR /app
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
-    pydantic>=2.0 pyzmq pyyaml numpy sgp4 skyfield
+    pydantic>=2.0 pyzmq nats-py pyyaml numpy sgp4 skyfield
 
 # Add lib/ to Python path so nodalarc package is importable
 ENV PYTHONPATH=/app/lib:/app

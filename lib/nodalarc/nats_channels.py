@@ -83,9 +83,8 @@ def node_agent_subject(node_id: str) -> str:
 # JetStream stream configurations — used during stream creation
 # ---------------------------------------------------------------------------
 
-# Orbital period for a 550km LEO orbit in nanoseconds (2 periods for retention)
-_ORBITAL_PERIOD_NS = 5730_000_000_000
-_TWO_PERIODS_NS = 2 * _ORBITAL_PERIOD_NS
+# Orbital period for a 550km LEO orbit — retention = 2 periods in seconds
+_TWO_PERIODS_S = 2 * 5730  # ~3.18 hours
 
 
 def ome_stream_config() -> dict:
@@ -96,7 +95,7 @@ def ome_stream_config() -> dict:
         "retention": "limits",
         "storage": "memory",
         "max_msgs_per_subject": -1,
-        "max_age": _TWO_PERIODS_NS,
+        "max_age": _TWO_PERIODS_S,
         "max_bytes": 128 * 1024 * 1024,
     }
 
@@ -114,7 +113,7 @@ def link_stream_config() -> dict:
         "retention": "limits",
         "storage": "memory",
         "max_msgs_per_subject": 1,
-        "max_age": _TWO_PERIODS_NS,
+        "max_age": _TWO_PERIODS_S,
         "max_bytes": 64 * 1024 * 1024,
     }
 
@@ -127,6 +126,6 @@ def mi_stream_config() -> dict:
         "retention": "limits",
         "storage": "memory",
         "max_msgs_per_subject": -1,
-        "max_age": _TWO_PERIODS_NS,
+        "max_age": _TWO_PERIODS_S,
         "max_bytes": 64 * 1024 * 1024,
     }

@@ -169,6 +169,33 @@ def precompute_timeline_window(
         dict(initial_gs_state) if initial_gs_state else {}
     )
 
+    # Window boundary bridge: emit absolute GS state for window 2+.
+    # GS pairs that are (visible=True, scheduled=False) at end of window N
+    # carry forward into window N+1 with no state transition — the OME only
+    # emits on change. Without this, the Scheduler never receives the
+    # deallocation event and stale GS links persist forever.
+    # TEMPORARY BRIDGE: replaced by NATS JetStream LinkStateSnapshot in M9.
+    if initial_gs_state:
+        boundary_sim = datetime.fromtimestamp(epoch_unix, tz=UTC)
+        for pair, (vis, sched) in gs_state.items():
+            if vis and not sched:
+                events.append(
+                    TimelineEvent(
+                        timestamp_offset,
+                        "VisibilityEvent",
+                        VisibilityEvent(
+                            sim_time=boundary_sim,
+                            node_a=pair[0],
+                            node_b=pair[1],
+                            visible=True,
+                            scheduled=False,
+                            range_km=0.0,
+                            elevation_deg=0.0,
+                            terminal_type="optical",
+                        ),
+                    )
+                )
+
     steps = int(duration_s / step_seconds)
     for step in range(steps + 1):
         dt = step * step_seconds

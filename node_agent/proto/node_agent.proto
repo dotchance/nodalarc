@@ -5,6 +5,8 @@ package nodalarc.node_agent;
 // The Node Agent runs as a DaemonSet on each K3s node.
 // It executes privileged netlink operations against local pod namespaces.
 // The Scheduler sends batched commands; the agent executes them concurrently.
+// PIDs are never supplied by the Scheduler — the Node Agent looks them up
+// internally from its own pid_map (populated during wiring).
 service NodeAgentService {
   // Bring down a batch of interfaces atomically.
   // All operations execute concurrently. ACK returned when all complete.
@@ -36,13 +38,11 @@ enum Locality {
 message InterfaceDown {
   string node_id = 1;
   string interface_name = 2;
-  int32 pid = 3;
+  // field 3 removed — PID looked up by Node Agent internally
   LinkType link_type = 4;
-  // Ground-specific: needed for bridge detach
   string gs_id = 5;
   string sat_id = 6;
-  int32 gs_pid = 7;
-  int32 sat_pid = 8;
+  // fields 7-8 removed — PID looked up by Node Agent internally
 }
 
 message BatchLinkDownRequest {
@@ -64,15 +64,13 @@ message BatchLinkDownResponse {
 message InterfaceUp {
   string node_id = 1;
   string interface_name = 2;
-  int32 pid = 3;
+  // field 3 removed — PID looked up by Node Agent internally
   LinkType link_type = 4;
   double latency_ms = 5;
   double bandwidth_mbps = 6;
-  // Ground-specific: needed for bridge attach
   string gs_id = 7;
   string sat_id = 8;
-  int32 gs_pid = 9;
-  int32 sat_pid = 10;
+  // fields 9-10 removed — PID looked up by Node Agent internally
   // NDP: peer MAC for deriving link-local address (ISL only)
   string peer_mac = 11;
 }
@@ -96,14 +94,12 @@ message BatchLinkUpResponse {
 message LatencyEntry {
   string node_id = 1;
   string interface_name = 2;
-  int32 pid = 3;
+  // field 3 removed — PID looked up by Node Agent internally
   double latency_ms = 4;
   LinkType link_type = 5;
-  // Ground-specific
   string gs_id = 6;
   string sat_id = 7;
-  int32 gs_pid = 8;
-  int32 sat_pid = 9;
+  // fields 8-9 removed — PID looked up by Node Agent internally
 }
 
 message SetLatencyRequest {

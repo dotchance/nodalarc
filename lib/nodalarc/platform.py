@@ -138,9 +138,7 @@ class PlatformConfig(BaseModel):
 
     @property
     def to_link_catchup_connect(self) -> str:
-        return (
-            f"tcp://{self.zmq_connect_host_for('scheduler-events')}:{self.zmq_to_link_catchup_port}"
-        )
+        return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_link_catchup_port}"
 
     @property
     def scheduler_events_hostname(self) -> str:

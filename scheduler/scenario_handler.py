@@ -176,12 +176,9 @@ def _dispatch_link_down(
             node_agent_pb2.InterfaceDown(
                 node_id=sat_id,
                 interface_name="gnd0",
-                pid=pod_locator.pid(sat_id),
                 link_type=node_agent_pb2.GROUND,
                 gs_id=gs_id,
                 sat_id=sat_id,
-                gs_pid=pod_locator.pid(gs_id),
-                sat_pid=pod_locator.pid(sat_id),
             )
         ]
     else:
@@ -191,13 +188,11 @@ def _dispatch_link_down(
             node_agent_pb2.InterfaceDown(
                 node_id=node_a,
                 interface_name=ifaces[0],
-                pid=pod_locator.pid(node_a),
                 link_type=node_agent_pb2.ISL,
             ),
             node_agent_pb2.InterfaceDown(
                 node_id=node_b,
                 interface_name=ifaces[1],
-                pid=pod_locator.pid(node_b),
                 link_type=node_agent_pb2.ISL,
             ),
         ]

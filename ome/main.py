@@ -392,6 +392,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                         break
 
                     # Enqueue all events for this tick
+                    current_positions = None
                     for te in tick_events:
                         payload = te.data.model_dump_json().encode()
                         if te.event_type == "VisibilityEvent":
@@ -406,6 +407,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                         elif te.event_type == "Snapshot":
                             _enqueue(SUBJECT_SNAPSHOT, payload)
                             current_sim_time_iso = te.data.sim_time.isoformat()
+                            current_positions = te.data.positions
 
                     # ClockTick
                     ct = ClockTick(
@@ -429,6 +431,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                                 sim_time=datetime.fromisoformat(current_sim_time_iso),
                                 seq=snapshot_seq,
                                 interval_s=snapshot_interval_s,
+                                positions=current_positions,
                             )
                             _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, snap.model_dump_json().encode())
                             last_snapshot_sim_s = current_sim_s

@@ -1,7 +1,7 @@
 """Unit tests for scheduler/dispatcher.py — the live production dispatcher.
 
 Uses mocked NATS connection and Node Agent stubs. Feeds VisibilityEvents
-through actual _dispatch_batch() and _apply_link_state_snapshot() methods.
+through actual _dispatch_batch() and _build_desired_from_snapshot() methods.
 """
 
 from __future__ import annotations
@@ -164,9 +164,9 @@ class TestDispatcherActiveLinks:
 
 
 class TestDispatcherLinkStateSnapshot:
-    """Test _apply_link_state_snapshot (R-OME-009 replace-not-merge)."""
+    """Test _build_desired_from_snapshot (R-OME-009 replace-not-merge)."""
 
-    def test_snapshot_clears_active_links_before_applying(self):
+    def test_snapshot_produces_desired_without_stale_links(self):
         d, _ = _make_dispatcher()
         d._active_links[("sat-P99S99", "sat-P99S98")] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
 
@@ -176,12 +176,12 @@ class TestDispatcherLinkStateSnapshot:
             links=(_make_link("sat-P00S00", "sat-P00S01"),),
             interval_s=5.0,
         )
-        d._apply_link_state_snapshot(snapshot)
+        desired = d._build_desired_from_snapshot(snapshot)
 
-        assert ("sat-P99S99", "sat-P99S98") not in d._active_links
-        assert ("sat-P00S00", "sat-P00S01") in d._active_links
+        assert ("sat-P99S99", "sat-P99S98") not in desired
+        assert ("sat-P00S00", "sat-P00S01") in desired
 
-    def test_snapshot_gs_removal(self):
+    def test_snapshot_gs_exclusion(self):
         d, _ = _make_dispatcher()
         d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
 
@@ -191,9 +191,9 @@ class TestDispatcherLinkStateSnapshot:
             links=(),
             interval_s=5.0,
         )
-        d._apply_link_state_snapshot(snapshot)
+        desired = d._build_desired_from_snapshot(snapshot)
 
-        assert ("gs-ashburn", "sat-P00S00") not in d._active_links
+        assert ("gs-ashburn", "sat-P00S00") not in desired
 
     def test_snapshot_seq_monotonicity(self):
         d, _ = _make_dispatcher()
@@ -206,8 +206,9 @@ class TestDispatcherLinkStateSnapshot:
             links=(),
             interval_s=5.0,
         )
-        d._apply_link_state_snapshot(snapshot)
+        desired = d._build_desired_from_snapshot(snapshot)
 
+        assert desired is None
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
 

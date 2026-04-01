@@ -167,14 +167,14 @@ def main():
     # In production, per-timestep OME Snapshot events drive position drift.
     # Between OME windows, FullStateSnapshots repeat the same trajectory,
     # so latencies don't change. This patch simulates first-update trigger.
-    original_dispatch_ups = dispatcher._dispatch_ups
+    original_send_batch_up = dispatcher._send_batch_up
 
-    async def patched_dispatch_ups(*a, **kw):
-        result = await original_dispatch_ups(*a, **kw)
+    async def patched_send_batch_up(*a, **kw):
+        result = await original_send_batch_up(*a, **kw)
         dispatcher._last_latencies.clear()
         return result
 
-    dispatcher._dispatch_ups = patched_dispatch_ups
+    dispatcher._send_batch_up = patched_send_batch_up
 
     async def run():
         task = asyncio.create_task(dispatcher.run())

@@ -1,14 +1,14 @@
-"""Scheduler dispatch loop — NATS JetStream subscription, two-phase dispatch.
+"""Scheduler dispatch loop — NATS JetStream subscription, reconcile-based dispatch.
 
 Subscribes to NATS JetStream for VisibilityEvent, ClockTick, Snapshot,
-HeartbeatTick, and LinkStateSnapshot. Dispatches link changes as two-phase
-BatchLinkDown/Up to Node Agents. Publishes LinkUp/LinkDown/LatencyUpdate
+HeartbeatTick, and LinkStateSnapshot. _reconcile_links is the single path
+to the Node Agent — both live VisibilityEvents and LinkStateSnapshot build
+a desired state dict and call it. Publishes LinkUp/LinkDown/LatencyUpdate
 on NATS subjects.
 
-LinkStateSnapshot (R-OME-009) is applied as replace-not-merge — all prior
-_active_links state is discarded and rebuilt from the snapshot. This
-eliminates window boundary accumulation, subscriber drift, and all
-transition-only state bugs permanently.
+LinkStateSnapshot (R-OME-009) is applied as replace-not-merge — desired
+state is built from the snapshot, and _reconcile_links computes the delta
+against current _active_links and dispatches BatchLinkDown/Up accordingly.
 """
 
 from __future__ import annotations
@@ -62,22 +62,21 @@ class ActiveLinkInfo:
 
 
 class Dispatcher:
-    """Two-phase topology dispatcher — NATS JetStream transport.
+    """Reconcile-based topology dispatcher — NATS JetStream transport.
 
     Subscribes to NATS for OME events, dispatches BatchLinkDown/Up to
-    Node Agents, publishes LinkUp/LinkDown/LatencyUpdate on NATS.
+    Node Agents via _reconcile_links, publishes LinkUp/LinkDown/LatencyUpdate.
 
     LinkStateSnapshot (R-OME-009) applied as replace-not-merge every 5
     sim-seconds. Eliminates window boundary GS accumulation permanently.
 
+    _reconcile_links is THE SINGLE PATH to the Node Agent for link state.
+    Both _dispatch_batch (live VisibilityEvents) and _on_link_state_snapshot
+    build a desired dict and call _reconcile_links. No other code path
+    touches BatchLinkUp/Down.
+
     INVARIANT: visible=True, scheduled=False for a GS pair MUST remove the
-    pair from _active_links in ALL code paths that process VisibilityEvents:
-      1. _apply_link_state_snapshot (replace-not-merge)
-      2. _dispatch_batch live (line ~281)
-    _dispatch_ups only processes scheduled=True events — deallocation is
-    handled by _dispatch_batch before _dispatch_ups is called.
-    This bug appeared 3 times. test_ome_scheduler_contract.py verifies both
-    paths. Do not remove that test.
+    pair from desired state. test_ome_scheduler_contract.py verifies this.
     """
 
     def __init__(
@@ -149,13 +148,15 @@ class Dispatcher:
             try:
                 msg = await sub_snap.next_msg(timeout=5)
                 snapshot = LinkStateSnapshot.model_validate_json(msg.data)
-                self._apply_link_state_snapshot(snapshot)
-                await self._dispatch_snapshot_delta(nc)
-                log.info(
-                    "Initial snapshot applied: seq=%d, %d links",
-                    snapshot.snapshot_seq,
-                    len(snapshot.links),
-                )
+                desired = self._build_desired_from_snapshot(snapshot)
+                if desired is not None:
+                    sim_time = self._current_sim_time or datetime.now(UTC)
+                    await self._reconcile_links(desired, nc, sim_time)
+                    log.info(
+                        "Initial snapshot applied: seq=%d, %d links",
+                        snapshot.snapshot_seq,
+                        len(desired),
+                    )
             except nats.errors.TimeoutError:
                 log.info("No initial LinkStateSnapshot available — waiting for OME")
         except Exception as exc:
@@ -208,9 +209,11 @@ class Dispatcher:
 
         async def _on_link_state_snapshot(msg):
             snapshot = LinkStateSnapshot.model_validate_json(msg.data)
-            self._apply_link_state_snapshot(snapshot)
-            # Dispatch delta in background — don't block message processing
-            asyncio.create_task(self._dispatch_snapshot_delta(nc))
+            async with _dispatch_lock:
+                desired = self._build_desired_from_snapshot(snapshot)
+                if desired is not None:
+                    sim_time = self._current_sim_time or datetime.now(UTC)
+                    await self._reconcile_links(desired, nc, sim_time)
 
         subs = []
         try:
@@ -271,12 +274,17 @@ class Dispatcher:
                 await nc.close()
             log.info("Dispatcher stopped")
 
-    def _apply_link_state_snapshot(self, snapshot: LinkStateSnapshot) -> None:
-        """Apply LinkStateSnapshot as replace-not-merge (R-OME-009).
+    def _build_desired_from_snapshot(
+        self, snapshot: LinkStateSnapshot
+    ) -> dict[tuple[str, str], ActiveLinkInfo] | None:
+        """Build desired link state from a LinkStateSnapshot (R-OME-009).
 
-        Discards all prior _active_links state and rebuilds from the snapshot.
-        Any subscriber applying the same snapshot arrives at identical state.
-        Multi-node safe: no coordination needed between Scheduler instances.
+        Returns the desired _active_links dict, or None if the snapshot is
+        stale. Does NOT modify _active_links — the caller passes the result
+        to _reconcile_links which computes the delta and dispatches.
+
+        Multi-node safe: two Scheduler instances applying the same snapshot
+        compute identical desired dicts.
         """
         if snapshot.snapshot_seq <= self._last_snapshot_seq:
             log.debug(
@@ -284,124 +292,42 @@ class Dispatcher:
                 snapshot.snapshot_seq,
                 self._last_snapshot_seq,
             )
-            return
+            return None
 
-        previous = dict(self._active_links)
-        self._active_links.clear()
+        self._last_snapshot_seq = snapshot.snapshot_seq
+        desired: dict[tuple[str, str], ActiveLinkInfo] = {}
 
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 pair = (link.node_a, link.node_b)
-                # Latency comes from the Scheduler's position table, not the snapshot.
-                # The snapshot reports admin/carrier state only (PRD R-TO-002).
                 latency = self._position_table.compute_link_latency(link.node_a, link.node_b)
-                self._active_links[pair] = ActiveLinkInfo(
-                    interface_a=link.interface_a,
-                    interface_b=link.interface_b,
+
+                is_gs = link.node_a.startswith("gs-") or link.node_b.startswith("gs-")
+                if is_gs:
+                    ifaces = ("gnd0", "gnd0")
+                else:
+                    ifaces = self._interface_map.get(pair)
+                    if not ifaces:
+                        continue
+
+                bandwidth = self._bandwidth_map.get(pair, link.bandwidth_mbps or 1000.0)
+                desired[pair] = ActiveLinkInfo(
+                    interface_a=ifaces[0],
+                    interface_b=ifaces[1],
                     latency_ms=latency if latency is not None else 3.0,
-                    bandwidth_mbps=link.bandwidth_mbps or 1000.0,
+                    bandwidth_mbps=bandwidth,
                 )
 
-        self._last_snapshot_seq = snapshot.snapshot_seq
-
-        isl = sum(1 for a, _ in self._active_links if not a.startswith("gs-"))
-        gs = sum(1 for a, _ in self._active_links if a.startswith("gs-"))
+        isl = sum(1 for a, _ in desired if not a.startswith("gs-"))
+        gs = sum(1 for a, _ in desired if a.startswith("gs-"))
         log.info(
-            "LinkStateSnapshot applied: seq=%d, %d links (%d ISL, %d GS)",
+            "LinkStateSnapshot seq=%d: %d links (%d ISL, %d GS)",
             snapshot.snapshot_seq,
-            len(self._active_links),
+            len(desired),
             isl,
             gs,
         )
-
-        # Compute delta and save previous state for dispatch.
-        # _dispatch_downs needs the PREVIOUS ActiveLinkInfo for removed pairs
-        # (interface names, agent lookup). We must save it before it's lost.
-        new_pairs = set(self._active_links.keys())
-        old_pairs = set(previous.keys())
-        self._snapshot_delta = (
-            new_pairs - old_pairs,
-            old_pairs - new_pairs,
-            previous,  # previous _active_links — needed for down dispatch
-        )
-
-    async def _dispatch_snapshot_delta(self, nc) -> None:
-        """Dispatch BatchLinkUp/Down to Node Agent for snapshot delta.
-
-        Called after _apply_link_state_snapshot. Sends the kernel operations
-        that make the data plane match the snapshot state.
-
-        Critical for GS handoffs: the down dispatch needs the PREVIOUS
-        ActiveLinkInfo (interface names) for removed pairs. We temporarily
-        restore them into _active_links for the dispatch, then remove them.
-        """
-        if not hasattr(self, "_snapshot_delta") or self._snapshot_delta is None:
-            return
-
-        added_pairs, removed_pairs, previous = self._snapshot_delta
-        self._snapshot_delta = None
-
-        if not added_pairs and not removed_pairs:
-            return
-
-        sim_time = self._current_sim_time or datetime.now(UTC)
-        sim_iso = sim_time.isoformat()
-
-        # Dispatch downs first — temporarily restore removed pairs so
-        # _dispatch_downs can find their interface info and agent address.
-        if removed_pairs:
-            for pair in removed_pairs:
-                prev_info = previous.get(pair)
-                if prev_info:
-                    self._active_links[pair] = prev_info
-
-            down_events = []
-            for pair in removed_pairs:
-                down_events.append(
-                    VisibilityEvent(
-                        sim_time=sim_time,
-                        node_a=pair[0],
-                        node_b=pair[1],
-                        visible=False,
-                        scheduled=False,
-                        range_km=0.0,
-                        elevation_deg=0.0,
-                        terminal_type="optical",
-                    )
-                )
-            await self._dispatch_downs(down_events, sim_iso, nc)
-
-            # Clean up — _dispatch_downs pops from _active_links on success,
-            # but ensure none linger if dispatch failed
-            for pair in removed_pairs:
-                self._active_links.pop(pair, None)
-
-        # Dispatch ups
-        if added_pairs:
-            up_events = []
-            for pair in added_pairs:
-                info = self._active_links.get(pair)
-                if not info:
-                    continue
-                up_events.append(
-                    VisibilityEvent(
-                        sim_time=sim_time,
-                        node_a=pair[0],
-                        node_b=pair[1],
-                        visible=True,
-                        scheduled=True,
-                        range_km=0.0,
-                        elevation_deg=0.0,
-                        terminal_type="optical",
-                    )
-                )
-            await self._dispatch_ups(up_events, sim_iso, nc)
-
-        log.info(
-            "Snapshot delta dispatched: %d up, %d down",
-            len(added_pairs),
-            len(removed_pairs),
-        )
+        return desired
 
     def stop(self) -> None:
         self._running = False
@@ -416,18 +342,20 @@ class Dispatcher:
         snapshots: list[TimelinePositionSnapshot],
         to_pub,
     ) -> None:
-        """Process one epsilon-windowed batch of VisibilityEvents."""
+        """Process one epsilon-windowed batch of VisibilityEvents.
+
+        Builds desired state from current _active_links plus event
+        classification, then delegates to _reconcile_links — the single
+        path to the Node Agent for link state.
+        """
         if not vis_events:
             return
 
-        # Phase 2: Collect link down/up events
         sim_time = vis_events[0].sim_time
         self._current_sim_time = sim_time
-        sim_time_iso = sim_time.isoformat()
 
-        # Filter overrides and classify
-        down_events: list[VisibilityEvent] = []
-        up_events: list[VisibilityEvent] = []
+        # Build desired: start from current _active_links, apply deltas
+        desired = dict(self._active_links)
 
         for vis in vis_events:
             pair = (vis.node_a, vis.node_b)
@@ -436,25 +364,35 @@ class Dispatcher:
                     continue
 
             if vis.visible and vis.scheduled:
-                if pair not in self._active_links:
-                    up_events.append(vis)
+                if pair not in desired:
+                    is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                    if is_gs:
+                        ifaces = ("gnd0", "gnd0")
+                    else:
+                        ifaces = self._interface_map.get(pair)
+                        if not ifaces:
+                            continue
+
+                    bandwidth = self._bandwidth_map.get(pair, 1000.0)
+                    latency = self._position_table.compute_link_latency(vis.node_a, vis.node_b)
+                    if latency is None:
+                        latency = 3.0
+
+                    desired[pair] = ActiveLinkInfo(
+                        interface_a=ifaces[0],
+                        interface_b=ifaces[1],
+                        latency_ms=latency,
+                        bandwidth_mbps=bandwidth,
+                    )
             elif not vis.visible:
-                if pair in self._active_links:
-                    down_events.append(vis)
+                desired.pop(pair, None)
             elif vis.visible and not vis.scheduled:
-                # Terminal deallocated (GS handoff)
+                # Terminal deallocated (GS handoff) — INVARIANT
                 is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
-                if is_gs and pair in self._active_links:
-                    down_events.append(vis)
+                if is_gs:
+                    desired.pop(pair, None)
 
-        # Phase A: All BatchLinkDown — concurrent across agents
-        if down_events:
-            await self._dispatch_downs(down_events, sim_time_iso, to_pub)
-
-        # Phase B: All BatchLinkUp — concurrent across agents
-        # Only AFTER all down ACKs received.
-        if up_events:
-            await self._dispatch_ups(up_events, sim_time_iso, to_pub)
+        await self._reconcile_links(desired, to_pub, sim_time)
 
         # Latency updates
         self._steps_since_latency_update += 1
@@ -462,41 +400,84 @@ class Dispatcher:
             await self._update_latencies(to_pub)
             self._steps_since_latency_update = 0
 
-        # Checkpoint (fire-and-forget — don't block event loop)
-        asyncio.create_task(self._write_checkpoint(sim_time_iso))
+        # Checkpoint (fire-and-forget)
+        asyncio.create_task(self._write_checkpoint(sim_time.isoformat()))
 
     # ------------------------------------------------------------------
-    # Two-phase gRPC dispatch
+    # Reconcile-based dispatch — single path to Node Agent
     # ------------------------------------------------------------------
 
-    async def _dispatch_downs(
+    async def _reconcile_links(
         self,
-        events: list[VisibilityEvent],
-        sim_time_iso: str,
-        to_pub,
+        desired: dict[tuple[str, str], ActiveLinkInfo],
+        nc,
+        sim_time: datetime,
     ) -> None:
-        """Phase A: BatchLinkDown to all agents concurrently.
+        """Reconcile _active_links toward desired state via Node Agent dispatch.
 
-        Links are removed from _active_links ONLY after the Node Agent
-        confirms success. If BatchLinkDown fails, links stay in
-        _active_links — they are still up as far as we know.
+        THE SINGLE PATH TO THE NODE AGENT FOR LINK STATE.
+
+        Computes delta (desired vs current), dispatches BatchLinkDown for
+        removed pairs (Phase A), then BatchLinkUp for added pairs (Phase B).
+        Updates _active_links only for successfully dispatched changes.
+
+        Multi-node safe: two Scheduler instances applying the same snapshot
+        compute identical desired dicts. Each dispatches independently.
         """
-        agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
-        # Pending removals: (pair -> (info, vis)) — committed only on success
-        pending: dict[tuple[str, str], tuple[ActiveLinkInfo, VisibilityEvent]] = {}
+        current_pairs = set(self._active_links.keys())
+        desired_pairs = set(desired.keys())
 
-        for vis in events:
-            pair = (vis.node_a, vis.node_b)
+        to_remove = current_pairs - desired_pairs
+        to_add = desired_pairs - current_pairs
+
+        if not to_remove and not to_add:
+            return
+
+        sim_iso = sim_time.isoformat()
+
+        # Phase A: BatchLinkDown — downs first, always
+        if to_remove:
+            removed = await self._send_batch_down(to_remove, sim_iso, sim_time, nc)
+            for pair in removed:
+                self._active_links.pop(pair, None)
+                self._last_latencies.pop(pair, None)
+
+        # Phase B: BatchLinkUp — only after all Phase A ACKs
+        if to_add:
+            added = await self._send_batch_up(to_add, desired, sim_iso, sim_time, nc)
+            for pair in added:
+                self._active_links[pair] = desired[pair]
+                self._last_latencies[pair] = desired[pair].latency_ms
+
+        log.info(
+            "Reconcile: +%d/-%d links (%d active)",
+            len(to_add),
+            len(to_remove),
+            len(self._active_links),
+        )
+
+    async def _send_batch_down(
+        self,
+        pairs: set[tuple[str, str]],
+        sim_iso: str,
+        sim_time: datetime,
+        nc,
+    ) -> set[tuple[str, str]]:
+        """Send BatchLinkDown to Node Agents. Returns successfully removed pairs."""
+        agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
+        pair_agents: dict[tuple[str, str], set[str]] = {}
+
+        for pair in pairs:
             info = self._active_links.get(pair)
             if info is None:
                 continue
-            pending[pair] = (info, vis)
 
-            is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+            node_a, node_b = pair
+            is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
 
             if is_gs:
-                gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
-                sat_id = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                gs_id = node_a if node_a.startswith("gs-") else node_b
+                sat_id = node_b if node_a.startswith("gs-") else node_a
                 agent = self._loc.agent_addr(sat_id)
                 agent_ifaces.setdefault(agent, []).append(
                     node_agent_pb2.InterfaceDown(
@@ -507,10 +488,11 @@ class Dispatcher:
                         sat_id=sat_id,
                     )
                 )
+                pair_agents.setdefault(pair, set()).add(agent)
             else:
                 for nid, ifname in [
-                    (vis.node_a, info.interface_a),
-                    (vis.node_b, info.interface_b),
+                    (node_a, info.interface_a),
+                    (node_b, info.interface_b),
                 ]:
                     agent = self._loc.agent_addr(nid)
                     agent_ifaces.setdefault(agent, []).append(
@@ -520,32 +502,30 @@ class Dispatcher:
                             link_type=node_agent_pb2.ISL,
                         )
                     )
+                    pair_agents.setdefault(pair, set()).add(agent)
 
-        # Send to all agents concurrently — simultaneity requirement
-        loop = asyncio.get_running_loop()
-        tasks = []
-        for agent_addr, ifaces in agent_ifaces.items():
-            stub = self._pool.get_stub(agent_addr)
-            req = node_agent_pb2.BatchLinkDownRequest(
-                batch_id=f"{sim_time_iso}-down",
-                target_sim_time=sim_time_iso,
-                locality=node_agent_pb2.LOCAL,
-                interfaces=ifaces,
-            )
-            tasks.append(stub.async_batch_link_down(req))
-
-        # Track which agents succeeded
         successful_agents: set[str] = set()
-        agent_addrs_list = list(agent_ifaces.keys())
-        if tasks:
+        agent_addrs = list(agent_ifaces.keys())
+        if agent_addrs:
+            tasks = []
+            for addr in agent_addrs:
+                stub = self._pool.get_stub(addr)
+                req = node_agent_pb2.BatchLinkDownRequest(
+                    batch_id=f"{sim_iso}-down",
+                    target_sim_time=sim_iso,
+                    locality=node_agent_pb2.LOCAL,
+                    interfaces=agent_ifaces[addr],
+                )
+                tasks.append(stub.async_batch_link_down(req))
+
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for i, result in enumerate(results):
-                addr = agent_addrs_list[i]
+                addr = agent_addrs[i]
                 if isinstance(result, Exception):
                     log.warning("BatchLinkDown failed for agent %s: %s", addr, result)
                 elif not result.success:
-                    log.warning("BatchLinkDown partial failure: %s", result.error_message[:200])
-                    successful_agents.add(addr)  # Partial = some succeeded
+                    log.warning("BatchLinkDown partial: %s", result.error_message[:200])
+                    successful_agents.add(addr)
                 else:
                     log.info(
                         "BatchLinkDown: %d downed in %.1fms",
@@ -554,92 +534,72 @@ class Dispatcher:
                     )
                     successful_agents.add(addr)
 
-        # Commit removals and publish TO events per-link for successful agents
-        for pair, (link_info, vis) in pending.items():
-            # Check if at least one node's agent succeeded
-            agent_a = self._loc.agent_addr(vis.node_a)
-            agent_b = self._loc.agent_addr(vis.node_b)
-            if agent_a in successful_agents or agent_b in successful_agents:
-                self._active_links.pop(pair, None)
-                self._last_latencies.pop(pair, None)
-                now = datetime.now(UTC)
-                event = LinkDown(
-                    sim_time=vis.sim_time,
-                    wall_time=now,
-                    node_a=vis.node_a,
-                    node_b=vis.node_b,
-                    interface_a=link_info.interface_a,
-                    interface_b=link_info.interface_b,
-                    reason="vis_lost",
-                )
-                asyncio.ensure_future(
-                    to_pub.publish(SUBJECT_LINK_DOWN, event.model_dump_json().encode())
-                )
+        removed: set[tuple[str, str]] = set()
+        now = datetime.now(UTC)
+        for pair in pairs:
+            agents = pair_agents.get(pair, set())
+            if agents & successful_agents:
+                removed.add(pair)
+                info = self._active_links.get(pair)
+                if info:
+                    event = LinkDown(
+                        sim_time=sim_time,
+                        wall_time=now,
+                        node_a=pair[0],
+                        node_b=pair[1],
+                        interface_a=info.interface_a,
+                        interface_b=info.interface_b,
+                        reason="vis_lost",
+                    )
+                    asyncio.ensure_future(
+                        nc.publish(
+                            SUBJECT_LINK_DOWN,
+                            event.model_dump_json().encode(),
+                        )
+                    )
 
-    async def _dispatch_ups(
+        return removed
+
+    async def _send_batch_up(
         self,
-        events: list[VisibilityEvent],
-        sim_time_iso: str,
-        to_pub,
-    ) -> None:
-        """Phase B: BatchLinkUp to all agents concurrently.
-
-        Called ONLY after all Phase A (down) ACKs are received.
-
-        Links are added to _active_links ONLY after the Node Agent
-        confirms success. If BatchLinkUp fails, the links stay out of
-        _active_links so the next dispatch cycle will retry them.
-        """
+        pairs: set[tuple[str, str]],
+        desired: dict[tuple[str, str], ActiveLinkInfo],
+        sim_iso: str,
+        sim_time: datetime,
+        nc,
+    ) -> set[tuple[str, str]]:
+        """Send BatchLinkUp to Node Agents. Returns successfully added pairs."""
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
-        # Pending links: added to _active_links only on success
-        pending: dict[tuple[str, str], tuple[ActiveLinkInfo, VisibilityEvent]] = {}
+        pair_agents: dict[tuple[str, str], set[str]] = {}
 
-        for vis in events:
-            pair = (vis.node_a, vis.node_b)
-            is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+        for pair in pairs:
+            info = desired.get(pair)
+            if info is None:
+                continue
 
-            # GS links use gnd0/gnd0 — not in _interface_map (which is ISL-only)
-            if is_gs:
-                ifaces = ("gnd0", "gnd0")
-            else:
-                ifaces = self._interface_map.get(pair)
-                if not ifaces:
-                    continue
-
-            bandwidth = self._bandwidth_map.get(pair, 1000.0)
-            latency = self._position_table.compute_link_latency(vis.node_a, vis.node_b)
-            if latency is None:
-                latency = 3.0
-
-            pending[pair] = (
-                ActiveLinkInfo(
-                    interface_a=ifaces[0],
-                    interface_b=ifaces[1],
-                    latency_ms=latency,
-                    bandwidth_mbps=bandwidth,
-                ),
-                vis,
-            )
+            node_a, node_b = pair
+            is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
 
             if is_gs:
-                gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
-                sat_id = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                gs_id = node_a if node_a.startswith("gs-") else node_b
+                sat_id = node_b if node_a.startswith("gs-") else node_a
                 agent = self._loc.agent_addr(sat_id)
                 agent_ifaces.setdefault(agent, []).append(
                     node_agent_pb2.InterfaceUp(
                         node_id=sat_id,
                         interface_name="gnd0",
                         link_type=node_agent_pb2.GROUND,
-                        latency_ms=latency,
-                        bandwidth_mbps=bandwidth,
+                        latency_ms=info.latency_ms,
+                        bandwidth_mbps=info.bandwidth_mbps,
                         gs_id=gs_id,
                         sat_id=sat_id,
                     )
                 )
+                pair_agents.setdefault(pair, set()).add(agent)
             else:
                 for nid, ifname in [
-                    (vis.node_a, ifaces[0]),
-                    (vis.node_b, ifaces[1]),
+                    (node_a, info.interface_a),
+                    (node_b, info.interface_b),
                 ]:
                     agent = self._loc.agent_addr(nid)
                     agent_ifaces.setdefault(agent, []).append(
@@ -647,40 +607,38 @@ class Dispatcher:
                             node_id=nid,
                             interface_name=ifname,
                             link_type=node_agent_pb2.ISL,
-                            latency_ms=latency,
-                            bandwidth_mbps=bandwidth,
+                            latency_ms=info.latency_ms,
+                            bandwidth_mbps=info.bandwidth_mbps,
                         )
                     )
+                    pair_agents.setdefault(pair, set()).add(agent)
 
-        # Send to all agents concurrently
-        loop = asyncio.get_running_loop()
-        tasks = []
-        for agent_addr, ifaces in agent_ifaces.items():
-            stub = self._pool.get_stub(agent_addr)
-            req = node_agent_pb2.BatchLinkUpRequest(
-                batch_id=f"{sim_time_iso}-up",
-                target_sim_time=sim_time_iso,
-                locality=node_agent_pb2.LOCAL,
-                interfaces=ifaces,
-            )
-            tasks.append(stub.async_batch_link_up(req))
-
-        # Track which agents succeeded (full or partial)
         successful_agents: set[str] = set()
-        agent_addrs_list = list(agent_ifaces.keys())
-        if tasks:
+        agent_addrs = list(agent_ifaces.keys())
+        if agent_addrs:
+            tasks = []
+            for addr in agent_addrs:
+                stub = self._pool.get_stub(addr)
+                req = node_agent_pb2.BatchLinkUpRequest(
+                    batch_id=f"{sim_iso}-up",
+                    target_sim_time=sim_iso,
+                    locality=node_agent_pb2.LOCAL,
+                    interfaces=agent_ifaces[addr],
+                )
+                tasks.append(stub.async_batch_link_up(req))
+
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for i, result in enumerate(results):
-                addr = agent_addrs_list[i]
+                addr = agent_addrs[i]
                 if isinstance(result, Exception):
                     log.warning("BatchLinkUp failed for agent %s: %s", addr, result)
                 elif not result.success:
                     log.warning(
-                        "BatchLinkUp partial failure: %d upped: %s",
+                        "BatchLinkUp partial: %d upped: %s",
                         result.interfaces_upped,
                         result.error_message[:200],
                     )
-                    successful_agents.add(addr)  # Partial = some succeeded
+                    successful_agents.add(addr)
                 else:
                     log.info(
                         "BatchLinkUp: %d upped in %.1fms",
@@ -689,28 +647,27 @@ class Dispatcher:
                     )
                     successful_agents.add(addr)
 
-        # Commit to _active_links and publish TO events per-link for successful agents
-        for pair, (info, vis) in pending.items():
-            agent_a = self._loc.agent_addr(vis.node_a)
-            agent_b = self._loc.agent_addr(vis.node_b)
-            if agent_a in successful_agents or agent_b in successful_agents:
-                self._active_links[pair] = info
-                self._last_latencies[pair] = info.latency_ms
-                now = datetime.now(UTC)
+        added: set[tuple[str, str]] = set()
+        now = datetime.now(UTC)
+        for pair in pairs:
+            agents = pair_agents.get(pair, set())
+            if agents & successful_agents:
+                added.add(pair)
+                info = desired[pair]
                 event = LinkUp(
-                    sim_time=vis.sim_time,
+                    sim_time=sim_time,
                     wall_time=now,
-                    node_a=vis.node_a,
-                    node_b=vis.node_b,
+                    node_a=pair[0],
+                    node_b=pair[1],
                     interface_a=info.interface_a,
                     interface_b=info.interface_b,
                     latency_ms=info.latency_ms,
                     bandwidth_mbps=info.bandwidth_mbps,
                     reason="vis_gained",
                 )
-                asyncio.ensure_future(
-                    to_pub.publish(SUBJECT_LINK_UP, event.model_dump_json().encode())
-                )
+                asyncio.ensure_future(nc.publish(SUBJECT_LINK_UP, event.model_dump_json().encode()))
+
+        return added
 
     # ------------------------------------------------------------------
     # Latency updates

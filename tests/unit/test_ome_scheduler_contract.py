@@ -2,12 +2,12 @@
 
 Tests the ACTUAL Dispatcher code — no logic extraction, no duplication.
 Constructs a minimal Dispatcher with mocked Node Agent, feeds events through
-real _apply_link_state_snapshot() and _dispatch_batch() paths, asserts
-_active_links state.
+real _build_desired_from_snapshot() and _dispatch_batch() paths, asserts
+desired/active state.
 
 Covers PRD B.3A requirement: GS links must not accumulate. Two paths:
-  1. _apply_link_state_snapshot (replace-not-merge from R-OME-009)
-  2. _dispatch_batch (live VisibilityEvent processing)
+  1. _build_desired_from_snapshot (replace-not-merge from R-OME-009)
+  2. _dispatch_batch (live VisibilityEvent → _reconcile_links)
 """
 
 from __future__ import annotations
@@ -125,7 +125,7 @@ class MockNats:
 
 
 class TestGsDeallocationSnapshot:
-    """Test _apply_link_state_snapshot removes GS links not in snapshot."""
+    """Test _build_desired_from_snapshot excludes GS links not in snapshot."""
 
     def test_snapshot_removes_stale_gs_link(self):
         d = _make_dispatcher()
@@ -144,10 +144,10 @@ class TestGsDeallocationSnapshot:
             links=(_make_link_state("sat-P00S00", "sat-P00S01"),),
             interval_s=5.0,
         )
-        d._apply_link_state_snapshot(snapshot)
+        desired = d._build_desired_from_snapshot(snapshot)
 
-        assert ("gs-ashburn", "sat-P00S00") not in d._active_links
-        assert ("sat-P00S00", "sat-P00S01") in d._active_links
+        assert ("gs-ashburn", "sat-P00S00") not in desired
+        assert ("sat-P00S00", "sat-P00S01") in desired
 
     def test_snapshot_handoff_keeps_new_satellite(self):
         d = _make_dispatcher(
@@ -171,10 +171,10 @@ class TestGsDeallocationSnapshot:
             links=(_make_link_state("gs-ashburn", "sat-P00S01", link_type="ground"),),
             interval_s=5.0,
         )
-        d._apply_link_state_snapshot(snapshot)
+        desired = d._build_desired_from_snapshot(snapshot)
 
-        assert ("gs-ashburn", "sat-P00S00") not in d._active_links
-        assert ("gs-ashburn", "sat-P00S01") in d._active_links
+        assert ("gs-ashburn", "sat-P00S00") not in desired
+        assert ("gs-ashburn", "sat-P00S01") in desired
 
     def test_old_snapshot_seq_discarded(self):
         d = _make_dispatcher()
@@ -192,9 +192,10 @@ class TestGsDeallocationSnapshot:
             3.0,
             1000.0,
         )
-        d._apply_link_state_snapshot(snapshot)
+        desired = d._build_desired_from_snapshot(snapshot)
 
-        # Old snapshot ignored — active_links unchanged
+        # Old snapshot ignored — returns None, active_links unchanged
+        assert desired is None
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
 
@@ -238,7 +239,7 @@ class TestGsDeallocationConsistency:
     def test_snapshot_and_dispatch_agree_on_gs_removal(self):
         pair = ("gs-ashburn", "sat-P00S00")
 
-        # Path 1: snapshot with no GS link
+        # Path 1: snapshot with no GS link — desired dict excludes pair
         d1 = _make_dispatcher()
         d1._active_links[pair] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
         snapshot = LinkStateSnapshot(
@@ -247,14 +248,14 @@ class TestGsDeallocationConsistency:
             links=(),
             interval_s=5.0,
         )
-        d1._apply_link_state_snapshot(snapshot)
+        desired = d1._build_desired_from_snapshot(snapshot)
 
-        # Path 2: dispatch batch with deallocation event
+        # Path 2: dispatch batch with deallocation event → _reconcile_links removes
         d2 = _make_dispatcher()
         d2._active_links[pair] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
         vis = _make_vis("gs-ashburn", "sat-P00S00", True, False)
         asyncio.run(d2._dispatch_batch([vis], [], MockNats()))
 
         # Both must agree
-        assert pair not in d1._active_links, "snapshot did not remove GS pair"
+        assert pair not in desired, "snapshot desired did not exclude GS pair"
         assert pair not in d2._active_links, "_dispatch_batch did not remove GS pair"

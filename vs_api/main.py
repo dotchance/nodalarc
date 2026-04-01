@@ -23,9 +23,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import nats
 import yaml
-import zmq
-import zmq.asyncio
 from fastapi import Depends, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -38,6 +37,7 @@ from nodalarc.db.queries import (
     query_probe_results,
 )
 from nodalarc.db.schema import create_tables
+from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
     LinkState,
@@ -47,44 +47,20 @@ from nodalarc.models.vs_api import (
     StateSnapshot,
     TracedPath,
 )
-from nodalarc.platform import get_platform_config
-from nodalarc.zmq_channels import (
-    TOPIC_ADAPTER_EVENT,
-    TOPIC_ALMANAC_EVENT,
-    TOPIC_CONVERGENCE_RESULT,
-    TOPIC_LATENCY_UPDATE,
-    TOPIC_LINK_DOWN,
-    TOPIC_LINK_UP,
-    TOPIC_PROBE_RESULT,
-    decode_message,
-    mi_events_connect,
-    nodalpath_events_connect,
-    ome_events_connect,
-    playback_control_connect,
-    to_events_connect,
-    vs_api_http_port,
+from nodalarc.nats_channels import (
+    NATS_CONNECT_OPTIONS,
+    SUBJECT_ALMANAC_EVENT,
+    SUBJECT_LATENCY_UPDATE,
+    SUBJECT_LINK_DOWN,
+    SUBJECT_LINK_STATE_SNAPSHOT,
+    SUBJECT_LINK_UP,
+    SUBJECT_SNAPSHOT,
+    nats_url,
 )
+from nodalarc.platform import get_platform_config
 
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
-
-
-def _connect_scheduler_events(zmq_socket) -> None:
-    """Connect ZMQ SUB socket to Scheduler events (port 5561).
-
-    Connects via DNS name directly so ZMQ can re-resolve on reconnect.
-    Do NOT resolve to pod IPs — they become stale when pods restart.
-    """
-    from nodalarc.platform import get_platform_config
-
-    cfg = get_platform_config()
-    hostname = cfg.zmq_connect_host_for("scheduler-events")
-    port = cfg.zmq_to_events_port
-    addr = f"tcp://{hostname}:{port}"
-    zmq_socket.connect(addr)
-    log.info("TO SUB connected to %s", addr)
-
-
 from vs_api.session_manager import SessionManager
 
 log = logging.getLogger(__name__)
@@ -253,7 +229,7 @@ _almanac_lock = threading.Lock()
 
 
 def _update_position(event_data: dict) -> None:
-    """Update node positions from Snapshot or R-TO-009 catch-up.
+    """Update node positions from OME Snapshot.
 
     Handles two formats:
     - Per-node: top-level node_id, lat_deg, lon_deg, etc.
@@ -355,7 +331,7 @@ def _update_link_up(event_data: dict) -> None:
             "range_km": 0.0,
             "traffic_load_pct": None,
         }
-    # Only notify tracer on actual state change, not R-TO-009 poll refresh
+    # Only notify tracer on actual state change
     if is_new and _continuous_tracer is not None:
         _continuous_tracer.notify_topology_change(node_a, node_b)
 
@@ -524,208 +500,170 @@ def _build_snapshot() -> dict:
         return json.loads(snapshot.model_dump_json())
 
 
-# --- ZMQ subscriber (asyncio per PRD 13.2) ---
+# --- NATS subscriber (replaces ZMQ subscriber) ---
 
-_zmq_ctx: zmq.asyncio.Context | None = None
+_nats_connection: nats.NATS | None = None
 
 
-async def _zmq_subscriber() -> None:
-    """Async ZMQ subscriber per streaming architecture v1.2 Section 3.5.
+async def _nats_subscriber() -> None:
+    """NATS JetStream subscriber — replaces ZMQ subscriber.
 
-    Two independent state domains:
-    - Positions: from OME Snapshot on port 5560 (replace-in-place, no dedup)
-    - Link state: from Scheduler LinkUp/LinkDown on port 5561 + R-TO-009 poll
+    Subscribes to:
+    - nodalarc.ome.snapshot → position updates
+    - nodalarc.links.state → LinkStateSnapshot (replace-not-merge, R-OME-009)
+    - nodalarc.links.up/down → individual link events
+    - nodalarc.links.latency → latency updates
+    - nodalarc.nodalpath.almanac → NodalPath almanac events
+
+    Stale detection: tracks wall-clock time of last snapshot and link event.
+    If no messages for 15s, data is stale (same logic as ZMQ, different transport).
     """
-    global _zmq_ctx
-    _zmq_ctx = zmq.asyncio.Context()
+    global _nats_connection, _last_snapshot_wall_time, _last_link_event_wall_time
 
-    # OME SUB: Snapshot only (positions)
-    ome_addr = ome_events_connect()
-    ome_sub = _zmq_ctx.socket(zmq.SUB)
-    ome_sub.setsockopt(zmq.RECONNECT_IVL, 1000)
-    ome_sub.setsockopt(zmq.RECONNECT_IVL_MAX, 10000)
-    ome_sub.connect(ome_addr)
-    ome_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
+    nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+    _nats_connection = nc
+    js = nc.jetstream()
 
-    # Scheduler SUB: LinkUp, LinkDown, LatencyUpdate
-    to_sub = _zmq_ctx.socket(zmq.SUB)
-    to_sub.setsockopt(zmq.RECONNECT_IVL, 1000)
-    to_sub.setsockopt(zmq.RECONNECT_IVL_MAX, 10000)
-    _connect_scheduler_events(to_sub)
-    to_sub.setsockopt(zmq.SUBSCRIBE, b"LinkUp")
-    to_sub.setsockopt(zmq.SUBSCRIBE, b"LinkDown")
-    to_sub.setsockopt(zmq.SUBSCRIBE, b"LatencyUpdate")
+    log.info("VS-API NATS connected to %s", nats_url())
 
-    # R-TO-009: Seed link state from Scheduler catch-up endpoint (port 5569)
-    def _do_link_catchup() -> int:
-        """Query R-TO-009 for current link state. Reconciles _state["links"].
-
-        Returns count of links in authoritative state, or -1 on failure.
-        Adds links present in the Scheduler but missing from VS-API state.
-        Removes stale links present in VS-API state but absent from Scheduler.
-        """
-        from nodalarc.zmq_channels import to_link_catchup_connect
-
-        _lctx = zmq.Context()
-        _lsock = _lctx.socket(zmq.REQ)
-        _lsock.setsockopt(zmq.RCVTIMEO, 5000)
-        _lsock.setsockopt(zmq.SNDTIMEO, 5000)
-        _lsock.setsockopt(zmq.LINGER, 0)
-        _lsock.connect(to_link_catchup_connect())
-        try:
-            _lsock.send_json({"request": "current_links"})
-            resp = _lsock.recv_json()
-            links = resp.get("active_links", [])
-
-            # Build authoritative key set from Scheduler response
-            authoritative_keys: set[str] = set()
-            for link in links:
-                node_a = link.get("node_a", "")
-                node_b = link.get("node_b", "")
-                key = _link_key(node_a, node_b)
-                authoritative_keys.add(key)
-                _update_link_up(link)
-
-            # Remove stale links not in Scheduler's active set
-            with _state_lock:
-                stale_keys = [k for k in _state["links"] if k not in authoritative_keys]
-                for k in stale_keys:
-                    del _state["links"][k]
-            if stale_keys:
-                log.info("R-TO-009 reconcile: removed %d stale links", len(stale_keys))
-
-            return len(links)
-        except Exception as exc:
-            log.warning("R-TO-009 link catch-up failed: %s", exc)
-            return -1
-        finally:
-            _lsock.close()
-            _lctx.term()
-
-    # Retry seed until Scheduler is ready (up to 30s)
-    deadline = _time.monotonic() + 30
-    while _time.monotonic() < deadline:
-        count = _do_link_catchup()
-        if count > 0:
-            log.info("R-TO-009 link catch-up: seeded %d links", count)
-            break
-        log.info("R-TO-009 link catch-up: 0 links (Scheduler not ready), retrying...")
-        _time.sleep(3)
-    else:
-        log.warning("R-TO-009 link catch-up: gave up after 30s")
-
-    # MI subscription is conditional — only connect if MI is enabled
-    mi_sub = None
-    try:
-        if _session_config and _session_config.mi and _session_config.mi.enabled:  # noqa: F821
-            mi_sub = _zmq_ctx.socket(zmq.SUB)
-            mi_sub.connect(mi_events_connect())
-            mi_sub.setsockopt(zmq.SUBSCRIBE, b"")
-    except NameError:
-        pass  # _session_config not yet set — MI disabled
-    else:
-        log.info("MI not configured — skipping MI metrics subscription")
-
-    np_sub = _zmq_ctx.socket(zmq.SUB)
-    np_sub.connect(nodalpath_events_connect())
-    np_sub.setsockopt(zmq.SUBSCRIBE, b"")
-
-    poller = zmq.asyncio.Poller()
-    poller.register(ome_sub, zmq.POLLIN)
-    poller.register(to_sub, zmq.POLLIN)
-    if mi_sub is not None:
-        poller.register(mi_sub, zmq.POLLIN)
-    poller.register(np_sub, zmq.POLLIN)
-
-    log.info(
-        "VS-API ZMQ subscriber started (asyncio) — connecting to "
-        f"OME={ome_events_connect()} TO={to_events_connect()} "
-        f"MI={'enabled' if mi_sub else 'disabled'} NP={nodalpath_events_connect()}"
-    )
-
-    global _last_snapshot_wall_time, _last_link_event_wall_time
     msg_count = 0
     last_status_time = _time.monotonic()
-    last_link_poll_time = _time.monotonic()
-    _LINK_POLL_INTERVAL_S = 10.0  # R-TO-009 periodic poll per spec Section 3.5
+
+    # Subscribe to JetStream subjects with ordered consumers
+    subs = []
+    try:
+        subs.append(
+            await js.subscribe(SUBJECT_SNAPSHOT, stream="NODALARC_OME", ordered_consumer=True)
+        )
+        subs.append(
+            await js.subscribe(
+                SUBJECT_LINK_STATE_SNAPSHOT, stream="NODALARC_LINKS", ordered_consumer=True
+            )
+        )
+        subs.append(
+            await js.subscribe(SUBJECT_LINK_UP, stream="NODALARC_LINKS", ordered_consumer=True)
+        )
+        subs.append(
+            await js.subscribe(SUBJECT_LINK_DOWN, stream="NODALARC_LINKS", ordered_consumer=True)
+        )
+        subs.append(
+            await js.subscribe(
+                SUBJECT_LATENCY_UPDATE, stream="NODALARC_LINKS", ordered_consumer=True
+            )
+        )
+        subs.append(
+            await js.subscribe(SUBJECT_ALMANAC_EVENT, stream="NODALARC_OME", ordered_consumer=True)
+        )
+    except Exception as exc:
+        log.warning("NATS subscription setup failed: %s — streams may not exist yet", exc)
+
+    log.info("VS-API NATS subscriber started — %d subscriptions active", len(subs))
 
     try:
         while True:
-            try:
-                socks = dict(await poller.poll(timeout=100))
-            except zmq.ZMQError as e:
-                log.error(f"ZMQ poller error: {e}")
-                break
-
             now_mono = _time.monotonic()
 
             # Periodic status log (every 30s)
             if now_mono - last_status_time >= 30:
-                log.info(f"ZMQ subscriber status: {msg_count} msgs, stale={_is_stale()}")
+                log.info("NATS subscriber status: %d msgs, stale=%s", msg_count, _is_stale())
                 last_status_time = now_mono
 
-            # R-TO-009 periodic poll: re-query Scheduler link state every 10s
-            if now_mono - last_link_poll_time >= _LINK_POLL_INTERVAL_S:
-                count = _do_link_catchup()
-                if count >= 0:
-                    # Successful poll — Scheduler is reachable, link state is authoritative
-                    _last_link_event_wall_time = _time.monotonic()
-                last_link_poll_time = now_mono
-
-            for sock in [s for s in [ome_sub, to_sub, mi_sub, np_sub] if s is not None]:
-                if sock not in socks:
-                    continue
-                raw = await sock.recv(zmq.NOBLOCK)
+            got_message = False
+            for sub in subs:
                 try:
-                    topic, payload = decode_message(raw)
-                    data = json.loads(payload)
+                    msg = await sub.next_msg(timeout=0.1)
+                    got_message = True
                     msg_count += 1
+                except nats.errors.TimeoutError:
+                    continue
 
-                    if msg_count <= 5 or msg_count % 100 == 0:
-                        log.info(
-                            f"ZMQ message #{msg_count}: topic={topic} payload_bytes={len(payload)}"
-                        )
+                try:
+                    subject = msg.subject
+                    data = json.loads(msg.data)
 
-                    # OME Snapshot → position update (replace-in-place, no dedup)
-                    if topic == b"Snapshot":
+                    if subject == SUBJECT_SNAPSHOT:
                         _update_position(data)
                         _last_snapshot_wall_time = _time.monotonic()
-                    # Scheduler link events → link state update
-                    elif topic == TOPIC_LINK_UP:
+
+                    elif subject == SUBJECT_LINK_STATE_SNAPSHOT:
+                        _apply_link_state_snapshot(data)
+                        _last_link_event_wall_time = _time.monotonic()
+
+                    elif subject == SUBJECT_LINK_UP:
                         _update_link_up(data)
                         _add_recent_event(data, "link_up")
                         _last_link_event_wall_time = _time.monotonic()
-                    elif topic == TOPIC_LINK_DOWN:
+
+                    elif subject == SUBJECT_LINK_DOWN:
                         _update_link_down(data)
                         _add_recent_event(data, "link_down")
                         _last_link_event_wall_time = _time.monotonic()
-                    elif topic == TOPIC_LATENCY_UPDATE:
+
+                    elif subject == SUBJECT_LATENCY_UPDATE:
                         _update_latency(data)
-                    # MI events
-                    elif topic == TOPIC_CONVERGENCE_RESULT:
-                        _update_convergence(data)
-                        _add_recent_event(data, "convergence")
-                    elif topic == TOPIC_ADAPTER_EVENT:
-                        _add_recent_event(data, data.get("event_type", "adapter"))
-                    elif topic == TOPIC_PROBE_RESULT:
-                        pass  # Probe results don't update snapshot state directly
-                    # NodalPath events
-                    elif topic == TOPIC_ALMANAC_EVENT:
+
+                    elif subject == SUBJECT_ALMANAC_EVENT:
                         _update_almanac_state(data)
 
                 except Exception as exc:
-                    log.warning(f"ZMQ message processing error: {exc}")
+                    log.warning("NATS message processing error on %s: %s", msg.subject, exc)
+
+            if not got_message:
+                await asyncio.sleep(0.05)
+
     except asyncio.CancelledError:
-        log.info(f"ZMQ subscriber cancelled after {msg_count} messages")
+        log.info("NATS subscriber cancelled after %d messages", msg_count)
     except Exception as exc:
-        log.error(f"ZMQ subscriber crashed: {exc}", exc_info=True)
+        log.error("NATS subscriber crashed: %s", exc, exc_info=True)
     finally:
-        log.info(f"ZMQ subscriber exiting (total messages: {msg_count})")
-        ome_sub.close()
-        to_sub.close()
-        if mi_sub is not None:
-            mi_sub.close()
-        np_sub.close()
+        log.info("NATS subscriber exiting (total messages: %d)", msg_count)
+        for sub in subs:
+            try:  # noqa: SIM105
+                await sub.unsubscribe()
+            except Exception:
+                pass
+        await nc.close()
+
+
+def _apply_link_state_snapshot(data: dict) -> None:
+    """Apply LinkStateSnapshot as replace-not-merge on _state["links"].
+
+    This is the VS-API's equivalent of the Scheduler's
+    _apply_link_state_snapshot(). It replaces _state["links"] entirely
+    with the snapshot contents. No transition replay needed.
+    """
+    try:
+        snapshot = LinkStateSnapshot.model_validate(data)
+    except Exception as exc:
+        log.warning("Failed to parse LinkStateSnapshot: %s", exc)
+        return
+
+    with _state_lock:
+        _state["links"].clear()
+        for link in snapshot.links:
+            if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
+                key = _link_key(link.node_a, link.node_b)
+                _state["links"][key] = {
+                    "node_a": link.node_a,
+                    "node_b": link.node_b,
+                    "state": "active",
+                    "link_type": _derive_link_type(link.node_a, link.node_b),
+                    "link_reason": "",
+                    "latency_ms": link.latency_ms or 0.0,
+                    "bandwidth_mbps": link.bandwidth_mbps or 0.0,
+                    "range_km": 0.0,
+                    "traffic_load_pct": None,
+                }
+
+    isl = sum(1 for k in _state["links"] if not k.startswith("gs-"))
+    gs = sum(1 for k in _state["links"] if k.startswith("gs-"))
+    log.info(
+        "LinkStateSnapshot applied: seq=%d, %d links (%d ISL, %d GS)",
+        snapshot.snapshot_seq,
+        len(_state["links"]),
+        isl,
+        gs,
+    )
 
 
 # --- FastAPI app ---
@@ -733,30 +671,26 @@ async def _zmq_subscriber() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start ZMQ subscriber and WebSocket broadcaster on startup."""
-    # Start ZMQ subscriber as asyncio task (PRD 13.2)
-    sub_task = asyncio.create_task(_zmq_subscriber())
+    """Start NATS subscriber and WebSocket broadcaster on startup."""
+    sub_task = asyncio.create_task(_nats_subscriber())
 
     def _on_subscriber_done(task: asyncio.Task) -> None:
         exc = task.exception() if not task.cancelled() else None
         if exc:
-            log.error(f"ZMQ subscriber task DIED with exception: {exc}", exc_info=exc)
+            log.error("NATS subscriber task DIED with exception: %s", exc, exc_info=exc)
         elif task.cancelled():
-            log.info("ZMQ subscriber task cancelled")
+            log.info("NATS subscriber task cancelled")
         else:
-            log.warning("ZMQ subscriber task exited unexpectedly")
+            log.warning("NATS subscriber task exited unexpectedly")
 
     sub_task.add_done_callback(_on_subscriber_done)
 
-    # Start WebSocket broadcaster
     broadcast_task = asyncio.create_task(_ws_broadcaster())
 
     yield
 
     sub_task.cancel()
     broadcast_task.cancel()
-    if _zmq_ctx is not None:
-        _zmq_ctx.term()
 
 
 app = FastAPI(title="Nodal Arc VS-API", version="1.0", lifespan=lifespan)
@@ -1725,7 +1659,10 @@ def _create_continuous_tracer() -> ContinuousTracer:
     "/api/v1/playback", dependencies=[Depends(_require_api_key), Depends(_rate_limit_playback)]
 )
 def playback_control(body: dict) -> Any:
-    """Relay playback command to dispatcher via ZMQ."""
+    """Relay playback command to dispatcher via ZMQ (Phase 6 migrates to NATS)."""
+    import zmq
+    from nodalarc.zmq_channels import playback_control_connect
+
     action = body.get("action", "")
     if action not in ("pause", "resume", "set_speed", "get_status"):
         return JSONResponse(status_code=400, content={"error": "Unknown action"})
@@ -2133,7 +2070,7 @@ def main() -> None:
         pass  # Non-fatal — CSPF fallback still works
 
     if args.port is None:
-        args.port = vs_api_http_port()
+        args.port = get_platform_config().vs_api_http_port
 
     global \
         _db_path, \

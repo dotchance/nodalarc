@@ -26,6 +26,8 @@ spec:
           type: Unconfined
       tolerations:
         - operator: Exists
+      initContainers:
+        {{- include "nodalarc.nats-wait-init" . | nindent 8 }}
       containers:
         - name: node-agent
           image: {{ .Values.images.nodeAgent | default "docker.io/nodalarc/node-agent:latest" }}

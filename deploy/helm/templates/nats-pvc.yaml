@@ -1,0 +1,17 @@
+# PersistentVolumeClaim for NATS JetStream file storage.
+# Streams survive NATS pod restarts. StorageClass is configurable
+# via values.yaml — local-path for single-node, Longhorn/Rook for multi-node.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nodalarc-nats-data
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-nats
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.nats.storageClass | default "local-path" }}
+  resources:
+    requests:
+      storage: {{ .Values.nats.storageSize | default "2Gi" }}

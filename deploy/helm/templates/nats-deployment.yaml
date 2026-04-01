@@ -1,6 +1,5 @@
-# NATS server with JetStream enabled.
-# Single pod in development, Helm values control replica count.
-# M9: replaces all ZMQ PUB/SUB and REQ/REP messaging.
+# NATS server with JetStream — file-based persistent storage.
+# Streams survive pod restarts via PVC. Config via ConfigMap.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,9 +24,8 @@ spec:
           image: {{ .Values.nats.image | default "nats:2.11-alpine" }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
-            - "--jetstream"
-            - "--store_dir=/data"
-            - "--http_port=8222"
+            - "--config"
+            - "/etc/nats/nats.conf"
           ports:
             - containerPort: 4222
               name: client
@@ -52,3 +50,15 @@ spec:
               port: 8222
             initialDelaySeconds: 2
             periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nats
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: nodalarc-nats-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: nodalarc-nats-data

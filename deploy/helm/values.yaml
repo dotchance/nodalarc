@@ -52,11 +52,13 @@ vsApi:
 nats:
   image: "nats:2.11-alpine"
   replicas: 1
-  maxMemStore: "128Mi"
   memoryLimit: 256Mi
   memoryRequest: 128Mi
   cpuLimit: 500m
   cpuRequest: 100m
+  # Storage — local-path for single-node, switch to Longhorn/Rook for multi-node
+  storageClass: "local-path"
+  storageSize: "2Gi"
 
 # Node where session pods (satellites, ground stations) are created.
 # All session pods must land on the same node until M9 (CROSS_NODE ISL).

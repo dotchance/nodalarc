@@ -35,6 +35,10 @@ class PlatformConfig(BaseModel):
     zmq_ome_catchup_port: int = 5568
     zmq_to_link_catchup_port: int = 5569
 
+    # NATS JetStream (M9 — coexists with ZMQ during migration)
+    nats_url: str = "nats://nodalarc-nats:4222"
+    ome_link_state_snapshot_interval_s: float = 5.0
+
     # HTTP/WebSocket service ports
     vs_api_http_port: int
     vf_static_file_server_port: int

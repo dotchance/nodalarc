@@ -23,7 +23,6 @@ from nodalarc.models.session import SessionConfig
 
 from scheduler.agent_pool import AgentPool
 from scheduler.dispatcher import Dispatcher
-from scheduler.link_catchup import run_link_catchup_handler
 from scheduler.pod_locator import PodLocationMap
 from scheduler.scenario_handler import run_scenario_handler
 
@@ -83,8 +82,8 @@ def main() -> None:
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument(
         "--ome-endpoint",
-        required=True,
-        help="ZMQ endpoint for OME events (e.g. tcp://nodalarc-ome:5560)",
+        default="",
+        help="Deprecated — OME events now via NATS. Ignored.",
     )
     parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     parser.add_argument(
@@ -173,7 +172,6 @@ def main() -> None:
     override_lock = threading.Lock()
 
     dispatcher = Dispatcher(
-        ome_endpoint=args.ome_endpoint,
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
         pod_locator=loc,
@@ -184,35 +182,12 @@ def main() -> None:
         latency_update_interval_s=session.time.latency_update_interval_seconds,
     )
 
-    # Scenario handler thread — shares override_set with dispatcher.
-    # The handler publishes LinkDown on its own ZMQ PUB socket connected
-    # to port 5561. ZMQ allows multiple PUB sockets to bind the same port
-    # from different contexts — but we use a separate bind address approach:
-    # the scenario handler publishes via an inproc relay pattern.
-    #
-    # Pragmatic M4 approach: the scenario handler creates its own ZMQ PUB
-    # that binds port 5564 (REP for commands) and publishes LinkDown events
-    # through the shared to_pub socket reference. The dispatcher exposes
-    # its _to_pub attribute after startup for the scenario handler to use.
-    #
-    # Simplest correct pattern: scenario handler receives a synchronous
-    # ZMQ PUB socket created in the main thread before the async loop starts.
-    import zmq
-
-    # Create the TO PUB socket here (main thread) — both the dispatcher
-    # and scenario handler will use it. The dispatcher's run() will skip
-    # binding if an external socket is provided.
-    from nodalarc.zmq_channels import to_events_bind
-
-    zmq_ctx = zmq.Context()
-    to_pub = zmq_ctx.socket(zmq.PUB)
-    to_pub.bind(to_events_bind())
-    log.info("TO PUB bound on %s (main thread)", to_events_bind())
-
+    # Scenario handler — uses NATS request/reply (Phase 6 converts transport).
+    # For now, scenario handler still uses ZMQ REP. Will be migrated in Phase 6.
     scenario_thread = threading.Thread(
         target=run_scenario_handler,
         args=(
-            to_pub,
+            None,  # to_pub — no longer needed, Scheduler publishes on NATS
             interface_map,
             bandwidth_map,
             override_set,
@@ -225,22 +200,12 @@ def main() -> None:
     )
     scenario_thread.start()
 
-    # R-TO-009: Link state catch-up endpoint (port 5569)
-    link_catchup_thread = threading.Thread(
-        target=run_link_catchup_handler,
-        args=(dispatcher._active_links,),
-        daemon=True,
-    )
-    link_catchup_thread.start()
-
     try:
-        asyncio.run(dispatcher.run(external_to_pub=to_pub))
+        asyncio.run(dispatcher.run())
     except KeyboardInterrupt:
         log.info("Scheduler interrupted")
     finally:
         pool.close()
-        to_pub.close()
-        zmq_ctx.term()
 
 
 if __name__ == "__main__":

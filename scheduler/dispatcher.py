@@ -300,7 +300,13 @@ class Dispatcher:
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 pair = (link.node_a, link.node_b)
-                latency = self._position_table.compute_link_latency(link.node_a, link.node_b)
+                # Prefer snapshot latency (OME-authoritative, R-TO-002).
+                # Fall back to position table only if snapshot has None.
+                latency = link.latency_ms
+                if latency is None:
+                    latency = self._position_table.compute_link_latency(link.node_a, link.node_b)
+                if latency is None:
+                    latency = 3.0
 
                 is_gs = link.node_a.startswith("gs-") or link.node_b.startswith("gs-")
                 if is_gs:
@@ -314,7 +320,7 @@ class Dispatcher:
                 desired[pair] = ActiveLinkInfo(
                     interface_a=ifaces[0],
                     interface_b=ifaces[1],
-                    latency_ms=latency if latency is not None else 3.0,
+                    latency_ms=latency,
                     bandwidth_mbps=bandwidth,
                 )
 

@@ -21,7 +21,3 @@ spec:
       port: 5566
       targetPort: 5566
       protocol: TCP
-    - name: link-catchup
-      port: 5569
-      targetPort: 5569
-      protocol: TCP

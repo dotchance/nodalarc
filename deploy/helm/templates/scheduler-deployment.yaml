@@ -30,14 +30,10 @@ spec:
             - "--platform-config"
             - "/etc/nodalarc/platform.yaml"
           ports:
-            - containerPort: 5561
-              name: to-events
             - containerPort: 5564
               name: scenario-inject
             - containerPort: 5566
               name: playback
-            - containerPort: 5569
-              name: link-catchup
           resources:
             limits:
               memory: {{ .Values.scheduler.memoryLimit | default "512Mi" }}

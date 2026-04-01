@@ -46,6 +46,18 @@ export function drawLinks(
   showGroundLinks: boolean = true,
 ): void {
   const now = performance.now();
+  const STUB_LEN = 20;
+
+  // Precompute ring sizes for wrap detection
+  const planeSlotsCount = new Map<number, number>();
+  const planeSet = new Set<number>();
+  for (const [, node] of nodeMap) {
+    if (node.type === "satellite" && node.plane != null) {
+      planeSlotsCount.set(node.plane, (planeSlotsCount.get(node.plane) ?? 0) + 1);
+      planeSet.add(node.plane);
+    }
+  }
+  const planeCount = planeSet.size;
 
   // Draw regular links
   for (const link of links) {
@@ -59,12 +71,12 @@ export function drawLinks(
       if (!link.isGround && !showIslLinks) continue;
     }
 
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    // Determine style before drawing
+    let strokeStyle: string;
+    let lineWidth: number;
+    let dash: number[] = [];
 
     if (link.state === "failed") {
-      // Fail-flash: red hold then fade
       const key = [link.nodeA, link.nodeB].sort().join(":");
       const ft = failTimes?.get(key) ?? now;
       const elapsed = now - ft;
@@ -72,24 +84,83 @@ export function drawLinks(
       if (elapsed > FAIL_HOLD_MS) {
         opacity = 0.7 * (1 - (elapsed - FAIL_HOLD_MS) / FAIL_FADE_MS);
       }
-      ctx.strokeStyle = `rgba(255, 51, 51, ${Math.max(0, opacity).toFixed(2)})`;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([]);
+      strokeStyle = `rgba(255, 51, 51, ${Math.max(0, opacity).toFixed(2)})`;
+      lineWidth = 2;
     } else if (link.isGround) {
-      ctx.strokeStyle = "rgba(0, 212, 170, 0.6)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([]);
+      strokeStyle = "rgba(0, 212, 170, 0.6)";
+      lineWidth = 2;
     } else if (link.isCrossArea) {
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 3]);
+      strokeStyle = "rgba(120, 180, 130, 0.35)";
+      lineWidth = 1.5;
+      dash = [4, 3];
     } else {
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([]);
+      strokeStyle = "rgba(120, 180, 130, 0.5)";
+      lineWidth = 1.5;
     }
 
-    ctx.stroke();
+    // Wrap detection for ISL links
+    const isSat = a.type === "satellite" && b.type === "satellite";
+    let isWrap = false;
+    let wrapDir: "horizontal" | "vertical" = "horizontal";
+
+    if (isSat && a.plane != null && b.plane != null && a.slot != null && b.slot != null) {
+      // Intra-plane wrap: same plane, slot difference > half ring
+      // Slots are on Y axis (transposed layout), so stubs go vertical
+      if (a.plane === b.plane) {
+        const ringSize = planeSlotsCount.get(a.plane) ?? 0;
+        if (ringSize > 0 && Math.abs(a.slot - b.slot) > ringSize / 2) {
+          isWrap = true;
+          wrapDir = "vertical";
+        }
+      }
+      // Cross-plane wrap: same slot, plane difference > half plane count
+      // Planes are on X axis (transposed layout), so stubs go horizontal
+      if (!isWrap && a.slot === b.slot && planeCount > 0) {
+        if (Math.abs(a.plane - b.plane) > planeCount / 2) {
+          isWrap = true;
+          wrapDir = "horizontal";
+        }
+      }
+    }
+
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash(dash);
+
+    if (isWrap) {
+      // Draw two short stubs from each endpoint toward the wrap edge
+      if (wrapDir === "horizontal") {
+        // Cross-plane wrap: planes on X axis
+        const aDir = a.plane! < b.plane! ? -1 : 1;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(a.x + aDir * STUB_LEN, a.y);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(b.x - aDir * STUB_LEN, b.y);
+        ctx.stroke();
+      } else {
+        // Intra-plane wrap: slots on Y axis
+        const aDir = a.slot! < b.slot! ? -1 : 1;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(a.x, a.y + aDir * STUB_LEN);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(b.x, b.y - aDir * STUB_LEN);
+        ctx.stroke();
+      }
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+
     ctx.setLineDash([]);
   }
 
@@ -99,16 +170,6 @@ export function drawLinks(
     ctx.lineWidth = 3;
     ctx.setLineDash([6, 3]);
     ctx.lineDashOffset = -dashOffset;
-
-    // Compute ring size per plane for ring-wrap detection
-    const planeSlotsCount = new Map<number, number>();
-    for (const [, node] of nodeMap) {
-      if (node.type === "satellite" && node.plane != null) {
-        planeSlotsCount.set(node.plane, (planeSlotsCount.get(node.plane) ?? 0) + 1);
-      }
-    }
-
-    const STUB_LEN = 20;
 
     for (let i = 0; i < flowPath.length - 1; i++) {
       const a = nodeMap.get(flowPath[i]!);
@@ -125,15 +186,16 @@ export function drawLinks(
         })();
 
       if (isRingWrap) {
-        // Draw two short horizontal stubs instead of a long diagonal
+        // Draw two short vertical stubs (slots on Y axis in transposed layout)
+        const aDir = a.slot! < b.slot! ? -1 : 1;
         ctx.beginPath();
         ctx.moveTo(a.x, a.y);
-        ctx.lineTo(a.x + (a.slot! < b.slot! ? -STUB_LEN : STUB_LEN), a.y);
+        ctx.lineTo(a.x, a.y + aDir * STUB_LEN);
         ctx.stroke();
 
         ctx.beginPath();
         ctx.moveTo(b.x, b.y);
-        ctx.lineTo(b.x + (b.slot! < a.slot! ? -STUB_LEN : STUB_LEN), b.y);
+        ctx.lineTo(b.x, b.y - aDir * STUB_LEN);
         ctx.stroke();
       } else {
         ctx.beginPath();

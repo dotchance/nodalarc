@@ -1,6 +1,6 @@
 /** Deterministic grid layout for topology view.
- *  Routing areas as horizontal bands with one row per plane, GS row below.
- *  VF spec Section 6A.1: satellites within each area arranged in rows by plane.
+ *  Transposed: planes as columns (X), slots as rows (Y).
+ *  Routing areas as vertical bands. GS column to the right.
  */
 
 import type { NodeState, LinkState } from "../types";
@@ -39,9 +39,9 @@ export interface TopologyLayout {
   height: number;
 }
 
-const NODE_SPACING_X = 80;
-const NODE_SPACING_Y = 64;
-const GS_SPACING = 100;
+const NODE_SPACING_X = 64;
+const NODE_SPACING_Y = 56;
+const GS_SPACING = 80;
 const PLANE_GAP = 8;
 const BAND_GAP = 32;
 const MARGIN = 40;
@@ -53,16 +53,26 @@ export function computeLayout(
   const sats = nodes.filter((n) => n.node_type === "satellite");
   const gss = nodes.filter((n) => n.node_type === "ground_station");
 
-  // Check if all areas are null/undefined — if so, skip area grouping
   const allAreasNull = sats.every((s) => s.routing_area == null);
 
   const layoutNodes: LayoutNode[] = [];
   const areaBoundsMap = new Map<string, { minX: number; minY: number; maxX: number; maxY: number }>();
-  let bandY = MARGIN;
+
+  // Find max slot count for Y extent
   let maxSlotCount = 0;
+  const planeSlotCounts = new Map<number, number>();
+  for (const sat of sats) {
+    const plane = sat.plane ?? 0;
+    planeSlotCounts.set(plane, (planeSlotCounts.get(plane) ?? 0) + 1);
+  }
+  for (const count of planeSlotCounts.values()) {
+    if (count > maxSlotCount) maxSlotCount = count;
+  }
+
+  // bandX advances as we lay out planes left to right
+  let bandX = MARGIN;
 
   if (allAreasNull) {
-    // No area grouping — lay out by plane directly (no band gaps, no area separation)
     const planeMap = new Map<number, NodeState[]>();
     for (const sat of sats) {
       const plane = sat.plane ?? 0;
@@ -74,16 +84,13 @@ export function computeLayout(
     for (const plane of sortedPlanes) {
       const planeSats = planeMap.get(plane)!;
       planeSats.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
-      if (planeSats.length > maxSlotCount) maxSlotCount = planeSats.length;
 
       for (let i = 0; i < planeSats.length; i++) {
         const sat = planeSats[i]!;
-        const x = MARGIN + i * NODE_SPACING_X;
-        const y = bandY;
         layoutNodes.push({
           id: sat.node_id,
-          x,
-          y,
+          x: bandX,
+          y: MARGIN + i * NODE_SPACING_Y,
           type: "satellite",
           area: sat.routing_area,
           plane: sat.plane,
@@ -91,10 +98,9 @@ export function computeLayout(
         });
       }
 
-      bandY += NODE_SPACING_Y + PLANE_GAP;
+      bandX += NODE_SPACING_X + PLANE_GAP;
     }
   } else {
-    // Group satellites by area, then by plane within each area
     const areaMap = new Map<string, Map<number, NodeState[]>>();
     for (const sat of sats) {
       const area = sat.routing_area ?? "unknown";
@@ -105,7 +111,6 @@ export function computeLayout(
       planeMap.get(plane)!.push(sat);
     }
 
-    // Sort areas for deterministic order
     const sortedAreas = [...areaMap.keys()].sort();
 
     for (const area of sortedAreas) {
@@ -114,14 +119,12 @@ export function computeLayout(
 
       for (const plane of sortedPlanes) {
         const planeSats = planeMap.get(plane)!;
-        // Sort by slot for deterministic layout
         planeSats.sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
-        if (planeSats.length > maxSlotCount) maxSlotCount = planeSats.length;
 
         for (let i = 0; i < planeSats.length; i++) {
           const sat = planeSats[i]!;
-          const x = MARGIN + i * NODE_SPACING_X;
-          const y = bandY;
+          const x = bandX;
+          const y = MARGIN + i * NODE_SPACING_Y;
           layoutNodes.push({
             id: sat.node_id,
             x,
@@ -132,7 +135,6 @@ export function computeLayout(
             slot: sat.slot,
           });
 
-          // Track area bounds
           const bounds = areaBoundsMap.get(area);
           if (bounds) {
             bounds.minX = Math.min(bounds.minX, x);
@@ -144,55 +146,48 @@ export function computeLayout(
           }
         }
 
-        bandY += NODE_SPACING_Y + PLANE_GAP;
+        bandX += NODE_SPACING_X + PLANE_GAP;
       }
 
-      // Extra gap between areas (subtract the plane gap we just added, add band gap)
-      bandY += BAND_GAP - PLANE_GAP;
+      // Extra gap between areas
+      bandX += BAND_GAP - PLANE_GAP;
     }
   }
 
-  // GS row below — center ground stations relative to satellite grid width
-  const gsY = bandY;
-  const satGridWidth = maxSlotCount > 0 ? (maxSlotCount - 1) * NODE_SPACING_X : 0;
+  // GS row below — center horizontally relative to satellite grid width
+  const satGridWidth = bandX - MARGIN;
+  const gsY = MARGIN + maxSlotCount * NODE_SPACING_Y + MARGIN;
   const gsRowWidth = gss.length > 0 ? (gss.length - 1) * GS_SPACING : 0;
   const gsStartX = MARGIN + (satGridWidth - gsRowWidth) / 2;
   for (let i = 0; i < gss.length; i++) {
     const gs = gss[i]!;
-    const x = gsStartX + i * GS_SPACING;
-    const y = gsY;
     layoutNodes.push({
       id: gs.node_id,
-      x,
-      y,
+      x: gsStartX + i * GS_SPACING,
+      y: gsY,
       type: "ground_station",
       area: gs.routing_area,
       plane: null,
       slot: null,
     });
-
-    // Ground stations sit in their own row — don't extend area bounds
-    // to include them, as their wide x-spread would distort area boxes.
   }
 
-  // Filter out areas that should not be drawn:
-  // - skip when only one area exists
-  // - skip areas with null, "unknown", or "0.0.0.0" ids
-  const AREA_PAD_X = 16;
-  const AREA_PAD_TOP = 12;   // Just above node circles (8px radius + 4px gap)
-  const AREA_PAD_BOTTOM = 32;  // Below node center: 8px radius + 12px gap + 9px label + 3px
+  // Area bounds — vertical bands now
+  const AREA_PAD_Y = 16;
+  const AREA_PAD_LEFT = 12;
+  const AREA_PAD_RIGHT = 32;
   const filteredAreaEntries = [...areaBoundsMap.entries()].filter(([id]) =>
     id !== "unknown" && id !== "0.0.0.0" && id !== "",
   );
   const areaBounds: AreaBounds[] = (areaBoundsMap.size <= 1 ? [] : filteredAreaEntries).map(([id, b]) => ({
     id,
-    minX: b.minX - AREA_PAD_X,
-    minY: b.minY - AREA_PAD_TOP,
-    maxX: b.maxX + AREA_PAD_X,
-    maxY: b.maxY + AREA_PAD_BOTTOM,
+    minX: b.minX - AREA_PAD_LEFT,
+    minY: b.minY - AREA_PAD_Y,
+    maxX: b.maxX + AREA_PAD_RIGHT,
+    maxY: b.maxY + AREA_PAD_Y,
   }));
 
-  // Build layout links — include both active and recently-failed
+  // Build layout links
   const nodeAreaMap = new Map<string, string | null>();
   for (const n of nodes) {
     nodeAreaMap.set(n.node_id, n.routing_area);
@@ -206,7 +201,7 @@ export function computeLayout(
     isCrossArea: nodeAreaMap.get(l.node_a) !== nodeAreaMap.get(l.node_b),
   }));
 
-  const maxX = Math.max(...layoutNodes.map((n) => n.x), 0) + MARGIN;
+  const maxX = bandX + MARGIN;
   const maxY = gsY + NODE_SPACING_Y + MARGIN;
 
   return { nodes: layoutNodes, links: layoutLinks, areas: areaBounds, width: maxX, height: maxY };

@@ -1,12 +1,13 @@
 """B.3A Contract test: GS deallocation consistency across Scheduler code paths.
 
 Tests the ACTUAL Dispatcher code — no logic extraction, no duplication.
-Constructs a minimal Dispatcher with mocked Node Agent (AgentPool.get_stub
-returns a mock that returns success), feeds VisibilityEvents through the
-real _ome_catchup replay and _dispatch_batch paths, and asserts _active_links.
+Constructs a minimal Dispatcher with mocked Node Agent, feeds events through
+real _apply_link_state_snapshot() and _dispatch_batch() paths, asserts
+_active_links state.
 
-Covers PRD B.3A requirement: visible=True/scheduled=False for a GS pair
-must remove the pair from _active_links in both code paths.
+Covers PRD B.3A requirement: GS links must not accumulate. Two paths:
+  1. _apply_link_state_snapshot (replace-not-merge from R-OME-009)
+  2. _dispatch_batch (live VisibilityEvent processing)
 """
 
 from __future__ import annotations
@@ -14,9 +15,16 @@ from __future__ import annotations
 import asyncio
 import threading
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from nodalarc.models.events import VisibilityEvent
+from nodalarc.models.link_state import (
+    AdminState,
+    CarrierState,
+    LinkState,
+    LinkStateSnapshot,
+    RoutingState,
+)
 
 from node_agent.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
@@ -36,8 +44,29 @@ def _make_vis(node_a: str, node_b: str, visible: bool, scheduled: bool) -> Visib
     )
 
 
-def _make_dispatcher(interface_map=None) -> Dispatcher:
-    """Construct a minimal Dispatcher with no ZMQ connections."""
+def _make_link_state(
+    node_a: str,
+    node_b: str,
+    admin: AdminState = AdminState.UP,
+    carrier: CarrierState = CarrierState.UP,
+    link_type: str = "isl",
+) -> LinkState:
+    return LinkState(
+        node_a=node_a,
+        node_b=node_b,
+        interface_a="isl0" if link_type == "isl" else "gnd0",
+        interface_b="isl1" if link_type == "isl" else "gnd0",
+        admin=admin,
+        carrier=carrier,
+        routing=RoutingState.UNKNOWN,
+        latency_ms=3.0 if carrier == CarrierState.UP else None,
+        bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
+        link_type=link_type,
+        sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def _make_dispatcher(interface_map=None):
     if interface_map is None:
         interface_map = {
             ("gs-ashburn", "sat-P00S00"): ("gnd0", "gnd0"),
@@ -46,14 +75,12 @@ def _make_dispatcher(interface_map=None) -> Dispatcher:
     bandwidth_map = {k: 1000.0 for k in interface_map}
 
     loc = PodLocationMap()
-    # Populate node_of so agent_addr returns something
     for pair in interface_map:
         for nid in pair:
             loc._node_of[nid] = "nodal"
     loc._agent_addrs["nodal"] = "127.0.0.1:50100"
 
     pool = MagicMock()
-    # Mock stub returns success for batch_link_up and batch_link_down
     mock_stub = MagicMock()
     mock_stub.batch_link_up.return_value = node_agent_pb2.BatchLinkUpResponse(
         success=True,
@@ -70,7 +97,6 @@ def _make_dispatcher(interface_map=None) -> Dispatcher:
     pool.get_stub.return_value = mock_stub
 
     d = Dispatcher(
-        ome_endpoint="tcp://127.0.0.1:5560",  # never connected
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
         pod_locator=loc,
@@ -81,79 +107,88 @@ def _make_dispatcher(interface_map=None) -> Dispatcher:
     return d
 
 
-class MockPub:
-    """Mock ZMQ PUB socket — records sent messages."""
+class MockNats:
+    """Mock NATS connection — records published messages."""
 
     def __init__(self):
         self.messages = []
 
-    def send(self, data):
-        self.messages.append(data)
+    async def publish(self, subject, data):
+        self.messages.append((subject, data))
 
 
-class TestGsDeallocationCatchupReplay:
-    """Test _ome_catchup replay handles visible=True/scheduled=False for GS."""
+class TestGsDeallocationSnapshot:
+    """Test _apply_link_state_snapshot removes GS links not in snapshot."""
 
-    def test_gs_pair_removed_after_deallocation(self):
+    def test_snapshot_removes_stale_gs_link(self):
         d = _make_dispatcher()
+        # Pre-seed a GS link
+        d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo(
+            "gnd0",
+            "gnd0",
+            3.0,
+            1000.0,
+        )
 
-        # Simulate what _ome_catchup does: replay events into _active_links
-        # by calling the actual catch-up method with a mocked OME response.
-        catchup_response = {
-            "events": [
-                _make_vis("gs-ashburn", "sat-P00S00", True, True).model_dump(mode="json"),
-                _make_vis("gs-ashburn", "sat-P00S00", True, False).model_dump(mode="json"),
-            ],
-            "current_sim_time": "2026-01-01T00:00:30Z",
-        }
-
-        with patch.object(d, "_ome_catchup", wraps=d._ome_catchup):
-            # Call the replay logic directly by patching the ZMQ call
-            async def _run():
-                mock_pub = MockPub()
-                # Patch the sync catchup to return our crafted response
-                with patch("nodalarc.platform.get_platform_config") as mock_cfg:
-                    mock_cfg.return_value.ome_catchup_connect = "tcp://127.0.0.1:5568"
-                    with patch("zmq.Context") as mock_zmq_ctx:
-                        mock_sock = MagicMock()
-                        mock_sock.recv_json.return_value = catchup_response
-                        mock_zmq_ctx.return_value.socket.return_value = mock_sock
-                        await d._ome_catchup(mock_pub)
-
-            asyncio.run(_run())
+        # Snapshot with NO GS links — replaces everything
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(_make_link_state("sat-P00S00", "sat-P00S01"),),
+            interval_s=5.0,
+        )
+        d._apply_link_state_snapshot(snapshot)
 
         assert ("gs-ashburn", "sat-P00S00") not in d._active_links
+        assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
-    def test_gs_handoff_keeps_new_satellite(self):
+    def test_snapshot_handoff_keeps_new_satellite(self):
         d = _make_dispatcher(
             {
                 ("gs-ashburn", "sat-P00S00"): ("gnd0", "gnd0"),
                 ("gs-ashburn", "sat-P00S01"): ("gnd0", "gnd0"),
+                ("sat-P00S00", "sat-P00S01"): ("isl0", "isl1"),
             }
         )
+        d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo(
+            "gnd0",
+            "gnd0",
+            3.0,
+            1000.0,
+        )
 
-        catchup_response = {
-            "events": [
-                _make_vis("gs-ashburn", "sat-P00S00", True, True).model_dump(mode="json"),
-                _make_vis("gs-ashburn", "sat-P00S01", True, True).model_dump(mode="json"),
-                _make_vis("gs-ashburn", "sat-P00S00", True, False).model_dump(mode="json"),
-            ],
-            "current_sim_time": "2026-01-01T00:00:30Z",
-        }
-
-        async def _run():
-            with patch("nodalarc.platform.get_platform_config") as mock_cfg:
-                mock_cfg.return_value.ome_catchup_connect = "tcp://127.0.0.1:5568"
-                with patch("zmq.Context") as mock_zmq_ctx:
-                    mock_sock = MagicMock()
-                    mock_sock.recv_json.return_value = catchup_response
-                    mock_zmq_ctx.return_value.socket.return_value = mock_sock
-                    await d._ome_catchup(MockPub())
-
-        asyncio.run(_run())
+        # Snapshot with different GS satellite
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(_make_link_state("gs-ashburn", "sat-P00S01", link_type="ground"),),
+            interval_s=5.0,
+        )
+        d._apply_link_state_snapshot(snapshot)
 
         assert ("gs-ashburn", "sat-P00S00") not in d._active_links
         assert ("gs-ashburn", "sat-P00S01") in d._active_links
+
+    def test_old_snapshot_seq_discarded(self):
+        d = _make_dispatcher()
+        d._last_snapshot_seq = 10
+
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=5,  # older than current
+            links=(),
+            interval_s=5.0,
+        )
+        d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
+            "isl0",
+            "isl1",
+            3.0,
+            1000.0,
+        )
+        d._apply_link_state_snapshot(snapshot)
+
+        # Old snapshot ignored — active_links unchanged
+        assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
 
 class TestGsDeallocationDispatchBatch:
@@ -161,7 +196,6 @@ class TestGsDeallocationDispatchBatch:
 
     def test_gs_pair_removed_via_dispatch_batch(self):
         d = _make_dispatcher()
-        # Pre-seed the link as active
         d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo(
             "gnd0",
             "gnd0",
@@ -171,11 +205,7 @@ class TestGsDeallocationDispatchBatch:
 
         vis = _make_vis("gs-ashburn", "sat-P00S00", True, False)
 
-        async def _run():
-            mock_pub = MockPub()
-            await d._dispatch_batch([vis], [], mock_pub)
-
-        asyncio.run(_run())
+        asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
         assert ("gs-ashburn", "sat-P00S00") not in d._active_links
 
@@ -190,55 +220,34 @@ class TestGsDeallocationDispatchBatch:
 
         vis = _make_vis("sat-P00S00", "sat-P00S01", True, False)
 
-        async def _run():
-            await d._dispatch_batch([vis], [], MockPub())
+        asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
-        asyncio.run(_run())
-
-        # ISL visible+unscheduled does NOT remove — only GS
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
 
 class TestGsDeallocationConsistency:
-    """Both paths produce identical _active_links for identical input."""
+    """Both paths produce identical _active_links for identical scenarios."""
 
-    def test_catchup_and_dispatch_agree(self):
-        events = [
-            _make_vis("gs-ashburn", "sat-P00S00", True, True),
-            _make_vis("gs-ashburn", "sat-P00S00", True, False),
-        ]
+    def test_snapshot_and_dispatch_agree_on_gs_removal(self):
         pair = ("gs-ashburn", "sat-P00S00")
 
-        # Path 1: catch-up replay
+        # Path 1: snapshot with no GS link
         d1 = _make_dispatcher()
-        catchup_response = {
-            "events": [e.model_dump(mode="json") for e in events],
-            "current_sim_time": "2026-01-01T00:00:30Z",
-        }
+        d1._active_links[pair] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(),
+            interval_s=5.0,
+        )
+        d1._apply_link_state_snapshot(snapshot)
 
-        async def _run_catchup():
-            with patch("nodalarc.platform.get_platform_config") as mock_cfg:
-                mock_cfg.return_value.ome_catchup_connect = "tcp://127.0.0.1:5568"
-                with patch("zmq.Context") as mock_zmq_ctx:
-                    mock_sock = MagicMock()
-                    mock_sock.recv_json.return_value = catchup_response
-                    mock_zmq_ctx.return_value.socket.return_value = mock_sock
-                    await d1._ome_catchup(MockPub())
-
-        asyncio.run(_run_catchup())
-
-        # Path 2: _dispatch_batch (feed events sequentially)
+        # Path 2: dispatch batch with deallocation event
         d2 = _make_dispatcher()
-
-        async def _run_dispatch():
-            mock_pub = MockPub()
-            # First event: link up
-            await d2._dispatch_batch([events[0]], [], mock_pub)
-            # Second event: deallocation
-            await d2._dispatch_batch([events[1]], [], mock_pub)
-
-        asyncio.run(_run_dispatch())
+        d2._active_links[pair] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        vis = _make_vis("gs-ashburn", "sat-P00S00", True, False)
+        asyncio.run(d2._dispatch_batch([vis], [], MockNats()))
 
         # Both must agree
-        assert pair not in d1._active_links, "catch-up replay did not remove GS pair"
+        assert pair not in d1._active_links, "snapshot did not remove GS pair"
         assert pair not in d2._active_links, "_dispatch_batch did not remove GS pair"

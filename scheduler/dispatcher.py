@@ -1,12 +1,14 @@
-"""Scheduler dispatch loop — OME ZMQ subscription, two-phase gRPC dispatch.
+"""Scheduler dispatch loop — NATS JetStream subscription, two-phase dispatch.
 
-Subscribes to OME ZMQ PUB (port 5560) for VisibilityEvent, ClockTick,
-Snapshot, and HeartbeatTick. Dispatches link changes as two-phase gRPC:
-all BatchLinkDown ACKs before any BatchLinkUp is sent. Publishes
-LinkUp/LinkDown/LatencyUpdate on port 5561.
+Subscribes to NATS JetStream for VisibilityEvent, ClockTick, Snapshot,
+HeartbeatTick, and LinkStateSnapshot. Dispatches link changes as two-phase
+BatchLinkDown/Up to Node Agents. Publishes LinkUp/LinkDown/LatencyUpdate
+on NATS subjects.
 
-Per streaming architecture v1.2: VisibilityEvents are paced by the OME
-at their sim_time. No _pending_vis buffer. No FullStateSnapshot.
+LinkStateSnapshot (R-OME-009) is applied as replace-not-merge — all prior
+_active_links state is discarded and rebuilt from the snapshot. This
+eliminates window boundary accumulation, subscriber drift, and all
+transition-only state bugs permanently.
 """
 
 from __future__ import annotations
@@ -15,19 +17,22 @@ import asyncio
 import json
 import logging
 import threading
-import time
 from datetime import UTC, datetime
 
-import zmq
-import zmq.asyncio
+import nats
 from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
-from nodalarc.zmq_channels import (
-    TOPIC_LATENCY_UPDATE,
-    TOPIC_LINK_DOWN,
-    TOPIC_LINK_UP,
-    decode_message,
-    encode_message,
+from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
+from nodalarc.nats_channels import (
+    NATS_CONNECT_OPTIONS,
+    SUBJECT_CLOCK_TICK,
+    SUBJECT_LATENCY_UPDATE,
+    SUBJECT_LINK_DOWN,
+    SUBJECT_LINK_STATE_SNAPSHOT,
+    SUBJECT_LINK_UP,
+    SUBJECT_SNAPSHOT,
+    SUBJECT_VISIBILITY_EVENT,
+    nats_url,
 )
 
 from node_agent.proto import node_agent_pb2
@@ -57,14 +62,17 @@ class ActiveLinkInfo:
 
 
 class Dispatcher:
-    """Two-phase topology dispatcher.
+    """Two-phase topology dispatcher — NATS JetStream transport.
 
-    Subscribes to OME ZMQ, windows events by sim_time, dispatches
-    BatchLinkDown/Up to Node Agents, publishes TO events on port 5561.
+    Subscribes to NATS for OME events, dispatches BatchLinkDown/Up to
+    Node Agents, publishes LinkUp/LinkDown/LatencyUpdate on NATS.
+
+    LinkStateSnapshot (R-OME-009) applied as replace-not-merge every 5
+    sim-seconds. Eliminates window boundary GS accumulation permanently.
 
     INVARIANT: visible=True, scheduled=False for a GS pair MUST remove the
     pair from _active_links in ALL code paths that process VisibilityEvents:
-      1. _ome_catchup replay (line ~803)
+      1. _apply_link_state_snapshot (replace-not-merge)
       2. _dispatch_batch live (line ~281)
     _dispatch_ups only processes scheduled=True events — deallocation is
     handled by _dispatch_batch before _dispatch_ups is called.
@@ -74,7 +82,6 @@ class Dispatcher:
 
     def __init__(
         self,
-        ome_endpoint: str,
         interface_map: dict[tuple[str, str], tuple[str, str]],
         bandwidth_map: dict[tuple[str, str], float],
         pod_locator: PodLocationMap,
@@ -84,8 +91,9 @@ class Dispatcher:
         compression_factor: int = 1,
         latency_update_interval_s: int = 10,
         epsilon_ms: float = 100.0,
+        # Legacy — kept for test compatibility, ignored at runtime
+        ome_endpoint: str = "",
     ) -> None:
-        self._ome_endpoint = ome_endpoint
         self._interface_map = interface_map
         self._bandwidth_map = bandwidth_map
         self._loc = pod_locator
@@ -102,152 +110,196 @@ class Dispatcher:
         self._steps_since_latency_update = 0
         self._current_sim_time: datetime | None = None
         self._running = False
+        self._last_snapshot_seq: int = 0
 
         # Pairs that failed dispatch and should not be retried.
         self._skip_pairs: set[tuple[str, str]] = set()
 
-        # Dedup threshold: skip VisibilityEvents with sim_time <= this value.
-        # Set from catch-up response current_sim_time.
-        self._dedup_threshold: str = ""
+    async def run(self, nc: nats.NATS | None = None, **_kwargs) -> None:
+        """Main async dispatch loop — NATS JetStream subscription.
 
-    async def run(self, external_to_pub: object | None = None) -> None:
-        """Main async dispatch loop.
+        On startup: get latest LinkStateSnapshot from JetStream, apply as
+        replace-not-merge. Then subscribe to live events.
 
         Args:
-            external_to_pub: If provided, use this synchronous ZMQ PUB socket
-                (created in the main thread, shared with scenario handler).
-                If None, create and bind a new async PUB socket.
+            nc: NATS connection. If None, connects using nats_url().
         """
         self._running = True
-        ctx = zmq.asyncio.Context()
+        owns_nc = nc is None
+        if nc is None:
+            nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
 
-        if external_to_pub is not None:
-            # Wrap the synchronous socket for use in the async loop.
-            # ZMQ sync sockets work fine with send() from asyncio — the send
-            # is non-blocking for PUB sockets (drops if no subscriber).
-            to_pub = external_to_pub
-            log.info("Using external TO PUB socket")
-        else:
-            from nodalarc.zmq_channels import to_events_bind
+        self._nc = nc
+        js = nc.jetstream()
 
-            to_pub = ctx.socket(zmq.PUB)
-            to_pub.bind(to_events_bind())
-            log.info("TO PUB bound on %s", to_events_bind())
+        log.info("Scheduler NATS connected")
 
-        # The Scheduler does NOT bind the OME port (5560). The OME container
-        # owns that port. VS-API subscribes to OME directly for position data.
-        # The Scheduler publishes ONLY LinkUp/LinkDown/LatencyUpdate on 5561.
+        # Subscribe to LinkStateSnapshot — get latest retained message
+        # JetStream MaxMsgsPerSubject=1 means only the latest snapshot exists
+        try:
+            sub_snap = await js.subscribe(
+                SUBJECT_LINK_STATE_SNAPSHOT,
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
+            )
+            # Try to get the latest snapshot (non-blocking)
+            try:
+                msg = await sub_snap.next_msg(timeout=5)
+                snapshot = LinkStateSnapshot.model_validate_json(msg.data)
+                self._apply_link_state_snapshot(snapshot)
+                log.info(
+                    "Initial snapshot applied: seq=%d, %d links",
+                    snapshot.snapshot_seq,
+                    len(snapshot.links),
+                )
+            except nats.errors.TimeoutError:
+                log.info("No initial LinkStateSnapshot available — waiting for OME")
+        except Exception as exc:
+            log.warning("LinkStateSnapshot subscription failed: %s", exc)
 
-        # SUB to OME events per streaming architecture v1.2 Section 3.4
-        ome_sub = ctx.socket(zmq.SUB)
-        ome_sub.setsockopt(zmq.RECONNECT_IVL, 1000)
-        ome_sub.setsockopt(zmq.RECONNECT_IVL_MAX, 10000)
-        ome_sub.connect(self._ome_endpoint)
-        ome_sub.setsockopt(zmq.SUBSCRIBE, b"VisibilityEvent")
-        ome_sub.setsockopt(zmq.SUBSCRIBE, b"ClockTick")
-        ome_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
-        ome_sub.setsockopt(zmq.SUBSCRIBE, b"HeartbeatTick")
-
-        await asyncio.sleep(0.5)
-
-        # R-OME-008: catch-up — VisibilityEvents only from rolling log.
-        # Catch-up is authoritative. No separate reconciliation step.
-        await self._ome_catchup(to_pub)
-
-        log.info("Scheduler dispatcher started — OME=%s", self._ome_endpoint)
-
-        # Buffered events for epsilon-windowed batching
+        # Subscribe to OME event subjects
         pending_vis: list[VisibilityEvent] = []
-        pending_snaps: list[TimelinePositionSnapshot] = []
         last_sim_time: datetime | None = None
 
-        poller = zmq.asyncio.Poller()
-        poller.register(ome_sub, zmq.POLLIN)
-        last_ome_msg_time = time.monotonic()
+        async def _handle_visibility(msg):
+            nonlocal last_sim_time
+            data = json.loads(msg.data)
+            vis = VisibilityEvent.model_validate(data)
+            pending_vis.append(vis)
+
+            snap_sim = vis.sim_time
+            if last_sim_time is not None and snap_sim != last_sim_time:
+                delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
+                if delta_ms > self._epsilon_ms and pending_vis:
+                    await self._dispatch_batch(pending_vis, [], nc)
+                    pending_vis.clear()
+            last_sim_time = snap_sim
+
+        async def _handle_snapshot(msg):
+            data = json.loads(msg.data)
+            snap = TimelinePositionSnapshot.model_validate(data)
+            self._position_table.update_from_snapshot(snap)
+            self._current_sim_time = snap.sim_time
+
+        async def _handle_clock_tick(msg):
+            data = json.loads(msg.data)
+            tick_sim_str = data.get("sim_time", "")
+            if tick_sim_str:
+                self._current_sim_time = datetime.fromisoformat(tick_sim_str)
+            if pending_vis:
+                await self._dispatch_batch(pending_vis, [], nc)
+                pending_vis.clear()
+            self._steps_since_latency_update += 1
+            if self._steps_since_latency_update >= self._latency_interval:
+                await self._update_latencies(nc)
+                self._steps_since_latency_update = 0
+
+        async def _handle_link_state_snapshot(msg):
+            snapshot = LinkStateSnapshot.model_validate_json(msg.data)
+            self._apply_link_state_snapshot(snapshot)
+
+        # Subscribe to all subjects via JetStream ordered consumers
+        subs = []
+        try:
+            subs.append(
+                await js.subscribe(
+                    SUBJECT_VISIBILITY_EVENT, stream="NODALARC_OME", ordered_consumer=True
+                )
+            )
+            subs.append(
+                await js.subscribe(SUBJECT_SNAPSHOT, stream="NODALARC_OME", ordered_consumer=True)
+            )
+            subs.append(
+                await js.subscribe(SUBJECT_CLOCK_TICK, stream="NODALARC_OME", ordered_consumer=True)
+            )
+            subs.append(
+                await js.subscribe(
+                    SUBJECT_LINK_STATE_SNAPSHOT,
+                    stream="NODALARC_LINKS",
+                    ordered_consumer=True,
+                )
+            )
+        except Exception as exc:
+            log.warning("NATS subscription setup failed: %s — streams may not exist yet", exc)
+
+        log.info("Scheduler dispatcher started — NATS subscriptions active")
+
+        # Message processing loop
+        handlers = {
+            SUBJECT_VISIBILITY_EVENT: _handle_visibility,
+            SUBJECT_SNAPSHOT: _handle_snapshot,
+            SUBJECT_CLOCK_TICK: _handle_clock_tick,
+            SUBJECT_LINK_STATE_SNAPSHOT: _handle_link_state_snapshot,
+        }
 
         try:
             while self._running:
-                socks = dict(await poller.poll(timeout=500))
-                if ome_sub not in socks:
-                    # Timeout — flush any pending batch
-                    if pending_vis or pending_snaps:
-                        await self._dispatch_batch(pending_vis, pending_snaps, to_pub)
-                        pending_vis.clear()
-                        pending_snaps.clear()
-                    # 15-second watchdog: re-run catch-up
-                    if time.monotonic() - last_ome_msg_time > 15.0:
-                        log.warning("No OME messages for 15s — forcing reconnect + catch-up")
-                        ome_sub.disconnect(self._ome_endpoint)
-                        ome_sub.connect(self._ome_endpoint)
-                        await self._ome_catchup(to_pub)
-                        last_ome_msg_time = time.monotonic()
-                    continue
-
-                # Drain all buffered messages
-                while True:
+                got_message = False
+                for sub in subs:
                     try:
-                        raw = await ome_sub.recv(zmq.NOBLOCK)
-                    except zmq.Again:
-                        break
-
-                    topic, payload = decode_message(raw)
-                    data = json.loads(payload)
-                    last_ome_msg_time = time.monotonic()
-
-                    # HeartbeatTick: reset watchdog only, no other action
-                    if topic == b"HeartbeatTick":
+                        msg = await sub.next_msg(timeout=0.5)
+                        got_message = True
+                        handler = handlers.get(msg.subject)
+                        if handler:
+                            await handler(msg)
+                    except nats.errors.TimeoutError:
                         continue
 
-                    # Snapshot: update position table for latency calculations
-                    if topic == b"Snapshot":
-                        snap = TimelinePositionSnapshot.model_validate(data)
-                        self._position_table.update_from_snapshot(snap)
-                        self._current_sim_time = snap.sim_time
-                        continue
-
-                    # ClockTick: trigger latency updates
-                    if topic == b"ClockTick":
-                        tick_sim_str = data.get("sim_time", "")
-                        if tick_sim_str:
-                            self._current_sim_time = datetime.fromisoformat(tick_sim_str)
-                        # Flush pending batch and update latencies
-                        if pending_vis or pending_snaps:
-                            await self._dispatch_batch(pending_vis, pending_snaps, to_pub)
-                            pending_vis.clear()
-                            pending_snaps.clear()
-                        self._steps_since_latency_update += 1
-                        if self._steps_since_latency_update >= self._latency_interval:
-                            await self._update_latencies(to_pub)
-                            self._steps_since_latency_update = 0
-                        continue
-
-                    # VisibilityEvent: dedup, then apply to _active_links and dispatch
-                    if topic == b"VisibilityEvent":
-                        vis = VisibilityEvent.model_validate(data)
-                        # Dedup: skip if already processed from catch-up
-                        if self._dedup_threshold:
-                            evt_st = vis.sim_time.isoformat()
-                            if evt_st <= self._dedup_threshold:
-                                continue
-                        pending_vis.append(vis)
-
-                        # Epsilon windowing: flush when sim_time changes
-                        snap_sim = vis.sim_time
-                        if last_sim_time is not None and snap_sim != last_sim_time:
-                            delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
-                            if delta_ms > self._epsilon_ms and pending_vis:
-                                await self._dispatch_batch(pending_vis, [], to_pub)
-                                pending_vis.clear()
-                        last_sim_time = snap_sim
+                if not got_message and pending_vis:
+                    await self._dispatch_batch(pending_vis, [], nc)
+                    pending_vis.clear()
 
         except asyncio.CancelledError:
             log.info("Dispatcher cancelled")
         finally:
-            if external_to_pub is None:
-                to_pub.close()
-            ome_sub.close()
-            ctx.term()
+            for sub in subs:
+                try:  # noqa: SIM105
+                    await sub.unsubscribe()
+                except Exception:
+                    pass
+            if owns_nc:
+                await nc.close()
             log.info("Dispatcher stopped")
+
+    def _apply_link_state_snapshot(self, snapshot: LinkStateSnapshot) -> None:
+        """Apply LinkStateSnapshot as replace-not-merge (R-OME-009).
+
+        Discards all prior _active_links state and rebuilds from the snapshot.
+        Any subscriber applying the same snapshot arrives at identical state.
+        Multi-node safe: no coordination needed between Scheduler instances.
+        """
+        if snapshot.snapshot_seq <= self._last_snapshot_seq:
+            log.debug(
+                "Discarding old snapshot seq=%d (current=%d)",
+                snapshot.snapshot_seq,
+                self._last_snapshot_seq,
+            )
+            return
+
+        previous = dict(self._active_links)
+        self._active_links.clear()
+
+        for link in snapshot.links:
+            if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
+                pair = (link.node_a, link.node_b)
+                self._active_links[pair] = ActiveLinkInfo(
+                    interface_a=link.interface_a,
+                    interface_b=link.interface_b,
+                    latency_ms=link.latency_ms or 3.0,
+                    bandwidth_mbps=link.bandwidth_mbps or 1000.0,
+                )
+
+        self._last_snapshot_seq = snapshot.snapshot_seq
+
+        isl = sum(1 for a, _ in self._active_links if not a.startswith("gs-"))
+        gs = sum(1 for a, _ in self._active_links if a.startswith("gs-"))
+        log.info(
+            "LinkStateSnapshot applied: seq=%d, %d links (%d ISL, %d GS)",
+            snapshot.snapshot_seq,
+            len(self._active_links),
+            isl,
+            gs,
+        )
 
     def stop(self) -> None:
         self._running = False
@@ -260,7 +312,7 @@ class Dispatcher:
         self,
         vis_events: list[VisibilityEvent],
         snapshots: list[TimelinePositionSnapshot],
-        to_pub: zmq.asyncio.Socket,
+        to_pub,
     ) -> None:
         """Process one epsilon-windowed batch of VisibilityEvents."""
         if not vis_events:
@@ -319,7 +371,7 @@ class Dispatcher:
         self,
         events: list[VisibilityEvent],
         sim_time_iso: str,
-        to_pub: zmq.asyncio.Socket,
+        to_pub,
     ) -> None:
         """Phase A: BatchLinkDown to all agents concurrently.
 
@@ -418,13 +470,15 @@ class Dispatcher:
                     interface_b=link_info.interface_b,
                     reason="vis_lost",
                 )
-                to_pub.send(encode_message(TOPIC_LINK_DOWN, event.model_dump_json().encode()))
+                asyncio.ensure_future(
+                    to_pub.publish(SUBJECT_LINK_DOWN, event.model_dump_json().encode())
+                )
 
     async def _dispatch_ups(
         self,
         events: list[VisibilityEvent],
         sim_time_iso: str,
-        to_pub: zmq.asyncio.Socket,
+        to_pub,
     ) -> None:
         """Phase B: BatchLinkUp to all agents concurrently.
 
@@ -552,13 +606,15 @@ class Dispatcher:
                     bandwidth_mbps=info.bandwidth_mbps,
                     reason="vis_gained",
                 )
-                to_pub.send(encode_message(TOPIC_LINK_UP, event.model_dump_json().encode()))
+                asyncio.ensure_future(
+                    to_pub.publish(SUBJECT_LINK_UP, event.model_dump_json().encode())
+                )
 
     # ------------------------------------------------------------------
     # Latency updates
     # ------------------------------------------------------------------
 
-    async def _update_latencies(self, to_pub: zmq.asyncio.Socket) -> None:
+    async def _update_latencies(self, to_pub) -> None:
         """Compute and dispatch latency updates for active links.
 
         Substrate compensation (R-TO-002A): netem_ms = max(0, target_ms - substrate_ms).
@@ -628,7 +684,9 @@ class Dispatcher:
                 latency_ms=new_lat,
                 range_km=range_km,
             )
-            to_pub.send(encode_message(TOPIC_LATENCY_UPDATE, event.model_dump_json().encode()))
+            asyncio.ensure_future(
+                to_pub.publish(SUBJECT_LATENCY_UPDATE, event.model_dump_json().encode())
+            )
 
         # Send to agents concurrently
         loop = asyncio.get_running_loop()
@@ -728,114 +786,3 @@ class Dispatcher:
     # ------------------------------------------------------------------
     # Reconciliation on startup
     # ------------------------------------------------------------------
-
-    async def _ome_catchup(self, to_pub) -> None:
-        """R-OME-008: Request VisibilityEvents from OME rolling catch-up log.
-
-        Per streaming architecture v1.2 Section 3.4:
-        - Process all VisibilityEvents in sim_time order
-        - Apply to _active_links (visible+scheduled → add, !visible → remove)
-        - Set _dedup_threshold from response current_sim_time
-        """
-
-        def _sync_catchup() -> dict | None:
-            import zmq as _zmq
-            from nodalarc.platform import get_platform_config
-
-            catchup_addr = get_platform_config().ome_catchup_connect
-            ctx = _zmq.Context()
-            sock = ctx.socket(_zmq.REQ)
-            sock.setsockopt(_zmq.RCVTIMEO, 20000)
-            sock.setsockopt(_zmq.SNDTIMEO, 5000)
-            sock.setsockopt(_zmq.LINGER, 0)
-            sock.connect(catchup_addr)
-
-            # Always request all events — the rolling log covers one orbital
-            # period and is small enough to replay from the start. Using a
-            # checkpoint offset can miss events if the OME restarted and its
-            # current pacing position is behind the checkpoint sim_time.
-            req: dict = {"request": "events_since"}
-
-            sock.send_json(req)
-            resp = sock.recv_json()
-            sock.close()
-            ctx.term()
-            return resp
-
-        try:
-            loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(None, _sync_catchup)
-            if resp is None:
-                return
-
-            events = resp.get("events", [])
-            current_sim = resp.get("current_sim_time", "")
-
-            log.info(
-                "OME catch-up: %d VisibilityEvents (current_sim=%s)",
-                len(events),
-                current_sim[:19] if current_sim else "none",
-            )
-
-            # Catch-up is authoritative — start from empty.
-            # Checkpoint provides since_sim_time offset only, not state.
-            self._active_links.clear()
-
-            # Apply all VisibilityEvents in sim_time order to _active_links
-            added = 0
-            removed = 0
-            skipped_no_iface = 0
-            for evt in events:
-                vis = VisibilityEvent.model_validate(evt)
-                pair = (vis.node_a, vis.node_b)
-                if vis.visible and vis.scheduled:
-                    is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
-                    if is_gs:
-                        iface_a, iface_b = "gnd0", "gnd0"
-                    else:
-                        ifaces = self._interface_map.get(pair)
-                        if not ifaces:
-                            skipped_no_iface += 1
-                            continue
-                        iface_a, iface_b = ifaces
-                    self._active_links[pair] = ActiveLinkInfo(
-                        interface_a=iface_a,
-                        interface_b=iface_b,
-                        latency_ms=3.0,
-                        bandwidth_mbps=self._bandwidth_map.get(pair, 1000.0),
-                    )
-                    added += 1
-                elif not vis.visible:
-                    if pair in self._active_links:
-                        removed += 1
-                    self._active_links.pop(pair, None)
-                elif vis.visible and not vis.scheduled:
-                    is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
-                    if is_gs:
-                        if pair in self._active_links:
-                            removed += 1
-                        self._active_links.pop(pair, None)
-            log.info(
-                "Catch-up applied: %d added, %d removed, %d skipped (no iface), "
-                "interface_map=%d pairs",
-                added,
-                removed,
-                skipped_no_iface,
-                len(self._interface_map),
-            )
-
-            # Set dedup threshold
-            self._dedup_threshold = current_sim
-
-            isl_count = sum(1 for (a, _) in self._active_links if not a.startswith("gs-"))
-            gs_count = sum(1 for (a, _) in self._active_links if a.startswith("gs-"))
-            log.info(
-                "Catch-up seeded %d active links (%d ISL, %d GS), dedup=%s",
-                len(self._active_links),
-                isl_count,
-                gs_count,
-                self._dedup_threshold[:19] if self._dedup_threshold else "none",
-            )
-
-        except Exception as exc:
-            log.warning("OME catch-up failed: %s", exc)

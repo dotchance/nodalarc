@@ -1,8 +1,7 @@
 """Unit tests for scheduler/dispatcher.py — the live production dispatcher.
 
-Uses the same mock pattern as test_ome_scheduler_contract.py: minimal
-Dispatcher with mocked Node Agent stubs, feeding VisibilityEvents through
-actual _dispatch_batch() and _ome_catchup() methods.
+Uses mocked NATS connection and Node Agent stubs. Feeds VisibilityEvents
+through actual _dispatch_batch() and _apply_link_state_snapshot() methods.
 """
 
 from __future__ import annotations
@@ -10,9 +9,16 @@ from __future__ import annotations
 import asyncio
 import threading
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from nodalarc.models.events import VisibilityEvent
+from nodalarc.models.link_state import (
+    AdminState,
+    CarrierState,
+    LinkState,
+    LinkStateSnapshot,
+    RoutingState,
+)
 
 from node_agent.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
@@ -32,8 +38,28 @@ def _make_vis(node_a: str, node_b: str, visible: bool, scheduled: bool) -> Visib
     )
 
 
+def _make_link(
+    node_a: str,
+    node_b: str,
+    link_type: str = "isl",
+    carrier: CarrierState = CarrierState.UP,
+) -> LinkState:
+    return LinkState(
+        node_a=node_a,
+        node_b=node_b,
+        interface_a="isl0" if link_type == "isl" else "gnd0",
+        interface_b="isl1" if link_type == "isl" else "gnd0",
+        admin=AdminState.UP,
+        carrier=carrier,
+        routing=RoutingState.UNKNOWN,
+        latency_ms=3.0 if carrier == CarrierState.UP else None,
+        bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
+        link_type=link_type,
+        sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
 def _make_dispatcher(interface_map=None, stub_success=True):
-    """Construct a minimal Dispatcher with mocked Node Agent."""
     if interface_map is None:
         interface_map = {
             ("gs-ashburn", "sat-P00S00"): ("gnd0", "gnd0"),
@@ -64,7 +90,6 @@ def _make_dispatcher(interface_map=None, stub_success=True):
     pool.get_stub.return_value = mock_stub
 
     d = Dispatcher(
-        ome_endpoint="tcp://127.0.0.1:5560",
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
         pod_locator=loc,
@@ -75,19 +100,14 @@ def _make_dispatcher(interface_map=None, stub_success=True):
     return d, pool
 
 
-class MockPub:
-    """Mock ZMQ PUB socket — records sent messages."""
+class MockNats:
+    """Mock NATS connection — records published messages."""
 
     def __init__(self):
         self.messages = []
 
-    def send(self, data):
-        self.messages.append(data)
-
-
-# ---------------------------------------------------------------------------
-# TestDispatcherActiveLinks
-# ---------------------------------------------------------------------------
+    async def publish(self, subject, data):
+        self.messages.append((subject, data))
 
 
 class TestDispatcherActiveLinks:
@@ -95,7 +115,7 @@ class TestDispatcherActiveLinks:
         d, _ = _make_dispatcher()
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=True)
 
-        asyncio.run(d._dispatch_batch([vis], [], MockPub()))
+        asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
@@ -103,7 +123,7 @@ class TestDispatcherActiveLinks:
         d, _ = _make_dispatcher()
         vis = _make_vis("gs-ashburn", "sat-P00S00", visible=True, scheduled=True)
 
-        asyncio.run(d._dispatch_batch([vis], [], MockPub()))
+        asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
         assert ("gs-ashburn", "sat-P00S00") in d._active_links
 
@@ -113,7 +133,7 @@ class TestDispatcherActiveLinks:
 
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=False, scheduled=False)
 
-        asyncio.run(d._dispatch_batch([vis], [], MockPub()))
+        asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
 
@@ -123,7 +143,7 @@ class TestDispatcherActiveLinks:
 
         vis = _make_vis("gs-ashburn", "sat-P00S00", visible=True, scheduled=False)
 
-        asyncio.run(d._dispatch_batch([vis], [], MockPub()))
+        asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
         assert ("gs-ashburn", "sat-P00S00") not in d._active_links
 
@@ -133,146 +153,97 @@ class TestDispatcherActiveLinks:
 
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=False)
 
-        asyncio.run(d._dispatch_batch([vis], [], MockPub()))
+        asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
-        # ISL visible+unscheduled does NOT remove — only GS
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
 
-# ---------------------------------------------------------------------------
-# TestDispatcherCatchupReplay
-# ---------------------------------------------------------------------------
+class TestDispatcherLinkStateSnapshot:
+    """Test _apply_link_state_snapshot (R-OME-009 replace-not-merge)."""
 
-
-class TestDispatcherCatchupReplay:
-    def _run_catchup(self, d, events_dicts):
-        catchup_response = {
-            "events": events_dicts,
-            "current_sim_time": "2026-01-01T00:00:30Z",
-        }
-
-        async def _run():
-            with patch("nodalarc.platform.get_platform_config") as mock_cfg:
-                mock_cfg.return_value.ome_catchup_connect = "tcp://127.0.0.1:5568"
-                with patch("zmq.Context") as mock_zmq_ctx:
-                    mock_sock = MagicMock()
-                    mock_sock.recv_json.return_value = catchup_response
-                    mock_zmq_ctx.return_value.socket.return_value = mock_sock
-                    await d._ome_catchup(MockPub())
-
-        asyncio.run(_run())
-
-    def test_catchup_clears_active_links_before_applying(self):
+    def test_snapshot_clears_active_links_before_applying(self):
         d, _ = _make_dispatcher()
-        # Pre-seed a stale link
         d._active_links[("sat-P99S99", "sat-P99S98")] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
 
-        self._run_catchup(
-            d,
-            [
-                _make_vis("sat-P00S00", "sat-P00S01", True, True).model_dump(mode="json"),
-            ],
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(_make_link("sat-P00S00", "sat-P00S01"),),
+            interval_s=5.0,
         )
+        d._apply_link_state_snapshot(snapshot)
 
-        # Stale link must be gone (catch-up clears before applying)
         assert ("sat-P99S99", "sat-P99S98") not in d._active_links
-        # New link from catch-up must be present
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
-    def test_catchup_gs_deallocation_removes_pair(self):
+    def test_snapshot_gs_removal(self):
         d, _ = _make_dispatcher()
+        d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
 
-        self._run_catchup(
-            d,
-            [
-                _make_vis("gs-ashburn", "sat-P00S00", True, True).model_dump(mode="json"),
-                _make_vis("gs-ashburn", "sat-P00S00", True, False).model_dump(mode="json"),
-            ],
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(),
+            interval_s=5.0,
         )
+        d._apply_link_state_snapshot(snapshot)
 
         assert ("gs-ashburn", "sat-P00S00") not in d._active_links
 
-    def test_catchup_handles_window_boundary_synthetic_events(self):
-        """Synthetic boundary events (visible=True, scheduled=False with
-        range_km=0.0) must be handled the same as real events."""
+    def test_snapshot_seq_monotonicity(self):
         d, _ = _make_dispatcher()
+        d._last_snapshot_seq = 10
+        d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
 
-        # Simulate: real allocation, then synthetic boundary deallocation
-        self._run_catchup(
-            d,
-            [
-                _make_vis("gs-ashburn", "sat-P00S00", True, True).model_dump(mode="json"),
-                # Synthetic boundary event — range_km=0.0, elevation_deg=0.0
-                VisibilityEvent(
-                    sim_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
-                    node_a="gs-ashburn",
-                    node_b="sat-P00S00",
-                    visible=True,
-                    scheduled=False,
-                    range_km=0.0,
-                    elevation_deg=0.0,
-                    terminal_type="optical",
-                ).model_dump(mode="json"),
-            ],
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=5,
+            links=(),
+            interval_s=5.0,
         )
+        d._apply_link_state_snapshot(snapshot)
 
-        assert ("gs-ashburn", "sat-P00S00") not in d._active_links
-
-
-# ---------------------------------------------------------------------------
-# TestDispatcherLiveDispatch
-# ---------------------------------------------------------------------------
+        assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
 
 class TestDispatcherLiveDispatch:
     def test_link_up_publishes_after_node_agent_ack(self):
         d, pool = _make_dispatcher()
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=True)
-        pub = MockPub()
+        pub = MockNats()
 
         asyncio.run(d._dispatch_batch([vis], [], pub))
 
-        # Node Agent stub was called
         stub = pool.get_stub.return_value
         assert stub.batch_link_up.called
-        # Link is in active_links
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
-        # LinkUp was published on PUB socket
         assert len(pub.messages) > 0
-        assert b"LinkUp" in pub.messages[0]
+        assert pub.messages[0][0] == "nodalarc.links.up"
 
     def test_link_down_publishes_after_node_agent_ack(self):
         d, pool = _make_dispatcher()
         d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=False, scheduled=False)
-        pub = MockPub()
+        pub = MockNats()
 
         asyncio.run(d._dispatch_batch([vis], [], pub))
 
-        # Node Agent stub was called
         stub = pool.get_stub.return_value
         assert stub.batch_link_down.called
-        # Link is NOT in active_links
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
-        # LinkDown was published on PUB socket
         assert len(pub.messages) > 0
-        assert b"LinkDown" in pub.messages[0]
+        assert pub.messages[0][0] == "nodalarc.links.down"
 
     def test_link_up_not_published_if_node_agent_exception(self):
-        """If the Node Agent raises an exception (unreachable), the link
-        must NOT be added to _active_links and no LinkUp is published."""
         d, pool = _make_dispatcher()
-        # Make the stub raise an exception (agent unreachable)
         stub = pool.get_stub.return_value
         stub.batch_link_up.side_effect = Exception("agent unreachable")
 
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=True)
-        pub = MockPub()
+        pub = MockNats()
 
         asyncio.run(d._dispatch_batch([vis], [], pub))
 
-        # Link must NOT be in active_links — agent was unreachable
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
-        # No LinkUp published
-        link_up_msgs = [m for m in pub.messages if b"LinkUp" in m]
+        link_up_msgs = [m for m in pub.messages if m[0] == "nodalarc.links.up"]
         assert len(link_up_msgs) == 0

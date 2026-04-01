@@ -1,8 +1,8 @@
 """Node Agent RPC handler implementations.
 
-Each handler maps directly to the dispatch logic in
-orchestrator/realtime_dispatcher.py, calling the same netlink functions
-from namespace_ops.py and ground_bridge.py (copied from link_manager.py).
+Executes kernel operations dispatched by scheduler/dispatcher.py via
+ZMQ ROUTER/DEALER. Uses namespace_ops.py and ground_bridge.py for
+all netlink operations (setns-based, no fork).
 
 IMPORTANT — node ID case sensitivity:
   Node IDs in gRPC messages MUST use the canonical case from the

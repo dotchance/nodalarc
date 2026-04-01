@@ -29,41 +29,17 @@ log = logging.getLogger(__name__)
 
 
 class NodeAgentServer:
-    """NATS request/reply server for the Node Agent DaemonSet."""
+    """NATS request/reply server for the Node Agent DaemonSet.
 
-    def __init__(self, port: int = 50100, pid_map: dict[str, int] | None = None) -> None:
-        self._port = port  # kept for backward compat / logging
+    The pid_map MUST be populated before run() is called. The server
+    does NOT discover PIDs — that is the wiring thread's responsibility.
+    This enforces startup ordering: wiring → pid_map → NATS server.
+    """
+
+    def __init__(self, pid_map: dict[str, int] | None = None) -> None:
         self._pid_map = pid_map or {}
         self._running = False
         self._nc: nats.NATS | None = None
-
-    def set_pid_map(self, pid_map: dict[str, int]) -> None:
-        self._pid_map = pid_map
-
-    def _ensure_pid_map(self) -> dict[str, int]:
-        """Return pid_map, refreshing if stale (fewer than expected pods)."""
-        import time as _time
-
-        now = _time.monotonic()
-        if not hasattr(self, "_last_refresh"):
-            self._last_refresh = 0.0
-        if now - self._last_refresh < 10.0 and self._pid_map:
-            return self._pid_map
-
-        try:
-            from node_agent.pid_discovery import discover_local_pod_pids
-
-            new_map = discover_local_pod_pids()
-            if len(new_map) > len(self._pid_map):
-                log.info("PID map refreshed: %d -> %d pods", len(self._pid_map), len(new_map))
-                self._pid_map = new_map
-            elif not self._pid_map:
-                self._pid_map = new_map
-                log.info("Initial PID discovery: %d pods", len(new_map))
-            self._last_refresh = now
-        except Exception as exc:
-            log.warning("PID discovery failed: %s", exc)
-        return self._pid_map
 
     def run(self) -> None:
         """Run the NATS request/reply server. Blocks until stop() is called."""
@@ -125,8 +101,12 @@ class NodeAgentServer:
 
         Runs in a thread pool executor — handlers use concurrent.futures
         internally for batch parallelism (ThreadPoolExecutor in handlers.py).
+
+        pid_map is populated by the wiring thread before the server starts.
+        No lazy discovery here — if a node_id is missing, the handler returns
+        a clear error (PidNotFoundError from handlers.py).
         """
-        pid_map = self._ensure_pid_map()
+        pid_map = self._pid_map
 
         if msg_type == b"BatchLinkDown":
             request = node_agent_pb2.BatchLinkDownRequest()

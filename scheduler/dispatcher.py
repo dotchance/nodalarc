@@ -306,21 +306,31 @@ class Dispatcher:
             gs,
         )
 
-        # Compute delta and dispatch to Node Agent
+        # Compute delta and save previous state for dispatch.
+        # _dispatch_downs needs the PREVIOUS ActiveLinkInfo for removed pairs
+        # (interface names, agent lookup). We must save it before it's lost.
         new_pairs = set(self._active_links.keys())
         old_pairs = set(previous.keys())
-        self._snapshot_delta = (new_pairs - old_pairs, old_pairs - new_pairs)
+        self._snapshot_delta = (
+            new_pairs - old_pairs,
+            old_pairs - new_pairs,
+            previous,  # previous _active_links — needed for down dispatch
+        )
 
     async def _dispatch_snapshot_delta(self, nc) -> None:
         """Dispatch BatchLinkUp/Down to Node Agent for snapshot delta.
 
         Called after _apply_link_state_snapshot. Sends the kernel operations
         that make the data plane match the snapshot state.
+
+        Critical for GS handoffs: the down dispatch needs the PREVIOUS
+        ActiveLinkInfo (interface names) for removed pairs. We temporarily
+        restore them into _active_links for the dispatch, then remove them.
         """
         if not hasattr(self, "_snapshot_delta") or self._snapshot_delta is None:
             return
 
-        added_pairs, removed_pairs = self._snapshot_delta
+        added_pairs, removed_pairs, previous = self._snapshot_delta
         self._snapshot_delta = None
 
         if not added_pairs and not removed_pairs:
@@ -329,8 +339,14 @@ class Dispatcher:
         sim_time = self._current_sim_time or datetime.now(UTC)
         sim_iso = sim_time.isoformat()
 
-        # Dispatch downs first, then ups (two-phase ordering)
+        # Dispatch downs first — temporarily restore removed pairs so
+        # _dispatch_downs can find their interface info and agent address.
         if removed_pairs:
+            for pair in removed_pairs:
+                prev_info = previous.get(pair)
+                if prev_info:
+                    self._active_links[pair] = prev_info
+
             down_events = []
             for pair in removed_pairs:
                 down_events.append(
@@ -347,6 +363,12 @@ class Dispatcher:
                 )
             await self._dispatch_downs(down_events, sim_iso, nc)
 
+            # Clean up — _dispatch_downs pops from _active_links on success,
+            # but ensure none linger if dispatch failed
+            for pair in removed_pairs:
+                self._active_links.pop(pair, None)
+
+        # Dispatch ups
         if added_pairs:
             up_events = []
             for pair in added_pairs:

@@ -18,6 +18,8 @@ spec:
       serviceAccountName: nodalarc-orchestrator
       nodeSelector:
         kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
+      initContainers:
+        {{- include "nodalarc.nats-wait-init" . | nindent 8 }}
       containers:
         - name: vs-api
           image: {{ .Values.images.vsApi | default "docker.io/nodalarc/vs-api:latest" }}

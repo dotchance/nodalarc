@@ -17,6 +17,35 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
+      initContainers:
+        - name: ensure-nats-streams
+          image: natsio/nats-box:latest
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "Waiting for NATS..."
+              until nats server check connection -s nats://nodalarc-nats:4222 2>/dev/null; do
+                sleep 1
+              done
+              echo "NATS ready. Creating streams..."
+              nats stream add NODALARC_OME \
+                --server=nats://nodalarc-nats:4222 \
+                --subjects="nodalarc.ome.>" \
+                --storage=file --retention=limits \
+                --max-msgs-per-subject=-1 \
+                --max-age=3h12m \
+                --max-bytes=134217728 \
+                --defaults 2>/dev/null || true
+              nats stream add NODALARC_LINKS \
+                --server=nats://nodalarc-nats:4222 \
+                --subjects="nodalarc.links.>" \
+                --storage=file --retention=limits \
+                --max-msgs-per-subject=1 \
+                --max-age=3h12m \
+                --max-bytes=67108864 \
+                --defaults 2>/dev/null || true
+              echo "Streams ready."
       containers:
         - name: ome
           image: {{ .Values.images.ome }}
@@ -29,12 +58,6 @@ spec:
           ports:
             - containerPort: 8081
               name: health
-              protocol: TCP
-            - containerPort: 5560
-              name: zmq-events
-              protocol: TCP
-            - containerPort: 5568
-              name: zmq-catchup
               protocol: TCP
           readinessProbe:
             httpGet:

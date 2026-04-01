@@ -1,0 +1,19 @@
+# NATS server configuration — JetStream with file-based storage.
+# Streams are persistent across NATS restarts.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nodalarc-nats-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: nodalarc-nats
+data:
+  nats.conf: |
+    listen: 0.0.0.0:4222
+    http_port: 8222
+
+    jetstream {
+      store_dir: /data/jetstream
+      max_mem: 128MB
+      max_file: 1GB
+    }

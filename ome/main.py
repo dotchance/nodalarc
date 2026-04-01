@@ -150,9 +150,7 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
         SUBJECT_LINK_STATE_SNAPSHOT,
         SUBJECT_SNAPSHOT,
         SUBJECT_VISIBILITY_EVENT,
-        link_stream_config,
         nats_url,
-        ome_stream_config,
     )
     from nodalarc.platform import get_platform_config
 
@@ -233,17 +231,9 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     js = nc.jetstream()
 
-    # Create streams (idempotent — no error if already exists with same config)
-    try:
-        await js.add_stream(**ome_stream_config())
-    except Exception:
-        await js.update_stream(**ome_stream_config())
-    try:
-        await js.add_stream(**link_stream_config())
-    except Exception:
-        await js.update_stream(**link_stream_config())
-
-    logging.info("OME NATS connected to %s, JetStream streams created", nats_url())
+    # Streams are created by the OME init container (nats-box).
+    # The main container starts only after streams exist.
+    logging.info("OME NATS connected to %s", nats_url())
 
     # Optional file output for debugging/development
     out_path = None

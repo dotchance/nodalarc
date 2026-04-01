@@ -14,7 +14,7 @@ WORKDIR /app
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
-    pydantic>=2.0 pyzmq pyyaml numpy grpcio>=1.74 protobuf>=6.31.1 \
+    pydantic>=2.0 pyzmq nats-py pyyaml numpy grpcio>=1.74 protobuf>=6.31.1 \
     kubernetes jinja2 sgp4 skyfield httpx>=0.28.1
 
 # Add lib/ to Python path so nodalarc package is importable

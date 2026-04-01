@@ -29,7 +29,7 @@ WORKDIR /app
 # No grpcio — ZMQ transport instead (gRPC C extension incompatible
 # with hostPID containers). Proto messages used for serialization only.
 RUN pip install --no-cache-dir \
-    pydantic>=2.0 pyroute2 pyzmq protobuf>=6.31.1 \
+    pydantic>=2.0 pyroute2 pyzmq nats-py protobuf>=6.31.1 \
     pyyaml kubernetes
 
 # Add lib/ to Python path so nodalarc package is importable

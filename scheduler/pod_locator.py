@@ -81,7 +81,7 @@ class PodLocationMap:
         k3s_node = _discover_k3s_node()
         for nid in pid_map:
             self._node_of[nid] = k3s_node
-        self._agent_addrs[k3s_node] = f"localhost:{agent_port}"
+        self._agent_addrs[k3s_node] = k3s_node
 
         log.info(
             "Loaded %d pods from pid_map, all on node %s, agent=%s",
@@ -129,12 +129,11 @@ class PodLocationMap:
             k3s_node = pod.spec.node_name or ""
             self._node_of[node_id] = k3s_node
 
-        # Build agent addresses from K3s node InternalIPs
+        # Build agent addresses — NATS uses K8s node name as subject
         k3s_nodes = set(self._node_of.values())
         for k3s in k3s_nodes:
             if k3s:
-                node_ip = _k3s_node_ip(v1, k3s)
-                self._agent_addrs[k3s] = f"{node_ip}:{agent_port}"
+                self._agent_addrs[k3s] = k3s  # Node name = NATS subject
 
         log.info(
             "Loaded %d pods across %d K3s nodes from API",

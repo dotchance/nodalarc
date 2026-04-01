@@ -310,6 +310,13 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                 kw["initial_gs_state"] = gs_state
                 kw["timestamp_offset"] = period * (window - 1)
 
+            # Save pre-window state for running state initialization during pacing.
+            # precompute_timeline_window returns END-of-window state, but the
+            # snapshot must reflect the CURRENT pacing position. Running state
+            # starts from beginning-of-window and gets updated by each paced event.
+            pre_window_isl = dict(isl_state) if isl_state else {}
+            pre_window_gs = dict(gs_state) if gs_state else {}
+
             frozen_kw = dict(kw)  # bind for closure
             events, isl_state, gs_state = await loop.run_in_executor(
                 None, lambda kw=frozen_kw: precompute_timeline_window(**kw)
@@ -350,6 +357,12 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
             current_sim_time_iso: str = ""
             last_snapshot_sim_s: float = 0.0
 
+            # Running link state — starts from BEGINNING of window, updated as
+            # each VisibilityEvent is paced. The snapshot reads this, not the
+            # end-of-window state from precompute_timeline_window.
+            running_isl_state: dict[tuple[str, str], tuple[bool, bool]] = dict(pre_window_isl)
+            running_gs_state: dict[tuple[str, str], tuple[bool, bool]] = dict(pre_window_gs)
+
             # Group events by timestamp_s for per-tick processing
             current_tick_ts: float | None = None
             tick_events: list = []
@@ -371,6 +384,14 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                         payload = te.data.model_dump_json().encode()
                         if te.event_type == "VisibilityEvent":
                             await nc.publish(SUBJECT_VISIBILITY_EVENT, payload)
+                            # Update running state to match current pacing position
+                            vis = te.data
+                            pair = (vis.node_a, vis.node_b)
+                            is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                            if is_gs:
+                                running_gs_state[pair] = (vis.visible, vis.scheduled)
+                            else:
+                                running_isl_state[pair] = (vis.visible, vis.scheduled)
                         elif te.event_type == "Snapshot":
                             await nc.publish(SUBJECT_SNAPSHOT, payload)
                             current_sim_time_iso = te.data.sim_time.isoformat()
@@ -391,8 +412,8 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                         if current_sim_s - last_snapshot_sim_s >= snapshot_interval_s:
                             snapshot_seq += 1
                             snap = build_link_state_snapshot(
-                                isl_state=isl_state or {},
-                                gs_state=gs_state or {},
+                                isl_state=running_isl_state,
+                                gs_state=running_gs_state,
                                 interface_map=interface_map,
                                 latency_map=latency_map,
                                 sim_time=datetime.fromisoformat(current_sim_time_iso),
@@ -416,6 +437,13 @@ async def run_continuous(session_path: str, output_dir: str | None = None) -> No
                     payload = te.data.model_dump_json().encode()
                     if te.event_type == "VisibilityEvent":
                         await nc.publish(SUBJECT_VISIBILITY_EVENT, payload)
+                        vis = te.data
+                        pair = (vis.node_a, vis.node_b)
+                        is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                        if is_gs:
+                            running_gs_state[pair] = (vis.visible, vis.scheduled)
+                        else:
+                            running_isl_state[pair] = (vis.visible, vis.scheduled)
                     elif te.event_type == "Snapshot":
                         await nc.publish(SUBJECT_SNAPSHOT, payload)
                         current_sim_time_iso = te.data.sim_time.isoformat()

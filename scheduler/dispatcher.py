@@ -161,11 +161,17 @@ class Dispatcher:
         except Exception as exc:
             log.warning("LinkStateSnapshot subscription failed: %s", exc)
 
-        # Subscribe to OME event subjects
+        # --- Callback-driven subscriptions (DeliverPolicy.NEW) ---
+        # Each subscription gets an async callback. NATS delivers messages
+        # to callbacks as they arrive — concurrently, no sequential polling.
+        # Long-running handlers run as background tasks to avoid blocking.
+        from nats.js.api import DeliverPolicy
+
         pending_vis: list[VisibilityEvent] = []
         last_sim_time: datetime | None = None
+        _dispatch_lock = asyncio.Lock()
 
-        async def _handle_visibility(msg):
+        async def _on_visibility(msg):
             nonlocal last_sim_time
             data = json.loads(msg.data)
             vis = VisibilityEvent.model_validate(data)
@@ -175,85 +181,84 @@ class Dispatcher:
             if last_sim_time is not None and snap_sim != last_sim_time:
                 delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
                 if delta_ms > self._epsilon_ms and pending_vis:
-                    await self._dispatch_batch(pending_vis, [], nc)
+                    async with _dispatch_lock:
+                        await self._dispatch_batch(list(pending_vis), [], nc)
                     pending_vis.clear()
             last_sim_time = snap_sim
 
-        async def _handle_snapshot(msg):
+        async def _on_snapshot(msg):
             data = json.loads(msg.data)
             snap = TimelinePositionSnapshot.model_validate(data)
             self._position_table.update_from_snapshot(snap)
             self._current_sim_time = snap.sim_time
 
-        async def _handle_clock_tick(msg):
+        async def _on_clock_tick(msg):
             data = json.loads(msg.data)
             tick_sim_str = data.get("sim_time", "")
             if tick_sim_str:
                 self._current_sim_time = datetime.fromisoformat(tick_sim_str)
             if pending_vis:
-                await self._dispatch_batch(pending_vis, [], nc)
+                async with _dispatch_lock:
+                    await self._dispatch_batch(list(pending_vis), [], nc)
                 pending_vis.clear()
             self._steps_since_latency_update += 1
             if self._steps_since_latency_update >= self._latency_interval:
                 await self._update_latencies(nc)
                 self._steps_since_latency_update = 0
 
-        async def _handle_link_state_snapshot(msg):
+        async def _on_link_state_snapshot(msg):
             snapshot = LinkStateSnapshot.model_validate_json(msg.data)
             self._apply_link_state_snapshot(snapshot)
-            await self._dispatch_snapshot_delta(nc)
+            # Dispatch delta in background — don't block message processing
+            asyncio.create_task(self._dispatch_snapshot_delta(nc))
 
-        # Subscribe to all subjects via JetStream ordered consumers
         subs = []
         try:
             subs.append(
                 await js.subscribe(
-                    SUBJECT_VISIBILITY_EVENT, stream="NODALARC_OME", ordered_consumer=True
+                    SUBJECT_VISIBILITY_EVENT,
+                    stream="NODALARC_OME",
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=_on_visibility,
                 )
             )
             subs.append(
-                await js.subscribe(SUBJECT_SNAPSHOT, stream="NODALARC_OME", ordered_consumer=True)
+                await js.subscribe(
+                    SUBJECT_SNAPSHOT,
+                    stream="NODALARC_OME",
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=_on_snapshot,
+                )
             )
             subs.append(
-                await js.subscribe(SUBJECT_CLOCK_TICK, stream="NODALARC_OME", ordered_consumer=True)
+                await js.subscribe(
+                    SUBJECT_CLOCK_TICK,
+                    stream="NODALARC_OME",
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=_on_clock_tick,
+                )
             )
             subs.append(
                 await js.subscribe(
                     SUBJECT_LINK_STATE_SNAPSHOT,
                     stream="NODALARC_LINKS",
                     ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=_on_link_state_snapshot,
                 )
             )
         except Exception as exc:
             log.warning("NATS subscription setup failed: %s — streams may not exist yet", exc)
 
-        log.info("Scheduler dispatcher started — NATS subscriptions active")
+        log.info("Scheduler dispatcher started — %d callback subscriptions active", len(subs))
 
-        # Message processing loop
-        handlers = {
-            SUBJECT_VISIBILITY_EVENT: _handle_visibility,
-            SUBJECT_SNAPSHOT: _handle_snapshot,
-            SUBJECT_CLOCK_TICK: _handle_clock_tick,
-            SUBJECT_LINK_STATE_SNAPSHOT: _handle_link_state_snapshot,
-        }
-
+        # Wait for shutdown — callbacks handle all message processing
         try:
             while self._running:
-                got_message = False
-                for sub in subs:
-                    try:
-                        msg = await sub.next_msg(timeout=0.5)
-                        got_message = True
-                        handler = handlers.get(msg.subject)
-                        if handler:
-                            await handler(msg)
-                    except nats.errors.TimeoutError:
-                        continue
-
-                if not got_message and pending_vis:
-                    await self._dispatch_batch(pending_vis, [], nc)
-                    pending_vis.clear()
-
+                await asyncio.sleep(1)
         except asyncio.CancelledError:
             log.info("Dispatcher cancelled")
         finally:
@@ -287,10 +292,13 @@ class Dispatcher:
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 pair = (link.node_a, link.node_b)
+                # Latency comes from the Scheduler's position table, not the snapshot.
+                # The snapshot reports admin/carrier state only (PRD R-TO-002).
+                latency = self._position_table.compute_link_latency(link.node_a, link.node_b)
                 self._active_links[pair] = ActiveLinkInfo(
                     interface_a=link.interface_a,
                     interface_b=link.interface_b,
-                    latency_ms=link.latency_ms or 3.0,
+                    latency_ms=latency if latency is not None else 3.0,
                     bandwidth_mbps=link.bandwidth_mbps or 1000.0,
                 )
 

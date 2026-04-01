@@ -430,16 +430,16 @@ def build_link_state_snapshot(
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
     gs_state: dict[tuple[str, str], tuple[bool, bool]],
     interface_map: dict[tuple[str, str], tuple[str, str]],
-    latency_map: dict[tuple[str, str], float],
     sim_time: datetime,
     seq: int,
     interval_s: float,
 ) -> LinkStateSnapshot:
     """Build a LinkStateSnapshot from OME internal state.
 
-    Called every interval_s sim-seconds. The snapshot contains the complete
-    admin + carrier state for every link the OME tracks. Routing adjacency
-    is UNKNOWN (requires MI protocol adapter data).
+    The snapshot reports admin + carrier state for every link. It does NOT
+    report latency — that is the Scheduler's concern (PRD R-TO-002).
+    The Scheduler computes latency from its position table and publishes
+    LatencyUpdate events. latency_ms is always None in the snapshot.
 
     PRD Section 4.1B R-OME-009.
     """
@@ -461,11 +461,9 @@ def build_link_state_snapshot(
         if visible and scheduled:
             admin = AdminState.UP
             carrier = CarrierState.UP
-            lat = latency_map.get(pair)
         else:
-            admin = AdminState.UP  # wired but not active
+            admin = AdminState.UP
             carrier = CarrierState.DOWN
-            lat = None
         links.append(
             LinkState(
                 node_a=pair[0],
@@ -475,7 +473,7 @@ def build_link_state_snapshot(
                 admin=admin,
                 carrier=carrier,
                 routing=RoutingState.UNKNOWN,
-                latency_ms=lat,
+                latency_ms=None,
                 bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
                 link_type="isl",
                 sim_time=sim_time,
@@ -489,15 +487,12 @@ def build_link_state_snapshot(
         if visible and scheduled:
             admin = AdminState.UP
             carrier = CarrierState.UP
-            lat = latency_map.get(pair)
         elif visible and not scheduled:
             admin = AdminState.UP
             carrier = CarrierState.LOWERLAYERDOWN
-            lat = None
         else:
             admin = AdminState.UP
             carrier = CarrierState.DOWN
-            lat = None
         links.append(
             LinkState(
                 node_a=pair[0],
@@ -507,7 +502,7 @@ def build_link_state_snapshot(
                 admin=admin,
                 carrier=carrier,
                 routing=RoutingState.UNKNOWN,
-                latency_ms=lat,
+                latency_ms=None,
                 bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
                 link_type="ground",
                 sim_time=sim_time,

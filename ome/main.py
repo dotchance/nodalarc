@@ -294,8 +294,6 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     isl_state = None
     gs_state = None
     snapshot_seq = 0
-    latency_map: dict[tuple[str, str], float] = {}
-
     _common_args = dict(
         satellites=satellites,
         addressing=addressing,
@@ -428,7 +426,6 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                                 isl_state=running_isl_state,
                                 gs_state=running_gs_state,
                                 interface_map=interface_map,
-                                latency_map=latency_map,
                                 sim_time=datetime.fromisoformat(current_sim_time_iso),
                                 seq=snapshot_seq,
                                 interval_s=snapshot_interval_s,

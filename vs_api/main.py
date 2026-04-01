@@ -526,90 +526,125 @@ async def _nats_subscriber() -> None:
 
     log.info("VS-API NATS connected to %s", nats_url())
 
-    msg_count = 0
-    last_status_time = _time.monotonic()
+    # --- Callback-driven subscriptions (DeliverPolicy.NEW) ---
+    # NATS delivers messages to callbacks as they arrive — concurrently,
+    # no sequential polling, no starvation of any subscription.
+    from nats.js.api import DeliverPolicy
 
-    # Subscribe to JetStream subjects with ordered consumers
+    msg_count = 0
+
+    async def _on_snapshot(msg):
+        global _last_snapshot_wall_time
+        nonlocal msg_count
+        msg_count += 1
+        _update_position(json.loads(msg.data))
+        _last_snapshot_wall_time = _time.monotonic()
+
+    async def _on_link_state_snapshot(msg):
+        global _last_link_event_wall_time
+        nonlocal msg_count
+        msg_count += 1
+        _apply_link_state_snapshot(json.loads(msg.data))
+        _last_link_event_wall_time = _time.monotonic()
+
+    async def _on_link_up(msg):
+        global _last_link_event_wall_time
+        nonlocal msg_count
+        msg_count += 1
+        data = json.loads(msg.data)
+        _update_link_up(data)
+        _add_recent_event(data, "link_up")
+        _last_link_event_wall_time = _time.monotonic()
+
+    async def _on_link_down(msg):
+        global _last_link_event_wall_time
+        nonlocal msg_count
+        msg_count += 1
+        data = json.loads(msg.data)
+        _update_link_down(data)
+        _add_recent_event(data, "link_down")
+        _last_link_event_wall_time = _time.monotonic()
+
+    async def _on_latency_update(msg):
+        nonlocal msg_count
+        msg_count += 1
+        _update_latency(json.loads(msg.data))
+
+    async def _on_almanac(msg):
+        nonlocal msg_count
+        msg_count += 1
+        _update_almanac_state(json.loads(msg.data))
+
     subs = []
     try:
         subs.append(
-            await js.subscribe(SUBJECT_SNAPSHOT, stream="NODALARC_OME", ordered_consumer=True)
-        )
-        subs.append(
             await js.subscribe(
-                SUBJECT_LINK_STATE_SNAPSHOT, stream="NODALARC_LINKS", ordered_consumer=True
+                SUBJECT_SNAPSHOT,
+                stream="NODALARC_OME",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_snapshot,
             )
         )
         subs.append(
-            await js.subscribe(SUBJECT_LINK_UP, stream="NODALARC_LINKS", ordered_consumer=True)
-        )
-        subs.append(
-            await js.subscribe(SUBJECT_LINK_DOWN, stream="NODALARC_LINKS", ordered_consumer=True)
-        )
-        subs.append(
             await js.subscribe(
-                SUBJECT_LATENCY_UPDATE, stream="NODALARC_LINKS", ordered_consumer=True
+                SUBJECT_LINK_STATE_SNAPSHOT,
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_link_state_snapshot,
             )
         )
         subs.append(
-            await js.subscribe(SUBJECT_ALMANAC_EVENT, stream="NODALARC_OME", ordered_consumer=True)
+            await js.subscribe(
+                SUBJECT_LINK_UP,
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_link_up,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                SUBJECT_LINK_DOWN,
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_link_down,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                SUBJECT_LATENCY_UPDATE,
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_latency_update,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                SUBJECT_ALMANAC_EVENT,
+                stream="NODALARC_OME",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_almanac,
+            )
         )
     except Exception as exc:
         log.warning("NATS subscription setup failed: %s — streams may not exist yet", exc)
 
-    log.info("VS-API NATS subscriber started — %d subscriptions active", len(subs))
+    log.info("VS-API NATS subscriber started — %d callback subscriptions active", len(subs))
 
+    # Periodic status log + wait for shutdown
     try:
+        last_status_time = _time.monotonic()
         while True:
+            await asyncio.sleep(10)
             now_mono = _time.monotonic()
-
-            # Periodic status log (every 30s)
             if now_mono - last_status_time >= 30:
                 log.info("NATS subscriber status: %d msgs, stale=%s", msg_count, _is_stale())
                 last_status_time = now_mono
-
-            got_message = False
-            for sub in subs:
-                try:
-                    msg = await sub.next_msg(timeout=0.1)
-                    got_message = True
-                    msg_count += 1
-                except nats.errors.TimeoutError:
-                    continue
-
-                try:
-                    subject = msg.subject
-                    data = json.loads(msg.data)
-
-                    if subject == SUBJECT_SNAPSHOT:
-                        _update_position(data)
-                        _last_snapshot_wall_time = _time.monotonic()
-
-                    elif subject == SUBJECT_LINK_STATE_SNAPSHOT:
-                        _apply_link_state_snapshot(data)
-                        _last_link_event_wall_time = _time.monotonic()
-
-                    elif subject == SUBJECT_LINK_UP:
-                        _update_link_up(data)
-                        _add_recent_event(data, "link_up")
-                        _last_link_event_wall_time = _time.monotonic()
-
-                    elif subject == SUBJECT_LINK_DOWN:
-                        _update_link_down(data)
-                        _add_recent_event(data, "link_down")
-                        _last_link_event_wall_time = _time.monotonic()
-
-                    elif subject == SUBJECT_LATENCY_UPDATE:
-                        _update_latency(data)
-
-                    elif subject == SUBJECT_ALMANAC_EVENT:
-                        _update_almanac_state(data)
-
-                except Exception as exc:
-                    log.warning("NATS message processing error on %s: %s", msg.subject, exc)
-
-            if not got_message:
-                await asyncio.sleep(0.05)
 
     except asyncio.CancelledError:
         log.info("NATS subscriber cancelled after %d messages", msg_count)

@@ -1659,36 +1659,39 @@ def _create_continuous_tracer() -> ContinuousTracer:
     "/api/v1/playback", dependencies=[Depends(_require_api_key), Depends(_rate_limit_playback)]
 )
 def playback_control(body: dict) -> Any:
-    """Relay playback command to dispatcher via ZMQ (Phase 6 migrates to NATS)."""
-    import zmq
-    from nodalarc.zmq_channels import playback_control_connect
+    """Relay playback command to dispatcher via NATS request/reply."""
+    import asyncio
+
+    from nodalarc.nats_channels import SUBJECT_PLAYBACK_CONTROL
 
     action = body.get("action", "")
     if action not in ("pause", "resume", "set_speed", "get_status"):
         return JSONResponse(status_code=400, content={"error": "Unknown action"})
 
-    ctx = zmq.Context()
-    sock = ctx.socket(zmq.REQ)
-    sock.setsockopt(zmq.RCVTIMEO, 5000)
-    sock.setsockopt(zmq.LINGER, 0)
-    sock.connect(playback_control_connect())
+    async def _request():
+        nc = _nats_connection
+        if nc is None:
+            return None
+        resp = await nc.request(SUBJECT_PLAYBACK_CONTROL, json.dumps(body).encode(), timeout=5)
+        return json.loads(resp.data)
 
     try:
-        sock.send(json.dumps(body).encode())
-        raw = sock.recv()
-        result = json.loads(raw)
-        # Track playback state for inclusion in snapshots
-        global _playback_paused, _playback_speed
-        if "paused" in result:
-            _playback_paused = result["paused"]
-        if "speed" in result:
-            _playback_speed = result["speed"]
-        return result
-    except zmq.Again:
+        loop = asyncio.get_running_loop()
+        result = loop.run_until_complete(_request())
+    except RuntimeError:
+        result = asyncio.run(_request())
+    except Exception:
         return JSONResponse(status_code=504, content={"error": "Dispatcher timeout"})
-    finally:
-        sock.close()
-        ctx.term()
+
+    if result is None:
+        return JSONResponse(status_code=503, content={"error": "NATS not connected"})
+
+    global _playback_paused, _playback_speed
+    if "paused" in result:
+        _playback_paused = result["paused"]
+    if "speed" in result:
+        _playback_speed = result["speed"]
+    return result
 
 
 @app.get("/api/v1/sessions", dependencies=[Depends(_require_api_key)])

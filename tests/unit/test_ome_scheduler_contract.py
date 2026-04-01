@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import (
@@ -82,17 +82,24 @@ def _make_dispatcher(interface_map=None):
 
     pool = MagicMock()
     mock_stub = MagicMock()
-    mock_stub.batch_link_up.return_value = node_agent_pb2.BatchLinkUpResponse(
-        success=True,
-        error_message="",
-        interfaces_upped=1,
-        apply_time_ms=0.0,
+    mock_stub.async_batch_link_up = AsyncMock(
+        return_value=node_agent_pb2.BatchLinkUpResponse(
+            success=True,
+            error_message="",
+            interfaces_upped=1,
+            apply_time_ms=0.0,
+        )
     )
-    mock_stub.batch_link_down.return_value = node_agent_pb2.BatchLinkDownResponse(
-        success=True,
-        error_message="",
-        interfaces_downed=1,
-        apply_time_ms=0.0,
+    mock_stub.async_batch_link_down = AsyncMock(
+        return_value=node_agent_pb2.BatchLinkDownResponse(
+            success=True,
+            error_message="",
+            interfaces_downed=1,
+            apply_time_ms=0.0,
+        )
+    )
+    mock_stub.async_set_latency = AsyncMock(
+        return_value=node_agent_pb2.SetLatencyResponse(success=True)
     )
     pool.get_stub.return_value = mock_stub
 

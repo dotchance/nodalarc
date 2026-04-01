@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import (
@@ -75,17 +75,22 @@ def _make_dispatcher(interface_map=None, stub_success=True):
 
     pool = MagicMock()
     mock_stub = MagicMock()
-    mock_stub.batch_link_up.return_value = node_agent_pb2.BatchLinkUpResponse(
+    up_resp = node_agent_pb2.BatchLinkUpResponse(
         success=stub_success,
         error_message="" if stub_success else "mock failure",
         interfaces_upped=1 if stub_success else 0,
         apply_time_ms=0.0,
     )
-    mock_stub.batch_link_down.return_value = node_agent_pb2.BatchLinkDownResponse(
+    down_resp = node_agent_pb2.BatchLinkDownResponse(
         success=stub_success,
         error_message="" if stub_success else "mock failure",
         interfaces_downed=1 if stub_success else 0,
         apply_time_ms=0.0,
+    )
+    mock_stub.async_batch_link_up = AsyncMock(return_value=up_resp)
+    mock_stub.async_batch_link_down = AsyncMock(return_value=down_resp)
+    mock_stub.async_set_latency = AsyncMock(
+        return_value=node_agent_pb2.SetLatencyResponse(success=True)
     )
     pool.get_stub.return_value = mock_stub
 
@@ -215,7 +220,7 @@ class TestDispatcherLiveDispatch:
         asyncio.run(d._dispatch_batch([vis], [], pub))
 
         stub = pool.get_stub.return_value
-        assert stub.batch_link_up.called
+        assert stub.async_batch_link_up.called
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
         assert len(pub.messages) > 0
         assert pub.messages[0][0] == "nodalarc.links.up"
@@ -229,7 +234,7 @@ class TestDispatcherLiveDispatch:
         asyncio.run(d._dispatch_batch([vis], [], pub))
 
         stub = pool.get_stub.return_value
-        assert stub.batch_link_down.called
+        assert stub.async_batch_link_down.called
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
         assert len(pub.messages) > 0
         assert pub.messages[0][0] == "nodalarc.links.down"
@@ -237,7 +242,7 @@ class TestDispatcherLiveDispatch:
     def test_link_up_not_published_if_node_agent_exception(self):
         d, pool = _make_dispatcher()
         stub = pool.get_stub.return_value
-        stub.batch_link_up.side_effect = Exception("agent unreachable")
+        stub.async_batch_link_up = AsyncMock(side_effect=Exception("agent unreachable"))
 
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=True)
         pub = MockNats()

@@ -628,7 +628,8 @@ class Dispatcher:
                     log.warning("BatchLinkDown failed for agent %s: %s", addr, result)
                 elif not result.success:
                     log.warning("BatchLinkDown partial: %s", result.error_message[:200])
-                    successful_agents.add(addr)
+                    if result.interfaces_downed > 0:
+                        successful_agents.add(addr)
                 else:
                     log.info(
                         "BatchLinkDown: %d downed in %.1fms",
@@ -787,7 +788,8 @@ class Dispatcher:
                         result.interfaces_upped,
                         result.error_message[:200],
                     )
-                    successful_agents.add(addr)
+                    if result.interfaces_upped > 0:
+                        successful_agents.add(addr)
                 else:
                     log.info(
                         "BatchLinkUp: %d upped in %.1fms",

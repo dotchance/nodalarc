@@ -198,7 +198,7 @@ def handle_batch_link_down(
         elif is_cross_node and iface.vni:
             # CROSS_NODE: destroy VXLAN interface entirely (not just admin-down)
             pid = pm.get(iface.node_id, 0)
-            fut = _BATCH_POOL.submit(vxlan.destroy_vxlan_interface, pid, iface.interface_name)
+            fut = _BATCH_POOL.submit(vxlan.destroy_vxlan_link, pid, iface.interface_name, iface.vni)
         else:
             fut = _BATCH_POOL.submit(_isl_link_down, iface, pm)
         futures[fut] = iface
@@ -388,7 +388,7 @@ def handle_batch_link_up(
                 continue
             try:
                 pid = _require_pid(iface.node_id, pm)
-                vxlan.create_vxlan_interface(
+                vxlan.create_vxlan_link(
                     pid=pid,
                     ifname=iface.interface_name,
                     local_ip=local_ip,

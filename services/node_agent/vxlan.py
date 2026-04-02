@@ -1,19 +1,35 @@
-"""VXLAN tunnel management for cross-node ISL links.
+"""VXLAN tunnel management for cross-node ISL and GS links.
 
-Creates and destroys per-link VXLAN interfaces in pod namespaces.
-Each cross-node link gets a dedicated VXLAN tunnel (point-to-point,
+Creates and destroys per-link VXLAN tunnels between pods on different K3s
+nodes. Each cross-node link gets a dedicated VXLAN interface (point-to-point,
 no shared bridge, no broadcast domain).
 
-All operations use pyroute2 — never shell commands (CLAUDE.md).
+Architecture per cross-node link (e.g., sat-P00S00 on nodal ↔ sat-P01S00 on nodal03):
+
+    Host namespace (nodal):
+      vxlan-{vni}  ←── tc mirred redirect ──→  veth-{vni}-h
+      (VXLAN UDP endpoint)                      (host-end of veth pair)
+                                                     │
+                                                veth-{vni}-p → moved into pod → renamed to isl0
+
+    Pod namespace (sat-P00S00):
+      isl0 (veth pod-end) — FRR sees this as a normal interface
+
+VXLAN must live in the HOST namespace because that's where the physical NIC
+and routing table are. The pod-side is a veth, same as LOCAL ISL wiring.
+tc mirred redirect connects the VXLAN to the veth host-end — same proven
+pattern as ground_bridge.py's satellite attachment.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 
 from nodalarc.vxlan import compute_vni  # noqa: F401 — re-export for convenience
 
-from node_agent.namespace_ops import _in_namespace
+from node_agent.ground_bridge import _tc_mirred_redirect, _tc_mirred_remove
+from node_agent.namespace_ops import _get_host_ns_fd, _in_namespace, _libc, _ns_lock
 
 log = logging.getLogger(__name__)
 
@@ -23,8 +39,17 @@ VXLAN_OVERHEAD_BYTES = 50
 # Default destination port for VXLAN (IANA standard)
 VXLAN_DST_PORT = 4789
 
+# Clone flag for setns
+_CLONE_NEWNET = 0x40000000
 
-def create_vxlan_interface(
+
+def _host_ifnames(vni: int) -> tuple[str, str, str]:
+    """Deterministic host-side interface names from VNI. Max 15 chars each."""
+    tag = f"{vni % 99999:05d}"
+    return f"vx{tag}", f"vh{tag}", f"vp{tag}"
+
+
+def create_vxlan_link(
     pid: int,
     ifname: str,
     local_ip: str,
@@ -32,19 +57,21 @@ def create_vxlan_interface(
     vni: int,
     mtu: int | None = None,
 ) -> None:
-    """Create a VXLAN interface and move it into a pod namespace.
+    """Create a VXLAN-backed interface in a pod namespace.
 
-    1. Create VXLAN interface on the host
-    2. Move it into the target pod's network namespace
-    3. Rename to target interface name (if needed)
-    4. Set MTU, bring UP
+    1. Enter host namespace
+    2. Create VXLAN interface (UDP endpoint to remote node)
+    3. Create veth pair (host-end + pod-end)
+    4. Install bidirectional tc mirred redirect: VXLAN ↔ veth host-end
+    5. Move veth pod-end into target pod namespace
+    6. Rename to target interface name, set MTU, bring UP
 
     Args:
-        pid: PID of the target pod (for namespace entry).
-        ifname: Target interface name inside the pod (e.g., "isl0").
+        pid: PID of the target pod.
+        ifname: Target interface name inside the pod (e.g., "isl0", "gnd0").
         local_ip: This node's IP (VXLAN local endpoint).
         remote_ip: Peer node's IP (VXLAN remote endpoint).
-        vni: VXLAN Network Identifier (deterministic from link pair).
+        vni: VXLAN Network Identifier.
         mtu: Inner MTU. Default: platform MTU - VXLAN overhead.
     """
     from pyroute2 import IPRoute
@@ -54,72 +81,143 @@ def create_vxlan_interface(
 
         mtu = get_platform_config().veth_interface_mtu_bytes - VXLAN_OVERHEAD_BYTES
 
-    # Temporary host-side name (must be unique, ≤15 chars)
-    host_ifname = f"vx{vni % 99999:05d}"
+    vxlan_if, veth_host, veth_pod = _host_ifnames(vni)
 
-    ipr = IPRoute()
+    # Get the target pod's namespace fd (while we can still see /proc/{pid})
+    pod_ns_fd = os.open(f"/proc/{pid}/ns/net", os.O_RDONLY)
+
     try:
-        # Create VXLAN interface on the host
-        ipr.link(
-            "add",
-            ifname=host_ifname,
-            kind="vxlan",
-            vxlan_id=vni,
-            vxlan_local=local_ip,
-            vxlan_group=remote_ip,
-            vxlan_port=VXLAN_DST_PORT,
-            vxlan_learning=False,
-        )
+        # --- All host namespace operations under the ns lock ---
+        import ctypes
 
-        # Get the interface index
-        links = ipr.link_lookup(ifname=host_ifname)
-        if not links:
-            raise RuntimeError(f"VXLAN interface {host_ifname} not found after creation")
-        idx = links[0]
+        with _ns_lock:
+            # Enter host namespace
+            host_fd = _get_host_ns_fd()
+            ret = _libc.setns(host_fd, _CLONE_NEWNET)
+            if ret != 0:
+                errno = ctypes.get_errno()
+                raise OSError(errno, f"setns to host failed: {os.strerror(errno)}")
 
-        # Set MTU on host side before moving
-        ipr.link("set", index=idx, mtu=mtu)
+            try:
+                ipr = IPRoute()
+                try:
+                    # 1. Create VXLAN interface
+                    ipr.link(
+                        "add",
+                        ifname=vxlan_if,
+                        kind="vxlan",
+                        vxlan_id=vni,
+                        vxlan_local=local_ip,
+                        vxlan_group=remote_ip,
+                        vxlan_port=VXLAN_DST_PORT,
+                        vxlan_learning=False,
+                    )
 
-        # Move into pod namespace
-        ipr.link("set", index=idx, net_ns_pid=pid)
+                    # 2. Create veth pair
+                    ipr.link(
+                        "add",
+                        ifname=veth_host,
+                        kind="veth",
+                        peer={"ifname": veth_pod},
+                    )
+
+                    # 3. Set MTU on all interfaces
+                    for name in [vxlan_if, veth_host, veth_pod]:
+                        links = ipr.link_lookup(ifname=name)
+                        if links:
+                            ipr.link("set", index=links[0], mtu=mtu)
+
+                    # 4. Bring VXLAN and veth host-end UP (required for tc mirred)
+                    for name in [vxlan_if, veth_host]:
+                        links = ipr.link_lookup(ifname=name)
+                        if links:
+                            ipr.link("set", index=links[0], state="up")
+
+                    # 5. Move veth pod-end into target pod namespace via fd
+                    links = ipr.link_lookup(ifname=veth_pod)
+                    if not links:
+                        raise RuntimeError(f"veth pod-end {veth_pod} not found")
+                    ipr.link("set", index=links[0], net_ns_fd=pod_ns_fd)
+
+                finally:
+                    ipr.close()
+
+                # 6. Install bidirectional tc mirred redirect (in host namespace)
+                _tc_mirred_redirect(vxlan_if, veth_host)
+                _tc_mirred_redirect(veth_host, vxlan_if)
+
+            finally:
+                # Return to Node Agent's CNI namespace (not strictly necessary
+                # since _in_namespace will re-enter host via _HOST_NS_FD, but
+                # defensive — don't leave the thread in host namespace)
+                pass
     finally:
-        ipr.close()
+        os.close(pod_ns_fd)
 
-    # Inside the pod namespace: rename and bring UP
-    def _configure_in_ns(ns_ipr):
-        links = ns_ipr.link_lookup(ifname=host_ifname)
+    # 7. Inside pod namespace: rename veth pod-end and bring UP
+    def _configure_in_pod(ns_ipr):
+        links = ns_ipr.link_lookup(ifname=veth_pod)
         if links:
             idx = links[0]
             ns_ipr.link("set", index=idx, ifname=ifname)
             ns_ipr.link("set", index=idx, state="up")
 
-    _in_namespace(pid, _configure_in_ns)
+    _in_namespace(pid, _configure_in_pod)
 
     log.info(
-        "Created VXLAN interface %s in ns(%d): VNI=%d, local=%s, remote=%s, MTU=%d",
+        "Created VXLAN link %s in ns(%d): VNI=%d %s→%s MTU=%d [%s↔%s↔%s]",
         ifname,
         pid,
         vni,
         local_ip,
         remote_ip,
         mtu,
+        vxlan_if,
+        veth_host,
+        veth_pod,
     )
 
 
-def destroy_vxlan_interface(pid: int, ifname: str) -> None:
-    """Remove a VXLAN interface from a pod namespace.
+def destroy_vxlan_link(pid: int, ifname: str, vni: int) -> None:
+    """Remove a VXLAN link — destroys host-side VXLAN + veth and pod-side interface.
 
-    Enters the pod namespace and deletes the interface. The kernel
-    automatically cleans up the VXLAN tunnel endpoint.
+    Enters host namespace to clean up VXLAN interface, veth host-end, and
+    tc mirred rules. The pod-side veth is automatically destroyed when the
+    host-side is deleted (kernel cleans up veth pairs).
     """
+    vxlan_if, veth_host, _veth_pod = _host_ifnames(vni)
 
-    def _destroy_in_ns(ns_ipr):
-        links = ns_ipr.link_lookup(ifname=ifname)
-        if links:
-            ns_ipr.link("del", index=links[0])
+    import ctypes
 
-    try:
-        _in_namespace(pid, _destroy_in_ns)
-        log.info("Destroyed VXLAN interface %s in ns(%d)", ifname, pid)
-    except Exception as exc:
-        log.warning("Failed to destroy VXLAN %s in ns(%d): %s", ifname, pid, exc)
+    with _ns_lock:
+        host_fd = _get_host_ns_fd()
+        ret = _libc.setns(host_fd, _CLONE_NEWNET)
+        if ret != 0:
+            errno = ctypes.get_errno()
+            log.warning("setns to host failed during VXLAN cleanup: %s", os.strerror(errno))
+            return
+
+        try:
+            from pyroute2 import IPRoute
+
+            ipr = IPRoute()
+            try:
+                # Remove tc mirred rules
+                _tc_mirred_remove(vxlan_if)
+                _tc_mirred_remove(veth_host)
+
+                # Delete veth host-end (kernel auto-deletes pod-end)
+                links = ipr.link_lookup(ifname=veth_host)
+                if links:
+                    ipr.link("del", index=links[0])
+
+                # Delete VXLAN interface
+                links = ipr.link_lookup(ifname=vxlan_if)
+                if links:
+                    ipr.link("del", index=links[0])
+            finally:
+                ipr.close()
+        except Exception as exc:
+            log.warning("VXLAN link cleanup failed (VNI=%d): %s", vni, exc)
+
+    log.info("Destroyed VXLAN link VNI=%d [%s + %s]", vni, vxlan_if, veth_host)

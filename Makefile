@@ -35,10 +35,11 @@ IMG_VS_API     := $(REGISTRY_PREFIX)nodalarc/vs-api:$(TAG)
 IMG_OPERATOR   := $(REGISTRY_PREFIX)nodalarc/operator:$(TAG)
 IMG_VF         := $(REGISTRY_PREFIX)nodalarc/vf:$(TAG)
 IMG_NODALPATH  := $(REGISTRY_PREFIX)nodalarc/nodalpath:$(TAG)
+IMG_MI         := $(REGISTRY_PREFIX)nodalarc/measurement:$(TAG)
 
 BASE_IMAGES := $(IMG_BASE) $(IMG_FRR) $(IMG_PROBE) $(IMG_FWD)
 SVC_IMAGES  := $(IMG_OME) $(IMG_SCHEDULER) $(IMG_NODE_AGENT) \
-               $(IMG_VS_API) $(IMG_OPERATOR) $(IMG_VF) $(IMG_NODALPATH)
+               $(IMG_VS_API) $(IMG_OPERATOR) $(IMG_VF) $(IMG_NODALPATH) $(IMG_MI)
 ALL_IMAGES  := $(BASE_IMAGES) $(SVC_IMAGES)
 SVC_IMAGES_LATEST := $(subst :$(TAG),:latest,$(SVC_IMAGES))
 REQUIRED_K3S_IMAGES := nodalarc/frr:10
@@ -52,9 +53,9 @@ REQUIRED_K3S_IMAGES := nodalarc/frr:10
         build-frontends build-images ensure-base-images build-base-images \
         build-base build-frr build-probe build-fwd \
         build-ome build-scheduler build-node-agent build-vs-api \
-        build-operator build-vf build-nodalpath \
+        build-operator build-vf build-nodalpath build-measurement \
         load-base load-services check-deps \
-        redeploy-ome redeploy-scheduler redeploy-node-agent \
+        redeploy-ome redeploy-scheduler redeploy-node-agent redeploy-measurement \
         redeploy-vs-api redeploy-operator redeploy-vf redeploy-nodalpath
 
 .DEFAULT_GOAL := help
@@ -139,7 +140,7 @@ build-frontends: ## Build VF and NodalPath console frontends
 	fi
 
 build-images: ensure-base-images build-ome build-scheduler build-node-agent \
-              build-vs-api build-operator build-vf build-nodalpath
+              build-vs-api build-operator build-vf build-nodalpath build-measurement
 
 ensure-base-images:
 	@for img in nodalarc/base:latest nodalarc/frr:10 nodalarc/probe:latest nodalarc/nodalpath-fwd:latest; do \
@@ -181,6 +182,9 @@ build-operator: ## Build Operator image
 
 build-nodalpath: ## Build NodalPath image
 	docker build -f nodalpath/Dockerfile -t $(IMG_NODALPATH) -t $(REGISTRY_PREFIX)nodalarc/nodalpath:latest .
+
+build-measurement: ## Build MI (Measurement) image
+	docker build -f services/measurement/Dockerfile -t $(IMG_MI) -t $(REGISTRY_PREFIX)nodalarc/measurement:latest .
 
 build-vf: build-frontends ## Build VF (visualization) image
 	docker build -t $(IMG_VF) -t $(REGISTRY_PREFIX)nodalarc/vf:latest frontend/
@@ -302,6 +306,9 @@ redeploy-vf: build-vf ## Build + load + restart VF
 
 redeploy-nodalpath: build-nodalpath ## Build + load + restart NodalPath
 	$(call load-and-restart,$(IMG_NODALPATH),deployment/nodalpath)
+
+redeploy-measurement: build-measurement ## Build + load + restart MI
+	$(call load-and-restart,$(IMG_MI),deployment/nodalarc-measurement)
 
 # ---------------------------------------------------------------------------
 # status / test / teardown / clean

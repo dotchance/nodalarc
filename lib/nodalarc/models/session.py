@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from nodalarc.models.ground_station import TerrestrialPrefixTemplate
 
@@ -124,6 +124,21 @@ class TerrestrialLinkConfig(BaseModel):
     loss_pct: float = 0.0
 
 
+class PlacementConfig(BaseModel):
+    """Pod placement policy for multi-node deployment.
+
+    allOnOne: all pods on a single node (default, backward compatible).
+    planePerNode: one orbital plane per K3s node. Intra-plane ISLs are
+        LOCAL (direct veth), cross-plane ISLs are CROSS_NODE (VXLAN).
+    planeGroupPerNode: multiple adjacent planes per node, round-robin.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    policy: str = "allOnOne"  # allOnOne | planePerNode | planeGroupPerNode
+    planes_per_group: int | None = None  # For planeGroupPerNode
+
+
 class SessionConfig(BaseModel):
     """Top-level session configuration — the single YAML file
     that defines an entire deployment.
@@ -151,5 +166,6 @@ class SessionConfig(BaseModel):
     time: TimeConfig = TimeConfig()
     traffic_flows: list[TrafficFlowConfig] | None = None
     terrestrial_links: list[TerrestrialLinkConfig] | None = None
+    placement: PlacementConfig = PlacementConfig()
     mi: MiConfig = MiConfig()
     convergence: ConvergenceConfig = ConvergenceConfig()  # backward compat — use mi.convergence

@@ -39,6 +39,8 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 30
           env:
+            # Fallback if no nodes have nodalarc.io/node-agent=true label.
+            # With M10 placement policies, the Operator discovers nodes automatically.
             - name: SESSION_NODE_NAME
               value: {{ .Values.sessionNodeName | default "nodal" | quote }}
           resources:

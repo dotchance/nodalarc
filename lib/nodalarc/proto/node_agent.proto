@@ -28,9 +28,12 @@ enum LinkType {
   GROUND = 1;
 }
 
+// Per-interface locality (PRD Decision 1, Section 13.6).
+// Carried in each InterfaceUp/InterfaceDown entry — not on the batch request.
+// The Node Agent decides per-interface whether to use local veth or VXLAN.
 enum Locality {
-  LOCAL = 0;        // Both pods on this node (M4: always LOCAL)
-  CROSS_NODE = 1;   // Pods on different nodes (M9: VXLAN tunnels)
+  LOCAL = 0;        // Both pods on this node — direct veth operations
+  CROSS_NODE = 1;   // Pods on different nodes — VXLAN tunnel
 }
 
 // --- BatchLinkDown ---
@@ -38,20 +41,22 @@ enum Locality {
 message InterfaceDown {
   string node_id = 1;
   string interface_name = 2;
-  // field 3 removed — PID looked up by Node Agent internally
+  // field 3 reserved — PID looked up by Node Agent internally
   LinkType link_type = 4;
   string gs_id = 5;
   string sat_id = 6;
-  // fields 7-8 removed — PID looked up by Node Agent internally
-  // M10 CROSS_NODE: VXLAN tunnel parameters (empty for LOCAL)
-  string remote_node_ip = 9;  // Peer node's IP for VXLAN endpoint
-  int32 vni = 10;             // VXLAN Network Identifier
+  // fields 7-8 reserved — PID looked up by Node Agent internally
+  // CROSS_NODE VXLAN parameters (empty/zero for LOCAL)
+  string remote_node_ip = 9;
+  int32 vni = 10;
+  // Per-interface locality (PRD Decision 1)
+  Locality locality = 11;
 }
 
 message BatchLinkDownRequest {
-  string batch_id = 1;             // e.g. "1710000000-down-001"
-  string target_sim_time = 2;      // ISO 8601 — metadata for event logging
-  Locality locality = 3;
+  string batch_id = 1;
+  string target_sim_time = 2;
+  // field 3 removed — locality moved to per-interface (M10)
   repeated InterfaceDown interfaces = 4;
 }
 
@@ -67,24 +72,26 @@ message BatchLinkDownResponse {
 message InterfaceUp {
   string node_id = 1;
   string interface_name = 2;
-  // field 3 removed — PID looked up by Node Agent internally
+  // field 3 reserved — PID looked up by Node Agent internally
   LinkType link_type = 4;
   double latency_ms = 5;
   double bandwidth_mbps = 6;
   string gs_id = 7;
   string sat_id = 8;
-  // fields 9-10 removed — PID looked up by Node Agent internally
+  // fields 9-10 reserved — PID looked up by Node Agent internally
   // NDP: peer MAC for deriving link-local address (ISL only)
   string peer_mac = 11;
-  // M10 CROSS_NODE: VXLAN tunnel parameters (empty for LOCAL)
-  string remote_node_ip = 12;  // Peer node's IP for VXLAN endpoint
-  int32 vni = 13;              // VXLAN Network Identifier
+  // CROSS_NODE VXLAN parameters (empty/zero for LOCAL)
+  string remote_node_ip = 12;
+  int32 vni = 13;
+  // Per-interface locality (PRD Decision 1)
+  Locality locality = 14;
 }
 
 message BatchLinkUpRequest {
   string batch_id = 1;
   string target_sim_time = 2;
-  Locality locality = 3;
+  // field 3 removed — locality moved to per-interface (M10)
   repeated InterfaceUp interfaces = 4;
 }
 
@@ -100,12 +107,12 @@ message BatchLinkUpResponse {
 message LatencyEntry {
   string node_id = 1;
   string interface_name = 2;
-  // field 3 removed — PID looked up by Node Agent internally
+  // field 3 reserved — PID looked up by Node Agent internally
   double latency_ms = 4;
   LinkType link_type = 5;
   string gs_id = 6;
   string sat_id = 7;
-  // fields 8-9 removed — PID looked up by Node Agent internally
+  // fields 8-9 reserved — PID looked up by Node Agent internally
 }
 
 message SetLatencyRequest {

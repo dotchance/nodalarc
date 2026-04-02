@@ -48,6 +48,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             - name: CONTAINER_RUNTIME_ENDPOINT
               value: unix:///run/k3s/containerd/containerd.sock
           resources:

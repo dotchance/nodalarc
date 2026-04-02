@@ -239,7 +239,11 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
 
 
 def write_wiring_status(wired: dict[str, str], namespace: str = "nodalarc") -> None:
-    """Write per-node wiring status to nodalarc-wiring-status ConfigMap."""
+    """Write per-node wiring status to nodalarc-wiring-status ConfigMap.
+
+    Uses PATCH (merge) so multiple Node Agents on different K3s nodes
+    can each write their local pods without overwriting each other.
+    """
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
 
@@ -255,7 +259,12 @@ def write_wiring_status(wired: dict[str, str], namespace: str = "nodalarc") -> N
         v1.create_namespaced_config_map(namespace, body)
     except kubernetes.client.rest.ApiException as e:
         if e.status == 409:
-            v1.replace_namespaced_config_map("nodalarc-wiring-status", namespace, body)
+            # ConfigMap exists — read existing, merge, update
+            existing = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
+            merged = dict(existing.data or {})
+            merged.update(wired)
+            existing.data = merged
+            v1.replace_namespaced_config_map("nodalarc-wiring-status", namespace, existing)
         else:
             raise
     log.info(f"Wrote wiring status: {len(wired)} nodes wired")

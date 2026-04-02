@@ -24,8 +24,9 @@ import logging
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from nodalarc.proto import node_agent_pb2
+
 from node_agent import ground_bridge, namespace_ops
-from node_agent.proto import node_agent_pb2
 
 log = logging.getLogger(__name__)
 

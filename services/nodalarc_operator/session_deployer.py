@@ -98,6 +98,69 @@ def compute_pod_placement(
     raise ValueError(f"Unknown placement policy: {placement.policy}")
 
 
+def measure_substrate_latency(available_nodes: list[str]) -> dict[str, str]:
+    """Measure baseline network latency between all node pairs.
+
+    Uses ICMP ping between node InternalIPs. 20 samples, takes median.
+    Stores results as a flat dict suitable for a ConfigMap:
+    {"nodal-nodal03": "0.23", "nodal03-nodal": "0.24"}
+
+    For single-node deployments, returns empty dict (no cross-node latency).
+    """
+    import subprocess
+
+    if len(available_nodes) < 2:
+        return {}
+
+    # Discover node IPs
+    v1 = kubernetes.client.CoreV1Api()
+    node_ips: dict[str, str] = {}
+    for node in v1.list_node().items:
+        name = node.metadata.name
+        if name in available_nodes:
+            for addr in node.status.addresses or []:
+                if addr.type == "InternalIP":
+                    node_ips[name] = addr.address
+                    break
+
+    results: dict[str, str] = {}
+    for i, node_a in enumerate(available_nodes):
+        for node_b in available_nodes[i + 1 :]:
+            ip_b = node_ips.get(node_b)
+            if not ip_b:
+                continue
+            # Measure A→B latency from the operator pod (runs on control plane)
+            try:
+                out = subprocess.run(
+                    ["ping", "-c", "20", "-q", "-W", "1", ip_b],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                # Parse avg from "rtt min/avg/max/mdev = 0.1/0.2/0.3/0.05 ms"
+                for line in out.stdout.splitlines():
+                    if "avg" in line and "/" in line:
+                        parts = line.split("=")[1].strip().split("/")
+                        avg_ms = float(parts[1])
+                        results[f"{node_a}-{node_b}"] = f"{avg_ms:.3f}"
+                        results[f"{node_b}-{node_a}"] = f"{avg_ms:.3f}"
+                        break
+            except Exception as exc:
+                log.warning(
+                    "Substrate latency measurement %s→%s failed: %s",
+                    node_a,
+                    node_b,
+                    exc,
+                )
+
+    if results:
+        log.info(
+            "Substrate latency measured: %s",
+            ", ".join(f"{k}={v}ms" for k, v in sorted(results.items())),
+        )
+    return results
+
+
 # All known FRR daemons — used to generate the daemons file
 _ALL_FRR_DAEMONS = [
     "mgmtd",
@@ -308,6 +371,19 @@ def deploy_session(
         len(node_counts),
         ", ".join(f"{n}={c}" for n, c in sorted(node_counts.items())),
     )
+
+    # --- Step 8b: Measure and store substrate latency (multi-node only) ---
+    if len(available_nodes) > 1:
+        substrate = measure_substrate_latency(available_nodes)
+        if substrate:
+            _create_or_update_configmap(
+                v1,
+                "nodalarc-substrate-latency",
+                namespace,
+                substrate,
+                owner_ref,
+            )
+            log.info("Stored substrate latency ConfigMap with %d entries", len(substrate))
 
     # --- Step 9: Create session pods ---
     sidecar_config = _build_sidecar_config(resolved)

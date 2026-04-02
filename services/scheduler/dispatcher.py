@@ -110,6 +110,7 @@ class Dispatcher:
         self._current_sim_time: datetime | None = None
         self._running = False
         self._last_snapshot_seq: int = 0
+        self._substrate_latency: dict[str, float] = {}  # "nodeA-nodeB" -> ms
 
         # Pairs that failed dispatch and should not be retried.
         self._skip_pairs: set[tuple[str, str]] = set()
@@ -135,6 +136,9 @@ class Dispatcher:
         self._pool.set_nc(nc)
 
         log.info("Scheduler NATS connected")
+
+        # Load substrate latency for R-TO-002A compensation
+        self._load_substrate_latency()
 
         # Subscribe to LinkStateSnapshot — get latest retained message
         # JetStream MaxMsgsPerSubject=1 means only the latest snapshot exists
@@ -412,6 +416,56 @@ class Dispatcher:
     # ------------------------------------------------------------------
     # Reconcile-based dispatch — single path to Node Agent
     # ------------------------------------------------------------------
+
+    def _load_substrate_latency(self) -> None:
+        """Load substrate latency from ConfigMap (created by Operator).
+
+        Populates self._substrate_latency with {"nodeA-nodeB": ms} entries.
+        For single-node deployments, the ConfigMap doesn't exist — all
+        substrate latencies remain 0.
+        """
+        try:
+            import kubernetes
+            import kubernetes.client
+            import kubernetes.config
+
+            try:
+                kubernetes.config.load_incluster_config()
+            except kubernetes.config.config_exception.ConfigException:
+                kubernetes.config.load_kube_config()
+
+            from nodalarc.platform import get_platform_config
+
+            ns = get_platform_config().kubernetes_namespace
+            v1 = kubernetes.client.CoreV1Api()
+            cm = v1.read_namespaced_config_map("nodalarc-substrate-latency", ns)
+            if cm.data:
+                for key, val in cm.data.items():
+                    self._substrate_latency[key] = float(val)
+                log.info(
+                    "Loaded substrate latency: %s",
+                    ", ".join(f"{k}={v}ms" for k, v in sorted(self._substrate_latency.items())),
+                )
+        except kubernetes.client.rest.ApiException as exc:
+            if exc.status == 404:
+                log.info("No substrate latency ConfigMap — single-node deployment")
+            else:
+                log.warning("Failed to read substrate latency ConfigMap: %s", exc)
+        except Exception as exc:
+            log.warning("Substrate latency load failed: %s", exc)
+
+    def _get_substrate_ms(self, node_a: str, node_b: str) -> float:
+        """Get substrate latency for a link pair in ms.
+
+        Looks up the K3s nodes for both endpoints, then checks
+        the substrate latency map. Returns 0.0 for LOCAL links.
+        """
+        k3s_a = self._loc.k3s_node(node_a)
+        k3s_b = self._loc.k3s_node(node_b)
+        if not k3s_a or not k3s_b or k3s_a == k3s_b:
+            return 0.0
+        key = f"{k3s_a}-{k3s_b}"
+        return self._substrate_latency.get(key, 0.0)
 
     def _link_locality(self, node_a: str, node_b: str) -> int:
         """Determine locality for a link pair.
@@ -724,10 +778,9 @@ class Dispatcher:
         """Compute and dispatch latency updates for active links.
 
         Substrate compensation (R-TO-002A): netem_ms = max(0, target_ms - substrate_ms).
-        In M4 (single node), substrate_ms = 0.0 for all pairs.
+        substrate_ms comes from the Operator's ping measurement between K3s nodes.
+        For LOCAL links (same node), substrate_ms = 0.0.
         """
-        # Scale-forward: substrate compensation present but zero in M4
-        substrate_latency: dict[tuple[str, str], float] = {}
 
         active_set = set(self._active_links.keys())
         updates = self._position_table.get_links_needing_update(active_set, self._last_latencies)
@@ -744,7 +797,7 @@ class Dispatcher:
                 continue
 
             # R-TO-002A substrate compensation
-            substrate_ms = substrate_latency.get(pair, 0.0)
+            substrate_ms = self._get_substrate_ms(node_a, node_b)
             netem_ms = max(0.0, new_lat - substrate_ms)
 
             info.latency_ms = new_lat

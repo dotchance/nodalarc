@@ -29,6 +29,8 @@ class TerrestrialPrefixTemplate(BaseModel):
     ipv4_template: str = "172.16.{gs_index}.0/24"
     ipv6_template: str = "fd10::{gs_index}:0/112"
     metric: int = 10
+    default_route: bool = False
+    default_route_metric: int = 100
 
     @field_validator("metric")
     @classmethod

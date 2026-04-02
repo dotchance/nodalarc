@@ -124,6 +124,9 @@ def _resolve_terrestrial_prefixes(
         ipv4 = tpl.ipv4_template.format(gs_index=gs_index)
         ipv6 = tpl.ipv6_template.format(gs_index=gs_index)
         raw_prefixes = [(ipv4, tpl.metric), (ipv6, tpl.metric)]
+        # Template-level default route (applies to all GS using this template)
+        if tpl.default_route:
+            raw_prefixes.append(("0.0.0.0/0", tpl.default_route_metric))
 
     result = []
     has_default_route = False

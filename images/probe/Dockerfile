@@ -3,7 +3,7 @@ FROM python:3.14-slim
 RUN pip install --no-cache-dir fastapi uvicorn
 
 WORKDIR /app
-COPY measurement/probe_daemon.py /app/measurement/probe_daemon.py
+COPY services/measurement/probe_daemon.py /app/measurement/probe_daemon.py
 RUN touch /app/measurement/__init__.py
 
 ENV PYTHONPATH=/app

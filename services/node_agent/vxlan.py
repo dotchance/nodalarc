@@ -83,6 +83,16 @@ def create_vxlan_link(
 
     vxlan_if, veth_host, veth_pod = _host_ifnames(vni)
 
+    # Idempotent: if the target interface already exists in the pod, skip.
+    # This happens when the Scheduler retries after a timeout — the prior
+    # attempt completed but the ACK was lost.
+    def _check_exists(ns_ipr):
+        return bool(ns_ipr.link_lookup(ifname=ifname))
+
+    if _in_namespace(pid, _check_exists):
+        log.info("VXLAN link %s already exists in ns(%d), skipping create", ifname, pid)
+        return
+
     # Get the target pod's namespace fd (while we can still see /proc/{pid})
     pod_ns_fd = os.open(f"/proc/{pid}/ns/net", os.O_RDONLY)
 
@@ -101,6 +111,14 @@ def create_vxlan_link(
             try:
                 ipr = IPRoute()
                 try:
+                    # Idempotent: clean up stale interfaces from prior attempt
+                    # (Case C — partial kernel state → cleanup then wire fresh)
+                    for stale_name in [veth_host, vxlan_if]:
+                        stale = ipr.link_lookup(ifname=stale_name)
+                        if stale:
+                            log.info("Cleaning stale %s before VXLAN create", stale_name)
+                            ipr.link("del", index=stale[0])
+
                     # 1. Create VXLAN interface
                     ipr.link(
                         "add",
@@ -263,6 +281,14 @@ def attach_cross_node_ground(
         try:
             ipr = IPRoute()
             try:
+                # Idempotent: clean up stale VXLAN from prior attempt
+                stale = ipr.link_lookup(ifname=vxlan_if)
+                if stale:
+                    log.info("Cleaning stale %s before ground VXLAN attach", vxlan_if)
+                    _tc_mirred_remove(vxlan_if)
+                    _tc_mirred_remove(local_host_ifname)
+                    ipr.link("del", index=stale[0])
+
                 # Create VXLAN interface
                 ipr.link(
                     "add",

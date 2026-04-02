@@ -13,3 +13,5 @@ ground_station_set:
     ipv4_template: "172.16.{gs_index}.0/24"
     ipv6_template: "fd10::{gs_index}:0/112"
     metric: 10
+    default_route: true
+    default_route_metric: 100

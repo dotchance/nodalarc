@@ -48,7 +48,7 @@ class NodeAgentClient:
         if self._nc is None:
             raise ConnectionError(f"NATS not connected for {self._subject}")
         payload = msg_type + b"\x00" + request_bytes
-        resp = await self._nc.request(self._subject, payload, timeout=30)
+        resp = await self._nc.request(self._subject, payload, timeout=60)
         return resp.data
 
     async def async_batch_link_down(

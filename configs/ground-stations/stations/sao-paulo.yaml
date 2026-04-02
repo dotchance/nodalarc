@@ -12,3 +12,5 @@ ground_station:
   terrestrial_prefixes:
     - prefix: "172.16.8.0/24"
       metric: 10
+    - prefix: "0.0.0.0/0"
+      metric: 100

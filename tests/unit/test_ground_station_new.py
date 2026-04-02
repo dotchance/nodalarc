@@ -77,9 +77,11 @@ class TestIndividualStationDetails:
     def test_mcmurdo_explicit_prefixes(self):
         s = load_ground_station_individual("mcmurdo")
         assert s.terrestrial_prefixes is not None
-        assert len(s.terrestrial_prefixes) == 2
+        assert len(s.terrestrial_prefixes) == 3
         assert s.terrestrial_prefixes[0].prefix == "172.16.100.0/24"
         assert s.terrestrial_prefixes[0].metric == 50
+        assert s.terrestrial_prefixes[2].prefix == "0.0.0.0/0"
+        assert s.terrestrial_prefixes[2].metric == 100
 
     def test_svalbard_polar_config(self):
         s = load_ground_station_individual("svalbard")

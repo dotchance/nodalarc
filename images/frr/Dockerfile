@@ -1,28 +1,10 @@
-FROM nodalarc/base:latest
+FROM quay.io/frrouting/frr:10.3.1
 
-# Install FRR 10.x from official repo
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    gnupg \
-    lsb-release \
-    && curl -s https://deb.frrouting.org/frr/keys.gpg \
-       | tee /usr/share/keyrings/frrouting.gpg > /dev/null \
-    && echo "deb [signed-by=/usr/share/keyrings/frrouting.gpg] https://deb.frrouting.org/frr bookworm frr-10" \
-       > /etc/apt/sources.list.d/frr.list \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    frr \
-    frr-pythontools \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy daemons enable file
-COPY daemons /etc/frr/daemons
-
-# Create runit service directories
-RUN mkdir -p /etc/service/mgmtd /etc/service/zebra /etc/service/isisd /etc/service/ospfd /etc/service/pathd /etc/service/staticd
-
-# Copy entrypoint
+# Our entrypoint waits for the Operator to deliver configs via
+# kubectl exec (cp + sentinel touch), then hands off to FRR's
+# stock docker-start which uses watchfrr to manage daemons.
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["/entrypoint.sh"]

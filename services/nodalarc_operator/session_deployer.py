@@ -712,6 +712,57 @@ def check_pods_ready(namespace: str) -> tuple[int, int]:
     return total, ready
 
 
+def signal_frr_config_ready(namespace: str) -> int:
+    """Copy FRR configs from ConfigMap staging dir and touch the config-ready sentinel.
+
+    Replicates na_deploy.py's two-step config delivery:
+      1. cp /etc/frr-config/* /etc/frr/  (ConfigMap mount → FRR config dir)
+      2. touch /etc/frr/.config-ready     (sentinel that unblocks the entrypoint)
+
+    The FRR entrypoint waits for the sentinel before starting daemons.
+
+    Returns the number of pods signaled.
+    """
+    from kubernetes.stream import stream
+
+    kubernetes.config.load_incluster_config()
+    v1 = kubernetes.client.CoreV1Api()
+    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+    signaled = 0
+    for pod in pods.items:
+        pod_name = pod.metadata.name
+        try:
+            # Step 1: Copy configs from ConfigMap staging dir to /etc/frr/
+            stream(
+                v1.connect_get_namespaced_pod_exec,
+                pod_name,
+                namespace,
+                container="frr",
+                command=["sh", "-c", "cp /etc/frr-config/* /etc/frr/"],
+                stderr=True,
+                stdout=True,
+                stdin=False,
+                tty=False,
+            )
+            # Step 2: Touch sentinel to unblock entrypoint
+            stream(
+                v1.connect_get_namespaced_pod_exec,
+                pod_name,
+                namespace,
+                container="frr",
+                command=["touch", "/etc/frr/.config-ready"],
+                stderr=True,
+                stdout=True,
+                stdin=False,
+                tty=False,
+            )
+            signaled += 1
+        except Exception as exc:
+            log.warning(f"Failed to signal config-ready in {pod_name}: {exc}")
+    log.info(f"Signaled FRR config-ready in {signaled}/{len(pods.items)} pods")
+    return signaled
+
+
 def write_pod_ips_configmap(namespace: str) -> None:
     """Write nodalarc-pod-ips ConfigMap from running session pods.
 

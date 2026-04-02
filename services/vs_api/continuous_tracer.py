@@ -406,8 +406,8 @@ class ContinuousTracer:
 
         cfg = get_platform_config()
         # NodalPath may run in a K8s container (NodePort 31100) or on the host (port 3100)
-        np_host = cfg.zmq_connect_host_for("nodalpath")
-        if np_host == cfg.zmq_connect_host:  # noqa: SIM108
+        np_host = cfg.service_host("nodalpath")
+        if np_host == cfg.default_service_host:  # noqa: SIM108
             # Fallback to global host → NodalPath is on the host or via NodePort
             # Try NodePort first (31100), fall back to direct port (3100)
             np_port = 31100

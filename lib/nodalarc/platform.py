@@ -23,19 +23,7 @@ class PlatformConfig(BaseModel):
     # Kubernetes
     kubernetes_namespace: str
 
-    # ZeroMQ ports
-    zmq_ome_events_port: int
-    zmq_to_events_port: int
-    zmq_mi_events_port: int
-    zmq_mi_convergence_gate_port: int
-    zmq_to_scenario_inject_port: int
-    zmq_mi_trace_port: int
-    zmq_playback_control_port: int
-    zmq_nodalpath_events_port: int
-    zmq_ome_catchup_port: int = 5568
-    zmq_to_link_catchup_port: int = 5569
-
-    # NATS JetStream (M9 — coexists with ZMQ during migration)
+    # NATS JetStream
     nats_url: str = "nats://nodalarc-nats:4222"
     ome_link_state_snapshot_interval_s: float = 5.0
 
@@ -87,117 +75,19 @@ class PlatformConfig(BaseModel):
     trace_interval_fast_seconds: float
     trace_fast_window_seconds: float
 
-    # OME FullStateSnapshot publication interval (seconds)
-    ome_full_state_snapshot_interval_s: int = 10
-
     # System tuning
     host_inotify_max_user_instances: int
     host_file_descriptor_limit: int
 
-    # ZMQ networking — controls bind/connect addresses for inter-component
-    # communication. Default "127.0.0.1" for single-host operation.
-    # Set bind to "0.0.0.0" and connect to K8s Service DNS names when
-    # components run in separate pods.
-    zmq_bind_host: str = "127.0.0.1"
-    zmq_connect_host: str = "127.0.0.1"
-    # Per-service connect host overrides. Keys are service names (ome, orchestrator,
-    # mi, nodalpath). Values are hostnames or IPs. Falls back to zmq_connect_host
-    # if a service isn't in the dict. Adding new services in future phases is a
-    # YAML change, not a schema change.
-    zmq_connect_hosts: dict[str, str] = {}
+    # Service host resolution — for inter-service HTTP calls (not NATS).
+    # Keys: service names (vs-api, nodalpath, etc.). Values: hostnames.
+    # Falls back to default_service_host if service not in dict.
+    default_service_host: str = "127.0.0.1"
+    service_hosts: dict[str, str] = {}
 
-    def zmq_connect_host_for(self, service: str) -> str:
-        """Resolve connect host for a named service, falling back to global default."""
-        return self.zmq_connect_hosts.get(service, self.zmq_connect_host)
-
-    # --- ZMQ socket address properties ---
-
-    @property
-    def ome_events_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_ome_events_port}"
-
-    @property
-    def ome_events_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('ome')}:{self.zmq_ome_events_port}"
-
-    @property
-    def to_events_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_to_events_port}"
-
-    @property
-    def to_events_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_events_port}"
-
-    @property
-    def ome_catchup_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_ome_catchup_port}"
-
-    @property
-    def ome_catchup_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('ome')}:{self.zmq_ome_catchup_port}"
-
-    @property
-    def to_link_catchup_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_to_link_catchup_port}"
-
-    @property
-    def to_link_catchup_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_link_catchup_port}"
-
-    @property
-    def scheduler_events_hostname(self) -> str:
-        """Hostname for headless Scheduler events Service (PUB/SUB fan-in)."""
-        return self.zmq_connect_host_for("scheduler-events")
-
-    @property
-    def mi_events_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_mi_events_port}"
-
-    @property
-    def mi_events_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('mi')}:{self.zmq_mi_events_port}"
-
-    @property
-    def mi_convergence_gate_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_mi_convergence_gate_port}"
-
-    @property
-    def mi_convergence_gate_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('mi')}:{self.zmq_mi_convergence_gate_port}"
-
-    @property
-    def to_scenario_inject_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_to_scenario_inject_port}"
-
-    @property
-    def to_scenario_inject_connect(self) -> str:
-        return (
-            f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_to_scenario_inject_port}"
-        )
-
-    @property
-    def mi_trace_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_mi_trace_port}"
-
-    @property
-    def mi_trace_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('mi')}:{self.zmq_mi_trace_port}"
-
-    @property
-    def playback_control_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_playback_control_port}"
-
-    @property
-    def playback_control_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('orchestrator')}:{self.zmq_playback_control_port}"
-
-    @property
-    def nodalpath_events_bind(self) -> str:
-        return f"tcp://{self.zmq_bind_host}:{self.zmq_nodalpath_events_port}"
-
-    @property
-    def nodalpath_events_connect(self) -> str:
-        return f"tcp://{self.zmq_connect_host_for('nodalpath')}:{self.zmq_nodalpath_events_port}"
+    def service_host(self, service: str) -> str:
+        """Resolve hostname for a named service, falling back to default."""
+        return self.service_hosts.get(service, self.default_service_host)
 
 
 # --- Module-level singleton ---

@@ -13,7 +13,7 @@ WORKDIR /app
 # Install Python dependencies (subset of project deps needed by NodalPath)
 RUN pip install --no-cache-dir \
     pydantic>=2.0 \
-    pyzmq \
+    \
     pyyaml \
     numpy \
     grpcio>=1.74 \

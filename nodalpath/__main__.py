@@ -43,7 +43,7 @@ def _build_push_scheduler(
 
 async def _run_live(config: NodalPathConfig) -> None:
     import uvicorn
-    from nodalarc.zmq_channels import nodalpath_console_port
+    from nodalarc.nats_channels import nodalpath_console_port
 
     from nodalpath.console.server import build_app
     from nodalpath.console.state import ConsoleState
@@ -209,7 +209,7 @@ async def _run_console(config: NodalPathConfig | None = None) -> None:
     import yaml
     from nodalarc.models.routing_stack import RoutingStackConfig
     from nodalarc.models.session import SessionConfig
-    from nodalarc.zmq_channels import nodalpath_console_port
+    from nodalarc.nats_channels import nodalpath_console_port
 
     from nodalpath.console.server import build_app
     from nodalpath.console.state import ConsoleState

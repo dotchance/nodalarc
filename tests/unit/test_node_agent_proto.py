@@ -46,12 +46,13 @@ def test_message_construction():
     req = node_agent_pb2.BatchLinkDownRequest(
         batch_id="1710000000-down-001",
         target_sim_time="2024-03-09T18:00:00Z",
-        locality=node_agent_pb2.LOCAL,
         interfaces=[down],
     )
     assert req.batch_id == "1710000000-down-001"
     assert len(req.interfaces) == 1
     assert req.interfaces[0].node_id == "sat-p00s00"
+    # Per-interface locality (PRD Decision 1)
+    assert req.interfaces[0].locality == node_agent_pb2.LOCAL  # default
 
 
 def test_latency_entry():

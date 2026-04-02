@@ -537,7 +537,6 @@ class Dispatcher:
     ) -> set[tuple[str, str]]:
         """Send BatchLinkDown to Node Agents. Returns successfully removed pairs."""
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
-        agent_locality: dict[str, int] = {}
         pair_agents: dict[tuple[str, str], set[str]] = {}
 
         for pair in pairs:
@@ -552,40 +551,39 @@ class Dispatcher:
             if is_gs:
                 gs_id = node_a if node_a.startswith("gs-") else node_b
                 sat_id = node_b if node_a.startswith("gs-") else node_a
+                vni = 0
+                if locality == node_agent_pb2.CROSS_NODE:
+                    from nodalarc.vxlan import compute_vni
+
+                    vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
 
                 if locality == node_agent_pb2.LOCAL:
-                    agent = self._loc.agent_addr(sat_id)
+                    # LOCAL: single command to satellite's agent
+                    targets = [(sat_id, self._loc.agent_addr(sat_id))]
+                else:
+                    # CROSS_NODE: command to both agents (each destroys its VXLAN)
+                    targets = [
+                        (sat_id, self._loc.agent_addr(sat_id)),
+                        (gs_id, self._loc.agent_addr(gs_id)),
+                    ]
+
+                for nid, agent in targets:
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceDown(
-                            node_id=sat_id,
+                            node_id=nid,
                             interface_name="gnd0",
                             link_type=node_agent_pb2.GROUND,
                             gs_id=gs_id,
                             sat_id=sat_id,
+                            locality=locality,
+                            remote_node_ip="",
+                            vni=vni,
                         )
                     )
-                    agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                     pair_agents.setdefault(pair, set()).add(agent)
-                else:
-                    from nodalarc.vxlan import compute_vni
-
-                    vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
-                    for nid in [sat_id, gs_id]:
-                        agent = self._loc.agent_addr(nid)
-                        agent_ifaces.setdefault(agent, []).append(
-                            node_agent_pb2.InterfaceDown(
-                                node_id=nid,
-                                interface_name="gnd0",
-                                link_type=node_agent_pb2.GROUND,
-                                gs_id=gs_id,
-                                sat_id=sat_id,
-                                vni=vni,
-                            )
-                        )
-                        agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
-                        pair_agents.setdefault(pair, set()).add(agent)
             else:
                 vni = 0
+                remote_ips: dict[str, str] = {}
                 if locality == node_agent_pb2.CROSS_NODE:
                     from nodalarc.vxlan import compute_vni
 
@@ -601,10 +599,10 @@ class Dispatcher:
                             node_id=nid,
                             interface_name=ifname,
                             link_type=node_agent_pb2.ISL,
+                            locality=locality,
                             vni=vni,
                         )
                     )
-                    agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                     pair_agents.setdefault(pair, set()).add(agent)
 
         successful_agents: set[str] = set()
@@ -616,7 +614,6 @@ class Dispatcher:
                 req = node_agent_pb2.BatchLinkDownRequest(
                     batch_id=f"{sim_iso}-down",
                     target_sim_time=sim_iso,
-                    locality=agent_locality.get(addr, node_agent_pb2.LOCAL),
                     interfaces=agent_ifaces[addr],
                 )
                 tasks.append(stub.async_batch_link_down(req))
@@ -674,7 +671,6 @@ class Dispatcher:
     ) -> set[tuple[str, str]]:
         """Send BatchLinkUp to Node Agents. Returns successfully added pairs."""
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
-        agent_locality: dict[str, int] = {}
         pair_agents: dict[tuple[str, str], set[str]] = {}
 
         for pair in pairs:
@@ -689,50 +685,40 @@ class Dispatcher:
             if is_gs:
                 gs_id = node_a if node_a.startswith("gs-") else node_b
                 sat_id = node_b if node_a.startswith("gs-") else node_a
+                vni = 0
+                if locality == node_agent_pb2.CROSS_NODE:
+                    from nodalarc.vxlan import compute_vni
+
+                    vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
 
                 if locality == node_agent_pb2.LOCAL:
-                    # Single-node: existing bridge+mirred model, command to sat's agent
-                    agent = self._loc.agent_addr(sat_id)
+                    # LOCAL: single command to satellite's agent
+                    targets = [(sat_id, self._loc.agent_addr(sat_id), "")]
+                else:
+                    # CROSS_NODE: both agents create VXLAN gnd0
+                    targets = []
+                    for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
+                        peer_k3s = self._loc.k3s_node(peer_nid)
+                        remote_ip = self._loc.node_ip(peer_k3s)
+                        targets.append((nid, self._loc.agent_addr(nid), remote_ip))
+
+                for nid, agent, remote_ip in targets:
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceUp(
-                            node_id=sat_id,
+                            node_id=nid,
                             interface_name="gnd0",
                             link_type=node_agent_pb2.GROUND,
                             latency_ms=info.latency_ms,
                             bandwidth_mbps=info.bandwidth_mbps,
                             gs_id=gs_id,
                             sat_id=sat_id,
+                            locality=locality,
+                            remote_node_ip=remote_ip,
+                            vni=vni,
                         )
                     )
-                    agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                     pair_agents.setdefault(pair, set()).add(agent)
-                else:
-                    # Cross-node: VXLAN on both sides. Each agent creates a
-                    # VXLAN gnd0 pointing at the other node.
-                    from nodalarc.vxlan import compute_vni
-
-                    vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
-                    for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
-                        agent = self._loc.agent_addr(nid)
-                        peer_k3s = self._loc.k3s_node(peer_nid)
-                        remote_ip = self._loc.node_ip(peer_k3s)
-                        agent_ifaces.setdefault(agent, []).append(
-                            node_agent_pb2.InterfaceUp(
-                                node_id=nid,
-                                interface_name="gnd0",
-                                link_type=node_agent_pb2.GROUND,
-                                latency_ms=info.latency_ms,
-                                bandwidth_mbps=info.bandwidth_mbps,
-                                gs_id=gs_id,
-                                sat_id=sat_id,
-                                remote_node_ip=remote_ip,
-                                vni=vni,
-                            )
-                        )
-                        agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
-                        pair_agents.setdefault(pair, set()).add(agent)
             else:
-                # Compute VXLAN params if CROSS_NODE
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
                     from nodalarc.vxlan import compute_vni
@@ -744,7 +730,6 @@ class Dispatcher:
                     (node_b, info.interface_b, node_a),
                 ]:
                     agent = self._loc.agent_addr(nid)
-                    # Remote IP: the node where the PEER lives
                     remote_ip = ""
                     if locality == node_agent_pb2.CROSS_NODE:
                         peer_k3s = self._loc.k3s_node(peer_nid)
@@ -756,11 +741,11 @@ class Dispatcher:
                             link_type=node_agent_pb2.ISL,
                             latency_ms=info.latency_ms,
                             bandwidth_mbps=info.bandwidth_mbps,
+                            locality=locality,
                             remote_node_ip=remote_ip,
                             vni=vni,
                         )
                     )
-                    agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                     pair_agents.setdefault(pair, set()).add(agent)
 
         successful_agents: set[str] = set()
@@ -772,7 +757,6 @@ class Dispatcher:
                 req = node_agent_pb2.BatchLinkUpRequest(
                     batch_id=f"{sim_iso}-up",
                     target_sim_time=sim_iso,
-                    locality=agent_locality.get(addr, node_agent_pb2.LOCAL),
                     interfaces=agent_ifaces[addr],
                 )
                 tasks.append(stub.async_batch_link_up(req))

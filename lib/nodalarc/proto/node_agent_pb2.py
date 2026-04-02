@@ -19,7 +19,7 @@ _sym_db = _symbol_database.Default()
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\x10node_agent.proto\x12\x13nodalarc.node_agent"\xae\x01\n\rInterfaceDown\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x16\n\x0einterface_name\x18\x02 \x01(\t\x12\x30\n\tlink_type\x18\x04 \x01(\x0e\x32\x1d.nodalarc.node_agent.LinkType\x12\r\n\x05gs_id\x18\x05 \x01(\t\x12\x0e\n\x06sat_id\x18\x06 \x01(\t\x12\x16\n\x0eremote_node_ip\x18\t \x01(\t\x12\x0b\n\x03vni\x18\n \x01(\x05"\xaa\x01\n\x14\x42\x61tchLinkDownRequest\x12\x10\n\x08\x62\x61tch_id\x18\x01 \x01(\t\x12\x17\n\x0ftarget_sim_time\x18\x02 \x01(\t\x12/\n\x08locality\x18\x03 \x01(\x0e\x32\x1d.nodalarc.node_agent.Locality\x12\x36\n\ninterfaces\x18\x04 \x03(\x0b\x32".nodalarc.node_agent.InterfaceDown"q\n\x15\x42\x61tchLinkDownResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x19\n\x11interfaces_downed\x18\x03 \x01(\x05\x12\x15\n\rapply_time_ms\x18\x04 \x01(\x02"\xea\x01\n\x0bInterfaceUp\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x16\n\x0einterface_name\x18\x02 \x01(\t\x12\x30\n\tlink_type\x18\x04 \x01(\x0e\x32\x1d.nodalarc.node_agent.LinkType\x12\x12\n\nlatency_ms\x18\x05 \x01(\x01\x12\x16\n\x0e\x62\x61ndwidth_mbps\x18\x06 \x01(\x01\x12\r\n\x05gs_id\x18\x07 \x01(\t\x12\x0e\n\x06sat_id\x18\x08 \x01(\t\x12\x10\n\x08peer_mac\x18\x0b \x01(\t\x12\x16\n\x0eremote_node_ip\x18\x0c \x01(\t\x12\x0b\n\x03vni\x18\r \x01(\x05"\xa6\x01\n\x12\x42\x61tchLinkUpRequest\x12\x10\n\x08\x62\x61tch_id\x18\x01 \x01(\t\x12\x17\n\x0ftarget_sim_time\x18\x02 \x01(\t\x12/\n\x08locality\x18\x03 \x01(\x0e\x32\x1d.nodalarc.node_agent.Locality\x12\x34\n\ninterfaces\x18\x04 \x03(\x0b\x32 .nodalarc.node_agent.InterfaceUp"n\n\x13\x42\x61tchLinkUpResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x18\n\x10interfaces_upped\x18\x03 \x01(\x05\x12\x15\n\rapply_time_ms\x18\x04 \x01(\x02"\x9c\x01\n\x0cLatencyEntry\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x16\n\x0einterface_name\x18\x02 \x01(\t\x12\x12\n\nlatency_ms\x18\x04 \x01(\x01\x12\x30\n\tlink_type\x18\x05 \x01(\x0e\x32\x1d.nodalarc.node_agent.LinkType\x12\r\n\x05gs_id\x18\x06 \x01(\t\x12\x0e\n\x06sat_id\x18\x07 \x01(\t"G\n\x11SetLatencyRequest\x12\x32\n\x07\x65ntries\x18\x01 \x03(\x0b\x32!.nodalarc.node_agent.LatencyEntry"U\n\x12SetLatencyResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x17\n\x0f\x65ntries_updated\x18\x03 \x01(\x05"\x14\n\x12GetTopologyRequest"x\n\x0eInterfaceState\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x16\n\x0einterface_name\x18\x02 \x01(\t\x12\x10\n\x08\x61\x64min_up\x18\x03 \x01(\x08\x12\x0f\n\x07oper_up\x18\x04 \x01(\x08\x12\x1a\n\x12\x63urrent_latency_ms\x18\x05 \x01(\x01"N\n\x13GetTopologyResponse\x12\x37\n\ninterfaces\x18\x01 \x03(\x0b\x32#.nodalarc.node_agent.InterfaceState*\x1f\n\x08LinkType\x12\x07\n\x03ISL\x10\x00\x12\n\n\x06GROUND\x10\x01*%\n\x08Locality\x12\t\n\x05LOCAL\x10\x00\x12\x0e\n\nCROSS_NODE\x10\x01\x32\x9d\x03\n\x10NodeAgentService\x12\x66\n\rBatchLinkDown\x12).nodalarc.node_agent.BatchLinkDownRequest\x1a*.nodalarc.node_agent.BatchLinkDownResponse\x12`\n\x0b\x42\x61tchLinkUp\x12\'.nodalarc.node_agent.BatchLinkUpRequest\x1a(.nodalarc.node_agent.BatchLinkUpResponse\x12]\n\nSetLatency\x12&.nodalarc.node_agent.SetLatencyRequest\x1a\'.nodalarc.node_agent.SetLatencyResponse\x12`\n\x0bGetTopology\x12\'.nodalarc.node_agent.GetTopologyRequest\x1a(.nodalarc.node_agent.GetTopologyResponseb\x06proto3'
+    b'\n\x10node_agent.proto\x12\x13nodalarc.node_agent"\xdf\x01\n\rInterfaceDown\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x16\n\x0einterface_name\x18\x02 \x01(\t\x12\x30\n\tlink_type\x18\x04 \x01(\x0e\x32\x1d.nodalarc.node_agent.LinkType\x12\r\n\x05gs_id\x18\x05 \x01(\t\x12\x0e\n\x06sat_id\x18\x06 \x01(\t\x12\x16\n\x0eremote_node_ip\x18\t \x01(\t\x12\x0b\n\x03vni\x18\n \x01(\x05\x12/\n\x08locality\x18\x0b \x01(\x0e\x32\x1d.nodalarc.node_agent.Locality"y\n\x14\x42\x61tchLinkDownRequest\x12\x10\n\x08\x62\x61tch_id\x18\x01 \x01(\t\x12\x17\n\x0ftarget_sim_time\x18\x02 \x01(\t\x12\x36\n\ninterfaces\x18\x04 \x03(\x0b\x32".nodalarc.node_agent.InterfaceDown"q\n\x15\x42\x61tchLinkDownResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x19\n\x11interfaces_downed\x18\x03 \x01(\x05\x12\x15\n\rapply_time_ms\x18\x04 \x01(\x02"\x9b\x02\n\x0bInterfaceUp\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x16\n\x0einterface_name\x18\x02 \x01(\t\x12\x30\n\tlink_type\x18\x04 \x01(\x0e\x32\x1d.nodalarc.node_agent.LinkType\x12\x12\n\nlatency_ms\x18\x05 \x01(\x01\x12\x16\n\x0e\x62\x61ndwidth_mbps\x18\x06 \x01(\x01\x12\r\n\x05gs_id\x18\x07 \x01(\t\x12\x0e\n\x06sat_id\x18\x08 \x01(\t\x12\x10\n\x08peer_mac\x18\x0b \x01(\t\x12\x16\n\x0eremote_node_ip\x18\x0c \x01(\t\x12\x0b\n\x03vni\x18\r \x01(\x05\x12/\n\x08locality\x18\x0e \x01(\x0e\x32\x1d.nodalarc.node_agent.Locality"u\n\x12\x42\x61tchLinkUpRequest\x12\x10\n\x08\x62\x61tch_id\x18\x01 \x01(\t\x12\x17\n\x0ftarget_sim_time\x18\x02 \x01(\t\x12\x34\n\ninterfaces\x18\x04 \x03(\x0b\x32 .nodalarc.node_agent.InterfaceUp"n\n\x13\x42\x61tchLinkUpResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x18\n\x10interfaces_upped\x18\x03 \x01(\x05\x12\x15\n\rapply_time_ms\x18\x04 \x01(\x02"\x9c\x01\n\x0cLatencyEntry\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x16\n\x0einterface_name\x18\x02 \x01(\t\x12\x12\n\nlatency_ms\x18\x04 \x01(\x01\x12\x30\n\tlink_type\x18\x05 \x01(\x0e\x32\x1d.nodalarc.node_agent.LinkType\x12\r\n\x05gs_id\x18\x06 \x01(\t\x12\x0e\n\x06sat_id\x18\x07 \x01(\t"G\n\x11SetLatencyRequest\x12\x32\n\x07\x65ntries\x18\x01 \x03(\x0b\x32!.nodalarc.node_agent.LatencyEntry"U\n\x12SetLatencyResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x17\n\x0f\x65ntries_updated\x18\x03 \x01(\x05"\x14\n\x12GetTopologyRequest"x\n\x0eInterfaceState\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x16\n\x0einterface_name\x18\x02 \x01(\t\x12\x10\n\x08\x61\x64min_up\x18\x03 \x01(\x08\x12\x0f\n\x07oper_up\x18\x04 \x01(\x08\x12\x1a\n\x12\x63urrent_latency_ms\x18\x05 \x01(\x01"N\n\x13GetTopologyResponse\x12\x37\n\ninterfaces\x18\x01 \x03(\x0b\x32#.nodalarc.node_agent.InterfaceState*\x1f\n\x08LinkType\x12\x07\n\x03ISL\x10\x00\x12\n\n\x06GROUND\x10\x01*%\n\x08Locality\x12\t\n\x05LOCAL\x10\x00\x12\x0e\n\nCROSS_NODE\x10\x01\x32\x9d\x03\n\x10NodeAgentService\x12\x66\n\rBatchLinkDown\x12).nodalarc.node_agent.BatchLinkDownRequest\x1a*.nodalarc.node_agent.BatchLinkDownResponse\x12`\n\x0b\x42\x61tchLinkUp\x12\'.nodalarc.node_agent.BatchLinkUpRequest\x1a(.nodalarc.node_agent.BatchLinkUpResponse\x12]\n\nSetLatency\x12&.nodalarc.node_agent.SetLatencyRequest\x1a\'.nodalarc.node_agent.SetLatencyResponse\x12`\n\x0bGetTopology\x12\'.nodalarc.node_agent.GetTopologyRequest\x1a(.nodalarc.node_agent.GetTopologyResponseb\x06proto3'
 )
 
 _globals = globals()
@@ -27,34 +27,34 @@ _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "node_agent_pb2", _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
     DESCRIPTOR._loaded_options = None
-    _globals["_LINKTYPE"]._serialized_start = 1567
-    _globals["_LINKTYPE"]._serialized_end = 1598
-    _globals["_LOCALITY"]._serialized_start = 1600
-    _globals["_LOCALITY"]._serialized_end = 1637
+    _globals["_LINKTYPE"]._serialized_start = 1565
+    _globals["_LINKTYPE"]._serialized_end = 1596
+    _globals["_LOCALITY"]._serialized_start = 1598
+    _globals["_LOCALITY"]._serialized_end = 1635
     _globals["_INTERFACEDOWN"]._serialized_start = 42
-    _globals["_INTERFACEDOWN"]._serialized_end = 216
-    _globals["_BATCHLINKDOWNREQUEST"]._serialized_start = 219
-    _globals["_BATCHLINKDOWNREQUEST"]._serialized_end = 389
-    _globals["_BATCHLINKDOWNRESPONSE"]._serialized_start = 391
-    _globals["_BATCHLINKDOWNRESPONSE"]._serialized_end = 504
-    _globals["_INTERFACEUP"]._serialized_start = 507
-    _globals["_INTERFACEUP"]._serialized_end = 741
-    _globals["_BATCHLINKUPREQUEST"]._serialized_start = 744
-    _globals["_BATCHLINKUPREQUEST"]._serialized_end = 910
-    _globals["_BATCHLINKUPRESPONSE"]._serialized_start = 912
-    _globals["_BATCHLINKUPRESPONSE"]._serialized_end = 1022
-    _globals["_LATENCYENTRY"]._serialized_start = 1025
-    _globals["_LATENCYENTRY"]._serialized_end = 1181
-    _globals["_SETLATENCYREQUEST"]._serialized_start = 1183
-    _globals["_SETLATENCYREQUEST"]._serialized_end = 1254
-    _globals["_SETLATENCYRESPONSE"]._serialized_start = 1256
-    _globals["_SETLATENCYRESPONSE"]._serialized_end = 1341
-    _globals["_GETTOPOLOGYREQUEST"]._serialized_start = 1343
-    _globals["_GETTOPOLOGYREQUEST"]._serialized_end = 1363
-    _globals["_INTERFACESTATE"]._serialized_start = 1365
-    _globals["_INTERFACESTATE"]._serialized_end = 1485
-    _globals["_GETTOPOLOGYRESPONSE"]._serialized_start = 1487
-    _globals["_GETTOPOLOGYRESPONSE"]._serialized_end = 1565
-    _globals["_NODEAGENTSERVICE"]._serialized_start = 1640
-    _globals["_NODEAGENTSERVICE"]._serialized_end = 2053
+    _globals["_INTERFACEDOWN"]._serialized_end = 265
+    _globals["_BATCHLINKDOWNREQUEST"]._serialized_start = 267
+    _globals["_BATCHLINKDOWNREQUEST"]._serialized_end = 388
+    _globals["_BATCHLINKDOWNRESPONSE"]._serialized_start = 390
+    _globals["_BATCHLINKDOWNRESPONSE"]._serialized_end = 503
+    _globals["_INTERFACEUP"]._serialized_start = 506
+    _globals["_INTERFACEUP"]._serialized_end = 789
+    _globals["_BATCHLINKUPREQUEST"]._serialized_start = 791
+    _globals["_BATCHLINKUPREQUEST"]._serialized_end = 908
+    _globals["_BATCHLINKUPRESPONSE"]._serialized_start = 910
+    _globals["_BATCHLINKUPRESPONSE"]._serialized_end = 1020
+    _globals["_LATENCYENTRY"]._serialized_start = 1023
+    _globals["_LATENCYENTRY"]._serialized_end = 1179
+    _globals["_SETLATENCYREQUEST"]._serialized_start = 1181
+    _globals["_SETLATENCYREQUEST"]._serialized_end = 1252
+    _globals["_SETLATENCYRESPONSE"]._serialized_start = 1254
+    _globals["_SETLATENCYRESPONSE"]._serialized_end = 1339
+    _globals["_GETTOPOLOGYREQUEST"]._serialized_start = 1341
+    _globals["_GETTOPOLOGYREQUEST"]._serialized_end = 1361
+    _globals["_INTERFACESTATE"]._serialized_start = 1363
+    _globals["_INTERFACESTATE"]._serialized_end = 1483
+    _globals["_GETTOPOLOGYRESPONSE"]._serialized_start = 1485
+    _globals["_GETTOPOLOGYRESPONSE"]._serialized_end = 1563
+    _globals["_NODEAGENTSERVICE"]._serialized_start = 1638
+    _globals["_NODEAGENTSERVICE"]._serialized_end = 2051
 # @@protoc_insertion_point(module_scope)

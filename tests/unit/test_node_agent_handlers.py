@@ -1,7 +1,7 @@
 """Node Agent handler tests — call handlers directly, no transport.
 
 Tests handler logic:
-- CROSS_NODE returns error in response
+- Per-interface locality (LOCAL/CROSS_NODE)
 - Empty batches succeed
 - Bad PIDs return structured errors
 - GetTopology with various pid_map states
@@ -22,7 +22,6 @@ class TestBatchLinkDown:
     def test_cross_node_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkDownRequest(
             batch_id="test-cross-down",
-            locality=node_agent_pb2.CROSS_NODE,
         )
         resp = handle_batch_link_down(req)
         assert resp.success is True
@@ -31,7 +30,6 @@ class TestBatchLinkDown:
     def test_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkDownRequest(
             batch_id="test-empty-down",
-            locality=node_agent_pb2.LOCAL,
         )
         resp = handle_batch_link_down(req)
         assert resp.success is True
@@ -41,7 +39,6 @@ class TestBatchLinkDown:
     def test_nonexistent_pid_returns_error_in_response(self):
         req = node_agent_pb2.BatchLinkDownRequest(
             batch_id="test-bad-pid",
-            locality=node_agent_pb2.LOCAL,
             interfaces=[
                 node_agent_pb2.InterfaceDown(
                     node_id="sat-P00S00",
@@ -58,7 +55,6 @@ class TestBatchLinkDown:
     def test_multiple_links_one_fails(self):
         req = node_agent_pb2.BatchLinkDownRequest(
             batch_id="test-partial",
-            locality=node_agent_pb2.LOCAL,
             interfaces=[
                 node_agent_pb2.InterfaceDown(
                     node_id="sat-P00S00",
@@ -81,7 +77,6 @@ class TestBatchLinkUp:
     def test_cross_node_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkUpRequest(
             batch_id="test-cross-up",
-            locality=node_agent_pb2.CROSS_NODE,
         )
         resp = handle_batch_link_up(req)
         assert resp.success is True
@@ -90,7 +85,6 @@ class TestBatchLinkUp:
     def test_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkUpRequest(
             batch_id="test-empty-up",
-            locality=node_agent_pb2.LOCAL,
         )
         resp = handle_batch_link_up(req)
         assert resp.success is True
@@ -99,7 +93,6 @@ class TestBatchLinkUp:
     def test_nonexistent_pid_returns_error_in_response(self):
         req = node_agent_pb2.BatchLinkUpRequest(
             batch_id="test-bad-pid-up",
-            locality=node_agent_pb2.LOCAL,
             interfaces=[
                 node_agent_pb2.InterfaceUp(
                     node_id="sat-P00S00",

@@ -33,6 +33,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["services"]
 timeout = 30
 markers = [
     "requires_root: tests that need root/namespace access",

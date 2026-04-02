@@ -511,6 +511,12 @@ class Dispatcher:
                 agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                 pair_agents.setdefault(pair, set()).add(agent)
             else:
+                vni = 0
+                if locality == node_agent_pb2.CROSS_NODE:
+                    from nodalarc.vxlan import compute_vni
+
+                    vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b)
+
                 for nid, ifname in [
                     (node_a, info.interface_a),
                     (node_b, info.interface_b),
@@ -521,6 +527,7 @@ class Dispatcher:
                             node_id=nid,
                             interface_name=ifname,
                             link_type=node_agent_pb2.ISL,
+                            vni=vni,
                         )
                     )
                     agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
@@ -622,11 +629,23 @@ class Dispatcher:
                 agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                 pair_agents.setdefault(pair, set()).add(agent)
             else:
-                for nid, ifname in [
-                    (node_a, info.interface_a),
-                    (node_b, info.interface_b),
+                # Compute VXLAN params if CROSS_NODE
+                vni = 0
+                if locality == node_agent_pb2.CROSS_NODE:
+                    from nodalarc.vxlan import compute_vni
+
+                    vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b)
+
+                for nid, ifname, peer_nid in [
+                    (node_a, info.interface_a, node_b),
+                    (node_b, info.interface_b, node_a),
                 ]:
                     agent = self._loc.agent_addr(nid)
+                    # Remote IP: the node where the PEER lives
+                    remote_ip = ""
+                    if locality == node_agent_pb2.CROSS_NODE:
+                        peer_k3s = self._loc.k3s_node(peer_nid)
+                        remote_ip = self._loc.node_ip(peer_k3s)
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceUp(
                             node_id=nid,
@@ -634,6 +653,8 @@ class Dispatcher:
                             link_type=node_agent_pb2.ISL,
                             latency_ms=info.latency_ms,
                             bandwidth_mbps=info.bandwidth_mbps,
+                            remote_node_ip=remote_ip,
+                            vni=vni,
                         )
                     )
                     agent_locality[agent] = max(agent_locality.get(agent, 0), locality)

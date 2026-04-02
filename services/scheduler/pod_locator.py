@@ -33,6 +33,7 @@ class PodLocationMap:
     def __init__(self) -> None:
         # canonical_node_id -> k3s node name
         self._node_of: dict[str, str] = {}
+        self._node_ips: dict[str, str] = {}  # k3s_node_name -> InternalIP
         # k3s node name -> Node Agent gRPC address
         self._agent_addrs: dict[str, str] = {}
 
@@ -49,6 +50,10 @@ class PodLocationMap:
         """Get Node Agent gRPC address for the K3s node hosting this pod."""
         k3s = self._node_of.get(node_id, "")
         return self._agent_addrs.get(k3s, "")
+
+    def node_ip(self, k3s_node: str) -> str:
+        """Get the InternalIP for a K3s node. Empty string if unknown."""
+        return self._node_ips.get(k3s_node, "")
 
     def all_agent_addrs(self) -> list[str]:
         """All unique Node Agent gRPC addresses."""
@@ -134,6 +139,18 @@ class PodLocationMap:
         for k3s in k3s_nodes:
             if k3s:
                 self._agent_addrs[k3s] = k3s  # Node name = NATS subject
+
+        # Discover node IPs (InternalIP) for VXLAN tunnel endpoints
+        try:
+            nodes = v1.list_node()
+            for node in nodes.items:
+                name = node.metadata.name
+                for addr in node.status.addresses or []:
+                    if addr.type == "InternalIP":
+                        self._node_ips[name] = addr.address
+                        break
+        except Exception as exc:
+            log.warning("Failed to discover node IPs: %s", exc)
 
         log.info(
             "Loaded %d pods across %d K3s nodes from API",

@@ -1,18 +1,15 @@
-"""Convergence gate — real ZMQ REP replacing Phase 1B stub.
+"""Convergence gate — handles convergence measurement requests.
 
-Receives ConvergenceRequest from TO, delegates to convergence_detector,
-returns ConvergenceResult.
-
-Run: python -m measurement.convergence_gate --session <path>
+Receives ConvergenceRequest, delegates to convergence_detector,
+returns ConvergenceResult. Transport-agnostic — called by MI main
+via NATS request/reply.
 """
 
 from __future__ import annotations
 
 import logging
 
-import zmq
 from nodalarc.models.metrics import ConvergenceRequest
-from nodalarc.zmq_channels import mi_convergence_gate_bind
 
 from measurement.convergence_detector import measure_convergence
 
@@ -20,7 +17,7 @@ log = logging.getLogger(__name__)
 
 
 class ConvergenceGate:
-    """ZMQ REP server for convergence measurement requests."""
+    """Convergence measurement request handler."""
 
     def __init__(
         self,
@@ -28,12 +25,6 @@ class ConvergenceGate:
         active_flows_fn=None,
         adapter=None,
     ) -> None:
-        """
-        Args:
-            convergence_config: ConvergenceConfig from session
-            active_flows_fn: callable returning dict of active flows
-            adapter: protocol adapter for trace_path
-        """
         self._config = convergence_config
         self._active_flows_fn = active_flows_fn or (lambda: {})
         self._adapter = adapter
@@ -57,23 +48,3 @@ class ConvergenceGate:
             f"converged={result.converged} duration={result.duration_ms}ms"
         )
         return result.model_dump_json().encode()
-
-    def run(self, bind_addr: str | None = None) -> None:
-        """Run the convergence gate — blocks forever."""
-        if bind_addr is None:
-            bind_addr = mi_convergence_gate_bind()
-        ctx = zmq.Context()
-        sock = ctx.socket(zmq.REP)
-        sock.bind(bind_addr)
-        log.info(f"Convergence gate bound on {bind_addr}")
-
-        try:
-            while True:
-                raw = sock.recv()
-                response = self.handle_request(raw)
-                sock.send(response)
-        except KeyboardInterrupt:
-            log.info("Convergence gate shutting down")
-        finally:
-            sock.close()
-            ctx.term()

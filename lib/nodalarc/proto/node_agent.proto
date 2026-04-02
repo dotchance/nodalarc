@@ -43,6 +43,9 @@ message InterfaceDown {
   string gs_id = 5;
   string sat_id = 6;
   // fields 7-8 removed — PID looked up by Node Agent internally
+  // M10 CROSS_NODE: VXLAN tunnel parameters (empty for LOCAL)
+  string remote_node_ip = 9;  // Peer node's IP for VXLAN endpoint
+  int32 vni = 10;             // VXLAN Network Identifier
 }
 
 message BatchLinkDownRequest {
@@ -73,6 +76,9 @@ message InterfaceUp {
   // fields 9-10 removed — PID looked up by Node Agent internally
   // NDP: peer MAC for deriving link-local address (ISL only)
   string peer_mac = 11;
+  // M10 CROSS_NODE: VXLAN tunnel parameters (empty for LOCAL)
+  string remote_node_ip = 12;  // Peer node's IP for VXLAN endpoint
+  int32 vni = 13;              // VXLAN Network Identifier
 }
 
 message BatchLinkUpRequest {

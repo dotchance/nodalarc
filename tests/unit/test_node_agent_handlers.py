@@ -10,7 +10,6 @@ Tests handler logic:
 from __future__ import annotations
 
 from nodalarc.proto import node_agent_pb2
-
 from node_agent.handlers import (
     handle_batch_link_down,
     handle_batch_link_up,
@@ -20,14 +19,14 @@ from node_agent.handlers import (
 
 
 class TestBatchLinkDown:
-    def test_cross_node_returns_error(self):
+    def test_cross_node_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkDownRequest(
             batch_id="test-cross-down",
             locality=node_agent_pb2.CROSS_NODE,
         )
         resp = handle_batch_link_down(req)
-        assert resp.success is False
-        assert "CROSS_NODE" in resp.error_message
+        assert resp.success is True
+        assert resp.interfaces_downed == 0
 
     def test_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkDownRequest(
@@ -79,14 +78,14 @@ class TestBatchLinkDown:
 
 
 class TestBatchLinkUp:
-    def test_cross_node_returns_error(self):
+    def test_cross_node_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkUpRequest(
             batch_id="test-cross-up",
             locality=node_agent_pb2.CROSS_NODE,
         )
         resp = handle_batch_link_up(req)
-        assert resp.success is False
-        assert "CROSS_NODE" in resp.error_message
+        assert resp.success is True
+        assert resp.interfaces_upped == 0
 
     def test_empty_batch_succeeds(self):
         req = node_agent_pb2.BatchLinkUpRequest(

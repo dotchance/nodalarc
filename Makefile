@@ -158,11 +158,11 @@ build-base-images: build-base build-frr build-probe build-fwd ## Build infrastru
 build-base:
 	docker build -t $(IMG_BASE) -t $(REGISTRY_PREFIX)nodalarc/base:latest images/base/
 
-build-frr: build-base
+build-frr: ## Build FRR image (official FRR base + our entrypoint)
 	docker build -t $(IMG_FRR) -t $(REGISTRY_PREFIX)nodalarc/frr:latest -t $(REGISTRY_PREFIX)nodalarc/frr:10 images/frr/
 
 build-probe:
-	docker build -t $(IMG_PROBE) -t $(REGISTRY_PREFIX)nodalarc/probe:latest images/probe/
+	docker build -t $(IMG_PROBE) -t $(REGISTRY_PREFIX)nodalarc/probe:latest -f images/probe/Dockerfile .
 
 build-fwd:
 	docker build -t $(IMG_FWD) -t $(REGISTRY_PREFIX)nodalarc/nodalpath-fwd:latest images/nodalpath-fwd/

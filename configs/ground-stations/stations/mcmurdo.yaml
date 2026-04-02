@@ -16,3 +16,5 @@ ground_station:
       metric: 50
     - prefix: "fd10::100:0/112"
       metric: 50
+    - prefix: "0.0.0.0/0"
+      metric: 100

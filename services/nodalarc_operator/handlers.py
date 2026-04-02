@@ -13,6 +13,7 @@ from nodalarc_operator.session_deployer import (
     deploy_session,
     restart_platform_pods,
     set_nodalpath_mode,
+    signal_frr_config_ready,
     teardown_session,
     write_pod_ips_configmap,
     write_wiring_manifest,
@@ -154,6 +155,9 @@ async def on_create(spec, name, namespace, meta, **_):
                 },
             )
             raise kopf.PermanentError(f"Session pods did not reach Running: {ready}/{pod_count}")
+
+        # Signal FRR config-ready in each pod (replaces na_deploy.py sentinel touch)
+        await loop.run_in_executor(None, signal_frr_config_ready, namespace)
 
         # Write pod-IPs ConfigMap (needs running pods)
         await loop.run_in_executor(None, write_pod_ips_configmap, namespace)

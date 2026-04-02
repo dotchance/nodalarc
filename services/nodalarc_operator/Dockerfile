@@ -6,6 +6,11 @@
 FROM python:3.14-slim
 WORKDIR /app
 
+# iputils-ping for substrate latency measurement between nodes (M10)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iputils-ping iputils-tracepath \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir \
     kopf kubernetes pydantic>=2.0 pyyaml jinja2 numpy sgp4 skyfield
 

@@ -552,18 +552,38 @@ class Dispatcher:
             if is_gs:
                 gs_id = node_a if node_a.startswith("gs-") else node_b
                 sat_id = node_b if node_a.startswith("gs-") else node_a
-                agent = self._loc.agent_addr(sat_id)
-                agent_ifaces.setdefault(agent, []).append(
-                    node_agent_pb2.InterfaceDown(
-                        node_id=sat_id,
-                        interface_name="gnd0",
-                        link_type=node_agent_pb2.GROUND,
-                        gs_id=gs_id,
-                        sat_id=sat_id,
+
+                if locality == node_agent_pb2.LOCAL:
+                    agent = self._loc.agent_addr(sat_id)
+                    agent_ifaces.setdefault(agent, []).append(
+                        node_agent_pb2.InterfaceDown(
+                            node_id=sat_id,
+                            interface_name="gnd0",
+                            link_type=node_agent_pb2.GROUND,
+                            gs_id=gs_id,
+                            sat_id=sat_id,
+                        )
                     )
-                )
-                agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
-                pair_agents.setdefault(pair, set()).add(agent)
+                    agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
+                    pair_agents.setdefault(pair, set()).add(agent)
+                else:
+                    from nodalarc.vxlan import compute_vni
+
+                    vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
+                    for nid in [sat_id, gs_id]:
+                        agent = self._loc.agent_addr(nid)
+                        agent_ifaces.setdefault(agent, []).append(
+                            node_agent_pb2.InterfaceDown(
+                                node_id=nid,
+                                interface_name="gnd0",
+                                link_type=node_agent_pb2.GROUND,
+                                gs_id=gs_id,
+                                sat_id=sat_id,
+                                vni=vni,
+                            )
+                        )
+                        agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
+                        pair_agents.setdefault(pair, set()).add(agent)
             else:
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
@@ -668,20 +688,48 @@ class Dispatcher:
             if is_gs:
                 gs_id = node_a if node_a.startswith("gs-") else node_b
                 sat_id = node_b if node_a.startswith("gs-") else node_a
-                agent = self._loc.agent_addr(sat_id)
-                agent_ifaces.setdefault(agent, []).append(
-                    node_agent_pb2.InterfaceUp(
-                        node_id=sat_id,
-                        interface_name="gnd0",
-                        link_type=node_agent_pb2.GROUND,
-                        latency_ms=info.latency_ms,
-                        bandwidth_mbps=info.bandwidth_mbps,
-                        gs_id=gs_id,
-                        sat_id=sat_id,
+
+                if locality == node_agent_pb2.LOCAL:
+                    # Single-node: existing bridge+mirred model, command to sat's agent
+                    agent = self._loc.agent_addr(sat_id)
+                    agent_ifaces.setdefault(agent, []).append(
+                        node_agent_pb2.InterfaceUp(
+                            node_id=sat_id,
+                            interface_name="gnd0",
+                            link_type=node_agent_pb2.GROUND,
+                            latency_ms=info.latency_ms,
+                            bandwidth_mbps=info.bandwidth_mbps,
+                            gs_id=gs_id,
+                            sat_id=sat_id,
+                        )
                     )
-                )
-                agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
-                pair_agents.setdefault(pair, set()).add(agent)
+                    agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
+                    pair_agents.setdefault(pair, set()).add(agent)
+                else:
+                    # Cross-node: VXLAN on both sides. Each agent creates a
+                    # VXLAN gnd0 pointing at the other node.
+                    from nodalarc.vxlan import compute_vni
+
+                    vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
+                    for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
+                        agent = self._loc.agent_addr(nid)
+                        peer_k3s = self._loc.k3s_node(peer_nid)
+                        remote_ip = self._loc.node_ip(peer_k3s)
+                        agent_ifaces.setdefault(agent, []).append(
+                            node_agent_pb2.InterfaceUp(
+                                node_id=nid,
+                                interface_name="gnd0",
+                                link_type=node_agent_pb2.GROUND,
+                                latency_ms=info.latency_ms,
+                                bandwidth_mbps=info.bandwidth_mbps,
+                                gs_id=gs_id,
+                                sat_id=sat_id,
+                                remote_node_ip=remote_ip,
+                                vni=vni,
+                            )
+                        )
+                        agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
+                        pair_agents.setdefault(pair, set()).add(agent)
             else:
                 # Compute VXLAN params if CROSS_NODE
                 vni = 0

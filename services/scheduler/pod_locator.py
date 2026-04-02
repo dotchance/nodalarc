@@ -149,6 +149,11 @@ class PodLocationMap:
                     if addr.type == "InternalIP":
                         self._node_ips[name] = addr.address
                         break
+            if self._node_ips:
+                log.info(
+                    "Node IPs: %s",
+                    ", ".join(f"{n}={ip}" for n, ip in sorted(self._node_ips.items())),
+                )
         except Exception as exc:
             log.warning("Failed to discover node IPs: %s", exc)
 

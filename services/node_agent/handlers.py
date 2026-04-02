@@ -200,9 +200,27 @@ def handle_batch_link_down(
     pm = pid_map or {}
     for iface in request.interfaces:
         if iface.locality == node_agent_pb2.CROSS_NODE and iface.vni:
-            # CROSS_NODE: destroy VXLAN tunnel (host-side cleanup)
-            pid = pm.get(iface.node_id, 0)
-            fut = _BATCH_POOL.submit(vxlan.destroy_vxlan_link, pid, iface.interface_name, iface.vni)
+            if iface.link_type == node_agent_pb2.GROUND:
+                # CROSS_NODE GROUND: detach VXLAN from existing host-side interface
+                is_sat = not iface.node_id.startswith("gs-")
+                if is_sat:
+                    host_ifname = ground_bridge._sat_gnd_host_name(iface.node_id)
+                    sat_pid = pm.get(iface.node_id, 0)
+                else:
+                    host_ifname = ground_bridge._gs_bridge_port_name(iface.node_id)
+                    sat_pid = None
+                fut = _BATCH_POOL.submit(
+                    vxlan.detach_cross_node_ground,
+                    host_ifname,
+                    iface.vni,
+                    sat_pid if is_sat else None,
+                )
+            else:
+                # CROSS_NODE ISL: destroy full VXLAN + veth pair
+                pid = pm.get(iface.node_id, 0)
+                fut = _BATCH_POOL.submit(
+                    vxlan.destroy_vxlan_link, pid, iface.interface_name, iface.vni
+                )
         elif iface.link_type == node_agent_pb2.GROUND:
             fut = _BATCH_POOL.submit(_ground_link_down, iface, pm)
         else:
@@ -378,7 +396,13 @@ def handle_batch_link_up(
     # Phase 0: Create VXLAN tunnels for CROSS_NODE interfaces.
     # Each interface carries its own locality — only CROSS_NODE interfaces
     # need VXLAN. LOCAL interfaces in the same batch are unaffected.
+    #
+    # ISL CROSS_NODE: create VXLAN + veth pair, move veth into pod namespace
+    # GROUND CROSS_NODE: create VXLAN in host ns, tc mirred to existing host-side
+    #   interface (satellite _gnd_{sat} or GS _gbr-{gs}). Pod-side gnd0 already
+    #   exists from wiring. Same carrier model as LOCAL ground links.
     local_ip: str | None = None
+    cross_node_ground: list[node_agent_pb2.InterfaceUp] = []
     for iface in request.interfaces:
         if iface.locality != node_agent_pb2.CROSS_NODE:
             continue
@@ -391,25 +415,52 @@ def handle_batch_link_up(
             continue
         if local_ip is None:
             local_ip = _discover_local_ip()
-        try:
-            pid = _require_pid(iface.node_id, pm)
-            vxlan.create_vxlan_link(
-                pid=pid,
-                ifname=iface.interface_name,
-                local_ip=local_ip,
-                remote_ip=iface.remote_node_ip,
-                vni=iface.vni,
-            )
-        except Exception as exc:
-            errors.append(f"VXLAN create failed {iface.node_id}/{iface.interface_name}: {exc}")
+
+        if iface.link_type == node_agent_pb2.GROUND:
+            # GROUND: attach via existing host-side infrastructure
+            try:
+                # Determine local host-side interface name
+                is_sat = not iface.node_id.startswith("gs-")
+                if is_sat:
+                    host_ifname = ground_bridge._sat_gnd_host_name(iface.node_id)
+                    sat_pid = pm.get(iface.node_id, 0)
+                else:
+                    host_ifname = ground_bridge._gs_bridge_port_name(iface.node_id)
+                    sat_pid = None
+                vxlan.attach_cross_node_ground(
+                    local_host_ifname=host_ifname,
+                    local_ip=local_ip,
+                    remote_ip=iface.remote_node_ip,
+                    vni=iface.vni,
+                    sat_pid=sat_pid if is_sat else None,
+                )
+                cross_node_ground.append(iface)
+            except Exception as exc:
+                errors.append(
+                    f"VXLAN ground attach failed {iface.node_id}/{iface.interface_name}: {exc}"
+                )
+        else:
+            # ISL: create full VXLAN + veth pair into pod namespace
+            try:
+                pid = _require_pid(iface.node_id, pm)
+                vxlan.create_vxlan_link(
+                    pid=pid,
+                    ifname=iface.interface_name,
+                    local_ip=local_ip,
+                    remote_ip=iface.remote_node_ip,
+                    vni=iface.vni,
+                )
+            except Exception as exc:
+                errors.append(f"VXLAN create failed {iface.node_id}/{iface.interface_name}: {exc}")
 
     # Phase 1: Bring interfaces UP + apply shaping.
-    # Per-interface locality determines the code path:
     # - LOCAL GROUND: bridge + mirred attach (_ground_link_up)
-    # - CROSS_NODE GROUND: VXLAN already created, just UP + shaping (_isl_link_up_phase1)
+    # - CROSS_NODE GROUND: fully handled in Phase 0 — skip
     # - LOCAL/CROSS_NODE ISL: UP + shaping (_isl_link_up_phase1)
     phase1_futures = {}
     for iface in request.interfaces:
+        if iface in cross_node_ground:
+            continue  # Fully handled in Phase 0
         if iface.link_type == node_agent_pb2.GROUND and iface.locality == node_agent_pb2.LOCAL:
             phase1_futures[_BATCH_POOL.submit(_ground_link_up, iface, pm)] = iface
         else:
@@ -430,6 +481,9 @@ def handle_batch_link_up(
                 errors.append(err)
         except Exception as exc:
             errors.append(f"Phase1 error for {iface.node_id}/{iface.interface_name}: {exc}")
+
+    # Count cross-node ground links handled in Phase 0
+    upped += len(cross_node_ground)
 
     # Phase 2: NDP resolution for ISL links that succeeded in phase 1
     # By now all peers are admin UP and non-tentative.

@@ -47,32 +47,49 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
         log.warning("Empty wiring manifest — nothing to wire")
         return {}
 
-    # Discover PIDs for all session pods on this node.
-    # Retry until ALL expected pods have non-zero PIDs. Pods may not have
-    # container_statuses populated immediately after reaching Running state.
+    # Discover PIDs for session pods LOCAL to this node only.
+    # The wiring manifest is global (all nodes), but each Node Agent
+    # only wires pods on its own K3s node. Filter expected_nodes to
+    # only include pods that exist locally (NODE_NAME env var filters
+    # the K8s API query in discover_local_pod_pids).
+    import os
     import time
 
-    expected_nodes = set(nodes.keys())
+    local_node = os.environ.get("NODE_NAME", "")
+    all_manifest_nodes = set(nodes.keys())
     pid_map: dict[str, int] = {}
     max_attempts = 30
 
     for attempt in range(1, max_attempts + 1):
         fresh = discover_local_pod_pids(namespace)
         pid_map.update(fresh)
-        missing = expected_nodes - set(pid_map.keys())
-        if not missing:
-            break
+        # Expected = local pods that are in the manifest
+        expected_nodes = all_manifest_nodes & set(pid_map.keys())
+        # Also check if we've stabilized (no new PIDs found in 2 consecutive attempts)
+        if attempt >= 3 and len(pid_map) > 0:
+            # All locally discoverable pods found — stop waiting
+            prev_count = len(expected_nodes)
+            if prev_count == len(pid_map):
+                break
         if attempt % 5 == 1:
             log.info(
-                "PID discovery attempt %d: %d/%d found, %d missing",
+                "PID discovery attempt %d: %d local pods found (manifest has %d total, node=%s)",
                 attempt,
                 len(pid_map),
-                len(expected_nodes),
-                len(missing),
+                len(all_manifest_nodes),
+                local_node,
             )
         time.sleep(2)
 
+    expected_nodes = all_manifest_nodes & set(pid_map.keys())
     missing = expected_nodes - set(pid_map.keys())
+    remote_nodes = all_manifest_nodes - expected_nodes
+    if remote_nodes:
+        log.info(
+            "%d pods on other nodes (not wired locally): %s",
+            len(remote_nodes),
+            ", ".join(sorted(remote_nodes)[:5]) + ("..." if len(remote_nodes) > 5 else ""),
+        )
     if missing:
         for nid in sorted(missing):
             log.warning(

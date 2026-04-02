@@ -3,7 +3,7 @@
 
 import grpc
 
-from node_agent.proto import node_agent_pb2 as node__agent_dot_proto_dot_node__agent__pb2
+from nodalarc.proto import node_agent_pb2 as node__agent_dot_proto_dot_node__agent__pb2
 
 GRPC_GENERATED_VERSION = "1.78.0"
 GRPC_VERSION = grpc.__version__

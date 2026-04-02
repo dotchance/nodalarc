@@ -9,13 +9,14 @@ Tests handler logic:
 
 from __future__ import annotations
 
+from nodalarc.proto import node_agent_pb2
+
 from node_agent.handlers import (
     handle_batch_link_down,
     handle_batch_link_up,
     handle_get_topology,
     handle_set_latency,
 )
-from node_agent.proto import node_agent_pb2
 
 
 class TestBatchLinkDown:

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def test_proto_stubs_importable():
     """Generated pb2 and pb2_grpc modules import without error."""
-    from node_agent.proto import node_agent_pb2, node_agent_pb2_grpc
+    from nodalarc.proto import node_agent_pb2, node_agent_pb2_grpc
 
     assert hasattr(node_agent_pb2, "BatchLinkDownRequest")
     assert hasattr(node_agent_pb2, "BatchLinkUpRequest")
@@ -22,7 +22,7 @@ def test_proto_stubs_importable():
 
 def test_enum_values():
     """LinkType and Locality enums have expected values."""
-    from node_agent.proto import node_agent_pb2
+    from nodalarc.proto import node_agent_pb2
 
     assert node_agent_pb2.ISL == 0
     assert node_agent_pb2.GROUND == 1
@@ -32,7 +32,7 @@ def test_enum_values():
 
 def test_message_construction():
     """Proto messages can be constructed with fields."""
-    from node_agent.proto import node_agent_pb2
+    from nodalarc.proto import node_agent_pb2
 
     down = node_agent_pb2.InterfaceDown(
         node_id="sat-p00s00",
@@ -56,7 +56,7 @@ def test_message_construction():
 
 def test_latency_entry():
     """LatencyEntry carries all required fields."""
-    from node_agent.proto import node_agent_pb2
+    from nodalarc.proto import node_agent_pb2
 
     entry = node_agent_pb2.LatencyEntry(
         node_id="sat-p00s00",
@@ -69,7 +69,7 @@ def test_latency_entry():
 
 def test_get_topology_response():
     """GetTopologyResponse holds interface state list."""
-    from node_agent.proto import node_agent_pb2
+    from nodalarc.proto import node_agent_pb2
 
     iface = node_agent_pb2.InterfaceState(
         node_id="sat-p00s00",

@@ -88,7 +88,8 @@ def main():
     subprocess.run(["pkill", "-f", "python.*-m orchestrator.main"], capture_output=True)
     time.sleep(1)
 
-    from node_agent.proto.node_agent_pb2_grpc import add_NodeAgentServiceServicer_to_server
+    from nodalarc.proto.node_agent_pb2_grpc import add_NodeAgentServiceServicer_to_server
+
     from node_agent.server import NodeAgentServicer
 
     pid_map = {nid: loc.pid(nid) for nid in loc.node_ids}

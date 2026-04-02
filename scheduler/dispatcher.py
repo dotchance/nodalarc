@@ -34,8 +34,8 @@ from nodalarc.nats_channels import (
     SUBJECT_VISIBILITY_EVENT,
     nats_url,
 )
+from nodalarc.proto import node_agent_pb2
 
-from node_agent.proto import node_agent_pb2
 from scheduler.agent_pool import AgentPool
 from scheduler.latency_model import PositionTable
 from scheduler.pod_locator import PodLocationMap

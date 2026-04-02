@@ -21,11 +21,12 @@ from concurrent import futures
 import grpc
 
 # Import the Node Agent gRPC components
-from node_agent.proto import node_agent_pb2
-from node_agent.proto.node_agent_pb2_grpc import (
+from nodalarc.proto import node_agent_pb2
+from nodalarc.proto.node_agent_pb2_grpc import (
     NodeAgentServiceStub,
     add_NodeAgentServiceServicer_to_server,
 )
+
 from node_agent.server import NodeAgentServicer
 
 KUBECONFIG = "/etc/rancher/k3s/k3s.yaml"

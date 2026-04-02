@@ -16,6 +16,7 @@ import socket
 
 import nats
 from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url
+from nodalarc.proto import node_agent_pb2
 
 from node_agent.handlers import (
     handle_batch_link_down,
@@ -23,7 +24,6 @@ from node_agent.handlers import (
     handle_get_topology,
     handle_set_latency,
 )
-from node_agent.proto import node_agent_pb2
 
 log = logging.getLogger(__name__)
 

@@ -15,8 +15,7 @@ import logging
 import threading
 
 import nats
-
-from node_agent.proto import node_agent_pb2
+from nodalarc.proto import node_agent_pb2
 
 log = logging.getLogger(__name__)
 

@@ -25,8 +25,8 @@ from nodalarc.models.link_state import (
     LinkStateSnapshot,
     RoutingState,
 )
+from nodalarc.proto import node_agent_pb2
 
-from node_agent.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 

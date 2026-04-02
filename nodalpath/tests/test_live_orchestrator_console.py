@@ -28,8 +28,6 @@ def _make_orchestrator(with_state=True):
         bandwidth_map=bandwidth_map,
         push_scheduler=push_scheduler,
         publisher=publisher,
-        ome_connect="tcp://127.0.0.1:5560",
-        to_connect="tcp://127.0.0.1:5561",
         console_state=console_state,
     )
     return orch, console_state

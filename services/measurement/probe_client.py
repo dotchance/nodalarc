@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from nodalarc.zmq_channels import probe_daemon_port
+from nodalarc.nats_channels import probe_daemon_port
 
 log = logging.getLogger(__name__)
 

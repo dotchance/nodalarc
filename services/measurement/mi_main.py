@@ -1,8 +1,8 @@
 """MI main loop — Measurement & Instrumentation service.
 
-Subscribes to ZMQ PUB sockets from OME and TO, runs the convergence
-gate, manages protocol adapters, publishes MI events, and records
-everything to SQLite.
+Subscribes to NATS request/reply for convergence gate and trace requests.
+Publishes adapter events, probe results, and convergence results to NATS
+JetStream. Records everything to SQLite.
 
 Run: python -m measurement.mi_main --session <path> --db <sqlite_path>
 """
@@ -10,6 +10,7 @@ Run: python -m measurement.mi_main --session <path> --db <sqlite_path>
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import sqlite3
@@ -19,8 +20,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import nats
 import yaml
-import zmq
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.db.queries import (
     insert_adapter_event,
@@ -36,16 +37,16 @@ from nodalarc.models.metrics import (
 )
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
-from nodalarc.platform import get_platform_config
-from nodalarc.zmq_channels import (
-    TOPIC_ADAPTER_EVENT,
-    TOPIC_CONVERGENCE_RESULT,
-    TOPIC_PROBE_RESULT,
-    encode_message,
-    mi_convergence_gate_bind,
-    mi_events_bind,
-    mi_trace_bind,
+from nodalarc.nats_channels import (
+    NATS_CONNECT_OPTIONS,
+    SUBJECT_ADAPTER_EVENT,
+    SUBJECT_CONVERGENCE_RESULT,
+    SUBJECT_MI_CONVERGENCE_GATE,
+    SUBJECT_MI_TRACE,
+    SUBJECT_PROBE_RESULT,
+    nats_url,
 )
+from nodalarc.platform import get_platform_config
 
 from measurement.adapters import create_adapter
 from measurement.convergence_gate import ConvergenceGate
@@ -96,12 +97,17 @@ def _discover_pods(namespace: str | None = None) -> list[dict[str, str]]:
 
 
 class MIService:
-    """Measurement & Instrumentation main service."""
+    """Measurement & Instrumentation main service.
+
+    Async-first: NATS for all messaging, SQLite for persistence.
+    Collector loop runs in a background thread, publishes to NATS
+    via the shared connection.
+    """
 
     def __init__(
         self,
         session: SessionConfig,
-        gs_file: GroundStationFile,  # noqa: F821
+        gs_file,
         stack_config: RoutingStackConfig,
         db_path: str,
         namespace: str | None = None,
@@ -125,11 +131,6 @@ class MIService:
         # Flow manager (lazy init — needs pods to be running)
         self._flow_manager = None
 
-        # ZMQ
-        self._ctx = zmq.Context()
-        self._pub_sock = self._ctx.socket(zmq.PUB)
-        self._pub_sock.bind(mi_events_bind())
-
         # Convergence gate
         self._gate = ConvergenceGate(
             convergence_config=session.convergence,
@@ -138,6 +139,8 @@ class MIService:
         )
 
         self._running = False
+        self._nc: nats.NATS | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _get_active_flows(self) -> dict:
         if self._flow_manager:
@@ -150,10 +153,7 @@ class MIService:
         for pod in pods:
             if pod["node_id"] and pod["role"] in ("satellite", "ground_station"):
                 try:
-                    self._adapter.start(
-                        pod["node_id"],
-                        pod["pod_ip"],
-                    )
+                    self._adapter.start(pod["node_id"], pod["pod_ip"])
                 except Exception as exc:
                     log.warning(f"Failed to start adapter for {pod['node_id']}: {exc}")
 
@@ -171,24 +171,32 @@ class MIService:
         except Exception as exc:
             log.warning(f"Failed to load initial flows: {exc}")
 
+    def _publish_sync(self, subject: str, payload: bytes) -> None:
+        """Publish to NATS from a sync thread. Fire-and-forget."""
+        if self._nc is None or self._nc.is_closed or self._loop is None:
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._nc.publish(subject, payload), self._loop).result(
+                timeout=5
+            )
+        except Exception as exc:
+            log.debug(f"NATS publish failed: {exc}")
+
     def _collector_loop(self) -> None:
-        """Periodically collect events from all adapters."""
+        """Periodically collect events from all adapters. Runs in background thread."""
         while self._running:
-            # Poll all adapters for events
             for pod in _discover_pods(self._namespace):
                 node_id = pod["node_id"]
                 if not node_id:
                     continue
 
-                # Trigger poll
                 try:
                     self._adapter.poll(node_id)
                 except AttributeError:
-                    pass  # Not all adapters have poll()
+                    pass
                 except Exception as exc:
                     log.debug(f"Poll failed for {node_id}: {exc}")
 
-                # Drain events
                 try:
                     events = self._adapter.get_events(node_id)
                 except Exception as exc:
@@ -196,25 +204,13 @@ class MIService:
                     continue
 
                 for event in events:
-                    # Record to SQLite
                     with self._db_lock:
                         try:
                             insert_adapter_event(self._db_conn, event)
                         except Exception as exc:
                             log.warning(f"DB insert failed: {exc}")
+                    self._publish_sync(SUBJECT_ADAPTER_EVENT, event.model_dump_json().encode())
 
-                    # Publish to ZMQ
-                    try:
-                        self._pub_sock.send(
-                            encode_message(
-                                TOPIC_ADAPTER_EVENT,
-                                event.model_dump_json().encode(),
-                            )
-                        )
-                    except Exception as exc:
-                        log.debug(f"ZMQ publish failed: {exc}")
-
-            # Collect probe results
             if self._flow_manager:
                 try:
                     results = self._flow_manager.collect_results()
@@ -238,90 +234,47 @@ class MIService:
                                 insert_probe_result(self._db_conn, probe_result)
                             except Exception as exc:
                                 log.warning(f"DB probe insert failed: {exc}")
-                        self._pub_sock.send(
-                            encode_message(
-                                TOPIC_PROBE_RESULT,
-                                probe_result.model_dump_json().encode(),
-                            )
+                        self._publish_sync(
+                            SUBJECT_PROBE_RESULT,
+                            probe_result.model_dump_json().encode(),
                         )
                 except Exception as exc:
                     log.warning(f"Probe result collection failed: {exc}")
 
             time.sleep(1.0)
 
-    def _convergence_loop(self) -> None:
-        """Run the convergence gate on the REP socket."""
-        ctx = zmq.Context()
-        sock = ctx.socket(zmq.REP)
-        sock.bind(mi_convergence_gate_bind())
-        log.info(f"Convergence gate bound on {mi_convergence_gate_bind()}")
-
-        poller = zmq.Poller()
-        poller.register(sock, zmq.POLLIN)
-
+    async def _on_convergence_request(self, msg) -> None:
+        """NATS request/reply handler for convergence gate."""
         try:
-            while self._running:
-                socks = dict(poller.poll(timeout=1000))
-                if sock in socks:
-                    raw = sock.recv()
-                    response = self._gate.handle_request(raw)
+            response = self._gate.handle_request(msg.data)
 
-                    # Record convergence result
-                    result = ConvergenceResult.model_validate_json(response)
-                    with self._db_lock:
-                        try:
-                            insert_convergence_result(self._db_conn, result)
-                        except Exception as exc:
-                            log.warning(f"DB convergence insert failed: {exc}")
+            # Record to SQLite
+            result = ConvergenceResult.model_validate_json(response)
+            with self._db_lock:
+                try:
+                    insert_convergence_result(self._db_conn, result)
+                except Exception as exc:
+                    log.warning(f"DB convergence insert failed: {exc}")
 
-                    # Publish
-                    self._pub_sock.send(
-                        encode_message(
-                            TOPIC_CONVERGENCE_RESULT,
-                            response,
-                        )
-                    )
+            # Publish result event
+            await self._nc.publish(SUBJECT_CONVERGENCE_RESULT, response)
 
-                    sock.send(response)
+            # Reply to requester
+            await msg.respond(response)
         except Exception as exc:
-            log.error(f"Convergence loop error: {exc}")
-        finally:
-            sock.close()
-            ctx.term()
+            log.warning(f"Convergence request error: {exc}")
+            await msg.respond(b'{"error": "internal error"}')
 
-    def _trace_loop(self) -> None:
-        """Run the trace REP socket — resolves forwarding paths."""
-        ctx = zmq.Context()
-        sock = ctx.socket(zmq.REP)
-        sock.bind(mi_trace_bind())
-        log.info(f"Trace endpoint bound on {mi_trace_bind()}")
-
-        poller = zmq.Poller()
-        poller.register(sock, zmq.POLLIN)
-
+    async def _on_trace_request(self, msg) -> None:
+        """NATS request/reply handler for trace requests."""
         try:
-            while self._running:
-                socks = dict(poller.poll(timeout=1000))
-                if sock in socks:
-                    raw = sock.recv()
-                    try:
-                        req = TraceRequest.model_validate_json(raw)
-                        resp = self._resolve_trace(req)
-                    except Exception as exc:
-                        log.warning(f"Trace request error: {exc}")
-                        resp = TraceResponse(
-                            src_node=req.src_node if "req" in dir() else "",
-                            dst_node=req.dst_node if "req" in dir() else "",
-                            hops=[],
-                            success=False,
-                            error=str(exc),
-                        )
-                    sock.send(resp.model_dump_json().encode())
+            req = TraceRequest.model_validate_json(msg.data)
+            resp = self._resolve_trace(req)
+            await msg.respond(resp.model_dump_json().encode())
         except Exception as exc:
-            log.error(f"Trace loop error: {exc}")
-        finally:
-            sock.close()
-            ctx.term()
+            log.warning(f"Trace request error: {exc}")
+            resp = TraceResponse(src_node="", dst_node="", hops=[], success=False, error=str(exc))
+            await msg.respond(resp.model_dump_json().encode())
 
     def _resolve_trace(self, req: TraceRequest) -> TraceResponse:
         """Resolve a forwarding path trace between two nodes."""
@@ -342,43 +295,63 @@ class MIService:
                 error=str(exc),
             )
 
-    def run(self) -> None:
-        """Run the MI service — blocks until interrupted."""
+    async def run_async(self) -> None:
+        """Async main loop — NATS subscriptions + background collector."""
         self._running = True
-        log.info("MI service starting")
+        self._loop = asyncio.get_running_loop()
 
-        # Start adapters
+        self._nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+        log.info("MI NATS connected to %s", nats_url())
+
+        # Start adapters and flow manager
         self._start_adapters()
-
-        # Start flow manager
         self._start_flow_manager()
 
         # Start collector thread
-        collector = threading.Thread(
-            target=self._collector_loop,
-            daemon=True,
-            name="mi-collector",
-        )
+        collector = threading.Thread(target=self._collector_loop, daemon=True, name="mi-collector")
         collector.start()
 
-        # Start trace thread
-        tracer = threading.Thread(
-            target=self._trace_loop,
-            daemon=True,
-            name="mi-trace",
-        )
-        tracer.start()
-
-        # Run convergence gate on main thread
+        # NATS request/reply subscriptions
+        subs = []
         try:
-            self._convergence_loop()
+            subs.append(
+                await self._nc.subscribe(
+                    SUBJECT_MI_CONVERGENCE_GATE, cb=self._on_convergence_request
+                )
+            )
+            subs.append(await self._nc.subscribe(SUBJECT_MI_TRACE, cb=self._on_trace_request))
+        except Exception as exc:
+            log.warning(f"NATS subscription setup failed: {exc}")
+
+        log.info(
+            "MI service started — %d NATS subscriptions, collector thread running",
+            len(subs),
+        )
+
+        # Wait for shutdown
+        try:
+            while self._running:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            log.info("MI service cancelled")
+        finally:
+            import contextlib
+
+            self._running = False
+            for sub in subs:
+                with contextlib.suppress(Exception):
+                    await sub.unsubscribe()
+            await self._nc.close()
+            self._db_conn.close()
+            log.info("MI service stopped")
+
+    def run(self) -> None:
+        """Synchronous entry point — runs the async loop."""
+        try:
+            asyncio.run(self.run_async())
         except KeyboardInterrupt:
             log.info("MI service shutting down")
-        finally:
             self._running = False
-            self._pub_sock.close()
-            self._ctx.term()
-            self._db_conn.close()
 
 
 def main() -> None:

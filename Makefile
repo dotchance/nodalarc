@@ -53,7 +53,9 @@ REQUIRED_K3S_IMAGES := nodalarc/frr:10
         build-base build-frr build-probe build-fwd \
         build-ome build-scheduler build-node-agent build-vs-api \
         build-operator build-vf build-nodalpath \
-        load-base load-services check-deps
+        load-base load-services check-deps \
+        redeploy-ome redeploy-scheduler redeploy-node-agent \
+        redeploy-vs-api redeploy-operator redeploy-vf redeploy-nodalpath
 
 .DEFAULT_GOAL := help
 
@@ -266,6 +268,40 @@ deploy: ## Apply ConstellationSpec CRD (DEFAULT_SESSION=path)
 			ELAPSED=$$((ELAPSED + 5)); \
 		done; \
 		echo "[deploy] ERROR: Timed out after 300s"; exit 1'
+
+# ---------------------------------------------------------------------------
+# redeploy-* — build, load, restart a single service
+# ---------------------------------------------------------------------------
+
+define load-and-restart
+	@echo "[redeploy] Loading $1 into K3s..."
+	@docker save $1 | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1
+	@docker save $(subst :$(TAG),:latest,$1) | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1
+	@echo "[redeploy] Restarting $2..."
+	@kubectl rollout restart $2 -n $(NAMESPACE)
+	@kubectl rollout status $2 -n $(NAMESPACE) --timeout=60s
+endef
+
+redeploy-ome: build-ome ## Build + load + restart OME
+	$(call load-and-restart,$(IMG_OME),deployment/ome)
+
+redeploy-scheduler: build-scheduler ## Build + load + restart Scheduler
+	$(call load-and-restart,$(IMG_SCHEDULER),deployment/nodalarc-scheduler)
+
+redeploy-node-agent: build-node-agent ## Build + load + restart Node Agent
+	$(call load-and-restart,$(IMG_NODE_AGENT),daemonset/nodalarc-node-agent)
+
+redeploy-vs-api: build-vs-api ## Build + load + restart VS-API
+	$(call load-and-restart,$(IMG_VS_API),deployment/nodalarc-vs-api)
+
+redeploy-operator: build-operator ## Build + load + restart Operator
+	$(call load-and-restart,$(IMG_OPERATOR),deployment/nodalarc-operator)
+
+redeploy-vf: build-vf ## Build + load + restart VF
+	$(call load-and-restart,$(IMG_VF),deployment/nodalarc-vf)
+
+redeploy-nodalpath: build-nodalpath ## Build + load + restart NodalPath
+	$(call load-and-restart,$(IMG_NODALPATH),deployment/nodalpath)
 
 # ---------------------------------------------------------------------------
 # status / test / teardown / clean

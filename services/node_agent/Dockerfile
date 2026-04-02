@@ -1,12 +1,11 @@
 # Node Agent container — executes privileged netlink operations on each
-# K3s node via gRPC from the Scheduler.
+# K3s node, receives commands from Scheduler via NATS request/reply.
 #
-# Requires hostPID: true and privileged: true in the DaemonSet spec
-# (not in this Dockerfile). Needs iproute2 for tc commands and crictl
-# for container PID discovery.
+# Requires hostPID: true and privileged: true in the DaemonSet spec.
+# Needs iproute2 for tc commands and crictl for container PID discovery.
 #
 # Build context must be the repo root:
-#   docker build -f node_agent/Dockerfile -t nodalarc/node-agent:latest .
+#   docker build -f services/node_agent/Dockerfile -t nodalarc/node-agent:latest .
 
 FROM python:3.14-slim
 
@@ -26,21 +25,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 WORKDIR /app
 
 # Install Python dependencies
-# No grpcio — ZMQ transport instead (gRPC C extension incompatible
-# with hostPID containers). Proto messages used for serialization only.
 RUN pip install --no-cache-dir \
     pydantic>=2.0 pyroute2 pyzmq nats-py protobuf>=6.31.1 \
     pyyaml kubernetes
 
-# Add lib/ to Python path so nodalarc package is importable
-ENV PYTHONPATH=/app/lib:/app
+# Add lib/ and services/ to Python path
+ENV PYTHONPATH=/app/lib:/app/services:/app
 
-# Copy shared library, node_agent, and orchestrator (for wiring functions)
+# Copy shared library (includes proto/)
 COPY lib/ lib/
-COPY node_agent/ node_agent/
-COPY orchestrator/ orchestrator/
 
-# gRPC listen port
-EXPOSE 50100
+# Copy node_agent service
+COPY services/node_agent/ services/node_agent/
 
 ENTRYPOINT ["python", "-m", "node_agent"]

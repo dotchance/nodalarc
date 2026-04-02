@@ -6,7 +6,7 @@
 # sessions, nodalpath config) is baked into the image at /app/configs/.
 #
 # Build context must be the repo root:
-#   docker build -f vs_api/Dockerfile -t nodalarc/vs-api:latest .
+#   docker build -f services/vs_api/Dockerfile -t nodalarc/vs-api:latest .
 
 FROM python:3.14-slim
 
@@ -18,27 +18,20 @@ RUN pip install --no-cache-dir \
     websockets>=16.0 grpcio>=1.74 protobuf>=6.31.1 numpy \
     kubernetes
 
-# Add lib/ to Python path so nodalarc package is importable
-ENV PYTHONPATH=/app/lib:/app
+# Add lib/ and services/ to Python path
+ENV PYTHONPATH=/app/lib:/app/services:/app
 ENV PYTHONUNBUFFERED=1
 
-# Copy shared library
+# Copy shared library (includes proto/, constellation_loader, models)
 COPY lib/ lib/
 
-# Copy VS-API module
-COPY vs_api/ vs_api/
+# Copy VS-API service
+COPY services/vs_api/ services/vs_api/
 
-# Copy dependencies used by VS-API at runtime:
-# - ome/constellation_loader.py for session context loading
-# - nodalpath/ for session_loader, platform config, live path tracer
-# - node_agent/proto/ for gRPC stubs used in live trace
-COPY ome/ ome/
+# Copy nodalpath (session_loader, live path tracer, console state)
 COPY nodalpath/ nodalpath/
-COPY node_agent/__init__.py node_agent/__init__.py
-COPY node_agent/proto/ node_agent/proto/
 
-# Bake in all config files (satellite types, ground stations,
-# constellations, sessions, nodalpath config)
+# Bake in all config files
 COPY configs/ configs/
 
 # HTTP + WebSocket port

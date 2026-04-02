@@ -1,6 +1,7 @@
 """Tests for satellite type Pydantic model and YAML loading."""
 
 import pytest
+from nodalarc.constellation_loader import load_satellite_type, set_satellite_type_dir
 from nodalarc.models.satellite_type import (
     GroundTerminalDef,
     IslTerminalDef,
@@ -8,7 +9,6 @@ from nodalarc.models.satellite_type import (
 )
 from pydantic import ValidationError
 
-from ome.constellation_loader import load_satellite_type, set_satellite_type_dir
 from tests.conftest import CONFIGS_DIR
 
 SAT_TYPE_DIR = CONFIGS_DIR / "satellite-types"

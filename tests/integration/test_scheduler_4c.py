@@ -44,13 +44,12 @@ def main():
     from nodalarc.models.session import SessionConfig
 
     session = SessionConfig.model_validate(data)
-    from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
-
-    from ome.constellation_loader import (
+    from nodalarc.constellation_loader import (
         expand_constellation,
         load_constellation,
         load_ground_stations,
     )
+    from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
 
     addressing = AddressingScheme(session.addressing)
     constellation = load_constellation(session.constellation)

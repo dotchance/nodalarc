@@ -1,6 +1,14 @@
 """Tests for ground station refactoring — individual files, sets, format detection."""
 
 import pytest
+from nodalarc.constellation_loader import (
+    load_ground_station_individual,
+    load_ground_station_set,
+    load_ground_stations,
+    load_ground_stations_from_list,
+    load_ground_stations_from_set,
+    set_ground_station_dirs,
+)
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
@@ -9,14 +17,6 @@ from nodalarc.models.ground_station import (
 )
 from pydantic import ValidationError
 
-from ome.constellation_loader import (
-    load_ground_station_individual,
-    load_ground_station_set,
-    load_ground_stations,
-    load_ground_stations_from_list,
-    load_ground_stations_from_set,
-    set_ground_station_dirs,
-)
 from tests.conftest import CONFIGS_DIR
 
 STATIONS_DIR = CONFIGS_DIR / "ground-stations" / "stations"

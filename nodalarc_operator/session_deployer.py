@@ -16,13 +16,16 @@ from typing import Any
 import kubernetes
 import yaml
 from jinja2 import Environment, FileSystemLoader
+from nodalarc.constellation_loader import (
+    expand_constellation,
+    load_constellation,
+    load_ground_stations,
+)
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
 from nodalarc.models.session import SessionConfig
 from nodalarc.platform import get_platform_config
 from nodalarc.stack_resolver import resolve_stack
 from nodalarc.template_vars import build_template_vars
-
-from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
 
 log = logging.getLogger(__name__)
 

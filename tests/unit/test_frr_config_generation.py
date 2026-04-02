@@ -4,6 +4,7 @@ import re
 
 import pytest
 from jinja2 import Environment, FileSystemLoader
+from nodalarc.constellation_loader import load_constellation
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.session import (
     AreaAssignmentConfig,
@@ -15,7 +16,6 @@ from nodalarc.models.session import (
 from nodalarc.stack_resolver import resolve_stack
 from nodalarc.template_vars import build_template_vars
 
-from ome.constellation_loader import load_constellation
 from tests.conftest import CONFIGS_DIR
 
 TEMPLATES_DIR = CONFIGS_DIR / "templates" / "frr"
@@ -38,7 +38,7 @@ def starlink_config():
 
 @pytest.fixture
 def gs_file():
-    from ome.constellation_loader import load_ground_stations
+    from nodalarc.constellation_loader import load_ground_stations
 
     return load_ground_stations(CONFIGS_DIR / "ground-stations/sets/global.yaml")
 

@@ -1,6 +1,6 @@
 """Session loader — config loading without OME imports.
 
-Replicates the minimal loading logic from ome/constellation_loader.py
+Replicates the minimal loading logic from lib/nodalarc/constellation_loader.py
 so that nodalpath can build topology context from session YAML without
 importing from ome/, orchestrator/, vs_api/, or measurement/.
 """
@@ -56,7 +56,7 @@ from nodalpath.models.topology import TopologyEdge, TopologyNode
 
 _constellation_adapter = TypeAdapter(ConstellationConfig)
 
-# Default GS terminal/elevation/policy (mirrors ome/constellation_loader.py)
+# Default GS terminal/elevation/policy (mirrors lib/nodalarc/constellation_loader.py)
 _DEFAULT_GS_TERMINALS = [
     GroundTerminalDef(type="optical", count=1, bandwidth_mbps=1000, tracking_capacity=1),
 ]

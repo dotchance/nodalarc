@@ -397,7 +397,7 @@ def main() -> None:
     raw = yaml.safe_load(Path(args.session).read_text())
     session = SessionConfig.model_validate(raw)
 
-    from ome.constellation_loader import load_ground_stations
+    from nodalarc.constellation_loader import load_ground_stations
 
     gs_file = load_ground_stations(session.ground_stations)
 

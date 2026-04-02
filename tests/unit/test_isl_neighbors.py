@@ -1,6 +1,7 @@
 """Test ISL neighbor assignment for all constellation types."""
 
 import pytest
+from nodalarc.constellation_loader import load_constellation
 from nodalarc.models.addressing import (
     AddressingScheme,
     NeighborAssignment,
@@ -10,7 +11,6 @@ from nodalarc.models.addressing import (
 from nodalarc.models.constellation import ConstellationConfig
 from pydantic import TypeAdapter
 
-from ome.constellation_loader import load_constellation
 from tests.conftest import CONFIGS_DIR
 
 adapter = TypeAdapter(ConstellationConfig)

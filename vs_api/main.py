@@ -864,7 +864,7 @@ def _clear_state() -> None:
 
 def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
     """Load per-station min_elevation_deg from ground station config."""
-    from ome.constellation_loader import load_ground_stations
+    from nodalarc.constellation_loader import load_ground_stations
 
     if isinstance(session.ground_stations, list):
         gs_file = load_ground_stations(session.ground_stations)
@@ -888,7 +888,7 @@ def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
 
 def _load_beam_falloff_exponent(session: SessionConfig) -> float:
     """Load beam_falloff_exponent from the constellation's satellite type."""
-    from ome.constellation_loader import load_constellation, load_satellite_type
+    from nodalarc.constellation_loader import load_constellation, load_satellite_type
 
     if isinstance(session.constellation, dict):
         config = load_constellation(session.constellation)

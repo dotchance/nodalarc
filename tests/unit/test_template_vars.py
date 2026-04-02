@@ -1,6 +1,7 @@
 """Test build_template_vars() — the single Jinja2 namespace builder."""
 
 import pytest
+from nodalarc.constellation_loader import load_constellation
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.session import (
     AreaAssignmentConfig,
@@ -11,7 +12,6 @@ from nodalarc.models.session import (
 )
 from nodalarc.template_vars import build_template_vars
 
-from ome.constellation_loader import load_constellation
 from tests.conftest import CONFIGS_DIR
 
 
@@ -32,7 +32,7 @@ def starlink_config():
 
 @pytest.fixture
 def gs_file():
-    from ome.constellation_loader import load_ground_stations
+    from nodalarc.constellation_loader import load_ground_stations
 
     return load_ground_stations(CONFIGS_DIR / "ground-stations/sets/global.yaml")
 

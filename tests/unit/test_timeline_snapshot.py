@@ -3,12 +3,16 @@
 import json
 
 import pytest
+from nodalarc.constellation_loader import (
+    expand_constellation,
+    load_constellation,
+    load_ground_stations,
+)
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.constellation import ConstellationConfig
 from nodalarc.models.events import ClockTick, TimelinePositionSnapshot, VisibilityEvent
 from pydantic import TypeAdapter
 
-from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
 from ome.event_stream import (
     precompute_timeline,
     read_timeline_jsonl,

@@ -10,6 +10,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
+from pydantic import TypeAdapter
+
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ExplicitConstellation,
@@ -27,9 +29,7 @@ from nodalarc.models.ground_station import (
     TerrestrialPrefixTemplate,
 )
 from nodalarc.models.satellite_type import SatelliteTypeConfig
-from pydantic import TypeAdapter
-
-from ome.propagator import OrbitalElements, elements_from_params
+from nodalarc.orbital import OrbitalElements, elements_from_params
 
 adapter = TypeAdapter(ConstellationConfig)
 
@@ -57,11 +57,21 @@ def set_ground_station_dirs(
         _GS_SETS_DIR = Path(sets_dir)
 
 
+def _find_repo_root() -> Path:
+    """Walk up from this file to find the repo root (contains configs/)."""
+    p = Path(__file__).resolve().parent
+    for _ in range(10):
+        if (p / "configs").is_dir():
+            return p
+        p = p.parent
+    raise FileNotFoundError("Cannot find repo root (directory containing configs/)")
+
+
 def _resolve_sat_type_dir() -> Path:
     """Resolve the satellite type directory, defaulting to configs/satellite-types/."""
     if _SAT_TYPE_DIR is not None:
         return _SAT_TYPE_DIR
-    candidate = Path(__file__).parent.parent / "configs" / "satellite-types"
+    candidate = _find_repo_root() / "configs" / "satellite-types"
     if candidate.is_dir():
         return candidate
     raise FileNotFoundError(
@@ -73,7 +83,7 @@ def _resolve_sat_type_dir() -> Path:
 def _resolve_gs_stations_dir() -> Path:
     if _GS_STATIONS_DIR is not None:
         return _GS_STATIONS_DIR
-    candidate = Path(__file__).parent.parent / "configs" / "ground-stations" / "stations"
+    candidate = _find_repo_root() / "configs" / "ground-stations" / "stations"
     if candidate.is_dir():
         return candidate
     raise FileNotFoundError("Cannot find configs/ground-stations/stations/ directory.")
@@ -82,7 +92,7 @@ def _resolve_gs_stations_dir() -> Path:
 def _resolve_gs_sets_dir() -> Path:
     if _GS_SETS_DIR is not None:
         return _GS_SETS_DIR
-    candidate = Path(__file__).parent.parent / "configs" / "ground-stations" / "sets"
+    candidate = _find_repo_root() / "configs" / "ground-stations" / "sets"
     if candidate.is_dir():
         return candidate
     raise FileNotFoundError("Cannot find configs/ground-stations/sets/ directory.")

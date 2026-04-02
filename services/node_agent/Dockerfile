@@ -26,7 +26,7 @@ WORKDIR /app
 
 # Install Python dependencies
 RUN pip install --no-cache-dir \
-    pydantic>=2.0 pyroute2 pyzmq nats-py protobuf>=6.31.1 \
+    pydantic>=2.0 pyroute2 nats-py protobuf>=6.31.1 \
     pyyaml kubernetes
 
 # Add lib/ and services/ to Python path

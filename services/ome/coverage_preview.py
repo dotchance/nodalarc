@@ -18,13 +18,11 @@ from collections import defaultdict
 from pathlib import Path
 
 import yaml
-
 from nodalarc.constellation_loader import (
     expand_constellation,
     load_constellation,
     load_ground_stations,
 )
-from nodalarc.coverage_insights import describe_gs_coverage, generate_insights
 from nodalarc.models.addressing import (
     AddressingScheme,
     assign_isl_neighbors,
@@ -42,6 +40,8 @@ from nodalarc.models.coverage import (
 )
 from nodalarc.models.session import AddressingConfig
 from nodalarc.session_generator import merge_constellation_with_satellite_type
+
+from ome.coverage_insights import describe_gs_coverage, generate_insights
 from ome.event_stream import precompute_timeline_window
 from ome.propagator import orbital_period, propagate_keplerian
 from ome.visibility import check_isl_visibility

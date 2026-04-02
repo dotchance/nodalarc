@@ -1921,7 +1921,7 @@ async def preview_coverage(body: dict) -> dict:
     Computes visibility at 10-second steps for one orbital period.
     Returns ISL/GS coverage statistics and warnings.
     """
-    from nodalarc.coverage_preview import compute_coverage_preview
+    from ome.coverage_preview import compute_coverage_preview
 
     loop = asyncio.get_event_loop()
     try:

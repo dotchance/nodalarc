@@ -344,14 +344,21 @@ def handle_batch_link_up(
     upped = 0
     pm = pid_map or {}
 
-    # Validate all node_ids have PIDs before doing any work
+    # Validate all node_ids have PIDs before doing any work.
+    # For CROSS_NODE GROUND links, only the local node_id needs a PID —
+    # the remote peer is on another node and won't be in our pid_map.
     missing = []
     for iface in request.interfaces:
         if iface.link_type == node_agent_pb2.GROUND:
-            if pm.get(iface.gs_id, 0) == 0:
-                missing.append(iface.gs_id)
-            if pm.get(iface.sat_id, 0) == 0:
-                missing.append(iface.sat_id)
+            if is_cross_node:
+                # Only validate the local node (node_id), not the remote peer
+                if pm.get(iface.node_id, 0) == 0:
+                    missing.append(iface.node_id)
+            else:
+                if pm.get(iface.gs_id, 0) == 0:
+                    missing.append(iface.gs_id)
+                if pm.get(iface.sat_id, 0) == 0:
+                    missing.append(iface.sat_id)
         else:
             if pm.get(iface.node_id, 0) == 0:
                 missing.append(iface.node_id)
@@ -372,11 +379,10 @@ def handle_batch_link_up(
     if is_cross_node:
         local_ip = _discover_local_ip()
         for iface in request.interfaces:
-            if iface.link_type == node_agent_pb2.GROUND:
-                continue
             if not iface.remote_node_ip or not iface.vni:
+                link_desc = "GROUND" if iface.link_type == node_agent_pb2.GROUND else "ISL"
                 errors.append(
-                    f"CROSS_NODE ISL {iface.node_id}/{iface.interface_name}: "
+                    f"CROSS_NODE {link_desc} {iface.node_id}/{iface.interface_name}: "
                     f"missing remote_node_ip or vni"
                 )
                 continue
@@ -392,14 +398,21 @@ def handle_batch_link_up(
             except Exception as exc:
                 errors.append(f"VXLAN create failed {iface.node_id}/{iface.interface_name}: {exc}")
 
-    # Separate ISL and ground interfaces
+    # Separate ISL and ground interfaces.
+    # For CROSS_NODE, ALL interfaces use the ISL phase 1 path (set_up + shaping)
+    # because VXLAN interfaces don't need bridge/mirred operations.
     isl_ifaces = [i for i in request.interfaces if i.link_type != node_agent_pb2.GROUND]
     gnd_ifaces = [i for i in request.interfaces if i.link_type == node_agent_pb2.GROUND]
     phase1_futures = {}
     for iface in isl_ifaces:
         phase1_futures[_BATCH_POOL.submit(_isl_link_up_phase1, iface, pm)] = iface
     for iface in gnd_ifaces:
-        phase1_futures[_BATCH_POOL.submit(_ground_link_up, iface, pm)] = iface
+        if is_cross_node:
+            # CROSS_NODE GROUND: VXLAN already created, just UP + shaping
+            phase1_futures[_BATCH_POOL.submit(_isl_link_up_phase1, iface, pm)] = iface
+        else:
+            # LOCAL GROUND: bridge + mirred attach
+            phase1_futures[_BATCH_POOL.submit(_ground_link_up, iface, pm)] = iface
 
     # Wait for ALL phase 1 to complete
     isl_phase1_ok: list[node_agent_pb2.InterfaceUp] = []

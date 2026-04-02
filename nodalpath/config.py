@@ -16,10 +16,8 @@ class NodalPathConfig:
     # Mode
     mode: str = "live"  # "live" | "batch"
 
-    # Live mode ZMQ
-    ome_connect: str = ""  # Filled from zmq_channels if empty
-    to_connect: str = ""  # Filled from zmq_channels if empty
-    events_bind: str = ""  # Filled from zmq_channels if empty
+    # Live mode NATS (connection handled by nats_channels.nats_url())
+    nats_url: str = ""  # Filled from nats_channels if empty
 
     # Batch mode
     timeline_path: Path | None = None
@@ -49,15 +47,7 @@ class NodalPathConfig:
     almanac_output_path: Path | None = None
 
     def __post_init__(self) -> None:
-        from nodalarc.zmq_channels import (
-            nodalpath_events_bind,
-            ome_events_connect,
-            to_events_connect,
-        )
+        if not self.nats_url:
+            from nodalarc.nats_channels import nats_url
 
-        if not self.ome_connect:
-            self.ome_connect = ome_events_connect()
-        if not self.to_connect:
-            self.to_connect = to_events_connect()
-        if not self.events_bind:
-            self.events_bind = nodalpath_events_bind()
+            self.nats_url = nats_url()

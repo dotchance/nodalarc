@@ -62,6 +62,7 @@ def _init_platform_configs():
         platform_config_path="configs/platform.yaml",
         satellite_sid_range_start=16000,
         ground_station_sid_range_start=24000,
+        adjacency_sid_range_start=32000,
         grpc_push_timeout_seconds=10,
         grpc_push_max_parallel_workers=20,
         lookahead_horizon_sim_seconds=5700,

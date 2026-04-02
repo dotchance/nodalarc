@@ -1,12 +1,17 @@
-"""Publishes AlmanacEvent records on the nodalpath-events ZMQ channel."""
+"""Publishes AlmanacEvent records on NATS JetStream.
+
+Replaces zmq_publisher.py. Same convenience methods (publish_table_pushed,
+publish_path_computed, publish_deviation). Transport is NATS core publish
+(fire-and-forget, non-blocking — same semantics as ZMQ PUB).
+"""
 
 from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
 
-import zmq
-from nodalarc.zmq_channels import TOPIC_ALMANAC_EVENT, encode_message
+import nats
+from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, SUBJECT_ALMANAC_EVENT, nats_url
 
 from nodalpath.models.almanac_event import AlmanacEvent
 
@@ -14,27 +19,31 @@ log = logging.getLogger(__name__)
 
 
 class AlmanacPublisher:
-    """ZMQ PUB socket wrapper for AlmanacEvent publishing.
+    """NATS publisher for AlmanacEvent records.
 
-    Call bind() before publish(). Call close() on shutdown.
+    Call connect() before publish(). Call close() on shutdown.
+    Publishes to SUBJECT_ALMANAC_EVENT (nodalarc.nodalpath.almanac).
     """
 
-    def __init__(self, bind_address: str) -> None:
-        self._bind_address = bind_address
-        self._ctx = zmq.Context()
-        self._sock = self._ctx.socket(zmq.PUB)
-        self._sock.bind(bind_address)
-        log.info("AlmanacPublisher bound to %s", bind_address)
+    def __init__(self) -> None:
+        self._nc: nats.NATS | None = None
 
-    def publish(self, event: AlmanacEvent) -> None:
+    async def connect(self) -> None:
+        """Connect to NATS. Must be called before publish()."""
+        self._nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+        log.info("AlmanacPublisher connected to %s", nats_url())
+
+    async def publish(self, event: AlmanacEvent) -> None:
         """Publish an AlmanacEvent. Never raises."""
+        if self._nc is None or self._nc.is_closed:
+            return
         try:
             payload = event.model_dump_json().encode()
-            self._sock.send(encode_message(TOPIC_ALMANAC_EVENT, payload), zmq.NOBLOCK)
+            await self._nc.publish(SUBJECT_ALMANAC_EVENT, payload)
         except Exception as exc:
             log.warning("Failed to publish AlmanacEvent: %s", exc)
 
-    def publish_table_pushed(
+    async def publish_table_pushed(
         self,
         sim_time: datetime,
         topology_state_id: str,
@@ -43,8 +52,8 @@ class AlmanacPublisher:
         nodes_failed: int,
         push_duration_ms: float,
     ) -> None:
-        """Convenience method: publish a table_pushed event."""
-        self.publish(
+        """Publish a table_pushed event."""
+        await self.publish(
             AlmanacEvent(
                 event_type="table_pushed",
                 sim_time=sim_time,
@@ -57,13 +66,13 @@ class AlmanacPublisher:
             )
         )
 
-    def publish_path_computed(
+    async def publish_path_computed(
         self,
         sim_time: datetime,
         topology_state_id: str,
     ) -> None:
-        """Convenience method: publish a path_computed event."""
-        self.publish(
+        """Publish a path_computed event."""
+        await self.publish(
             AlmanacEvent(
                 event_type="path_computed",
                 sim_time=sim_time,
@@ -72,7 +81,7 @@ class AlmanacPublisher:
             )
         )
 
-    def publish_deviation(
+    async def publish_deviation(
         self,
         sim_time: datetime,
         topology_state_id: str,
@@ -80,8 +89,8 @@ class AlmanacPublisher:
         node_b: str,
         reason: str,
     ) -> None:
-        """Convenience method: publish a deviation_detected event."""
-        self.publish(
+        """Publish a deviation_detected event."""
+        await self.publish(
             AlmanacEvent(
                 event_type="deviation_detected",
                 sim_time=sim_time,
@@ -93,6 +102,7 @@ class AlmanacPublisher:
             )
         )
 
-    def close(self) -> None:
-        self._sock.close()
-        self._ctx.term()
+    async def close(self) -> None:
+        if self._nc is not None and not self._nc.is_closed:
+            await self._nc.drain()
+            await self._nc.close()

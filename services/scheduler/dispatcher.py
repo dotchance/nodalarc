@@ -413,6 +413,18 @@ class Dispatcher:
     # Reconcile-based dispatch — single path to Node Agent
     # ------------------------------------------------------------------
 
+    def _link_locality(self, node_a: str, node_b: str) -> int:
+        """Determine locality for a link pair.
+
+        Returns node_agent_pb2.LOCAL if both endpoints are on the same K3s
+        node, node_agent_pb2.CROSS_NODE if they are on different nodes.
+        """
+        k3s_a = self._loc.k3s_node(node_a)
+        k3s_b = self._loc.k3s_node(node_b)
+        if k3s_a and k3s_b and k3s_a != k3s_b:
+            return node_agent_pb2.CROSS_NODE
+        return node_agent_pb2.LOCAL
+
     async def _reconcile_links(
         self,
         desired: dict[tuple[str, str], ActiveLinkInfo],
@@ -471,6 +483,7 @@ class Dispatcher:
     ) -> set[tuple[str, str]]:
         """Send BatchLinkDown to Node Agents. Returns successfully removed pairs."""
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
+        agent_locality: dict[str, int] = {}
         pair_agents: dict[tuple[str, str], set[str]] = {}
 
         for pair in pairs:
@@ -479,6 +492,7 @@ class Dispatcher:
                 continue
 
             node_a, node_b = pair
+            locality = self._link_locality(node_a, node_b)
             is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
 
             if is_gs:
@@ -494,6 +508,7 @@ class Dispatcher:
                         sat_id=sat_id,
                     )
                 )
+                agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                 pair_agents.setdefault(pair, set()).add(agent)
             else:
                 for nid, ifname in [
@@ -508,6 +523,7 @@ class Dispatcher:
                             link_type=node_agent_pb2.ISL,
                         )
                     )
+                    agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                     pair_agents.setdefault(pair, set()).add(agent)
 
         successful_agents: set[str] = set()
@@ -519,7 +535,7 @@ class Dispatcher:
                 req = node_agent_pb2.BatchLinkDownRequest(
                     batch_id=f"{sim_iso}-down",
                     target_sim_time=sim_iso,
-                    locality=node_agent_pb2.LOCAL,
+                    locality=agent_locality.get(addr, node_agent_pb2.LOCAL),
                     interfaces=agent_ifaces[addr],
                 )
                 tasks.append(stub.async_batch_link_down(req))
@@ -576,6 +592,7 @@ class Dispatcher:
     ) -> set[tuple[str, str]]:
         """Send BatchLinkUp to Node Agents. Returns successfully added pairs."""
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
+        agent_locality: dict[str, int] = {}
         pair_agents: dict[tuple[str, str], set[str]] = {}
 
         for pair in pairs:
@@ -584,6 +601,7 @@ class Dispatcher:
                 continue
 
             node_a, node_b = pair
+            locality = self._link_locality(node_a, node_b)
             is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
 
             if is_gs:
@@ -601,6 +619,7 @@ class Dispatcher:
                         sat_id=sat_id,
                     )
                 )
+                agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                 pair_agents.setdefault(pair, set()).add(agent)
             else:
                 for nid, ifname in [
@@ -617,6 +636,7 @@ class Dispatcher:
                             bandwidth_mbps=info.bandwidth_mbps,
                         )
                     )
+                    agent_locality[agent] = max(agent_locality.get(agent, 0), locality)
                     pair_agents.setdefault(pair, set()).add(agent)
 
         successful_agents: set[str] = set()
@@ -628,7 +648,7 @@ class Dispatcher:
                 req = node_agent_pb2.BatchLinkUpRequest(
                     batch_id=f"{sim_iso}-up",
                     target_sim_time=sim_iso,
-                    locality=node_agent_pb2.LOCAL,
+                    locality=agent_locality.get(addr, node_agent_pb2.LOCAL),
                     interfaces=agent_ifaces[addr],
                 )
                 tasks.append(stub.async_batch_link_up(req))

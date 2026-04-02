@@ -22,12 +22,81 @@ from nodalarc.constellation_loader import (
     load_ground_stations,
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.session import PlacementConfig, SessionConfig
 from nodalarc.platform import get_platform_config
 from nodalarc.stack_resolver import resolve_stack
 from nodalarc.template_vars import build_template_vars
 
 log = logging.getLogger(__name__)
+
+
+def discover_available_nodes() -> list[str]:
+    """Discover K3s nodes available for session pods.
+
+    Returns node names that have the nodalarc.io/node-agent=true label
+    and do not have the nodalarc.io/not-ready taint.
+    """
+    v1 = kubernetes.client.CoreV1Api()
+    nodes = v1.list_node(label_selector="nodalarc.io/node-agent=true")
+    available = []
+    for node in nodes.items:
+        taints = node.spec.taints or []
+        blocked = any(t.key == "nodalarc.io/not-ready" and t.effect == "NoSchedule" for t in taints)
+        if not blocked:
+            available.append(node.metadata.name)
+    return sorted(available)
+
+
+def compute_pod_placement(
+    placement: PlacementConfig,
+    node_vars: dict[str, dict],
+    available_nodes: list[str],
+) -> dict[str, str]:
+    """Compute target node for each pod based on placement policy.
+
+    Args:
+        placement: PlacementConfig from session YAML.
+        node_vars: {node_id: {node_type, plane, ...}} from template_vars.
+        available_nodes: sorted list of available K3s node names.
+
+    Returns:
+        {node_id: k3s_node_name} mapping.
+    """
+    if not available_nodes:
+        raise ValueError("No available K3s nodes for pod placement")
+
+    if placement.policy == "allOnOne":
+        # All pods on the first available node (backward compatible)
+        target = available_nodes[0]
+        return {nid: target for nid in node_vars}
+
+    if placement.policy == "planePerNode":
+        # One plane per node, round-robin across available nodes.
+        # Ground stations go on the first node (control plane).
+        result: dict[str, str] = {}
+        for nid, vars in node_vars.items():
+            if vars.get("node_type") == "ground_station":
+                result[nid] = available_nodes[0]
+            else:
+                plane = vars.get("plane", 0)
+                result[nid] = available_nodes[plane % len(available_nodes)]
+        return result
+
+    if placement.policy == "planeGroupPerNode":
+        # Group adjacent planes, assign groups round-robin.
+        ppg = placement.planes_per_group or max(1, len(available_nodes))
+        result = {}
+        for nid, vars in node_vars.items():
+            if vars.get("node_type") == "ground_station":
+                result[nid] = available_nodes[0]
+            else:
+                plane = vars.get("plane", 0)
+                group = plane // ppg
+                result[nid] = available_nodes[group % len(available_nodes)]
+        return result
+
+    raise ValueError(f"Unknown placement policy: {placement.policy}")
+
 
 # All known FRR daemons — used to generate the daemons file
 _ALL_FRR_DAEMONS = [
@@ -216,7 +285,31 @@ def deploy_session(
         owner_ref,
     )
 
-    # --- Step 8: Create session pods ---
+    # --- Step 8: Compute pod placement ---
+    available_nodes = discover_available_nodes()
+    if not available_nodes:
+        # Fallback: use the env var if no labeled nodes found (backward compat)
+        fallback = os.environ.get("SESSION_NODE_NAME", "nodal")
+        available_nodes = [fallback]
+        log.warning(
+            "No nodes with nodalarc.io/node-agent=true label — "
+            "falling back to SESSION_NODE_NAME=%s",
+            fallback,
+        )
+
+    pod_placement = compute_pod_placement(session.placement, node_vars, available_nodes)
+    node_counts: dict[str, int] = {}
+    for target in pod_placement.values():
+        node_counts[target] = node_counts.get(target, 0) + 1
+    log.info(
+        "Placement policy=%s, %d pods across %d nodes: %s",
+        session.placement.policy,
+        len(pod_placement),
+        len(node_counts),
+        ", ".join(f"{n}={c}" for n, c in sorted(node_counts.items())),
+    )
+
+    # --- Step 9: Create session pods ---
     sidecar_config = _build_sidecar_config(resolved)
     env_list = resolved.env
 
@@ -241,6 +334,7 @@ def deploy_session(
             sidecar_config=sidecar_config,
             sidecar_env=sidecar_env,
             probe_enabled=session.mi.enabled if session.mi else False,
+            target_node=pod_placement.get(node_id),
             owner_ref=owner_ref,
         )
         created_pods += 1
@@ -690,6 +784,7 @@ def _create_session_pod(
     sidecar_env: list[dict] | None,
     probe_enabled: bool,
     owner_ref: dict,
+    target_node: str | None = None,
 ) -> None:
     """Create a single session pod (satellite or ground station)."""
     cfg = get_platform_config()
@@ -778,7 +873,7 @@ def _create_session_pod(
             owner_references=[owner_ref],
         ),
         spec=kubernetes.client.V1PodSpec(
-            node_name=os.environ.get("SESSION_NODE_NAME") or None,
+            node_name=target_node,
             containers=containers,
             volumes=volumes,
             restart_policy="Never",

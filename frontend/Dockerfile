@@ -1,7 +1,7 @@
 # VF container — React/Vite SPA served by nginx.
 #
-# Build context must be the visualization/ directory:
-#   docker build -t nodalarc/vf:latest visualization/
+# Build context must be the frontend/ directory:
+#   docker build -t nodalarc/visualization:latest frontend/
 #
 # Runtime config: VS_API_URL and WS_URL env vars are written to
 # config.js by docker-entrypoint.sh at container startup.

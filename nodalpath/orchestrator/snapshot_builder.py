@@ -6,33 +6,10 @@ instances on demand.
 
 from __future__ import annotations
 
-import math
-
-from nodalarc.constants import SPEED_OF_LIGHT_KM_S, WGS84_A, WGS84_E2
+from nodalarc.geo import compute_latency_ms, geodetic_to_ecef
 from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
 
 from nodalpath.models.topology import TopologyEdge, TopologyNode, TopologySnapshot
-
-
-def _geodetic_to_ecef(
-    lat_deg: float,
-    lon_deg: float,
-    alt_km: float,
-) -> tuple[float, float, float]:
-    """Convert geodetic (lat, lon, alt) to ECEF xyz in km.
-
-    Replicates orchestrator/latency_model.py:17-29 using WGS84 constants
-    from lib/nodalarc/constants.py.
-    """
-    lat_rad = math.radians(lat_deg)
-    lon_rad = math.radians(lon_deg)
-    sin_lat = math.sin(lat_rad)
-    cos_lat = math.cos(lat_rad)
-    n = WGS84_A / math.sqrt(1.0 - WGS84_E2 * sin_lat * sin_lat)
-    x = (n + alt_km) * cos_lat * math.cos(lon_rad)
-    y = (n + alt_km) * cos_lat * math.sin(lon_rad)
-    z = (n * (1.0 - WGS84_E2) + alt_km) * sin_lat
-    return (x, y, z)
 
 
 class SnapshotBuilder:
@@ -64,7 +41,7 @@ class SnapshotBuilder:
     def apply_position_record(self, record: TimelinePositionSnapshot) -> None:
         """Update ECEF positions from a TimelinePositionSnapshot."""
         for node_id, pos in record.positions.items():
-            self._positions[node_id] = _geodetic_to_ecef(
+            self._positions[node_id] = geodetic_to_ecef(
                 pos.lat_deg,
                 pos.lon_deg,
                 pos.alt_km,
@@ -106,7 +83,7 @@ class SnapshotBuilder:
         for pair, range_km in self._active_links.items():
             a, b = pair
             ifaces = self._interface_map.get(pair, ("unknown", "unknown"))
-            latency_ms = range_km / SPEED_OF_LIGHT_KM_S * 1000.0
+            latency_ms = compute_latency_ms(range_km)
             bandwidth = self._bandwidth_map.get(pair, 1000.0)
             link_type = "ground" if a.startswith("gs-") or b.startswith("gs-") else "isl"
 

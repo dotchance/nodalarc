@@ -23,6 +23,10 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "watch"]
+  # Node discovery for pod placement and substrate latency measurement (M10)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
   # ConstellationSpec CRD operations
   - apiGroups: ["nodalarc.io"]
     resources: ["constellationspecs"]

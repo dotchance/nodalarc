@@ -57,7 +57,7 @@ ALL_IMAGES  := $(BASE_IMAGES) $(SVC_IMAGES)
 # ---------------------------------------------------------------------------
 
 .PHONY: all deps build load load-all install deploy test teardown clean \
-        build-frontends build-images build-base-images \
+        build-frontends build-images ensure-base-images build-base-images \
         build-base build-frr build-probe build-fwd \
         build-ome build-scheduler build-node-agent build-vs-api \
         build-operator build-vf build-nodalpath check-deps
@@ -116,10 +116,18 @@ build-frontends:
 	fi
 
 # build-images builds service images (our code — always rebuild).
-# Base images (base, frr, probe, fwd) are infrastructure — built rarely.
-# Use `make build-base-images` to rebuild them explicitly.
-build-images: build-ome build-scheduler build-node-agent \
+# Base images are checked and built only if missing from Docker cache.
+build-images: ensure-base-images build-ome build-scheduler build-node-agent \
               build-vs-api build-operator build-vf build-nodalpath
+
+ensure-base-images:
+	@for img in nodalarc/base:latest nodalarc/frr:10 nodalarc/probe:latest nodalarc/nodalpath-fwd:latest; do \
+		if ! docker image inspect $$img >/dev/null 2>&1; then \
+			echo "[build] Base image $$img not found — building base images..."; \
+			$(MAKE) build-base-images; \
+			break; \
+		fi; \
+	done
 
 build-base-images: build-base build-frr build-probe build-fwd
 
@@ -165,21 +173,29 @@ build-vf: build-frontends
 
 SVC_IMAGES_LATEST := $(subst :$(TAG),:latest,$(SVC_IMAGES))
 
-load:
+# Images that must be in k3s for Helm to work (values.yaml references)
+REQUIRED_K3S_IMAGES := nodalarc/frr:10
+
+load: load-base load-services
+
+load-base:
+	@echo "[load] Ensuring base images in K3s..."
+	@for img in $(REQUIRED_K3S_IMAGES); do \
+		if ! $(SUDO_CTR) k3s ctr images check "name==docker.io/$$img" 2>/dev/null | grep -q $$img; then \
+			echo "  Loading $$img"; \
+			docker save $$img | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1; \
+		else \
+			echo "  $$img already in K3s"; \
+		fi; \
+	done
+
+load-services:
 	@echo "[load] Importing service images into K3s..."
 	@for img in $(SVC_IMAGES) $(SVC_IMAGES_LATEST); do \
 		echo "  $$img"; \
 		docker save $$img | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1; \
 	done
 	@echo "[load] Done."
-
-load-all:
-	@echo "[load-all] Importing all images (base + service) into K3s..."
-	@for img in $(ALL_IMAGES); do \
-		echo "  $$img"; \
-		docker save $$img | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1; \
-	done
-	@echo "[load-all] Done."
 
 # ---------------------------------------------------------------------------
 # install — helm install the platform chart

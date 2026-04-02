@@ -1,0 +1,20 @@
+# Machine-specific settings for the Makefile.
+# Copy to config.mk and edit for your environment.
+# config.mk is gitignored — never commit it.
+
+# K3s kubeconfig path
+KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
+
+# K3s node name (used for nodeSelector in Helm)
+K3S_NODE ?= nodal
+
+# Whether sudo is needed for containerd image import
+# Set to empty string if your user can access the containerd socket directly
+SUDO_CTR ?= sudo
+
+# Container registry prefix (empty = local images only)
+# Set to e.g. "ghcr.io/yourorg/" for remote registry
+REGISTRY_PREFIX ?=
+
+# Default session for `make deploy`
+DEFAULT_SESSION ?= configs/sessions/starlink-176-isis-te.yaml

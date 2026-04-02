@@ -221,3 +221,149 @@ def destroy_vxlan_link(pid: int, ifname: str, vni: int) -> None:
             log.warning("VXLAN link cleanup failed (VNI=%d): %s", vni, exc)
 
     log.info("Destroyed VXLAN link VNI=%d [%s + %s]", vni, vxlan_if, veth_host)
+
+
+# ---------------------------------------------------------------------------
+# Cross-node ground link — VXLAN between existing host-side interfaces
+# ---------------------------------------------------------------------------
+
+
+def attach_cross_node_ground(
+    local_host_ifname: str,
+    local_ip: str,
+    remote_ip: str,
+    vni: int,
+    sat_pid: int | None = None,
+) -> None:
+    """Connect a local host-side interface to a remote node via VXLAN.
+
+    Used for CROSS_NODE GROUND links. The local host-side interface
+    already exists from wiring (satellite's _gnd_{sat} or GS's _gbr-{gs}).
+    This function creates a VXLAN tunnel in the host namespace and
+    tc mirred redirects between the VXLAN and the existing host-side interface.
+
+    Same pattern as LOCAL attach_to_ground_bridge but with VXLAN replacing
+    the direct host-side veth connection.
+
+    If sat_pid is provided, also brings satellite's gnd0 UP inside the pod.
+    """
+    import ctypes
+
+    from pyroute2 import IPRoute
+
+    vxlan_if, _, _ = _host_ifnames(vni)
+
+    with _ns_lock:
+        host_fd = _get_host_ns_fd()
+        ret = _libc.setns(host_fd, _CLONE_NEWNET)
+        if ret != 0:
+            errno = ctypes.get_errno()
+            raise OSError(errno, f"setns to host failed: {os.strerror(errno)}")
+
+        try:
+            ipr = IPRoute()
+            try:
+                # Create VXLAN interface
+                ipr.link(
+                    "add",
+                    ifname=vxlan_if,
+                    kind="vxlan",
+                    vxlan_id=vni,
+                    vxlan_local=local_ip,
+                    vxlan_group=remote_ip,
+                    vxlan_port=VXLAN_DST_PORT,
+                    vxlan_learning=False,
+                )
+
+                # Bring VXLAN and local host interface UP
+                for name in [vxlan_if, local_host_ifname]:
+                    links = ipr.link_lookup(ifname=name)
+                    if links:
+                        ipr.link("set", index=links[0], state="up")
+            finally:
+                ipr.close()
+
+            # Bidirectional tc mirred redirect: VXLAN ↔ host-side interface
+            _tc_mirred_redirect(vxlan_if, local_host_ifname)
+            _tc_mirred_redirect(local_host_ifname, vxlan_if)
+        finally:
+            pass
+
+    # Bring satellite gnd0 UP if this is the satellite side
+    if sat_pid:
+
+        def _up_gnd0(ns_ipr):
+            gnd_idx = ns_ipr.link_lookup(ifname="gnd0")
+            if gnd_idx:
+                ns_ipr.link("set", index=gnd_idx[0], state="up")
+
+        _in_namespace(sat_pid, _up_gnd0)
+
+    log.info(
+        "Attached cross-node ground: %s ↔ VXLAN VNI=%d (%s→%s)",
+        local_host_ifname,
+        vni,
+        local_ip,
+        remote_ip,
+    )
+
+
+def detach_cross_node_ground(
+    local_host_ifname: str,
+    vni: int,
+    sat_pid: int | None = None,
+) -> None:
+    """Disconnect a cross-node ground link.
+
+    Removes tc mirred redirect, destroys VXLAN, brings host-side interface DOWN.
+    If sat_pid provided, brings satellite gnd0 DOWN.
+    """
+    import ctypes
+
+    vxlan_if, _, _ = _host_ifnames(vni)
+
+    # Bring satellite gnd0 DOWN first
+    if sat_pid:
+
+        def _down_gnd0(ns_ipr):
+            gnd_idx = ns_ipr.link_lookup(ifname="gnd0")
+            if gnd_idx:
+                ns_ipr.link("set", index=gnd_idx[0], state="down")
+
+        try:
+            _in_namespace(sat_pid, _down_gnd0)
+        except Exception as exc:
+            log.warning("Failed to down gnd0 in ns(%d): %s", sat_pid, exc)
+
+    with _ns_lock:
+        host_fd = _get_host_ns_fd()
+        ret = _libc.setns(host_fd, _CLONE_NEWNET)
+        if ret != 0:
+            errno = ctypes.get_errno()
+            log.warning("setns to host failed: %s", os.strerror(errno))
+            return
+
+        try:
+            # Remove tc mirred
+            _tc_mirred_remove(vxlan_if)
+            _tc_mirred_remove(local_host_ifname)
+
+            from pyroute2 import IPRoute
+
+            ipr = IPRoute()
+            try:
+                # Bring host-side interface DOWN (carrier drops on pod gnd0)
+                links = ipr.link_lookup(ifname=local_host_ifname)
+                if links:
+                    ipr.link("set", index=links[0], state="down")
+
+                # Delete VXLAN
+                links = ipr.link_lookup(ifname=vxlan_if)
+                if links:
+                    ipr.link("del", index=links[0])
+            finally:
+                ipr.close()
+        except Exception as exc:
+            log.warning("Cross-node ground detach failed (VNI=%d): %s", vni, exc)
+
+    log.info("Detached cross-node ground: %s, VNI=%d", local_host_ifname, vni)

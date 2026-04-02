@@ -5,6 +5,7 @@ Proves discriminated union dispatch, validation rules, and round-trips.
 
 import pytest
 import yaml
+from nodalarc.constellation_loader import load_constellation
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ExplicitConstellation,
@@ -13,7 +14,6 @@ from nodalarc.models.constellation import (
 )
 from pydantic import TypeAdapter, ValidationError
 
-from ome.constellation_loader import load_constellation
 from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
 
 adapter = TypeAdapter(ConstellationConfig)

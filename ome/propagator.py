@@ -37,13 +37,11 @@ class Vec3(NamedTuple):
     z: float
 
 
-class OrbitalElements(NamedTuple):
-    """Keplerian orbital elements for circular orbits."""
-
-    semi_major_axis_km: float  # a = altitude + Earth radius
-    inclination_rad: float  # i
-    raan_rad: float  # Ω (Right Ascension of Ascending Node)
-    true_anomaly_rad: float  # ν at epoch
+# Re-export from shared library so existing `from ome.propagator import ...` still works
+from nodalarc.orbital import (
+    OrbitalElements,  # noqa: F401
+    elements_from_params,  # noqa: F401
+)
 
 
 class GeoPosition(NamedTuple):
@@ -70,21 +68,6 @@ def orbital_velocity(altitude_km: float) -> float:
     """
     a = EARTH_RADIUS_KM + altitude_km
     return math.sqrt(EARTH_MU / a)
-
-
-def elements_from_params(
-    altitude_km: float,
-    inclination_deg: float,
-    raan_deg: float,
-    true_anomaly_deg: float,
-) -> OrbitalElements:
-    """Create OrbitalElements from human-readable parameters."""
-    return OrbitalElements(
-        semi_major_axis_km=EARTH_RADIUS_KM + altitude_km,
-        inclination_rad=math.radians(inclination_deg),
-        raan_rad=math.radians(raan_deg),
-        true_anomaly_rad=math.radians(true_anomaly_deg),
-    )
 
 
 def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[Vec3, Vec3]:

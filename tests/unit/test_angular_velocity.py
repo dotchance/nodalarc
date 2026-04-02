@@ -80,7 +80,7 @@ class TestTrackingRateCalibration:
         """
         from pathlib import Path
 
-        from ome.constellation_loader import load_constellation
+        from nodalarc.constellation_loader import load_constellation
 
         config_path = (
             Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"
@@ -118,7 +118,7 @@ class TestTrackingRateCalibration:
         """OME reads tracking rate from constellation config, not hardcoded."""
         from pathlib import Path
 
-        from ome.constellation_loader import load_constellation
+        from nodalarc.constellation_loader import load_constellation
 
         config_path = (
             Path(__file__).parent.parent.parent / "configs/constellations/starlink-early-44.yaml"

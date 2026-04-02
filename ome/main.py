@@ -15,10 +15,14 @@ from pathlib import Path
 
 import yaml
 from nodalarc.constants import LOG_FORMAT
+from nodalarc.constellation_loader import (
+    expand_constellation,
+    load_constellation,
+    load_ground_stations,
+)
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.session import SessionConfig
 
-from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
 from ome.event_stream import (
     append_timeline_jsonl,
     precompute_timeline,

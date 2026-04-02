@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from nodalarc.models.link_state import LinkStateSnapshot
 
+from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
@@ -25,7 +26,6 @@ from nodalarc.models.events import (
 )
 from nodalarc.models.ground_station import GroundStationFile
 
-from ome.constellation_loader import SatelliteNode
 from ome.propagator import (
     GeoPosition,
     Vec3,

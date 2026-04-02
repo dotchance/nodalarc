@@ -3,17 +3,17 @@
 import math
 
 import pytest
+from nodalarc.constellation_loader import (
+    expand_constellation,
+    load_constellation,
+    load_ground_stations,
+)
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ParametricConstellation,
 )
 from pydantic import TypeAdapter
 
-from ome.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
 from tests.conftest import CONFIGS_DIR
 
 adapter = TypeAdapter(ConstellationConfig)

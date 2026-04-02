@@ -21,12 +21,15 @@ from pathlib import Path
 import yaml
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.constants import LOG_FORMAT
+from nodalarc.constellation_loader import (
+    expand_constellation,
+    load_constellation,
+    load_ground_stations,
+)
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.template_vars import build_template_vars
-
-from ome.constellation_loader import expand_constellation, load_constellation, load_ground_stations
 
 log = logging.getLogger(__name__)
 

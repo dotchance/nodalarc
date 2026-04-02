@@ -34,7 +34,7 @@ def _build_interface_map(
     addressing: AddressingScheme,
 ) -> tuple[dict[tuple[str, str], tuple[str, str]], dict[tuple[str, str], float]]:
     """Build interface and bandwidth maps — migrated from orchestrator/main.py."""
-    from ome.constellation_loader import (
+    from nodalarc.constellation_loader import (
         expand_constellation,
         load_constellation,
         load_ground_stations,

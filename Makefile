@@ -39,8 +39,10 @@ IMG_MI         := $(REGISTRY_PREFIX)nodalarc/measurement:$(TAG)
 
 BASE_IMAGES := $(IMG_BASE) $(IMG_FRR) $(IMG_PROBE) $(IMG_FWD)
 SVC_IMAGES  := $(IMG_OME) $(IMG_SCHEDULER) $(IMG_NODE_AGENT) \
-               $(IMG_VS_API) $(IMG_OPERATOR) $(IMG_VF) $(IMG_NODALPATH) $(IMG_MI)
-ALL_IMAGES  := $(BASE_IMAGES) $(SVC_IMAGES)
+               $(IMG_VS_API) $(IMG_OPERATOR) $(IMG_VF) $(IMG_NODALPATH)
+# MI is not part of the default deployment — build/load explicitly with make build-measurement
+OPT_IMAGES  := $(IMG_MI)
+ALL_IMAGES  := $(BASE_IMAGES) $(SVC_IMAGES) $(OPT_IMAGES)
 SVC_IMAGES_LATEST := $(subst :$(TAG),:latest,$(SVC_IMAGES))
 REQUIRED_K3S_IMAGES := nodalarc/frr:10
 
@@ -140,7 +142,7 @@ build-frontends: ## Build VF and NodalPath console frontends
 	fi
 
 build-images: ensure-base-images build-ome build-scheduler build-node-agent \
-              build-vs-api build-operator build-vf build-nodalpath build-measurement
+              build-vs-api build-operator build-vf build-nodalpath
 
 ensure-base-images:
 	@for img in nodalarc/base:latest nodalarc/frr:10 nodalarc/probe:latest nodalarc/nodalpath-fwd:latest; do \

@@ -44,22 +44,23 @@ IMG_SCHEDULER  := $(REGISTRY_PREFIX)nodalarc/scheduler:$(TAG)
 IMG_NODE_AGENT := $(REGISTRY_PREFIX)nodalarc/node-agent:$(TAG)
 IMG_VS_API     := $(REGISTRY_PREFIX)nodalarc/vs-api:$(TAG)
 IMG_OPERATOR   := $(REGISTRY_PREFIX)nodalarc/operator:$(TAG)
-IMG_VF         := $(REGISTRY_PREFIX)nodalarc/visualization:$(TAG)
+IMG_VF         := $(REGISTRY_PREFIX)nodalarc/vf:$(TAG)
 IMG_NODALPATH  := $(REGISTRY_PREFIX)nodalarc/nodalpath:$(TAG)
 
-ALL_IMAGES := $(IMG_BASE) $(IMG_FRR) $(IMG_PROBE) $(IMG_FWD) \
-              $(IMG_OME) $(IMG_SCHEDULER) $(IMG_NODE_AGENT) \
-              $(IMG_VS_API) $(IMG_OPERATOR) $(IMG_VF) $(IMG_NODALPATH)
+BASE_IMAGES := $(IMG_BASE) $(IMG_FRR) $(IMG_PROBE) $(IMG_FWD)
+SVC_IMAGES  := $(IMG_OME) $(IMG_SCHEDULER) $(IMG_NODE_AGENT) \
+               $(IMG_VS_API) $(IMG_OPERATOR) $(IMG_VF) $(IMG_NODALPATH)
+ALL_IMAGES  := $(BASE_IMAGES) $(SVC_IMAGES)
 
 # ---------------------------------------------------------------------------
 # Phony targets
 # ---------------------------------------------------------------------------
 
-.PHONY: all deps build load install deploy test teardown clean \
-        build-frontends build-images build-base build-frr \
-        build-probe build-fwd build-ome build-scheduler \
-        build-node-agent build-vs-api build-operator build-vf \
-        build-nodalpath check-deps
+.PHONY: all deps build load load-all install deploy test teardown clean \
+        build-frontends build-images build-base-images \
+        build-base build-frr build-probe build-fwd \
+        build-ome build-scheduler build-node-agent build-vs-api \
+        build-operator build-vf build-nodalpath check-deps
 
 # ---------------------------------------------------------------------------
 # Composite targets
@@ -100,17 +101,27 @@ check-deps:
 build: build-frontends build-images
 	@echo "[build] All images built with tag $(TAG)."
 
-build-frontends: frontend/dist nodalpath/console/frontend/dist
+build-frontends:
+	@if [ ! -d frontend/dist ]; then \
+		echo "[build] Building VF frontend..."; \
+		cd frontend && npm run build; \
+	else \
+		echo "[build] VF frontend/dist exists — skipping (make clean to force rebuild)"; \
+	fi
+	@if [ ! -d nodalpath/console/frontend/dist ]; then \
+		echo "[build] Building NodalPath console frontend..."; \
+		cd nodalpath/console/frontend && npm run build; \
+	else \
+		echo "[build] NodalPath console dist exists — skipping"; \
+	fi
 
-frontend/dist: frontend/package.json frontend/src/**
-	cd frontend && npm run build
-
-nodalpath/console/frontend/dist: nodalpath/console/frontend/package.json nodalpath/console/frontend/src/**
-	cd nodalpath/console/frontend && npm run build
-
-build-images: build-base build-frr build-probe build-fwd \
-              build-ome build-scheduler build-node-agent \
+# build-images builds service images (our code — always rebuild).
+# Base images (base, frr, probe, fwd) are infrastructure — built rarely.
+# Use `make build-base-images` to rebuild them explicitly.
+build-images: build-ome build-scheduler build-node-agent \
               build-vs-api build-operator build-vf build-nodalpath
+
+build-base-images: build-base build-frr build-probe build-fwd
 
 # Base images (base must build before frr)
 build-base:
@@ -145,20 +156,30 @@ build-nodalpath:
 	docker build -f nodalpath/Dockerfile -t $(IMG_NODALPATH) -t $(REGISTRY_PREFIX)nodalarc/nodalpath:latest .
 
 # Frontend image (frontend/ context, requires dist/)
-build-vf: frontend/dist
-	docker build -t $(IMG_VF) -t $(REGISTRY_PREFIX)nodalarc/visualization:latest frontend/
+build-vf: build-frontends
+	docker build -t $(IMG_VF) -t $(REGISTRY_PREFIX)nodalarc/vf:latest frontend/
 
 # ---------------------------------------------------------------------------
 # load — import images into K3s containerd
 # ---------------------------------------------------------------------------
 
+SVC_IMAGES_LATEST := $(subst :$(TAG),:latest,$(SVC_IMAGES))
+
 load:
-	@echo "[load] Importing images into K3s..."
-	@for img in $(ALL_IMAGES); do \
+	@echo "[load] Importing service images into K3s..."
+	@for img in $(SVC_IMAGES) $(SVC_IMAGES_LATEST); do \
 		echo "  $$img"; \
 		docker save $$img | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1; \
 	done
 	@echo "[load] Done."
+
+load-all:
+	@echo "[load-all] Importing all images (base + service) into K3s..."
+	@for img in $(ALL_IMAGES); do \
+		echo "  $$img"; \
+		docker save $$img | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1; \
+	done
+	@echo "[load-all] Done."
 
 # ---------------------------------------------------------------------------
 # install — helm install the platform chart

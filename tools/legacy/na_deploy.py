@@ -68,7 +68,7 @@ def _teardown_previous() -> None:
 
     # Clean up ground bridge infrastructure from host namespace
     try:
-        from orchestrator.link_manager import teardown_all_ground_infra
+        from node_agent.link_ops import teardown_all_ground_infra
 
         teardown_all_ground_infra()
     except Exception as exc:
@@ -584,7 +584,7 @@ def deploy(
 
     # === Step 7: Wire data plane ===
     log.info("Step 7: Wire data plane")
-    from orchestrator.link_manager import (
+    from node_agent.link_ops import (
         configure_interface,
         create_dummy_interface,
         create_ground_bridge,

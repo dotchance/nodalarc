@@ -16,8 +16,7 @@ import kubernetes.client
 import kubernetes.config
 from pyroute2 import IPRoute
 
-from node_agent.pid_discovery import discover_local_pod_pids
-from orchestrator.link_manager import (
+from node_agent.link_ops import (
     _write_sysctl_in_netns,
     configure_interface,
     create_dummy_interface,
@@ -26,6 +25,7 @@ from orchestrator.link_manager import (
     create_veth_pair,
     enable_mpls_input,
 )
+from node_agent.pid_discovery import discover_local_pod_pids
 
 log = logging.getLogger(__name__)
 

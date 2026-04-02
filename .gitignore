@@ -116,6 +116,9 @@ node_modules/
 frontend/dist/
 nodalpath/console/frontend/dist/
 
+# Machine-specific build config (from config.mk.example)
+config.mk
+
 # IDE
 .idea/
 .vscode/

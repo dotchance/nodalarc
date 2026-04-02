@@ -16,7 +16,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     pydantic>=2.0 nats-py pyyaml fastapi uvicorn httpx>=0.28.1 \
     websockets>=16.0 grpcio>=1.74 protobuf>=6.31.1 numpy \
-    kubernetes
+    kubernetes sgp4 skyfield
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app
@@ -27,6 +27,9 @@ COPY lib/ lib/
 
 # Copy VS-API service
 COPY services/vs_api/ services/vs_api/
+
+# Copy OME service (coverage_preview used by wizard)
+COPY services/ome/ services/ome/
 
 # Copy nodalpath (session_loader, live path tracer, console state)
 COPY nodalpath/ nodalpath/

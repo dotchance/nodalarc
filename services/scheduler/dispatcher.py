@@ -682,6 +682,15 @@ class Dispatcher:
             locality = self._link_locality(node_a, node_b)
             is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
 
+            # R-TO-002A: substrate compensation on initial link-up.
+            # The Node Agent applies this as tc netem delay. For CROSS_NODE
+            # links the VXLAN packet already traverses substrate_ms of
+            # physical network, so netem = orbital - substrate. The UI
+            # sees info.latency_ms (raw orbital) — only the wire value
+            # to the Node Agent is compensated.
+            substrate_ms = self._get_substrate_ms(node_a, node_b)
+            netem_ms = max(0.0, info.latency_ms - substrate_ms)
+
             if is_gs:
                 gs_id = node_a if node_a.startswith("gs-") else node_b
                 sat_id = node_b if node_a.startswith("gs-") else node_a
@@ -708,7 +717,7 @@ class Dispatcher:
                             node_id=nid,
                             interface_name="gnd0",
                             link_type=node_agent_pb2.GROUND,
-                            latency_ms=info.latency_ms,
+                            latency_ms=netem_ms,
                             bandwidth_mbps=info.bandwidth_mbps,
                             gs_id=gs_id,
                             sat_id=sat_id,
@@ -739,7 +748,7 @@ class Dispatcher:
                             node_id=nid,
                             interface_name=ifname,
                             link_type=node_agent_pb2.ISL,
-                            latency_ms=info.latency_ms,
+                            latency_ms=netem_ms,
                             bandwidth_mbps=info.bandwidth_mbps,
                             locality=locality,
                             remote_node_ip=remote_ip,

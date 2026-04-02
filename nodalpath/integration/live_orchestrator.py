@@ -1,4 +1,4 @@
-"""Live orchestrator — drives NodalPath from ZMQ event streams."""
+"""Live orchestrator — drives NodalPath from NATS JetStream event streams."""
 
 from __future__ import annotations
 
@@ -13,15 +13,23 @@ if TYPE_CHECKING:
     from nodalpath.integration.node_inspector import NodeInspector
     from nodalpath.orchestrator.link_state_store import LinkStateStore
 
-import zmq
-import zmq.asyncio
+import nats
 from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
 from nodalarc.models.link_events import LinkDown, LinkUp
-from nodalarc.zmq_channels import decode_message
+from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
+from nodalarc.nats_channels import (
+    NATS_CONNECT_OPTIONS,
+    SUBJECT_LINK_DOWN,
+    SUBJECT_LINK_STATE_SNAPSHOT,
+    SUBJECT_LINK_UP,
+    SUBJECT_SNAPSHOT,
+    SUBJECT_VISIBILITY_EVENT,
+    nats_url,
+)
 
 from nodalpath.engine.almanac_builder import compute_almanac_entry
 from nodalpath.integration.deviation import DeviationDetector
-from nodalpath.integration.zmq_publisher import AlmanacPublisher
+from nodalpath.integration.nats_publisher import AlmanacPublisher
 from nodalpath.models.almanac_event import AlmanacEvent
 from nodalpath.models.topology import TopologyNode
 from nodalpath.orchestrator.almanac_store import AlmanacStore
@@ -33,11 +41,11 @@ log = logging.getLogger(__name__)
 
 
 class LiveOrchestrator:
-    """Drives NodalPath in live mode from ZMQ event streams.
+    """Drives NodalPath in live mode from NATS JetStream event streams.
 
-    Subscribes to OME events (VisibilityEvent, TimelinePositionSnapshot) to
-    track topology. Subscribes to TO events (LinkDown) for deviation detection.
-    Publishes AlmanacEvent records for VS-API consumption.
+    Subscribes to OME events (VisibilityEvent, TimelinePositionSnapshot) and
+    Scheduler events (LinkDown, LinkUp) via NATS JetStream. Publishes
+    AlmanacEvent records via NATS for VS-API consumption.
     """
 
     def __init__(
@@ -48,8 +56,6 @@ class LiveOrchestrator:
         bandwidth_map: dict[tuple[str, str], float] | None,
         push_scheduler: PushScheduler,
         publisher: AlmanacPublisher,
-        ome_connect: str,
-        to_connect: str,
         console_state: ConsoleState | None = None,
         link_state_store: LinkStateStore | None = None,
         node_inspector: NodeInspector | None = None,
@@ -67,8 +73,6 @@ class LiveOrchestrator:
         self._prefix_map = prefix_map
         self._push_scheduler = push_scheduler
         self._publisher = publisher
-        self._ome_connect = ome_connect
-        self._to_connect = to_connect
         self._deviation_detector = DeviationDetector(self._store)
         self._prev_link_set: frozenset[tuple[str, str]] = frozenset()
         self._current_sim_time: datetime | None = None
@@ -98,244 +102,210 @@ class LiveOrchestrator:
         return self._builder
 
     async def run(self) -> None:
-        """Main async loop. Runs until stop() is called."""
+        """Main async loop — NATS JetStream subscriptions with callbacks."""
         self._running = True
-        ctx = zmq.asyncio.Context()
 
-        ome_sub = ctx.socket(zmq.SUB)
-        ome_sub.connect(self._ome_connect)
-        ome_sub.setsockopt(zmq.SUBSCRIBE, b"VisibilityEvent")
-        ome_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
+        nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+        js = nc.jetstream()
+        await self._publisher.connect()
 
-        to_sub = ctx.socket(zmq.SUB)
-        to_sub.connect(self._to_connect)
-        to_sub.setsockopt(zmq.SUBSCRIBE, b"LinkDown")
-        to_sub.setsockopt(zmq.SUBSCRIBE, b"LinkUp")
-        to_sub.setsockopt(zmq.SUBSCRIBE, b"VisibilityEvent")
-        to_sub.setsockopt(zmq.SUBSCRIBE, b"Snapshot")
+        log.info("LiveOrchestrator NATS connected to %s", nats_url())
 
-        poller = zmq.asyncio.Poller()
-        poller.register(ome_sub, zmq.POLLIN)
-        poller.register(to_sub, zmq.POLLIN)
-
-        log.info(
-            "LiveOrchestrator started — OME=%s TO=%s",
-            self._ome_connect,
-            self._to_connect,
-        )
-
-        # Seed active link state from OME R-OME-008 catch-up (port 5568)
-        # per streaming architecture v1.2 Section 3.5 / Phase C.
-        await self._ome_catchup()
+        # Seed active link state from the latest LinkStateSnapshot
+        await self._seed_from_snapshot(js)
 
         if self._inspector is not None and self._inspection_heartbeat_interval_s > 0:
             asyncio.create_task(
                 self._inspector.heartbeat_loop(self._inspection_heartbeat_interval_s),
             )
 
-        _poll_count = 0
+        # Callback-driven subscriptions (same pattern as Scheduler dispatcher)
+        from nats.js.api import DeliverPolicy
+
+        subs = []
+        try:
+            subs.append(
+                await js.subscribe(
+                    SUBJECT_VISIBILITY_EVENT,
+                    stream="NODALARC_OME",
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=self._on_visibility_event,
+                )
+            )
+            subs.append(
+                await js.subscribe(
+                    SUBJECT_SNAPSHOT,
+                    stream="NODALARC_OME",
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=self._on_position_snapshot,
+                )
+            )
+            subs.append(
+                await js.subscribe(
+                    SUBJECT_LINK_DOWN,
+                    stream="NODALARC_LINKS",
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=self._on_link_down,
+                )
+            )
+            subs.append(
+                await js.subscribe(
+                    SUBJECT_LINK_UP,
+                    stream="NODALARC_LINKS",
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=self._on_link_up,
+                )
+            )
+        except Exception as exc:
+            log.warning("NATS subscription setup failed: %s", exc)
+
+        log.info("LiveOrchestrator started — %d NATS subscriptions active", len(subs))
+
+        # Wait for shutdown — callbacks handle all message processing
         try:
             while self._running:
-                try:
-                    socks = dict(await poller.poll(timeout=1000))
-                except zmq.ZMQError as exc:
-                    log.error("ZMQ poller error: %s", exc)
-                    break
-
-                _poll_count += 1
-                if _poll_count % 30 == 1:
-                    log.info(
-                        "Poll #%d: %d sockets ready, active_links=%d, transitions=%d",
-                        _poll_count,
-                        len(socks),
-                        len(self._builder._active_links),
-                        self._transition_count,
-                    )
-
-                # Drain ALL buffered messages per socket (not just one)
-                if ome_sub in socks:
-                    while True:
-                        try:
-                            raw = await ome_sub.recv(zmq.NOBLOCK)
-                            await self._handle_ome_message(raw)
-                        except zmq.Again:
-                            break
-
-                if to_sub in socks:
-                    while True:
-                        try:
-                            raw = await to_sub.recv(zmq.NOBLOCK)
-                            await self._handle_to_message(raw)
-                        except zmq.Again:
-                            break
-
+                await asyncio.sleep(1)
                 # Check for manual recompute request from console
-                if (  # noqa: SIM102
+                if (
                     self._console_state is not None
                     and self._console_state.consume_recompute_request()
+                    and self._current_sim_time is not None
                 ):
-                    if self._current_sim_time is not None:
-                        log.info("Manual recompute requested via console")
-                        await self._recompute(self._current_sim_time.isoformat())
-
+                    log.info("Manual recompute requested via console")
+                    await self._recompute(self._current_sim_time.isoformat())
         except asyncio.CancelledError:
             log.info("LiveOrchestrator cancelled")
         finally:
-            ome_sub.close()
-            to_sub.close()
-            ctx.term()
+            import contextlib
+
+            for sub in subs:
+                with contextlib.suppress(Exception):
+                    await sub.unsubscribe()
+            await self._publisher.close()
+            await nc.close()
             log.info(
                 "LiveOrchestrator stopped (%d transitions, %d deviations)",
                 self._transition_count,
                 self._deviation_detector.deviation_count,
             )
 
-    async def _ome_catchup(self) -> None:
-        """R-OME-008: Seed link state from OME rolling catch-up log (port 5568).
+    async def _seed_from_snapshot(self, js) -> None:
+        """Seed active link state from the latest LinkStateSnapshot on NATS.
 
-        Per streaming architecture v1.2 Phase C: NodalPath uses R-OME-008
-        catch-up at startup instead of FullStateSnapshot. Processes
-        VisibilityEvents from the rolling log to build initial link state.
+        Replaces the ZMQ R-OME-008 catch-up endpoint. The LinkStateSnapshot
+        on NODALARC_LINKS stream (MaxMsgsPerSubject=1) contains the complete
+        link state — apply as replace-not-merge.
         """
-
-        def _sync_catchup() -> dict | None:
-            import zmq as _zmq
-            from nodalarc.platform import get_platform_config
-
-            catchup_addr = get_platform_config().ome_catchup_connect
-            ctx = _zmq.Context()
-            sock = ctx.socket(_zmq.REQ)
-            sock.setsockopt(_zmq.RCVTIMEO, 20000)
-            sock.setsockopt(_zmq.SNDTIMEO, 5000)
-            sock.setsockopt(_zmq.LINGER, 0)
-            sock.connect(catchup_addr)
-            sock.send_json({"request": "events_since"})
-            resp = sock.recv_json()
-            sock.close()
-            ctx.term()
-            return resp
-
         try:
-            loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(None, _sync_catchup)
-            if resp is None:
-                return
-
-            events = resp.get("events", [])
-            current_sim = resp.get("current_sim_time", "")
-
-            seeded = 0
-            for evt in events:
-                vis = VisibilityEvent.model_validate(evt)
-                pair = (vis.node_a, vis.node_b)
-                if vis.visible and vis.scheduled:
-                    self._builder._active_links[pair] = vis.range_km
-                    seeded += 1
-                elif not vis.visible:
-                    self._builder._active_links.pop(pair, None)
-
-            if current_sim:
-                self._current_sim_time = datetime.fromisoformat(current_sim)
-
-            log.info(
-                "OME catch-up: %d VisibilityEvents, seeded %d active links (sim=%s)",
-                len(events),
-                len(self._builder._active_links),
-                current_sim[:19] if current_sim else "none",
+            sub = await js.subscribe(
+                SUBJECT_LINK_STATE_SNAPSHOT,
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
             )
+            try:
+                msg = await sub.next_msg(timeout=5)
+                snapshot = LinkStateSnapshot.model_validate_json(msg.data)
 
-            if self._builder._active_links:
-                await self._check_transition(current_sim or datetime.now(UTC).isoformat())
+                seeded = 0
+                for link in snapshot.links:
+                    if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
+                        pair = (link.node_a, link.node_b)
+                        self._builder._active_links[pair] = 0.0  # range updated by Snapshot
+                        seeded += 1
+
+                self._current_sim_time = snapshot.sim_time
+
+                log.info(
+                    "Seeded from LinkStateSnapshot seq=%d: %d active links (sim=%s)",
+                    snapshot.snapshot_seq,
+                    seeded,
+                    snapshot.sim_time.isoformat()[:19],
+                )
+
+                if self._builder._active_links:
+                    await self._check_transition(snapshot.sim_time.isoformat())
+
+            except nats.errors.TimeoutError:
+                log.info("No LinkStateSnapshot available — starting with empty link state")
+            finally:
+                await sub.unsubscribe()
+
         except Exception as exc:
-            log.warning("OME catch-up failed: %s — starting with empty link state", exc)
+            log.warning("Snapshot seed failed: %s — starting with empty link state", exc)
 
     def stop(self) -> None:
         self._running = False
 
-    async def _handle_ome_message(self, raw: bytes) -> None:
-        """Process one OME message.
-
-        Handles both wrapped format (from OME ZMQ direct: {timestamp_s, event_type, data: {...}})
-        and unwrapped format (from orchestrator re-publish: the model directly).
-        """
+    async def _on_visibility_event(self, msg) -> None:
+        """NATS callback: VisibilityEvent from OME."""
         try:
-            topic, payload = decode_message(raw)
-            data = json.loads(payload)
-
-            # Unwrap if OME sends wrapped events (has "data" key with nested model)
-            inner = (
-                data.get("data", data) if isinstance(data, dict) and "event_type" in data else data
-            )
-
-            if topic == b"VisibilityEvent":
-                event = VisibilityEvent.model_validate(inner)
-                if self._current_sim_time is not None and event.sim_time != self._current_sim_time:
-                    await self._check_transition(self._current_sim_time.isoformat())
-                self._current_sim_time = event.sim_time
-                self._builder.apply_link_event(event)
-
-            elif topic == b"Snapshot":
-                snapshot = TimelinePositionSnapshot.model_validate(inner)
-                self._builder.apply_position_record(snapshot)
-                # Trigger transition check on sim_time change from Snapshots too
-                if (
-                    self._current_sim_time is not None
-                    and snapshot.sim_time != self._current_sim_time
-                ):
-                    await self._check_transition(self._current_sim_time.isoformat())
-                self._current_sim_time = snapshot.sim_time
-
+            data = json.loads(msg.data)
+            event = VisibilityEvent.model_validate(data)
+            if self._current_sim_time is not None and event.sim_time != self._current_sim_time:
+                await self._check_transition(self._current_sim_time.isoformat())
+            self._current_sim_time = event.sim_time
+            self._builder.apply_link_event(event)
         except Exception as exc:
-            log.warning("OME message processing error: %s", exc, exc_info=True)
+            log.warning("VisibilityEvent processing error: %s", exc, exc_info=True)
 
-    async def _handle_to_message(self, raw: bytes) -> None:
-        """Process one TO message — deviations + re-published OME events."""
+    async def _on_position_snapshot(self, msg) -> None:
+        """NATS callback: TimelinePositionSnapshot from OME."""
         try:
-            topic, payload = decode_message(raw)
-            data = json.loads(payload)
+            data = json.loads(msg.data)
+            snapshot = TimelinePositionSnapshot.model_validate(data)
+            self._builder.apply_position_record(snapshot)
+            if self._current_sim_time is not None and snapshot.sim_time != self._current_sim_time:
+                await self._check_transition(self._current_sim_time.isoformat())
+            self._current_sim_time = snapshot.sim_time
+        except Exception as exc:
+            log.warning("Snapshot processing error: %s", exc, exc_info=True)
 
-            # Handle VisibilityEvent and Snapshot re-published by orchestrator
-            if topic == b"VisibilityEvent" or topic == b"Snapshot":
-                await self._handle_ome_message(raw)
-                return
-
-            if topic == b"LinkDown":
-                event = LinkDown.model_validate(data)
-                is_deviation = self._deviation_detector.check_link_down(event)
-                if is_deviation:
-                    sim_time_iso = event.sim_time.isoformat()
-                    entry = self._store.get_entry_at(sim_time_iso)
-                    self._publisher.publish_deviation(
-                        sim_time=event.sim_time,
+    async def _on_link_down(self, msg) -> None:
+        """NATS callback: LinkDown from Scheduler — deviation detection."""
+        try:
+            data = json.loads(msg.data)
+            event = LinkDown.model_validate(data)
+            is_deviation = self._deviation_detector.check_link_down(event)
+            if is_deviation:
+                sim_time_iso = event.sim_time.isoformat()
+                entry = self._store.get_entry_at(sim_time_iso)
+                await self._publisher.publish_deviation(
+                    sim_time=event.sim_time,
+                    topology_state_id=entry.topology_state_id if entry else "unknown",
+                    node_a=event.node_a,
+                    node_b=event.node_b,
+                    reason=event.reason,
+                )
+                if self._console_state is not None:
+                    self._console_state.record_deviation(
+                        sim_time=event.sim_time.isoformat(),
                         topology_state_id=entry.topology_state_id if entry else "unknown",
                         node_a=event.node_a,
                         node_b=event.node_b,
                         reason=event.reason,
                     )
-                    if self._console_state is not None:
-                        self._console_state.record_deviation(
-                            sim_time=event.sim_time.isoformat(),
-                            topology_state_id=entry.topology_state_id if entry else "unknown",
-                            node_a=event.node_a,
-                            node_b=event.node_b,
-                            reason=event.reason,
-                        )
-                    if self._inspector is not None and self._inspection_on_link_event:
-                        state_id = (
-                            entry.topology_state_id
-                            if entry
-                            else self._inspector._last_pushed_state_id
-                        )
-                        asyncio.create_task(self._inspector.trigger_link_event(state_id))
-                    await self._recompute(event.sim_time.isoformat())
-
-            elif topic == b"LinkUp":
-                event = LinkUp.model_validate(data)
-                if self._deviation_detector.check_link_up(event):
-                    await self._recompute(event.sim_time.isoformat())
-
+                if self._inspector is not None and self._inspection_on_link_event:
+                    state_id = (
+                        entry.topology_state_id if entry else self._inspector._last_pushed_state_id
+                    )
+                    asyncio.create_task(self._inspector.trigger_link_event(state_id))
+                await self._recompute(event.sim_time.isoformat())
         except Exception as exc:
-            log.warning("TO message processing error: %s", exc)
+            log.warning("LinkDown processing error: %s", exc)
+
+    async def _on_link_up(self, msg) -> None:
+        """NATS callback: LinkUp from Scheduler — deviation recovery."""
+        try:
+            data = json.loads(msg.data)
+            event = LinkUp.model_validate(data)
+            if self._deviation_detector.check_link_up(event):
+                await self._recompute(event.sim_time.isoformat())
+        except Exception as exc:
+            log.warning("LinkUp processing error: %s", exc)
 
     async def _check_transition(self, sim_time_iso: str) -> None:
         """Check for topology transition and compute almanac entry if changed."""
@@ -360,7 +330,7 @@ class LiveOrchestrator:
             len(entry.forwarding_tables),
         )
 
-        self._publisher.publish_path_computed(
+        await self._publisher.publish_path_computed(
             sim_time=datetime.fromisoformat(sim_time_iso),
             topology_state_id=entry.topology_state_id,
         )
@@ -374,7 +344,7 @@ class LiveOrchestrator:
             prev_entry,
         )
 
-        self._publisher.publish_table_pushed(
+        await self._publisher.publish_table_pushed(
             sim_time=datetime.fromisoformat(sim_time_iso),
             topology_state_id=entry.topology_state_id,
             nodes_attempted=push_result.nodes_attempted,
@@ -491,7 +461,7 @@ class LiveOrchestrator:
             len(entry.forwarding_tables),
         )
 
-        self._publisher.publish(
+        await self._publisher.publish(
             AlmanacEvent(
                 event_type="recomputation_triggered",
                 sim_time=datetime.fromisoformat(sim_time_iso),
@@ -511,7 +481,7 @@ class LiveOrchestrator:
         if self._console_state is not None:
             self._console_state.record_push_result(push_result)
 
-        self._publisher.publish_table_pushed(
+        await self._publisher.publish_table_pushed(
             sim_time=datetime.fromisoformat(sim_time_iso),
             topology_state_id=entry.topology_state_id,
             nodes_attempted=push_result.nodes_attempted,

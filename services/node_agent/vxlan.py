@@ -86,16 +86,12 @@ def create_vxlan_interface(
         ipr.close()
 
     # Inside the pod namespace: rename and bring UP
-    def _configure_in_ns():
-        ns_ipr = IPRoute()
-        try:
-            links = ns_ipr.link_lookup(ifname=host_ifname)
-            if links:
-                idx = links[0]
-                ns_ipr.link("set", index=idx, ifname=ifname)
-                ns_ipr.link("set", index=idx, state="up")
-        finally:
-            ns_ipr.close()
+    def _configure_in_ns(ns_ipr):
+        links = ns_ipr.link_lookup(ifname=host_ifname)
+        if links:
+            idx = links[0]
+            ns_ipr.link("set", index=idx, ifname=ifname)
+            ns_ipr.link("set", index=idx, state="up")
 
     _in_namespace(pid, _configure_in_ns)
 
@@ -117,16 +113,10 @@ def destroy_vxlan_interface(pid: int, ifname: str) -> None:
     automatically cleans up the VXLAN tunnel endpoint.
     """
 
-    def _destroy_in_ns():
-        from pyroute2 import IPRoute
-
-        ipr = IPRoute()
-        try:
-            links = ipr.link_lookup(ifname=ifname)
-            if links:
-                ipr.link("del", index=links[0])
-        finally:
-            ipr.close()
+    def _destroy_in_ns(ns_ipr):
+        links = ns_ipr.link_lookup(ifname=ifname)
+        if links:
+            ns_ipr.link("del", index=links[0])
 
     try:
         _in_namespace(pid, _destroy_in_ns)

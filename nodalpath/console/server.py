@@ -397,7 +397,7 @@ def build_app(
         from nodalarc.platform import get_platform_config
 
         cfg = get_platform_config()
-        vs_host = cfg.zmq_connect_host_for("vs-api")
+        vs_host = cfg.service_host("vs-api")
         vs_port = cfg.vs_api_http_port
         url = f"http://{vs_host}:{vs_port}{path}"
         # Fetch VS-API auth token (unauthenticated endpoint)

@@ -90,14 +90,6 @@ def test_node_agent_grpc_port():
     reset_platform_config()
     cfg = PlatformConfig(
         kubernetes_namespace="nodalarc",
-        zmq_ome_events_port=5560,
-        zmq_to_events_port=5561,
-        zmq_mi_events_port=5562,
-        zmq_mi_convergence_gate_port=5563,
-        zmq_to_scenario_inject_port=5564,
-        zmq_mi_trace_port=5565,
-        zmq_playback_control_port=5566,
-        zmq_nodalpath_events_port=5567,
         vs_api_http_port=8080,
         vf_static_file_server_port=8081,
         nodalpath_console_http_port=3100,

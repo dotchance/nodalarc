@@ -30,41 +30,17 @@ platform:
   #
   # Components run on the same host and connect via localhost.
 
-  # Port: OME → TO, VS-API, NodalPath (PUB/SUB)
-  # Messages: PositionEvent, VisibilityEvent, ClockTick
-  zmq_ome_events_port: 5560
 
-  # Port: TO → MI, VS-API, NodalPath (PUB/SUB)
-  # Messages: LinkUp, LinkDown, LatencyUpdate
-  zmq_to_events_port: 5561
 
-  # Port: MI → VS-API (PUB/SUB)
-  # Messages: ConvergenceResult, ProbeResult, AdapterEvent
-  zmq_mi_events_port: 5562
 
-  # Port: TO ↔ MI convergence gate (REQ/REP)
   # TO sends ConvergenceRequest, MI replies with ConvergenceResult
-  zmq_mi_convergence_gate_port: 5563
 
-  # Port: na-scenario → TO scenario injection (REQ/REP)
-  # Commands: inject_link_down, inject_link_up, inject_satellite_loss
-  zmq_to_scenario_inject_port: 5564
 
-  # Port: VS-API → MI forwarding path trace (REQ/REP)
   # VS-API sends TraceRequest, MI replies with TraceResponse
-  zmq_mi_trace_port: 5565
 
-  # Port: VS-API → TO playback control (REQ/REP)
-  # Commands: pause, resume, set_speed
-  zmq_playback_control_port: 5566
 
-  # Port: NodalPath → VS-API (PUB/SUB)
-  # Messages: AlmanacEvent (path_computed, table_pushed, deviation)
-  zmq_nodalpath_events_port: 5567
 
-  # Port: OME on-connect catch-up (REP/REQ) — R-OME-008
   # Subscribers send CatchupRequest, receive current window event sequence
-  zmq_ome_catchup_port: 5568
 
   # ── HTTP and WebSocket Service Ports ────────────────────────────────
 
@@ -217,21 +193,15 @@ platform:
 
   # ── ZMQ Networking ─────────────────────────────────────────────────
   #
-  # Controls bind/connect addresses for inter-component ZMQ sockets.
-  # - bind: address that PUB/REP sockets listen on
-  # - connect: address that SUB/REQ sockets connect to
   #
-  # For single-host: bind 0.0.0.0 (allows containerized subscribers),
   # connect 127.0.0.1 (host-to-host stays on loopback).
-  # For full containerization: connect to K8s Service DNS names.
-  zmq_bind_host: "0.0.0.0"
-  zmq_connect_host: "127.0.0.1"
 
-  # Per-service overrides for K8s — connect to Service DNS names.
-  zmq_connect_hosts:
-    ome: "nodalarc-ome"
-    orchestrator: "nodalarc-scheduler-control"
-    scheduler-events: "nodalarc-scheduler-events"
+
+  # Service host resolution — for inter-service HTTP calls.
+  # Falls back to default_service_host if service not listed.
+  default_service_host: "127.0.0.1"
+  service_hosts:
+    vs-api: "nodalarc-vs-api"
     nodalpath: "nodalpath"
 
   # ── System Tuning ───────────────────────────────────────────────────

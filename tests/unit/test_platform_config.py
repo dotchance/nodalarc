@@ -15,14 +15,6 @@ from pydantic import ValidationError
 def _valid_config_dict() -> dict:
     return {
         "kubernetes_namespace": "nodalarc",
-        "zmq_ome_events_port": 5560,
-        "zmq_to_events_port": 5561,
-        "zmq_mi_events_port": 5562,
-        "zmq_mi_convergence_gate_port": 5563,
-        "zmq_to_scenario_inject_port": 5564,
-        "zmq_mi_trace_port": 5565,
-        "zmq_playback_control_port": 5566,
-        "zmq_nodalpath_events_port": 5567,
         "vs_api_http_port": 8080,
         "vf_static_file_server_port": 8081,
         "nodalpath_console_http_port": 3100,
@@ -59,7 +51,6 @@ class TestPlatformConfig:
     def test_validates_from_dict(self):
         cfg = PlatformConfig(**_valid_config_dict())
         assert cfg.kubernetes_namespace == "nodalarc"
-        assert cfg.zmq_ome_events_port == 5560
 
     def test_frozen(self):
         cfg = PlatformConfig(**_valid_config_dict())
@@ -72,37 +63,17 @@ class TestPlatformConfig:
         with pytest.raises(ValidationError):
             PlatformConfig(**d)
 
-    def test_zmq_address_properties(self):
+    def test_service_host_default(self):
         cfg = PlatformConfig(**_valid_config_dict())
-        # Default bind/connect host is 127.0.0.1
-        assert cfg.ome_events_bind == "tcp://127.0.0.1:5560"
-        assert cfg.ome_events_connect == "tcp://127.0.0.1:5560"
-        assert cfg.to_events_bind == "tcp://127.0.0.1:5561"
-        assert cfg.playback_control_bind == "tcp://127.0.0.1:5566"
-        assert cfg.nodalpath_events_connect == "tcp://127.0.0.1:5567"
+        assert cfg.service_host("anything") == "127.0.0.1"
 
-    def test_zmq_custom_bind_connect_hosts(self):
+    def test_service_host_override(self):
         d = _valid_config_dict()
-        d["zmq_bind_host"] = "0.0.0.0"
-        d["zmq_connect_host"] = "my-service.svc"
+        d["service_hosts"] = {"vs-api": "nodalarc-vs-api", "nodalpath": "nodalpath"}
         cfg = PlatformConfig(**d)
-        assert cfg.ome_events_bind == "tcp://0.0.0.0:5560"
-        assert cfg.ome_events_connect == "tcp://my-service.svc:5560"
-        assert cfg.to_events_bind == "tcp://0.0.0.0:5561"
-        assert cfg.nodalpath_events_connect == "tcp://my-service.svc:5567"
-
-    def test_zmq_per_service_connect_hosts(self):
-        d = _valid_config_dict()
-        d["zmq_connect_host"] = "127.0.0.1"
-        d["zmq_connect_hosts"] = {"ome": "nodalarc-ome", "orchestrator": "nodalarc-host-zmq"}
-        cfg = PlatformConfig(**d)
-        # Per-service overrides
-        assert cfg.ome_events_connect == "tcp://nodalarc-ome:5560"
-        assert cfg.to_events_connect == "tcp://nodalarc-host-zmq:5561"
-        assert cfg.playback_control_connect == "tcp://nodalarc-host-zmq:5566"
-        # Fallback to global for services not in dict
-        assert cfg.mi_events_connect == "tcp://127.0.0.1:5562"
-        assert cfg.nodalpath_events_connect == "tcp://127.0.0.1:5567"
+        assert cfg.service_host("vs-api") == "nodalarc-vs-api"
+        assert cfg.service_host("nodalpath") == "nodalpath"
+        assert cfg.service_host("unknown") == "127.0.0.1"
 
 
 class TestSingleton:

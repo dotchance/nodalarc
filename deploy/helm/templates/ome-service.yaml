@@ -9,14 +9,6 @@ spec:
   selector:
     app: nodalarc-ome
   ports:
-    - name: zmq-events
-      port: 5560
-      targetPort: 5560
-      protocol: TCP
-    - name: zmq-catchup
-      port: 5568
-      targetPort: 5568
-      protocol: TCP
     - name: health
       port: 8081
       targetPort: 8081

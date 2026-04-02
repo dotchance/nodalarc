@@ -27,15 +27,8 @@ spec:
           args:
             - "--session"
             - "/etc/nodalarc/session.yaml"
-            - "--ome-endpoint"
-            - "tcp://nodalarc-ome:5560"
             - "--platform-config"
             - "/etc/nodalarc/platform.yaml"
-          ports:
-            - containerPort: 5564
-              name: scenario-inject
-            - containerPort: 5566
-              name: playback
           resources:
             limits:
               memory: {{ .Values.scheduler.memoryLimit | default "512Mi" }}

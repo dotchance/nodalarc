@@ -1,0 +1,15 @@
+# Demo-36 with OSPF: single orbital ring, 36 satellites, 6 ground stations.
+# Good for quick demos, evaluation, and learning. Deploys in under a minute.
+session:
+  name: demo-36-ospf
+
+constellation: configs/constellations/demo-36.yaml
+ground_stations: configs/ground-stations/sets/demo.yaml
+
+routing:
+  protocol: ospf
+  area_assignment:
+    strategy: flat
+
+time:
+  step_seconds: 1

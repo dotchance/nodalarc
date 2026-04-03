@@ -32,7 +32,7 @@ Open http://localhost:3000. The constellation is live.
 
 The script does NOT modify an existing Kubernetes installation. If K3s or kubectl are already present, those steps are skipped.
 
-`make all` installs dependencies, builds container images, loads them into the cluster, deploys the platform via Helm, and launches a 176-satellite Starlink constellation with IS-IS routing. About 3 minutes from a fresh checkout on a single machine.
+`make all` installs dependencies, builds container images, loads them into the cluster, deploys the platform via Helm, and launches a 36-satellite constellation with OSPF routing and 6 ground stations. About 2 minutes from a fresh checkout on a single machine.
 
 ## What You Get
 

@@ -11,7 +11,7 @@ KUBECONFIG      ?= /etc/rancher/k3s/k3s.yaml
 K3S_NODE        ?= nodal
 SUDO_CTR        ?= sudo
 REGISTRY_PREFIX ?=
-DEFAULT_SESSION ?= configs/sessions/starlink-176-isis-te.yaml
+DEFAULT_SESSION ?= configs/sessions/demo-36-ospf.yaml
 NAMESPACE       ?= nodalarc
 HELM_EXTRA_ARGS ?=
 

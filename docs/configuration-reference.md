@@ -410,6 +410,7 @@ Or use the session wizard in the UI. It handles the teardown and redeploy automa
 
 | Config | Satellites | Planes | Altitude | Description |
 |--------|-----------|--------|----------|-------------|
+| `demo-36.yaml` | 36 | 1 | 550 km | Single orbital ring for demos (default) |
 | `starlink-176.yaml` | 176 | 16 | 550 km | Starlink-scale Walker delta |
 | `custom-example.yaml` | 4 | 2 | 550 km | Minimal test constellation |
 
@@ -417,6 +418,7 @@ Or use the session wizard in the UI. It handles the teardown and redeploy automa
 
 | Config | Stations | Coverage | Description |
 |--------|----------|----------|-------------|
+| `demo.yaml` | 6 | 5 continents | Hawthorne, Ashburn, Denver, Frankfurt, Singapore, Tokyo |
 | `global.yaml` | 7 | 6 continents | Hawthorne, Ashburn, Frankfurt, Singapore, Sao Paulo, Sydney, McMurdo |
 
 ### Satellite Types

@@ -123,6 +123,34 @@ config.mk
 .idea/
 .vscode/
 
+# Specs (reference only, not shipped)
+specs/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Type checking
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+.venv/
+venv/
+
+
 # Generated proto stubs
 nodalpath/proto/forwarding_pb2.py
 nodalpath/proto/forwarding_pb2_grpc.py

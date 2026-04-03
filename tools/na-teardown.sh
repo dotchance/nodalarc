@@ -11,15 +11,39 @@ export KUBECONFIG
 
 echo "=== NodalArc Teardown ==="
 
-# Step 1: Delete ConstellationSpec CRs so Operator cleans up session pods
-echo "[1/9] Deleting ConstellationSpec resources..."
-kubectl delete constellationspec --all -n "$NAMESPACE" \
-    --ignore-not-found --timeout=60s || true
+# Bail early if namespace doesn't exist
+if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
+    echo "Namespace $NAMESPACE does not exist — nothing to tear down."
+    # Still clean cluster-scoped resources and kernel state (belt+suspenders)
+    kubectl delete crd constellationspecs.nodalarc.io --ignore-not-found 2>/dev/null || true
+    kubectl delete clusterrole nodalarc-operator nodalarc-orchestrator-cluster \
+        nodalarc-node-agent nodalarc-scheduler --ignore-not-found 2>/dev/null || true
+    kubectl delete clusterrolebinding nodalarc-operator nodalarc-orchestrator-cluster \
+        nodalarc-node-agent nodalarc-scheduler --ignore-not-found 2>/dev/null || true
+    kubectl delete clusterrole,clusterrolebinding \
+        -l nodalarc.io/managed-by=helm 2>/dev/null || true
+    echo "=== Teardown complete. Cluster is clean. ==="
+    exit 0
+fi
 
-# Step 2: Wait for Operator to finish session pod cleanup
-# Session pods carry the nodalarc.io/node-id label; platform pods do not.
+# Step 1: Delete ConstellationSpec CRs — try graceful first, force-strip
+# kopf finalizers if it hangs. The Operator may not be running (crashed,
+# image pull failure, post-reboot), so graceful delete can block forever.
+echo "[1/9] Deleting ConstellationSpec resources..."
+if kubectl get constellationspec -n "$NAMESPACE" --no-headers 2>/dev/null | grep -q .; then
+    # Strip kopf finalizers from all CRs so delete doesn't hang
+    for CR in $(kubectl get constellationspec -n "$NAMESPACE" -o name 2>/dev/null); do
+        kubectl patch "$CR" -n "$NAMESPACE" \
+            -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
+    done
+    kubectl delete constellationspec --all -n "$NAMESPACE" \
+        --ignore-not-found --timeout=30s 2>/dev/null || true
+fi
+
+# Step 2: Wait for session pods to terminate. Force-delete stuck pods
+# (ImagePullBackOff, CrashLoopBackOff, Unknown) after timeout.
 echo "[2/9] Waiting for session pods to terminate..."
-TIMEOUT=120
+TIMEOUT=60
 ELAPSED=0
 while true; do
     SESSION_PODS=$(kubectl get pods -n "$NAMESPACE" \
@@ -30,9 +54,11 @@ while true; do
     fi
     sleep 5; ELAPSED=$((ELAPSED+5))
     if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-        echo "ERROR: Session pods did not terminate within ${TIMEOUT}s"
-        kubectl get pods -n "$NAMESPACE" -l nodalarc.io/node-id
-        exit 1
+        echo "  Session pods still present after ${TIMEOUT}s — force deleting..."
+        kubectl delete pods -n "$NAMESPACE" -l nodalarc.io/node-id \
+            --force --grace-period=0 2>/dev/null || true
+        sleep 5
+        break
     fi
 done
 
@@ -83,7 +109,7 @@ ip link show type bridge 2>/dev/null | grep -oE 'br-gnd-[a-z0-9_]+' | \
 # Step 4: Helm uninstall — removes all Helm-managed resources including DaemonSet
 echo "[4/9] Helm uninstall..."
 helm uninstall nodalarc -n "$NAMESPACE" \
-    --ignore-not-found --timeout=120s || true
+    --ignore-not-found --timeout=120s 2>/dev/null || true
 
 # Step 5: Wait for DaemonSet pod to actually terminate
 echo "[5/9] Waiting for Node Agent DaemonSet pod to terminate..."
@@ -91,24 +117,34 @@ kubectl wait pod -n "$NAMESPACE" \
     -l app=nodalarc-node-agent \
     --for=delete --timeout=60s 2>/dev/null || true
 
-# Step 6: Delete namespace (remaining resources)
+# Step 6: Delete namespace — strip finalizers if stuck
 echo "[6/9] Deleting namespace..."
-kubectl delete namespace "$NAMESPACE" \
-    --ignore-not-found --timeout=120s || true
+kubectl delete namespace "$NAMESPACE" --timeout=30s 2>/dev/null || true
+# If still stuck (Terminating), force-remove finalizers
+if kubectl get namespace "$NAMESPACE" 2>/dev/null | grep -q Terminating; then
+    echo "  Namespace stuck in Terminating — removing finalizers..."
+    kubectl get namespace "$NAMESPACE" -o json 2>/dev/null | \
+        python3 -c "import sys,json; ns=json.load(sys.stdin); ns['spec']['finalizers']=[]; print(json.dumps(ns))" | \
+        kubectl replace --raw "/api/v1/namespaces/$NAMESPACE/finalize" -f - 2>/dev/null || true
+    sleep 3
+fi
 
 # Step 7: Delete cluster-scoped resources
 echo "[7/9] Deleting cluster-scoped resources..."
+# CRD may also be stuck due to finalizers on orphaned instances
+kubectl patch crd constellationspecs.nodalarc.io \
+    -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
 kubectl delete crd constellationspecs.nodalarc.io \
-    --ignore-not-found || true
+    --ignore-not-found --timeout=10s 2>/dev/null || true
 kubectl delete clusterrole \
     nodalarc-operator nodalarc-orchestrator-cluster \
     nodalarc-node-agent nodalarc-scheduler \
-    --ignore-not-found || true
+    --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrolebinding \
     nodalarc-operator nodalarc-orchestrator-cluster \
     nodalarc-node-agent nodalarc-scheduler \
-    --ignore-not-found || true
-# Label-based catch-all (after Task 3 adds labels)
+    --ignore-not-found 2>/dev/null || true
+# Label-based catch-all
 kubectl delete clusterrole,clusterrolebinding \
     -l nodalarc.io/managed-by=helm 2>/dev/null || true
 
@@ -139,9 +175,14 @@ if [ -n "$PODS" ]; then
     ERRORS=$((ERRORS+1))
 fi
 
+# Check namespace gone
+if kubectl get namespace "$NAMESPACE" 2>/dev/null | grep -q "$NAMESPACE"; then
+    echo "ERROR: Namespace $NAMESPACE still exists"
+    ERRORS=$((ERRORS+1))
+fi
+
 # Check no nodalarc CRD survives
-if kubectl get crd constellationspecs.nodalarc.io \
-    &>/dev/null 2>&1; then
+if kubectl get crd constellationspecs.nodalarc.io &>/dev/null 2>&1; then
     echo "ERROR: ConstellationSpec CRD still exists"
     ERRORS=$((ERRORS+1))
 fi

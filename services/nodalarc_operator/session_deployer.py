@@ -931,7 +931,7 @@ def _create_session_pod(
     # FRR container
     frr_container = kubernetes.client.V1Container(
         name="frr",
-        image=cfg.frr_image if hasattr(cfg, "frr_image") else "nodalarc/frr:latest",
+        image=os.environ.get("FRR_IMAGE", "nodalarc/frr:latest"),
         image_pull_policy="IfNotPresent",
         security_context=kubernetes.client.V1SecurityContext(
             capabilities=kubernetes.client.V1Capabilities(add=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"])

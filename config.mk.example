@@ -12,9 +12,30 @@ K3S_NODE ?= nodal
 # Set to empty string if your user can access the containerd socket directly
 SUDO_CTR ?= sudo
 
-# Container registry prefix (empty = local images only)
-# Set to e.g. "ghcr.io/yourorg/" for remote registry
-REGISTRY_PREFIX ?=
-
 # Default session for `make deploy`
 DEFAULT_SESSION ?= configs/sessions/starlink-176-isis-te.yaml
+
+# Extra Helm arguments (empty for single-node defaults)
+HELM_EXTRA_ARGS ?=
+
+# --- Multi-node setup ---
+# If running multiple K3s nodes with a container registry, set REGISTRY_PREFIX
+# to your registry URL (with trailing slash). This changes `make load` from
+# local containerd import to docker push, and `make build` tags images with
+# the prefix.
+#
+# You must also set HELM_EXTRA_ARGS to tell Helm to use the registry images
+# and IfNotPresent pull policy so nodes can pull from the registry.
+#
+# Example for a local dev registry at localhost:5000:
+#
+# REGISTRY_PREFIX ?= localhost:5000/
+# HELM_EXTRA_ARGS ?= --set imagePullPolicy=IfNotPresent \
+# 	--set images.frr=localhost:5000/nodalarc/frr:latest \
+# 	--set images.ome=localhost:5000/nodalarc/ome:latest \
+# 	--set images.vf=localhost:5000/nodalarc/vf:latest \
+# 	--set images.nodalpath=localhost:5000/nodalarc/nodalpath:latest \
+# 	--set images.scheduler=localhost:5000/nodalarc/scheduler:latest \
+# 	--set images.nodeAgent=localhost:5000/nodalarc/node-agent:latest \
+# 	--set images.vsApi=localhost:5000/nodalarc/vs-api:latest \
+# 	--set images.operator=localhost:5000/nodalarc/operator:latest

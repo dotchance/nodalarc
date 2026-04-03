@@ -1,68 +1,52 @@
 # Teardown and Cleanup
 
-NodalArc has several levels of cleanup depending on what you need.
+## Switching Sessions
 
-## Stop a Running Session
+The typical way to switch sessions is through the session wizard in the UI. Select a new constellation, routing stack, and ground stations, then deploy. The platform handles the transition automatically.
+
+From the command line:
+
+```bash
+sudo make session DEFAULT_SESSION=configs/sessions/starlink-176-nodalpath.yaml
+```
+
+No teardown needed to switch sessions.
+
+## Full Teardown
+
+When you need to take everything down (done for the day, something went wrong, or any reason you want the platform completely stopped):
 
 ```bash
 sudo make teardown
 ```
 
-This is the standard way to stop a session. It:
+This runs `tools/na-teardown.sh` which executes a specific 9-step sequence. The order matters because doing it out of order causes pods and namespaces to get stuck on finalizers.
 
-1. Stops the constellation session (deletes all satellite and ground station pods)
-2. Cleans kernel state on all nodes (VXLAN tunnels, veth pairs, bridges)
-3. Removes the platform (Helm uninstall)
-4. Deletes the namespace and cluster-scoped resources
-5. Verifies everything is clean
+The sequence:
 
-Wait for "Teardown complete" before starting a new session. The script handles stuck pods, stuck finalizers, and partially deployed states automatically. It works regardless of what state the system is in.
+1. Strip finalizers from session resources and delete them
+2. Wait for session pods to terminate (force-deletes stuck pods after 60s)
+3. Clean kernel state on all nodes via the Node Agent pods (VXLAN tunnels, veth pairs, bridges)
+4. Helm uninstall (removes all platform pods)
+5. Wait for Node Agent pods to terminate
+6. Delete namespace (forces through stuck finalizers if needed)
+7. Delete cluster-scoped resources (CRD, roles, bindings)
+8. Final local kernel state cleanup (belt and suspenders)
+9. Verify clean state
 
-After teardown, start a new session with:
+The script handles every failure mode: stuck pods, stuck finalizers, stuck namespaces, partially deployed sessions, crashed operators. If it reports "Teardown complete" the system is clean.
+
+To bring the platform back up after a teardown:
 
 ```bash
 sudo make install session
 ```
 
-## Remove Build Artifacts
+## Cleanup Levels
 
-```bash
-make clean
-```
-
-Removes frontend build output (dist/) and Python caches. Does not touch Docker images or installed dependencies. Use this when you want to force a frontend rebuild.
-
-## Remove Docker Images
-
-```bash
-make clean-images
-```
-
-Removes all nodalarc Docker images and the Docker build cache. Use this when you want to force a full image rebuild from scratch (for example, after updating a base image or Dockerfile).
-
-## Remove Dependencies
-
-```bash
-make clean-deps
-```
-
-Removes the Python virtual environment (.venv) and all node_modules directories. Use this when you want to force a full dependency reinstall (for example, after changing package versions).
-
-## Remove Everything
-
-```bash
-sudo make nuke
-```
-
-Does all of the above in one shot: teardown + clean + clean-images + clean-deps. After this, the system is back to a fresh checkout state. The next `make all` rebuilds everything from scratch.
-
-## When to Use Each
-
-| Situation | Command |
-|-----------|---------|
-| Done for the day, want to free resources | `sudo make teardown` |
-| Want to run a different session | `sudo make teardown` then `sudo make session DEFAULT_SESSION=...` |
-| Something is broken, want a clean restart | `sudo make teardown` then `sudo make install session` |
-| Images seem stale or corrupted | `make clean-images` then `make build` |
-| Dependencies seem wrong | `make clean-deps` then `make deps` |
-| Nothing works, start completely fresh | `sudo make nuke` then `make all` |
+| Command | What it does | When to use |
+|---------|-------------|-------------|
+| `make clean` | Removes frontend build output and Python caches | Force a frontend rebuild |
+| `make clean-images` | Removes all nodalarc Docker images and build cache | Force a full image rebuild |
+| `make clean-deps` | Removes Python .venv and node_modules | Force a full dependency reinstall |
+| `sudo make nuke` | All of the above plus full teardown | Start completely fresh, as if from a new checkout |

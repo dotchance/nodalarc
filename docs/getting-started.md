@@ -131,9 +131,10 @@ The session wizard lets you configure and launch new constellation sessions from
 ### From the Command Line
 
 ```bash
-sudo make teardown
 sudo make session DEFAULT_SESSION=configs/sessions/starlink-176-nodalpath.yaml
 ```
+
+No teardown needed. The platform switches sessions automatically.
 
 Available sessions:
 - `starlink-176-isis-te.yaml` - IS-IS with traffic engineering (default)

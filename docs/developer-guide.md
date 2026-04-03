@@ -114,7 +114,7 @@ The `REGISTRY_PREFIX` variable controls whether `make load` imports locally (sin
 
 ## Code Conventions
 
-- Python 3.11+ for all backend code
+- Python 3.14+ for all backend code
 - Pydantic v2 for all structured data across component boundaries
 - pyroute2 for all kernel netlink operations. Never shell out to `ip`, `tc`, or `bridge`
 - All NATS subjects defined in `lib/nodalarc/nats_channels.py`. No string literals

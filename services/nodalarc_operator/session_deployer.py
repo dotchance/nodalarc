@@ -295,6 +295,7 @@ def deploy_session(
 
     # --- Step 5: Render FRR configs ---
     template_dir = str(Path("configs/templates/frr").resolve())
+    # nosec B701 — these are FRR router config templates, not HTML; autoescape would break config syntax
     env = Environment(loader=FileSystemLoader(template_dir), keep_trailing_newline=True)
 
     rendered_configs: dict[str, dict[str, str]] = {}

@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
+// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** Deterministic grid layout for topology view.
  *  Transposed: planes as columns (X), slots as rows (Y).
  *  Routing areas as vertical bands. GS column to the right.

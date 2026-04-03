@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
+// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** Right panel — switches display based on selection type.
  *  Includes a draggable divider between detail section and event log.
  */

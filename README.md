@@ -151,6 +151,6 @@ docs/         Documentation
 
 ## License
 
-NodalArc is licensed under the [Elastic License 2.0 (ELv2)](LICENSE). You can use, modify, and distribute it freely. You cannot offer it as a hosted service or build a competing commercial product from it. See the LICENSE file for full terms.
+NodalArc is source available under the [NodalArc Source Available License 1.0](LICENSE). You can use, modify, and distribute it freely. You cannot offer it as a hosted service or build a competing commercial product from it. See the LICENSE file for full terms.
 
 Copyright 2024-2026 .chance (dotchance)

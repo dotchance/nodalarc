@@ -2,7 +2,7 @@
 
 NodalArc's routing stack is pluggable. The default stack is FRRouting (FRR), but the architecture supports replacing it with any containerized routing daemon: Juniper cRPD, Arista cEOS, Cisco IOS-XE, BIRD, or custom implementations.
 
-This document describes the integration points. We are actively working on adding Juniper cRPD as the second supported stack. This guide will be updated with tested, validated steps as that work progresses.
+This document describes the integration points. We are evaluating additional routing stacks including Juniper cRPD. This guide will be updated with tested, validated steps as that work progresses.
 
 ## How It Works Today
 
@@ -59,6 +59,6 @@ To add a new routing daemon, you need to provide:
 - MI adapters for non-FRR daemons (the measurement infrastructure polls vtysh, which is FRR-specific)
 - Validated integration with any non-FRR routing stack
 
-## Coming Soon
+## What's Next
 
-Juniper cRPD integration is the next routing stack we're adding. That work will validate and refine the integration points described above and produce a tested, repeatable process for adding third-party routing daemons.
+We are evaluating Juniper cRPD as the next supported routing stack. That work will validate and refine the integration points described above and produce a tested, repeatable process for adding third-party routing daemons.

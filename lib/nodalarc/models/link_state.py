@@ -12,7 +12,7 @@ in time. Subscribers apply it as replace-not-merge — discard all prior state
 and replace with snapshot contents. Published to nodalarc.links.state with
 MaxMsgsPerSubject=1 so only the latest snapshot is retained.
 
-Transport-agnostic — works on ZMQ or NATS identically.
+Published via NATS JetStream with MaxMsgsPerSubject=1 retention.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Test scenario handler logic: override_set management and dispatch routing.
 
-Tests the internal functions without ZMQ sockets — verifies that:
+Tests the internal functions without NATS connections — verifies that:
 - inject_link_down adds to override_set and calls _dispatch_link_down
 - inject_link_up removes from override_set
 - inject_satellite_loss overrides all links for a node

@@ -14,7 +14,7 @@ Runtime configuration files mounted into containers or read at deploy time.
 | `scenarios/` | Failure injection scenarios (link failure, satellite loss, compound). |
 | `sessions/` | Pre-built session YAMLs for manual deployment (e.g., `starlink-176-isis-te.yaml`). |
 | `templates/frr/` | Jinja2 templates for FRR daemon configuration files. |
-| `platform.yaml` | Platform-level settings (NATS URL, ZMQ ports for transitional components). |
+| `platform.yaml` | Platform-level settings (NATS URL, service ports, system tuning). |
 
 ## Constellations vs Presets
 

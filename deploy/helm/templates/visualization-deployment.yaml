@@ -15,8 +15,10 @@ spec:
       labels:
         app: nodalarc-vf
     spec:
+{{- if .Values.controlPlaneNode }}
       nodeSelector:
-        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode }}
+{{- end }}
       containers:
         - name: vf
           image: {{ .Values.images.vf | default "docker.io/nodalarc/vf:latest" }}

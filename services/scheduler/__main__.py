@@ -1,6 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Scheduler entry point — replaces orchestrator/main.py for M4+.
+"""Scheduler entry point.
 
 Loads session config, builds interface/bandwidth maps, discovers pod
 locations, initializes agent pool, and runs the async dispatch loop.
@@ -184,8 +184,7 @@ def main() -> None:
         latency_update_interval_s=session.time.latency_update_interval_seconds,
     )
 
-    # Scenario handler — uses NATS request/reply (Phase 6 converts transport).
-    # For now, scenario handler still uses ZMQ REP. Will be migrated in Phase 6.
+    # Scenario handler — NATS request/reply.
     scenario_thread = threading.Thread(
         target=run_scenario_handler,
         args=(

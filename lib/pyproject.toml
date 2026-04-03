@@ -1,7 +1,7 @@
 [project]
 name = "nodalarc"
 version = "0.1.0"
-description = "Nodal Arc shared library - Pydantic models, DB schema, ZeroMQ channels"
+description = "Nodal Arc shared library - Pydantic models, DB schema, NATS channels"
 requires-python = ">=3.14"
 dependencies = [
     "pydantic>=2.0",

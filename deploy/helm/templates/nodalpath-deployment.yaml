@@ -16,8 +16,10 @@ spec:
         app: nodalarc-nodalpath
     spec:
       serviceAccountName: nodalarc-orchestrator
+{{- if .Values.controlPlaneNode }}
       nodeSelector:
-        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode }}
+{{- end }}
       containers:
         - name: nodalpath
           image: {{ .Values.images.nodalpath | default "nodalarc/nodalpath:latest" }}

@@ -1,6 +1,6 @@
 """Test that every Pydantic model round-trips through JSON serialization.
 
-Proves the contract that ZeroMQ messages, SQLite records, and config
+Proves the contract that NATS messages, SQLite records, and config
 files depend on. If a model round-trip fails, components that serialize
 and deserialize will disagree on the data.
 """

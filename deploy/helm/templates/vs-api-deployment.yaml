@@ -16,8 +16,10 @@ spec:
         app: nodalarc-vs-api
     spec:
       serviceAccountName: nodalarc-orchestrator
+{{- if .Values.controlPlaneNode }}
       nodeSelector:
-        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode }}
+{{- end }}
       initContainers:
         {{- include "nodalarc.nats-wait-init" . | nindent 8 }}
       containers:

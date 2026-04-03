@@ -3,7 +3,7 @@
 """VS-API — Visualization State API server.
 
 FastAPI server with WebSocket (full snapshots at ~1Hz) and REST endpoints.
-Subscribes to ZMQ PUB sockets from OME, TO, and MI to maintain state.
+Subscribes to NATS JetStream topics from OME and link state to maintain state.
 
 Run: python -m vs_api.main --session <path> --db <sqlite_path> --port 8080
 """
@@ -502,13 +502,13 @@ def _build_snapshot() -> dict:
         return json.loads(snapshot.model_dump_json())
 
 
-# --- NATS subscriber (replaces ZMQ subscriber) ---
+# --- NATS subscriber ---
 
 _nats_connection: nats.NATS | None = None
 
 
 async def _nats_subscriber() -> None:
-    """NATS JetStream subscriber — replaces ZMQ subscriber.
+    """NATS JetStream subscriber.
 
     Subscribes to:
     - nodalarc.ome.snapshot → position updates
@@ -518,7 +518,7 @@ async def _nats_subscriber() -> None:
     - nodalarc.nodalpath.almanac → NodalPath almanac events
 
     Stale detection: tracks wall-clock time of last snapshot and link event.
-    If no messages for 15s, data is stale (same logic as ZMQ, different transport).
+    If no messages for 15s, data is stale.
     """
     global _nats_connection, _last_snapshot_wall_time, _last_link_event_wall_time
 

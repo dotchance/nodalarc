@@ -31,12 +31,12 @@ nodalpath:
   memoryLimit: 256Mi
   cpuLimit: 500m
 
-# M4: Scheduler consumes OME events and dispatches topology changes to Node Agents.
+# Scheduler consumes OME events and dispatches topology changes to Node Agents.
 scheduler:
   memoryLimit: 512Mi
   cpuLimit: 500m
 
-# M4: Node Agent DaemonSet runs on each K3s node.
+# Node Agent DaemonSet runs on each K3s node.
 # Executes privileged netlink operations on behalf of the Scheduler.
 nodeAgent:
   grpcPort: 50100
@@ -48,7 +48,7 @@ vsApi:
   memoryLimit: 512Mi
   cpuLimit: 500m
 
-# NATS JetStream messaging server (M9: replaces all ZMQ)
+# NATS JetStream messaging server
 nats:
   image: "nats:2.11-alpine"
   replicas: 1
@@ -60,9 +60,8 @@ nats:
   storageClass: "local-path"
   storageSize: "2Gi"
 
-# Node where session pods (satellites, ground stations) are created.
-# All session pods must land on the same node until M9 (CROSS_NODE ISL).
-sessionNodeName: "nodal"
+# Node where session pods are created (auto-detected if empty, or set to your node name).
+sessionNodeName: ""
 
-# K8s node hostname for platform pods.
-controlPlaneNode: "nodal"
+# Node for platform pods (auto-detected if empty, or set to your node name).
+controlPlaneNode: ""

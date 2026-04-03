@@ -346,10 +346,6 @@ class ContinuousTracer:
         rev_links = self._build_links(rev_hops)
 
         all_links = fwd_links + rev_links
-        # TODO post-M7: add ReadLinkDelays to Node Agent ZMQ
-        # protocol and call it here instead of returning 0.0
-        # For now, skip delay enrichment — path/hop info is correct,
-        # only per-link latency values are absent.
         fwd_links = all_links[: len(fwd_links)]
         rev_links = all_links[len(fwd_links) :]
 

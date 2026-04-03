@@ -308,7 +308,6 @@ class SessionManager:
     ) -> None:
         """Tear down current session and deploy new one via ConstellationSpec CRD.
 
-        Replaces the deploy daemon approach with direct K8s API calls:
         1. Delete existing ConstellationSpec CR (Operator tears down)
         2. Apply new ConstellationSpec CR (Operator deploys)
         3. Poll CR status until Ready

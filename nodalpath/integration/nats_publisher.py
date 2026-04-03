@@ -1,8 +1,8 @@
 """Publishes AlmanacEvent records on NATS JetStream.
 
-Replaces zmq_publisher.py. Same convenience methods (publish_table_pushed,
-publish_path_computed, publish_deviation). Transport is NATS core publish
-(fire-and-forget, non-blocking — same semantics as ZMQ PUB).
+Convenience methods: publish_table_pushed, publish_path_computed,
+publish_deviation. Transport is NATS core publish (fire-and-forget,
+non-blocking).
 """
 
 from __future__ import annotations

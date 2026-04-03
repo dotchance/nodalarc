@@ -22,12 +22,9 @@ platform:
   # Must exist before running na-deploy.
   kubernetes_namespace: nodalarc
 
-  # ── ZeroMQ Inter-Process Communication Ports ────────────────────────
+  # ── Service Ports ───────────────────────────────────────────────────
   #
-  # TCP port numbers for ZeroMQ PUB/SUB and REQ/REP sockets between
-  # backend components. All ZMQ sockets bind to 127.0.0.1 (loopback
-  # only) because ZMQ has no authentication layer.
-  #
+  # TCP port numbers for inter-component communication.
   # Components run on the same host and connect via localhost.
 
 
@@ -81,7 +78,7 @@ platform:
   # Protocol: UDP (custom binary — sequence number + timestamp).
   probe_daemon_udp_data_port: 19100
 
-  # gRPC server port for the Node Agent DaemonSet (M4+).
+  # gRPC server port for the Node Agent DaemonSet.
   # Each Node Agent listens on this port on the host network (hostPort).
   # The Scheduler connects to <node-ip>:50100.
   node_agent_grpc_port: 50100
@@ -188,13 +185,10 @@ platform:
   # Interval (seconds) between FullStateSnapshot publications during
   # paced replay. FullStateSnapshots carry current link state for
   # late-joining or recovering subscribers. Lower values improve
-  # recovery time at the cost of slightly more ZMQ traffic.
+  # recovery time at the cost of slightly more NATS traffic.
   ome_full_state_snapshot_interval_s: 10
 
-  # ── ZMQ Networking ─────────────────────────────────────────────────
-  #
-  #
-  # connect 127.0.0.1 (host-to-host stays on loopback).
+  # ── Networking ──────────────────────────────────────────────────────
 
 
   # Service host resolution — for inter-service HTTP calls.
@@ -212,5 +206,5 @@ platform:
   host_inotify_max_user_instances: 512
 
   # File descriptor limit (ulimit -n) for backend processes.
-  # Each ZMQ socket, pod connection, and open file consumes one FD.
+  # Each NATS connection, pod connection, and open file consumes one FD.
   host_file_descriptor_limit: 65536

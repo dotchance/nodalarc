@@ -196,9 +196,8 @@ class LiveOrchestrator:
     async def _seed_from_snapshot(self, js) -> None:
         """Seed active link state from the latest LinkStateSnapshot on NATS.
 
-        Replaces the ZMQ R-OME-008 catch-up endpoint. The LinkStateSnapshot
-        on NODALARC_LINKS stream (MaxMsgsPerSubject=1) contains the complete
-        link state — apply as replace-not-merge.
+        The LinkStateSnapshot on NODALARC_LINKS stream (MaxMsgsPerSubject=1)
+        contains the complete link state — apply as replace-not-merge.
         """
         try:
             sub = await js.subscribe(

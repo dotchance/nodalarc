@@ -3,7 +3,7 @@
 """Node Agent RPC handler implementations.
 
 Executes kernel operations dispatched by scheduler/dispatcher.py via
-ZMQ ROUTER/DEALER. Uses namespace_ops.py and ground_bridge.py for
+NATS request/reply. Uses namespace_ops.py and ground_bridge.py for
 all netlink operations (setns-based, no fork).
 
 IMPORTANT — node ID case sensitivity:

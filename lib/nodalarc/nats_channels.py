@@ -3,9 +3,7 @@
 """NATS JetStream stream and subject definitions.
 
 All NATS subject strings and stream names live here. No component
-invents its own subjects or stream names. Same discipline as zmq_channels.py.
-
-M9: replaces zmq_channels.py entirely. After Phase 7, zmq_channels.py is deleted.
+invents its own subjects or stream names.
 """
 
 from __future__ import annotations

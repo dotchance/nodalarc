@@ -2,8 +2,7 @@
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 """MI measurement event models — all frozen (immutable after creation).
 
-Published on ZeroMQ port 5562 (MI_EVENTS_PORT).
-Convergence gate uses port 5563 (MI_CONVERGENCE_GATE_PORT) REQ/REP.
+Published via NATS JetStream.
 """
 
 from datetime import datetime

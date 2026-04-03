@@ -3,9 +3,8 @@
 """NATS client pool for Node Agent connections.
 
 The Scheduler uses this to route BatchLinkDown/Up to the correct agent(s).
-For M4 (single K3s node), there is exactly one agent.
 
-Uses NATS request/reply — each NodeAgentClient shares the Scheduler's
+Uses NATS request/reply -- each NodeAgentClient shares the Scheduler's
 NATS connection and sends to nodalarc.agent.{hostname}.
 """
 

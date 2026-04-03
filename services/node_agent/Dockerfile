@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install crictl for container PID discovery
-ARG CRICTL_VERSION=v1.32.0
+ARG CRICTL_VERSION=v1.35.0
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
        | tar -xz -C /usr/local/bin \

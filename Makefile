@@ -215,15 +215,15 @@ load: ## Import images into K3s (single-node) or push to registry (multi-node)
 	done
 	@echo "[load] Done."
 else
-# Multi-node: push to customer's container registry
+# Multi-node: push to container registry (images already tagged with REGISTRY_PREFIX by build)
 load:
 	@echo "[load] Pushing images to registry $(REGISTRY_PREFIX)..."
-	@for img in nodalarc/frr:latest nodalarc/node-agent:latest nodalarc/ome:latest \
-		nodalarc/scheduler:latest nodalarc/vs-api:latest nodalarc/operator:latest \
-		nodalarc/vf:latest nodalarc/nodalpath:latest; do \
-		echo "  $(REGISTRY_PREFIX)$$img"; \
-		docker tag $$img $(REGISTRY_PREFIX)$$img && \
-		docker push $(REGISTRY_PREFIX)$$img 2>&1 | tail -1; \
+	@for img in $(REGISTRY_PREFIX)nodalarc/frr:latest $(REGISTRY_PREFIX)nodalarc/node-agent:latest \
+		$(REGISTRY_PREFIX)nodalarc/ome:latest $(REGISTRY_PREFIX)nodalarc/scheduler:latest \
+		$(REGISTRY_PREFIX)nodalarc/vs-api:latest $(REGISTRY_PREFIX)nodalarc/operator:latest \
+		$(REGISTRY_PREFIX)nodalarc/vf:latest $(REGISTRY_PREFIX)nodalarc/nodalpath:latest; do \
+		echo "  $$img"; \
+		docker push $$img 2>&1 | tail -1; \
 	done
 	@echo "[load] Done."
 endif
@@ -303,8 +303,7 @@ define _load-image
 endef
 else
 define _load-image
-	@docker tag $(subst :$(TAG),:latest,$1) $(REGISTRY_PREFIX)$(subst $(REGISTRY_PREFIX),,$(subst :$(TAG),:latest,$1)) 2>/dev/null || true
-	@docker push $(REGISTRY_PREFIX)$(subst $(REGISTRY_PREFIX),,$(subst :$(TAG),:latest,$1)) 2>&1 | tail -1
+	@docker push $(subst :$(TAG),:latest,$1) 2>&1 | tail -1
 endef
 endif
 

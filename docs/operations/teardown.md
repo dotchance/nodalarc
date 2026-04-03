@@ -1,63 +1,68 @@
-# NodalArc Teardown Procedure
+# Teardown and Cleanup
 
-Always follow this order. Deviating from it causes kopf
-finalizer to block namespace deletion.
+NodalArc has several levels of cleanup depending on what you need.
 
-## Correct Order
-
-```bash
-# Step 1: Delete the ConstellationSpec CR (session)
-kubectl delete constellationspec current-session \
-    -n nodalarc --timeout=60s
-
-# Step 2: Wait for session pods to terminate
-kubectl wait --for=delete pod -l nodalarc.io/node-id \
-    -n nodalarc --timeout=120s 2>/dev/null || true
-
-# Step 3: Uninstall the Helm release
-# This removes platform pods and the CRD (Helm owns the CRD)
-helm uninstall nodalarc -n nodalarc
-
-# Step 4: Delete the namespace
-kubectl delete namespace nodalarc --timeout=60s
-```
-
-## What Not To Do
-
-Do NOT manually delete the CRD:
+## Stop a Running Session
 
 ```bash
-kubectl delete crd constellationspecs.nodalarc.io  # WRONG
+sudo make teardown
 ```
 
-The CRD is owned by the Helm release. Deleting it before
-helm uninstall causes kopf's finalizer to block because
-the CR still exists but its CRD is gone. Helm uninstall
-handles CRD deletion correctly as part of the release.
+This is the standard way to stop a session. It:
 
-## Fresh Install After Teardown
+1. Stops the constellation session (deletes all satellite and ground station pods)
+2. Cleans kernel state on all nodes (VXLAN tunnels, veth pairs, bridges)
+3. Removes the platform (Helm uninstall)
+4. Deletes the namespace and cluster-scoped resources
+5. Verifies everything is clean
+
+Wait for "Teardown complete" before starting a new session. The script handles stuck pods, stuck finalizers, and partially deployed states automatically. It works regardless of what state the system is in.
+
+After teardown, start a new session with:
 
 ```bash
-helm install nodalarc deploy/helm/ \
-    -n nodalarc --create-namespace \
-    --set ome.enabled=true \
-    --set nodalpath.enabled=true
+sudo make install session
 ```
 
-No other steps required.
-
-## Adding a Node (M9+)
-
-When cross-node ISL tunnels are implemented (M9), expand
-the cluster by labeling the new node and pushing images:
+## Remove Build Artifacts
 
 ```bash
-# 1. Label the new node for Node Agent scheduling
-kubectl label node <new-node> nodalarc.io/node-agent=true
-
-# 2. Push images to the new node
-bash scripts/push-images-to-node.sh <new-node-ip>
+make clean
 ```
 
-The Node Agent DaemonSet will automatically start on any
-node labeled `nodalarc.io/node-agent=true`.
+Removes frontend build output (dist/) and Python caches. Does not touch Docker images or installed dependencies. Use this when you want to force a frontend rebuild.
+
+## Remove Docker Images
+
+```bash
+make clean-images
+```
+
+Removes all nodalarc Docker images and the Docker build cache. Use this when you want to force a full image rebuild from scratch (for example, after updating a base image or Dockerfile).
+
+## Remove Dependencies
+
+```bash
+make clean-deps
+```
+
+Removes the Python virtual environment (.venv) and all node_modules directories. Use this when you want to force a full dependency reinstall (for example, after changing package versions).
+
+## Remove Everything
+
+```bash
+sudo make nuke
+```
+
+Does all of the above in one shot: teardown + clean + clean-images + clean-deps. After this, the system is back to a fresh checkout state. The next `make all` rebuilds everything from scratch.
+
+## When to Use Each
+
+| Situation | Command |
+|-----------|---------|
+| Done for the day, want to free resources | `sudo make teardown` |
+| Want to run a different session | `sudo make teardown` then `sudo make session DEFAULT_SESSION=...` |
+| Something is broken, want a clean restart | `sudo make teardown` then `sudo make install session` |
+| Images seem stale or corrupted | `make clean-images` then `make build` |
+| Dependencies seem wrong | `make clean-deps` then `make deps` |
+| Nothing works, start completely fresh | `sudo make nuke` then `make all` |

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Copyright 2024-2026 .chance (dotchance)
 # na-teardown.sh — Complete NodalArc teardown
 # This is the ONLY permitted teardown mechanism. Never use kubectl delete namespace
 # as a standalone teardown. Never construct custom teardown sequences.

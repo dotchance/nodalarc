@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Visibility computation for ISL and ground station links.
 
 The hardest module in Phase 1A. Handles:

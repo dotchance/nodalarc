@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Review & Deploy panel — session summary, YAML preview, deploy/download.
  *
  * Extracted from SessionWizard.tsx step 6 with zero behavior change.

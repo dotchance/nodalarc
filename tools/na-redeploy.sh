@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright 2024-2026 .chance (dotchance)
 # Tear down and redeploy a Nodal Arc session via the K8s Operator.
 # Usage: na-redeploy.sh --session <path-to-session.yaml>
 #

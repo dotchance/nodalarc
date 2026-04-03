@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Geodetic/ECEF conversion and range/latency computation.
 
 Pure math on WGS84 constants. Used by OME (snapshot latency) and

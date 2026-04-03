@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Orbit pin display — Ctrl+click to pin up to 3 orbital great circles. */
 
 import * as THREE from "three";

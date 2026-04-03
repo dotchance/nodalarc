@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Link detail panel — state, metrics, flow paths, history. */
 
 import { useEffect, useState } from "react";

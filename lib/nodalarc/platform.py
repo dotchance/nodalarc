@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Platform configuration — single source of truth for deployment-level settings.
 
 Loads from configs/platform.yaml. No fallback defaults in Python code.

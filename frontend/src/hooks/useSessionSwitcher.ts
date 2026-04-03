@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Hook for listing available sessions and triggering session switches. */
 
 import { useState, useEffect, useCallback, useRef } from "react";

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright 2024-2026 .chance (dotchance)
 # One-time host bootstrap for NodalArc.
 #
 # Installs K3s, Docker, uv, Node.js, Helm, and configures the kernel

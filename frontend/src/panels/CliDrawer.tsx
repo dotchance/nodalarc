@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Bottom CLI drawer — run whitelisted vtysh commands on FRR nodes. */
 
 import { useState, useRef, useEffect, useCallback } from "react";

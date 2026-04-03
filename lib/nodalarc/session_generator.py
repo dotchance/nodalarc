@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Session generator — produces session YAML from wizard selections.
 
 Takes independent wizard choices (constellation geometry, satellite type,

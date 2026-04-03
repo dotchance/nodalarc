@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Translate VS-API reason codes into networking language for display. */
 
 /** VF spec Section 8.4 — reason code translation table */

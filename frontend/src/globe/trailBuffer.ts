@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Pure ring buffer for orbital trail geometry.
  *
  *  Extracted from orbitalTrails.ts so the draw-order and arc-length

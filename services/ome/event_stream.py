@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Event stream — precompute timeline and write/publish events.
 
 Propagates all satellites, computes visibility at each step,

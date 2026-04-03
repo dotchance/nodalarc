@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Convergence detector — measures network convergence after link events.
 
 Determines which flows are affected by a link event, drives probe bursts

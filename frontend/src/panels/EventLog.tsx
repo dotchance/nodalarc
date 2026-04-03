@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Event log — scrolling list with sortable, draggable columns. */
 
 import React, { useRef, useEffect, useState, useMemo, useCallback } from "react";

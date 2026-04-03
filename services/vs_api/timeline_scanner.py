@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Scan OME timeline JSONL for next event affecting a set of nodes.
 
 The timeline file is append-only and concurrent-read safe. The scanner

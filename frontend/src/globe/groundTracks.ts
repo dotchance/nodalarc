@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Ground track lines — faint orbit traces on Earth surface. Off by default.
  *  Extrapolates +-10 minutes using ECEF velocity, projects onto earth sphere.
  */

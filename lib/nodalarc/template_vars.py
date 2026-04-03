@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Template variable builder — single public API per Section 13.25.
 
 Thin orchestrator that delegates to AddressingScheme and addressing

@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Keplerian orbital propagator for Nodal Arc.
 
 Pure math, no I/O. Circular orbit simplification (e=0).

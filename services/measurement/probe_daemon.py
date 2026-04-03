@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Probe daemon — lightweight custom UDP probe sidecar for ground station pods.
 
 REST API on port 9100. Sends timestamped UDP probe packets with sequence

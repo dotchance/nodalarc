@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Coverage insights — physics-based explanations with severity levels.
 
 Pure functions. No OME imports. Takes analysis results and produces

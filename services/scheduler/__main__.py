@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Scheduler entry point — replaces orchestrator/main.py for M4+.
 
 Loads session config, builds interface/bandwidth maps, discovers pod

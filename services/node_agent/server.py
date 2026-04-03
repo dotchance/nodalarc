@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Node Agent NATS server — replaces ZMQ ROUTER transport.
 
 Subscribes to NATS subject nodalarc.agent.{hostname} for batch commands

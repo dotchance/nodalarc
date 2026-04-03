@@ -103,7 +103,7 @@ Session configs live in `configs/sessions/`. Each defines a constellation, groun
 
 ## Multi-Node Deployment
 
-For clusters with multiple K3s nodes, configure a container registry in `config.mk`:
+For clusters with multiple Kubernetes nodes, configure a container registry in `config.mk`:
 
 ```makefile
 REGISTRY_PREFIX ?= myregistry.local:5000/
@@ -132,13 +132,19 @@ configs/      Runtime configuration (constellations, ground stations, sessions)
 tools/        CLI tools (teardown, scenario inject)
 scripts/      Host bootstrap and infra scripts
 tests/        Unit and integration tests
+docs/         Documentation
 ```
 
 ## Documentation
 
 - [Getting Started](docs/getting-started.md) - install, deploy, and explore the UI
 - [Architecture](docs/architecture.md) - system design, data flow, how it works
+- [Configuration Reference](docs/configuration-reference.md) - sessions, constellations, ground stations, routing stacks
 - [VS-API Reference](docs/vs-api-reference.md) - REST and WebSocket API for automation
-- [Configuration Reference](docs/configuration-reference.md) - session, constellation, and ground station schemas
+- [Building Visualization Clients](docs/building-visualization-clients.md) - WebSocket/REST integration guide
+- [Extending Propagators](docs/extending-propagators.md) - replacing or extending the orbital propagator
+- [Adding Routing Stacks](docs/adding-routing-stacks.md) - integrating new routing daemons
+- [Performance and Scaling](docs/performance-baseline.md) - resource usage and scaling characteristics
+- [Teardown and Cleanup](docs/operations/teardown.md) - session switching, teardown, cleanup levels
 - [CLI Reference](docs/cli-reference.md) - command-line examples for power users
 - [Developer Guide](docs/developer-guide.md) - rebuilding services, running tests, code conventions

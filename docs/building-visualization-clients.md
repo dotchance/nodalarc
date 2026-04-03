@@ -1,28 +1,40 @@
 # Building Visualization Clients
 
-How to build alternative frontends that consume Nodal Arc state data.
+How to build alternative frontends or dashboards that consume NodalArc constellation data.
 
-## Architecture Constraint
+## Architecture
 
-All visualization data flows through VS-API. No visualization client may communicate directly with OME, the Scheduler, or MI. VS-API is the single gateway. It subscribes to NATS JetStream internally and exposes a unified HTTP/WebSocket interface.
+All visualization data flows through the VS-API. Your client connects to VS-API over HTTP/WebSocket. It never talks directly to the OME, Scheduler, or any other backend component.
 
 ```
 OME ──NATS──┐
-Scheduler ──NATS──┤──▶ VS-API ──HTTP/WS──▶ Your Client
+Scheduler ──NATS──┤──> VS-API ──HTTP/WS──> Your Client
 MI ──NATS──┘
 ```
 
-## WebSocket Endpoint
+## Authentication
 
-**URL:** `ws://<host>:8080/ws/v1/state`
+All endpoints except `/api/v1/health` and `/api/v1/auth/token` require a Bearer token.
 
-Delivers a full `StateSnapshot` JSON payload at approximately 1 Hz. The server sends the complete state each time. There are no delta updates, no patch messages, and no incremental encoding.
+Fetch the token (unauthenticated):
+```bash
+curl -s http://localhost:8080/api/v1/auth/token
+# Returns: {"token": "..."}
+```
 
-On connection, the server immediately sends one snapshot before entering the 1 Hz broadcast loop.
+Use it in HTTP headers: `Authorization: Bearer <token>`
 
-WebSocket connections require a token passed as a query parameter. Fetch the token from the unauthenticated `/api/v1/auth/token` endpoint first.
+Use it in WebSocket URLs: `ws://host:8080/ws/v1/state?token=<token>`
 
-### Connection Example (Python)
+## WebSocket: Real-Time State Stream
+
+**URL:** `ws://<host>:8080/ws/v1/state?token=<token>`
+
+Delivers a full JSON snapshot of the entire constellation at ~1 Hz. Every message contains the complete state (all nodes, all links, all events). There are no delta updates.
+
+On connect, the server sends one snapshot immediately, then continues at ~1 Hz.
+
+### Python Example
 
 ```python
 import asyncio
@@ -30,119 +42,229 @@ import json
 import urllib.request
 import websockets
 
-# Fetch the API token
-token = json.loads(urllib.request.urlopen("http://localhost:8080/api/v1/auth/token").read())["token"]
+token = json.loads(
+    urllib.request.urlopen("http://localhost:8080/api/v1/auth/token").read()
+)["token"]
 
 async def main():
-    async with websockets.connect(f"ws://localhost:8080/ws/v1/state?token={token}") as ws:
+    url = f"ws://localhost:8080/ws/v1/state?token={token}"
+    async with websockets.connect(url) as ws:
         async for message in ws:
-            snapshot = json.loads(message)
-            print(f"sim_time={snapshot['sim_time']} "
-                  f"nodes={len(snapshot['nodes'])} "
-                  f"links={len(snapshot['links'])}")
+            snap = json.loads(message)
+            sats = sum(1 for n in snap["nodes"] if n["node_type"] == "satellite")
+            links = len(snap["links"])
+            print(f"[{snap['sim_time'][:19]}] {sats} satellites, {links} links")
 
 asyncio.run(main())
 ```
 
-### Connection Example (Browser JavaScript)
+### JavaScript Example
 
 ```javascript
-// Fetch the API token first
-const tokenResp = await fetch("http://localhost:8080/api/v1/auth/token");
-const { token } = await tokenResp.json();
+const resp = await fetch("http://localhost:8080/api/v1/auth/token");
+const { token } = await resp.json();
 
 const ws = new WebSocket(`ws://localhost:8080/ws/v1/state?token=${token}`);
 
 ws.onmessage = (event) => {
-  const snapshot = JSON.parse(event.data);
-  console.log(`sim_time=${snapshot.sim_time}`,
-              `nodes=${snapshot.nodes.length}`,
-              `links=${snapshot.links.length}`);
-  // Render your UI with snapshot data
+  const snap = JSON.parse(event.data);
+  console.log(snap.sim_time, snap.nodes.length, "nodes", snap.links.length, "links");
 };
 
-ws.onclose = () => {
-  // Reconnect after a delay
-  setTimeout(() => location.reload(), 2000);
-};
+ws.onclose = () => setTimeout(() => location.reload(), 2000);
 ```
 
 ## REST Endpoints
 
-All REST endpoints return JSON and require a Bearer token in the `Authorization` header (see [VS-API Reference](vs-api-reference.md#authentication) for details). Base URL: `http://<host>:8080`.
+Base URL: `http://<host>:8080`. All require `Authorization: Bearer <token>` header.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/state` | Current state snapshot (same format as WebSocket) |
-| GET | `/api/v1/state/{sim_time}` | Historical snapshot nearest to given sim_time (ISO 8601) |
-| GET | `/api/v1/links?start=<t>&end=<t>` | Link events (LinkUp, LinkDown, LatencyUpdate) with optional time range |
-| GET | `/api/v1/metrics/convergence` | All convergence events |
-| GET | `/api/v1/metrics/flows/{flow_id}?start=<t>&end=<t>` | Probe results for a specific flow with optional time range |
-| POST | `/api/v1/trace` | Request path trace (body: `{"src_node": "...", "dst_node": "..."}`) |
+| GET | `/api/v1/state` | Current full snapshot (same format as WebSocket) |
+| GET | `/api/v1/state/{sim_time}` | Historical snapshot nearest to given ISO 8601 time |
+| GET | `/api/v1/links` | Link events with optional `?start=` and `?end=` time filters |
+| POST | `/api/v1/trace` | Path trace between two nodes |
 
-### Historical Playback
+## Snapshot Format
 
-Historical snapshots are stored to SQLite every ~10 seconds. Query with `GET /api/v1/state/{sim_time}` where `sim_time` is an ISO 8601 timestamp. The server returns the nearest available snapshot.
+Here is a real snapshot from a running 176-satellite constellation. This is the exact JSON your client receives over WebSocket or from `GET /api/v1/state`.
 
-### Path Tracing
-
-`POST /api/v1/trace` sends a path trace request via NATS and returns the forwarding path:
+### Top-Level Fields
 
 ```json
 {
-  "src_node": "sat-P00S00",
-  "dst_node": "sat-P03S05"
+  "sim_time": "2026-04-03T19:48:03.567875Z",
+  "wall_time": "2026-04-03T19:49:34.619726Z",
+  "schema_version": 1,
+  "session_status": "ready",
+  "playback_paused": false,
+  "playback_speed": 1.0,
+  "stale": false,
+  "routing_stack": "isis-traffic-engineering",
+  "constellation_name": "constellation",
+  "nodes": [ ... ],
+  "links": [ ... ],
+  "recent_events": [ ... ],
+  "network_health": { ... },
+  "traced_paths": [],
+  "active_flows": []
 }
 ```
-
-Response:
-
-```json
-{
-  "hops": ["sat-P00S00", "sat-P01S00", "sat-P02S02", "sat-P03S05"],
-  "success": true
-}
-```
-
-## StateSnapshot Schema
-
-The full JSON Schema is at `vs_api/schema/snapshot_v1.json` in the repository. Key fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `sim_time` | datetime | Simulation time |
-| `wall_time` | datetime | Real wall-clock time |
-| `schema_version` | int | Always 1 for Phase 1 |
-| `nodes` | NodeState[] | All satellite and ground station positions |
-| `links` | LinkState[] | All active links with latency and bandwidth |
-| `traced_paths` | TracedPath[] | Active path traces |
-| `active_flows` | ActiveFlow[] | Configured traffic flows |
-| `recent_events` | RecentEvent[] | Last 50 events for the event log |
-| `network_health` | NetworkHealth | Overall convergence status |
-| `routing_stack` | string? | Active routing stack name |
-| `constellation_name` | string? | Active constellation name |
+| `sim_time` | string | Current simulation time (ISO 8601) |
+| `wall_time` | string | Current wall-clock time |
+| `schema_version` | int | Always 1. Will increment if the format changes. |
+| `session_status` | string | `"ready"`, `"creating"`, `"wiring"`, or `"idle"` |
+| `playback_paused` | bool | Whether the simulation is paused |
+| `playback_speed` | float | Time compression factor (1.0 = real-time) |
+| `stale` | bool | True if no OME data received recently |
+| `routing_stack` | string | Active routing stack name |
+| `constellation_name` | string | Active constellation name |
 
-### NodeState Fields
+### Node Object
 
-Each node has: `node_id`, `node_type` ("satellite" or "ground_station"), `lat_deg`, `lon_deg`, `alt_km`, velocity components (`vel_x_km_s`, `vel_y_km_s`, `vel_z_km_s`), `plane`, `slot`, `routing_area`, `neighbor_count`, `isl_count`, `gnd_count`, and optional `prefix`.
+Satellite:
+```json
+{
+  "node_id": "sat-P00S00",
+  "node_type": "satellite",
+  "lat_deg": 42.95,
+  "lon_deg": -84.98,
+  "alt_km": 552.75,
+  "vel_x_km_s": 5.57,
+  "vel_y_km_s": 3.45,
+  "vel_z_km_s": 3.19,
+  "plane": 0,
+  "slot": 0,
+  "isl_count": 4,
+  "gnd_count": 1,
+  "neighbor_count": 0,
+  "routing_area": null,
+  "prefix": null,
+  "min_elevation_deg": null,
+  "beam_falloff_exponent": 2.0
+}
+```
 
-### LinkState Fields
+Ground station:
+```json
+{
+  "node_id": "gs-hawthorne",
+  "node_type": "ground_station",
+  "lat_deg": 33.92,
+  "lon_deg": -118.33,
+  "alt_km": 0.02,
+  "vel_x_km_s": 0.0,
+  "vel_y_km_s": 0.0,
+  "vel_z_km_s": 0.0,
+  "plane": null,
+  "slot": null,
+  "isl_count": 0,
+  "gnd_count": 1,
+  "neighbor_count": 0,
+  "routing_area": null,
+  "prefix": null,
+  "min_elevation_deg": 15.0,
+  "beam_falloff_exponent": null
+}
+```
 
-Each link has: `node_a`, `node_b`, `state` ("active"), `link_type`, `link_reason`, `latency_ms`, `bandwidth_mbps`, `range_km`, and `traffic_load_pct` (null if no probe data).
+| Field | Type | Description |
+|-------|------|-------------|
+| `node_id` | string | Stable identifier. `sat-P{plane}S{slot}` for satellites, `gs-{name}` for ground stations |
+| `node_type` | string | `"satellite"` or `"ground_station"` |
+| `lat_deg`, `lon_deg` | float | WGS84 position in degrees |
+| `alt_km` | float | Altitude above sea level in km |
+| `vel_x_km_s`, `vel_y_km_s`, `vel_z_km_s` | float | ECEF velocity in km/s (0 for ground stations) |
+| `plane`, `slot` | int or null | Orbital plane and slot index (null for ground stations) |
+| `isl_count` | int | Number of active ISL links on this node |
+| `gnd_count` | int | Number of active ground links on this node |
+| `neighbor_count` | int | Total routing neighbor count |
+| `min_elevation_deg` | float or null | Minimum satellite elevation angle (ground stations only) |
+| `beam_falloff_exponent` | float or null | Signal degradation model parameter |
 
-## Design Rules
+### Link Object
 
-1. **Drop frames if behind.** If your render loop takes longer than 1 second, discard intermediate snapshots. Never queue snapshots. Always render the most recent one.
+ISL link (between two satellites):
+```json
+{
+  "node_a": "sat-P00S00",
+  "node_b": "sat-P00S01",
+  "state": "active",
+  "link_type": "intra_plane_isl",
+  "link_reason": "",
+  "latency_ms": 13.01,
+  "bandwidth_mbps": 1000.0,
+  "range_km": 0.0,
+  "traffic_load_pct": null
+}
+```
 
-2. **Handle reconnection.** The WebSocket server does not persist client state. On disconnect, reconnect and resume from the next snapshot. There is no replay mechanism over WebSocket.
+Ground link (satellite to ground station):
+```json
+{
+  "node_a": "gs-frankfurt",
+  "node_b": "sat-P02S01",
+  "state": "active",
+  "link_type": "ground",
+  "link_reason": "",
+  "latency_ms": 2.50,
+  "bandwidth_mbps": 1000.0,
+  "range_km": 0.0,
+  "traffic_load_pct": null
+}
+```
 
-3. **Use `schema_version` for forward compatibility.** Check that `schema_version == 1`. Future versions may add fields. Unknown fields should be ignored, not rejected.
+| Field | Type | Description |
+|-------|------|-------------|
+| `node_a`, `node_b` | string | Endpoint node IDs. `node_a < node_b` alphabetically. |
+| `state` | string | `"active"` |
+| `link_type` | string | `"intra_plane_isl"`, `"cross_plane_isl"`, or `"ground"` |
+| `link_reason` | string | Why this link was created (may be empty) |
+| `latency_ms` | float | One-way propagation delay in milliseconds |
+| `bandwidth_mbps` | float | Link capacity |
+| `range_km` | float | Physical distance between endpoints |
+| `traffic_load_pct` | float or null | Traffic load percentage (null if no probe data) |
 
-4. **Interpolate positions client-side.** Satellites move between 1 Hz snapshots. For smooth rendering, lerp node positions toward the latest target using exponential convergence in your render loop:
-   ```
-   current = lerp(current, target, 1 - e^(-speed * dt))
-   ```
+### Event Object
 
-5. **Node IDs are stable identifiers.** Satellite IDs follow `sat-P{plane:02d}S{slot:02d}` (e.g., `sat-P00S00`). Ground station IDs follow `gs-{name}` (e.g., `gs-hawthorne`). Use these as dictionary keys for your node state.
+```json
+{
+  "sim_time": "2026-04-03T19:34:58.567875Z",
+  "node_id": "gs-ashburn",
+  "event_type": "link_down",
+  "summary": "vis_lost"
+}
+```
 
-6. **Link keys are unordered pairs.** `node_a < node_b` alphabetically. A link between `sat-P00S00` and `sat-P01S00` always appears with `node_a="sat-P00S00"`, `node_b="sat-P01S00"`.
+The `recent_events` array contains the last 50 events. Event types include `link_up`, `link_down`, and `latency_update`.
+
+### Network Health
+
+```json
+{
+  "status": "converged",
+  "converging_since_ms": null,
+  "unreachable_flows": 0,
+  "last_convergence_ms": null
+}
+```
+
+## Design Rules for Clients
+
+**Drop frames if behind.** If your render loop takes longer than 1 second, discard intermediate snapshots. Never queue them. Always render the most recent one.
+
+**Handle reconnection.** The WebSocket server does not persist client state. On disconnect, reconnect and resume from the next snapshot.
+
+**Check `schema_version`.** Currently 1. Future versions may add fields. Ignore unknown fields, don't reject them.
+
+**Interpolate positions.** Satellites move between 1 Hz snapshots. For smooth rendering, interpolate node positions toward the latest target:
+```
+current = lerp(current, target, 1 - e^(-speed * dt))
+```
+
+**Node IDs are stable keys.** Use `node_id` as your dictionary key. Satellite IDs are `sat-P{plane:02d}S{slot:02d}` (e.g., `sat-P00S00`). Ground station IDs are `gs-{name}` (e.g., `gs-hawthorne`). These never change within a session.
+
+**Link keys are ordered pairs.** `node_a` is always alphabetically less than `node_b`. Use `(node_a, node_b)` as your link key.

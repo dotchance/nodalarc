@@ -388,6 +388,12 @@ status: ## Show cluster status (pods, phase, links)
 		echo "=== NodalArc Status ==="; \
 		echo ""; \
 		\
+		if ! kubectl cluster-info >/dev/null 2>&1; then \
+			echo "Platform: CANNOT REACH CLUSTER"; \
+			echo "  Check that Kubernetes is running and KUBECONFIG is readable."; \
+			echo "  For K3s: sudo chmod 644 /etc/rancher/k3s/k3s.yaml"; \
+			exit 0; \
+		fi; \
 		if ! kubectl get namespace $(NAMESPACE) >/dev/null 2>&1; then \
 			echo "Platform: NOT INSTALLED"; \
 			echo "  Run: make all"; \

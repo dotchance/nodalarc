@@ -123,9 +123,10 @@ Here is a real snapshot from a running 176-satellite constellation. This is the 
 | `routing_stack` | string | Active routing stack name |
 | `constellation_name` | string | Active constellation name |
 
-### Node Object
+### Satellite Node
 
-Satellite:
+Each satellite in the constellation appears as a node with its current orbital position, velocity, and link counts:
+
 ```json
 {
   "node_id": "sat-P00S00",
@@ -148,7 +149,10 @@ Satellite:
 }
 ```
 
-Ground station:
+### Ground Station Node
+
+Ground stations are fixed locations with tracking antenna parameters instead of orbital data:
+
 ```json
 {
   "node_id": "gs-hawthorne",
@@ -185,9 +189,10 @@ Ground station:
 | `min_elevation_deg` | float or null | Minimum satellite elevation angle (ground stations only) |
 | `beam_falloff_exponent` | float or null | Signal degradation model parameter |
 
-### Link Object
+### ISL Link (Satellite to Satellite)
 
-ISL link (between two satellites):
+Inter-satellite links connect two satellites within the same orbital plane (intra-plane) or between adjacent planes (cross-plane):
+
 ```json
 {
   "node_a": "sat-P00S00",
@@ -202,7 +207,10 @@ ISL link (between two satellites):
 }
 ```
 
-Ground link (satellite to ground station):
+### Ground Link (Satellite to Ground Station)
+
+Ground links connect an overhead satellite to a ground station. These appear and disappear as satellites pass over ground station coverage areas:
+
 ```json
 {
   "node_a": "gs-frankfurt",
@@ -228,7 +236,9 @@ Ground link (satellite to ground station):
 | `range_km` | float | Physical distance between endpoints |
 | `traffic_load_pct` | float or null | Traffic load percentage (null if no probe data) |
 
-### Event Object
+### Recent Events
+
+The `recent_events` array contains the last 50 link state changes, handoffs, and convergence events:
 
 ```json
 {
@@ -239,9 +249,11 @@ Ground link (satellite to ground station):
 }
 ```
 
-The `recent_events` array contains the last 50 events. Event types include `link_up`, `link_down`, and `latency_update`.
+Event types include `link_up`, `link_down`, and `latency_update`. The `summary` field gives a short reason (e.g., `vis_lost` when a satellite moves out of range).
 
 ### Network Health
+
+Overall convergence status for the constellation:
 
 ```json
 {

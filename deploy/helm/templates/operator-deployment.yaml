@@ -43,6 +43,8 @@ spec:
             # With M10 placement policies, the Operator discovers nodes automatically.
             - name: SESSION_NODE_NAME
               value: {{ .Values.sessionNodeName | default "nodal" | quote }}
+            - name: FRR_IMAGE
+              value: {{ .Values.images.frr | default "nodalarc/frr:latest" | quote }}
           resources:
             limits:
               memory: 256Mi

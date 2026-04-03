@@ -123,6 +123,50 @@ config.mk
 .idea/
 .vscode/
 
+# Specs (reference only, not shipped)
+specs/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Type checking
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+.venv/
+venv/
+
+# AI/LLM tools
+CLAUDE.md
+.claude/
+.cursor/
+.cursorrules
+.copilot/
+.github/copilot-instructions.md
+.aider*
+.continue/
+.codeium/
+.tabnine/
+.windsurf/
+.codex/
+.openai/
+.gemini/
+.antigravity/
+
 # Generated proto stubs
 nodalpath/proto/forwarding_pb2.py
 nodalpath/proto/forwarding_pb2_grpc.py

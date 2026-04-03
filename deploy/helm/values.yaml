@@ -2,16 +2,16 @@
 namespace: nodalarc
 
 images:
-  frr: docker.io/nodalarc/frr:10
-  ome: docker.io/nodalarc/ome:latest
-  vf: docker.io/nodalarc/vf:latest
-  nodalpath: docker.io/nodalarc/nodalpath:latest
-  scheduler: docker.io/nodalarc/scheduler:latest
-  nodeAgent: docker.io/nodalarc/node-agent:latest
-  vsApi: docker.io/nodalarc/vs-api:latest
-  operator: docker.io/nodalarc/operator:latest
+  frr: nodalarc/frr:latest
+  ome: nodalarc/ome:latest
+  vf: nodalarc/vf:latest
+  nodalpath: nodalarc/nodalpath:latest
+  scheduler: nodalarc/scheduler:latest
+  nodeAgent: nodalarc/node-agent:latest
+  vsApi: nodalarc/vs-api:latest
+  operator: nodalarc/operator:latest
 
-imagePullPolicy: Never  # Local images loaded into K3s containerd directly
+imagePullPolicy: Never  # Single-node: images loaded directly into containerd
 
 ome:
   cpuRequest: 500m

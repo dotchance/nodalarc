@@ -13,6 +13,7 @@ SUDO_CTR        ?= sudo
 REGISTRY_PREFIX ?=
 DEFAULT_SESSION ?= configs/sessions/starlink-176-isis-te.yaml
 NAMESPACE       ?= nodalarc
+HELM_EXTRA_ARGS ?=
 
 export KUBECONFIG
 
@@ -44,21 +45,21 @@ SVC_IMAGES  := $(IMG_OME) $(IMG_SCHEDULER) $(IMG_NODE_AGENT) \
 OPT_IMAGES  := $(IMG_MI)
 ALL_IMAGES  := $(BASE_IMAGES) $(SVC_IMAGES) $(OPT_IMAGES)
 SVC_IMAGES_LATEST := $(subst :$(TAG),:latest,$(SVC_IMAGES))
-REQUIRED_K3S_IMAGES := nodalarc/frr:10
+REQUIRED_K3S_IMAGES := nodalarc/frr:latest
 
 # ---------------------------------------------------------------------------
 # Phony targets
 # ---------------------------------------------------------------------------
 
-.PHONY: help all deps build load install deploy test test-integration \
-        teardown clean status \
+.PHONY: help all deps build load install session test test-integration \
+        teardown clean clean-deps clean-images nuke status \
         build-frontends build-images ensure-base-images build-base-images \
         build-base build-frr build-probe build-fwd \
         build-ome build-scheduler build-node-agent build-vs-api \
         build-operator build-vf build-nodalpath build-measurement \
-        load-base load-services check-deps \
-        redeploy-ome redeploy-scheduler redeploy-node-agent redeploy-measurement \
-        redeploy-vs-api redeploy-operator redeploy-vf redeploy-nodalpath
+        check-deps \
+        deploy-all deploy-ome deploy-scheduler deploy-node-agent deploy-measurement \
+        deploy-vs-api deploy-operator deploy-vf deploy-nodalpath
 
 .DEFAULT_GOAL := help
 
@@ -69,16 +70,16 @@ REQUIRED_K3S_IMAGES := nodalarc/frr:10
 help: ## Show this help
 	@echo "NodalArc Build System"
 	@echo ""
-	@echo "Quick start:  sudo scripts/bootstrap-host.sh && sudo make all"
+	@echo "Quick start:  scripts/bootstrap-host.sh && make all"
 	@echo ""
 	@echo "Targets:"
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
+	@grep -E '^[a-zA-Z_-]+:.*?## ' Makefile | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
-	@echo "  sudo make all                          Full pipeline: deps → build → load → install → deploy"
-	@echo "  sudo make build load                   Rebuild images and reimport into K3s"
-	@echo "  sudo make deploy DEFAULT_SESSION=configs/sessions/starlink-176-nodalpath.yaml"
+	@echo "  make all                               Full pipeline: deps → build → sudo load/install/session"
+	@echo "  make build && sudo make load            Rebuild images and push to registry"
+	@echo "  sudo make session DEFAULT_SESSION=configs/sessions/starlink-176-nodalpath.yaml"
 	@echo "  sudo make teardown                     Full teardown"
 	@echo "  make test                              Run unit tests (no sudo needed)"
 	@echo "  make -n build                          Dry-run — show what would be built"
@@ -92,7 +93,8 @@ help: ## Show this help
 # Composite targets
 # ---------------------------------------------------------------------------
 
-all: deps build load install deploy ## Full pipeline: checkout → running constellation
+all: deps build ## Full pipeline: checkout → running constellation
+	sudo make load install session
 	@echo ""
 	@echo "=== NodalArc is running ==="
 	@echo "VF:     http://localhost:3000"
@@ -124,7 +126,7 @@ check-deps:
 # build
 # ---------------------------------------------------------------------------
 
-build: build-frontends build-images ## Build frontend dist + all Docker images
+build: deps build-frontends build-images ## Build frontend dist + all Docker images
 	@echo "[build] All images built with tag $(TAG)."
 
 build-frontends: ## Build VF and NodalPath console frontends
@@ -145,7 +147,7 @@ build-images: ensure-base-images build-ome build-scheduler build-node-agent \
               build-vs-api build-operator build-vf build-nodalpath
 
 ensure-base-images:
-	@for img in nodalarc/base:latest nodalarc/frr:10 nodalarc/probe:latest nodalarc/nodalpath-fwd:latest; do \
+	@for img in nodalarc/base:latest nodalarc/frr:latest nodalarc/probe:latest nodalarc/nodalpath-fwd:latest; do \
 		if ! docker image inspect $$img >/dev/null 2>&1; then \
 			echo "[build] Base image $$img not found — building base images..."; \
 			$(MAKE) build-base-images; \
@@ -195,26 +197,36 @@ build-vf: build-frontends ## Build VF (visualization) image
 # load
 # ---------------------------------------------------------------------------
 
-load: load-base load-services ## Import images into K3s containerd
-
-load-base:
-	@echo "[load] Ensuring base images in K3s..."
+ifeq ($(REGISTRY_PREFIX),)
+# Single-node: import directly into local K3s containerd
+load: ## Import images into K3s (single-node) or push to registry (multi-node)
+	@echo "[load] Importing images into K3s containerd..."
 	@for img in $(REQUIRED_K3S_IMAGES); do \
 		if ! $(SUDO_CTR) k3s ctr images check "name==docker.io/$$img" 2>/dev/null | grep -q $$img; then \
-			echo "  Loading $$img"; \
+			echo "  $$img"; \
 			docker save $$img | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1; \
 		else \
 			echo "  $$img already in K3s"; \
 		fi; \
 	done
-
-load-services:
-	@echo "[load] Importing service images into K3s..."
 	@for img in $(SVC_IMAGES) $(SVC_IMAGES_LATEST); do \
 		echo "  $$img"; \
 		docker save $$img | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1; \
 	done
 	@echo "[load] Done."
+else
+# Multi-node: push to customer's container registry
+load:
+	@echo "[load] Pushing images to registry $(REGISTRY_PREFIX)..."
+	@for img in nodalarc/frr:latest nodalarc/node-agent:latest nodalarc/ome:latest \
+		nodalarc/scheduler:latest nodalarc/vs-api:latest nodalarc/operator:latest \
+		nodalarc/vf:latest nodalarc/nodalpath:latest; do \
+		echo "  $(REGISTRY_PREFIX)$$img"; \
+		docker tag $$img $(REGISTRY_PREFIX)$$img && \
+		docker push $(REGISTRY_PREFIX)$$img 2>&1 | tail -1; \
+	done
+	@echo "[load] Done."
+endif
 
 # ---------------------------------------------------------------------------
 # install
@@ -223,10 +235,10 @@ load-services:
 install: ## Helm install/upgrade the platform chart
 	@if kubectl get namespace $(NAMESPACE) >/dev/null 2>&1; then \
 		echo "[install] Namespace $(NAMESPACE) exists — upgrading..."; \
-		helm upgrade nodalarc deploy/helm --namespace $(NAMESPACE); \
+		helm upgrade nodalarc deploy/helm --namespace $(NAMESPACE) $(HELM_EXTRA_ARGS); \
 	else \
 		echo "[install] Installing Helm chart..."; \
-		helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace; \
+		helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace $(HELM_EXTRA_ARGS); \
 	fi
 	@echo "[install] Waiting for platform pods..."
 	@kubectl wait --for=condition=Ready pod -l app=nodalarc-nats \
@@ -240,15 +252,20 @@ install: ## Helm install/upgrade the platform chart
 # deploy
 # ---------------------------------------------------------------------------
 
-deploy: ## Apply ConstellationSpec CRD (DEFAULT_SESSION=path)
-	@echo "[deploy] Applying session: $(DEFAULT_SESSION)"
+session: ## Start a session (DEFAULT_SESSION=path/to/session.yaml)
+	@echo "[session] Starting: $(DEFAULT_SESSION)"
+	@echo "[session] Waiting for platform..."
+	@bash -c 'for i in $$(seq 1 30); do \
+		kubectl get crd constellationspecs.nodalarc.io &>/dev/null && break; \
+		sleep 2; \
+	done'
 	@bash -c '\
 		SESSION_YAML=$$(cat $(DEFAULT_SESSION)); \
 		printf "apiVersion: nodalarc.io/v1alpha1\nkind: ConstellationSpec\nmetadata:\n  name: current-session\n  namespace: $(NAMESPACE)\nspec:\n  sessionYaml: |\n" > /tmp/_nodalarc_crd.yaml; \
 		echo "$$SESSION_YAML" | sed "s/^/    /" >> /tmp/_nodalarc_crd.yaml; \
 		kubectl apply -f /tmp/_nodalarc_crd.yaml; \
 		rm -f /tmp/_nodalarc_crd.yaml'
-	@echo "[deploy] Waiting for Ready (timeout 300s)..."
+	@echo "[session] Waiting for Ready (timeout 300s)..."
 	@bash -c '\
 		ELAPSED=0; \
 		while [ $$ELAPSED -lt 300 ]; do \
@@ -257,13 +274,13 @@ deploy: ## Apply ConstellationSpec CRD (DEFAULT_SESSION=path)
 			if [ "$$PHASE" = "Ready" ]; then \
 				PODS=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | wc -l); \
 				RUNNING=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -c Running || true); \
-				echo "[deploy] Session ready. $$RUNNING/$$PODS pods running."; \
+				echo "[session] Session ready. $$RUNNING/$$PODS pods running."; \
 				exit 0; \
 			fi; \
 			if [ "$$PHASE" = "Error" ]; then \
 				MSG=$$(kubectl get constellationspec current-session \
 					-n $(NAMESPACE) -o jsonpath="{.status.message}" 2>/dev/null); \
-				echo "[deploy] ERROR: $$MSG"; \
+				echo "[session] ERROR: $$MSG"; \
 				exit 1; \
 			fi; \
 			if [ $$((ELAPSED % 15)) -eq 0 ] && [ $$ELAPSED -gt 0 ]; then \
@@ -273,44 +290,63 @@ deploy: ## Apply ConstellationSpec CRD (DEFAULT_SESSION=path)
 			sleep 5; \
 			ELAPSED=$$((ELAPSED + 5)); \
 		done; \
-		echo "[deploy] ERROR: Timed out after 300s"; exit 1'
+		echo "[session] ERROR: Timed out after 300s"; exit 1'
 
 # ---------------------------------------------------------------------------
-# redeploy-* — build, load, restart a single service
+# deploy-* — build, load, restart a single service
 # ---------------------------------------------------------------------------
 
-define load-and-restart
-	@echo "[redeploy] Loading $1 into K3s..."
+ifeq ($(REGISTRY_PREFIX),)
+define _load-image
 	@docker save $1 | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1
 	@docker save $(subst :$(TAG),:latest,$1) | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1
-	@echo "[redeploy] Restarting $2..."
+endef
+else
+define _load-image
+	@docker tag $(subst :$(TAG),:latest,$1) $(REGISTRY_PREFIX)$(subst $(REGISTRY_PREFIX),,$(subst :$(TAG),:latest,$1)) 2>/dev/null || true
+	@docker push $(REGISTRY_PREFIX)$(subst $(REGISTRY_PREFIX),,$(subst :$(TAG),:latest,$1)) 2>&1 | tail -1
+endef
+endif
+
+define _deploy-service
+	@echo "[deploy] Loading $1..."
+	$(call _load-image,$1)
+	@echo "[deploy] Restarting $2..."
 	@kubectl rollout restart $2 -n $(NAMESPACE)
 	@kubectl rollout status $2 -n $(NAMESPACE) --timeout=60s
 endef
 
-redeploy-ome: build-ome ## Build + load + restart OME
-	$(call load-and-restart,$(IMG_OME),deployment/ome)
+deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf ## Build + load + restart all core services
+	$(call _deploy-service,$(IMG_OME),deployment/ome)
+	$(call _deploy-service,$(IMG_SCHEDULER),deployment/nodalarc-scheduler)
+	$(call _deploy-service,$(IMG_NODE_AGENT),daemonset/nodalarc-node-agent)
+	$(call _deploy-service,$(IMG_VS_API),deployment/nodalarc-vs-api)
+	$(call _deploy-service,$(IMG_OPERATOR),deployment/nodalarc-operator)
+	$(call _deploy-service,$(IMG_VF),deployment/nodalarc-vf)
 
-redeploy-scheduler: build-scheduler ## Build + load + restart Scheduler
-	$(call load-and-restart,$(IMG_SCHEDULER),deployment/nodalarc-scheduler)
+deploy-ome: build-ome ## Build + load + restart OME
+	$(call _deploy-service,$(IMG_OME),deployment/ome)
 
-redeploy-node-agent: build-node-agent ## Build + load + restart Node Agent
-	$(call load-and-restart,$(IMG_NODE_AGENT),daemonset/nodalarc-node-agent)
+deploy-scheduler: build-scheduler ## Build + load + restart Scheduler
+	$(call _deploy-service,$(IMG_SCHEDULER),deployment/nodalarc-scheduler)
 
-redeploy-vs-api: build-vs-api ## Build + load + restart VS-API
-	$(call load-and-restart,$(IMG_VS_API),deployment/nodalarc-vs-api)
+deploy-node-agent: build-node-agent ## Build + load + restart Node Agent
+	$(call _deploy-service,$(IMG_NODE_AGENT),daemonset/nodalarc-node-agent)
 
-redeploy-operator: build-operator ## Build + load + restart Operator
-	$(call load-and-restart,$(IMG_OPERATOR),deployment/nodalarc-operator)
+deploy-vs-api: build-vs-api ## Build + load + restart VS-API
+	$(call _deploy-service,$(IMG_VS_API),deployment/nodalarc-vs-api)
 
-redeploy-vf: build-vf ## Build + load + restart VF
-	$(call load-and-restart,$(IMG_VF),deployment/nodalarc-vf)
+deploy-operator: build-operator ## Build + load + restart Operator
+	$(call _deploy-service,$(IMG_OPERATOR),deployment/nodalarc-operator)
 
-redeploy-nodalpath: build-nodalpath ## Build + load + restart NodalPath
-	$(call load-and-restart,$(IMG_NODALPATH),deployment/nodalpath)
+deploy-vf: build-vf ## Build + load + restart VF
+	$(call _deploy-service,$(IMG_VF),deployment/nodalarc-vf)
 
-redeploy-measurement: build-measurement ## Build + load + restart MI
-	$(call load-and-restart,$(IMG_MI),deployment/nodalarc-measurement)
+deploy-nodalpath: build-nodalpath ## Build + load + restart NodalPath
+	$(call _deploy-service,$(IMG_NODALPATH),deployment/nodalpath)
+
+deploy-measurement: build-measurement ## Build + load + restart MI
+	$(call _deploy-service,$(IMG_MI),deployment/nodalarc-measurement)
 
 # ---------------------------------------------------------------------------
 # status / test / teardown / clean
@@ -333,8 +369,23 @@ test-integration: ## Run integration tests (requires running cluster)
 teardown: ## Full teardown — pods, namespace, cluster resources, kernel state
 	bash tools/na-teardown.sh
 
-clean: ## Remove build artifacts (dist/, __pycache__, caches)
+clean: ## Remove build artifacts (dist/, caches)
 	rm -rf frontend/dist nodalpath/console/frontend/dist
 	find . -type d -name __pycache__ ! -path ./.venv/\* -exec rm -rf {} + 2>/dev/null || true
 	rm -rf .pytest_cache .ruff_cache
 	@echo "[clean] Build artifacts removed."
+
+clean-deps: ## Remove installed dependencies (.venv, node_modules)
+	rm -rf .venv lib/nodalarc.egg-info
+	rm -rf frontend/node_modules nodalpath/console/frontend/node_modules
+	@echo "[clean-deps] Dependencies removed."
+
+clean-images: ## Remove all nodalarc Docker images
+	@docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'nodalarc|localhost:5000/nodalarc' | \
+		xargs -r docker rmi -f 2>/dev/null || true
+	@docker builder prune -af 2>/dev/null | tail -1
+	@echo "[clean-images] Docker images removed."
+
+nuke: teardown clean clean-images clean-deps ## Remove everything — teardown + images + deps + artifacts
+	@echo ""
+	@echo "=== Nuke complete. Fresh slate. ==="

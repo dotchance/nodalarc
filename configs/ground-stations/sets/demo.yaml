@@ -1,0 +1,18 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+ground_station_set:
+  name: demo
+  description: "6 stations across 5 continents for the demo-36 constellation."
+  stations:
+    - hawthorne
+    - ashburn
+    - denver
+    - frankfurt
+    - singapore
+    - tokyo
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10
+    default_route: true
+    default_route_metric: 100

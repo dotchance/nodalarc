@@ -1,6 +1,6 @@
 # Getting Started with NodalArc
 
-Deploy a satellite constellation emulation lab from scratch. This guide walks through every step from a bare Linux machine to a running 176-satellite Starlink constellation with IS-IS routing, ground station handoffs, and a 3D visualization.
+Deploy a satellite constellation emulation lab from scratch. This guide walks through every step from a bare Linux machine to a running satellite constellation with OSPF routing, ground station handoffs, and a 3D visualization.
 
 ## Prerequisites
 
@@ -137,8 +137,9 @@ sudo make session DEFAULT_SESSION=configs/sessions/starlink-176-nodalpath.yaml
 No teardown needed. The platform switches sessions automatically.
 
 Available sessions:
-- `starlink-176-isis-te.yaml` - IS-IS with traffic engineering (default)
-- `starlink-176-nodalpath.yaml` - NodalPath centralized path computation
+- `demo-36-ospf.yaml` - 36 satellites, OSPF, 6 ground stations (default)
+- `starlink-176-isis-te.yaml` - 176 satellites, IS-IS with traffic engineering
+- `starlink-176-nodalpath.yaml` - 176 satellites, NodalPath centralized path computation
 
 ## Step 5: Shut Down
 

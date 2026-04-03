@@ -1,0 +1,21 @@
+# Demo-36: single orbital ring for quick demos and evaluation.
+#
+# 1 plane x 36 satellites at 550 km, 53 deg inclination. Satellites
+# form a continuous ISL chain around the ring. Ground stations provide
+# connectivity to the terrestrial network as satellites pass overhead.
+#
+# Intra-plane ISL distance: ~2400 km (well within Starlink V2's 5000 km range).
+# Cross-plane ISLs: none (single plane).
+
+mode: parametric
+name: demo-36
+satellite_type: starlink-v2
+orbit:
+  altitude_km: 550
+  inclination_deg: 53
+  pattern: walker-delta
+planes:
+  count: 1
+  raan_spacing_deg: 0
+  sats_per_plane: 36
+  phase_offset_deg: 10.0

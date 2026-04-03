@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** VS-API types — mirrors lib/nodalarc/models/vs_api.py exactly.
  *  Field names are snake_case to match Pydantic JSON output.
  */

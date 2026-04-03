@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Typed insert/query functions for Nodal Arc SQLite database.
 
 All functions accept and return Pydantic model instances.

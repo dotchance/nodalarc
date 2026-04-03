@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Kernel-vs-ConfigMap reconciliation for Node Agent wiring.
 
 The Node Agent is stateless across restarts. On every startup and ConfigMap

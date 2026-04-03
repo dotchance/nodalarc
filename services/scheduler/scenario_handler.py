@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Scenario injection handler — NATS request/reply.
 
 Subscribes to nodalarc.scheduler.scenario for scenario injection commands.

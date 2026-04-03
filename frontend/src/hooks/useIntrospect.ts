@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Hook for running whitelisted vtysh commands via VS-API introspect endpoint. */
 
 import { useState, useEffect, useCallback } from "react";

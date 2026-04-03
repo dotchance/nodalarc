@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """FRR introspection — execute whitelisted vtysh commands in node containers.
 
 Uses the kubernetes Python client to exec into FRR containers directly,

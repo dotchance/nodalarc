@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright 2024-2026 .chance (dotchance)
 # Push all NodalArc images to a remote K3s node.
 # Usage: ./scripts/push-images-to-node.sh <node-ip>
 # Requires: ssh access to node-ip, sudo on remote

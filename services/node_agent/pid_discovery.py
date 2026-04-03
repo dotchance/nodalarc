@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """PID discovery for pods on the local K3s node.
 
 Migrated from orchestrator/link_manager.py:71-111. The DaemonSet

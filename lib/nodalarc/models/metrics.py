@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """MI measurement event models — all frozen (immutable after creation).
 
 Published on ZeroMQ port 5562 (MI_EVENTS_PORT).

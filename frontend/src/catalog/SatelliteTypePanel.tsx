@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Satellite type selection panel — library list + custom builder.
  *
  * Extracted from SessionWizard.tsx lines 38-441 with zero behavior change.

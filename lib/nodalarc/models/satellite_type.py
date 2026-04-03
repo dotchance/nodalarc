@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Satellite type configuration models.
 
 A satellite type defines the terminal hardware carried by each satellite

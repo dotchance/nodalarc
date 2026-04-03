@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Node Agent entry point — NATS request/reply server for netlink operations.
 
 Runs as a DaemonSet on each K3s node. Subscribes to NATS subject

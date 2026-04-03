@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Color utilities for satellite and link rendering. */
 
 import { AREA_COLORS, PLANE_COLORS } from "../config";

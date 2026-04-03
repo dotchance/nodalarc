@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """NATS request/reply client for Node Agent communication.
 
 Sends serialized protobuf requests to nodalarc.agent.{host} and

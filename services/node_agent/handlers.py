@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Node Agent RPC handler implementations.
 
 Executes kernel operations dispatched by scheduler/dispatcher.py via

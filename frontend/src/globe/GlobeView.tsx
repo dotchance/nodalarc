@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** GlobeView — Three.js globe with satellites, ground stations, and links. */
 
 import { useEffect, useRef, type MutableRefObject } from "react";

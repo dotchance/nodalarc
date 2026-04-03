@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """VS-API — Visualization State API server.
 
 FastAPI server with WebSocket (full snapshots at ~1Hz) and REST endpoints.

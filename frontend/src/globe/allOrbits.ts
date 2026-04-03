@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Render orbit rings for ALL satellites when "Satellite Paths" toggle is on.
  *  Reuses computeOrbitPositions from orbitPins.ts.
  *  Uses plane color, thinner line (width 2), lower opacity (0.2).

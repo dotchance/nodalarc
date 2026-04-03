@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """VXLAN tunnel management for cross-node ISL and GS links.
 
 Creates and destroys per-link VXLAN tunnels between pods on different K3s

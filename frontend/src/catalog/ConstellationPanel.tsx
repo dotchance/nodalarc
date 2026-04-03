@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Constellation selection panel — library presets + custom orbital geometry builder.
  *
  * Custom mode lets the user define orbital geometry with any parameters.

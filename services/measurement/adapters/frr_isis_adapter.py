@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """FRR IS-IS protocol adapter — vtysh polling + log file parsing.
 
 Collects IS-IS adjacency state via `show isis neighbor` polling and

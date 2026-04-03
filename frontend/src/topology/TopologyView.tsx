@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** TopologyView — HTML5 Canvas 2D topology diagram with hover tooltips. */
 
 import { useEffect, useRef, useCallback, useState } from "react";

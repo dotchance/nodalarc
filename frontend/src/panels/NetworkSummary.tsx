@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Network summary — shown when nothing is selected. */
 
 import type { StateSnapshot, Selection } from "../types";

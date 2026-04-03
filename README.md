@@ -148,3 +148,9 @@ docs/         Documentation
 - [Teardown and Cleanup](docs/operations/teardown.md) - session switching, teardown, cleanup levels
 - [CLI Reference](docs/cli-reference.md) - command-line examples for power users
 - [Developer Guide](docs/developer-guide.md) - rebuilding services, running tests, code conventions
+
+## License
+
+NodalArc is licensed under the [Elastic License 2.0 (ELv2)](LICENSE). You can use, modify, and distribute it freely. You cannot offer it as a hosted service or build a competing commercial product from it. See the LICENSE file for full terms.
+
+Copyright 2024-2026 .chance (dotchance)

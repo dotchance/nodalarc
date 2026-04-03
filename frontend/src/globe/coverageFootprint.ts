@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Satellite coverage footprint — radial falloff shader on Earth surface below selected satellite.
  *
  * Replaces the flat disc with a radial gradient parameterized by beam_falloff_exponent

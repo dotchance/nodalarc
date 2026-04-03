@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright 2024-2026 .chance (dotchance)
 # M9 health check — run after letting the system soak.
 # Usage: bash tools/check-m9-health.sh
 set -euo pipefail

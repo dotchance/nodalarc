@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """VXLAN utility functions shared between Scheduler and Node Agent.
 
 Pure computation — no I/O, no pyroute2, no kernel operations.

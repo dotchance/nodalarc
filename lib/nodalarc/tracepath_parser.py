@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Parse tracepath output into structured results.
 
 Pure parsing module — no I/O. Handles the output of `tracepath -n -b`.

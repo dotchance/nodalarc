@@ -1,3 +1,5 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 /** Types for the M8 session wizard.
  *
  * Step model: Group A (selections — any order, preview gates on all three)

@@ -1,4 +1,5 @@
 #!/bin/bash
+# Copyright 2024-2026 .chance (dotchance)
 # Show Nodal Arc deployment status.
 set -euo pipefail
 

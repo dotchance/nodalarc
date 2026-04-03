@@ -1,3 +1,5 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
 """Continuous path tracer — traces forward and reverse paths in a loop.
 
 Runs as an asyncio task, executing tracepath (or CSPF) at regular intervals.

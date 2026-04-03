@@ -257,7 +257,14 @@ install: ## Helm install/upgrade the platform chart
 		echo "[install] Waiting for namespace cleanup..."; \
 		while kubectl get namespace $(NAMESPACE) 2>/dev/null | grep -q $(NAMESPACE); do sleep 2; done; \
 	fi
-	@helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace $(HELM_EXTRA_ARGS)
+	@NODAL_NODE=$$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo ""); \
+		if [ -n "$$NODAL_NODE" ]; then \
+			echo "[install] Auto-detected node: $$NODAL_NODE"; \
+			helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace \
+				--set controlPlaneNode=$$NODAL_NODE --set sessionNodeName=$$NODAL_NODE $(HELM_EXTRA_ARGS); \
+		else \
+			helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace $(HELM_EXTRA_ARGS); \
+		fi
 	@echo "[install] Waiting for platform pods..."
 	@kubectl wait --for=condition=Ready pod -l app=nodalarc-nats \
 		-n $(NAMESPACE) --timeout=60s 2>/dev/null || true
@@ -377,12 +384,76 @@ deploy-measurement: build-measurement ## Build + load + restart MI
 # ---------------------------------------------------------------------------
 
 status: ## Show cluster status (pods, phase, links)
-	@echo "=== Cluster Status ==="
-	@kubectl get constellationspec current-session -n $(NAMESPACE) \
-		-o jsonpath='Phase: {.status.phase}  Pods: {.status.readyPods}/{.status.totalPods}' 2>/dev/null || echo "No session deployed"
-	@echo ""
-	@kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | \
-		awk '{status[$$3]++} END {for (s in status) printf "  %s: %d\n", s, status[s]}' || true
+	@bash -c '\
+		echo "=== NodalArc Status ==="; \
+		echo ""; \
+		\
+		if ! kubectl get namespace $(NAMESPACE) >/dev/null 2>&1; then \
+			echo "Platform: NOT INSTALLED"; \
+			echo "  Run: make all"; \
+			exit 0; \
+		fi; \
+		\
+		echo "Platform:"; \
+		PLATFORM=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -E "nodalarc-|nodalpath-|ome-" || true); \
+		if [ -z "$$PLATFORM" ]; then \
+			echo "  NOT RUNNING"; \
+			echo "  Run: sudo make install"; \
+		else \
+			TOTAL=$$(echo "$$PLATFORM" | wc -l); \
+			RUNNING=$$(echo "$$PLATFORM" | grep -c Running || true); \
+			if [ "$$RUNNING" -eq "$$TOTAL" ]; then \
+				echo "  Running ($$RUNNING/$$TOTAL platform pods)"; \
+			else \
+				echo "  DEGRADED ($$RUNNING/$$TOTAL platform pods running)"; \
+				echo "$$PLATFORM" | grep -v Running | awk "{printf \"    %s: %s\n\", \$$1, \$$3}"; \
+			fi; \
+		fi; \
+		echo ""; \
+		\
+		echo "Session:"; \
+		SESSION=$$(kubectl get constellationspec current-session -n $(NAMESPACE) -o json 2>/dev/null); \
+		if [ -z "$$SESSION" ] || [ "$$SESSION" = "" ]; then \
+			echo "  No session deployed"; \
+			echo "  Run: sudo make session"; \
+		else \
+			PHASE=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"phase\",\"Unknown\"))" 2>/dev/null); \
+			POD_COUNT=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"podCount\",0))" 2>/dev/null); \
+			READY=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"readyPods\",0))" 2>/dev/null); \
+			WIRED=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"wiredPods\",0))" 2>/dev/null); \
+			MSG=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"message\",\"\"))" 2>/dev/null); \
+			SATS=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/role=satellite --no-headers 2>/dev/null | grep -c Running || echo 0); \
+			GS=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/role=ground-station --no-headers 2>/dev/null | grep -c Running || echo 0); \
+			echo "  Phase: $$PHASE"; \
+			echo "  Satellites: $$SATS running"; \
+			echo "  Ground stations: $$GS running"; \
+			echo "  Wired: $$WIRED nodes"; \
+			if [ -n "$$MSG" ]; then echo "  Message: $$MSG"; fi; \
+			NOT_RUNNING=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/node-id --no-headers 2>/dev/null | grep -v Running | grep -v Completed || true); \
+			if [ -n "$$NOT_RUNNING" ]; then \
+				echo "  WARNING: Some session pods not running:"; \
+				echo "$$NOT_RUNNING" | awk "{printf \"    %s: %s\n\", \$$1, \$$3}"; \
+			fi; \
+		fi; \
+		echo ""; \
+		\
+		echo "Nodes:"; \
+		kubectl get nodes --no-headers 2>/dev/null | awk "{printf \"  %s: %s\n\", \$$1, \$$2}" || echo "  Unable to reach cluster"; \
+		echo ""; \
+		\
+		echo "Links:"; \
+		TOKEN=$$(curl -s http://localhost:8080/api/v1/auth/token 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get(\"token\",\"\"))" 2>/dev/null || true); \
+		if [ -n "$$TOKEN" ]; then \
+			curl -s -H "Authorization: Bearer $$TOKEN" http://localhost:8080/api/v1/state 2>/dev/null | \
+				python3 -c "import json,sys; s=json.load(sys.stdin); \
+					isl=sum(1 for l in s[\"links\"] if \"isl\" in (l.get(\"link_type\") or \"\")); \
+					gnd=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"ground\"); \
+					print(f\"  ISL links: {isl}\"); \
+					print(f\"  Ground links: {gnd}\"); \
+					print(f\"  Total active: {len(s[\"links\"])}\")" 2>/dev/null || echo "  Unable to query VS-API"; \
+		else \
+			echo "  VS-API not reachable"; \
+		fi'
 
 test: ## Run unit tests (868+, no sudo needed)
 	uv run pytest --ignore=tests/integration --tb=short -q

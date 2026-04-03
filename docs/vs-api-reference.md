@@ -24,15 +24,17 @@ WebSocket connections pass the token as a query parameter: `ws://host:8080/ws/v1
 
 ## Quick Examples
 
-All examples below assume `$TOKEN` is set as shown above. Each example is a standalone command you can copy and paste.
+All examples below assume `$TOKEN` is set as shown above.
+
+### Get the full constellation state
 
 ```bash
-# Get current constellation state
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | python3 -m json.tool
 ```
 
+### Count satellites, ground stations, and active links
+
 ```bash
-# Count satellites, ground stations, and active links
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | python3 -c "
 import json, sys
 s = json.load(sys.stdin)
@@ -42,8 +44,9 @@ print(f'{sats} satellites, {gs} ground stations, {len(s[\"links\"])} links')
 "
 ```
 
+### Find active ground station connections
+
 ```bash
-# Find which ground stations have active satellite connections
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | python3 -c "
 import json, sys
 s = json.load(sys.stdin)
@@ -53,8 +56,9 @@ for link in s['links']:
 "
 ```
 
+### Look up a specific satellite
+
 ```bash
-# Get a specific satellite's position and neighbor count
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/state | python3 -c "
 import json, sys
 s = json.load(sys.stdin)
@@ -65,21 +69,24 @@ if node:
 "
 ```
 
+### Trace the forwarding path between two nodes
+
 ```bash
-# Trace the forwarding path between two nodes
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   http://localhost:8080/api/v1/trace \
   -d '{"src_node": "gs-hawthorne", "dst_node": "gs-frankfurt"}'
 ```
 
+### Query link events in a time window
+
 ```bash
-# List all link events in a time window
 curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/api/v1/links?start=2026-01-01T00:00:00Z&end=2026-01-01T00:10:00Z'
 ```
 
+### Stream live state over WebSocket
+
 ```bash
-# Stream live state updates over WebSocket (Python)
 python3 -c "
 import asyncio, json, websockets, urllib.request
 token = json.loads(urllib.request.urlopen('http://localhost:8080/api/v1/auth/token').read())['token']

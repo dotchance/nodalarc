@@ -159,6 +159,7 @@ export function updateSatellites(
       const glow = new THREE.Sprite(glowMat);
       glow.scale.set(SAT_RADIUS * 5, SAT_RADIUS * 5, 1);
       glow.position.copy(newPos);
+      glow.visible = false;  // Only shown on selection/highlight
       scene.add(glow);
 
       satellites.set(node.node_id, {

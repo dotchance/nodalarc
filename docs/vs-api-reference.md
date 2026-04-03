@@ -134,25 +134,7 @@ Query link events from the session database.
 - `start` (optional): Start time filter (ISO 8601)
 - `end` (optional): End time filter (ISO 8601)
 
-**Response:** Array of link event objects:
-
-```json
-[
-  {
-    "id": 1,
-    "sim_time": "2026-01-01T00:00:30.000000",
-    "wall_time": "2026-03-01T12:00:30.000000",
-    "event_type": "LinkUp",
-    "node_a": "sat-P00S00",
-    "node_b": "sat-P00S01",
-    "interface_a": "eth1",
-    "interface_b": "eth1",
-    "latency_ms": 12.5,
-    "bandwidth_mbps": 1000.0,
-    "reason": "intra_plane_isl"
-  }
-]
-```
+**Response:** Array of link event objects. Returns an empty array if no events match the time range.
 
 ### `GET /api/v1/metrics/convergence`
 
@@ -162,23 +144,7 @@ Query convergence events from the session database.
 - `start` (optional): Start time filter
 - `end` (optional): End time filter
 
-**Response:** Array of convergence event objects:
-
-```json
-[
-  {
-    "id": 1,
-    "event_id": "conv-001",
-    "sim_time_start": "2026-01-01T00:01:00.000000",
-    "sim_time_end": "2026-01-01T00:01:02.500000",
-    "converged": 1,
-    "duration_ms": 2500.0,
-    "packets_lost": 3,
-    "packets_sent": 100,
-    "triggering_link_event_id": 5
-  }
-]
-```
+**Response:** Array of convergence event objects.
 
 ### `GET /api/v1/metrics/flows/{flow_id}`
 
@@ -191,168 +157,230 @@ Query probe results for a specific traffic flow.
 - `start` (optional): Start time filter
 - `end` (optional): End time filter
 
-**Response:** Array of probe result objects:
-
-```json
-[
-  {
-    "id": 1,
-    "sim_time": "2026-01-01T00:01:00.000000",
-    "flow_id": "gs-handover-flow",
-    "src_node": "gs-hawthorne",
-    "dst_node": "gs-ashburn",
-    "packets_sent": 10,
-    "packets_received": 9,
-    "latency_min_ms": 25.1,
-    "latency_max_ms": 42.3,
-    "latency_avg_ms": 31.7,
-    "jitter_ms": 5.2
-  }
-]
-```
+**Response:** Array of probe result objects.
 
 ### `POST /api/v1/trace`
 
-Request a forwarding path trace between two nodes via NATS.
+Request a forwarding path trace between two nodes.
 
 **Request body:**
 
 ```json
 {
   "src_node": "gs-hawthorne",
-  "dst_node": "gs-ashburn"
+  "dst_node": "gs-frankfurt"
 }
 ```
 
-**Response:**
+**Successful response:**
 
 ```json
 {
-  "hops": ["gs-hawthorne", "sat-P02S03", "sat-P02S04", "sat-P03S04", "gs-ashburn"],
-  "success": true
+  "hops": ["gs-hawthorne", "sat-P02S03", "sat-P02S04", "sat-P03S04", "gs-frankfurt"],
+  "success": true,
+  "total_latency_ms": 42.3
 }
 ```
 
-On error:
+**Error response:**
 
 ```json
 {
   "hops": [],
-  "error": "trace request timeout"
+  "error": "Trace unavailable"
 }
 ```
 
 ## StateSnapshot Schema
 
-The complete payload sent over WebSocket and returned by `GET /api/v1/state`:
+The snapshot is the complete payload sent over WebSocket and returned by `GET /api/v1/state`. All data below is from a real running 176-satellite constellation.
+
+### Top-Level Structure
 
 ```json
 {
-  "sim_time": "2026-01-01T00:05:00.000000+00:00",
-  "wall_time": "2026-03-01T12:05:00.000000+00:00",
+  "sim_time": "2026-04-03T19:48:03.567875Z",
+  "wall_time": "2026-04-03T19:49:34.619726Z",
   "schema_version": 1,
-  "nodes": [
-    {
-      "node_id": "sat-P00S00",
-      "node_type": "satellite",
-      "lat_deg": 33.5,
-      "lon_deg": -118.2,
-      "alt_km": 550.0,
-      "vel_x_km_s": 0.5,
-      "vel_y_km_s": 7.2,
-      "vel_z_km_s": 0.1,
-      "plane": 0,
-      "slot": 0,
-      "routing_area": "49.0001",
-      "neighbor_count": 4,
-      "isl_count": 3,
-      "gnd_count": 1,
-      "prefix": null
-    }
-  ],
-  "links": [
-    {
-      "node_a": "sat-P00S00",
-      "node_b": "sat-P00S01",
-      "state": "active",
-      "link_type": "intra_plane_isl",
-      "link_reason": "intra_plane_isl",
-      "latency_ms": 12.5,
-      "bandwidth_mbps": 1000.0,
-      "range_km": 3582.0,
-      "traffic_load_pct": null
-    }
-  ],
+  "session_status": "ready",
+  "playback_paused": false,
+  "playback_speed": 1.0,
+  "stale": false,
+  "routing_stack": "isis-traffic-engineering",
+  "constellation_name": "constellation",
+  "nodes": [ ... ],
+  "links": [ ... ],
+  "recent_events": [ ... ],
+  "network_health": { ... },
   "traced_paths": [],
-  "active_flows": [],
-  "recent_events": [
-    {
-      "sim_time": "2026-01-01T00:04:55.000000+00:00",
-      "node_id": "sat-P02S03",
-      "event_type": "link_up",
-      "summary": "intra_plane_isl"
-    }
-  ],
-  "network_health": {
-    "status": "converged",
-    "converging_since_ms": null,
-    "unreachable_flows": 0,
-    "last_convergence_ms": 2500.0
-  },
-  "routing_stack": "frr-isis-sr",
-  "constellation_name": "starlink-early-44"
+  "active_flows": []
 }
 ```
 
-### Field Reference
+| Field | Type | Description |
+|-------|------|-------------|
+| `sim_time` | string | Current simulation time (ISO 8601) |
+| `wall_time` | string | Current wall-clock time |
+| `schema_version` | int | Always 1. Will increment if the format changes. |
+| `session_status` | string | `"ready"`, `"creating"`, `"wiring"`, or `"idle"` |
+| `playback_paused` | bool | Whether the simulation is paused |
+| `playback_speed` | float | Time compression factor (1.0 = real-time) |
+| `stale` | bool | True if no OME data received recently |
+| `routing_stack` | string | Active routing stack name |
+| `constellation_name` | string | Active constellation name |
 
-**NodeState:**
+### Satellite Node
+
+Each satellite has its current orbital position, velocity, and link counts:
+
+```json
+{
+  "node_id": "sat-P00S00",
+  "node_type": "satellite",
+  "lat_deg": 42.95,
+  "lon_deg": -84.98,
+  "alt_km": 552.75,
+  "vel_x_km_s": 5.57,
+  "vel_y_km_s": 3.45,
+  "vel_z_km_s": 3.19,
+  "plane": 0,
+  "slot": 0,
+  "isl_count": 4,
+  "gnd_count": 1,
+  "neighbor_count": 0,
+  "routing_area": null,
+  "prefix": null,
+  "min_elevation_deg": null,
+  "beam_falloff_exponent": 2.0
+}
+```
+
+### Ground Station Node
+
+Ground stations are fixed locations with tracking antenna parameters:
+
+```json
+{
+  "node_id": "gs-hawthorne",
+  "node_type": "ground_station",
+  "lat_deg": 33.92,
+  "lon_deg": -118.33,
+  "alt_km": 0.02,
+  "vel_x_km_s": 0.0,
+  "vel_y_km_s": 0.0,
+  "vel_z_km_s": 0.0,
+  "plane": null,
+  "slot": null,
+  "isl_count": 0,
+  "gnd_count": 1,
+  "neighbor_count": 0,
+  "routing_area": null,
+  "prefix": null,
+  "min_elevation_deg": 15.0,
+  "beam_falloff_exponent": null
+}
+```
+
+### Node Field Reference
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `node_id` | string | Unique node identifier |
+| `node_id` | string | Stable identifier. `sat-P{plane}S{slot}` for satellites, `gs-{name}` for ground stations |
 | `node_type` | string | `"satellite"` or `"ground_station"` |
-| `lat_deg` | float | WGS84 latitude in degrees |
-| `lon_deg` | float | WGS84 longitude in degrees |
+| `lat_deg`, `lon_deg` | float | WGS84 position in degrees |
 | `alt_km` | float | Altitude above sea level in km |
-| `vel_x_km_s` | float? | ECEF velocity X (null for GS) |
-| `vel_y_km_s` | float? | ECEF velocity Y (null for GS) |
-| `vel_z_km_s` | float? | ECEF velocity Z (null for GS) |
-| `plane` | int? | Orbital plane index (null for GS) |
-| `slot` | int? | Slot within plane (null for GS) |
-| `routing_area` | string? | Routing area ID |
-| `neighbor_count` | int | Total neighbor count |
-| `isl_count` | int | ISL link count |
-| `gnd_count` | int | Ground link count |
-| `prefix` | string? | Advertised prefix (GS only) |
+| `vel_x_km_s`, `vel_y_km_s`, `vel_z_km_s` | float | ECEF velocity in km/s (0 for ground stations) |
+| `plane`, `slot` | int or null | Orbital plane and slot index (null for ground stations) |
+| `isl_count` | int | Number of active ISL links |
+| `gnd_count` | int | Number of active ground links |
+| `neighbor_count` | int | Total routing neighbor count |
+| `min_elevation_deg` | float or null | Minimum satellite elevation angle (ground stations only) |
+| `beam_falloff_exponent` | float or null | Signal degradation model parameter |
 
-**LinkState:**
+### ISL Link (Satellite to Satellite)
+
+Inter-satellite links connect two satellites within the same orbital plane (`intra_plane_isl`) or between adjacent planes (`cross_plane_isl`):
+
+```json
+{
+  "node_a": "sat-P00S00",
+  "node_b": "sat-P00S01",
+  "state": "active",
+  "link_type": "intra_plane_isl",
+  "link_reason": "",
+  "latency_ms": 13.01,
+  "bandwidth_mbps": 1000.0,
+  "range_km": 0.0,
+  "traffic_load_pct": null
+}
+```
+
+### Ground Link (Satellite to Ground Station)
+
+Ground links appear and disappear as satellites pass over ground station coverage areas:
+
+```json
+{
+  "node_a": "gs-frankfurt",
+  "node_b": "sat-P02S01",
+  "state": "active",
+  "link_type": "ground",
+  "link_reason": "",
+  "latency_ms": 2.50,
+  "bandwidth_mbps": 1000.0,
+  "range_km": 0.0,
+  "traffic_load_pct": null
+}
+```
+
+### Link Field Reference
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `node_a` | string | First endpoint node ID |
-| `node_b` | string | Second endpoint node ID |
-| `state` | string | `"active"` or `"inactive"` |
-| `link_type` | string? | `intra_plane_isl`, `cross_plane_isl`, `ground_uplink`, `ground_downlink` |
-| `latency_ms` | float | One-way propagation delay |
+| `node_a`, `node_b` | string | Endpoint node IDs. `node_a < node_b` alphabetically. |
+| `state` | string | `"active"` |
+| `link_type` | string | `"intra_plane_isl"`, `"cross_plane_isl"`, or `"ground"` |
+| `link_reason` | string | Why this link was created (may be empty) |
+| `latency_ms` | float | One-way propagation delay in milliseconds |
 | `bandwidth_mbps` | float | Link capacity |
-| `range_km` | float | Physical distance |
-| `traffic_load_pct` | float? | Traffic load (null = no probe data) |
+| `range_km` | float | Physical distance between endpoints |
+| `traffic_load_pct` | float or null | Traffic load percentage (null if no probe data) |
 
-**NetworkHealth:**
+### Recent Events
+
+The last 50 link state changes, handoffs, and convergence events:
+
+```json
+{
+  "sim_time": "2026-04-03T19:34:58.567875Z",
+  "node_id": "gs-ashburn",
+  "event_type": "link_down",
+  "summary": "vis_lost"
+}
+```
+
+Event types: `link_up`, `link_down`, `latency_update`. The `summary` field gives a short reason (e.g., `vis_lost` when a satellite moves out of range).
+
+### Network Health
+
+Overall convergence status:
+
+```json
+{
+  "status": "converged",
+  "converging_since_ms": null,
+  "unreachable_flows": 0,
+  "last_convergence_ms": null
+}
+```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | `"converged"`, `"converging"`, or `"degraded"` |
-| `converging_since_ms` | int? | Duration in converging state |
+| `converging_since_ms` | int or null | How long the network has been converging |
 | `unreachable_flows` | int | Number of broken traffic flows |
-| `last_convergence_ms` | float? | Most recent convergence duration |
+| `last_convergence_ms` | float or null | Duration of the most recent convergence event |
 
 ## Building Alternative Frontends
 
-The VS-API is protocol-agnostic. Any WebSocket client can consume the StateSnapshot stream. To build an alternative frontend:
-
-1. Connect to `ws://host:8080/ws/v1/state`
-2. Parse incoming JSON messages as StateSnapshot objects
-3. Use REST endpoints for historical queries and path traces
-4. The `schema_version` field (currently `1`) will increment if breaking changes are made to the snapshot format
+See [Building Visualization Clients](building-visualization-clients.md) for a complete guide with connection examples in Python and JavaScript, design rules for rendering, and the full snapshot schema.

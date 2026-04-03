@@ -389,11 +389,23 @@ status: ## Show cluster status (pods, phase, links)
 		echo ""; \
 		\
 		if ! kubectl cluster-info >/dev/null 2>&1; then \
-			echo "Platform: CANNOT REACH CLUSTER"; \
+			echo "Cluster: CANNOT REACH"; \
 			echo "  Check that Kubernetes is running and KUBECONFIG is readable."; \
 			echo "  For K3s: sudo chmod 644 /etc/rancher/k3s/k3s.yaml"; \
 			exit 0; \
 		fi; \
+		\
+		echo "Cluster:"; \
+		NODE_COUNT=$$(kubectl get nodes --no-headers 2>/dev/null | wc -l); \
+		NODE_READY=$$(kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready" || echo 0); \
+		if [ "$$NODE_COUNT" -eq 1 ]; then \
+			echo "  Single node ($$NODE_READY/$$NODE_COUNT ready)"; \
+		else \
+			echo "  Multi-node ($$NODE_READY/$$NODE_COUNT nodes ready)"; \
+		fi; \
+		kubectl get nodes --no-headers 2>/dev/null | awk "{printf \"    %s: %s  (%s, %s)\n\", \$$1, \$$2, \$$4, \$$5}"; \
+		echo ""; \
+		\
 		if ! kubectl get namespace $(NAMESPACE) >/dev/null 2>&1; then \
 			echo "Platform: NOT INSTALLED"; \
 			echo "  Run: make all"; \
@@ -401,7 +413,7 @@ status: ## Show cluster status (pods, phase, links)
 		fi; \
 		\
 		echo "Platform:"; \
-		PLATFORM=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -E "nodalarc-|nodalpath-|ome-" || true); \
+		PLATFORM=$$(kubectl get pods -n $(NAMESPACE) --no-headers -o wide 2>/dev/null | grep -E "nodalarc-|nodalpath-|ome-" || true); \
 		if [ -z "$$PLATFORM" ]; then \
 			echo "  NOT RUNNING"; \
 			echo "  Run: sudo make install"; \
@@ -412,9 +424,16 @@ status: ## Show cluster status (pods, phase, links)
 				echo "  Running ($$RUNNING/$$TOTAL platform pods)"; \
 			else \
 				echo "  DEGRADED ($$RUNNING/$$TOTAL platform pods running)"; \
-				echo "$$PLATFORM" | grep -v Running | awk "{printf \"    %s: %s\n\", \$$1, \$$3}"; \
 			fi; \
+			echo "$$PLATFORM" | awk "{printf \"    %-45s %-10s %s\n\", \$$1, \$$3, \$$7}"; \
 		fi; \
+		echo ""; \
+		\
+		echo "Services:"; \
+		VF_PORT=$$(kubectl get svc -n $(NAMESPACE) --no-headers 2>/dev/null | grep "nodalarc-vf" | grep -oP "\\d+:30\\d+" | head -1 || true); \
+		API_PORT=$$(kubectl get pods -n $(NAMESPACE) --no-headers -o wide 2>/dev/null | grep "vs-api" | awk "{print \$$6}" | head -1 || true); \
+		echo "  Visualization:  http://localhost:3000"; \
+		echo "  VS-API:         http://localhost:8080"; \
 		echo ""; \
 		\
 		echo "Session:"; \
@@ -423,18 +442,16 @@ status: ## Show cluster status (pods, phase, links)
 			echo "  No session deployed"; \
 			echo "  Run: sudo make session"; \
 		else \
+			SESSION_NAME=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"sessionId\",\"unknown\"))" 2>/dev/null); \
 			PHASE=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"phase\",\"Unknown\"))" 2>/dev/null); \
-			POD_COUNT=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"podCount\",0))" 2>/dev/null); \
-			READY=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"readyPods\",0))" 2>/dev/null); \
 			WIRED=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"wiredPods\",0))" 2>/dev/null); \
-			MSG=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"message\",\"\"))" 2>/dev/null); \
 			SATS=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/role=satellite --no-headers 2>/dev/null | grep -c Running || echo 0); \
 			GS=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/role=ground-station --no-headers 2>/dev/null | grep -c Running || echo 0); \
+			echo "  Name: $$SESSION_NAME"; \
 			echo "  Phase: $$PHASE"; \
 			echo "  Satellites: $$SATS running"; \
 			echo "  Ground stations: $$GS running"; \
 			echo "  Wired: $$WIRED nodes"; \
-			if [ -n "$$MSG" ]; then echo "  Message: $$MSG"; fi; \
 			NOT_RUNNING=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/node-id --no-headers 2>/dev/null | grep -v Running | grep -v Completed || true); \
 			if [ -n "$$NOT_RUNNING" ]; then \
 				echo "  WARNING: Some session pods not running:"; \
@@ -443,8 +460,9 @@ status: ## Show cluster status (pods, phase, links)
 		fi; \
 		echo ""; \
 		\
-		echo "Nodes:"; \
-		kubectl get nodes --no-headers 2>/dev/null | awk "{printf \"  %s: %s\n\", \$$1, \$$2}" || echo "  Unable to reach cluster"; \
+		echo "Pod Distribution:"; \
+		kubectl get pods -n $(NAMESPACE) -l nodalarc.io/node-id -o wide --no-headers 2>/dev/null | \
+			awk "{nodes[\$$7]++} END {for (n in nodes) printf \"  %s: %d session pods\n\", n, nodes[n]}" 2>/dev/null || echo "  No session pods"; \
 		echo ""; \
 		\
 		echo "Links:"; \
@@ -452,9 +470,11 @@ status: ## Show cluster status (pods, phase, links)
 		if [ -n "$$TOKEN" ]; then \
 			curl -s -H "Authorization: Bearer $$TOKEN" http://localhost:8080/api/v1/state 2>/dev/null | \
 				python3 -c "import json,sys; s=json.load(sys.stdin); \
-					isl=sum(1 for l in s[\"links\"] if \"isl\" in (l.get(\"link_type\") or \"\")); \
+					intra=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"intra_plane_isl\"); \
+					cross=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"cross_plane_isl\"); \
 					gnd=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"ground\"); \
-					print(f\"  ISL links: {isl}\"); \
+					print(f\"  Intra-plane ISL: {intra}\"); \
+					print(f\"  Cross-plane ISL: {cross}\"); \
 					print(f\"  Ground links: {gnd}\"); \
 					print(f\"  Total active: {len(s[\"links\"])}\")" 2>/dev/null || echo "  Unable to query VS-API"; \
 		else \

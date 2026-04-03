@@ -25,6 +25,12 @@ export function updateSelection(
   scene: THREE.Scene,
   camera: THREE.Camera,
 ): void {
+  // Hide glow on previously selected satellite
+  if (currentSelection?.type === "satellite") {
+    const prevSat = getSatellites().get(currentSelection.id);
+    if (prevSat) prevSat.glow.visible = false;
+  }
+
   if (!selection || selection.type === "link") {
     if (selectionRing) {
       selectionRing.visible = false;
@@ -50,7 +56,10 @@ export function updateSelection(
 
   if (selection.type === "satellite") {
     const sat = sats.get(selection.id);
-    if (sat) targetPos = sat.mesh.position;
+    if (sat) {
+      targetPos = sat.mesh.position;
+      sat.glow.visible = true;
+    }
   } else if (selection.type === "ground_station") {
     const gs = gss.get(selection.id);
     if (gs) {

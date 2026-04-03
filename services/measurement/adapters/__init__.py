@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 
 class ProtocolAdapter(Protocol):
-    """Interface for FRR protocol adapters (PRD 2050-2056)."""
+    """Interface for FRR protocol adapters."""
 
     def start(self, node_id: str, management_ip: str) -> None:
         """Begin collecting events from a specific node."""

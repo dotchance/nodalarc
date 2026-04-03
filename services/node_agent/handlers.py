@@ -101,7 +101,7 @@ def _ground_link_down(
 ) -> str | None:
     """Tear down a ground link. Returns error string or None.
 
-    PRD v0.42 Section 13.6 LinkDown sequence:
+    Ground LinkDown sequence:
     1. Remove tc mirred redirect from host-side veths
     2. Bring satellite host-side veth DOWN — carrier drops on GS gnd0
        automatically (UP → LOWERLAYERDOWN), FRR tears down adjacency
@@ -129,7 +129,7 @@ def _ground_link_up(
 ) -> str | None:
     """Bring up a ground link with bridge attach + shaping. Returns error or None.
 
-    PRD v0.42 Section 13.6 LinkUp sequence:
+    Ground LinkUp sequence:
     1. attach_to_ground_bridge (host veths UP, sat gnd0 UP, mirred redirect)
        — carrier arrives on GS gnd0 automatically (LOWERLAYERDOWN → UP)
     2. Apply tc shaping on GS gnd0
@@ -190,7 +190,7 @@ def handle_batch_link_down(
     context=None,
     pid_map: dict[str, int] | None = None,
 ) -> node_agent_pb2.BatchLinkDownResponse:
-    """Handle BatchLinkDown — per-interface locality (PRD Decision 1)."""
+    """Handle BatchLinkDown — per-interface locality."""
     start = _time.monotonic()
     errors: list[str] = []
     downed = 0
@@ -366,7 +366,7 @@ def handle_batch_link_up(
     upped = 0
     pm = pid_map or {}
 
-    # Validate PIDs. Per-interface locality (PRD Decision 1):
+    # Validate PIDs. Per-interface locality:
     # LOCAL GROUND needs both gs_id and sat_id PIDs (bridge ops).
     # CROSS_NODE needs only node_id PID (VXLAN into local pod).
     # LOCAL ISL needs node_id PID.

@@ -159,10 +159,10 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
     log.info("Phase 3: MPLS input enabled on ISL interfaces")
 
     # Phase 4: Create ground bridges and GS gnd0 interfaces
-    # PRD v0.42 Section 13.6: gnd0 initial state is LOWERLAYERDOWN — FRR zebra
-    # brings admin UP at config load, no carrier because host-side veth is down.
-    # No explicit admin state manipulation needed. Host-side veth UP on LinkUp
-    # gives gnd0 carrier automatically.
+    # gnd0 initial state is LOWERLAYERDOWN — FRR zebra brings admin UP at
+    # config load, no carrier because host-side veth is down. No explicit
+    # admin state manipulation needed. Host-side veth UP on LinkUp gives
+    # gnd0 carrier automatically.
     for gs_id, _bridge_spec in ground_bridges.items():
         gs_pid = pid_map.get(gs_id, 0)
         if gs_pid == 0:

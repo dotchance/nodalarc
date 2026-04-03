@@ -1,8 +1,7 @@
 """Kernel-vs-ConfigMap reconciliation for Node Agent wiring.
 
-PRD v0.38 Node Agent Reconciliation Model: the Node Agent is stateless
-across restarts. On every startup and ConfigMap change, it diffs desired
-(ConfigMap) vs actual (kernel) and acts accordingly:
+The Node Agent is stateless across restarts. On every startup and ConfigMap
+change, it diffs desired (ConfigMap) vs actual (kernel) and acts accordingly:
   Case A — No kernel state, no current wiring-status: wire from scratch
   Case B — Wiring-status present and current: no-op
   Case C — Kernel state exists but wiring-status absent/stale: clean, re-wire

@@ -2,9 +2,8 @@
 
 REST API on port 9100. Sends timestamped UDP probe packets with sequence
 numbering to measure end-to-end reachability through the constellation.
-
-PRD: "Lightweight UDP probe with sequence numbering; runs as sidecar
-in ground station pods."
+Lightweight UDP probe with sequence numbering; runs as sidecar in ground
+station pods.
 
 Run: python -m measurement.probe_daemon
      uvicorn measurement.probe_daemon:app --host 0.0.0.0 --port 9100

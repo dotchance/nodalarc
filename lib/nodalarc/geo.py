@@ -3,7 +3,7 @@
 Pure math on WGS84 constants. Used by OME (snapshot latency) and
 Scheduler (position table, inter-snapshot latency refinement).
 
-One formula, one place. PRD R-TO-002.
+One formula, one place.
 """
 
 from __future__ import annotations
@@ -44,6 +44,6 @@ def compute_range_km(
 def compute_latency_ms(range_km: float) -> float:
     """Compute one-way propagation delay from range in km.
 
-    PRD R-TO-002: one_way_latency_ms = range_km / 299792.458 * 1000
+    one_way_latency_ms = range_km / 299792.458 * 1000
     """
     return range_km / SPEED_OF_LIGHT_KM_S * 1000.0

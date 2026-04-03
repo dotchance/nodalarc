@@ -19,7 +19,7 @@ package with its own Dockerfile. All share `lib/nodalarc/` as a dependency.
 1. **NATS** — JetStream server (deployed by Helm, not a service in this directory)
 2. **OME** — must create JetStream streams before other services subscribe (init container)
 3. **Node Agent** — must complete wiring before accepting NATS requests (wiring gate)
-4. **Scheduler** — must wait for wiring-status ConfigMap before dispatching (R-TO-010)
+4. **Scheduler** — must wait for wiring-status ConfigMap before dispatching (wiring gate)
 5. **VS-API** — subscribes to all NATS subjects, can start anytime after NATS
 6. **Operator** — watches CRDs, can start anytime after Helm install
 

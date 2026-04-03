@@ -238,7 +238,7 @@ def _update_position(event_data: dict) -> None:
     with _state_lock:
         _state["sim_time"] = event_data.get("sim_time", _state["sim_time"])
 
-        # Per-node format (PRD PositionEvent schema)
+        # Per-node format (PositionEvent schema)
         if "node_id" in event_data:
             import re
 
@@ -510,7 +510,7 @@ async def _nats_subscriber() -> None:
 
     Subscribes to:
     - nodalarc.ome.snapshot → position updates
-    - nodalarc.links.state → LinkStateSnapshot (replace-not-merge, R-OME-009)
+    - nodalarc.links.state → LinkStateSnapshot (replace-not-merge)
     - nodalarc.links.up/down → individual link events
     - nodalarc.links.latency → latency updates
     - nodalarc.nodalpath.almanac → NodalPath almanac events

@@ -28,9 +28,9 @@ enum LinkType {
   GROUND = 1;
 }
 
-// Per-interface locality (PRD Decision 1, Section 13.6).
-// Carried in each InterfaceUp/InterfaceDown entry — not on the batch request.
-// The Node Agent decides per-interface whether to use local veth or VXLAN.
+// Per-interface locality — carried in each InterfaceUp/InterfaceDown entry,
+// not on the batch request. The Node Agent decides per-interface whether to
+// use local veth or VXLAN.
 enum Locality {
   LOCAL = 0;        // Both pods on this node — direct veth operations
   CROSS_NODE = 1;   // Pods on different nodes — VXLAN tunnel
@@ -49,7 +49,7 @@ message InterfaceDown {
   // CROSS_NODE VXLAN parameters (empty/zero for LOCAL)
   string remote_node_ip = 9;
   int32 vni = 10;
-  // Per-interface locality (PRD Decision 1)
+  // Per-interface locality
   Locality locality = 11;
 }
 
@@ -84,7 +84,7 @@ message InterfaceUp {
   // CROSS_NODE VXLAN parameters (empty/zero for LOCAL)
   string remote_node_ip = 12;
   int32 vni = 13;
-  // Per-interface locality (PRD Decision 1)
+  // Per-interface locality
   Locality locality = 14;
 }
 

@@ -438,11 +438,9 @@ def build_link_state_snapshot(
     """Build a LinkStateSnapshot from OME internal state.
 
     Reports admin + carrier state and latency for every link.
-    latency_ms is computed from satellite positions (PRD R-TO-002:
-    range_km / 299792.458 * 1000). Positions come from the
+    latency_ms is computed from satellite positions as
+    range_km / 299792.458 * 1000. Positions come from the
     TimelinePositionSnapshot at the same sim_time tick.
-
-    PRD Section 4.1B R-OME-009.
     """
     from nodalarc.geo import compute_latency_ms, compute_range_km, geodetic_to_ecef
     from nodalarc.models.link_state import (
@@ -453,7 +451,7 @@ def build_link_state_snapshot(
         RoutingState,
     )
 
-    # Convert geodetic positions to ECEF for range computation (R-TO-002)
+    # Convert geodetic positions to ECEF for range computation
     ecef: dict[str, tuple[float, float, float]] = {}
     if positions:
         for node_id, pos in positions.items():

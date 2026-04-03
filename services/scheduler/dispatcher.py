@@ -6,9 +6,9 @@ to the Node Agent — both live VisibilityEvents and LinkStateSnapshot build
 a desired state dict and call it. Publishes LinkUp/LinkDown/LatencyUpdate
 on NATS subjects.
 
-LinkStateSnapshot (R-OME-009) is applied as replace-not-merge — desired
-state is built from the snapshot, and _reconcile_links computes the delta
-against current _active_links and dispatches BatchLinkDown/Up accordingly.
+LinkStateSnapshot is applied as replace-not-merge — desired state is built
+from the snapshot, and _reconcile_links computes the delta against current
+_active_links and dispatches BatchLinkDown/Up accordingly.
 """
 
 from __future__ import annotations
@@ -67,8 +67,8 @@ class Dispatcher:
     Subscribes to NATS for OME events, dispatches BatchLinkDown/Up to
     Node Agents via _reconcile_links, publishes LinkUp/LinkDown/LatencyUpdate.
 
-    LinkStateSnapshot (R-OME-009) applied as replace-not-merge every 5
-    sim-seconds. Eliminates window boundary GS accumulation permanently.
+    LinkStateSnapshot applied as replace-not-merge every 5 sim-seconds.
+    Eliminates window boundary GS accumulation permanently.
 
     _reconcile_links is THE SINGLE PATH to the Node Agent for link state.
     Both _dispatch_batch (live VisibilityEvents) and _on_link_state_snapshot
@@ -137,7 +137,7 @@ class Dispatcher:
 
         log.info("Scheduler NATS connected")
 
-        # Load substrate latency for R-TO-002A compensation
+        # Load substrate latency for cross-node compensation
         self._load_substrate_latency()
 
         # Subscribe to LinkStateSnapshot — get latest retained message
@@ -281,7 +281,7 @@ class Dispatcher:
     def _build_desired_from_snapshot(
         self, snapshot: LinkStateSnapshot
     ) -> dict[tuple[str, str], ActiveLinkInfo] | None:
-        """Build desired link state from a LinkStateSnapshot (R-OME-009).
+        """Build desired link state from a LinkStateSnapshot.
 
         Returns the desired _active_links dict, or None if the snapshot is
         stale. Does NOT modify _active_links — the caller passes the result
@@ -304,7 +304,7 @@ class Dispatcher:
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 pair = (link.node_a, link.node_b)
-                # Prefer snapshot latency (OME-authoritative, R-TO-002).
+                # Prefer snapshot latency (OME-authoritative).
                 # Fall back to position table only if snapshot has None.
                 latency = link.latency_ms
                 if latency is None:
@@ -682,7 +682,7 @@ class Dispatcher:
             locality = self._link_locality(node_a, node_b)
             is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
 
-            # R-TO-002A: substrate compensation on initial link-up.
+            # Substrate compensation on initial link-up.
             # The Node Agent applies this as tc netem delay. For CROSS_NODE
             # links the VXLAN packet already traverses substrate_ms of
             # physical network, so netem = orbital - substrate. The UI
@@ -820,7 +820,7 @@ class Dispatcher:
     async def _update_latencies(self, to_pub) -> None:
         """Compute and dispatch latency updates for active links.
 
-        Substrate compensation (R-TO-002A): netem_ms = max(0, target_ms - substrate_ms).
+        Substrate compensation: netem_ms = max(0, target_ms - substrate_ms).
         substrate_ms comes from the Operator's ping measurement between K3s nodes.
         For LOCAL links (same node), substrate_ms = 0.0.
         """
@@ -839,7 +839,7 @@ class Dispatcher:
             if not info:
                 continue
 
-            # R-TO-002A substrate compensation
+            # Substrate compensation for cross-node links
             substrate_ms = self._get_substrate_ms(node_a, node_b)
             netem_ms = max(0.0, new_lat - substrate_ms)
 

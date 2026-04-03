@@ -20,4 +20,4 @@ spec:
 ```
 
 Singleton — only `current-session` is allowed. The Operator handles the
-11-step session switch sequence (PRD R-OPS-003).
+11-step session switch sequence.

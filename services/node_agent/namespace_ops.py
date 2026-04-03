@@ -192,7 +192,7 @@ def apply_link_shaping(
     Called once when a link goes up. Subsequent delay changes use
     update_delay().
 
-    PRD Appendix A: tbf root qdisc, netem child.
+    Uses tbf root qdisc with netem child for combined shaping.
     """
     rate_bps = int(rate_mbps * 1_000_000)
     burst = max(9000, rate_bps // 250)

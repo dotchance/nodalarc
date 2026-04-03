@@ -1,4 +1,4 @@
-"""Satellite type configuration models (PRD Section 13.16A).
+"""Satellite type configuration models.
 
 A satellite type defines the terminal hardware carried by each satellite
 in a constellation. Satellite type files live in configs/satellite-types/

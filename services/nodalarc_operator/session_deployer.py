@@ -444,7 +444,7 @@ def write_wiring_manifest(
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
 
-    # R-OPS-003 Step 4: Delete stale wiring-status before writing new manifest.
+    # Delete stale wiring-status before writing new manifest.
     # Without this, the Node Agent sees old wiring-status as "current" and
     # hits Case B (no-op) instead of Case A (wire from scratch).
     try:

@@ -24,8 +24,8 @@ def resolve_dst_ip(
 ) -> str:
     """Resolve destination node ID to first IPv4 from terrestrial prefix.
 
-    PRD line 820: "first IPv4 address from destination ground station's
-    terrestrial prefix."
+    Uses the first IPv4 address from the destination ground station's
+    terrestrial prefix.
 
     gs-frankfurt with 172.16.1.0/24 → 172.16.1.1
     """

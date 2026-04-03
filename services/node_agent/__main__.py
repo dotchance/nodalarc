@@ -11,7 +11,7 @@ Startup ordering (enforced, not hoped for):
   4. NATS server subscribes and begins accepting requests
   5. Requests use the wiring thread's pid_map — no rediscovery
 
-This is the same principle as R-TO-010 (Scheduler wiring gate).
+This is the same principle as the Scheduler wiring gate.
 The NATS server must NOT accept requests until wiring is complete.
 """
 

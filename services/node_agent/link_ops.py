@@ -4,7 +4,7 @@ Creates/destroys veth pairs, creates dummy interfaces, sets interface
 state, applies tc netem/tbf, manages ground station bridges.
 Does NOT compute latency, decide when links change, or know about OME events.
 
-All netlink operations use pyroute2 directly (PRD 13.6).
+All netlink operations use pyroute2 directly.
 """
 
 from __future__ import annotations
@@ -125,7 +125,7 @@ def create_veth_pair(
     """Create a veth pair and move ends into the given namespaces.
 
     Each end is renamed to the specified ifname inside its namespace.
-    PRD 13.6: sets MTU, disables IPv6 autoconfig, sets deterministic MACs.
+    Sets MTU, disables IPv6 autoconfig, sets deterministic MACs.
     """
     if mtu is None:
         from nodalarc.platform import get_platform_config
@@ -184,7 +184,7 @@ def create_veth_pair(
     finally:
         ns_b.close()
 
-    # PRD 13.6 step 5: disable IPv6 autoconfig, set deterministic MACs
+    # Disable IPv6 autoconfig and set deterministic MACs
     if node_id_a:
         configure_interface(pid_a, ifname_a, node_id_a)
     if node_id_b:
@@ -239,7 +239,7 @@ def _write_sysctl_in_netns(pid: int, sysctl_key: str, value: str) -> str | None:
 
 
 def disable_ipv6_autoconfig(pid: int, ifname: str) -> None:
-    """Disable IPv6 autoconfig on an interface (PRD 13.6 step 5).
+    """Disable IPv6 autoconfig on an interface.
 
     Uses os.setns to enter the pod's network namespace and write sysctl
     values directly — no subprocess/nsenter.
@@ -384,7 +384,7 @@ def deterministic_mac(node_id: str, ifname: str) -> str:
 
 
 def configure_interface(pid: int, ifname: str, node_id: str) -> None:
-    """Apply PRD 13.6 step 5 configuration to a veth interface.
+    """Apply post-creation configuration to a veth interface.
 
     Disables IPv6 autoconfig and sets a deterministic MAC address.
     MTU is set during veth creation.
@@ -461,7 +461,7 @@ def apply_link_shaping(
     Called once when a link goes up. Subsequent delay changes use
     update_delay().
 
-    PRD Appendix A: tbf root qdisc, netem child.
+    Uses tbf root qdisc with netem child for combined shaping.
     """
     rate_bps = int(rate_mbps * 1_000_000)
     # tbf burst: at least 1 MTU, typically rate / 250 Hz

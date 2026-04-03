@@ -1,8 +1,8 @@
 """Convergence detector — measures network convergence after link events.
 
-PRD line 2054: Determine which flows are affected by a link event.
-Drive probe bursts via probe daemon REST API. Evaluate probe results
-against stability criteria.
+Determines which flows are affected by a link event, drives probe bursts
+via probe daemon REST API, and evaluates probe results against stability
+criteria.
 """
 
 from __future__ import annotations

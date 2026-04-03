@@ -1,4 +1,4 @@
-"""Three-layer link state model — PRD Section 4.1B.
+"""Three-layer link state model.
 
 Every link has three causally dependent layers:
   1. Admin state — is the interface administratively enabled?

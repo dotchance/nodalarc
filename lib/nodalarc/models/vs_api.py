@@ -41,7 +41,7 @@ class LinkState(BaseModel):
 
     node_a: str
     node_b: str
-    state: str  # "active" or "inactive" (Phase 1)
+    state: str  # "active" or "inactive"
     link_type: str | None  # intra_plane_isl, cross_plane_isl, ground_uplink, ground_downlink
     link_reason: str | None
     latency_ms: float
@@ -116,7 +116,7 @@ class StateSnapshot(BaseModel):
 
     sim_time: datetime
     wall_time: datetime
-    schema_version: int  # Always 1 for Phase 1
+    schema_version: int  # Always 1
     nodes: list[NodeState]
     links: list[LinkState]
     traced_paths: list[TracedPath]

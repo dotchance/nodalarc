@@ -1,4 +1,4 @@
-"""Phase 1 test: node_agent.proto compiles and stubs are importable."""
+"""Test that node_agent.proto compiles and stubs are importable."""
 
 from __future__ import annotations
 

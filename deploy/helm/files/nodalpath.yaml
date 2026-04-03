@@ -80,7 +80,7 @@ nodalpath:
   #
   # The lookahead worker reads ahead in the OME timeline JSONL file
   # and pre-computes forwarding tables for topology states that have
-  # not yet been observed in the live ZMQ event stream. This enables
+  # not yet been observed in the live NATS event stream. This enables
   # the operator console to show future topology transitions.
 
   # How far ahead in simulation time to pre-compute forwarding tables

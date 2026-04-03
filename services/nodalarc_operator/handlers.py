@@ -158,7 +158,7 @@ async def on_create(spec, name, namespace, meta, **_):
             )
             raise kopf.PermanentError(f"Session pods did not reach Running: {ready}/{pod_count}")
 
-        # Signal FRR config-ready in each pod (replaces na_deploy.py sentinel touch)
+        # Signal FRR config-ready in each pod
         await loop.run_in_executor(None, signal_frr_config_ready, namespace)
 
         # Write pod-IPs ConfigMap (needs running pods)

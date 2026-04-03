@@ -15,8 +15,10 @@ spec:
       labels:
         app: nodalarc-ome
     spec:
+{{- if .Values.controlPlaneNode }}
       nodeSelector:
-        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode }}
+{{- end }}
       initContainers:
         - name: ensure-nats-streams
           image: natsio/nats-box:latest

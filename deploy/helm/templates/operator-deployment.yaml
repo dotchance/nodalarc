@@ -16,8 +16,10 @@ spec:
         app: nodalarc-operator
     spec:
       serviceAccountName: nodalarc-operator
+{{- if .Values.controlPlaneNode }}
       nodeSelector:
-        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode }}
+{{- end }}
       containers:
         - name: operator
           image: {{ .Values.images.operator | default "nodalarc/operator:latest" }}
@@ -40,9 +42,9 @@ spec:
             periodSeconds: 30
           env:
             # Fallback if no nodes have nodalarc.io/node-agent=true label.
-            # With M10 placement policies, the Operator discovers nodes automatically.
+            # The Operator discovers nodes automatically via the K8s API.
             - name: SESSION_NODE_NAME
-              value: {{ .Values.sessionNodeName | default "nodal" | quote }}
+              value: {{ .Values.sessionNodeName | quote }}
             - name: FRR_IMAGE
               value: {{ .Values.images.frr | default "nodalarc/frr:latest" | quote }}
           resources:

@@ -12,4 +12,4 @@ Collects routing protocol events and probe measurements. Not yet containerized.
 
 ## Status
 
-Uses ZMQ for transport (transitional). Will migrate to NATS in a future phase.
+Uses NATS JetStream for transport.

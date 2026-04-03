@@ -455,8 +455,8 @@ def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
 
 
 def expand_tle(config: TLEConstellation) -> list[SatelliteNode]:
-    """Expand TLE constellation — stub for Phase 1."""
-    raise NotImplementedError("TLE constellation expansion deferred to Phase 1B+")
+    """Expand TLE constellation — not yet implemented."""
+    raise NotImplementedError("TLE constellation expansion not yet implemented")
 
 
 def expand_constellation(config: ConstellationConfig) -> list[SatelliteNode]:

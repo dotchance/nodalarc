@@ -2,7 +2,7 @@
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 """Visibility computation for ISL and ground station links.
 
-The hardest module in Phase 1A. Handles:
+Handles:
 - Line-of-sight (Earth body occlusion)
 - Range constraints
 - Elevation angle for ground stations

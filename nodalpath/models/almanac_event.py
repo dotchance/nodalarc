@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class AlmanacEvent(BaseModel):
-    """Event published by NodalPath on the nodalpath-events ZMQ channel."""
+    """Event published by NodalPath on the nodalpath-events NATS subject."""
 
     model_config = ConfigDict(frozen=True)
 

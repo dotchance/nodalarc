@@ -17,8 +17,10 @@ spec:
       labels:
         app: nodalarc-nats
     spec:
+{{- if .Values.controlPlaneNode }}
       nodeSelector:
-        kubernetes.io/hostname: {{ .Values.controlPlaneNode | default "nodal" }}
+        kubernetes.io/hostname: {{ .Values.controlPlaneNode }}
+{{- end }}
       containers:
         - name: nats
           image: {{ .Values.nats.image | default "nats:2.11-alpine" }}

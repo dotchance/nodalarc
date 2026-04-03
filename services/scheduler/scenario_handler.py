@@ -3,7 +3,6 @@
 """Scenario injection handler — NATS request/reply.
 
 Subscribes to nodalarc.scheduler.scenario for scenario injection commands.
-Replaces ZMQ REP on port 5564.
 
 Actions:
   inject_link_down: Add pair to override set, dispatch BatchLinkDown to agent,

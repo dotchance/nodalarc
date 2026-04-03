@@ -78,13 +78,12 @@ class PodLocationMap:
         The pid_map.json is keyed by canonical node IDs (from discover_pod_pids
         which reads the nodalarc.io/node-id label).
 
-        For M4 (single K3s node), all pods are on the same node.
-        We discover the node name from K8s API and set all pods to that node.
+        Discovers the K3s node name from the API and maps all pods to it.
         """
         with open(path) as f:
             pid_map: dict[str, int] = json.load(f)
 
-        # Discover K3s node name — all pods on same node in M4
+        # Discover K3s node name
         k3s_node = _discover_k3s_node()
         for nid in pid_map:
             self._node_of[nid] = k3s_node

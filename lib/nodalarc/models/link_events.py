@@ -2,7 +2,7 @@
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 """TO link event models — all frozen (immutable after creation).
 
-Published on ZeroMQ port 5561 (TO_EVENTS_PORT).
+Published via NATS JetStream.
 """
 
 from datetime import datetime

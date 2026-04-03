@@ -1,6 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Node Agent NATS server — replaces ZMQ ROUTER transport.
+"""Node Agent NATS server.
 
 Subscribes to NATS subject nodalarc.agent.{hostname} for batch commands
 from the Scheduler. Uses NATS request/reply — Scheduler publishes a request,

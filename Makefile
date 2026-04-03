@@ -70,7 +70,7 @@ REQUIRED_K3S_IMAGES := nodalarc/frr:latest
 help: ## Show this help
 	@echo "NodalArc Build System"
 	@echo ""
-	@echo "Quick start:  scripts/bootstrap-host.sh && make all"
+	@echo "Quick start:  sudo scripts/bootstrap-host.sh && make all"
 	@echo ""
 	@echo "Targets:"
 	@grep -E '^[a-zA-Z_-]+:.*?## ' Makefile | sort | \

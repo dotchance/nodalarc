@@ -2,7 +2,7 @@
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 """OME event models — all frozen (immutable after creation).
 
-Published on ZeroMQ port 5560 (OME_EVENTS_PORT).
+Published via NATS JetStream.
 """
 
 from datetime import datetime
@@ -24,7 +24,7 @@ class NodePosition(BaseModel):
 
 
 class PositionEvent(BaseModel):
-    """Position update for a single node, published via ZeroMQ."""
+    """Position update for a single node, published via NATS JetStream."""
 
     model_config = ConfigDict(frozen=True)
 

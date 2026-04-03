@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
+// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** Link rendering using Line2 for pixel-width lines.
  *  Per VF spec Sections 7.3, 7.4, 10.2:
  *   - ISL (all): solid, muted green #44cc66, 1.5px

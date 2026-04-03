@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
+// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** WebSocket hook — connects to VS-API, parses StateSnapshot, drops intermediate frames. */
 
 import { useEffect, useRef, useState, useCallback } from "react";

@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
+# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 """FRR OSPF protocol adapter — vtysh polling + log file parsing.
 
 Collects OSPF adjacency state via `show ip ospf neighbor` polling and

@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the Elastic License 2.0 (ELv2). See LICENSE file.
+# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 """Initial topology wiring — executes data plane setup from wiring manifest.
 
 Called by the Node Agent when a new nodalarc-topology-wiring ConfigMap

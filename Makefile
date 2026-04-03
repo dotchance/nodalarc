@@ -249,13 +249,15 @@ endif
 # ---------------------------------------------------------------------------
 
 install: ## Helm install/upgrade the platform chart
-	@if kubectl get namespace $(NAMESPACE) >/dev/null 2>&1; then \
-		echo "[install] Namespace $(NAMESPACE) exists — upgrading..."; \
-		helm upgrade nodalarc deploy/helm --namespace $(NAMESPACE) $(HELM_EXTRA_ARGS); \
-	else \
-		echo "[install] Installing Helm chart..."; \
-		helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace $(HELM_EXTRA_ARGS); \
+	@echo "[install] Installing Helm chart..."
+	@if helm status nodalarc -n $(NAMESPACE) >/dev/null 2>&1; then \
+		echo "[install] Removing existing installation..."; \
+		helm uninstall nodalarc -n $(NAMESPACE) 2>/dev/null || true; \
+		kubectl delete namespace $(NAMESPACE) --timeout=30s 2>/dev/null || true; \
+		echo "[install] Waiting for namespace cleanup..."; \
+		while kubectl get namespace $(NAMESPACE) 2>/dev/null | grep -q $(NAMESPACE); do sleep 2; done; \
 	fi
+	@helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace $(HELM_EXTRA_ARGS)
 	@echo "[install] Waiting for platform pods..."
 	@kubectl wait --for=condition=Ready pod -l app=nodalarc-nats \
 		-n $(NAMESPACE) --timeout=60s 2>/dev/null || true
@@ -290,6 +292,13 @@ session: ## Start a session (DEFAULT_SESSION=path/to/session.yaml)
 			if [ "$$PHASE" = "Ready" ]; then \
 				PODS=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | wc -l); \
 				RUNNING=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -c Running || true); \
+				NOT_RUNNING=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -v Running | grep -v Completed || true); \
+				if [ -n "$$NOT_RUNNING" ]; then \
+					echo "[session] WARNING: Phase is Ready but some pods are not running:"; \
+					echo "$$NOT_RUNNING"; \
+					echo "[session] $$RUNNING/$$PODS pods running. Check pod status."; \
+					exit 1; \
+				fi; \
 				echo "[session] Session ready. $$RUNNING/$$PODS pods running."; \
 				exit 0; \
 			fi; \

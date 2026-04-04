@@ -1,11 +1,9 @@
 # Demo-36: single orbital ring for quick demos and evaluation.
 #
-# 1 plane x 36 satellites at 550 km, 45 deg inclination. The 45 deg
-# inclination puts the densest ground track coverage at 34-40N where
-# the US ground stations (Hawthorne, Denver, Ashburn) sit, giving
-# frequent overhead passes with good dwell time. Frankfurt (50N) is
-# still within the 12 deg footprint cone. Singapore and Tokyo get
-# passes as the ground track crosses their latitudes.
+# 1 plane x 36 satellites at 550 km, 53 deg inclination. The ground
+# track reaches 53N/53S, covering all demo ground stations including
+# Frankfurt (50N). The ring sweeps diagonally across the US, giving
+# passes over Hawthorne, Denver, and Ashburn.
 #
 # Intra-plane ISL distance: ~2400 km (well within Starlink V2's 5000 km range).
 # Cross-plane ISLs: none (single plane).
@@ -15,7 +13,7 @@ name: demo-36
 satellite_type: starlink-v2
 orbit:
   altitude_km: 550
-  inclination_deg: 45
+  inclination_deg: 53
   pattern: walker-delta
 planes:
   count: 1

@@ -2,12 +2,13 @@
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 ground_station_set:
   name: demo
-  description: "6 stations across 5 continents for the demo-36 constellation."
+  description: "7 stations across 6 continents for the demo-36 constellation."
   stations:
     - hawthorne
     - ashburn
     - denver
     - frankfurt
+    - hartebeesthoek
     - singapore
     - tokyo
   default_terrestrial_prefixes:

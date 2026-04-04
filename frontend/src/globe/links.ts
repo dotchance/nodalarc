@@ -213,9 +213,13 @@ export function animateLinks(showIslLinks: boolean = true, showGroundLinks: bool
       }
     }
 
-    // Gently bowed curve so links read as smooth, not polygonal
-    entry.geometry.setPositions(bowedPositions(posA, posB));
-    if (entry.isGround) entry.line.computeLineDistances();
+    // ISL links get a gentle bow; ground links are straight (direct radio beam)
+    if (entry.isGround) {
+      entry.geometry.setPositions([posA.x, posA.y, posA.z, posB.x, posB.y, posB.z]);
+      entry.line.computeLineDistances();
+    } else {
+      entry.geometry.setPositions(bowedPositions(posA, posB));
+    }
 
     // Fail-flash animation — boost opacity so it's visible on all link types
     if (entry.failTime !== null) {

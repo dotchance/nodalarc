@@ -25,11 +25,17 @@ const MIN_WALL_DELTA_MS = 10;
 const OUTLIER_RATIO_MIN = 0.2;
 const OUTLIER_RATIO_MAX = 5.0;
 const DEFAULT_WALL_MS_PER_SIM_MS = 1.0;
+/** After this many consecutive outlier-clamped snapshots, accept the new
+ *  rate as a legitimate persistent change (e.g. user changed playback
+ *  speed from 1x to 30x) and re-seed the EMA. Standard adaptive outlier
+ *  filter pattern: reject transient jitter, accept sustained step changes. */
+const RESEED_AFTER_CONSECUTIVE_OUTLIERS = 3;
 
 let _wallMsPerSimMs = DEFAULT_WALL_MS_PER_SIM_MS;
 let _rateSeeded = false;
 let _lastSimTimeMs: number | null = null;
 let _lastSimWallTime: number | null = null;
+let _consecutiveOutliers = 0;
 
 /** Record a new snapshot arrival. Updates the wall-to-sim rate EMA.
  *
@@ -70,6 +76,16 @@ export function onSnapshot(
       if (ratio > OUTLIER_RATIO_MIN && ratio < OUTLIER_RATIO_MAX) {
         _wallMsPerSimMs =
           _wallMsPerSimMs * (1 - RATE_EMA_ALPHA) + instantRate * RATE_EMA_ALPHA;
+        _consecutiveOutliers = 0;
+      } else {
+        // Outlier: could be transient jitter OR a legitimate persistent
+        // rate change (user changed playback speed). Track consecutive
+        // outliers; if sustained, re-seed EMA to the new reality.
+        _consecutiveOutliers++;
+        if (_consecutiveOutliers >= RESEED_AFTER_CONSECUTIVE_OUTLIERS) {
+          _wallMsPerSimMs = instantRate;
+          _consecutiveOutliers = 0;
+        }
       }
     }
   }
@@ -107,4 +123,5 @@ export function resetSimClock(): void {
   _rateSeeded = false;
   _lastSimTimeMs = null;
   _lastSimWallTime = null;
+  _consecutiveOutliers = 0;
 }

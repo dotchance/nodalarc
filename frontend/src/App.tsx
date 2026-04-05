@@ -91,7 +91,6 @@ function AppInner() {
   const [followNode, setFollowNode] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
-  const playingRef = useRef(historicalPlaying);
 
   // Track window width for split view gate
   useEffect(() => {
@@ -229,10 +228,7 @@ function AppInner() {
       onToggleHistorical: toggleHistorical,
       onPlayPause: () => {
         if (historicalMode) {
-          setHistoricalPlaying((prev) => {
-            playingRef.current = !prev;
-            return !prev;
-          });
+          setHistoricalPlaying((prev) => !prev);
         } else {
           if (playback.paused) {
             playback.resume();
@@ -370,7 +366,6 @@ function AppInner() {
             showIslLinks={showIslLinks}
             showSatPaths={showSatPaths}
             actionsRef={globeActionsRef}
-            followNode={followNode}
           />
         </div>
         <div

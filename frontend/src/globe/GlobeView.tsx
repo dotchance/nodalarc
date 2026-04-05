@@ -43,7 +43,6 @@ interface GlobeViewProps {
   showIslLinks: boolean;
   showSatPaths: boolean;
   actionsRef?: MutableRefObject<GlobeActions | null>;
-  followNode?: boolean;
 }
 
 export function GlobeView({
@@ -56,7 +55,6 @@ export function GlobeView({
   showIslLinks,
   showSatPaths,
   actionsRef,
-  followNode: _followNode,
 }: GlobeViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);

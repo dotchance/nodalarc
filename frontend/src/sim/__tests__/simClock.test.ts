@@ -82,9 +82,43 @@ describe("simClock", () => {
     expect(wallMsPerSimMs()).toBe(2.0); // unchanged
 
     // Send slow outlier: 1000ms sim in 100ms wall → instantRate 0.1
-    // Ratio 0.05, below 0.2 → clamp, don't update.
+    // Ratio 0.05, below 0.2 → clamp on first occurrence.
     onSnapshot(ISO(simStart + 2100), 4200);
-    expect(wallMsPerSimMs()).toBe(2.0); // still unchanged
+    expect(wallMsPerSimMs()).toBe(2.0); // still unchanged after 1 outlier
+  });
+
+  it("re-seeds EMA after 3 consecutive outliers (persistent rate change)", () => {
+    const simStart = 1775260800000;
+    onSnapshot(ISO(simStart), 100);
+    onSnapshot(ISO(simStart + 1000), 2100); // seed EMA = 2.0
+    // Simulate speed change from 1x to 30x: each snapshot now arrives
+    // much faster (wallDelta=33ms for simDelta=1000ms → rate=0.033).
+    // This ratio (0.033/2.0 = 0.017) is below the 0.2 clamp threshold.
+    // After 3 consecutive outliers, the EMA should re-seed.
+    onSnapshot(ISO(simStart + 2000), 2133); // outlier 1 → still 2.0
+    expect(wallMsPerSimMs()).toBe(2.0);
+    onSnapshot(ISO(simStart + 3000), 2166); // outlier 2 → still 2.0
+    expect(wallMsPerSimMs()).toBe(2.0);
+    onSnapshot(ISO(simStart + 4000), 2199); // outlier 3 → RE-SEED
+    expect(wallMsPerSimMs()).toBeCloseTo(0.033, 1);
+  });
+
+  it("resets consecutive outlier counter on normal measurement", () => {
+    const simStart = 1775260800000;
+    onSnapshot(ISO(simStart), 100);
+    onSnapshot(ISO(simStart + 1000), 2100); // seed EMA = 2.0
+    // 2 outliers (fast delivery: rate ≈ 0.033)
+    onSnapshot(ISO(simStart + 2000), 2133); // outlier 1
+    onSnapshot(ISO(simStart + 3000), 2166); // outlier 2
+    // Then a normal measurement at a DIFFERENT rate (1.5) to move EMA
+    onSnapshot(ISO(simStart + 4000), 3666); // rate=1500/1000=1.5, ratio=0.75 → normal
+    const rate = wallMsPerSimMs();
+    // EMA: 2.0*0.85 + 1.5*0.15 = 1.925 — moved from 2.0, still above 1.5
+    expect(rate).toBeCloseTo(1.925, 2);
+    // Counter was reset by the normal measurement. One more outlier
+    // should NOT trigger re-seed (only 1 consecutive, need 3).
+    onSnapshot(ISO(simStart + 5000), 3699); // outlier again → count=1
+    expect(wallMsPerSimMs()).toBeCloseTo(1.925, 1); // unchanged
   });
 
   it("interpolates sim_time from last snapshot + rate", () => {

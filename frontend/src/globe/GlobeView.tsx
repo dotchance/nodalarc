@@ -12,19 +12,20 @@ import {
   CAMERA_MAX_DISTANCE,
   EARTH_RADIUS,
 } from "../config";
-import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, setGlobeMode } from "./earth";
+import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, updateSunWorldDirection, setGlobeMode } from "./earth";
 import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites } from "./satellites";
-import { resetSimClock } from "../sim/simClock";
+import { resetSimClock, interpolatedSimTimeMs } from "../sim/simClock";
+import { gmstRadians, EARTH_ROTATION_RATE_RAD_S } from "./astronomy";
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
 import { updateOrbitalTrails, flushTrails } from "./orbitalTrails";
-import { updateOrbitPins, clearOrbitPins } from "./orbitPins";
+import { updateOrbitPins, clearOrbitPins, reseedAllPins } from "./orbitPins";
 import { updateAllOrbits, clearAllOrbits } from "./allOrbits";
 import { setupRaycaster } from "./raycaster";
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
-import type { StateSnapshot, Selection, ColorMode, GlobeMode } from "../types";
+import type { StateSnapshot, Selection, ColorMode, GlobeMode, ReferenceFrame } from "../types";
 
 // Reusable temporaries for camera-math helpers (flyToNode, getNodeScreenPosition,
 // follow-target), avoiding per-call allocation. World-space values only.
@@ -51,6 +52,7 @@ interface GlobeViewProps {
   showGroundLinks: boolean;
   showIslLinks: boolean;
   showSatPaths: boolean;
+  referenceFrame: ReferenceFrame;
   actionsRef?: MutableRefObject<GlobeActions | null>;
 }
 
@@ -63,6 +65,7 @@ export function GlobeView({
   showGroundLinks,
   showIslLinks,
   showSatPaths,
+  referenceFrame,
   actionsRef,
 }: GlobeViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -78,6 +81,9 @@ export function GlobeView({
   const showGroundLinksRef = useRef(showGroundLinks);
   const showIslLinksRef = useRef(showIslLinks);
   const showSatPathsRef = useRef(showSatPaths);
+  const referenceFrameRef = useRef<ReferenceFrame>(referenceFrame);
+  const earthFrameRef = useRef<THREE.Group | null>(null);
+  const starFrameRef = useRef<THREE.Group | null>(null);
   const followTargetRef = useRef<string | null>(null);
 
   // Keep refs in sync
@@ -87,6 +93,7 @@ export function GlobeView({
   showGroundLinksRef.current = showGroundLinks;
   showIslLinksRef.current = showIslLinks;
   showSatPathsRef.current = showSatPaths;
+  referenceFrameRef.current = referenceFrame;
 
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
@@ -125,31 +132,37 @@ export function GlobeView({
 
     // Two reference-frame groups: earthFrame holds ECEF-referenced data
     // (Earth, atmosphere, sun, sats, GS, in-group geometry); starFrame
-    // holds inertial data (starfield). Rotations are wired up in Phase 6;
-    // both remain at identity here so visual output is unchanged.
+    // holds inertial data (starfield). Relative rotation is always +gmst;
+    // which group carries the rotation depends on the view mode.
     const earthFrame = new THREE.Group();
     earthFrame.name = "earthFrame";
     scene.add(earthFrame);
+    earthFrameRef.current = earthFrame;
     const starFrame = new THREE.Group();
     starFrame.name = "starFrame";
     scene.add(starFrame);
+    starFrameRef.current = starFrame;
 
     createStarfield(starFrame);
     createEarth(earthFrame);
     createAtmosphere(earthFrame);
     createLights(scene, earthFrame);
 
-    // Raycaster for picking
-    // Raycaster closes over a getter that reads current earthFrame rotation
-    // so Ctrl+click orbit-pin seeds use the active view frame. Until the
-    // frame toggle wires up in Phase 6, the angular velocity is 0 and
-    // rotation is 0 (earth-fixed view).
+    // Raycaster closes over getters that read current earthFrame rotation
+    // and active frame angular velocity so Ctrl+click orbit-pin seeds use
+    // the view frame that's active at click time.
     setupRaycaster(
       renderer.domElement,
       camera,
       scene,
       (sel) => { onSelectRef.current(sel); },
-      () => ({ rotationRad: earthFrame.rotation.y, angularVelocityRadS: 0 }),
+      () => ({
+        rotationRad: earthFrame.rotation.y,
+        angularVelocityRadS:
+          referenceFrameRef.current === "earth-inertial"
+            ? EARTH_ROTATION_RATE_RAD_S
+            : 0,
+      }),
     );
 
     // Expose imperative actions
@@ -272,6 +285,26 @@ export function GlobeView({
         updateSunPosition(snap.sim_time);
       }
 
+      // Apply view-frame rotation. The relative rotation between earthFrame
+      // and starFrame is always +gmst(simTime); the active mode decides
+      // which group carries it. Must run BEFORE any consumer that reads
+      // getWorldPosition (selection ring, trails, orbits, GS labels).
+      const interpMs = interpolatedSimTimeMs(performance.now());
+      const gmstRad = interpMs !== null ? gmstRadians(interpMs / 1000) : 0;
+      const mode = referenceFrameRef.current;
+      if (mode === "earth-inertial") {
+        earthFrame.rotation.y = gmstRad;
+        starFrame.rotation.y = 0;
+      } else {
+        earthFrame.rotation.y = 0;
+        starFrame.rotation.y = -gmstRad;
+      }
+      const angularVelocityRadS =
+        mode === "earth-inertial" ? EARTH_ROTATION_RATE_RAD_S : 0;
+      // DayNight shader's u_sunDirection is sampled from sun's world pos;
+      // must run after earthFrame rotation is set.
+      updateSunWorldDirection();
+
       // Follow selected node — rotate camera toward it, keep orbit pivot at origin.
       // World position required: camera rotation math operates in world space.
       if (followTargetRef.current) {
@@ -297,10 +330,15 @@ export function GlobeView({
       animateFlowPaths();
       if (!skipTrails) updateOrbitalTrails(scene);
       updateOrbitPins(scene);
-      // Current view frame parameters threaded through so ring seeds
-      // are correct at the active frame rotation (Phase 6 will set
-      // these from gmstRad / EARTH_ROTATION_RATE_RAD_S when in inertial).
-      updateAllOrbits(scene, showSatPathsRef.current, earthFrame.rotation.y, 0);
+      // Current view-frame parameters: rotation is whatever earthFrame
+      // carries this frame; angular velocity is non-zero only in
+      // earth-inertial view (dθ/dt = 0 when frame is static).
+      updateAllOrbits(
+        scene,
+        showSatPathsRef.current,
+        earthFrame.rotation.y,
+        angularVelocityRadS,
+      );
       updateSelection(selectionRef.current, scene, camera);
       animateSelection(camera);
       updateCoverageFootprint(selectionRef.current, earthFrame, camera);
@@ -339,6 +377,26 @@ export function GlobeView({
   useEffect(() => {
     setGlobeMode(globeMode);
   }, [globeMode]);
+
+  // On reference-frame toggle, reset frame-dependent world-space geometry:
+  //   - Trail buffers: stored as world-space points; mixing points from
+  //     two frames produces a meaningless trail. Clear and re-accumulate.
+  //   - All-orbits rings: seeded from world pos+vel; invalid in the new
+  //     frame. Clear; lazy-recreated from the render loop on next tick.
+  //   - Orbit pins: re-seed rings using the new frame's parameters. Pin
+  //     list (node IDs) preserved so user selections survive the toggle.
+  // This useEffect fires AFTER the first render that has the new mode,
+  // which means earthFrame.rotation.y already reflects the new frame.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    const earthFrame = earthFrameRef.current;
+    if (!scene || !earthFrame) return;  // before mount completes
+    flushTrails();
+    clearAllOrbits(scene);
+    const angularVelocityRadS =
+      referenceFrame === "earth-inertial" ? EARTH_ROTATION_RATE_RAD_S : 0;
+    reseedAllPins(earthFrame.rotation.y, angularVelocityRadS);
+  }, [referenceFrame]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>

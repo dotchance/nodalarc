@@ -24,7 +24,7 @@ function getTrackColor(node: NodeState): number {
 /** Surface offset (scene units) to avoid z-fighting with earth sphere. */
 const SURFACE_OFFSET = EARTH_RADIUS * 1.002;
 
-export function updateGroundTracks(nodes: NodeState[], scene: THREE.Scene): void {
+export function updateGroundTracks(nodes: NodeState[], earthFrame: THREE.Object3D): void {
   const sats = nodes.filter(
     (n) => n.node_type === "satellite" && n.vel_x_km_s != null,
   );
@@ -73,7 +73,7 @@ export function updateGroundTracks(nodes: NodeState[], scene: THREE.Scene): void
         depthWrite: false,
       });
       const line = new THREE.Line(geometry, material);
-      scene.add(line);
+      earthFrame.add(line);
       trackLines.set(sat.node_id, line);
     }
   }
@@ -81,16 +81,16 @@ export function updateGroundTracks(nodes: NodeState[], scene: THREE.Scene): void
   // Remove tracks for missing satellites
   for (const [id, line] of trackLines) {
     if (!seen.has(id)) {
-      scene.remove(line);
+      earthFrame.remove(line);
       line.geometry.dispose();
       trackLines.delete(id);
     }
   }
 }
 
-export function clearGroundTracks(scene: THREE.Scene): void {
+export function clearGroundTracks(earthFrame: THREE.Object3D): void {
   for (const [id, line] of trackLines) {
-    scene.remove(line);
+    earthFrame.remove(line);
     line.geometry.dispose();
     trackLines.delete(id);
   }

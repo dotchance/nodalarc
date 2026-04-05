@@ -259,8 +259,8 @@ export function GlobeView({
         lastSnapshotRef = snap;
         updateSatellites(snap.nodes, earthFrame, colorModeRef.current, snap.sim_time);
         updateGroundStations(snap.nodes, earthFrame, labelContainer);
-        updateLinks(snap.links, scene, showIslLinksRef.current);
-        updateFlowPaths(snap.traced_paths, scene);
+        updateLinks(snap.links, earthFrame, showIslLinksRef.current);
+        updateFlowPaths(snap.traced_paths, earthFrame);
         updateSunPosition(snap.sim_time);
       }
 
@@ -292,7 +292,7 @@ export function GlobeView({
       updateAllOrbits(scene, showSatPathsRef.current);
       updateSelection(selectionRef.current, scene, camera);
       animateSelection(camera);
-      updateCoverageFootprint(selectionRef.current, scene, camera);
+      updateCoverageFootprint(selectionRef.current, earthFrame, camera);
       controls.update();
       updateGSLabels(camera, labelContainer);
       renderer.render(scene, camera);

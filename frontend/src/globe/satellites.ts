@@ -15,7 +15,7 @@
 import * as THREE from "three";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../config";
 import { geoToWorld } from "./geo";
-import { onSnapshot, wallMsPerSimMs, resetSimClock } from "../sim/simClock";
+import { onSnapshot, wallMsPerSimMs } from "../sim/simClock";
 import type { NodeState, ColorMode } from "../types";
 
 /** Shared geometry for all satellites. */
@@ -192,11 +192,4 @@ export function recolorAllSatellites(colorMode: ColorMode): void {
   for (const entry of satellites.values()) {
     updateSatColor(entry, colorMode);
   }
-}
-
-/** Reset delivery rate EMA — call on session switch.
- *  Thin shim over simClock.resetSimClock for Phase-1→Phase-2 transition;
- *  removed in Phase 2 when GlobeView imports resetSimClock directly. */
-export function resetDeliveryRate(): void {
-  resetSimClock();
 }

@@ -79,9 +79,24 @@ class TimeConfig(BaseModel):
     """Time configuration."""
 
     compression: int = 1
-    start_time: str | None = None  # ISO 8601 (default: now)
+    start_time: str | None = None  # ISO 8601 (default: now per R-OME-005)
     step_seconds: int = 1
     latency_update_interval_seconds: int = 10
+
+
+def resolve_session_epoch(time_config: TimeConfig) -> float:
+    """Resolve session epoch to Unix timestamp (seconds).
+
+    Per R-OME-005: when start_time is null/omitted, the session starts at
+    wall-clock now. OME is the single authoritative resolver.  This function
+    is called exactly once at session start — the resolved value is the
+    sim-time basis for every event emitted during the session.
+    """
+    from datetime import UTC, datetime
+
+    if time_config.start_time:
+        return datetime.fromisoformat(time_config.start_time).timestamp()
+    return datetime.now(UTC).timestamp()
 
 
 class TrafficFlowConfig(BaseModel):

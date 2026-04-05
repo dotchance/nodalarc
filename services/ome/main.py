@@ -23,7 +23,7 @@ from nodalarc.constellation_loader import (
     load_ground_stations,
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.session import SessionConfig, resolve_session_epoch
 
 from ome.event_stream import (
     append_timeline_jsonl,
@@ -32,6 +32,16 @@ from ome.event_stream import (
     write_timeline_jsonl,
 )
 from ome.propagator import orbital_period
+
+# ---------------------------------------------------------------------------
+# Shared playback state (Pacemaker role, R-OME-008B)
+# ---------------------------------------------------------------------------
+# Mutated by the NATS publisher thread (async subscriber callback) and
+# read by the pacing thread each tick.  Python GIL guarantees atomic
+# reads/writes on single scalar values (float, bool).  No lock needed.
+
+_time_accel: float = 1.0  # current d(sim)/d(wall) multiplier
+_paused: bool = False  # emission halted?
 
 
 def run(session_path: str, output_dir: str | None = None) -> Path:
@@ -87,11 +97,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
-        epoch_unix=(
-            datetime.fromisoformat(session.time.start_time).timestamp()
-            if session.time.start_time
-            else time.time()
-        ),
+        epoch_unix=resolve_session_epoch(session.time),
         duration_s=period,
         step_seconds=session.time.step_seconds,
         max_range_km=max_range_km,
@@ -151,16 +157,69 @@ async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
     Handles HeartbeatTick via the queue (pacing thread sends them during
     window computation). Handles reconnection transparently via nats-py.
 
-    Never touches timing. Never sleeps for pacing. Only I/O.
+    Also subscribes to SUBJECT_PLAYBACK_CONTROL for runtime pause/resume/
+    set_speed commands (R-OME-008B Pacemaker role).  The subscriber callback
+    mutates module-level _time_accel and _paused; the pacing thread reads
+    them each tick.
     """
     import asyncio
+    import json
     import queue
 
     import nats
-    from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url
+    from nodalarc.nats_channels import (
+        MAX_TIME_ACCEL,
+        MIN_TIME_ACCEL,
+        NATS_CONNECT_OPTIONS,
+        SUBJECT_PLAYBACK_CONTROL,
+        nats_url,
+    )
 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     logging.info("OME NATS publisher connected to %s", nats_url())
+
+    # --- Playback control subscriber (R-OME-008B Tier 1) ---
+
+    async def _handle_playback(msg) -> None:
+        global _time_accel, _paused
+        try:
+            cmd = json.loads(msg.data)
+            action = cmd.get("action", "")
+            if action == "pause":
+                _paused = True
+                logging.info("Playback paused (speed=%.1f)", _time_accel)
+            elif action == "resume":
+                _paused = False
+                logging.info("Playback resumed (speed=%.1f)", _time_accel)
+            elif action == "set_speed":
+                factor = float(cmd.get("factor", 1.0))
+                if factor < MIN_TIME_ACCEL or factor > MAX_TIME_ACCEL:
+                    reply = {
+                        "error": f"factor {factor} out of range [{MIN_TIME_ACCEL}, {MAX_TIME_ACCEL}]",
+                        "paused": _paused,
+                        "speed": _time_accel,
+                    }
+                    await msg.respond(json.dumps(reply).encode())
+                    return
+                _time_accel = factor
+                logging.info("Playback speed set to %.1fx", factor)
+            elif action == "get_status":
+                pass  # fall through to reply with current state
+            else:
+                reply = {
+                    "error": f"unknown action: {action}",
+                    "paused": _paused,
+                    "speed": _time_accel,
+                }
+                await msg.respond(json.dumps(reply).encode())
+                return
+            await msg.respond(json.dumps({"paused": _paused, "speed": _time_accel}).encode())
+        except Exception as exc:
+            logging.error("Playback control error: %s", exc)
+            await msg.respond(json.dumps({"error": str(exc)}).encode())
+
+    await nc.subscribe(SUBJECT_PLAYBACK_CONTROL, cb=_handle_playback)
+    logging.info("OME playback control active on %s", SUBJECT_PLAYBACK_CONTROL)
 
     try:
         while not shutdown_event.is_set():
@@ -250,12 +309,13 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
             latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
 
     default_min_elevation = gs_file.default_min_elevation_deg or 25.0
-    epoch_unix = (
-        datetime.fromisoformat(session.time.start_time).timestamp()
-        if session.time.start_time
-        else time.time()
-    )
+    epoch_unix = resolve_session_epoch(session.time)
     compression = session.time.compression if session.time.compression else 1
+
+    # Initialize Pacemaker rate from static compression (R-OME-008B Part 1).
+    # Runtime set_speed commands replace this value dynamically.
+    global _time_accel
+    _time_accel = float(compression)
     snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
     # Build interface map for LinkStateSnapshot

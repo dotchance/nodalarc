@@ -67,7 +67,7 @@ const _tmpPos = new THREE.Vector3();
 
 export function updateSatellites(
   nodes: NodeState[],
-  scene: THREE.Scene,
+  earthFrame: THREE.Object3D,
   colorMode: ColorMode,
   simTime: string,
 ): void {
@@ -115,7 +115,7 @@ export function updateSatellites(
       mesh.position.copy(newPos);
       mesh.userData["nodeId"] = node.node_id;
       mesh.userData["nodeType"] = "satellite";
-      scene.add(mesh);
+      earthFrame.add(mesh);
 
       const glowMat = new THREE.SpriteMaterial({
         map: getGlowTexture(),
@@ -128,7 +128,7 @@ export function updateSatellites(
       glow.scale.set(SAT_RADIUS * 5, SAT_RADIUS * 5, 1);
       glow.position.copy(newPos);
       glow.visible = false;  // Only shown on selection/highlight
-      scene.add(glow);
+      earthFrame.add(glow);
 
       satellites.set(node.node_id, {
         mesh,
@@ -144,8 +144,8 @@ export function updateSatellites(
 
   for (const [id, entry] of satellites) {
     if (!seen.has(id)) {
-      scene.remove(entry.mesh);
-      scene.remove(entry.glow);
+      earthFrame.remove(entry.mesh);
+      earthFrame.remove(entry.glow);
       satellites.delete(id);
     }
   }

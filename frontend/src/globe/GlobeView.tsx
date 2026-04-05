@@ -140,9 +140,17 @@ export function GlobeView({
     createLights(scene, earthFrame);
 
     // Raycaster for picking
-    setupRaycaster(renderer.domElement, camera, scene, (sel) => {
-      onSelectRef.current(sel);
-    });
+    // Raycaster closes over a getter that reads current earthFrame rotation
+    // so Ctrl+click orbit-pin seeds use the active view frame. Until the
+    // frame toggle wires up in Phase 6, the angular velocity is 0 and
+    // rotation is 0 (earth-fixed view).
+    setupRaycaster(
+      renderer.domElement,
+      camera,
+      scene,
+      (sel) => { onSelectRef.current(sel); },
+      () => ({ rotationRad: earthFrame.rotation.y, angularVelocityRadS: 0 }),
+    );
 
     // Expose imperative actions
     if (actionsRef) {
@@ -289,7 +297,10 @@ export function GlobeView({
       animateFlowPaths();
       if (!skipTrails) updateOrbitalTrails(scene);
       updateOrbitPins(scene);
-      updateAllOrbits(scene, showSatPathsRef.current);
+      // Current view frame parameters threaded through so ring seeds
+      // are correct at the active frame rotation (Phase 6 will set
+      // these from gmstRad / EARTH_ROTATION_RATE_RAD_S when in inertial).
+      updateAllOrbits(scene, showSatPathsRef.current, earthFrame.rotation.y, 0);
       updateSelection(selectionRef.current, scene, camera);
       animateSelection(camera);
       updateCoverageFootprint(selectionRef.current, earthFrame, camera);

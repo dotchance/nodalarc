@@ -13,6 +13,12 @@ import { getSatellites } from "./satellites";
 import { computeOrbitPositions } from "./orbitPins";
 import { getPlaneColor } from "../config";
 import { velocityToScene } from "./geo";
+import { worldVelocity } from "./astronomy";
+
+// Reusable temporaries for seed sampling — avoid per-sat allocation.
+const _allOrbitsWorldPos = new THREE.Vector3();
+const _allOrbitsVelEcef = new THREE.Vector3();
+const _allOrbitsVelWorld = new THREE.Vector3();
 
 interface OrbitRing {
   line: Line2;
@@ -23,7 +29,12 @@ interface OrbitRing {
 const orbits = new Map<string, OrbitRing>();
 let lastSatCount = 0;
 
-export function updateAllOrbits(scene: THREE.Scene, show: boolean): void {
+export function updateAllOrbits(
+  scene: THREE.Scene,
+  show: boolean,
+  viewFrameRotationRad: number,
+  frameAngularVelocityRadS: number,
+): void {
   if (!show) {
     clearAllOrbits(scene);
     return;
@@ -58,10 +69,23 @@ export function updateAllOrbits(scene: THREE.Scene, show: boolean): void {
     if (ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
     if (ns.plane == null) continue;
 
-    const pos = sat.mesh.position.clone();
-    const vel = velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s);
+    // Seed from world pos + WORLD velocity so the ring is correct in
+    // the active view frame. In earth-fixed view both reduce to the
+    // ECEF-frame values (frameAngularVelocityRadS = 0). In earth-inertial
+    // view worldVelocity adds the ω × r term and rotates by gmst.
+    sat.mesh.getWorldPosition(_allOrbitsWorldPos);
+    _allOrbitsVelEcef.copy(
+      velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s),
+    );
+    worldVelocity(
+      sat.mesh.position,
+      _allOrbitsVelEcef,
+      viewFrameRotationRad,
+      frameAngularVelocityRadS,
+      _allOrbitsVelWorld,
+    );
 
-    const positions = computeOrbitPositions(pos, vel);
+    const positions = computeOrbitPositions(_allOrbitsWorldPos, _allOrbitsVelWorld);
     const geometry = new LineGeometry();
     geometry.setPositions(positions);
 

@@ -26,6 +26,14 @@ import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
 import type { StateSnapshot, Selection, ColorMode, GlobeMode } from "../types";
 
+// Reusable temporaries for camera-math helpers (flyToNode, getNodeScreenPosition,
+// follow-target), avoiding per-call allocation. World-space values only.
+const _tmpWorldA = new THREE.Vector3();
+const _tmpWorldB = new THREE.Vector3();
+const _tmpNdc = new THREE.Vector3();
+const _tmpDirA = new THREE.Vector3();
+const _tmpDirB = new THREE.Vector3();
+
 export interface GlobeActions {
   flyToTopView: () => void;
   setFollowTarget: (nodeId: string | null) => void;
@@ -175,43 +183,49 @@ export function GlobeView({
         flyToNode: (nodeId: string) => {
           const sat = getSatellites().get(nodeId);
           const gs = getGroundStations().get(nodeId);
-          const pos = sat?.mesh.position ?? gs?.sprite.position;
-          if (pos) {
-            // Move camera so the node faces the viewer, keeping orbit pivot at Earth center
+          // World position required: camera direction math operates in
+          // world space. Sats/GS live in earthFrame; local coords would
+          // misdirect the camera under any non-identity group rotation.
+          const target = sat?.mesh.getWorldPosition(_tmpWorldA)
+            ?? gs?.sprite.getWorldPosition(_tmpWorldA);
+          if (target) {
             controls.target.set(0, 0, 0);
             const dist = camera.position.length();
-            const dir = pos.clone().normalize();
-            camera.position.copy(dir.multiplyScalar(dist));
+            _tmpWorldA.normalize();
+            camera.position.copy(_tmpWorldA.multiplyScalar(dist));
             controls.update();
           }
         },
         getNodeScreenPosition: (nodeId: string) => {
           const sat = getSatellites().get(nodeId);
           const gs = getGroundStations().get(nodeId);
-          const worldPos = sat?.mesh.position ?? gs?.sprite.position;
+          const worldPos = sat
+            ? sat.mesh.getWorldPosition(_tmpWorldA)
+            : gs
+              ? gs.sprite.getWorldPosition(_tmpWorldA)
+              : null;
           if (!worldPos) return null;
 
-          const vec = worldPos.clone().project(camera);
+          _tmpNdc.copy(worldPos).project(camera);
 
           // Behind camera or behind Earth
-          if (vec.z > 1) return { x: 0, y: 0, visible: false };
+          if (_tmpNdc.z > 1) return { x: 0, y: 0, visible: false };
 
           // Earth occlusion check (same as updateGSLabels)
           const cameraPos = camera.position;
-          const dirToNode = worldPos.clone().sub(cameraPos).normalize();
-          const dirToCenter = new THREE.Vector3(0, 0, 0).sub(cameraPos).normalize();
-          const dot = dirToNode.dot(dirToCenter);
+          _tmpDirA.copy(worldPos).sub(cameraPos).normalize();
+          _tmpDirB.copy(cameraPos).multiplyScalar(-1).normalize();
+          const dot = _tmpDirA.dot(_tmpDirB);
           const distToCenter = cameraPos.length();
           const sinAngle = EARTH_RADIUS / distToCenter;
           if (dot > Math.sqrt(1 - sinAngle * sinAngle) && worldPos.length() < distToCenter) {
             return { x: 0, y: 0, visible: false };
           }
 
-          // Convert NDC to pixel coords relative to the container
           const w = container.clientWidth;
           const h = container.clientHeight;
-          const x = (vec.x * 0.5 + 0.5) * w;
-          const y = (-vec.y * 0.5 + 0.5) * h;
+          const x = (_tmpNdc.x * 0.5 + 0.5) * w;
+          const y = (-_tmpNdc.y * 0.5 + 0.5) * h;
           return { x, y, visible: true };
         },
       };
@@ -243,25 +257,29 @@ export function GlobeView({
       // Update entities when snapshot changes
       if (snap && snap !== lastSnapshotRef) {
         lastSnapshotRef = snap;
-        updateSatellites(snap.nodes, scene, colorModeRef.current, snap.sim_time);
-        updateGroundStations(snap.nodes, scene, labelContainer);
+        updateSatellites(snap.nodes, earthFrame, colorModeRef.current, snap.sim_time);
+        updateGroundStations(snap.nodes, earthFrame, labelContainer);
         updateLinks(snap.links, scene, showIslLinksRef.current);
         updateFlowPaths(snap.traced_paths, scene);
         updateSunPosition(snap.sim_time);
       }
 
-      // Follow selected node — rotate camera toward it, keep orbit pivot at origin
+      // Follow selected node — rotate camera toward it, keep orbit pivot at origin.
+      // World position required: camera rotation math operates in world space.
       if (followTargetRef.current) {
         const sat = getSatellites().get(followTargetRef.current);
         const gs = getGroundStations().get(followTargetRef.current);
-        const targetPos = sat?.mesh.position ?? gs?.sprite.position;
+        const targetPos = sat
+          ? sat.mesh.getWorldPosition(_tmpWorldA)
+          : gs
+            ? gs.sprite.getWorldPosition(_tmpWorldA)
+            : null;
         if (targetPos) {
           const dist = camera.position.length();
-          const desiredDir = targetPos.clone().normalize();
-          const currentDir = camera.position.clone().normalize();
-          currentDir.lerp(desiredDir, 0.05);
-          currentDir.normalize();
-          camera.position.copy(currentDir.multiplyScalar(dist));
+          _tmpWorldA.normalize();
+          _tmpWorldB.copy(camera.position).normalize();
+          _tmpWorldB.lerp(_tmpWorldA, 0.05).normalize();
+          camera.position.copy(_tmpWorldB.multiplyScalar(dist));
           controls.target.set(0, 0, 0);
         }
       }

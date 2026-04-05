@@ -98,13 +98,23 @@ function hitTestLinks(
 
   for (const [key, entry] of getLinks()) {
     if (!entry.line.visible) continue;
-    const posA = sats.get(entry.nodeA)?.mesh.position ?? gss.get(entry.nodeA)?.sprite.position;
-    const posB = sats.get(entry.nodeB)?.mesh.position ?? gss.get(entry.nodeB)?.sprite.position;
-    if (!posA || !posB) continue;
+    // World-space endpoints required: Vector3.project(camera) takes
+    // world coords. Sats/GS live in earthFrame; their local positions
+    // are ECEF and misproject under a rotated group.
+    const satA = sats.get(entry.nodeA);
+    const satB = sats.get(entry.nodeB);
+    const gsA = satA ? null : gss.get(entry.nodeA);
+    const gsB = satB ? null : gss.get(entry.nodeB);
+    if (satA) satA.mesh.getWorldPosition(_v3a);
+    else if (gsA) gsA.sprite.getWorldPosition(_v3a);
+    else continue;
+    if (satB) satB.mesh.getWorldPosition(_v3b);
+    else if (gsB) gsB.sprite.getWorldPosition(_v3b);
+    else continue;
 
     // Project endpoints to NDC (-1..1)
-    _v3a.copy(posA).project(camera);
-    _v3b.copy(posB).project(camera);
+    _v3a.project(camera);
+    _v3b.project(camera);
 
     const dist = pointToSegment2D(ndcX, ndcY, _v3a.x, _v3a.y, _v3b.x, _v3b.y);
     if (dist < bestDist) {
@@ -148,7 +158,7 @@ export function setupRaycaster(
 
     raycaster.setFromCamera(mouse, camera);
     // Only test nodes (meshes/sprites), not Line2
-    const intersects = raycaster.intersectObjects(scene.children, false);
+    const intersects = raycaster.intersectObjects(scene.children, true);
 
     const nodeHit = intersects.find((i) => i.object.userData["nodeId"]);
 
@@ -186,7 +196,7 @@ export function setupRaycaster(
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
     raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObjects(scene.children, false);
+    const intersects = raycaster.intersectObjects(scene.children, true);
 
     // Ctrl+click (or Cmd+click on macOS): toggle orbit pin for satellites
     if (event.ctrlKey || event.metaKey) {

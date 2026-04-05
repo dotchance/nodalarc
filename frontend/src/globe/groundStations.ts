@@ -82,6 +82,11 @@ export function computeConeRadius(minElevDeg: number, orbitalAltKm: number): num
   return arcKm / KM_PER_UNIT;
 }
 
+/** Axis used to orient flat circular geometries (cone rings, footprint disc)
+ *  so their local -Z faces outward along the radial. Declared at module
+ *  scope to avoid re-allocation on every ground-station creation. */
+const _RING_LOCAL_Z_AXIS = new THREE.Vector3(0, 0, -1);
+
 /** Create the elevation cone ring (coverage area indicator) positioned on the surface. */
 function createElevationCone(
   pos: THREE.Vector3,
@@ -121,23 +126,31 @@ function createElevationCone(
   });
   const outline = new THREE.LineLoop(outlineGeo, outlineMat);
 
-  // Position and orient to surface normal
-  const surfaceNormal = pos.clone().normalize();
-  const surfacePos = surfaceNormal.clone().multiplyScalar(EARTH_RADIUS * 1.001);
+  // Position on surface and orient tangent to the sphere at that point.
+  // Both computations are done in the local (ECEF) frame since the cone
+  // and GS sprite share parent (earthFrame). We use setFromUnitVectors
+  // rather than lookAt because lookAt takes a world-space target — see
+  // plan §1.12. Computing the orientation in local coords produces a
+  // local quaternion that is invariant under any rotation of earthFrame.
+  const outward = pos.clone().normalize();
+  const surfacePos = outward.clone().multiplyScalar(EARTH_RADIUS * 1.001);
 
   cone.position.copy(surfacePos);
   outline.position.copy(surfacePos);
 
-  // Orient ring to lie flat on globe surface
-  cone.lookAt(surfaceNormal.clone().multiplyScalar(EARTH_RADIUS * 2));
-  outline.lookAt(surfaceNormal.clone().multiplyScalar(EARTH_RADIUS * 2));
+  // Rotate so the ring's +Z axis (its surface normal) points outward.
+  // lookAt target was "2·EARTH_RADIUS along radial", which pointed the
+  // ring's -Z at the outside → +Z pointed inward at Earth's center.
+  // Preserve that semantic: map (0,0,-1) to outward.
+  cone.quaternion.setFromUnitVectors(_RING_LOCAL_Z_AXIS, outward);
+  outline.quaternion.setFromUnitVectors(_RING_LOCAL_Z_AXIS, outward);
 
   return { cone, outline };
 }
 
 export function updateGroundStations(
   nodes: NodeState[],
-  scene: THREE.Scene,
+  earthFrame: THREE.Object3D,
   labelContainer: HTMLDivElement,
 ): void {
   const seen = new Set<string>();
@@ -164,14 +177,14 @@ export function updateGroundStations(
       sprite.position.copy(pos);
       sprite.userData["nodeId"] = node.node_id;
       sprite.userData["nodeType"] = "ground_station";
-      scene.add(sprite);
+      earthFrame.add(sprite);
 
       // Elevation cone — per-station radius from actual min_elevation_deg
       const minElev = node.min_elevation_deg ?? 25;
       const coneRadius = computeConeRadius(minElev, orbitalAltKm);
       const { cone, outline: coneOutline } = createElevationCone(pos, coneRadius);
-      scene.add(cone);
-      scene.add(coneOutline);
+      earthFrame.add(cone);
+      earthFrame.add(coneOutline);
 
       // HTML label
       const label = document.createElement("div");
@@ -198,9 +211,9 @@ export function updateGroundStations(
   // Remove missing
   for (const [id, entry] of groundStations) {
     if (!seen.has(id)) {
-      scene.remove(entry.sprite);
-      scene.remove(entry.cone);
-      scene.remove(entry.coneOutline);
+      earthFrame.remove(entry.sprite);
+      earthFrame.remove(entry.cone);
+      earthFrame.remove(entry.coneOutline);
       entry.cone.geometry.dispose();
       entry.coneOutline.geometry.dispose();
       entry.label.remove();
@@ -209,35 +222,45 @@ export function updateGroundStations(
   }
 }
 
+// Reusable temporaries for label projection math — avoid per-frame alloc.
+const _gsWorldPos = new THREE.Vector3();
+const _gsNdc = new THREE.Vector3();
+const _gsDirA = new THREE.Vector3();
+const _gsDirB = new THREE.Vector3();
+
 export function updateGSLabels(camera: THREE.Camera, container: HTMLDivElement): void {
   const width = container.clientWidth;
   const height = container.clientHeight;
+  const cameraPos = camera.position;
+  const distToCenter = cameraPos.length();
+  const sinAngle = EARTH_RADIUS / distToCenter;
+  const occlusionThreshold = Math.sqrt(1 - sinAngle * sinAngle);
 
   for (const entry of groundStations.values()) {
-    const pos = entry.sprite.position.clone();
-    pos.project(camera);
+    // World-space position (traverses earthFrame transform). Required:
+    // Vector3.project(camera) treats its input as world coords, and the
+    // occlusion dot-product compares against world camera.position.
+    entry.sprite.getWorldPosition(_gsWorldPos);
 
-    // Check if behind camera
-    if (pos.z > 1) {
+    _gsNdc.copy(_gsWorldPos).project(camera);
+
+    // Behind camera
+    if (_gsNdc.z > 1) {
       entry.label.style.display = "none";
       continue;
     }
 
-    // Check if occluded by Earth
-    const worldPos = entry.sprite.position;
-    const cameraPos = camera.position;
-    const dirToGS = worldPos.clone().sub(cameraPos).normalize();
-    const dirToCenter = new THREE.Vector3(0, 0, 0).sub(cameraPos).normalize();
-    const dot = dirToGS.dot(dirToCenter);
-    const distToCenter = cameraPos.length();
-    const sinAngle = EARTH_RADIUS / distToCenter;
-    if (dot > Math.sqrt(1 - sinAngle * sinAngle) && worldPos.length() < distToCenter) {
+    // Earth-occlusion test (world-space)
+    _gsDirA.copy(_gsWorldPos).sub(cameraPos).normalize();
+    _gsDirB.copy(cameraPos).multiplyScalar(-1).normalize();
+    const dot = _gsDirA.dot(_gsDirB);
+    if (dot > occlusionThreshold && _gsWorldPos.length() < distToCenter) {
       entry.label.style.display = "none";
       continue;
     }
 
-    const x = (pos.x * 0.5 + 0.5) * width;
-    const y = (-pos.y * 0.5 + 0.5) * height;
+    const x = (_gsNdc.x * 0.5 + 0.5) * width;
+    const y = (-_gsNdc.y * 0.5 + 0.5) * height;
 
     entry.label.style.display = "block";
     entry.label.style.left = `${x + 8}px`;

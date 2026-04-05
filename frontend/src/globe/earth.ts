@@ -13,6 +13,9 @@ let _earthBlueMarble: THREE.Mesh | null = null;
 let _earthDayNight: THREE.Mesh | null = null;
 let _dayNightMaterial: THREE.ShaderMaterial | null = null;
 
+// Reusable temporary for world-space sun direction sampling.
+const _tmpSunWorld = new THREE.Vector3();
+
 const DAY_NIGHT_VERTEX = `
   varying vec2 vUv;
   varying vec3 vWorldNormal;
@@ -48,7 +51,7 @@ const DAY_NIGHT_FRAGMENT = `
   }
 `;
 
-function createDayNightEarth(scene: THREE.Scene): void {
+function createDayNightEarth(parent: THREE.Object3D): void {
   const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
   const textureLoader = new THREE.TextureLoader();
 
@@ -70,12 +73,12 @@ function createDayNightEarth(scene: THREE.Scene): void {
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.visible = false;
-  scene.add(mesh);
+  parent.add(mesh);
   _earthDayNight = mesh;
   _dayNightMaterial = material;
 }
 
-export function createEarth(scene: THREE.Scene): THREE.Mesh {
+export function createEarth(parent: THREE.Object3D): THREE.Mesh {
   const geometry = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
   const textureLoader = new THREE.TextureLoader();
   const texture = textureLoader.load("/earth-blue-marble.jpg");
@@ -87,15 +90,15 @@ export function createEarth(scene: THREE.Scene): THREE.Mesh {
   });
 
   const earth = new THREE.Mesh(geometry, material);
-  scene.add(earth);
+  parent.add(earth);
   _earthBlueMarble = earth;
 
-  createDayNightEarth(scene);
+  createDayNightEarth(parent);
 
   return earth;
 }
 
-export function createAtmosphere(scene: THREE.Scene): THREE.Mesh {
+export function createAtmosphere(parent: THREE.Object3D): THREE.Mesh {
   const geometry = new THREE.SphereGeometry(EARTH_RADIUS * 1.015, 32, 32);
   const material = new THREE.ShaderMaterial({
     vertexShader: `
@@ -124,11 +127,11 @@ export function createAtmosphere(scene: THREE.Scene): THREE.Mesh {
   });
 
   const atmosphere = new THREE.Mesh(geometry, material);
-  scene.add(atmosphere);
+  parent.add(atmosphere);
   return atmosphere;
 }
 
-export function createStarfield(scene: THREE.Scene): void {
+export function createStarfield(parent: THREE.Object3D): void {
   const count = 2000;
   const positions = new Float32Array(count * 3);
   const sizes = new Float32Array(count);
@@ -157,18 +160,21 @@ export function createStarfield(scene: THREE.Scene): void {
   });
 
   const stars = new THREE.Points(geometry, material);
-  scene.add(stars);
+  parent.add(stars);
 }
 
-export function createLights(scene: THREE.Scene): void {
-  // Ambient light for night side visibility
+export function createLights(scene: THREE.Scene, earthParent: THREE.Object3D): void {
+  // Ambient light for night side visibility — frame-independent.
   const ambient = new THREE.AmbientLight(0xffffff, 0.5);
   scene.add(ambient);
 
-  // Directional light simulating sun — positioned based on sim time
+  // Directional light simulating sun. Position is computed in ECEF
+  // (hour-angle-relative) and placed in earthParent so that its world
+  // direction automatically composes with the earthFrame rotation:
+  // the terminator sweeps continents correctly in both view frames.
   const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
   sunLight.position.set(1000, 0, 0);
-  scene.add(sunLight);
+  earthParent.add(sunLight);
   _sunLight = sunLight;
 }
 
@@ -211,10 +217,20 @@ export function updateSunPosition(simTime: string): void {
 
   _sunLight.position.set(sunX, sunY, sunZ);
 
-  if (_dayNightMaterial) {
-    const sunDir = new THREE.Vector3(sunX, sunY, sunZ).normalize();
-    _dayNightMaterial.uniforms.u_sunDirection!.value.copy(sunDir);
-  }
+  // Keep the DayNight shader's u_sunDirection synced to sun's world
+  // direction after any sun-position change. The render loop also calls
+  // updateSunWorldDirection() every frame after setting earthFrame rotation.
+  updateSunWorldDirection();
+}
+
+/** Update the DayNight shader's sun-direction uniform from the sun's
+ *  *world*-space position. Must run AFTER earthFrame.rotation.y has
+ *  been set for the current frame: the vertex shader's vWorldNormal
+ *  is in world space, so u_sunDirection must be too (see plan §1.9). */
+export function updateSunWorldDirection(): void {
+  if (!_sunLight || !_dayNightMaterial) return;
+  _sunLight.getWorldPosition(_tmpSunWorld).normalize();
+  _dayNightMaterial.uniforms.u_sunDirection!.value.copy(_tmpSunWorld);
 }
 
 export function setGlobeMode(mode: GlobeMode): void {

@@ -13,7 +13,8 @@ import {
   EARTH_RADIUS,
 } from "../config";
 import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, setGlobeMode } from "./earth";
-import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites, resetDeliveryRate } from "./satellites";
+import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites } from "./satellites";
+import { resetSimClock } from "../sim/simClock";
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
@@ -114,10 +115,21 @@ export function GlobeView({
     controls.maxDistance = CAMERA_MAX_DISTANCE;
     controlsRef.current = controls;
 
-    createStarfield(scene);
-    createEarth(scene);
-    createAtmosphere(scene);
-    createLights(scene);
+    // Two reference-frame groups: earthFrame holds ECEF-referenced data
+    // (Earth, atmosphere, sun, sats, GS, in-group geometry); starFrame
+    // holds inertial data (starfield). Rotations are wired up in Phase 6;
+    // both remain at identity here so visual output is unchanged.
+    const earthFrame = new THREE.Group();
+    earthFrame.name = "earthFrame";
+    scene.add(earthFrame);
+    const starFrame = new THREE.Group();
+    starFrame.name = "starFrame";
+    scene.add(starFrame);
+
+    createStarfield(starFrame);
+    createEarth(earthFrame);
+    createAtmosphere(earthFrame);
+    createLights(scene, earthFrame);
 
     // Raycaster for picking
     setupRaycaster(renderer.domElement, camera, scene, (sel) => {
@@ -223,7 +235,7 @@ export function GlobeView({
           flushTrails();
           clearOrbitPins(scene);
           clearAllOrbits(scene);
-          resetDeliveryRate();
+          resetSimClock();
         }
         lastConstellationName = snap.constellation_name;
       }

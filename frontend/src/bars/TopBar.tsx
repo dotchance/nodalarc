@@ -129,12 +129,13 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
           }}
           title="Playback speed"
         >
-          <option value={0.25}>0.25x</option>
-          <option value={0.5}>0.5x</option>
           <option value={1}>1x</option>
-          <option value={2}>2x</option>
           <option value={5}>5x</option>
           <option value={10}>10x</option>
+          <option value={30}>30x</option>
+          <option value={60}>60x</option>
+          <option value={120}>120x</option>
+          <option value={300}>300x</option>
         </select>
       </div>
       <div style={{ flex: 1 }} />

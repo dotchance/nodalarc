@@ -427,11 +427,20 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
             sim_span = last_ts - first_ts if last_ts > first_ts else 1.0
             pace = window_duration / sim_span
 
+            # Reference-point model for time_accel + pause support
+            # (see specs/time-controls-plan.md §3).  The reference resets
+            # on rate change or unpause to avoid drift and catch-up bursts.
+            pace_ref_wall = window_start
+            pace_ref_sim_offset = 0.0
+            current_rate = _time_accel  # snapshot shared state
+            last_emitted_sim_offset = 0.0
+
             logging.info(
-                "OME pacing: %d events over %.0fs wall (%.3fs/tick)",
+                "OME pacing: %d events over %.0fs wall (%.3fs/tick, accel=%.1fx)",
                 len(events),
                 window_duration,
                 pace,
+                current_rate,
             )
 
             current_sim_time_iso: str = ""
@@ -447,14 +456,42 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     break
 
                 if current_tick_ts is not None and evt.timestamp_s != current_tick_ts:
-                    # Precise wall-clock sleep — blocking, no yield
+                    # --- Pause gate ---
+                    if _paused:
+                        while _paused and not shutdown_event.is_set():
+                            time.sleep(0.1)
+                        # Reset reference on unpause — time spent paused
+                        # must not count toward wall-clock budget.
+                        pace_ref_wall = time.monotonic()
+                        pace_ref_sim_offset = last_emitted_sim_offset
+                        current_rate = _time_accel
+
+                    # --- Rate-change detection ---
+                    new_rate = _time_accel
+                    if new_rate != current_rate:
+                        pace_ref_wall = time.monotonic()
+                        pace_ref_sim_offset = last_emitted_sim_offset
+                        current_rate = new_rate
+
+                    # --- Drift-free sleep with reference-point model ---
                     sim_offset = current_tick_ts - first_ts
-                    wall_target = window_start + sim_offset * pace
+                    sim_delta = sim_offset - pace_ref_sim_offset
+                    effective_pace = pace / current_rate
+                    wall_target = pace_ref_wall + sim_delta * effective_pace
                     now = time.monotonic()
-                    if now < wall_target and now < window_start + window_duration:
+                    if now < wall_target:
                         time.sleep(wall_target - now)
 
-                    if time.monotonic() >= window_start + window_duration:
+                    last_emitted_sim_offset = sim_offset
+
+                    # Safety: if we've overrun, skip remaining events
+                    # and move to the next window computation.
+                    remaining_sim = sim_span - last_emitted_sim_offset
+                    expected_remaining_wall = remaining_sim * effective_pace
+                    if (
+                        time.monotonic()
+                        > pace_ref_wall + sim_delta * effective_pace + expected_remaining_wall + 5.0
+                    ):
                         break
 
                     # Enqueue all events for this tick
@@ -481,7 +518,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                         if current_sim_time_iso
                         else datetime.now(UTC),
                         wall_time=datetime.now(UTC),
-                        compression_ratio=float(compression),
+                        compression_ratio=float(_time_accel),
                     )
                     _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
 
@@ -529,7 +566,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     if current_sim_time_iso
                     else datetime.now(UTC),
                     wall_time=datetime.now(UTC),
-                    compression_ratio=float(compression),
+                    compression_ratio=float(_time_accel),
                 )
                 _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
 

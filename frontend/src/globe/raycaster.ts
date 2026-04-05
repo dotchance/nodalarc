@@ -146,6 +146,7 @@ export function setupRaycaster(
   camera: THREE.PerspectiveCamera,
   scene: THREE.Scene,
   onSelect: (sel: Selection | null) => void,
+  getViewFrameRotation: () => { rotationRad: number; angularVelocityRadS: number },
 ): void {
   const raycaster = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
@@ -205,7 +206,8 @@ export function setupRaycaster(
         const nodeId = nodeHit.object.userData["nodeId"] as string;
         const nodeType = nodeHit.object.userData["nodeType"] as string;
         if (nodeType === "satellite") {
-          toggleOrbitPin(nodeId, scene);
+          const { rotationRad, angularVelocityRadS } = getViewFrameRotation();
+          toggleOrbitPin(nodeId, scene, rotationRad, angularVelocityRadS);
         }
       }
       return;

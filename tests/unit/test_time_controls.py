@@ -66,7 +66,7 @@ def _make_handler():
     Returns (handler_func, get_state_func) where handler_func accepts
     a mock NATS message and get_state_func returns current (paused, speed).
     """
-    state = {"time_accel": 1.0, "paused": False}
+    state = {"time_accel": 1.0, "paused": False, "seek_target": None}
 
     async def handle(msg):
         try:
@@ -87,6 +87,12 @@ def _make_handler():
                     await msg.respond(json.dumps(reply).encode())
                     return
                 state["time_accel"] = factor
+            elif action == "seek":
+                target_str = cmd.get("target_sim_time")
+                if target_str:
+                    state["seek_target"] = datetime.fromisoformat(target_str).timestamp()
+                else:
+                    state["seek_target"] = datetime.now(UTC).timestamp()
             elif action == "get_status":
                 pass
             else:
@@ -106,7 +112,10 @@ def _make_handler():
     def get_state():
         return state["paused"], state["time_accel"]
 
-    return handle, get_state
+    def get_seek():
+        return state["seek_target"]
+
+    return handle, get_state, get_seek
 
 
 def _make_msg(action_body: dict) -> MagicMock:
@@ -135,7 +144,7 @@ class TestPlaybackHandler:
     """Protocol + state validation for the OME playback control handler."""
 
     def test_pause_sets_paused_true(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         msg = _make_msg({"action": "pause"})
         _run(handler(msg))
         paused, speed = get_state()
@@ -144,7 +153,7 @@ class TestPlaybackHandler:
         assert reply["paused"] is True
 
     def test_resume_sets_paused_false(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         _run(handler(_make_msg({"action": "pause"})))
         msg = _make_msg({"action": "resume"})
         _run(handler(msg))
@@ -153,7 +162,7 @@ class TestPlaybackHandler:
         assert _reply_data(msg)["paused"] is False
 
     def test_set_speed_valid_factor(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         msg = _make_msg({"action": "set_speed", "factor": 30.0})
         _run(handler(msg))
         _, speed = get_state()
@@ -161,21 +170,21 @@ class TestPlaybackHandler:
         assert _reply_data(msg)["speed"] == 30.0
 
     def test_set_speed_min_boundary(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         msg = _make_msg({"action": "set_speed", "factor": MIN_TIME_ACCEL})
         _run(handler(msg))
         _, speed = get_state()
         assert speed == MIN_TIME_ACCEL
 
     def test_set_speed_max_boundary(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         msg = _make_msg({"action": "set_speed", "factor": MAX_TIME_ACCEL})
         _run(handler(msg))
         _, speed = get_state()
         assert speed == MAX_TIME_ACCEL
 
     def test_set_speed_below_min_rejected(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         msg = _make_msg({"action": "set_speed", "factor": 0.05})
         _run(handler(msg))
         _, speed = get_state()
@@ -185,7 +194,7 @@ class TestPlaybackHandler:
         assert reply["speed"] == 1.0
 
     def test_set_speed_above_max_rejected(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         msg = _make_msg({"action": "set_speed", "factor": 2000.0})
         _run(handler(msg))
         _, speed = get_state()
@@ -193,7 +202,7 @@ class TestPlaybackHandler:
         assert "error" in _reply_data(msg)
 
     def test_get_status_returns_state_no_mutation(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         _run(handler(_make_msg({"action": "set_speed", "factor": 42.0})))
         _run(handler(_make_msg({"action": "pause"})))
         msg = _make_msg({"action": "get_status"})
@@ -205,7 +214,7 @@ class TestPlaybackHandler:
         assert reply == {"paused": True, "speed": 42.0}
 
     def test_unknown_action_returns_error(self):
-        handler, _ = _make_handler()
+        handler, _, _ = _make_handler()
         msg = _make_msg({"action": "rewind"})
         _run(handler(msg))
         reply = _reply_data(msg)
@@ -214,7 +223,7 @@ class TestPlaybackHandler:
 
     def test_pause_preserves_speed(self):
         """Pausing should NOT reset speed — resume should return at previous rate."""
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         _run(handler(_make_msg({"action": "set_speed", "factor": 60.0})))
         _run(handler(_make_msg({"action": "pause"})))
         paused, speed = get_state()
@@ -222,7 +231,7 @@ class TestPlaybackHandler:
         assert speed == 60.0
 
     def test_resume_preserves_speed(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         _run(handler(_make_msg({"action": "set_speed", "factor": 60.0})))
         _run(handler(_make_msg({"action": "pause"})))
         _run(handler(_make_msg({"action": "resume"})))
@@ -232,7 +241,7 @@ class TestPlaybackHandler:
 
     def test_set_speed_while_paused(self):
         """Changing speed while paused should work — resume will use new speed."""
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         _run(handler(_make_msg({"action": "pause"})))
         _run(handler(_make_msg({"action": "set_speed", "factor": 100.0})))
         paused, speed = get_state()
@@ -240,7 +249,7 @@ class TestPlaybackHandler:
         assert speed == 100.0
 
     def test_negative_factor_rejected(self):
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         msg = _make_msg({"action": "set_speed", "factor": -5.0})
         _run(handler(msg))
         _, speed = get_state()
@@ -249,9 +258,64 @@ class TestPlaybackHandler:
 
     def test_zero_factor_rejected(self):
         """Factor=0 would divide-by-zero in pacing; users should pause() instead."""
-        handler, get_state = _make_handler()
+        handler, get_state, _ = _make_handler()
         msg = _make_msg({"action": "set_speed", "factor": 0.0})
         _run(handler(msg))
         _, speed = get_state()
         assert speed == 1.0
         assert "error" in _reply_data(msg)
+
+
+class TestSeekHandler:
+    """Tests for the Tier 2 seek action (R-OME-008B Part 5)."""
+
+    def test_seek_with_explicit_target(self):
+        handler, _, get_seek = _make_handler()
+        msg = _make_msg({"action": "seek", "target_sim_time": "2025-06-15T12:00:00+00:00"})
+        _run(handler(msg))
+        target = get_seek()
+        expected = datetime(2025, 6, 15, 12, 0, 0, tzinfo=UTC).timestamp()
+        assert target is not None
+        assert abs(target - expected) < 1.0
+        reply = _reply_data(msg)
+        assert "error" not in reply
+
+    def test_seek_without_target_uses_now(self):
+        """Seek with no target_sim_time = 'reset to now' (R-OME-005)."""
+        import time as _time
+
+        handler, _, get_seek = _make_handler()
+        before = _time.time()
+        msg = _make_msg({"action": "seek"})
+        _run(handler(msg))
+        after = _time.time()
+        target = get_seek()
+        assert target is not None
+        assert before <= target <= after + 0.1
+
+    def test_seek_preserves_speed(self):
+        """Seek should NOT reset speed — the rate is independent of epoch."""
+        handler, get_state, get_seek = _make_handler()
+        _run(handler(_make_msg({"action": "set_speed", "factor": 60.0})))
+        _run(handler(_make_msg({"action": "seek"})))
+        _, speed = get_state()
+        assert speed == 60.0  # speed preserved through seek
+        assert get_seek() is not None
+
+    def test_seek_preserves_pause_state(self):
+        """Seek while paused should stay paused at new epoch."""
+        handler, get_state, get_seek = _make_handler()
+        _run(handler(_make_msg({"action": "pause"})))
+        _run(handler(_make_msg({"action": "seek", "target_sim_time": "2020-01-01T00:00:00+00:00"})))
+        paused, _ = get_state()
+        assert paused is True
+        assert get_seek() is not None
+
+    def test_seek_replies_with_current_state(self):
+        handler, _, _ = _make_handler()
+        _run(handler(_make_msg({"action": "set_speed", "factor": 30.0})))
+        msg = _make_msg({"action": "seek", "target_sim_time": "2026-01-01T00:00:00+00:00"})
+        _run(handler(msg))
+        reply = _reply_data(msg)
+        assert reply["speed"] == 30.0
+        assert reply["paused"] is False

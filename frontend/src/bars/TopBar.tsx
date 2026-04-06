@@ -19,9 +19,10 @@ interface TopBarProps {
   onPlaybackPause: () => void;
   onPlaybackResume: () => void;
   onPlaybackSetSpeed: (factor: number) => void;
+  onSeekToNow: () => void;
 }
 
-export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical, activeSessionName, switching, onOpenCatalog, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed }: TopBarProps) {
+export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical, activeSessionName, switching, onOpenCatalog, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed, onSeekToNow }: TopBarProps) {
   const healthStatus = snapshot?.network_health.status ?? "unknown";
   const healthColor =
     healthStatus === "converged"
@@ -137,6 +138,22 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
           <option value={120}>120x</option>
           <option value={300}>300x</option>
         </select>
+        <button
+          onClick={onSeekToNow}
+          disabled={playbackLoading}
+          style={{
+            padding: "2px 6px",
+            borderRadius: 4,
+            border: "1px solid var(--border)",
+            background: "transparent",
+            color: "var(--text-secondary)",
+            fontSize: 11,
+            cursor: playbackLoading ? "wait" : "pointer",
+          }}
+          title="Reset sim time to wall-clock now"
+        >
+          Now
+        </button>
       </div>
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>

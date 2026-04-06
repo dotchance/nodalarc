@@ -305,6 +305,7 @@ function AppInner() {
         onPlaybackPause={playback.pause}
         onPlaybackResume={playback.resume}
         onPlaybackSetSpeed={playback.setSpeed}
+        onSeekToNow={playback.seekToNow}
       />
 
       {showCatalog && (

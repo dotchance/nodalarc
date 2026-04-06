@@ -10,6 +10,8 @@ interface PlaybackState {
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   setSpeed: (factor: number) => Promise<void>;
+  seekToNow: () => Promise<void>;
+  seek: (targetSimTime: string) => Promise<void>;
 }
 
 /**
@@ -55,5 +57,7 @@ export function usePlayback(snapshotPaused?: boolean, snapshotSpeed?: number): P
     pause: useCallback(() => sendCommand({ action: "pause" }), [sendCommand]),
     resume: useCallback(() => sendCommand({ action: "resume" }), [sendCommand]),
     setSpeed: useCallback((f: number) => sendCommand({ action: "set_speed", factor: f }), [sendCommand]),
+    seekToNow: useCallback(() => sendCommand({ action: "seek" }), [sendCommand]),
+    seek: useCallback((t: string) => sendCommand({ action: "seek", target_sim_time: t }), [sendCommand]),
   };
 }

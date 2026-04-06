@@ -37,6 +37,11 @@ let _lastSimTimeMs: number | null = null;
 let _lastSimWallTime: number | null = null;
 let _consecutiveOutliers = 0;
 
+// Pause state: when frozen, interpolatedSimTimeMs returns a constant.
+// d(sim)/d(wall) = 0 means NO extrapolation past the freeze point.
+let _frozen = false;
+let _frozenSimTimeMs: number | null = null;
+
 /** Record a new snapshot arrival. Updates the wall-to-sim rate EMA.
  *
  *  @param simTimeIso  ISO-8601 sim_time string from the snapshot
@@ -104,16 +109,38 @@ export function wallMsPerSimMs(): number {
 /** Interpolated sim_time at the given wall-clock instant, in ms since epoch.
  *
  *  Returns null if the clock has not been seeded (no snapshot received yet).
- *  Unbounded extrapolation: if snapshots stop, this value drifts indefinitely.
- *  Matches satellite-lerp behavior — callers visualize the same extrapolated
- *  timeline or apply their own bounds.
+ *  When paused (via setPlaybackPaused), returns the frozen value — no
+ *  extrapolation past the freeze point (d(sim)/d(wall) = 0 per R-OME-008B).
  *
  *  @param now  performance.now()
  */
 export function interpolatedSimTimeMs(now: number): number | null {
+  if (_frozen) return _frozenSimTimeMs;
   if (_lastSimTimeMs === null || _lastSimWallTime === null) return null;
   const wallSinceLast = now - _lastSimWallTime;
   return _lastSimTimeMs + wallSinceLast / _wallMsPerSimMs;
+}
+
+/** Notify simClock of playback pause/resume.
+ *
+ *  On pause: freeze interpolatedSimTimeMs at its current value.
+ *  On resume: reset the wall-time reference so extrapolation starts
+ *  from "now" at the frozen sim_time — no catch-up burst.
+ */
+export function setPlaybackPaused(paused: boolean): void {
+  if (paused && !_frozen) {
+    _frozenSimTimeMs = interpolatedSimTimeMs(performance.now());
+    _frozen = true;
+  } else if (!paused && _frozen) {
+    // Resume: anchor simClock at the frozen value with wall_time = now.
+    // Next interpolation starts from this point, no gap from pause duration.
+    if (_frozenSimTimeMs !== null) {
+      _lastSimTimeMs = _frozenSimTimeMs;
+      _lastSimWallTime = performance.now();
+    }
+    _frozen = false;
+    _frozenSimTimeMs = null;
+  }
 }
 
 /** Reset the clock. Call on session switch so stale EMA doesn't bleed
@@ -124,4 +151,6 @@ export function resetSimClock(): void {
   _lastSimTimeMs = null;
   _lastSimWallTime = null;
   _consecutiveOutliers = 0;
+  _frozen = false;
+  _frozenSimTimeMs = null;
 }

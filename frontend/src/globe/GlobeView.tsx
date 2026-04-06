@@ -12,18 +12,28 @@ import {
   CAMERA_MAX_DISTANCE,
   EARTH_RADIUS,
 } from "../config";
-import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, setGlobeMode } from "./earth";
-import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites, resetDeliveryRate } from "./satellites";
+import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, updateSunWorldDirection, setGlobeMode } from "./earth";
+import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites } from "./satellites";
+import { resetSimClock, interpolatedSimTimeMs } from "../sim/simClock";
+import { gmstRadians, EARTH_ROTATION_RATE_RAD_S } from "./astronomy";
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
 import { updateOrbitalTrails, flushTrails } from "./orbitalTrails";
-import { updateOrbitPins, clearOrbitPins } from "./orbitPins";
+import { updateOrbitPins, clearOrbitPins, reseedAllPins } from "./orbitPins";
 import { updateAllOrbits, clearAllOrbits } from "./allOrbits";
 import { setupRaycaster } from "./raycaster";
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
-import type { StateSnapshot, Selection, ColorMode, GlobeMode } from "../types";
+import type { StateSnapshot, Selection, ColorMode, GlobeMode, ReferenceFrame } from "../types";
+
+// Reusable temporaries for camera-math helpers (flyToNode, getNodeScreenPosition,
+// follow-target), avoiding per-call allocation. World-space values only.
+const _tmpWorldA = new THREE.Vector3();
+const _tmpWorldB = new THREE.Vector3();
+const _tmpNdc = new THREE.Vector3();
+const _tmpDirA = new THREE.Vector3();
+const _tmpDirB = new THREE.Vector3();
 
 export interface GlobeActions {
   flyToTopView: () => void;
@@ -42,8 +52,8 @@ interface GlobeViewProps {
   showGroundLinks: boolean;
   showIslLinks: boolean;
   showSatPaths: boolean;
+  referenceFrame: ReferenceFrame;
   actionsRef?: MutableRefObject<GlobeActions | null>;
-  followNode?: boolean;
 }
 
 export function GlobeView({
@@ -55,8 +65,8 @@ export function GlobeView({
   showGroundLinks,
   showIslLinks,
   showSatPaths,
+  referenceFrame,
   actionsRef,
-  followNode: _followNode,
 }: GlobeViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
@@ -71,6 +81,9 @@ export function GlobeView({
   const showGroundLinksRef = useRef(showGroundLinks);
   const showIslLinksRef = useRef(showIslLinks);
   const showSatPathsRef = useRef(showSatPaths);
+  const referenceFrameRef = useRef<ReferenceFrame>(referenceFrame);
+  const earthFrameRef = useRef<THREE.Group | null>(null);
+  const starFrameRef = useRef<THREE.Group | null>(null);
   const followTargetRef = useRef<string | null>(null);
 
   // Keep refs in sync
@@ -80,6 +93,7 @@ export function GlobeView({
   showGroundLinksRef.current = showGroundLinks;
   showIslLinksRef.current = showIslLinks;
   showSatPathsRef.current = showSatPaths;
+  referenceFrameRef.current = referenceFrame;
 
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
@@ -116,15 +130,40 @@ export function GlobeView({
     controls.maxDistance = CAMERA_MAX_DISTANCE;
     controlsRef.current = controls;
 
-    createStarfield(scene);
-    createEarth(scene);
-    createAtmosphere(scene);
-    createLights(scene);
+    // Two reference-frame groups: earthFrame holds ECEF-referenced data
+    // (Earth, atmosphere, sun, sats, GS, in-group geometry); starFrame
+    // holds inertial data (starfield). Relative rotation is always +gmst;
+    // which group carries the rotation depends on the view mode.
+    const earthFrame = new THREE.Group();
+    earthFrame.name = "earthFrame";
+    scene.add(earthFrame);
+    earthFrameRef.current = earthFrame;
+    const starFrame = new THREE.Group();
+    starFrame.name = "starFrame";
+    scene.add(starFrame);
+    starFrameRef.current = starFrame;
 
-    // Raycaster for picking
-    setupRaycaster(renderer.domElement, camera, scene, (sel) => {
-      onSelectRef.current(sel);
-    });
+    createStarfield(starFrame);
+    createEarth(earthFrame);
+    createAtmosphere(earthFrame);
+    createLights(scene, earthFrame);
+
+    // Raycaster closes over getters that read current earthFrame rotation
+    // and active frame angular velocity so Ctrl+click orbit-pin seeds use
+    // the view frame that's active at click time.
+    setupRaycaster(
+      renderer.domElement,
+      camera,
+      scene,
+      (sel) => { onSelectRef.current(sel); },
+      () => ({
+        rotationRad: earthFrame.rotation.y,
+        angularVelocityRadS:
+          referenceFrameRef.current === "earth-inertial"
+            ? EARTH_ROTATION_RATE_RAD_S
+            : 0,
+      }),
+    );
 
     // Expose imperative actions
     if (actionsRef) {
@@ -165,43 +204,49 @@ export function GlobeView({
         flyToNode: (nodeId: string) => {
           const sat = getSatellites().get(nodeId);
           const gs = getGroundStations().get(nodeId);
-          const pos = sat?.mesh.position ?? gs?.sprite.position;
-          if (pos) {
-            // Move camera so the node faces the viewer, keeping orbit pivot at Earth center
+          // World position required: camera direction math operates in
+          // world space. Sats/GS live in earthFrame; local coords would
+          // misdirect the camera under any non-identity group rotation.
+          const target = sat?.mesh.getWorldPosition(_tmpWorldA)
+            ?? gs?.sprite.getWorldPosition(_tmpWorldA);
+          if (target) {
             controls.target.set(0, 0, 0);
             const dist = camera.position.length();
-            const dir = pos.clone().normalize();
-            camera.position.copy(dir.multiplyScalar(dist));
+            _tmpWorldA.normalize();
+            camera.position.copy(_tmpWorldA.multiplyScalar(dist));
             controls.update();
           }
         },
         getNodeScreenPosition: (nodeId: string) => {
           const sat = getSatellites().get(nodeId);
           const gs = getGroundStations().get(nodeId);
-          const worldPos = sat?.mesh.position ?? gs?.sprite.position;
+          const worldPos = sat
+            ? sat.mesh.getWorldPosition(_tmpWorldA)
+            : gs
+              ? gs.sprite.getWorldPosition(_tmpWorldA)
+              : null;
           if (!worldPos) return null;
 
-          const vec = worldPos.clone().project(camera);
+          _tmpNdc.copy(worldPos).project(camera);
 
           // Behind camera or behind Earth
-          if (vec.z > 1) return { x: 0, y: 0, visible: false };
+          if (_tmpNdc.z > 1) return { x: 0, y: 0, visible: false };
 
           // Earth occlusion check (same as updateGSLabels)
           const cameraPos = camera.position;
-          const dirToNode = worldPos.clone().sub(cameraPos).normalize();
-          const dirToCenter = new THREE.Vector3(0, 0, 0).sub(cameraPos).normalize();
-          const dot = dirToNode.dot(dirToCenter);
+          _tmpDirA.copy(worldPos).sub(cameraPos).normalize();
+          _tmpDirB.copy(cameraPos).multiplyScalar(-1).normalize();
+          const dot = _tmpDirA.dot(_tmpDirB);
           const distToCenter = cameraPos.length();
           const sinAngle = EARTH_RADIUS / distToCenter;
           if (dot > Math.sqrt(1 - sinAngle * sinAngle) && worldPos.length() < distToCenter) {
             return { x: 0, y: 0, visible: false };
           }
 
-          // Convert NDC to pixel coords relative to the container
           const w = container.clientWidth;
           const h = container.clientHeight;
-          const x = (vec.x * 0.5 + 0.5) * w;
-          const y = (-vec.y * 0.5 + 0.5) * h;
+          const x = (_tmpNdc.x * 0.5 + 0.5) * w;
+          const y = (-_tmpNdc.y * 0.5 + 0.5) * h;
           return { x, y, visible: true };
         },
       };
@@ -225,7 +270,7 @@ export function GlobeView({
           flushTrails();
           clearOrbitPins(scene);
           clearAllOrbits(scene);
-          resetDeliveryRate();
+          resetSimClock();
         }
         lastConstellationName = snap.constellation_name;
       }
@@ -233,25 +278,49 @@ export function GlobeView({
       // Update entities when snapshot changes
       if (snap && snap !== lastSnapshotRef) {
         lastSnapshotRef = snap;
-        updateSatellites(snap.nodes, scene, colorModeRef.current, snap.sim_time);
-        updateGroundStations(snap.nodes, scene, labelContainer);
-        updateLinks(snap.links, scene, showIslLinksRef.current);
-        updateFlowPaths(snap.traced_paths, scene);
+        updateSatellites(snap.nodes, earthFrame, colorModeRef.current, snap.sim_time);
+        updateGroundStations(snap.nodes, earthFrame, labelContainer);
+        updateLinks(snap.links, earthFrame, showIslLinksRef.current);
+        updateFlowPaths(snap.traced_paths, earthFrame);
         updateSunPosition(snap.sim_time);
       }
 
-      // Follow selected node — rotate camera toward it, keep orbit pivot at origin
+      // Apply view-frame rotation. The relative rotation between earthFrame
+      // and starFrame is always +gmst(simTime); the active mode decides
+      // which group carries it. Must run BEFORE any consumer that reads
+      // getWorldPosition (selection ring, trails, orbits, GS labels).
+      const interpMs = interpolatedSimTimeMs(performance.now());
+      const gmstRad = interpMs !== null ? gmstRadians(interpMs / 1000) : 0;
+      const mode = referenceFrameRef.current;
+      if (mode === "earth-inertial") {
+        earthFrame.rotation.y = gmstRad;
+        starFrame.rotation.y = 0;
+      } else {
+        earthFrame.rotation.y = 0;
+        starFrame.rotation.y = -gmstRad;
+      }
+      const angularVelocityRadS =
+        mode === "earth-inertial" ? EARTH_ROTATION_RATE_RAD_S : 0;
+      // DayNight shader's u_sunDirection is sampled from sun's world pos;
+      // must run after earthFrame rotation is set.
+      updateSunWorldDirection();
+
+      // Follow selected node — rotate camera toward it, keep orbit pivot at origin.
+      // World position required: camera rotation math operates in world space.
       if (followTargetRef.current) {
         const sat = getSatellites().get(followTargetRef.current);
         const gs = getGroundStations().get(followTargetRef.current);
-        const targetPos = sat?.mesh.position ?? gs?.sprite.position;
+        const targetPos = sat
+          ? sat.mesh.getWorldPosition(_tmpWorldA)
+          : gs
+            ? gs.sprite.getWorldPosition(_tmpWorldA)
+            : null;
         if (targetPos) {
           const dist = camera.position.length();
-          const desiredDir = targetPos.clone().normalize();
-          const currentDir = camera.position.clone().normalize();
-          currentDir.lerp(desiredDir, 0.05);
-          currentDir.normalize();
-          camera.position.copy(currentDir.multiplyScalar(dist));
+          _tmpWorldA.normalize();
+          _tmpWorldB.copy(camera.position).normalize();
+          _tmpWorldB.lerp(_tmpWorldA, 0.05).normalize();
+          camera.position.copy(_tmpWorldB.multiplyScalar(dist));
           controls.target.set(0, 0, 0);
         }
       }
@@ -261,10 +330,18 @@ export function GlobeView({
       animateFlowPaths();
       if (!skipTrails) updateOrbitalTrails(scene);
       updateOrbitPins(scene);
-      updateAllOrbits(scene, showSatPathsRef.current);
+      // Current view-frame parameters: rotation is whatever earthFrame
+      // carries this frame; angular velocity is non-zero only in
+      // earth-inertial view (dθ/dt = 0 when frame is static).
+      updateAllOrbits(
+        scene,
+        showSatPathsRef.current,
+        earthFrame.rotation.y,
+        angularVelocityRadS,
+      );
       updateSelection(selectionRef.current, scene, camera);
       animateSelection(camera);
-      updateCoverageFootprint(selectionRef.current, scene, camera);
+      updateCoverageFootprint(selectionRef.current, earthFrame, camera);
       controls.update();
       updateGSLabels(camera, labelContainer);
       renderer.render(scene, camera);
@@ -300,6 +377,26 @@ export function GlobeView({
   useEffect(() => {
     setGlobeMode(globeMode);
   }, [globeMode]);
+
+  // On reference-frame toggle, reset frame-dependent world-space geometry:
+  //   - Trail buffers: stored as world-space points; mixing points from
+  //     two frames produces a meaningless trail. Clear and re-accumulate.
+  //   - All-orbits rings: seeded from world pos+vel; invalid in the new
+  //     frame. Clear; lazy-recreated from the render loop on next tick.
+  //   - Orbit pins: re-seed rings using the new frame's parameters. Pin
+  //     list (node IDs) preserved so user selections survive the toggle.
+  // This useEffect fires AFTER the first render that has the new mode,
+  // which means earthFrame.rotation.y already reflects the new frame.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    const earthFrame = earthFrameRef.current;
+    if (!scene || !earthFrame) return;  // before mount completes
+    flushTrails();
+    clearAllOrbits(scene);
+    const angularVelocityRadS =
+      referenceFrame === "earth-inertial" ? EARTH_ROTATION_RATE_RAD_S : 0;
+    reseedAllPins(earthFrame.rotation.y, angularVelocityRadS);
+  }, [referenceFrame]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>

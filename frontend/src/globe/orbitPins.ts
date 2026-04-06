@@ -9,6 +9,12 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getSatellites } from "./satellites";
 import { getPlaneColor } from "../config";
 import { velocityToScene } from "./geo";
+import { worldVelocity } from "./astronomy";
+
+// Reusable temporaries for world-space seed sampling.
+const _pinWorldPos = new THREE.Vector3();
+const _pinVelEcef = new THREE.Vector3();
+const _pinVelWorld = new THREE.Vector3();
 
 interface OrbitPin {
   nodeId: string;
@@ -44,7 +50,12 @@ export function computeOrbitPositions(pos: THREE.Vector3, vel: THREE.Vector3): F
   return positions;
 }
 
-export function toggleOrbitPin(nodeId: string, scene: THREE.Scene): void {
+export function toggleOrbitPin(
+  nodeId: string,
+  scene: THREE.Scene,
+  viewFrameRotationRad: number,
+  frameAngularVelocityRadS: number,
+): void {
   // If already pinned, unpin
   const existing = pins.get(nodeId);
   if (existing) {
@@ -82,10 +93,19 @@ export function toggleOrbitPin(nodeId: string, scene: THREE.Scene): void {
     }
   }
 
-  const pos = sat.mesh.position.clone();
-  const vel = velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s);
+  // Seed from world pos + WORLD velocity (plan §1.5, §1.6). In earth-fixed
+  // view (frameAngularVelocityRadS = 0) this reduces to the ECEF values.
+  sat.mesh.getWorldPosition(_pinWorldPos);
+  _pinVelEcef.copy(velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s));
+  worldVelocity(
+    sat.mesh.position,
+    _pinVelEcef,
+    viewFrameRotationRad,
+    frameAngularVelocityRadS,
+    _pinVelWorld,
+  );
 
-  const positions = computeOrbitPositions(pos, vel);
+  const positions = computeOrbitPositions(_pinWorldPos, _pinVelWorld);
   const geometry = new LineGeometry();
   geometry.setPositions(positions);
 
@@ -111,6 +131,37 @@ export function toggleOrbitPin(nodeId: string, scene: THREE.Scene): void {
     altitude_km: ns.alt_km,
     pinnedAt: performance.now(),
   });
+}
+
+/** Re-seed every pinned orbit's ring geometry from the pinned satellite's
+ *  current world pos + world velocity. Called from GlobeView.tsx on
+ *  reference-frame toggle (plan §1.7) to preserve the user's pin list
+ *  while updating ring geometry into the new frame. */
+export function reseedAllPins(
+  viewFrameRotationRad: number,
+  frameAngularVelocityRadS: number,
+): void {
+  const sats = getSatellites();
+  for (const pin of pins.values()) {
+    const sat = sats.get(pin.nodeId);
+    if (!sat) continue;
+    const ns = sat.nodeState;
+    if (ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
+
+    sat.mesh.getWorldPosition(_pinWorldPos);
+    _pinVelEcef.copy(velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s));
+    worldVelocity(
+      sat.mesh.position,
+      _pinVelEcef,
+      viewFrameRotationRad,
+      frameAngularVelocityRadS,
+      _pinVelWorld,
+    );
+
+    const positions = computeOrbitPositions(_pinWorldPos, _pinVelWorld);
+    pin.geometry.setPositions(positions);
+    pin.line.computeLineDistances();
+  }
 }
 
 export function updateOrbitPins(scene: THREE.Scene): void {

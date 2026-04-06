@@ -20,6 +20,9 @@ const ringMat = new THREE.MeshBasicMaterial({
   depthWrite: false,
 });
 
+// Reusable temporary for world-space target reads.
+const _selWorldPos = new THREE.Vector3();
+
 export function updateSelection(
   selection: Selection | null,
   scene: THREE.Scene,
@@ -51,25 +54,29 @@ export function updateSelection(
   const sats = getSatellites();
   const gss = getGroundStations();
 
-  let targetPos: THREE.Vector3 | undefined;
+  // Selection ring lives in scene root; entity positions live in earthFrame.
+  // Read world coords so the ring tracks through the group rotation.
+  let hasTarget = false;
   let scale = SAT_RADIUS * 3;
 
   if (selection.type === "satellite") {
     const sat = sats.get(selection.id);
     if (sat) {
-      targetPos = sat.mesh.position;
+      sat.mesh.getWorldPosition(_selWorldPos);
       sat.glow.visible = true;
+      hasTarget = true;
     }
   } else if (selection.type === "ground_station") {
     const gs = gss.get(selection.id);
     if (gs) {
-      targetPos = gs.sprite.position;
+      gs.sprite.getWorldPosition(_selWorldPos);
       scale = SAT_RADIUS * 4;
+      hasTarget = true;
     }
   }
 
-  if (targetPos) {
-    selectionRing.position.copy(targetPos);
+  if (hasTarget) {
+    selectionRing.position.copy(_selWorldPos);
     selectionRing.lookAt(camera.position);
     selectionRing.scale.set(scale, scale, scale);
     selectionRing.visible = true;
@@ -84,16 +91,23 @@ export function animateSelection(camera: THREE.Camera): void {
   const sats = getSatellites();
   const gss = getGroundStations();
 
-  let targetPos: THREE.Vector3 | undefined;
-
+  let hasTarget = false;
   if (currentSelection.type === "satellite") {
-    targetPos = sats.get(currentSelection.id)?.mesh.position;
+    const sat = sats.get(currentSelection.id);
+    if (sat) {
+      sat.mesh.getWorldPosition(_selWorldPos);
+      hasTarget = true;
+    }
   } else if (currentSelection.type === "ground_station") {
-    targetPos = gss.get(currentSelection.id)?.sprite.position;
+    const gs = gss.get(currentSelection.id);
+    if (gs) {
+      gs.sprite.getWorldPosition(_selWorldPos);
+      hasTarget = true;
+    }
   }
 
-  if (targetPos) {
-    selectionRing.position.copy(targetPos);
+  if (hasTarget) {
+    selectionRing.position.copy(_selWorldPos);
     selectionRing.lookAt(camera.position);
 
     // Pulse effect

@@ -42,6 +42,9 @@ let trailsVisible = true;
 
 const TRAIL_COLOR = new THREE.Color(0x6699dd);
 
+// Reusable temporary for world-position sampling each frame.
+const _trailWorldPos = new THREE.Vector3();
+
 function createTrail(scene: THREE.Scene): TrailEntry {
   // Pre-allocate max-size attributes
   const posArr = new Float32Array(TRAIL_LENGTH * 3);
@@ -110,10 +113,13 @@ export function updateOrbitalTrails(scene: THREE.Scene): void {
     trail.frame++;
     if (trail.frame % SAMPLE_EVERY !== 0) continue;
 
-    // Record the mesh's actual rendered position (post-lerp), not the
-    // snapshot target — otherwise the trail leads the satellite.
-    const pos = sat.mesh.position;
-    pushSample(trail.buffer, pos.x, pos.y, pos.z);
+    // Record the mesh's actual rendered position (post-lerp) in WORLD
+    // space. Trail geometry is in scene root, so world coords are what
+    // the trail line's local frame expects. In earth-fixed view (group
+    // rotation 0) world equals local ECEF; in earth-inertial view the
+    // rotation is automatically applied via getWorldPosition.
+    sat.mesh.getWorldPosition(_trailWorldPos);
+    pushSample(trail.buffer, _trailWorldPos.x, _trailWorldPos.y, _trailWorldPos.z);
 
     // Extract draw-order points capped by arc length
     const points = extractDrawPoints(trail.buffer, MAX_ARC_LENGTH);

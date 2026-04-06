@@ -32,7 +32,7 @@ window.addEventListener("resize", () => {
   }
 });
 
-export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
+export function updateFlowPaths(paths: TracedPath[], earthFrame: THREE.Object3D): void {
   const active = new Set<string>();
 
   let flowIndex = 0;
@@ -68,7 +68,7 @@ export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
 
     const line = new Line2(geometry, material);
     line.computeLineDistances();
-    scene.add(line);
+    earthFrame.add(line);
 
     const flowEntry: FlowPathEntry = { line, geometry, material, hops: path.hops };
 
@@ -87,7 +87,7 @@ export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
       });
       const revLine = new Line2(revGeometry, revMaterial);
       revLine.computeLineDistances();
-      scene.add(revLine);
+      earthFrame.add(revLine);
       flowEntry.reverseLine = revLine;
       flowEntry.reverseGeometry = revGeometry;
       flowEntry.reverseMaterial = revMaterial;
@@ -101,11 +101,11 @@ export function updateFlowPaths(paths: TracedPath[], scene: THREE.Scene): void {
   // Remove old flow paths
   for (const [id, entry] of flowPaths) {
     if (!active.has(id)) {
-      scene.remove(entry.line);
+      earthFrame.remove(entry.line);
       entry.geometry.dispose();
       entry.material.dispose();
       if (entry.reverseLine) {
-        scene.remove(entry.reverseLine);
+        earthFrame.remove(entry.reverseLine);
         entry.reverseGeometry?.dispose();
         entry.reverseMaterial?.dispose();
       }

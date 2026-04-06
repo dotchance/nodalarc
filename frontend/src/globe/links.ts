@@ -97,7 +97,7 @@ function isGroundLink(nodeA: string, nodeB: string): boolean {
 
 export function updateLinks(
   linkStates: LinkState[],
-  scene: THREE.Scene,
+  earthFrame: THREE.Object3D,
   _showAllLinks: boolean,
 ): void {
   const now = performance.now();
@@ -158,7 +158,7 @@ export function updateLinks(
       line.userData["nodeA"] = ls.node_a;
       line.userData["nodeB"] = ls.node_b;
       if (dashed) line.computeLineDistances();
-      scene.add(line);
+      earthFrame.add(line);
 
       links.set(key, {
         line,

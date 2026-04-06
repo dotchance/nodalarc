@@ -1702,7 +1702,7 @@ def playback_control(body: dict) -> Any:
     from nodalarc.nats_channels import SUBJECT_PLAYBACK_CONTROL
 
     action = body.get("action", "")
-    if action not in ("pause", "resume", "set_speed", "get_status"):
+    if action not in ("pause", "resume", "set_speed", "get_status", "seek"):
         return JSONResponse(status_code=400, content={"error": "Unknown action"})
 
     async def _request():

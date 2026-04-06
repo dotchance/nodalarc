@@ -93,7 +93,7 @@ function AppInner() {
   const [referenceFrame, setReferenceFrame] = useState<ReferenceFrame>(() => {
     // Bootstrap from localStorage; default to earth-fixed (current behavior).
     const saved = localStorage.getItem(REFERENCE_FRAME_STORAGE_KEY);
-    return saved === "earth-inertial" ? "earth-inertial" : "earth-fixed";
+    return saved === "earth-fixed" ? "earth-fixed" : "earth-inertial";
   });
   useEffect(() => {
     localStorage.setItem(REFERENCE_FRAME_STORAGE_KEY, referenceFrame);
@@ -305,6 +305,7 @@ function AppInner() {
         onPlaybackPause={playback.pause}
         onPlaybackResume={playback.resume}
         onPlaybackSetSpeed={playback.setSpeed}
+        onSeekToNow={playback.seekToNow}
       />
 
       {showCatalog && (
@@ -380,6 +381,7 @@ function AppInner() {
             showIslLinks={showIslLinks}
             showSatPaths={showSatPaths}
             referenceFrame={referenceFrame}
+            playbackPaused={playback.paused}
             actionsRef={globeActionsRef}
           />
         </div>

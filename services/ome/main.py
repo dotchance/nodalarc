@@ -42,6 +42,7 @@ from ome.propagator import orbital_period
 
 _time_accel: float = 1.0  # current d(sim)/d(wall) multiplier
 _paused: bool = False  # emission halted?
+_seek_target: float | None = None  # Unix timestamp to seek to, or None
 
 
 def run(session_path: str, output_dir: str | None = None) -> Path:
@@ -203,6 +204,18 @@ async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
                     return
                 _time_accel = factor
                 logging.info("Playback speed set to %.1fx", factor)
+            elif action == "seek":
+                global _seek_target
+                target_str = cmd.get("target_sim_time")
+                if target_str:
+                    _seek_target = datetime.fromisoformat(target_str).timestamp()
+                else:
+                    # "Reset to now" — OME resolves authoritatively per R-OME-005
+                    _seek_target = datetime.now(UTC).timestamp()
+                # Seek implies resume: user asked to go somewhere, show it.
+                _paused = False
+                target_iso = datetime.fromtimestamp(_seek_target, UTC).isoformat()
+                logging.info("Seek requested: %s (auto-resumed)", target_iso)
             elif action == "get_status":
                 pass  # fall through to reply with current state
             else:
@@ -314,7 +327,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
 
     # Initialize Pacemaker rate from static compression (R-OME-008B Part 1).
     # Runtime set_speed commands replace this value dynamically.
-    global _time_accel
+    global _time_accel, _seek_target
     _time_accel = float(compression)
     snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
@@ -376,6 +389,23 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
 
     try:
         while not shutdown_event.is_set():
+            # --- Seek check (Tier 2, R-OME-008B Part 5) ---
+            # Consume a pending seek BEFORE the expensive window computation
+            # so we don't waste 8+ seconds computing a window we'd discard.
+            seek_to = _seek_target
+            force_first_snapshot = False
+            if seek_to is not None:
+                _seek_target = None  # consume the pending seek
+                epoch_for_next = seek_to
+                isl_state = None  # no prior link state at new epoch
+                gs_state = None
+                window = 0  # incremented to 1 below
+                force_first_snapshot = True
+                logging.info(
+                    "Seek applied: new epoch %s",
+                    datetime.fromtimestamp(seek_to, UTC).isoformat(),
+                )
+
             window += 1
             logging.info("OME continuous: computing window %d (period=%.0fs)", window, period)
 
@@ -444,7 +474,11 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
             )
 
             current_sim_time_iso: str = ""
-            last_snapshot_sim_s: float = 0.0
+            # Force immediate LinkStateSnapshot on first tick after seek:
+            # the Scheduler's replace-not-merge needs it to clear stale
+            # _active_links from the old epoch. Without it, the forwarding
+            # plane carries phantom links for up to snapshot_interval_s.
+            last_snapshot_sim_s: float = -snapshot_interval_s if force_first_snapshot else 0.0
             running_isl_state = dict(pre_window_isl)
             running_gs_state = dict(pre_window_gs)
 
@@ -453,6 +487,10 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
 
             for evt in events:
                 if shutdown_event.is_set():
+                    break
+                # Seek interrupt: break immediately so the outer loop can
+                # consume the seek before the next window computation.
+                if _seek_target is not None:
                     break
 
                 if current_tick_ts is not None and evt.timestamp_s != current_tick_ts:

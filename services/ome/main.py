@@ -15,6 +15,11 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Session config bundle — shared between run() and _run_pacing()
+# ---------------------------------------------------------------------------
+from typing import NamedTuple
+
 import yaml
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.constellation_loader import (
@@ -33,6 +38,78 @@ from ome.event_stream import (
 )
 from ome.propagator import orbital_period
 
+
+class _SessionBundle(NamedTuple):
+    """All session-derived config needed by the OME pacing loop."""
+
+    session: SessionConfig
+    constellation_config: object  # ConstellationConfig (discriminated union)
+    gs_file: object  # GroundStationFile
+    satellites: list
+    period: float
+    addressing: AddressingScheme
+    neighbors: frozenset
+    max_range_km: float
+    max_tracking_rate_deg_s: float
+    field_of_regard_deg: float
+    polar_seam_enabled: bool
+    latitude_threshold_deg: float
+    default_min_elevation_deg: float
+
+
+def _load_session_config(session_path: str | Path) -> _SessionBundle:
+    """Load and validate all session config. Pure — no side effects."""
+    from nodalarc.models.constellation import ParametricConstellation
+
+    data = yaml.safe_load(Path(session_path).read_text())
+    session = SessionConfig.model_validate(data)
+
+    constellation_config = load_constellation(session.constellation)
+    gs_file = load_ground_stations(session.ground_stations)
+    satellites = expand_constellation(constellation_config)
+    if not satellites:
+        raise ValueError("No satellites in constellation")
+
+    first_alt = satellites[0].elements.semi_major_axis_km - 6371.0
+    period = orbital_period(first_alt)
+    addressing = AddressingScheme(session.addressing)
+    neighbors = assign_isl_neighbors(constellation_config, addressing)
+
+    max_range_km = 5016.0
+    max_tracking_rate_deg_s = 3.0
+    field_of_regard_deg = 360.0
+    polar_seam_enabled = False
+    latitude_threshold_deg = 70.0
+
+    if isinstance(constellation_config, ParametricConstellation):
+        if constellation_config.default_terminals and constellation_config.default_terminals.isl:
+            isl_term = constellation_config.default_terminals.isl[0]
+            max_range_km = isl_term.max_range_km
+            max_tracking_rate_deg_s = isl_term.max_tracking_rate_deg_s
+            field_of_regard_deg = isl_term.field_of_regard_deg
+        if constellation_config.polar_seam:
+            polar_seam_enabled = constellation_config.polar_seam.enabled
+            latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
+
+    default_min_elevation = gs_file.default_min_elevation_deg or 25.0
+
+    return _SessionBundle(
+        session=session,
+        constellation_config=constellation_config,
+        gs_file=gs_file,
+        satellites=satellites,
+        period=period,
+        addressing=addressing,
+        neighbors=neighbors,
+        max_range_km=max_range_km,
+        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
+        field_of_regard_deg=field_of_regard_deg,
+        polar_seam_enabled=polar_seam_enabled,
+        latitude_threshold_deg=latitude_threshold_deg,
+        default_min_elevation_deg=default_min_elevation,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shared playback state (Pacemaker role, R-OME-008B)
 # ---------------------------------------------------------------------------
@@ -46,76 +123,34 @@ _seek_target: float | None = None  # Unix timestamp to seek to, or None
 
 
 def run(session_path: str, output_dir: str | None = None) -> Path:
-    """Run the OME pipeline and return the output path."""
-    # Load session config
-    data = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(data)
+    """Run the OME pipeline (single window, batch mode) and return the output path."""
+    cfg = _load_session_config(session_path)
 
-    # Resolve paths relative to CWD (paths in session YAML are project-relative)
-    constellation_config = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-
-    # Expand constellation to satellite nodes
-    satellites = expand_constellation(constellation_config)
-    if not satellites:
-        raise ValueError("No satellites in constellation")
-
-    # Determine orbital period from first satellite's altitude
-    first_alt = satellites[0].elements.semi_major_axis_km - 6371.0
-    period = orbital_period(first_alt)
-
-    # Create addressing scheme
-    addressing = AddressingScheme(session.addressing)
-
-    # Compute ISL neighbor assignments (frozen, computed once)
-    neighbors = assign_isl_neighbors(constellation_config, addressing)
-
-    # Extract visibility parameters from constellation config
-    max_range_km = 5016.0
-    max_tracking_rate_deg_s = 3.0
-    field_of_regard_deg = 360.0
-    polar_seam_enabled = False
-    latitude_threshold_deg = 70.0
-
-    from nodalarc.models.constellation import ParametricConstellation
-
-    if isinstance(constellation_config, ParametricConstellation):
-        if constellation_config.default_terminals.isl:
-            isl = constellation_config.default_terminals.isl[0]
-            max_range_km = isl.max_range_km
-            max_tracking_rate_deg_s = isl.max_tracking_rate_deg_s
-            field_of_regard_deg = isl.field_of_regard_deg
-        if constellation_config.polar_seam:
-            polar_seam_enabled = constellation_config.polar_seam.enabled
-            latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
-
-    # Default min elevation from GS file
-    default_min_elevation = gs_file.default_min_elevation_deg or 25.0
-
-    # Precompute timeline
     events = precompute_timeline(
-        satellites=satellites,
-        addressing=addressing,
-        gs_file=gs_file,
-        neighbors=neighbors,
-        epoch_unix=resolve_session_epoch(session.time),
-        duration_s=period,
-        step_seconds=session.time.step_seconds,
-        max_range_km=max_range_km,
-        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-        field_of_regard_deg=field_of_regard_deg,
-        polar_seam_enabled=polar_seam_enabled,
-        latitude_threshold_deg=latitude_threshold_deg,
-        default_min_elevation_deg=default_min_elevation,
+        satellites=cfg.satellites,
+        addressing=cfg.addressing,
+        gs_file=cfg.gs_file,
+        neighbors=cfg.neighbors,
+        epoch_unix=resolve_session_epoch(cfg.session.time),
+        duration_s=cfg.period,
+        step_seconds=cfg.session.time.step_seconds,
+        max_range_km=cfg.max_range_km,
+        max_tracking_rate_deg_s=cfg.max_tracking_rate_deg_s,
+        field_of_regard_deg=cfg.field_of_regard_deg,
+        polar_seam_enabled=cfg.polar_seam_enabled,
+        latitude_threshold_deg=cfg.latitude_threshold_deg,
+        default_min_elevation_deg=cfg.default_min_elevation_deg,
     )
 
-    # Write output
     out_dir = Path(output_dir) if output_dir else Path("output")
-    out_path = out_dir / f"{session.session.name}-timeline.jsonl"
+    out_path = out_dir / f"{cfg.session.session.name}-timeline.jsonl"
     write_timeline_jsonl(events, out_path)
 
     logging.info(
-        f"OME complete: {len(events)} events, {len(satellites)} satellites, period={period:.0f}s"
+        "OME complete: %d events, %d satellites, period=%.0fs",
+        len(events),
+        len(cfg.satellites),
+        cfg.period,
     )
     return out_path
 
@@ -288,40 +323,9 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     while not session_file.is_file():
         logging.info("Waiting for session config at %s...", session_path)
         time.sleep(5)
-    data = yaml.safe_load(session_file.read_text())
-    session = SessionConfig.model_validate(data)
-
-    constellation_config = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation_config)
-    if not satellites:
-        raise ValueError("No satellites in constellation")
-
-    first_alt = satellites[0].elements.semi_major_axis_km - 6371.0
-    period = orbital_period(first_alt)
-    addressing = AddressingScheme(session.addressing)
-    neighbors = assign_isl_neighbors(constellation_config, addressing)
-
-    # Extract visibility parameters
-    max_range_km = 5016.0
-    max_tracking_rate_deg_s = 3.0
-    field_of_regard_deg = 360.0
-    polar_seam_enabled = False
-    latitude_threshold_deg = 70.0
-
-    from nodalarc.models.constellation import ParametricConstellation
-
-    if isinstance(constellation_config, ParametricConstellation):
-        if constellation_config.default_terminals.isl:
-            isl_term = constellation_config.default_terminals.isl[0]
-            max_range_km = isl_term.max_range_km
-            max_tracking_rate_deg_s = isl_term.max_tracking_rate_deg_s
-            field_of_regard_deg = isl_term.field_of_regard_deg
-        if constellation_config.polar_seam:
-            polar_seam_enabled = constellation_config.polar_seam.enabled
-            latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
-
-    default_min_elevation = gs_file.default_min_elevation_deg or 25.0
+    cfg = _load_session_config(session_path)
+    session = cfg.session
+    period = cfg.period
     epoch_unix = resolve_session_epoch(session.time)
     compression = session.time.compression if session.time.compression else 1
 
@@ -334,7 +338,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     # Build interface map for LinkStateSnapshot
     from nodalarc.models.addressing import neighbors_by_node
 
-    by_node = neighbors_by_node(neighbors)
+    by_node = neighbors_by_node(cfg.neighbors)
     interface_map: dict[tuple[str, str], tuple[str, str]] = {}
     for node_id, assignments in by_node.items():
         for na in assignments:
@@ -374,17 +378,17 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     gs_state = None
     snapshot_seq = 0
     _common_args = dict(
-        satellites=satellites,
-        addressing=addressing,
-        gs_file=gs_file,
-        neighbors=neighbors,
+        satellites=cfg.satellites,
+        addressing=cfg.addressing,
+        gs_file=cfg.gs_file,
+        neighbors=cfg.neighbors,
         step_seconds=session.time.step_seconds,
-        max_range_km=max_range_km,
-        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-        field_of_regard_deg=field_of_regard_deg,
-        polar_seam_enabled=polar_seam_enabled,
-        latitude_threshold_deg=latitude_threshold_deg,
-        default_min_elevation_deg=default_min_elevation,
+        max_range_km=cfg.max_range_km,
+        max_tracking_rate_deg_s=cfg.max_tracking_rate_deg_s,
+        field_of_regard_deg=cfg.field_of_regard_deg,
+        polar_seam_enabled=cfg.polar_seam_enabled,
+        latitude_threshold_deg=cfg.latitude_threshold_deg,
+        default_min_elevation_deg=cfg.default_min_elevation_deg,
     )
 
     try:

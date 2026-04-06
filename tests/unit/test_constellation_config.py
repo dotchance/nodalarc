@@ -132,7 +132,7 @@ class TestValidationRejections:
                 ]
             },
         }
-        with pytest.raises(ValidationError, match="terminal count must be 0-8"):
+        with pytest.raises(ValidationError, match="terminal count must be 1-8"):
             adapter.validate_python(data)
 
     def test_negative_tracking_rate(self):

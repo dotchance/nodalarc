@@ -212,8 +212,10 @@ async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
                 else:
                     # "Reset to now" — OME resolves authoritatively per R-OME-005
                     _seek_target = datetime.now(UTC).timestamp()
+                # Seek implies resume: user asked to go somewhere, show it.
+                _paused = False
                 target_iso = datetime.fromtimestamp(_seek_target, UTC).isoformat()
-                logging.info("Seek requested: %s", target_iso)
+                logging.info("Seek requested: %s (auto-resumed)", target_iso)
             elif action == "get_status":
                 pass  # fall through to reply with current state
             else:

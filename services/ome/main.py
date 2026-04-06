@@ -23,7 +23,7 @@ from nodalarc.constellation_loader import (
     load_ground_stations,
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.session import SessionConfig, resolve_session_epoch
 
 from ome.event_stream import (
     append_timeline_jsonl,
@@ -32,6 +32,16 @@ from ome.event_stream import (
     write_timeline_jsonl,
 )
 from ome.propagator import orbital_period
+
+# ---------------------------------------------------------------------------
+# Shared playback state (Pacemaker role, R-OME-008B)
+# ---------------------------------------------------------------------------
+# Mutated by the NATS publisher thread (async subscriber callback) and
+# read by the pacing thread each tick.  Python GIL guarantees atomic
+# reads/writes on single scalar values (float, bool).  No lock needed.
+
+_time_accel: float = 1.0  # current d(sim)/d(wall) multiplier
+_paused: bool = False  # emission halted?
 
 
 def run(session_path: str, output_dir: str | None = None) -> Path:
@@ -87,11 +97,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
-        epoch_unix=(
-            datetime.fromisoformat(session.time.start_time).timestamp()
-            if session.time.start_time
-            else time.time()
-        ),
+        epoch_unix=resolve_session_epoch(session.time),
         duration_s=period,
         step_seconds=session.time.step_seconds,
         max_range_km=max_range_km,
@@ -151,16 +157,69 @@ async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
     Handles HeartbeatTick via the queue (pacing thread sends them during
     window computation). Handles reconnection transparently via nats-py.
 
-    Never touches timing. Never sleeps for pacing. Only I/O.
+    Also subscribes to SUBJECT_PLAYBACK_CONTROL for runtime pause/resume/
+    set_speed commands (R-OME-008B Pacemaker role).  The subscriber callback
+    mutates module-level _time_accel and _paused; the pacing thread reads
+    them each tick.
     """
     import asyncio
+    import json
     import queue
 
     import nats
-    from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url
+    from nodalarc.nats_channels import (
+        MAX_TIME_ACCEL,
+        MIN_TIME_ACCEL,
+        NATS_CONNECT_OPTIONS,
+        SUBJECT_PLAYBACK_CONTROL,
+        nats_url,
+    )
 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     logging.info("OME NATS publisher connected to %s", nats_url())
+
+    # --- Playback control subscriber (R-OME-008B Tier 1) ---
+
+    async def _handle_playback(msg) -> None:
+        global _time_accel, _paused
+        try:
+            cmd = json.loads(msg.data)
+            action = cmd.get("action", "")
+            if action == "pause":
+                _paused = True
+                logging.info("Playback paused (speed=%.1f)", _time_accel)
+            elif action == "resume":
+                _paused = False
+                logging.info("Playback resumed (speed=%.1f)", _time_accel)
+            elif action == "set_speed":
+                factor = float(cmd.get("factor", 1.0))
+                if factor < MIN_TIME_ACCEL or factor > MAX_TIME_ACCEL:
+                    reply = {
+                        "error": f"factor {factor} out of range [{MIN_TIME_ACCEL}, {MAX_TIME_ACCEL}]",
+                        "paused": _paused,
+                        "speed": _time_accel,
+                    }
+                    await msg.respond(json.dumps(reply).encode())
+                    return
+                _time_accel = factor
+                logging.info("Playback speed set to %.1fx", factor)
+            elif action == "get_status":
+                pass  # fall through to reply with current state
+            else:
+                reply = {
+                    "error": f"unknown action: {action}",
+                    "paused": _paused,
+                    "speed": _time_accel,
+                }
+                await msg.respond(json.dumps(reply).encode())
+                return
+            await msg.respond(json.dumps({"paused": _paused, "speed": _time_accel}).encode())
+        except Exception as exc:
+            logging.error("Playback control error: %s", exc)
+            await msg.respond(json.dumps({"error": str(exc)}).encode())
+
+    await nc.subscribe(SUBJECT_PLAYBACK_CONTROL, cb=_handle_playback)
+    logging.info("OME playback control active on %s", SUBJECT_PLAYBACK_CONTROL)
 
     try:
         while not shutdown_event.is_set():
@@ -250,12 +309,13 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
             latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
 
     default_min_elevation = gs_file.default_min_elevation_deg or 25.0
-    epoch_unix = (
-        datetime.fromisoformat(session.time.start_time).timestamp()
-        if session.time.start_time
-        else time.time()
-    )
+    epoch_unix = resolve_session_epoch(session.time)
     compression = session.time.compression if session.time.compression else 1
+
+    # Initialize Pacemaker rate from static compression (R-OME-008B Part 1).
+    # Runtime set_speed commands replace this value dynamically.
+    global _time_accel
+    _time_accel = float(compression)
     snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
     # Build interface map for LinkStateSnapshot
@@ -367,11 +427,20 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
             sim_span = last_ts - first_ts if last_ts > first_ts else 1.0
             pace = window_duration / sim_span
 
+            # Reference-point model for time_accel + pause support
+            # (see specs/time-controls-plan.md §3).  The reference resets
+            # on rate change or unpause to avoid drift and catch-up bursts.
+            pace_ref_wall = window_start
+            pace_ref_sim_offset = 0.0
+            current_rate = _time_accel  # snapshot shared state
+            last_emitted_sim_offset = 0.0
+
             logging.info(
-                "OME pacing: %d events over %.0fs wall (%.3fs/tick)",
+                "OME pacing: %d events over %.0fs wall (%.3fs/tick, accel=%.1fx)",
                 len(events),
                 window_duration,
                 pace,
+                current_rate,
             )
 
             current_sim_time_iso: str = ""
@@ -387,14 +456,42 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     break
 
                 if current_tick_ts is not None and evt.timestamp_s != current_tick_ts:
-                    # Precise wall-clock sleep — blocking, no yield
+                    # --- Pause gate ---
+                    if _paused:
+                        while _paused and not shutdown_event.is_set():
+                            time.sleep(0.1)
+                        # Reset reference on unpause — time spent paused
+                        # must not count toward wall-clock budget.
+                        pace_ref_wall = time.monotonic()
+                        pace_ref_sim_offset = last_emitted_sim_offset
+                        current_rate = _time_accel
+
+                    # --- Rate-change detection ---
+                    new_rate = _time_accel
+                    if new_rate != current_rate:
+                        pace_ref_wall = time.monotonic()
+                        pace_ref_sim_offset = last_emitted_sim_offset
+                        current_rate = new_rate
+
+                    # --- Drift-free sleep with reference-point model ---
                     sim_offset = current_tick_ts - first_ts
-                    wall_target = window_start + sim_offset * pace
+                    sim_delta = sim_offset - pace_ref_sim_offset
+                    effective_pace = pace / current_rate
+                    wall_target = pace_ref_wall + sim_delta * effective_pace
                     now = time.monotonic()
-                    if now < wall_target and now < window_start + window_duration:
+                    if now < wall_target:
                         time.sleep(wall_target - now)
 
-                    if time.monotonic() >= window_start + window_duration:
+                    last_emitted_sim_offset = sim_offset
+
+                    # Safety: if we've overrun, skip remaining events
+                    # and move to the next window computation.
+                    remaining_sim = sim_span - last_emitted_sim_offset
+                    expected_remaining_wall = remaining_sim * effective_pace
+                    if (
+                        time.monotonic()
+                        > pace_ref_wall + sim_delta * effective_pace + expected_remaining_wall + 5.0
+                    ):
                         break
 
                     # Enqueue all events for this tick
@@ -421,7 +518,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                         if current_sim_time_iso
                         else datetime.now(UTC),
                         wall_time=datetime.now(UTC),
-                        compression_ratio=float(compression),
+                        compression_ratio=float(_time_accel),
                     )
                     _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
 
@@ -469,7 +566,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     if current_sim_time_iso
                     else datetime.now(UTC),
                     wall_time=datetime.now(UTC),
-                    compression_ratio=float(compression),
+                    compression_ratio=float(_time_accel),
                 )
                 _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
 

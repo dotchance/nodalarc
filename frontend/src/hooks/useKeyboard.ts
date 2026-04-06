@@ -18,6 +18,7 @@ interface KeyboardActions {
   onFollowNode: () => void;
   onTopView: () => void;
   onToggleGlobeMode?: () => void;
+  onToggleReferenceFrame?: () => void;
   onToggleCli?: () => void;
   onTogglePanel?: () => void;
 }
@@ -82,6 +83,10 @@ export function useKeyboard(actions: KeyboardActions): void {
         case "n":
         case "N":
           actions.onToggleGlobeMode?.();
+          break;
+        case "i":
+        case "I":
+          actions.onToggleReferenceFrame?.();
           break;
         case "]":
           actions.onTogglePanel?.();

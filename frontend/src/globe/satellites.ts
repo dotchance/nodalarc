@@ -5,16 +5,17 @@
  *  Motion model: linear interpolation between consecutive snapshot positions.
  *
  *  Distance comes from sim_time (deterministic orbital mechanics).
- *  Duration comes from an EMA-smoothed wall-clock delivery rate.
- *  This decouples visual speed from packet delivery jitter.
+ *  Duration comes from an EMA-smoothed wall-clock delivery rate owned by
+ *  the shared simClock module (so Earth-frame rotation and sat lerp are
+ *  driven by the same clock and cannot drift relative to each other).
  *
- *  The delivery rate EMA is module-level because all satellites arrive in the
- *  same snapshot at the same wall-clock instant.
+ *  This decouples visual speed from packet delivery jitter.
  */
 
 import * as THREE from "three";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../config";
 import { geoToWorld } from "./geo";
+import { onSnapshot, wallMsPerSimMs } from "../sim/simClock";
 import type { NodeState, ColorMode } from "../types";
 
 /** Shared geometry for all satellites. */
@@ -61,56 +62,23 @@ export function getSatellites(): Map<string, SatelliteEntry> {
   return satellites;
 }
 
-// --- Module-level delivery rate EMA ---
-
-/** EMA of wall-ms per sim-ms.  Shared across all satellites. */
-let _wallMsPerSimMs = 1.0;
-/** Whether the EMA has been seeded with a real measurement. */
-let _rateSeeded = false;
-/** sim_time (ms since epoch) of the last snapshot that advanced sim_time. */
-let _lastSimTimeMs: number | null = null;
-/** performance.now() when that snapshot arrived. */
-let _lastSimWallTime: number | null = null;
-
-const RATE_EMA_ALPHA = 0.15;
-
 // Reusable temporary
 const _tmpPos = new THREE.Vector3();
 
 export function updateSatellites(
   nodes: NodeState[],
-  scene: THREE.Scene,
+  earthFrame: THREE.Object3D,
   colorMode: ColorMode,
   simTime: string,
 ): void {
   const seen = new Set<string>();
   const now = performance.now();
 
-  // --- Update delivery rate EMA (once per snapshot, not per satellite) ---
-  const simTimeMs = new Date(simTime).getTime();
-  let simDeltaMs = 0;
-
-  if (_lastSimTimeMs !== null && simTimeMs > _lastSimTimeMs) {
-    simDeltaMs = simTimeMs - _lastSimTimeMs;
-    const wallDelta = now - _lastSimWallTime!;
-    if (wallDelta > 10) {
-      const instantRate = wallDelta / simDeltaMs;
-      if (!_rateSeeded) {
-        _wallMsPerSimMs = instantRate;
-        _rateSeeded = true;
-      } else {
-        const ratio = instantRate / _wallMsPerSimMs;
-        if (ratio > 0.2 && ratio < 5.0) {
-          _wallMsPerSimMs = _wallMsPerSimMs * (1 - RATE_EMA_ALPHA) + instantRate * RATE_EMA_ALPHA;
-        }
-      }
-    }
-    _lastSimWallTime = now;
-    _lastSimTimeMs = simTimeMs;
-  } else if (_lastSimTimeMs === null) {
-    _lastSimTimeMs = simTimeMs;
-    _lastSimWallTime = now;
-  }
+  // Advance the shared sim clock with this snapshot's timestamp; the
+  // simDelta drives per-sat lerp duration below. Returns null on the
+  // seeding snapshot or when sim_time didn't advance (defensive).
+  const tick = onSnapshot(simTime, now);
+  const simDeltaMs = tick?.simDeltaMs ?? 0;
 
   // --- Per-satellite updates ---
   for (const node of nodes) {
@@ -135,7 +103,7 @@ export function updateSatellites(
       // Falls back to previous interval if sim_time didn't advance (shouldn't
       // happen since we already skip duplicate positions, but defensive).
       if (simDeltaMs > 0) {
-        existing.interval = simDeltaMs * _wallMsPerSimMs;
+        existing.interval = simDeltaMs * wallMsPerSimMs();
       }
       existing.snapshotTime = now;
       existing.nodeState = node;
@@ -147,7 +115,7 @@ export function updateSatellites(
       mesh.position.copy(newPos);
       mesh.userData["nodeId"] = node.node_id;
       mesh.userData["nodeType"] = "satellite";
-      scene.add(mesh);
+      earthFrame.add(mesh);
 
       const glowMat = new THREE.SpriteMaterial({
         map: getGlowTexture(),
@@ -160,7 +128,7 @@ export function updateSatellites(
       glow.scale.set(SAT_RADIUS * 5, SAT_RADIUS * 5, 1);
       glow.position.copy(newPos);
       glow.visible = false;  // Only shown on selection/highlight
-      scene.add(glow);
+      earthFrame.add(glow);
 
       satellites.set(node.node_id, {
         mesh,
@@ -176,8 +144,8 @@ export function updateSatellites(
 
   for (const [id, entry] of satellites) {
     if (!seen.has(id)) {
-      scene.remove(entry.mesh);
-      scene.remove(entry.glow);
+      earthFrame.remove(entry.mesh);
+      earthFrame.remove(entry.glow);
       satellites.delete(id);
     }
   }
@@ -224,12 +192,4 @@ export function recolorAllSatellites(colorMode: ColorMode): void {
   for (const entry of satellites.values()) {
     updateSatColor(entry, colorMode);
   }
-}
-
-/** Reset delivery rate EMA — call on session switch. */
-export function resetDeliveryRate(): void {
-  _wallMsPerSimMs = 1.0;
-  _rateSeeded = false;
-  _lastSimTimeMs = null;
-  _lastSimWallTime = null;
 }

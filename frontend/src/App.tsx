@@ -19,7 +19,9 @@ import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { WS_URL, fetchApiKey } from "./config";
-import type { ViewMode, ColorMode, GlobeMode, TracedPath } from "./types";
+import type { ViewMode, ColorMode, GlobeMode, ReferenceFrame, TracedPath } from "./types";
+
+const REFERENCE_FRAME_STORAGE_KEY = "nodalarc.referenceFrame";
 
 import "./styles/variables.css";
 import "./styles/reset.css";
@@ -88,10 +90,20 @@ function AppInner() {
   const [showIslLinks, setShowIslLinks] = useState(true);
   const [showSatPaths, setShowSatPaths] = useState(false);
   const [globeMode, setGlobeMode] = useState<GlobeMode>("blue-marble");
+  const [referenceFrame, setReferenceFrame] = useState<ReferenceFrame>(() => {
+    // Bootstrap from localStorage; default to earth-fixed (current behavior).
+    const saved = localStorage.getItem(REFERENCE_FRAME_STORAGE_KEY);
+    return saved === "earth-inertial" ? "earth-inertial" : "earth-fixed";
+  });
+  useEffect(() => {
+    localStorage.setItem(REFERENCE_FRAME_STORAGE_KEY, referenceFrame);
+  }, [referenceFrame]);
+  const toggleReferenceFrame = useCallback(() => {
+    setReferenceFrame((f) => (f === "earth-fixed" ? "earth-inertial" : "earth-fixed"));
+  }, []);
   const [followNode, setFollowNode] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
-  const playingRef = useRef(historicalPlaying);
 
   // Track window width for split view gate
   useEffect(() => {
@@ -229,10 +241,7 @@ function AppInner() {
       onToggleHistorical: toggleHistorical,
       onPlayPause: () => {
         if (historicalMode) {
-          setHistoricalPlaying((prev) => {
-            playingRef.current = !prev;
-            return !prev;
-          });
+          setHistoricalPlaying((prev) => !prev);
         } else {
           if (playback.paused) {
             playback.resume();
@@ -242,12 +251,13 @@ function AppInner() {
         }
       },
       onToggleGlobeMode: () => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble"),
+      onToggleReferenceFrame: toggleReferenceFrame,
       onFollowNode: handleFollowNode,
       onTopView: handleTopView,
       onToggleCli: () => setCliDrawerOpen((v) => !v),
       onTogglePanel: handlePanelToggle,
     }),
-    [clearSelection, handleCloseCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback, handlePanelToggle],
+    [clearSelection, handleCloseCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame],
   );
 
   useKeyboard(keyboardActions);
@@ -369,8 +379,8 @@ function AppInner() {
             showGroundLinks={showGroundLinks}
             showIslLinks={showIslLinks}
             showSatPaths={showSatPaths}
+            referenceFrame={referenceFrame}
             actionsRef={globeActionsRef}
-            followNode={followNode}
           />
         </div>
         <div
@@ -395,6 +405,7 @@ function AppInner() {
           showSatPaths={showSatPaths}
           followNode={followNode}
           canSplit={canSplit}
+          referenceFrame={referenceFrame}
           onViewMode={setViewMode}
           onColorMode={setColorMode}
           onToggleGroundLinks={() => setShowGroundLinks((v) => !v)}
@@ -402,6 +413,7 @@ function AppInner() {
           onToggleSatPaths={() => setShowSatPaths((v) => !v)}
           globeMode={globeMode}
           onToggleGlobeMode={() => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble")}
+          onToggleReferenceFrame={toggleReferenceFrame}
           onTopView={handleTopView}
           onFollowNode={handleFollowNode}
           onScreenshot={handleScreenshot}

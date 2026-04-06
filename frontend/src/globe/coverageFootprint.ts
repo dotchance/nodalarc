@@ -45,7 +45,10 @@ let footprintMesh: THREE.Mesh | null = null;
 let currentSatId: string | null = null;
 let currentAltKm = 0;
 
-function createFootprint(radius: number, falloff: number, scene: THREE.Scene): void {
+/** Axis used to orient the footprint disc so its local -Z faces outward. */
+const _FOOTPRINT_LOCAL_Z_AXIS = new THREE.Vector3(0, 0, -1);
+
+function createFootprint(radius: number, falloff: number, earthFrame: THREE.Object3D): void {
   const geo = new THREE.CircleGeometry(radius, SEGMENTS);
   const mat = new THREE.ShaderMaterial({
     uniforms: {
@@ -60,12 +63,12 @@ function createFootprint(radius: number, falloff: number, scene: THREE.Scene): v
   });
   footprintMesh = new THREE.Mesh(geo, mat);
   footprintMesh.renderOrder = 1;
-  scene.add(footprintMesh);
+  earthFrame.add(footprintMesh);
 }
 
-function disposeFootprint(scene: THREE.Scene): void {
+function disposeFootprint(earthFrame: THREE.Object3D): void {
   if (footprintMesh) {
-    scene.remove(footprintMesh);
+    earthFrame.remove(footprintMesh);
     footprintMesh.geometry.dispose();
     (footprintMesh.material as THREE.Material).dispose();
     footprintMesh = null;
@@ -77,9 +80,13 @@ function hideCoverageFootprint(): void {
   currentSatId = null;
 }
 
+// Reusable temporaries for per-frame footprint positioning.
+const _outward = new THREE.Vector3();
+const _surfacePos = new THREE.Vector3();
+
 export function updateCoverageFootprint(
   selection: Selection | null,
-  scene: THREE.Scene,
+  earthFrame: THREE.Object3D,
   _camera: THREE.Camera,
 ): void {
   if (!selection || selection.type !== "satellite") {
@@ -98,9 +105,9 @@ export function updateCoverageFootprint(
 
   // Recreate geometry if satellite changed or altitude shifted significantly
   if (selection.id !== currentSatId || Math.abs(altKm - currentAltKm) > 1) {
-    disposeFootprint(scene);
+    disposeFootprint(earthFrame);
     const radius = computeConeRadius(MIN_ELEV_DEG, altKm);
-    createFootprint(radius, falloff, scene);
+    createFootprint(radius, falloff, earthFrame);
     currentSatId = selection.id;
     currentAltKm = altKm;
   } else if (footprintMesh) {
@@ -111,18 +118,20 @@ export function updateCoverageFootprint(
     }
   }
 
-  // Position disc on surface below satellite
-  const surfaceNormal = sat.mesh.position.clone().normalize();
-  const surfacePos = surfaceNormal.clone().multiplyScalar(EARTH_RADIUS * 1.002);
-  const lookTarget = surfaceNormal.clone().multiplyScalar(EARTH_RADIUS * 2);
+  // Position disc on surface below satellite. Sat and footprint share
+  // earthFrame, so both computations are in local (ECEF) coords.
+  // Orient via direct quaternion (plan §1.12): lookAt() takes world-space
+  // targets, which would give wrong rotations under group rotation.
+  _outward.copy(sat.mesh.position).normalize();
+  _surfacePos.copy(_outward).multiplyScalar(EARTH_RADIUS * 1.002);
 
-  footprintMesh!.position.copy(surfacePos);
-  footprintMesh!.lookAt(lookTarget);
+  footprintMesh!.position.copy(_surfacePos);
+  footprintMesh!.quaternion.setFromUnitVectors(_FOOTPRINT_LOCAL_Z_AXIS, _outward);
   footprintMesh!.visible = true;
 }
 
-export function clearCoverageFootprint(scene: THREE.Scene): void {
-  disposeFootprint(scene);
+export function clearCoverageFootprint(earthFrame: THREE.Object3D): void {
+  disposeFootprint(earthFrame);
   currentSatId = null;
   currentAltKm = 0;
 }

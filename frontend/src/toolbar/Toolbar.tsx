@@ -2,7 +2,7 @@
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** Left-edge vertical toolbar with icon buttons (VF spec Section 11). */
 
-import type { ViewMode, ColorMode, GlobeMode } from "../types";
+import type { ViewMode, ColorMode, GlobeMode, ReferenceFrame } from "../types";
 
 interface ToolbarProps {
   viewMode: ViewMode;
@@ -12,6 +12,7 @@ interface ToolbarProps {
   showSatPaths: boolean;
   followNode: boolean;
   canSplit: boolean;
+  referenceFrame: ReferenceFrame;
   onViewMode: (mode: ViewMode) => void;
   onColorMode: (mode: ColorMode) => void;
   onToggleGroundLinks: () => void;
@@ -19,6 +20,7 @@ interface ToolbarProps {
   onToggleSatPaths: () => void;
   globeMode: GlobeMode;
   onToggleGlobeMode: () => void;
+  onToggleReferenceFrame: () => void;
   onTopView: () => void;
   onFollowNode: () => void;
   onScreenshot: () => void;
@@ -55,6 +57,7 @@ export function Toolbar({
   showSatPaths,
   followNode,
   canSplit,
+  referenceFrame,
   onViewMode,
   onColorMode,
   onToggleGroundLinks,
@@ -62,6 +65,7 @@ export function Toolbar({
   onToggleSatPaths,
   globeMode,
   onToggleGlobeMode,
+  onToggleReferenceFrame,
   onTopView,
   onFollowNode,
   onScreenshot,
@@ -102,6 +106,12 @@ export function Toolbar({
         icon="🌗"
         active={globeMode === "day-night"}
         onClick={onToggleGlobeMode}
+      />
+      <ToolBtn
+        label={`Frame: ${referenceFrame === "earth-inertial" ? "Earth-Inertial (I)" : "Earth-Fixed (I)"}`}
+        icon="🌀"
+        active={referenceFrame === "earth-inertial"}
+        onClick={onToggleReferenceFrame}
       />
       <div className="toolbar-separator" />
       <ToolBtn label="Top View (T)" icon="⊙" onClick={onTopView} />

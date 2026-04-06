@@ -114,3 +114,13 @@ export interface Selection {
 export type ViewMode = "globe" | "topology" | "split";
 export type ColorMode = "area" | "plane";
 export type GlobeMode = "blue-marble" | "day-night";
+
+/** Reference frame for the globe view.
+ *  - "earth-fixed": Earth static, satellites trace ground tracks, stars rotate
+ *    at sidereal rate beneath the fixed Earth. Current-behavior default.
+ *  - "earth-inertial": observer fixed in inertial space, Earth visibly rotates
+ *    at sidereal rate, satellites visibly traverse orbits, stars stationary.
+ *
+ *  Namespace reserves "earth-*" prefix for future "moon-*", "sun-*", and
+ *  rotating-barycenter-frame values. See specs/eci-view-plan.md §9. */
+export type ReferenceFrame = "earth-fixed" | "earth-inertial";

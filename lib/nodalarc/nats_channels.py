@@ -42,10 +42,21 @@ SUBJECT_ALMANAC_EVENT = "nodalarc.nodalpath.almanac"
 
 # Request/reply subjects (NATS core, not JetStream)
 SUBJECT_SCENARIO_INJECT = "nodalarc.scheduler.scenario"
-SUBJECT_PLAYBACK_CONTROL = "nodalarc.scheduler.playback"
+# Playback control (pause / resume / set_speed) owned by OME Pacemaker
+# (R-OME-008B). Subject is in ome_control namespace — deliberately outside
+# the "nodalarc.ome.>" JetStream-captured wildcard so request/reply
+# messages are not stream-retained.
+SUBJECT_PLAYBACK_CONTROL = "nodalarc.ome_control.playback"
 SUBJECT_MI_TRACE = "nodalarc.mi.trace"
 SUBJECT_MI_CONVERGENCE_GATE = "nodalarc.mi.convergence_gate"
 SUBJECT_NODE_AGENT = "nodalarc.agent.{node_id}"
+
+# Playback speed bounds — safety clamp on the OME Pacemaker's time_accel.
+# Below MIN, callers should use pause() rather than extreme slow-motion;
+# above MAX, the pacing thread cannot reliably keep up with NATS publish
+# throughput on typical hardware.
+MIN_TIME_ACCEL = 0.1
+MAX_TIME_ACCEL = 1000.0
 
 # ---------------------------------------------------------------------------
 # Standard connection options — every component must use these

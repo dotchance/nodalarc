@@ -14,7 +14,7 @@ import {
 } from "../config";
 import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, updateSunWorldDirection, setGlobeMode } from "./earth";
 import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites } from "./satellites";
-import { resetSimClock, interpolatedSimTimeMs } from "../sim/simClock";
+import { resetSimClock, interpolatedSimTimeMs, setPlaybackPaused } from "../sim/simClock";
 import { gmstRadians, EARTH_ROTATION_RATE_RAD_S } from "./astronomy";
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
@@ -53,6 +53,7 @@ interface GlobeViewProps {
   showIslLinks: boolean;
   showSatPaths: boolean;
   referenceFrame: ReferenceFrame;
+  playbackPaused: boolean;
   actionsRef?: MutableRefObject<GlobeActions | null>;
 }
 
@@ -66,6 +67,7 @@ export function GlobeView({
   showIslLinks,
   showSatPaths,
   referenceFrame,
+  playbackPaused,
   actionsRef,
 }: GlobeViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -377,6 +379,13 @@ export function GlobeView({
   useEffect(() => {
     setGlobeMode(globeMode);
   }, [globeMode]);
+
+  // Freeze/unfreeze simClock on pause/resume (R-OME-008B: d(sim)/d(wall) = 0).
+  // When paused, interpolatedSimTimeMs returns a constant, freezing both
+  // satellite lerp timing and Earth rotation in lockstep.
+  useEffect(() => {
+    setPlaybackPaused(playbackPaused);
+  }, [playbackPaused]);
 
   // On reference-frame toggle, reset frame-dependent world-space geometry:
   //   - Trail buffers: stored as world-space points; mixing points from

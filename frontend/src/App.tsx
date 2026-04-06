@@ -381,6 +381,7 @@ function AppInner() {
             showIslLinks={showIslLinks}
             showSatPaths={showSatPaths}
             referenceFrame={referenceFrame}
+            playbackPaused={playback.paused}
             actionsRef={globeActionsRef}
           />
         </div>

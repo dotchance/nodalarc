@@ -48,7 +48,7 @@ async def _run_live(config: NodalPathConfig) -> None:
     from nodalpath.console.server import build_app
     from nodalpath.console.state import ConsoleState
     from nodalpath.integration.live_orchestrator import LiveOrchestrator
-    from nodalpath.integration.zmq_publisher import AlmanacPublisher
+    from nodalpath.integration.nats_publisher import AlmanacPublisher
 
     node_registry, interface_map, prefix_map, bandwidth_map, static_edges = load_session_context(
         config.session_path,
@@ -76,7 +76,7 @@ async def _run_live(config: NodalPathConfig) -> None:
             log.warning("No pod IPs resolved — push will fail for all nodes")
 
     push_scheduler = _build_push_scheduler(config, node_registry, interface_map, pod_ip_map)
-    publisher = AlmanacPublisher(config.events_bind)
+    publisher = AlmanacPublisher()
 
     from nodalpath.orchestrator.link_state_store import LinkStateStore
 

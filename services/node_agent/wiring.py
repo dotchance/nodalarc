@@ -161,10 +161,12 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
     log.info("Phase 3: MPLS input enabled on ISL interfaces")
 
     # Phase 4: Create ground bridges and GS gnd0 interfaces
-    # gnd0 initial state is LOWERLAYERDOWN — FRR zebra brings admin UP at
-    # config load, no carrier because host-side veth is down. No explicit
-    # admin state manipulation needed. Host-side veth UP on LinkUp gives
-    # gnd0 carrier automatically.
+    # gnd0 is created admin DOWN by pyroute2. FRR zebra brings it admin UP
+    # when it detects the interface and matches its config (no `shutdown`
+    # directive = admin UP by default). With no host-side veth connected,
+    # gnd0 enters LOWERLAYERDOWN (admin UP, no carrier). This is the correct
+    # idle state — terminal powered and scanning, no L1 signal. GS gnd0
+    # carrier is driven by host-side veth state on LinkUp/LinkDown.
     for gs_id, _bridge_spec in ground_bridges.items():
         gs_pid = pid_map.get(gs_id, 0)
         if gs_pid == 0:

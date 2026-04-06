@@ -91,7 +91,7 @@ function AppInner() {
   const [showSatPaths, setShowSatPaths] = useState(false);
   const [globeMode, setGlobeMode] = useState<GlobeMode>("blue-marble");
   const [referenceFrame, setReferenceFrame] = useState<ReferenceFrame>(() => {
-    // Bootstrap from localStorage; default to earth-fixed (current behavior).
+    // Bootstrap from localStorage; default to earth-inertial (physically correct).
     const saved = localStorage.getItem(REFERENCE_FRAME_STORAGE_KEY);
     return saved === "earth-fixed" ? "earth-fixed" : "earth-inertial";
   });

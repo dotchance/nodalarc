@@ -34,7 +34,5 @@ ENV PYTHONPATH=/app/lib:/app
 
 # Console HTTP port
 EXPOSE 3100
-# ZMQ PUB port (almanac events)
-EXPOSE 5567
 
 ENTRYPOINT ["python", "-m", "nodalpath"]

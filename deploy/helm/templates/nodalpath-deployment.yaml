@@ -41,9 +41,6 @@ spec:
             - containerPort: 3100
               name: console
               protocol: TCP
-            - containerPort: 5567
-              name: zmq-events
-              protocol: TCP
           env:
             - name: POD_IP_MAP_PATH
               value: /etc/nodalarc/pod-ips.json

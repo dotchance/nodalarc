@@ -15,7 +15,3 @@ spec:
       targetPort: 3100
       nodePort: 31100
       protocol: TCP
-    - name: zmq-events
-      port: 5567
-      targetPort: 5567
-      protocol: TCP

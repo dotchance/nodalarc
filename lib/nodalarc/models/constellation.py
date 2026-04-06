@@ -38,13 +38,12 @@ class IslTerminal(BaseModel):
     bandwidth_mbps: float
     max_tracking_rate_deg_s: float
     field_of_regard_deg: float = 360.0
-    allocation: str = "auto"
 
     @field_validator("count")
     @classmethod
     def _count_range(cls, v: int) -> int:
-        if not 0 <= v <= 8:
-            raise ValueError(f"terminal count must be 0-8, got {v}")
+        if not 1 <= v <= 8:
+            raise ValueError(f"terminal count must be 1-8, got {v}")
         return v
 
     @field_validator("max_tracking_rate_deg_s")
@@ -65,8 +64,8 @@ class GroundTerminal(BaseModel):
     @field_validator("count")
     @classmethod
     def _count_range(cls, v: int) -> int:
-        if not 0 <= v <= 8:
-            raise ValueError(f"terminal count must be 0-8, got {v}")
+        if not 1 <= v <= 8:
+            raise ValueError(f"terminal count must be 1-8, got {v}")
         return v
 
 

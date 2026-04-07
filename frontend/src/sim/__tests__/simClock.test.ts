@@ -157,4 +157,46 @@ describe("simClock", () => {
     const interp = interpolatedSimTimeMs(12100);
     expect(interp).toBe(simStart + 1000 + 5000);
   });
+
+  it("re-seeds immediately on large backward sim_time jump (seek backward)", () => {
+    const simStart = 1775260800000;
+    onSnapshot(ISO(simStart), 100);
+    onSnapshot(ISO(simStart + 1000), 2100); // seed EMA = 2.0
+    // Advance sim_time far ahead (as if running at 60x)
+    onSnapshot(ISO(simStart + 60000), 3100); // 60s sim in 1s wall
+    // Now seek backward to "now" — sim_time jumps back by 59 seconds
+    const seekTarget = simStart + 1000;
+    onSnapshot(ISO(seekTarget), 4100);
+    // Should have re-seeded: interpolation should return ~seekTarget
+    const interp = interpolatedSimTimeMs(4200);
+    // With default rate 1.0: seekTarget + (4200-4100)/1.0 = seekTarget + 100
+    expect(interp).toBeCloseTo(seekTarget + 100, -1);
+    // Rate should be reset to default
+    expect(wallMsPerSimMs()).toBe(1.0);
+  });
+
+  it("re-seeds immediately on large forward sim_time jump (seek forward)", () => {
+    const simStart = 1775260800000;
+    onSnapshot(ISO(simStart), 100);
+    onSnapshot(ISO(simStart + 1000), 2100); // seed EMA = 2.0
+    // Seek forward by 60 seconds in 1 wall-second
+    const seekTarget = simStart + 61000;
+    onSnapshot(ISO(seekTarget), 3100);
+    // Should have re-seeded: interpolation from new anchor
+    const interp = interpolatedSimTimeMs(3600);
+    // Default rate 1.0: seekTarget + (3600-3100)/1.0 = seekTarget + 500
+    expect(interp).toBeCloseTo(seekTarget + 500, -1);
+    expect(wallMsPerSimMs()).toBe(1.0);
+  });
+
+  it("does NOT re-seed on small backward jump (jitter)", () => {
+    const simStart = 1775260800000;
+    onSnapshot(ISO(simStart), 100);
+    onSnapshot(ISO(simStart + 1000), 2100); // seed EMA = 2.0
+    // Small backward jump of 500ms — jitter, not seek
+    const result = onSnapshot(ISO(simStart + 500), 2600);
+    expect(result).toBeNull();
+    // Rate should be unchanged
+    expect(wallMsPerSimMs()).toBeCloseTo(2.0, 10);
+  });
 });

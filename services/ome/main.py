@@ -184,6 +184,101 @@ def _start_health_server(port: int = 8081) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Look-ahead thread — background precomputation for NodalPath proactive scheduling
+# ---------------------------------------------------------------------------
+
+
+class _LookAheadThread:
+    """Background precomputation of future windows for NodalPath almanac.
+
+    Runs precompute_timeline_window() in a daemon thread, producing events
+    for the next orbital period. Results are stored for future consumption
+    by NodalPath's proactive scheduling engine. Does NOT emit to the
+    real-time event stream — that's the Pacemaker's job.
+
+    Thread-safe: receives epoch and state via submit(), produces results
+    retrievable via get_result(). Cancel on seek via cancel().
+    """
+
+    def __init__(self) -> None:
+        import threading
+
+        self._thread: threading.Thread | None = None
+        self._result: tuple | None = None  # (events, isl_state, gs_state)
+        self._ready = threading.Event()
+        self._cancelled = threading.Event()
+        self._lock = threading.Lock()
+
+    def submit(
+        self,
+        common_args: dict,
+        epoch_unix: float,
+        duration_s: float,
+        initial_isl_state: dict | None,
+        initial_gs_state: dict | None,
+        timestamp_offset: float,
+    ) -> None:
+        """Start background window precomputation. Non-blocking."""
+        import threading
+
+        from ome.event_stream import precompute_timeline_window
+
+        # Cancel any in-flight computation
+        self.cancel()
+
+        self._ready.clear()
+        self._cancelled.clear()
+        with self._lock:
+            self._result = None
+
+        def _compute():
+            try:
+                result = precompute_timeline_window(
+                    **common_args,
+                    epoch_unix=epoch_unix,
+                    duration_s=duration_s,
+                    initial_isl_state=dict(initial_isl_state) if initial_isl_state else None,
+                    initial_gs_state=dict(initial_gs_state) if initial_gs_state else None,
+                    timestamp_offset=timestamp_offset,
+                )
+                if not self._cancelled.is_set():
+                    with self._lock:
+                        self._result = result
+                    self._ready.set()
+                    logging.info(
+                        "Look-ahead: window precomputed (%.0fs from epoch %s, %d events)",
+                        duration_s,
+                        datetime.fromtimestamp(epoch_unix, UTC).isoformat(),
+                        len(result[0]),
+                    )
+            except Exception:
+                logging.exception("Look-ahead computation failed")
+
+        self._thread = threading.Thread(target=_compute, name="ome-lookahead", daemon=True)
+        self._thread.start()
+
+    def get_result(self, timeout: float | None = None) -> tuple | None:
+        """Block until result ready or timeout. Returns None if cancelled/timeout."""
+        if not self._ready.wait(timeout=timeout):
+            return None
+        with self._lock:
+            return self._result
+
+    def cancel(self) -> None:
+        """Signal cancellation. In-flight thread runs to completion but result is discarded."""
+        self._cancelled.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=0.1)  # don't block, daemon thread dies on exit
+        self._ready.clear()
+        with self._lock:
+            self._result = None
+
+    def is_ready(self) -> bool:
+        """Non-blocking check if result is available."""
+        return self._ready.is_set()
+
+
 async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
     """NATS publisher — runs in its own async event loop in its own thread.
 
@@ -388,6 +483,25 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     )
 
     step_seconds = session.time.step_seconds
+
+    # Look-ahead thread — background precomputation for NodalPath proactive scheduling.
+    # Precomputes the next orbital period's events concurrently with real-time emission.
+    # Results available for NodalPath almanac consumption.
+    lookahead = _LookAheadThread()
+    _lookahead_common_args = dict(
+        satellites=cfg.satellites,
+        addressing=cfg.addressing,
+        gs_file=cfg.gs_file,
+        neighbors=cfg.neighbors,
+        step_seconds=step_seconds,
+        max_range_km=cfg.max_range_km,
+        max_tracking_rate_deg_s=cfg.max_tracking_rate_deg_s,
+        field_of_regard_deg=cfg.field_of_regard_deg,
+        polar_seam_enabled=cfg.polar_seam_enabled,
+        latitude_threshold_deg=cfg.latitude_threshold_deg,
+        default_min_elevation_deg=cfg.default_min_elevation_deg,
+    )
+    lookahead_launched_for_epoch: float | None = None
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     running_isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
@@ -434,10 +548,24 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 current_rate = _time_accel
                 last_snapshot_sim_s = -snapshot_interval_s
                 force_first_snapshot = True
+                lookahead.cancel()
+                lookahead_launched_for_epoch = None
                 logging.info(
                     "Seek applied: new epoch %s",
                     datetime.fromtimestamp(seek_to, UTC).isoformat(),
                 )
+
+            # --- Launch look-ahead if not already running for this epoch ---
+            if lookahead_launched_for_epoch != epoch_unix:
+                lookahead.submit(
+                    common_args=_lookahead_common_args,
+                    epoch_unix=epoch_unix,
+                    duration_s=period,
+                    initial_isl_state=isl_state if isl_state else None,
+                    initial_gs_state=gs_state if gs_state else None,
+                    timestamp_offset=0.0,
+                )
+                lookahead_launched_for_epoch = epoch_unix
 
             # --- Pause gate ---
             if _paused:
@@ -556,6 +684,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     except KeyboardInterrupt:
         logging.info("OME pacing interrupted")
     finally:
+        lookahead.cancel()
         shutdown_event.set()
 
 

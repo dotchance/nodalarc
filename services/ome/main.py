@@ -518,8 +518,10 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     current_rate = _time_accel
 
     # Per-step timing observability — p50/p95/p99 logged every 60s
-    step_timings: deque[float] = deque(maxlen=3600)  # last 60 min at 1x
+    step_timings: deque[float] = deque(maxlen=3600)  # pre-sleep compute time
+    iter_timings: deque[float] = deque(maxlen=3600)  # full iteration (compute + sleep)
     last_timing_log = time.monotonic()
+    last_iter_start: float = time.monotonic()
 
     logging.info(
         "OME real-time stepped emission: epoch=%s, step=%ds, accel=%.1fx, period=%.0fs",
@@ -532,6 +534,9 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     try:
         while not shutdown_event.is_set():
             step_start = time.monotonic()
+            if step > 0:
+                iter_timings.append((step_start - last_iter_start) * 1000)
+            last_iter_start = step_start
 
             # --- Seek check (Tier 2, R-OME-008B Part 5) ---
             seek_to = _seek_target
@@ -654,20 +659,23 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                         )
 
             # --- Per-step timing observability ---
-            step_compute_ms = (time.monotonic() - step_start) * 1000
-            step_timings.append(step_compute_ms)
+            pre_sleep_ms = (time.monotonic() - step_start) * 1000
+            step_timings.append(pre_sleep_ms)
             now_mono = time.monotonic()
             if now_mono - last_timing_log >= 60.0:
                 if len(step_timings) >= 10:
                     pcts = quantiles(step_timings, n=100)
                     budget_ms = (step_seconds / current_rate) * 1000
                     headroom = (1.0 - pcts[94] / budget_ms) * 100 if budget_ms > 0 else 0
+                    iter_pcts = quantiles(iter_timings, n=100) if len(iter_timings) >= 10 else None
                     logging.info(
-                        "OME pacing: step_compute p50=%.1fms p95=%.1fms p99=%.1fms "
+                        "OME pacing: compute p50=%.1fms p95=%.1fms "
+                        "iter p50=%.1fms p95=%.1fms "
                         "budget=%.1fms (%.0fx) headroom=%.0f%%",
                         pcts[49],
                         pcts[94],
-                        pcts[98],
+                        iter_pcts[49] if iter_pcts else 0,
+                        iter_pcts[94] if iter_pcts else 0,
                         budget_ms,
                         current_rate,
                         headroom,

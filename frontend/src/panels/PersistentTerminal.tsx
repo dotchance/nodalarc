@@ -59,16 +59,15 @@ export function PersistentTerminal({ nodeId, fontSize }: PersistentTerminalProps
     }`;
 
     setStatus("connecting");
-    terminal.writeln(`\x1b[90mConnecting to ${nodeId}...\x1b[0m`);
+    terminal.writeln(`\x1b[90mConnecting to ${nodeId}, please wait...\x1b[0m`);
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+    let receivedFirstOutput = false;
 
     ws.onopen = () => {
-      setStatus("connected");
-      terminal.writeln(`\x1b[32mConnected.\x1b[0m\r\n`);
-
-      // Send initial terminal size
+      // WebSocket is open but SSH session may still be negotiating.
+      // Don't say "Connected" yet — wait for first output from vtysh.
       const dims = fitAddon.proposeDimensions();
       if (dims) {
         ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
@@ -79,10 +78,15 @@ export function PersistentTerminal({ nodeId, fontSize }: PersistentTerminalProps
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "output" && msg.data) {
+          if (!receivedFirstOutput) {
+            receivedFirstOutput = true;
+            setStatus("connected");
+            // Clear the "Connecting" message before writing vtysh output
+            terminal.write("\x1b[2K\x1b[1A\x1b[2K\r");
+          }
           terminal.write(msg.data);
         }
       } catch {
-        // Non-JSON message — write raw
         terminal.write(event.data);
       }
     };

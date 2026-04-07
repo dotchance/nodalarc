@@ -353,7 +353,7 @@ def deploy_session(
 
     # --- Step 7b: Generate SSH keypair for terminal access ---
     # Per-session ED25519 keypair for secure interactive vtysh terminal.
-    # Public key mounted into session pods (dropbear authorized_keys).
+    # Public key mounted into session pods (SSH authorized_keys).
     # Private key stored in Secret for VS-API SSH proxy.
     # Owner reference ensures cleanup on session teardown.
     _create_terminal_ssh_keys(v1, namespace, owner_ref)
@@ -806,7 +806,7 @@ def _create_terminal_ssh_keys(
 ) -> None:
     """Generate an ED25519 SSH keypair and store in a K8s Secret.
 
-    The public key is mounted into session pods for dropbear authorized_keys.
+    The public key is mounted into session pods for SSH authorized_keys.
     The private key is read by the VS-API to SSH into pods for terminal proxy.
     Owner reference ties the Secret lifecycle to the ConstellationSpec CR —
     teardown deletes the Secret automatically.
@@ -1014,7 +1014,7 @@ def _create_session_pod(
             kubernetes.client.V1VolumeMount(name="frr-run", mount_path="/var/run/frr"),
             kubernetes.client.V1VolumeMount(name="frr-etc", mount_path="/etc/frr"),
             kubernetes.client.V1VolumeMount(name="tmp", mount_path="/tmp"),
-            kubernetes.client.V1VolumeMount(name="dropbear", mount_path="/etc/dropbear"),
+            kubernetes.client.V1VolumeMount(name="ssh-config", mount_path="/etc/ssh"),
             kubernetes.client.V1VolumeMount(name="operator-home", mount_path="/home/operator"),
             kubernetes.client.V1VolumeMount(name="var-log", mount_path="/var/log"),
             kubernetes.client.V1VolumeMount(
@@ -1050,14 +1050,14 @@ def _create_session_pod(
         ),
         # Forward-compatible mounts for SSH terminal (Phase 1)
         kubernetes.client.V1Volume(
-            name="dropbear",
+            name="ssh-config",
             empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
         ),
         kubernetes.client.V1Volume(
             name="operator-home",
             empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
         ),
-        # SSH public key for terminal access (dropbear authorized_keys)
+        # SSH public key for terminal access (SSH authorized_keys)
         kubernetes.client.V1Volume(
             name="ssh-keys",
             secret=kubernetes.client.V1SecretVolumeSource(

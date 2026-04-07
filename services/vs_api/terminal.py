@@ -142,6 +142,10 @@ class TerminalSession:
             username="operator",
             client_keys=[self._ssh_key],
             known_hosts=None,
+            # Disable all DNS lookups — pod IPs have no DNS records.
+            # Without this, asyncssh attempts host canonicalization and
+            # reverse DNS which times out against CoreDNS.
+            canonicalize=False,
         )
         self._process = await self._conn.create_process(
             term_type="xterm-256color",

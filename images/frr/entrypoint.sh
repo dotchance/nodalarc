@@ -23,5 +23,52 @@ echo "Config ready after ${WAITED}s"
 # Ensure FRR owns config directory
 chown -R frr:frr /etc/frr
 
+# ---------------------------------------------------------------------------
+# SSH terminal access setup (dropbear)
+#
+# Creates an 'operator' user with login shell = /usr/bin/vtysh.
+# SSH sessions land directly in the FRR CLI — same experience as a real
+# router. Key-only auth (no passwords), root login disabled.
+#
+# Public key is delivered via K8s Secret mount at /etc/ssh-keys/.
+# Host keys are generated on first boot (tmpfs, regenerate on restart).
+# ---------------------------------------------------------------------------
+
+# Generate host keys if not present (tmpfs — regenerated each pod start)
+if [ ! -f /etc/dropbear/dropbear_ed25519_host_key ]; then
+    dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key >/dev/null 2>&1
+    echo "SSH host key generated"
+fi
+
+# Create operator user: login shell = vtysh, member of frrvty group.
+# frrvty group grants access to FRR VTY sockets (/var/run/frr/*.vty).
+if ! id operator >/dev/null 2>&1; then
+    adduser -D -s /usr/bin/vtysh -G frrvty operator
+fi
+
+# Install authorized keys from Secret mount (if present).
+# The Operator generates a per-session SSH keypair and stores the public
+# key in the nodalarc-terminal-keys Secret, mounted at /etc/ssh-keys/.
+if [ -f /etc/ssh-keys/authorized_keys ]; then
+    mkdir -p /home/operator/.ssh
+    cp /etc/ssh-keys/authorized_keys /home/operator/.ssh/authorized_keys
+    chown -R operator:frrvty /home/operator/.ssh
+    chmod 700 /home/operator/.ssh
+    chmod 600 /home/operator/.ssh/authorized_keys
+    echo "SSH authorized key installed for operator"
+else
+    echo "WARNING: No SSH authorized keys found at /etc/ssh-keys/ — terminal access disabled"
+fi
+
+# Start dropbear SSH daemon in background.
+#   -R: generate host keys if missing (belt and suspenders)
+#   -s: disable password login (key-only authentication)
+#   -g: disable root login
+#   -p 22: listen on all interfaces, port 22
+#   -K 60: send keepalive every 60 seconds
+#   -I 600: disconnect idle sessions after 10 minutes
+dropbear -R -s -g -p 22 -K 60 -I 600 2>/dev/null &
+echo "SSH daemon started (key-only auth, root disabled, idle timeout 600s)"
+
 # Hand off to FRR's stock docker-start (watchfrr reads /etc/frr/daemons)
 exec /usr/lib/frr/docker-start

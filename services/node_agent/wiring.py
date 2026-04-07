@@ -233,6 +233,76 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             log.warning(f"Default route removal failed for {node_id}: {exc}")
     log.info(f"Phase 7: removed default route from {removed} pods")
 
+    # Phase 8: Rename eth0 → cni0 and lock down with iptables
+    # cni0 is the K8s CNI interface — infrastructure only, not user-configurable.
+    # The name "cni0" keeps it out of the user's namespace (they can create their
+    # own mgmt0, mgmt VRF, etc.). iptables blocks all egress except return traffic
+    # for SSH and kubectl exec, preventing users from routing data through the CNI.
+    #
+    # Uses _in_namespace + pyroute2 for the rename (netlink operation).
+    # Uses nsenter + subprocess for iptables (no pyroute2 equivalent for iptables;
+    # nsenter is the approved pattern — same as NDP ping in namespace_ops.py).
+    import subprocess
+
+    hardened = 0
+    for node_id in nodes:
+        pid = pid_map.get(node_id, 0)
+        if pid == 0:
+            continue
+        try:
+            # Step 1: Rename eth0 → cni0 via pyroute2 (inside pod namespace)
+            def _rename_eth0(ipr: IPRoute) -> bool:
+                links = ipr.link_lookup(ifname="eth0")
+                if not links:
+                    return False
+                ipr.link("set", index=links[0], ifname="cni0")
+                return True
+
+            if not _in_namespace(pid, _rename_eth0):
+                log.warning(f"eth0 not found in {node_id}, skipping CNI hardening")
+                continue
+
+            # Step 2: Apply iptables egress rules via nsenter
+            # (iptables has no netlink/pyroute2 API — nsenter subprocess is the
+            # approved pattern, same as NDP ping in namespace_ops.py line 294)
+            ns_path = f"/proc/{pid}/ns/net"
+            for cmd in [
+                # Allow return traffic for established connections (SSH, kubectl exec)
+                [
+                    "nsenter",
+                    f"--net={ns_path}",
+                    "iptables",
+                    "-A",
+                    "OUTPUT",
+                    "-o",
+                    "cni0",
+                    "-m",
+                    "state",
+                    "--state",
+                    "ESTABLISHED,RELATED",
+                    "-j",
+                    "ACCEPT",
+                ],
+                # Drop all other egress on cni0
+                [
+                    "nsenter",
+                    f"--net={ns_path}",
+                    "iptables",
+                    "-A",
+                    "OUTPUT",
+                    "-o",
+                    "cni0",
+                    "-j",
+                    "DROP",
+                ],
+            ]:
+                subprocess.run(cmd, check=True, capture_output=True)
+
+            hardened += 1
+        except Exception as exc:
+            log.warning(f"CNI hardening failed for {node_id}: {exc}")
+    log.info(f"Phase 8: hardened CNI interface on {hardened} pods (eth0→cni0 + iptables)")
+
     # Mark all nodes as wired
     for node_id in nodes:
         if pid_map.get(node_id, 0) > 0:

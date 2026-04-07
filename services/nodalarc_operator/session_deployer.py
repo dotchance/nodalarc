@@ -1117,6 +1117,7 @@ def _create_session_pod(
             containers=containers,
             volumes=volumes,
             restart_policy="Never",
+            automount_service_account_token=False,
         ),
     )
 

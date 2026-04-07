@@ -29,8 +29,8 @@ from nodalarc.models.events import (
 from nodalarc.models.ground_station import GroundStationFile
 
 from ome.propagator import (
+    EcefVec3,
     GeoPosition,
-    Vec3,
     geodetic_to_ecef,
     propagate_keplerian,
 )
@@ -62,31 +62,39 @@ def _compute_positions(
     addressing: AddressingScheme,
     epoch_unix: float,
     dt: float,
-) -> dict[str, tuple[Vec3, Vec3, GeoPosition]]:
-    """Compute ECEF position, ECI velocity, and geodetic for all satellites at time dt."""
-    positions: dict[str, tuple[Vec3, Vec3, GeoPosition]] = {}
+) -> dict[str, tuple[EcefVec3, EcefVec3, GeoPosition]]:
+    """Compute ECEF position, ECEF velocity, and geodetic for all satellites at time dt.
+
+    All vectors are in the Earth-Centered Earth-Fixed frame. The velocity
+    includes Earth rotation subtraction (v_ecef = R·v_eci - ω×r_ecef).
+    """
+    positions: dict[str, tuple[EcefVec3, EcefVec3, GeoPosition]] = {}
     for sat in satellites:
         node_id = addressing.sat_id(sat.plane, sat.slot)
-        ecef, vel_eci, geo = propagate_keplerian(sat.elements, epoch_unix, dt)
-        positions[node_id] = (ecef, vel_eci, geo)
+        pos_ecef, vel_ecef, geo = propagate_keplerian(sat.elements, epoch_unix, dt)
+        positions[node_id] = (pos_ecef, vel_ecef, geo)
     return positions
 
 
 def _build_snapshot(
-    sat_positions: dict[str, tuple[Vec3, Vec3, GeoPosition]],
-    gs_positions: dict[str, tuple[Vec3, GeoPosition]],
+    sat_positions: dict[str, tuple[EcefVec3, EcefVec3, GeoPosition]],
+    gs_positions: dict[str, tuple[EcefVec3, GeoPosition]],
 ) -> dict[str, NodePosition]:
-    """Build position snapshot for all nodes."""
+    """Build position snapshot for all nodes.
+
+    Velocity fields in NodePosition are ECEF (Earth-Centered Earth-Fixed).
+    Ground stations have zero velocity (static).
+    """
     positions: dict[str, NodePosition] = {}
 
-    for node_id, (_ecef, vel, geo) in sat_positions.items():
+    for node_id, (_ecef, vel_ecef, geo) in sat_positions.items():
         positions[node_id] = NodePosition(
             lat_deg=geo.lat_deg,
             lon_deg=geo.lon_deg,
             alt_km=geo.alt_km,
-            vel_x_km_s=vel.x,
-            vel_y_km_s=vel.y,
-            vel_z_km_s=vel.z,
+            vel_x_km_s=vel_ecef.x,
+            vel_y_km_s=vel_ecef.y,
+            vel_z_km_s=vel_ecef.z,
         )
 
     for node_id, (_ecef, geo) in gs_positions.items():
@@ -115,7 +123,7 @@ class StepContext:
 
     satellites: list[SatelliteNode]
     addressing: AddressingScheme
-    gs_positions: dict[str, tuple[Vec3, GeoPosition]]
+    gs_positions: dict[str, tuple[EcefVec3, GeoPosition]]
     gs_min_elevations: dict[str, float]
     gs_terminal_counts: dict[str, int]
     gs_policies: dict[str, str]
@@ -148,7 +156,7 @@ def build_step_context(
         nid = addressing.sat_id(sat.plane, sat.slot)
         sat_isl_terminals[nid] = sat.isl_terminal_count
 
-    gs_positions: dict[str, tuple[Vec3, GeoPosition]] = {}
+    gs_positions: dict[str, tuple[EcefVec3, GeoPosition]] = {}
     gs_min_elevations: dict[str, float] = {}
     gs_terminal_counts: dict[str, int] = {}
     gs_policies: dict[str, str] = {}

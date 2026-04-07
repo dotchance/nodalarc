@@ -14,7 +14,7 @@ Coordinate frames:
 from __future__ import annotations
 
 import math
-from typing import NamedTuple
+from typing import NamedTuple, NewType
 
 from nodalarc.constants import (
     EARTH_MU,
@@ -32,11 +32,27 @@ J2000_UNIX = 946728000.0
 
 
 class Vec3(NamedTuple):
-    """3D vector."""
+    """3D vector — frame-unaware base type.
+
+    Use EciVec3 or EcefVec3 in function signatures to document which
+    coordinate frame a vector belongs to. These are zero-cost NewType
+    wrappers — erased at runtime, enforced by mypy --strict.
+
+    Frame-agnostic functions (e.g., distance_km, relative-vector math
+    in visibility.py) should accept plain Vec3.
+    """
 
     x: float
     y: float
     z: float
+
+
+# Zero-cost frame tags for type-checker enforcement (PEP 484 NewType).
+# At runtime: EciVec3 IS Vec3, EcefVec3 IS Vec3. No overhead.
+# At type-check time: passing EciVec3 where EcefVec3 is expected is an error.
+# This prevents the Mars Climate Orbiter class of frame confusion bugs.
+EciVec3 = NewType("EciVec3", Vec3)
+EcefVec3 = NewType("EcefVec3", Vec3)
 
 
 # Re-export from shared library so existing `from ome.propagator import ...` still works
@@ -72,10 +88,12 @@ def orbital_velocity(altitude_km: float) -> float:
     return math.sqrt(EARTH_MU / a)
 
 
-def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[Vec3, Vec3]:
+def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec3]:
     """Propagate circular orbit by dt seconds in ECI frame.
 
-    Returns (position_km, velocity_km_s) in ECI coordinates.
+    Returns (position_km_ECI, velocity_km_s_ECI) in Earth-Centered Inertial
+    coordinates. Both vectors are in the inertial frame — they do NOT include
+    Earth's rotation.
 
     For circular orbits (e=0): M = E = ν, so true anomaly
     advances linearly: ν(t) = ν₀ + n·dt where n = √(μ/a³).
@@ -116,7 +134,7 @@ def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[Vec3, Vec3]:
     vy_eci = sin_raan * vx_pf + cos_raan * cos_i * vy_pf
     vz_eci = sin_i * vy_pf
 
-    return Vec3(x_eci, y_eci, z_eci), Vec3(vx_eci, vy_eci, vz_eci)
+    return EciVec3(Vec3(x_eci, y_eci, z_eci)), EciVec3(Vec3(vx_eci, vy_eci, vz_eci))
 
 
 def gmst(unix_timestamp: float) -> float:
@@ -135,31 +153,35 @@ def gmst(unix_timestamp: float) -> float:
     return math.radians(gmst_deg % 360.0)
 
 
-def eci_to_ecef(pos_eci: Vec3, unix_timestamp: float) -> Vec3:
+def eci_to_ecef(pos_eci: EciVec3, unix_timestamp: float) -> EcefVec3:
     """Convert ECI position to ECEF via GMST rotation about Z axis."""
     theta = gmst(unix_timestamp)
     cos_t = math.cos(theta)
     sin_t = math.sin(theta)
-    return Vec3(
-        cos_t * pos_eci.x + sin_t * pos_eci.y,
-        -sin_t * pos_eci.x + cos_t * pos_eci.y,
-        pos_eci.z,
+    return EcefVec3(
+        Vec3(
+            cos_t * pos_eci.x + sin_t * pos_eci.y,
+            -sin_t * pos_eci.x + cos_t * pos_eci.y,
+            pos_eci.z,
+        )
     )
 
 
-def ecef_to_eci(pos_ecef: Vec3, unix_timestamp: float) -> Vec3:
+def ecef_to_eci(pos_ecef: EcefVec3, unix_timestamp: float) -> EciVec3:
     """Convert ECEF position to ECI via inverse GMST rotation."""
     theta = gmst(unix_timestamp)
     cos_t = math.cos(theta)
     sin_t = math.sin(theta)
-    return Vec3(
-        cos_t * pos_ecef.x - sin_t * pos_ecef.y,
-        sin_t * pos_ecef.x + cos_t * pos_ecef.y,
-        pos_ecef.z,
+    return EciVec3(
+        Vec3(
+            cos_t * pos_ecef.x - sin_t * pos_ecef.y,
+            sin_t * pos_ecef.x + cos_t * pos_ecef.y,
+            pos_ecef.z,
+        )
     )
 
 
-def ecef_to_geodetic(pos_ecef: Vec3) -> GeoPosition:
+def ecef_to_geodetic(pos_ecef: EcefVec3) -> GeoPosition:
     """Convert ECEF (km) to geodetic (lat_deg, lon_deg, alt_km).
 
     Uses iterative Bowring method on WGS84 ellipsoid.
@@ -192,7 +214,7 @@ def ecef_to_geodetic(pos_ecef: Vec3) -> GeoPosition:
     )
 
 
-def geodetic_to_ecef(pos: GeoPosition) -> Vec3:
+def geodetic_to_ecef(pos: GeoPosition) -> EcefVec3:
     """Convert geodetic (lat_deg, lon_deg, alt_km) to ECEF (km)."""
     lat_rad = math.radians(pos.lat_deg)
     lon_rad = math.radians(pos.lon_deg)
@@ -205,10 +227,10 @@ def geodetic_to_ecef(pos: GeoPosition) -> Vec3:
     x = (n + pos.alt_km) * cos_lat * cos_lon
     y = (n + pos.alt_km) * cos_lat * sin_lon
     z = (n * (1.0 - WGS84_E2) + pos.alt_km) * sin_lat
-    return Vec3(x, y, z)
+    return EcefVec3(Vec3(x, y, z))
 
 
-def eci_to_ecef_velocity(pos_eci: Vec3, vel_eci: Vec3, unix_timestamp: float) -> Vec3:
+def eci_to_ecef_velocity(pos_eci: EciVec3, vel_eci: EciVec3, unix_timestamp: float) -> EcefVec3:
     """Convert ECI velocity to ECEF velocity.
 
     v_ecef = R_z(-θ) · v_eci - ω×r_ecef
@@ -227,17 +249,20 @@ def eci_to_ecef_velocity(pos_eci: Vec3, vel_eci: Vec3, unix_timestamp: float) ->
     vx -= -EARTH_ROTATION_RATE * pos_ecef.y
     vy -= EARTH_ROTATION_RATE * pos_ecef.x
 
-    return Vec3(vx, vy, vz)
+    return EcefVec3(Vec3(vx, vy, vz))
 
 
 def propagate_keplerian(
     elements: OrbitalElements,
     epoch_unix: float,
     dt: float,
-) -> tuple[Vec3, Vec3, GeoPosition]:
-    """Propagate and return (ecef_pos, ecef_vel, geodetic).
+) -> tuple[EcefVec3, EcefVec3, GeoPosition]:
+    """Propagate and return ECEF position, ECEF velocity, and geodetic.
 
-    This is the primary public API for the propagator.
+    This is the primary public API for the propagator. All outputs are in
+    the Earth-Centered Earth-Fixed frame. The ECEF velocity includes the
+    subtraction of Earth's rotation (v_ecef = R·v_eci - ω×r_ecef), so it
+    represents motion relative to the rotating Earth.
 
     Args:
         elements: Orbital elements at epoch
@@ -245,7 +270,7 @@ def propagate_keplerian(
         dt: Time delta in seconds from epoch
 
     Returns:
-        (ecef_position_km, ecef_velocity_km_s, geodetic_position)
+        (pos_ecef_km, vel_ecef_km_s, geodetic_position)
     """
     pos_eci, vel_eci = propagate_eci(elements, dt)
     current_time = epoch_unix + dt

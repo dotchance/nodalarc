@@ -11,16 +11,24 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class NodePosition(BaseModel):
-    """Position and velocity of a single node."""
+    """Position and velocity of a single node.
+
+    Position is geodetic (WGS84). Velocity is ECEF (Earth-Centered Earth-Fixed)
+    in km/s — includes Earth rotation subtraction, so it represents motion
+    relative to the rotating Earth. Ground stations have zero velocity.
+
+    The frontend's worldVelocity() function in astronomy.ts expects ECEF
+    velocity and applies the view-frame rotation to produce world-frame velocity.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     lat_deg: float
     lon_deg: float
     alt_km: float
-    vel_x_km_s: float
-    vel_y_km_s: float
-    vel_z_km_s: float
+    vel_x_km_s: float  # ECEF velocity X component (km/s)
+    vel_y_km_s: float  # ECEF velocity Y component (km/s)
+    vel_z_km_s: float  # ECEF velocity Z component (km/s)
 
 
 class PositionEvent(BaseModel):

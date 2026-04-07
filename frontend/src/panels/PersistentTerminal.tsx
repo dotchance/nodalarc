@@ -1,10 +1,11 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-/** Multi-session persistent terminal manager with tab switching.
+/** Multi-session persistent terminal — single renderer, multiple backends.
  *
- *  Each node gets its own SSH session that stays alive when switching tabs.
- *  Sessions accumulate output in the background — switching back shows
- *  the full scroll buffer and cursor where you left it.
+ *  ONE xterm.js Terminal instance (single WebGL canvas) shared across all
+ *  sessions. Each session is a WebSocket + output buffer. Switching tabs
+ *  replays the target session's buffer into the shared terminal. This scales
+ *  to many simultaneous sessions without GPU/memory pressure.
  */
 
 import { useEffect, useRef, useCallback } from "react";
@@ -16,18 +17,21 @@ import { REST_URL, getApiKey } from "../config";
 
 type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
-interface SessionState {
+const MAX_BUFFER_LINES = 10_000;
+
+/** Lightweight session — WebSocket + text buffer, no xterm.js instance. */
+interface Session {
   nodeId: string;
-  terminal: Terminal;
-  fitAddon: FitAddon;
   ws: WebSocket | null;
   status: ConnectionStatus;
-  containerEl: HTMLDivElement;
+  /** Accumulated output lines. Replayed into the shared terminal on tab switch. */
+  buffer: string[];
+  receivedFirstOutput: boolean;
 }
 
 interface PersistentTerminalProps {
-  sessions: string[];             // ordered list of open node IDs
-  activeNodeId: string | null;    // which tab is visible
+  sessions: string[];
+  activeNodeId: string | null;
   onSessionStatusChange: (nodeId: string, status: ConnectionStatus) => void;
   fontSize: number;
 }
@@ -39,59 +43,74 @@ export function PersistentTerminal({
   fontSize,
 }: PersistentTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const sessionsRef = useRef<Map<string, SessionState>>(new Map());
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const sessionsRef = useRef<Map<string, Session>>(new Map());
+  const activeRef = useRef<string | null>(null);
+  const dataListenerRef = useRef<{ dispose: () => void } | null>(null);
 
-  // Create or retrieve a session for a node
-  const getOrCreateSession = useCallback(
-    (nodeId: string): SessionState => {
-      const existing = sessionsRef.current.get(nodeId);
-      if (existing) return existing;
+  // Initialize the single shared terminal on mount
+  useEffect(() => {
+    if (!containerRef.current || terminalRef.current) return;
 
-      // Create terminal instance
-      const terminal = new Terminal({
-        cursorBlink: true,
-        fontSize,
-        fontFamily:
-          "'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
-        theme: {
-          background: "#0d0d1a",
-          foreground: "#e0e0e0",
-          cursor: "#4488ff",
-          selectionBackground: "#2a4a7a",
-        },
-        scrollback: 10000,
-      });
+    const terminal = new Terminal({
+      cursorBlink: true,
+      fontSize,
+      fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
+      theme: {
+        background: "#0d0d1a",
+        foreground: "#e0e0e0",
+        cursor: "#4488ff",
+        selectionBackground: "#2a4a7a",
+      },
+      scrollback: MAX_BUFFER_LINES,
+    });
 
-      const fitAddon = new FitAddon();
-      const webLinksAddon = new WebLinksAddon();
-      terminal.loadAddon(fitAddon);
-      terminal.loadAddon(webLinksAddon);
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.loadAddon(new WebLinksAddon());
+    terminal.open(containerRef.current);
+    fitAddon.fit();
 
-      // Create a container div for this terminal (hidden until active)
-      const containerEl = document.createElement("div");
-      containerEl.style.cssText =
-        "width:100%;height:100%;display:none;padding:4px 0;";
+    terminalRef.current = terminal;
+    fitRef.current = fitAddon;
 
-      const session: SessionState = {
+    return () => {
+      terminal.dispose();
+      terminalRef.current = null;
+      fitRef.current = null;
+    };
+  }, []);
+
+  // Create a session (WebSocket + buffer) for a node
+  const createSession = useCallback(
+    (nodeId: string): Session => {
+      const session: Session = {
         nodeId,
-        terminal,
-        fitAddon,
         ws: null,
         status: "connecting",
-        containerEl,
+        buffer: [],
+        receivedFirstOutput: false,
       };
       sessionsRef.current.set(nodeId, session);
-
-      // Append container and open terminal
-      if (containerRef.current) {
-        containerRef.current.appendChild(containerEl);
-      }
-      terminal.open(containerEl);
-
-      // Connect WebSocket
-      terminal.writeln(`\x1b[90mConnecting to ${nodeId}, please wait...\x1b[0m`);
       onSessionStatusChange(nodeId, "connecting");
 
+      // Append to buffer + write to terminal if this is the active session
+      const appendOutput = (text: string) => {
+        session.buffer.push(text);
+        // Trim buffer if too large
+        if (session.buffer.length > MAX_BUFFER_LINES * 2) {
+          session.buffer = session.buffer.slice(-MAX_BUFFER_LINES);
+        }
+        // Write to terminal only if this session is active
+        if (activeRef.current === nodeId && terminalRef.current) {
+          terminalRef.current.write(text);
+        }
+      };
+
+      appendOutput(`\x1b[90mConnecting to ${nodeId}, please wait...\x1b[0m\r\n`);
+
+      // Open WebSocket
       const wsBase = REST_URL.replace(/^http/, "ws");
       const key = getApiKey();
       const wsUrl = `${wsBase}/ws/v1/terminal/${encodeURIComponent(nodeId)}${
@@ -100,14 +119,14 @@ export function PersistentTerminal({
 
       const ws = new WebSocket(wsUrl);
       session.ws = ws;
-      let receivedFirstOutput = false;
 
       ws.onopen = () => {
-        const dims = fitAddon.proposeDimensions();
-        if (dims) {
-          ws.send(
-            JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows })
-          );
+        // Send initial terminal size
+        if (fitRef.current) {
+          const dims = fitRef.current.proposeDimensions();
+          if (dims) {
+            ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
+          }
         }
       };
 
@@ -115,16 +134,20 @@ export function PersistentTerminal({
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === "output" && msg.data) {
-            if (!receivedFirstOutput) {
-              receivedFirstOutput = true;
+            if (!session.receivedFirstOutput) {
+              session.receivedFirstOutput = true;
               session.status = "connected";
               onSessionStatusChange(nodeId, "connected");
-              terminal.write("\x1b[2K\x1b[1A\x1b[2K\r");
+              // Clear the "Connecting" message from the buffer
+              session.buffer = [];
+              if (activeRef.current === nodeId && terminalRef.current) {
+                terminalRef.current.clear();
+              }
             }
-            terminal.write(msg.data);
+            appendOutput(msg.data);
           }
         } catch {
-          terminal.write(event.data);
+          appendOutput(event.data);
         }
       };
 
@@ -132,118 +155,123 @@ export function PersistentTerminal({
         if (event.code === 4401) {
           session.status = "error";
           onSessionStatusChange(nodeId, "error");
-          terminal.writeln("\r\n\x1b[31mAuthentication failed.\x1b[0m");
+          appendOutput("\r\n\x1b[31mAuthentication failed.\x1b[0m");
         } else if (event.code === 4404) {
           session.status = "error";
           onSessionStatusChange(nodeId, "error");
-          terminal.writeln(`\r\n\x1b[31mNode ${nodeId} not found.\x1b[0m`);
+          appendOutput(`\r\n\x1b[31mNode ${nodeId} not found.\x1b[0m`);
         } else {
           session.status = "disconnected";
           onSessionStatusChange(nodeId, "disconnected");
-          terminal.writeln("\r\n\x1b[90mDisconnected.\x1b[0m");
+          appendOutput("\r\n\x1b[90mDisconnected.\x1b[0m");
         }
       };
 
       ws.onerror = () => {
         session.status = "error";
         onSessionStatusChange(nodeId, "error");
-        terminal.writeln("\r\n\x1b[31mConnection error.\x1b[0m");
+        appendOutput("\r\n\x1b[31mConnection error.\x1b[0m");
       };
-
-      terminal.onData((data) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "input", data }));
-        }
-      });
 
       return session;
     },
-    [fontSize, onSessionStatusChange]
+    [onSessionStatusChange]
   );
 
-  // Manage session lifecycle — create new sessions, clean up removed ones
+  // Manage session lifecycle
   useEffect(() => {
     const currentIds = new Set(sessions);
 
     // Create sessions for new nodes
     for (const nodeId of sessions) {
-      getOrCreateSession(nodeId);
+      if (!sessionsRef.current.has(nodeId)) {
+        createSession(nodeId);
+      }
     }
 
-    // Clean up sessions that were removed
+    // Clean up removed sessions
     for (const [nodeId, session] of sessionsRef.current.entries()) {
       if (!currentIds.has(nodeId)) {
         session.ws?.close();
-        session.terminal.dispose();
-        session.containerEl.remove();
         sessionsRef.current.delete(nodeId);
       }
     }
-  }, [sessions, getOrCreateSession]);
+  }, [sessions, createSession]);
 
-  // Show/hide terminal containers based on active tab
+  // Switch active session — replay buffer into shared terminal
   useEffect(() => {
-    for (const [nodeId, session] of sessionsRef.current.entries()) {
-      const isActive = nodeId === activeNodeId;
-      session.containerEl.style.display = isActive ? "block" : "none";
-      if (isActive) {
-        // Fit to container and focus
-        requestAnimationFrame(() => {
-          session.fitAddon.fit();
-          session.terminal.focus();
-          // Send resize to server
-          const dims = session.fitAddon.proposeDimensions();
-          if (
-            dims &&
-            session.ws &&
-            session.ws.readyState === WebSocket.OPEN
-          ) {
-            session.ws.send(
-              JSON.stringify({
-                type: "resize",
-                cols: dims.cols,
-                rows: dims.rows,
-              })
-            );
-          }
-        });
-      }
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+
+    // Detach keyboard listener from previous session
+    if (dataListenerRef.current) {
+      dataListenerRef.current.dispose();
+      dataListenerRef.current = null;
     }
+
+    activeRef.current = activeNodeId;
+
+    if (!activeNodeId) {
+      terminal.clear();
+      terminal.write("\x1b[90mNo session selected.\x1b[0m");
+      return;
+    }
+
+    const session = sessionsRef.current.get(activeNodeId);
+    if (!session) return;
+
+    // Clear terminal and replay this session's buffer
+    terminal.reset();
+    for (const chunk of session.buffer) {
+      terminal.write(chunk);
+    }
+    terminal.scrollToBottom();
+
+    // Attach keyboard listener to this session's WebSocket
+    dataListenerRef.current = terminal.onData((data) => {
+      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+        session.ws.send(JSON.stringify({ type: "input", data }));
+      }
+    });
+
+    // Focus and fit
+    requestAnimationFrame(() => {
+      fitRef.current?.fit();
+      terminal.focus();
+      // Send resize to server
+      if (fitRef.current && session.ws?.readyState === WebSocket.OPEN) {
+        const dims = fitRef.current.proposeDimensions();
+        if (dims) {
+          session.ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
+        }
+      }
+    });
   }, [activeNodeId]);
 
-  // Handle resize of the container
+  // Handle container resize
   useEffect(() => {
     if (!containerRef.current) return;
     const observer = new ResizeObserver(() => {
-      if (!activeNodeId) return;
-      const session = sessionsRef.current.get(activeNodeId);
-      if (session) {
-        session.fitAddon.fit();
-        const dims = session.fitAddon.proposeDimensions();
-        if (
-          dims &&
-          session.ws &&
-          session.ws.readyState === WebSocket.OPEN
-        ) {
-          session.ws.send(
-            JSON.stringify({
-              type: "resize",
-              cols: dims.cols,
-              rows: dims.rows,
-            })
-          );
+      fitRef.current?.fit();
+      const session = activeRef.current
+        ? sessionsRef.current.get(activeRef.current)
+        : null;
+      if (session?.ws?.readyState === WebSocket.OPEN && fitRef.current) {
+        const dims = fitRef.current.proposeDimensions();
+        if (dims) {
+          session.ws.send(JSON.stringify({ type: "resize", cols: dims.cols, rows: dims.rows }));
         }
       }
     });
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [activeNodeId]);
+  }, []);
 
-  // Update font size on all terminals
+  // Update font size
   useEffect(() => {
-    for (const session of sessionsRef.current.values()) {
-      session.terminal.options.fontSize = fontSize;
-      session.fitAddon.fit();
+    if (terminalRef.current) {
+      terminalRef.current.options.fontSize = fontSize;
+      fitRef.current?.fit();
     }
   }, [fontSize]);
 
@@ -252,14 +280,16 @@ export function PersistentTerminal({
     return () => {
       for (const session of sessionsRef.current.values()) {
         session.ws?.close();
-        session.terminal.dispose();
-        session.containerEl.remove();
       }
       sessionsRef.current.clear();
+      dataListenerRef.current?.dispose();
     };
   }, []);
 
   return (
-    <div ref={containerRef} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
+    <div
+      ref={containerRef}
+      style={{ width: "100%", height: "100%", overflow: "hidden" }}
+    />
   );
 }

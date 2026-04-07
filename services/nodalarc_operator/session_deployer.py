@@ -931,13 +931,18 @@ def _create_session_pod(
     if gs_name:
         labels["nodalarc.io/gs-name"] = gs_name
 
-    # FRR container
+    # FRR container — hardened security context:
+    #   SYS_ADMIN: required by FRR's ospfd/mgmtd (privs_init requests it)
+    #   read_only_root_filesystem: writable paths via tmpfs only
     frr_container = kubernetes.client.V1Container(
         name="frr",
         image=os.environ.get("FRR_IMAGE", "nodalarc/frr:latest"),
         image_pull_policy="IfNotPresent",
         security_context=kubernetes.client.V1SecurityContext(
-            capabilities=kubernetes.client.V1Capabilities(add=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"])
+            capabilities=kubernetes.client.V1Capabilities(
+                add=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+            ),
+            read_only_root_filesystem=True,
         ),
         resources=kubernetes.client.V1ResourceRequirements(limits={"memory": "60Mi", "cpu": "50m"}),
         volume_mounts=[
@@ -945,6 +950,12 @@ def _create_session_pod(
                 name="frr-config",
                 mount_path="/etc/frr-config",
             ),
+            kubernetes.client.V1VolumeMount(name="frr-run", mount_path="/var/run/frr"),
+            kubernetes.client.V1VolumeMount(name="frr-etc", mount_path="/etc/frr"),
+            kubernetes.client.V1VolumeMount(name="tmp", mount_path="/tmp"),
+            kubernetes.client.V1VolumeMount(name="dropbear", mount_path="/etc/dropbear"),
+            kubernetes.client.V1VolumeMount(name="operator-home", mount_path="/home/operator"),
+            kubernetes.client.V1VolumeMount(name="var-log", mount_path="/var/log"),
         ],
     )
 
@@ -955,6 +966,32 @@ def _create_session_pod(
             config_map=kubernetes.client.V1ConfigMapVolumeSource(
                 name=config_cm_name,
             ),
+        ),
+        # Writable tmpfs for FRR runtime (read-only root filesystem)
+        kubernetes.client.V1Volume(
+            name="frr-run",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
+        ),
+        kubernetes.client.V1Volume(
+            name="frr-etc",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(),
+        ),
+        kubernetes.client.V1Volume(
+            name="tmp",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
+        ),
+        kubernetes.client.V1Volume(
+            name="var-log",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
+        ),
+        # Forward-compatible mounts for SSH terminal (Phase 1)
+        kubernetes.client.V1Volume(
+            name="dropbear",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
+        ),
+        kubernetes.client.V1Volume(
+            name="operator-home",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
         ),
     ]
 

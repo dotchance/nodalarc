@@ -64,12 +64,34 @@ export function onSnapshot(
   }
 
   if (simTimeMs <= _lastSimTimeMs) {
-    // Duplicate or regression — don't update EMA or timestamps.
+    // Small regression or duplicate — ignore (jitter).
+    // Large backward jump — seek discontinuity. Re-seed immediately.
+    const backwardMs = _lastSimTimeMs - simTimeMs;
+    if (backwardMs > 5000) {
+      // Seek backward detected: re-seed clock at new sim_time.
+      _lastSimTimeMs = simTimeMs;
+      _lastSimWallTime = now;
+      _wallMsPerSimMs = DEFAULT_WALL_MS_PER_SIM_MS;
+      _rateSeeded = false;
+      _consecutiveOutliers = 0;
+      return null;
+    }
     return null;
   }
 
   const simDeltaMs = simTimeMs - _lastSimTimeMs;
   const wallDelta = now - (_lastSimWallTime as number);
+
+  // Large forward jump — seek discontinuity. Re-seed immediately
+  // rather than waiting for 3 outlier rejections.
+  if (simDeltaMs > 30_000 && wallDelta < 5_000) {
+    _lastSimTimeMs = simTimeMs;
+    _lastSimWallTime = now;
+    _wallMsPerSimMs = DEFAULT_WALL_MS_PER_SIM_MS;
+    _rateSeeded = false;
+    _consecutiveOutliers = 0;
+    return null;
+  }
 
   if (wallDelta > MIN_WALL_DELTA_MS) {
     const instantRate = wallDelta / simDeltaMs;

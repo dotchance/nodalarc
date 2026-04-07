@@ -29,28 +29,38 @@ touch /etc/frr/vtysh.conf
 chown -R frr:frr /etc/frr
 
 # ---------------------------------------------------------------------------
-# SSH terminal access setup (dropbear)
+# SSH terminal access (OpenSSH sshd)
 #
-# Creates an 'operator' user with login shell = /usr/bin/vtysh.
-# SSH sessions land directly in the FRR CLI — same experience as a real
-# router. Key-only auth (no passwords), root login disabled.
-#
-# Public key is delivered via K8s Secret mount at /etc/ssh-keys/.
-# Host keys are generated on first boot (tmpfs, regenerate on restart).
+# sshd_config written to tmpfs (/etc/ssh emptyDir mount).
+# Host keys generated on first boot (tmpfs, regenerated each pod start).
+# operator user created at image build time (Dockerfile) with:
+#   login shell = /usr/bin/vtysh, group = frrvty (VTY socket access)
+# Home dir is tmpfs (owned by root at mount) — must chown for sshd auth.
 # ---------------------------------------------------------------------------
 
+# Fix home directory ownership (tmpfs mount is root-owned at creation)
+chown operator:frrvty /home/operator
+chmod 755 /home/operator
+
 # Generate host keys if not present (tmpfs — regenerated each pod start)
-if [ ! -f /etc/dropbear/dropbear_ed25519_host_key ]; then
-    dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key >/dev/null 2>&1
+if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+    ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N "" -q
     echo "SSH host key generated"
 fi
 
-# operator user created at image build time (Dockerfile) with:
-#   login shell = /usr/bin/vtysh, group = frrvty (VTY socket access)
-# Cannot create at runtime because /etc/passwd is on read-only root filesystem.
-# Home dir is tmpfs (owned by root at mount) — must chown for dropbear auth.
-chown operator:frrvty /home/operator
-chmod 755 /home/operator
+# Write sshd_config to tmpfs
+cat > /etc/ssh/sshd_config << 'SSHD_CONFIG'
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+AuthorizedKeysFile .ssh/authorized_keys
+PasswordAuthentication no
+PermitRootLogin no
+UseDNS no
+ClientAliveInterval 60
+ClientAliveCountMax 10
+PrintMotd yes
+AcceptEnv LANG LC_*
+SSHD_CONFIG
 
 # Install authorized keys from Secret mount (if present).
 # The Operator generates a per-session SSH keypair and stores the public
@@ -66,15 +76,9 @@ else
     echo "WARNING: No SSH authorized keys found at /etc/ssh-keys/ — terminal access disabled"
 fi
 
-# Start dropbear SSH daemon in background.
-#   -R: generate host keys if missing (belt and suspenders)
-#   -s: disable password login (key-only authentication)
-#   -g: disable root login
-#   -p 22: listen on all interfaces, port 22
-#   -K 60: send keepalive every 60 seconds
-#   -I 600: disconnect idle sessions after 10 minutes
-dropbear -R -s -g -p 22 -K 60 -I 600 2>/dev/null &
-echo "SSH daemon started (key-only auth, root disabled, idle timeout 600s)"
+# Start sshd in background
+/usr/sbin/sshd -e 2>/dev/null &
+echo "SSH daemon started (OpenSSH, key-only auth, root disabled, UseDNS no)"
 
 # Rename eth0 → cni0 BEFORE FRR starts so zebra learns the correct name.
 # cni0 is the K8s CNI infrastructure interface — not user-configurable.

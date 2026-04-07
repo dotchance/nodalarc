@@ -76,5 +76,13 @@ fi
 dropbear -R -s -g -p 22 -K 60 -I 600 2>/dev/null &
 echo "SSH daemon started (key-only auth, root disabled, idle timeout 600s)"
 
+# Rename eth0 → cni0 BEFORE FRR starts so zebra learns the correct name.
+# cni0 is the K8s CNI infrastructure interface — not user-configurable.
+# The name reserves mgmt0 for users to create their own management VRF.
+if ip link show eth0 >/dev/null 2>&1; then
+    ip link set eth0 name cni0
+    echo "Renamed eth0 → cni0"
+fi
+
 # Hand off to FRR's stock docker-start (watchfrr reads /etc/frr/daemons)
 exec /usr/lib/frr/docker-start

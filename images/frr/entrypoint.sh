@@ -20,6 +20,11 @@ while [ ! -f "$READY_FILE" ]; do
 done
 echo "Config ready after ${WAITED}s"
 
+# Create vtysh.conf if it doesn't exist — suppresses the
+# "Can't open configuration file /etc/frr/vtysh.conf" warning
+# that appears on every vtysh invocation without it.
+touch /etc/frr/vtysh.conf
+
 # Ensure FRR owns config directory
 chown -R frr:frr /etc/frr
 

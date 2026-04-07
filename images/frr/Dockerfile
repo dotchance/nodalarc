@@ -3,7 +3,9 @@ FROM quay.io/frrouting/frr:10.3.1
 # Dropbear: lightweight SSH daemon (~110KB) for interactive terminal access.
 # Users SSH in and land directly in vtysh (login shell).
 # Key-only auth, no password login, root login disabled.
-RUN apk add --no-cache dropbear && \
+# libcap for setcap (used below to grant traceroute raw socket capability)
+RUN apk add --no-cache dropbear traceroute libcap && \
+    setcap cap_net_raw+ep /usr/bin/traceroute && \
     adduser -D -s /usr/bin/vtysh -G frrvty operator && \
     mkdir -p /home/operator/.ssh && \
     chown -R operator:frrvty /home/operator/.ssh && \

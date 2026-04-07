@@ -40,11 +40,9 @@ if [ ! -f /etc/dropbear/dropbear_ed25519_host_key ]; then
     echo "SSH host key generated"
 fi
 
-# Create operator user: login shell = vtysh, member of frrvty group.
-# frrvty group grants access to FRR VTY sockets (/var/run/frr/*.vty).
-if ! id operator >/dev/null 2>&1; then
-    adduser -D -s /usr/bin/vtysh -G frrvty operator
-fi
+# operator user created at image build time (Dockerfile) with:
+#   login shell = /usr/bin/vtysh, group = frrvty (VTY socket access)
+# Cannot create at runtime because /etc/passwd is on read-only root filesystem.
 
 # Install authorized keys from Secret mount (if present).
 # The Operator generates a per-session SSH keypair and stores the public

@@ -49,6 +49,10 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create", "update", "delete", "get", "list", "watch"]
+  # Secrets — SSH keypair for terminal access (nodalarc-terminal-keys)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update", "delete", "get", "list"]
   # Deployment patching (NodalPath mode switch)
   - apiGroups: ["apps"]
     resources: ["deployments"]

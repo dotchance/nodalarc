@@ -8,7 +8,8 @@ RUN apk add --no-cache dropbear && \
     mkdir -p /home/operator/.ssh && \
     chown -R operator:frrvty /home/operator/.ssh && \
     chmod 700 /home/operator/.ssh && \
-    echo "/usr/bin/vtysh" >> /etc/shells
+    echo "/usr/bin/vtysh" >> /etc/shells && \
+    printf '\n  NodalArc Constellation Emulation Node\n  https://github.com/dotchance/nodalarc\n\n' > /etc/motd
 
 # Security note: bash and ash are NOT removed from this image.
 # FRR's docker-start and frrcommon.sh are bash scripts — removing bash

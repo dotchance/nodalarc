@@ -19,27 +19,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import tempfile
-from pathlib import Path
 
 import asyncssh
 import kubernetes.client
 
 log = logging.getLogger(__name__)
 
-# Cached SSH private key (loaded lazily from K8s Secret on first terminal request)
-_ssh_key_path: str | None = None
+# Cached SSH private key object (loaded lazily from K8s Secret, kept in memory only)
+_ssh_key: asyncssh.SSHKey | None = None
 
 
-def _load_ssh_key(namespace: str) -> str:
-    """Load the SSH private key from the K8s Secret into a temp file.
+def _load_ssh_key(namespace: str) -> asyncssh.SSHKey:
+    """Load the SSH private key from the K8s Secret into memory.
 
-    Returns the path to the temp file. Called once, cached for the VS-API
-    process lifetime. The temp file persists until VS-API restart.
+    Returns an asyncssh.SSHKey object. Called once, cached for the VS-API
+    process lifetime. The key NEVER touches disk — it stays in memory only.
     """
-    global _ssh_key_path
-    if _ssh_key_path and Path(_ssh_key_path).exists():
-        return _ssh_key_path
+    global _ssh_key
+    if _ssh_key is not None:
+        return _ssh_key
 
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
@@ -61,20 +59,27 @@ def _load_ssh_key(namespace: str) -> str:
         raise RuntimeError("Secret nodalarc-terminal-keys missing id_ed25519 key")
 
     private_key_pem = base64.b64decode(private_key_b64).decode()
+    _ssh_key = asyncssh.import_private_key(private_key_pem)
+    log.info("SSH private key loaded from Secret (in-memory only, never written to disk)")
+    return _ssh_key
 
-    # Write to a temp file (asyncssh needs a file path for client_keys)
-    tmpf = tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False)
-    tmpf.write(private_key_pem)
-    tmpf.close()
-    Path(tmpf.name).chmod(0o600)
 
-    _ssh_key_path = tmpf.name
-    log.info("SSH private key loaded from Secret (cached at %s)", _ssh_key_path)
-    return _ssh_key_path
+import re
+
+# Node ID must match the pattern: sat-P00S00 or gs-name (alphanumeric + hyphens)
+_NODE_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9\-]{0,62}$")
 
 
 def resolve_pod_ip(node_id: str, namespace: str) -> str | None:
-    """Resolve a constellation node_id to its K8s pod IP."""
+    """Resolve a constellation node_id to its K8s pod IP.
+
+    Validates node_id against a strict pattern to prevent label selector
+    injection. Only alphanumeric characters and hyphens are allowed.
+    """
+    if not _NODE_ID_PATTERN.match(node_id):
+        log.warning("Invalid node_id rejected: %r", node_id)
+        return None
+
     try:
         kubernetes.config.load_incluster_config()
         v1 = kubernetes.client.CoreV1Api()
@@ -97,9 +102,9 @@ class TerminalSession:
     config export endpoint for non-interactive command execution.
     """
 
-    def __init__(self, pod_ip: str, ssh_key_path: str):
+    def __init__(self, pod_ip: str, ssh_key: asyncssh.SSHKey):
         self._pod_ip = pod_ip
-        self._ssh_key_path = ssh_key_path
+        self._ssh_key = ssh_key
         self._conn: asyncssh.SSHClientConnection | None = None
         self._process: asyncssh.SSHClientProcess | None = None
 
@@ -116,7 +121,7 @@ class TerminalSession:
             self._pod_ip,
             port=22,
             username="operator",
-            client_keys=[self._ssh_key_path],
+            client_keys=[self._ssh_key],
             known_hosts=None,
         )
         self._process = await self._conn.create_process(

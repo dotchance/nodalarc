@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-/** Bottom CLI drawer — commands mode (one-shot) + terminal mode (persistent SSH). */
+/** Bottom CLI drawer — commands mode (one-shot) + terminal mode (multi-session SSH). */
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useIntrospect } from "../hooks/useIntrospect";
@@ -9,6 +9,7 @@ import { REST_URL, authHeaders } from "../config";
 import type { StateSnapshot, Selection } from "../types";
 
 type CliMode = "commands" | "terminal";
+type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
 interface CliDrawerProps {
   open: boolean;
@@ -32,6 +33,11 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
   const draggingRef = useRef(false);
   const drawerRef = useRef<HTMLDivElement>(null);
 
+  // Multi-session terminal state
+  const [openSessions, setOpenSessions] = useState<string[]>([]);
+  const [activeSession, setActiveSession] = useState<string | null>(null);
+  const [sessionStatuses, setSessionStatuses] = useState<Map<string, ConnectionStatus>>(new Map());
+
   // Auto-select node when selection changes
   useEffect(() => {
     if (selection && selection.type !== "link") {
@@ -45,6 +51,53 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
       setSelectedCommand(commands[0] ?? "");
     }
   }, [commands, selectedCommand]);
+
+  // Open a terminal session for the selected node
+  const openTerminalSession = useCallback((nodeId: string) => {
+    if (!nodeId) return;
+    setOpenSessions((prev) => {
+      if (prev.includes(nodeId)) {
+        // Already open — just switch to it
+        setActiveSession(nodeId);
+        return prev;
+      }
+      setActiveSession(nodeId);
+      return [...prev, nodeId];
+    });
+  }, []);
+
+  // When node dropdown changes in terminal mode, open a session
+  useEffect(() => {
+    if (mode === "terminal" && selectedNode) {
+      openTerminalSession(selectedNode);
+    }
+  }, [selectedNode, mode, openTerminalSession]);
+
+  // Close a specific session
+  const closeSession = useCallback((nodeId: string) => {
+    setOpenSessions((prev) => {
+      const next = prev.filter((id) => id !== nodeId);
+      // If we closed the active session, switch to the last remaining
+      setActiveSession((current) =>
+        current === nodeId ? next[next.length - 1] ?? null : current
+      );
+      return next;
+    });
+    setSessionStatuses((prev) => {
+      const next = new Map(prev);
+      next.delete(nodeId);
+      return next;
+    });
+  }, []);
+
+  // Session status callback from PersistentTerminal
+  const handleSessionStatus = useCallback((nodeId: string, status: ConnectionStatus) => {
+    setSessionStatuses((prev) => {
+      const next = new Map(prev);
+      next.set(nodeId, status);
+      return next;
+    });
+  }, []);
 
   // Drag handle for resizing
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -78,10 +131,11 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
   }, [selectedNode, selectedCommand, execute]);
 
   const handleDownloadConfig = useCallback(async () => {
-    if (!selectedNode) return;
+    const target = mode === "terminal" ? activeSession : selectedNode;
+    if (!target) return;
     try {
       const resp = await fetch(
-        `${REST_URL}/api/v1/nodes/${encodeURIComponent(selectedNode)}/config`,
+        `${REST_URL}/api/v1/nodes/${encodeURIComponent(target)}/config`,
         { headers: authHeaders() },
       );
       if (resp.ok) {
@@ -90,18 +144,23 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `${selectedNode}.conf`;
+        a.download = `${target}.conf`;
         a.click();
         URL.revokeObjectURL(url);
       }
     } catch { /* ignore */ }
-  }, [selectedNode]);
+  }, [mode, activeSession, selectedNode]);
 
   const nodes = snapshot
     ? [...snapshot.nodes].sort((a, b) => a.node_id.localeCompare(b.node_id))
     : [];
 
   if (!open) return null;
+
+  const statusColor = (status?: ConnectionStatus) =>
+    status === "connected" ? "#44cc66" :
+    status === "connecting" ? "#ffaa00" :
+    status === "error" ? "#ff3333" : "#555577";
 
   return (
     <div
@@ -115,10 +174,7 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
       {/* Drag handle */}
       <div
         onMouseDown={handleDragStart}
-        style={{
-          flexShrink: 0, height: 5, cursor: "ns-resize",
-          background: "#2a2a4e",
-        }}
+        style={{ flexShrink: 0, height: 5, cursor: "ns-resize", background: "#2a2a4e" }}
       />
 
       {/* Toolbar */}
@@ -199,7 +255,7 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
         )}
 
         {/* Download config button */}
-        {selectedNode && (
+        {(mode === "terminal" ? activeSession : selectedNode) && (
           <button
             onClick={handleDownloadConfig}
             title="Download running config"
@@ -244,14 +300,64 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
         >✕</button>
       </div>
 
+      {/* Session tabs (terminal mode only) */}
+      {mode === "terminal" && openSessions.length > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 2,
+          padding: "3px 12px", flexShrink: 0, borderBottom: "1px solid #1a1a2e",
+          overflowX: "auto", minHeight: 28,
+        }}>
+          {openSessions.map((nodeId) => {
+            const isActive = nodeId === activeSession;
+            const status = sessionStatuses.get(nodeId);
+            return (
+              <div
+                key={nodeId}
+                onClick={() => setActiveSession(nodeId)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 5,
+                  padding: "3px 8px", borderRadius: 4, cursor: "pointer",
+                  background: isActive ? "#1a2a4e" : "transparent",
+                  border: isActive ? "1px solid #2a4a7a" : "1px solid transparent",
+                  fontSize: 11, color: isActive ? "#e0e0e0" : "#888899",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span style={{
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: statusColor(status), display: "inline-block",
+                  flexShrink: 0,
+                }} />
+                {nodeId}
+                <span
+                  onClick={(e) => { e.stopPropagation(); closeSession(nodeId); }}
+                  title="Close session"
+                  style={{
+                    color: "#555577", cursor: "pointer", fontSize: 10,
+                    padding: "0 2px", marginLeft: 2,
+                  }}
+                >✕</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Content area */}
       <div style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
-        {mode === "terminal" && selectedNode ? (
-          <PersistentTerminal nodeId={selectedNode} fontSize={fontSize} />
-        ) : mode === "terminal" && !selectedNode ? (
-          <div style={{ padding: "12px", color: "#555577", fontStyle: "italic", fontSize: 12 }}>
-            Select a node to open an interactive terminal.
-          </div>
+        {mode === "terminal" ? (
+          openSessions.length > 0 ? (
+            <PersistentTerminal
+              sessions={openSessions}
+              activeNodeId={activeSession}
+              onSessionStatusChange={handleSessionStatus}
+              fontSize={fontSize}
+            />
+          ) : (
+            <div style={{ padding: "12px", color: "#555577", fontStyle: "italic", fontSize: 12 }}>
+              Select a node to open an interactive terminal.
+            </div>
+          )
         ) : (
           /* Commands mode output */
           <div style={{ padding: "8px 12px", overflow: "auto", height: "100%" }}>

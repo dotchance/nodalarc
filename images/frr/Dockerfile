@@ -7,7 +7,8 @@ RUN apk add --no-cache dropbear && \
     adduser -D -s /usr/bin/vtysh -G frrvty operator && \
     mkdir -p /home/operator/.ssh && \
     chown -R operator:frrvty /home/operator/.ssh && \
-    chmod 700 /home/operator/.ssh
+    chmod 700 /home/operator/.ssh && \
+    echo "/usr/bin/vtysh" >> /etc/shells
 
 # Security note: bash and ash are NOT removed from this image.
 # FRR's docker-start and frrcommon.sh are bash scripts — removing bash

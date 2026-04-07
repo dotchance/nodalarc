@@ -34,13 +34,13 @@ def _load_ssh_key(namespace: str) -> asyncssh.SSHKey:
 
     Returns an asyncssh.SSHKey object. Called once, cached for the VS-API
     process lifetime. The key NEVER touches disk — it stays in memory only.
+    Uses the cached K8s client to avoid blocking on load_incluster_config().
     """
     global _ssh_key
     if _ssh_key is not None:
         return _ssh_key
 
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_k8s_client()
 
     try:
         secret = v1.read_namespaced_secret("nodalarc-terminal-keys", namespace)
@@ -69,20 +69,26 @@ import re
 # Node ID must match the pattern: sat-P00S00 or gs-name (alphanumeric + hyphens)
 _NODE_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9\-]{0,62}$")
 
+# Cached K8s API client (initialized once, reused for all pod lookups)
+_k8s_v1: kubernetes.client.CoreV1Api | None = None
 
-def resolve_pod_ip(node_id: str, namespace: str) -> str | None:
-    """Resolve a constellation node_id to its K8s pod IP.
 
-    Validates node_id against a strict pattern to prevent label selector
-    injection. Only alphanumeric characters and hyphens are allowed.
-    """
+def _get_k8s_client() -> kubernetes.client.CoreV1Api:
+    """Get or create the cached K8s API client."""
+    global _k8s_v1
+    if _k8s_v1 is None:
+        kubernetes.config.load_incluster_config()
+        _k8s_v1 = kubernetes.client.CoreV1Api()
+    return _k8s_v1
+
+
+def _resolve_pod_ip_sync(node_id: str, namespace: str) -> str | None:
+    """Synchronous pod IP resolution (runs in thread executor)."""
     if not _NODE_ID_PATTERN.match(node_id):
         log.warning("Invalid node_id rejected: %r", node_id)
         return None
-
     try:
-        kubernetes.config.load_incluster_config()
-        v1 = kubernetes.client.CoreV1Api()
+        v1 = _get_k8s_client()
         pods = v1.list_namespaced_pod(
             namespace,
             label_selector=f"nodalarc.io/node-id={node_id}",
@@ -92,6 +98,19 @@ def resolve_pod_ip(node_id: str, namespace: str) -> str | None:
     except Exception:
         log.exception("Failed to resolve pod IP for %s", node_id)
     return None
+
+
+async def resolve_pod_ip(node_id: str, namespace: str) -> str | None:
+    """Resolve a constellation node_id to its K8s pod IP.
+
+    Runs the synchronous K8s API call in a thread executor so it doesn't
+    block the async event loop (which would stall active SSH sessions).
+    Validates node_id against a strict pattern to prevent label selector
+    injection.
+    """
+    return await asyncio.get_running_loop().run_in_executor(
+        None, _resolve_pod_ip_sync, node_id, namespace
+    )
 
 
 class TerminalSession:

@@ -24,12 +24,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import asyncssh
 import httpx
 import nats
 import yaml
 from fastapi import Depends, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.db.queries import (
     insert_snapshot,
@@ -1042,6 +1043,133 @@ async def ws_state(websocket: WebSocket) -> None:
         log.warning(f"WS send error for {ws_ip}: {type(exc).__name__} {exc}")
     finally:
         _audit_log.info(f"WS_DISCONNECT ip={ws_ip}")
+
+
+@app.websocket("/ws/v1/terminal/{node_id}")
+async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
+    """Persistent interactive terminal to a constellation node via SSH.
+
+    Opens an SSH connection to the target pod's dropbear daemon and
+    bidirectionally pipes data between the browser's WebSocket and the
+    SSH channel. The user lands in vtysh — full FRR CLI access.
+
+    Message protocol (JSON over WebSocket):
+      Browser → VS-API: {"type": "input", "data": "show ip route\\n"}
+      Browser → VS-API: {"type": "resize", "cols": 120, "rows": 40}
+      VS-API → Browser: {"type": "output", "data": "Codes: K - kernel..."}
+    """
+    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_ip
+
+    ws_ip = websocket.client.host if websocket.client else "unknown"
+    if _API_KEY:
+        token = websocket.query_params.get("token", "")
+        if token != _API_KEY:
+            _audit_log.warning(f"WS_TERMINAL_AUTH_FAIL ip={ws_ip} node={node_id}")
+            await websocket.close(code=4401, reason="Unauthorized")
+            return
+
+    # Resolve node_id to pod IP
+    namespace = os.environ.get("NAMESPACE", "nodalarc")
+    pod_ip = resolve_pod_ip(node_id, namespace)
+    if not pod_ip:
+        await websocket.close(code=4404, reason=f"Node {node_id} not found")
+        return
+
+    # Load SSH key (cached after first call)
+    try:
+        ssh_key_path = _load_ssh_key(namespace)
+    except RuntimeError as e:
+        log.warning("Terminal key error: %s", e)
+        await websocket.close(code=4503, reason=str(e))
+        return
+
+    await websocket.accept()
+    _audit_log.info(f"WS_TERMINAL_CONNECT ip={ws_ip} node={node_id} pod_ip={pod_ip}")
+
+    session = TerminalSession(pod_ip, ssh_key_path)
+    try:
+        await session.connect()
+
+        async def ws_to_ssh():
+            """Forward browser input to SSH session."""
+            try:
+                async for msg in websocket.iter_text():
+                    data = json.loads(msg)
+                    msg_type = data.get("type", "")
+                    if msg_type == "input":
+                        await session.send(data.get("data", ""))
+                    elif msg_type == "resize":
+                        await session.resize(data.get("cols", 80), data.get("rows", 24))
+            except WebSocketDisconnect:
+                pass
+
+        async def ssh_to_ws():
+            """Forward SSH output to browser."""
+            try:
+                while True:
+                    output = await session.read_output()
+                    if output is None:
+                        await asyncio.sleep(0.05)
+                        continue
+                    await websocket.send_json({"type": "output", "data": output})
+            except (WebSocketDisconnect, asyncio.CancelledError):
+                pass
+
+        # Run both directions concurrently; when either exits, cancel the other
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(ws_to_ssh()), asyncio.create_task(ssh_to_ws())],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+
+    except asyncssh.misc.DisconnectError as e:
+        log.warning("SSH disconnect for %s: %s", node_id, e)
+    except Exception as exc:
+        log.warning("Terminal session error for %s: %s", node_id, exc)
+    finally:
+        await session.close()
+        _audit_log.info(f"WS_TERMINAL_DISCONNECT ip={ws_ip} node={node_id}")
+
+
+@app.get(
+    "/api/v1/nodes/{node_id}/config",
+    dependencies=[Depends(_require_api_key)],
+)
+async def get_node_config(node_id: str) -> Response:
+    """Download the running FRR configuration from a constellation node.
+
+    Opens a temporary SSH session, runs 'show running-config', returns
+    the output as a downloadable text file.
+    """
+    from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_ip
+
+    namespace = os.environ.get("NAMESPACE", "nodalarc")
+    pod_ip = resolve_pod_ip(node_id, namespace)
+    if not pod_ip:
+        return JSONResponse(status_code=404, content={"error": f"Node {node_id} not found"})
+
+    try:
+        ssh_key_path = _load_ssh_key(namespace)
+    except RuntimeError as e:
+        return JSONResponse(status_code=503, content={"error": str(e)})
+
+    session = TerminalSession(pod_ip, ssh_key_path)
+    try:
+        await session.connect()
+        config_text = await session.run_command("show running-config")
+        return Response(
+            content=config_text,
+            media_type="text/plain",
+            headers={
+                "Content-Disposition": f'attachment; filename="{node_id}.conf"',
+            },
+        )
+    except Exception as exc:
+        log.warning("Config export error for %s: %s", node_id, exc)
+        return JSONResponse(status_code=500, content={"error": f"Failed to retrieve config: {exc}"})
+    finally:
+        await session.close()
 
 
 @app.get("/api/v1/state", dependencies=[Depends(_require_api_key)])

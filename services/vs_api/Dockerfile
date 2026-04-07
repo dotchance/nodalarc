@@ -16,7 +16,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     pydantic>=2.0 nats-py pyyaml fastapi uvicorn httpx>=0.28.1 \
     websockets>=16.0 grpcio>=1.74 protobuf>=6.31.1 numpy \
-    kubernetes sgp4 skyfield
+    kubernetes sgp4 skyfield asyncssh>=2.14.0
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app

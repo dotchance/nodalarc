@@ -1075,9 +1075,9 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
         await websocket.close(code=4404, reason=f"Node {node_id} not found")
         return
 
-    # Load SSH key (cached after first call)
+    # Load SSH key (cached in memory after first call — never written to disk)
     try:
-        ssh_key_path = _load_ssh_key(namespace)
+        ssh_key = _load_ssh_key(namespace)
     except RuntimeError as e:
         log.warning("Terminal key error: %s", e)
         await websocket.close(code=4503, reason=str(e))
@@ -1086,7 +1086,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     await websocket.accept()
     _audit_log.info(f"WS_TERMINAL_CONNECT ip={ws_ip} node={node_id} pod_ip={pod_ip}")
 
-    session = TerminalSession(pod_ip, ssh_key_path)
+    session = TerminalSession(pod_ip, ssh_key)
     try:
         await session.connect()
 
@@ -1147,14 +1147,14 @@ async def get_node_config(node_id: str) -> Response:
     namespace = os.environ.get("NAMESPACE", "nodalarc")
     pod_ip = resolve_pod_ip(node_id, namespace)
     if not pod_ip:
-        return JSONResponse(status_code=404, content={"error": f"Node {node_id} not found"})
+        return JSONResponse(status_code=404, content={"error": "Node not found"})
 
     try:
-        ssh_key_path = _load_ssh_key(namespace)
+        ssh_key = _load_ssh_key(namespace)
     except RuntimeError as e:
         return JSONResponse(status_code=503, content={"error": str(e)})
 
-    session = TerminalSession(pod_ip, ssh_key_path)
+    session = TerminalSession(pod_ip, ssh_key)
     try:
         await session.connect()
         config_text = await session.run_command("show running-config")

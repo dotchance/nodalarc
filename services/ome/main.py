@@ -31,9 +31,7 @@ from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.session import SessionConfig, resolve_session_epoch
 
 from ome.event_stream import (
-    append_timeline_jsonl,
     precompute_timeline,
-    precompute_timeline_window,
     write_timeline_jsonl,
 )
 from ome.propagator import orbital_period
@@ -302,12 +300,10 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     Blocks on queue.put() if queue is full (backpressure from publisher).
     """
     import queue
-    import threading
 
-    from nodalarc.models.events import ClockTick, HeartbeatTick
+    from nodalarc.models.events import ClockTick
     from nodalarc.nats_channels import (
         SUBJECT_CLOCK_TICK,
-        SUBJECT_HEARTBEAT,
         SUBJECT_LINK_STATE_SNAPSHOT,
         SUBJECT_SNAPSHOT,
         SUBJECT_VISIBILITY_EVENT,
@@ -372,17 +368,17 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
             logging.warning("Event queue full — backpressure from NATS publisher")
             event_queue.put((subject, payload))  # blocking wait, no timeout
 
-    window = 0
-    epoch_for_next = epoch_unix
-    isl_state = None
-    gs_state = None
-    snapshot_seq = 0
-    _common_args = dict(
+    # Build StepContext for per-step computation (Physicist role)
+    from collections import deque
+    from statistics import quantiles
+
+    from ome.event_stream import build_step_context, compute_step
+
+    step_ctx = build_step_context(
         satellites=cfg.satellites,
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,
         neighbors=cfg.neighbors,
-        step_seconds=session.time.step_seconds,
         max_range_km=cfg.max_range_km,
         max_tracking_rate_deg_s=cfg.max_tracking_rate_deg_s,
         field_of_regard_deg=cfg.field_of_regard_deg,
@@ -391,226 +387,171 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
         default_min_elevation_deg=cfg.default_min_elevation_deg,
     )
 
+    step_seconds = session.time.step_seconds
+    isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    running_isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    running_gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    step = 0
+    snapshot_seq = 0
+    last_snapshot_sim_s: float = -snapshot_interval_s  # force immediate on first step
+    force_first_snapshot = True
+
+    # Reference-point pacing model (R-OME-008B).
+    # Resets on rate change, unpause, or seek to avoid drift.
+    pace_ref_wall = time.monotonic()
+    pace_ref_step = 0
+    current_rate = _time_accel
+
+    # Per-step timing observability — p50/p95/p99 logged every 60s
+    step_timings: deque[float] = deque(maxlen=3600)  # last 60 min at 1x
+    last_timing_log = time.monotonic()
+
+    logging.info(
+        "OME real-time stepped emission: epoch=%s, step=%ds, accel=%.1fx, period=%.0fs",
+        datetime.fromtimestamp(epoch_unix, UTC).isoformat(),
+        step_seconds,
+        current_rate,
+        period,
+    )
+
     try:
         while not shutdown_event.is_set():
+            step_start = time.monotonic()
+
             # --- Seek check (Tier 2, R-OME-008B Part 5) ---
-            # Consume a pending seek BEFORE the expensive window computation
-            # so we don't waste 8+ seconds computing a window we'd discard.
             seek_to = _seek_target
-            force_first_snapshot = False
             if seek_to is not None:
-                _seek_target = None  # consume the pending seek
-                epoch_for_next = seek_to
-                isl_state = None  # no prior link state at new epoch
-                gs_state = None
-                window = 0  # incremented to 1 below
+                _seek_target = None
+                epoch_unix = seek_to
+                isl_state = {}
+                gs_state = {}
+                running_isl_state = {}
+                running_gs_state = {}
+                step = 0
+                pace_ref_wall = time.monotonic()
+                pace_ref_step = 0
+                current_rate = _time_accel
+                last_snapshot_sim_s = -snapshot_interval_s
                 force_first_snapshot = True
                 logging.info(
                     "Seek applied: new epoch %s",
                     datetime.fromtimestamp(seek_to, UTC).isoformat(),
                 )
 
-            window += 1
-            logging.info("OME continuous: computing window %d (period=%.0fs)", window, period)
+            # --- Pause gate ---
+            if _paused:
+                while _paused and not shutdown_event.is_set():
+                    if _seek_target is not None:
+                        break
+                    time.sleep(0.1)
+                # Reset reference on unpause — time spent paused
+                # must not count toward wall-clock budget.
+                pace_ref_wall = time.monotonic()
+                pace_ref_step = step
+                current_rate = _time_accel
+                continue  # re-check seek at top
 
-            # HeartbeatTick during window computation — sent via queue
-            hb_stop = threading.Event()
+            # --- Rate-change detection ---
+            new_rate = _time_accel
+            if new_rate != current_rate:
+                pace_ref_wall = time.monotonic()
+                pace_ref_step = step
+                current_rate = new_rate
 
-            def _heartbeat_sender(stop=hb_stop):
-                while not stop.is_set():
-                    hb = HeartbeatTick(wall_time=datetime.now(UTC), status="computing")
-                    _enqueue(SUBJECT_HEARTBEAT, hb.model_dump_json().encode())
-                    stop.wait(5)
+            # --- Compute one step (Physicist role) ---
+            step_events = compute_step(
+                step_ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state
+            )
 
-            hb_thread = threading.Thread(target=_heartbeat_sender, daemon=True)
-            hb_thread.start()
+            # --- Emit events for this step ---
+            sim_time = datetime.fromtimestamp(epoch_unix + step * step_seconds, UTC)
+            current_positions = None
 
-            # Compute window (CPU-bound, synchronous)
-            kw = dict(**_common_args, epoch_unix=epoch_for_next, duration_s=period)
-            if window > 1:
-                kw["initial_isl_state"] = isl_state
-                kw["initial_gs_state"] = gs_state
-                kw["timestamp_offset"] = period * (window - 1)
+            for te in step_events:
+                payload = te.data.model_dump_json().encode()
+                if te.event_type == "VisibilityEvent":
+                    _enqueue(SUBJECT_VISIBILITY_EVENT, payload)
+                    vis = te.data
+                    pair = (vis.node_a, vis.node_b)
+                    is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                    if is_gs:
+                        running_gs_state[pair] = (vis.visible, vis.scheduled)
+                    else:
+                        running_isl_state[pair] = (vis.visible, vis.scheduled)
+                elif te.event_type == "Snapshot":
+                    _enqueue(SUBJECT_SNAPSHOT, payload)
+                    current_positions = te.data.positions
 
-            pre_window_isl = dict(isl_state) if isl_state else {}
-            pre_window_gs = dict(gs_state) if gs_state else {}
+            # ClockTick with real wall_time (not precomputed placeholder)
+            ct = ClockTick(
+                sim_time=sim_time,
+                wall_time=datetime.now(UTC),
+                compression_ratio=float(current_rate),
+            )
+            _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
 
-            events, isl_state, gs_state = precompute_timeline_window(**kw)
-
-            hb_stop.set()
-            hb_thread.join(timeout=1)
+            # LinkStateSnapshot at interval
+            sim_s = step * step_seconds
+            if sim_s - last_snapshot_sim_s >= snapshot_interval_s or force_first_snapshot:
+                snapshot_seq += 1
+                snap = build_link_state_snapshot(
+                    isl_state=running_isl_state,
+                    gs_state=running_gs_state,
+                    interface_map=interface_map,
+                    sim_time=sim_time,
+                    seq=snapshot_seq,
+                    interval_s=snapshot_interval_s,
+                    positions=current_positions,
+                )
+                _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, snap.model_dump_json().encode())
+                last_snapshot_sim_s = sim_s
+                force_first_snapshot = False
 
             # Write JSONL if --output-dir provided
             if out_path is not None:
-                if window == 1:
-                    write_timeline_jsonl(events, out_path)
-                    sentinel.write_text(str(out_path))
-                else:
-                    append_timeline_jsonl(events, out_path)
+                import json
 
-            epoch_for_next += period
-
-            # --- Pacing loop: wall-clock precise event delivery ---
-            window_start = time.monotonic()
-            window_duration = period / compression
-            if not events:
-                continue
-
-            first_ts = events[0].timestamp_s
-            last_ts = events[-1].timestamp_s
-            sim_span = last_ts - first_ts if last_ts > first_ts else 1.0
-            pace = window_duration / sim_span
-
-            # Reference-point model for time_accel + pause support
-            # (see specs/time-controls-plan.md §3).  The reference resets
-            # on rate change or unpause to avoid drift and catch-up bursts.
-            pace_ref_wall = window_start
-            pace_ref_sim_offset = 0.0
-            current_rate = _time_accel  # snapshot shared state
-            last_emitted_sim_offset = 0.0
-
-            logging.info(
-                "OME pacing: %d events over %.0fs wall (%.3fs/tick, accel=%.1fx)",
-                len(events),
-                window_duration,
-                pace,
-                current_rate,
-            )
-
-            current_sim_time_iso: str = ""
-            # Force immediate LinkStateSnapshot on first tick after seek:
-            # the Scheduler's replace-not-merge needs it to clear stale
-            # _active_links from the old epoch. Without it, the forwarding
-            # plane carries phantom links for up to snapshot_interval_s.
-            last_snapshot_sim_s: float = -snapshot_interval_s if force_first_snapshot else 0.0
-            running_isl_state = dict(pre_window_isl)
-            running_gs_state = dict(pre_window_gs)
-
-            current_tick_ts: float | None = None
-            tick_events: list = []
-
-            for evt in events:
-                if shutdown_event.is_set():
-                    break
-                # Seek interrupt: break immediately so the outer loop can
-                # consume the seek before the next window computation.
-                if _seek_target is not None:
-                    break
-
-                if current_tick_ts is not None and evt.timestamp_s != current_tick_ts:
-                    # --- Pause gate ---
-                    if _paused:
-                        while _paused and not shutdown_event.is_set():
-                            time.sleep(0.1)
-                        # Reset reference on unpause — time spent paused
-                        # must not count toward wall-clock budget.
-                        pace_ref_wall = time.monotonic()
-                        pace_ref_sim_offset = last_emitted_sim_offset
-                        current_rate = _time_accel
-
-                    # --- Rate-change detection ---
-                    new_rate = _time_accel
-                    if new_rate != current_rate:
-                        pace_ref_wall = time.monotonic()
-                        pace_ref_sim_offset = last_emitted_sim_offset
-                        current_rate = new_rate
-
-                    # --- Drift-free sleep with reference-point model ---
-                    sim_offset = current_tick_ts - first_ts
-                    sim_delta = sim_offset - pace_ref_sim_offset
-                    effective_pace = pace / current_rate
-                    wall_target = pace_ref_wall + sim_delta * effective_pace
-                    now = time.monotonic()
-                    if now < wall_target:
-                        time.sleep(wall_target - now)
-
-                    last_emitted_sim_offset = sim_offset
-
-                    # Safety: if we've overrun, skip remaining events
-                    # and move to the next window computation.
-                    remaining_sim = sim_span - last_emitted_sim_offset
-                    expected_remaining_wall = remaining_sim * effective_pace
-                    if (
-                        time.monotonic()
-                        > pace_ref_wall + sim_delta * effective_pace + expected_remaining_wall + 5.0
-                    ):
-                        break
-
-                    # Enqueue all events for this tick
-                    current_positions = None
-                    for te in tick_events:
-                        payload = te.data.model_dump_json().encode()
-                        if te.event_type == "VisibilityEvent":
-                            _enqueue(SUBJECT_VISIBILITY_EVENT, payload)
-                            vis = te.data
-                            pair = (vis.node_a, vis.node_b)
-                            is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
-                            if is_gs:
-                                running_gs_state[pair] = (vis.visible, vis.scheduled)
-                            else:
-                                running_isl_state[pair] = (vis.visible, vis.scheduled)
-                        elif te.event_type == "Snapshot":
-                            _enqueue(SUBJECT_SNAPSHOT, payload)
-                            current_sim_time_iso = te.data.sim_time.isoformat()
-                            current_positions = te.data.positions
-
-                    # ClockTick
-                    ct = ClockTick(
-                        sim_time=datetime.fromisoformat(current_sim_time_iso)
-                        if current_sim_time_iso
-                        else datetime.now(UTC),
-                        wall_time=datetime.now(UTC),
-                        compression_ratio=float(_time_accel),
-                    )
-                    _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
-
-                    # LinkStateSnapshot at interval
-                    if current_sim_time_iso:
-                        current_sim_s = current_tick_ts
-                        if current_sim_s - last_snapshot_sim_s >= snapshot_interval_s:
-                            snapshot_seq += 1
-                            snap = build_link_state_snapshot(
-                                isl_state=running_isl_state,
-                                gs_state=running_gs_state,
-                                interface_map=interface_map,
-                                sim_time=datetime.fromisoformat(current_sim_time_iso),
-                                seq=snapshot_seq,
-                                interval_s=snapshot_interval_s,
-                                positions=current_positions,
+                with open(out_path, "a") as f:
+                    for te in step_events:
+                        f.write(
+                            json.dumps(
+                                {
+                                    "timestamp_s": te.timestamp_s,
+                                    "event_type": te.event_type,
+                                    "data": te.data.model_dump(mode="json"),
+                                }
                             )
-                            _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, snap.model_dump_json().encode())
-                            last_snapshot_sim_s = current_sim_s
+                            + "\n"
+                        )
 
-                    tick_events = []
+            # --- Per-step timing observability ---
+            step_compute_ms = (time.monotonic() - step_start) * 1000
+            step_timings.append(step_compute_ms)
+            now_mono = time.monotonic()
+            if now_mono - last_timing_log >= 60.0:
+                if len(step_timings) >= 10:
+                    pcts = quantiles(step_timings, n=100)
+                    budget_ms = (step_seconds / current_rate) * 1000
+                    headroom = (1.0 - pcts[94] / budget_ms) * 100 if budget_ms > 0 else 0
+                    logging.info(
+                        "OME pacing: step_compute p50=%.1fms p95=%.1fms p99=%.1fms "
+                        "budget=%.1fms (%.0fx) headroom=%.0f%%",
+                        pcts[49],
+                        pcts[94],
+                        pcts[98],
+                        budget_ms,
+                        current_rate,
+                        headroom,
+                    )
+                last_timing_log = now_mono
 
-                current_tick_ts = evt.timestamp_s
-                tick_events.append(evt)
-
-            # Publish final tick
-            if tick_events and not shutdown_event.is_set():
-                for te in tick_events:
-                    payload = te.data.model_dump_json().encode()
-                    if te.event_type == "VisibilityEvent":
-                        _enqueue(SUBJECT_VISIBILITY_EVENT, payload)
-                        vis = te.data
-                        pair = (vis.node_a, vis.node_b)
-                        is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
-                        if is_gs:
-                            running_gs_state[pair] = (vis.visible, vis.scheduled)
-                        else:
-                            running_isl_state[pair] = (vis.visible, vis.scheduled)
-                    elif te.event_type == "Snapshot":
-                        _enqueue(SUBJECT_SNAPSHOT, payload)
-                        current_sim_time_iso = te.data.sim_time.isoformat()
-
-                ct = ClockTick(
-                    sim_time=datetime.fromisoformat(current_sim_time_iso)
-                    if current_sim_time_iso
-                    else datetime.now(UTC),
-                    wall_time=datetime.now(UTC),
-                    compression_ratio=float(_time_accel),
-                )
-                _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
+            # --- Sleep until next step (Pacemaker role) ---
+            step += 1
+            wall_target = pace_ref_wall + (step - pace_ref_step) * (step_seconds / current_rate)
+            now_mono = time.monotonic()
+            if now_mono < wall_target:
+                time.sleep(wall_target - now_mono)
 
     except KeyboardInterrupt:
         logging.info("OME pacing interrupted")

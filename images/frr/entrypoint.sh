@@ -43,6 +43,9 @@ fi
 # operator user created at image build time (Dockerfile) with:
 #   login shell = /usr/bin/vtysh, group = frrvty (VTY socket access)
 # Cannot create at runtime because /etc/passwd is on read-only root filesystem.
+# Home dir is tmpfs (owned by root at mount) — must chown for dropbear auth.
+chown operator:frrvty /home/operator
+chmod 755 /home/operator
 
 # Install authorized keys from Secret mount (if present).
 # The Operator generates a per-session SSH keypair and stores the public

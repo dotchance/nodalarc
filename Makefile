@@ -507,6 +507,23 @@ clean-images: ## Remove all nodalarc Docker images
 	@docker builder prune -af 2>/dev/null | tail -1
 	@echo "[clean-images] Docker images removed."
 
-nuke: teardown clean clean-images clean-deps ## Remove everything — teardown + images + deps + artifacts
+clean-registry: ## Purge all images from local container registry and K3s containerd
+	@echo "[clean-registry] Purging local registry and K3s containerd cache..."
+	@if docker ps --format '{{.Names}}' | grep -q registry; then \
+		echo "  Stopping local registry..."; \
+		docker stop registry 2>/dev/null || true; \
+		docker rm registry 2>/dev/null || true; \
+		docker volume rm registry_data 2>/dev/null || true; \
+		echo "  Starting fresh registry..."; \
+		docker run -d --restart=always -p 5000:5000 --name registry \
+			-v registry_data:/var/lib/registry registry:2 2>/dev/null || true; \
+	fi
+	@echo "  Purging K3s containerd nodalarc images..."
+	@for img in $$($(SUDO_CTR) k3s ctr images ls -q 2>/dev/null | grep nodalarc || true); do \
+		$(SUDO_CTR) k3s ctr images rm "$$img" 2>/dev/null || true; \
+	done
+	@echo "[clean-registry] Registry and containerd cache purged."
+
+nuke: teardown clean clean-images clean-registry clean-deps ## Remove everything — teardown + images + registry + deps + artifacts
 	@echo ""
 	@echo "=== Nuke complete. Fresh slate. ==="

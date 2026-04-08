@@ -1,12 +1,9 @@
 FROM quay.io/frrouting/frr:10.3.1
 
-# Dropbear: lightweight SSH daemon (~110KB) for interactive terminal access.
-# Users SSH in and land directly in vtysh (login shell).
-# Key-only auth, no password login, root login disabled.
 # OpenSSH server for interactive terminal access (vtysh login shell).
-# libcap for setcap (grant traceroute raw socket capability).
-RUN apk add --no-cache openssh-server traceroute libcap && \
-    setcap cap_net_raw+ep /usr/bin/traceroute && \
+# Users SSH in and land directly in vtysh — same as a real router.
+# Key-only auth, no password login, root login disabled, UseDNS no.
+RUN apk add --no-cache openssh-server && \
     adduser -D -s /usr/bin/vtysh -G frrvty operator && \
     passwd -u operator && \
     mkdir -p /home/operator/.ssh /etc/ssh && \

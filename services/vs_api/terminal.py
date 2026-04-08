@@ -145,7 +145,7 @@ class TerminalSession:
             # Disable all DNS lookups — pod IPs have no DNS records.
             # Without this, asyncssh attempts host canonicalization and
             # reverse DNS which times out against CoreDNS.
-            canonicalize=False,
+            canonical=False,
         )
         self._process = await self._conn.create_process(
             term_type="xterm-256color",

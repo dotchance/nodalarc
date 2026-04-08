@@ -8,6 +8,7 @@ FROM quay.io/frrouting/frr:10.3.1
 RUN apk add --no-cache openssh-server traceroute libcap && \
     setcap cap_net_raw+ep /usr/bin/traceroute && \
     adduser -D -s /usr/bin/vtysh -G frrvty operator && \
+    passwd -u operator && \
     mkdir -p /home/operator/.ssh /etc/ssh && \
     chown -R operator:frrvty /home/operator/.ssh && \
     chmod 700 /home/operator/.ssh && \

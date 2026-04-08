@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Naming helpers for ground link infrastructure (15-char Linux limit)
+# Naming helpers for link infrastructure (15-char Linux limit)
 # ---------------------------------------------------------------------------
 
 
@@ -60,6 +60,20 @@ def _gs_bridge_port_name(gs_id: str) -> str:
 def _sat_gnd_host_name(sat_id: str) -> str:
     """Host-side veth name for satellite ground link. ≤15 chars."""
     return f"_gnd_{_sat_short_id(sat_id)}"[:15]
+
+
+def _isl_host_name(node_id: str, isl_idx: int) -> str:
+    """Host-side veth name for ISL endpoint. ≤15 chars.
+
+    "sat-P00S00", 0 → "_isl_P00S00_0" (13 chars)
+    "sat-P99S999", 3 → "_isl_P99S999_3" (14 chars)
+    """
+    return f"_isl_{_sat_short_id(node_id)}_{isl_idx}"[:15]
+
+
+def _isl_idx_from_ifname(ifname: str) -> int:
+    """Extract ISL index from interface name. 'isl0' → 0, 'isl3' → 3."""
+    return int(ifname.replace("isl", ""))
 
 
 def _bridge_sysfs(bridge_name: str, param: str, value: str) -> None:
@@ -193,6 +207,142 @@ def create_veth_pair(
         configure_interface(pid_b, ifname_b, node_id_b)
 
     log.info(f"Created veth pair: ns({pid_a})/{ifname_a} <-> ns({pid_b})/{ifname_b}")
+
+
+def create_mediated_isl(
+    pid_a: int,
+    pid_b: int,
+    ifname_a: str,
+    ifname_b: str,
+    node_id_a: str,
+    node_id_b: str,
+    mtu: int | None = None,
+) -> tuple[str, str]:
+    """Create a host-mediated ISL: two veth pairs through the host namespace.
+
+    Creates:
+      pod-A: ifname_a ←veth→ host: _isl_{a_short}_{a_idx}
+      pod-B: ifname_b ←veth→ host: _isl_{b_short}_{b_idx}
+
+    Pod-side interfaces are brought admin UP immediately (host-side stays
+    DOWN → pod-side enters LOWERLAYERDOWN = admin UP, no carrier). This
+    models a powered transceiver with no signal. Routes can be pre-installed
+    on admin-UP no-carrier interfaces.
+
+    At LinkUp time, the Node Agent brings host-side endpoints UP and installs
+    tc mirred between them (see ground_bridge.attach_isl).
+
+    Returns (host_name_a, host_name_b).
+    """
+    if mtu is None:
+        from nodalarc.platform import get_platform_config
+
+        mtu = get_platform_config().veth_interface_mtu_bytes
+
+    host_a = _isl_host_name(node_id_a, _isl_idx_from_ifname(ifname_a))
+    host_b = _isl_host_name(node_id_b, _isl_idx_from_ifname(ifname_b))
+
+    for pid, ifname, host_name, node_id in [
+        (pid_a, ifname_a, host_a, node_id_a),
+        (pid_b, ifname_b, host_b, node_id_b),
+    ]:
+        ipr = IPRoute()
+        try:
+            # Idempotent: skip if host side already exists
+            if ipr.link_lookup(ifname=host_name):
+                log.debug(f"ISL host veth {host_name} already exists, skipping")
+                continue
+
+            # Clean stale pod-side interface
+            ns = NetNS(f"/proc/{pid}/ns/net")
+            try:
+                stale = ns.link_lookup(ifname=ifname)
+                if stale:
+                    ns.link("del", index=stale[0])
+                    log.info(f"Cleaned stale {ifname} in ns({pid})")
+            except Exception:
+                pass
+            finally:
+                ns.close()
+
+            # Create veth pair with temp names in host namespace
+            rand = os.urandom(3).hex()
+            tmp_host = f"_na_h{rand}"[:15]
+            tmp_ns = f"_na_n{rand}"[:15]
+
+            for tmp in [tmp_host, tmp_ns]:
+                stale = ipr.link_lookup(ifname=tmp)
+                if stale:
+                    ipr.link("del", index=stale[0])
+
+            ipr.link("add", ifname=tmp_host, peer={"ifname": tmp_ns}, kind="veth")
+
+            # Host end: rename, set MTU — leave admin DOWN
+            host_idx = ipr.link_lookup(ifname=tmp_host)[0]
+            ipr.link("set", index=host_idx, ifname=host_name, mtu=mtu)
+
+            # Move pod end into target namespace
+            ns_idx = ipr.link_lookup(ifname=tmp_ns)[0]
+            ipr.link("set", index=ns_idx, net_ns_pid=pid)
+
+            # Rename to target ifname inside namespace, bring admin UP
+            ns = NetNS(f"/proc/{pid}/ns/net")
+            try:
+                idx = ns.link_lookup(ifname=tmp_ns)[0]
+                ns.link("set", index=idx, ifname=ifname, mtu=mtu, state="up")
+            finally:
+                ns.close()
+        finally:
+            ipr.close()
+
+        # Deterministic MAC, disable IPv6 autoconfig
+        configure_interface(pid, ifname, node_id)
+
+    # Install bidirectional tc mirred between host-side endpoints.
+    # Mirred rules persist through DOWN→UP→DOWN interface state transitions,
+    # so they're installed once at wiring time and never touched again.
+    # At LinkUp time, only the host-side admin state needs to change.
+    import subprocess
+
+    for src, dst in [(host_a, host_b), (host_b, host_a)]:
+        subprocess.run(["tc", "qdisc", "del", "dev", src, "ingress"], capture_output=True)
+        subprocess.run(
+            ["tc", "qdisc", "add", "dev", src, "ingress"], capture_output=True, check=True
+        )
+        result = subprocess.run(
+            [
+                "tc",
+                "filter",
+                "add",
+                "dev",
+                src,
+                "parent",
+                "ffff:",
+                "protocol",
+                "all",
+                "u32",
+                "match",
+                "u32",
+                "0",
+                "0",
+                "action",
+                "mirred",
+                "egress",
+                "redirect",
+                "dev",
+                dst,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 and "File exists" not in result.stderr:
+            log.warning(f"tc mirred {src}→{dst} failed: {result.stderr.strip()}")
+
+    log.info(
+        f"Created mediated ISL: ns({pid_a})/{ifname_a} [{host_a}] "
+        f"<-> [{host_b}] ns({pid_b})/{ifname_b} (mirred installed)"
+    )
+    return (host_a, host_b)
 
 
 def create_dummy_interface(

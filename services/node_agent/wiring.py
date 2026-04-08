@@ -23,8 +23,8 @@ from node_agent.link_ops import (
     configure_interface,
     create_dummy_interface,
     create_ground_bridge,
+    create_mediated_isl,
     create_satellite_ground_veth,
-    create_veth_pair,
     enable_mpls_input,
 )
 from node_agent.pid_discovery import discover_local_pod_pids
@@ -113,8 +113,11 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
                 log.warning(f"sysctl {key}={value} failed in {node_id}: {err}")
     log.info(f"Phase 1: sysctls set for {len(nodes)} nodes")
 
-    # Phase 2: Create ISL veth pairs (deduplicate A→B and B→A)
-    created_links: set[tuple[str, str]] = set()
+    # Phase 2: Create ISL veth pairs (deduplicate A→B and B→A, parallelized)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    isl_tasks: list[tuple[int, int, str, str, str, str]] = []
+    seen_pairs: set[tuple[str, str]] = set()
     for node_id, node_spec in nodes.items():
         pid_a = pid_map.get(node_id, 0)
         if pid_a == 0:
@@ -122,7 +125,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
         for iface in node_spec.get("isl_interfaces", []):
             peer_node = iface["peer_node"]
             pair = (min(node_id, peer_node), max(node_id, peer_node))
-            if pair in created_links:
+            if pair in seen_pairs:
                 continue
             pid_b = pid_map.get(peer_node, 0)
             if pid_b == 0:
@@ -132,70 +135,103 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             if not peer_iface:
                 log.warning(f"No peer_iface for {node_id}:{iface['name']}<->{peer_node}")
                 continue
-            try:
-                create_veth_pair(
-                    pid_a,
-                    pid_b,
-                    iface["name"],
-                    peer_iface,
-                    node_id_a=node_id,
-                    node_id_b=peer_node,
-                )
-                created_links.add(pair)
-            except Exception as exc:
-                log.warning(f"Failed to create veth {node_id}<->{peer_node}: {exc}")
-    log.info(f"Phase 2: created {len(created_links)} ISL veth pairs")
+            isl_tasks.append((pid_a, pid_b, iface["name"], peer_iface, node_id, peer_node))
+            seen_pairs.add(pair)
 
-    # Phase 3: Enable MPLS input on ISL interfaces
+    created_links: set[tuple[str, str]] = set()
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = {}
+        for pid_a, pid_b, ifname_a, ifname_b, nid_a, nid_b in isl_tasks:
+            fut = pool.submit(
+                create_mediated_isl,
+                pid_a,
+                pid_b,
+                ifname_a,
+                ifname_b,
+                node_id_a=nid_a,
+                node_id_b=nid_b,
+            )
+            futures[fut] = (nid_a, nid_b)
+        for fut in as_completed(futures):
+            nid_a, nid_b = futures[fut]
+            try:
+                fut.result()
+                created_links.add((min(nid_a, nid_b), max(nid_a, nid_b)))
+            except Exception as exc:
+                log.warning(f"Failed to create mediated ISL {nid_a}<->{nid_b}: {exc}")
+    log.info(f"Phase 2: created {len(created_links)} host-mediated ISL pairs")
+
+    # Phase 3: Enable MPLS input on ISL interfaces (parallelized)
+    mpls_tasks = []
     for node_id, node_spec in nodes.items():
         pid = pid_map.get(node_id, 0)
-        if pid == 0:
-            continue
-        if not node_spec.get("mpls_enable"):
+        if pid == 0 or not node_spec.get("mpls_enable"):
             continue
         for iface in node_spec.get("isl_interfaces", []):
+            mpls_tasks.append((pid, iface["name"], node_id))
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = {
+            pool.submit(enable_mpls_input, pid, ifname): (nid, ifname)
+            for pid, ifname, nid in mpls_tasks
+        }
+        for fut in as_completed(futures):
+            nid, ifname = futures[fut]
             try:
-                enable_mpls_input(pid, iface["name"])
+                fut.result()
             except Exception as exc:
-                log.warning(f"MPLS enable failed {node_id}:{iface['name']}: {exc}")
-    log.info("Phase 3: MPLS input enabled on ISL interfaces")
+                log.warning(f"MPLS enable failed {nid}:{ifname}: {exc}")
+    log.info(f"Phase 3: MPLS input enabled on {len(mpls_tasks)} ISL interfaces")
 
-    # Phase 4: Create ground bridges and GS gnd0 interfaces
-    # gnd0 is created admin DOWN by pyroute2. FRR zebra brings it admin UP
-    # when it detects the interface and matches its config (no `shutdown`
-    # directive = admin UP by default). With no host-side veth connected,
-    # gnd0 enters LOWERLAYERDOWN (admin UP, no carrier). This is the correct
-    # idle state — terminal powered and scanning, no L1 signal. GS gnd0
-    # carrier is driven by host-side veth state on LinkUp/LinkDown.
-    for gs_id, _bridge_spec in ground_bridges.items():
-        gs_pid = pid_map.get(gs_id, 0)
-        if gs_pid == 0:
-            log.warning(f"No PID for ground station {gs_id}")
-            continue
-        try:
-            create_ground_bridge(gs_id, gs_pid)
-            configure_interface(gs_pid, "gnd0", gs_id)
-            enable_mpls_input(gs_pid, "gnd0")
-        except Exception as exc:
-            log.warning(f"Ground bridge setup failed for {gs_id}: {exc}")
-    log.info(f"Phase 4: created {len(ground_bridges)} ground bridges")
+    # Phase 4+5: Create ground infrastructure (parallelized)
+    # Ground bridges (GS-side) and satellite ground veths are independent
+    # and can be created concurrently. gnd0 starts admin DOWN; FRR zebra
+    # brings it admin UP (no `shutdown` in config). With no host-side veth
+    # connected, gnd0 enters LOWERLAYERDOWN (admin UP, no carrier).
 
-    # Phase 5: Create satellite ground veths (all start admin DOWN)
-    for node_id, node_spec in nodes.items():
-        if node_spec.get("node_type") != "satellite":
-            continue
-        pid = pid_map.get(node_id, 0)
-        if pid == 0:
-            continue
-        try:
-            create_satellite_ground_veth(node_id, pid)
-            configure_interface(pid, "gnd0", node_id)
-            enable_mpls_input(pid, "gnd0")
-        except Exception as exc:
-            log.warning(f"Satellite ground veth failed for {node_id}: {exc}")
-    log.info("Phase 5: satellite ground veths created")
+    def _create_ground_bridge_task(gs_id: str, gs_pid: int) -> None:
+        create_ground_bridge(gs_id, gs_pid)
+        configure_interface(gs_pid, "gnd0", gs_id)
+        enable_mpls_input(gs_pid, "gnd0")
 
-    # Phase 6: Create terr0 dummy interfaces for ground stations
+    def _create_sat_ground_task(node_id: str, pid: int) -> None:
+        create_satellite_ground_veth(node_id, pid)
+        configure_interface(pid, "gnd0", node_id)
+        enable_mpls_input(pid, "gnd0")
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        gnd_futures = {}
+        for gs_id, _bridge_spec in ground_bridges.items():
+            gs_pid = pid_map.get(gs_id, 0)
+            if gs_pid == 0:
+                log.warning(f"No PID for ground station {gs_id}")
+                continue
+            gnd_futures[pool.submit(_create_ground_bridge_task, gs_id, gs_pid)] = gs_id
+
+        for node_id, node_spec in nodes.items():
+            if node_spec.get("node_type") != "satellite":
+                continue
+            pid = pid_map.get(node_id, 0)
+            if pid == 0:
+                continue
+            gnd_futures[pool.submit(_create_sat_ground_task, node_id, pid)] = node_id
+
+        gs_created = 0
+        sat_gnd_created = 0
+        for fut in as_completed(gnd_futures):
+            nid = gnd_futures[fut]
+            try:
+                fut.result()
+                if nid.startswith("gs-"):
+                    gs_created += 1
+                else:
+                    sat_gnd_created += 1
+            except Exception as exc:
+                log.warning(f"Ground setup failed for {nid}: {exc}")
+    log.info(f"Phase 4+5: {gs_created} ground bridges, {sat_gnd_created} satellite ground veths")
+
+    # Phase 6: Create terr0 dummy interfaces for ground stations (parallelized)
+    terr0_tasks = []
     for node_id, node_spec in nodes.items():
         if node_spec.get("node_type") != "ground_station":
             continue
@@ -204,54 +240,43 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             continue
         addrs = node_spec.get("terrestrial", {}).get("addresses", [])
         if addrs:
-            try:
-                create_dummy_interface(pid, "terr0", addrs)
-            except Exception as exc:
-                log.warning(f"terr0 creation failed for {node_id}: {exc}")
-    log.info("Phase 6: terr0 dummy interfaces created")
+            terr0_tasks.append((pid, node_id, addrs))
 
-    # Phase 7: Remove default route from each pod (setns + IPRoute)
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        terr_futures = {
+            pool.submit(create_dummy_interface, pid, "terr0", addrs): nid
+            for pid, nid, addrs in terr0_tasks
+        }
+        for fut in as_completed(terr_futures):
+            nid = terr_futures[fut]
+            try:
+                fut.result()
+            except Exception as exc:
+                log.warning(f"terr0 creation failed for {nid}: {exc}")
+    log.info(f"Phase 6: {len(terr0_tasks)} terr0 dummy interfaces created")
+
+    # Phase 7+8: Per-pod finalization (parallelized)
+    # Default route removal + cni0 iptables lockdown per pod.
+    import subprocess
+
     from node_agent.namespace_ops import _in_namespace
 
-    removed = 0
-    for node_id in nodes:
-        pid = pid_map.get(node_id, 0)
-        if pid == 0:
-            continue
+    def _finalize_pod(node_id: str, pid: int) -> str | None:
+        """Remove default route and lock down cni0. Returns error or None."""
         try:
-
-            def _remove_default(ipr: IPRoute, _pid: int = pid) -> bool:
+            # Phase 7: Remove default route
+            def _remove_default(ipr: IPRoute) -> bool:
                 for route in ipr.get_routes(family=2):
                     if route.get_attr("RTA_DST") is None and route["dst_len"] == 0:
                         ipr.route("del", dst="0.0.0.0/0", gateway=route.get_attr("RTA_GATEWAY"))
                         return True
                 return False
 
-            if _in_namespace(pid, _remove_default):
-                removed += 1
-        except Exception as exc:
-            log.warning(f"Default route removal failed for {node_id}: {exc}")
-    log.info(f"Phase 7: removed default route from {removed} pods")
+            _in_namespace(pid, _remove_default)
 
-    # Phase 8: Lock down cni0 egress with iptables
-    # The eth0 → cni0 rename happens in the FRR entrypoint BEFORE FRR starts,
-    # so zebra learns the correct interface name. The iptables rules are applied
-    # here by the Node Agent after wiring, blocking all egress on cni0 except
-    # return traffic for SSH and kubectl exec.
-    #
-    # Uses nsenter + subprocess for iptables (no pyroute2 equivalent;
-    # nsenter is the approved pattern — same as NDP ping in namespace_ops.py).
-    import subprocess
-
-    hardened = 0
-    for node_id in nodes:
-        pid = pid_map.get(node_id, 0)
-        if pid == 0:
-            continue
-        try:
+            # Phase 8: iptables cni0 lockdown
             ns_path = f"/proc/{pid}/ns/net"
             for cmd in [
-                # Allow return traffic for established connections (SSH, kubectl exec)
                 [
                     "nsenter",
                     f"--net={ns_path}",
@@ -267,7 +292,6 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
                     "-j",
                     "ACCEPT",
                 ],
-                # Drop all other egress on cni0
                 [
                     "nsenter",
                     f"--net={ns_path}",
@@ -281,10 +305,29 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
                 ],
             ]:
                 subprocess.run(cmd, check=True, capture_output=True)
-            hardened += 1
+            return None
         except Exception as exc:
-            log.warning(f"CNI hardening failed for {node_id}: {exc}")
-    log.info(f"Phase 8: locked down cni0 egress on {hardened} pods")
+            return f"{node_id}: {exc}"
+
+    finalized = 0
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        fin_futures = {}
+        for node_id in nodes:
+            pid = pid_map.get(node_id, 0)
+            if pid == 0:
+                continue
+            fin_futures[pool.submit(_finalize_pod, node_id, pid)] = node_id
+        for fut in as_completed(fin_futures):
+            nid = fin_futures[fut]
+            try:
+                err = fut.result()
+                if err:
+                    log.warning(f"Pod finalization failed: {err}")
+                else:
+                    finalized += 1
+            except Exception as exc:
+                log.warning(f"Pod finalization error for {nid}: {exc}")
+    log.info(f"Phase 7+8: finalized {finalized} pods (default route + cni0 lockdown)")
 
     # Mark all nodes as wired
     for node_id in nodes:

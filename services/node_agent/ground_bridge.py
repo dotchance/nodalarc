@@ -209,3 +209,80 @@ def detach_from_ground_bridge(
         ipr.close()
 
     log.info(f"Detached {sat_id} from {gs_id}")
+
+
+# ---------------------------------------------------------------------------
+# ISL host-mediated attach / detach
+# ---------------------------------------------------------------------------
+
+
+def _isl_host_name(node_id: str, isl_idx: int) -> str:
+    """Host-side veth name for ISL endpoint. ≤15 chars."""
+    return f"_isl_{_sat_short_id(node_id)}_{isl_idx}"[:15]
+
+
+def _isl_idx_from_ifname(ifname: str) -> int:
+    """Extract ISL index from interface name. 'isl0' → 0, 'isl3' → 3."""
+    return int(ifname.replace("isl", ""))
+
+
+def attach_isl(
+    node_id: str,
+    ifname: str,
+    peer_node_id: str,
+    peer_ifname: str,
+) -> None:
+    """Activate an ISL by bringing host-side veths admin UP.
+
+    Both pod-side interfaces are already admin UP (from wiring). tc mirred
+    redirect rules were installed at wiring time and persist through state
+    transitions — no mirred operations needed at runtime.
+
+    Bringing host-side veths UP gives carrier to pod-side interfaces,
+    enabling traffic flow through the pre-installed mirred rules.
+
+    Both host-side veths must exist on this node (LOCAL ISL). For CROSS_NODE
+    ISLs, the VXLAN code path handles activation separately.
+    """
+    host_a = _isl_host_name(node_id, _isl_idx_from_ifname(ifname))
+    host_b = _isl_host_name(peer_node_id, _isl_idx_from_ifname(peer_ifname))
+
+    ipr = IPRoute()
+    try:
+        for name in (host_a, host_b):
+            idx = ipr.link_lookup(ifname=name)
+            if not idx:
+                raise FileNotFoundError(f"{name} not found in host namespace")
+            ipr.link("set", index=idx[0], state="up")
+    finally:
+        ipr.close()
+
+    log.info(f"Attached ISL: {host_a} <-> {host_b}")
+
+
+def detach_isl(
+    node_id: str,
+    ifname: str,
+    peer_node_id: str,
+    peer_ifname: str,
+) -> None:
+    """Deactivate an ISL by bringing host-side veths admin DOWN.
+
+    tc mirred rules remain installed (they persist through state transitions
+    and were set up at wiring time). Pod-side interfaces remain admin UP.
+    Host-side DOWN causes carrier to drop on pod-side (LOWERLAYERDOWN),
+    which is the correct idle state for a powered transceiver with no signal.
+    """
+    host_a = _isl_host_name(node_id, _isl_idx_from_ifname(ifname))
+    host_b = _isl_host_name(peer_node_id, _isl_idx_from_ifname(peer_ifname))
+
+    ipr = IPRoute()
+    try:
+        for name in (host_a, host_b):
+            idx = ipr.link_lookup(ifname=name)
+            if idx:
+                ipr.link("set", index=idx[0], state="down")
+    finally:
+        ipr.close()
+
+    log.info(f"Detached ISL: {host_a} <-> {host_b}")

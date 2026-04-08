@@ -87,10 +87,25 @@ def _require_pid(node_id: str, pid_map: dict[str, int]) -> int:
 def _isl_link_down(
     iface: node_agent_pb2.InterfaceDown, pid_map: dict[str, int] | None = None
 ) -> str | None:
-    """Admin-down a single ISL interface. Returns error string or None."""
+    """Deactivate an ISL link. Returns error string or None.
+
+    LOCAL ISLs: removes tc shaping from pod-side, then detaches host-side
+    veths (removes mirred, brings host-side DOWN → carrier drops on pod-side).
+    Pod-side interface remains admin UP in LOWERLAYERDOWN state.
+
+    CROSS_NODE ISLs: removes tc shaping, then destroys the VXLAN tunnel
+    (handled separately in the batch handler's Phase 0 teardown).
+    """
     try:
         pid = _require_pid(iface.node_id, pid_map or {})
-        namespace_ops.set_interface_down(pid, iface.interface_name)
+        namespace_ops.remove_link_shaping(pid, iface.interface_name)
+        if iface.locality == node_agent_pb2.LOCAL:
+            ground_bridge.detach_isl(
+                iface.node_id,
+                iface.interface_name,
+                iface.peer_node_id,
+                iface.peer_interface_name,
+            )
         return None
     except Exception as exc:
         msg = f"ISL down failed {iface.node_id}/{iface.interface_name}: {exc}"
@@ -266,7 +281,13 @@ def handle_batch_link_down(
 def _isl_link_up_phase1(
     iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
 ) -> str | None:
-    """Phase 1 of ISL link-up: admin UP + shaping. No NDP yet.
+    """Phase 1 of ISL link-up: attach host-side + shaping. No NDP yet.
+
+    LOCAL ISLs: pod-side interface is already admin UP (from wiring). Attaches
+    host-side veths (UP + tc mirred) → carrier appears on pod-side.
+
+    CROSS_NODE ISLs: VXLAN tunnel + veth already created in Phase 0 and
+    interface is UP. Only tc shaping needs to be applied.
 
     Returns error string or None.
     """
@@ -274,7 +295,13 @@ def _isl_link_up_phase1(
         pid = _require_pid(iface.node_id, pid_map or {})
         if iface.peer_mac:
             namespace_ops.disable_dad(pid, iface.interface_name)
-        namespace_ops.set_interface_up(pid, iface.interface_name)
+        if iface.locality == node_agent_pb2.LOCAL:
+            ground_bridge.attach_isl(
+                iface.node_id,
+                iface.interface_name,
+                iface.peer_node_id,
+                iface.peer_interface_name,
+            )
         namespace_ops.apply_link_shaping(
             pid, iface.interface_name, iface.latency_ms, iface.bandwidth_mbps
         )

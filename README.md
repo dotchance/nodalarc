@@ -50,12 +50,14 @@ See the constellation as a traditional network graph with real-time link state, 
 ![Topology Graph](docs/images/vf-topology-graph.png)
 <!-- TODO: Screenshot showing 2D topology graph with latency labels -->
 
-### Run Router Commands from the Browser
+### Interactive Router CLI from the Browser
 
-Click any satellite or ground station and run standard FRR commands (`show isis neighbor`, `show ip route`, `show mpls table`) directly from the UI. No SSH or terminal required.
+Open a persistent SSH terminal to any satellite or ground station directly from the UI. You land in vtysh — the same CLI experience as a real router. Run `show ip route`, `configure terminal`, `write memory`, or any FRR command. Multiple sessions stay alive in tabs — switch between nodes instantly.
+
+Power users can also SSH directly with PuTTY, iTerm, SecureCRT, or any SSH client. See [Terminal Access](docs/terminal-access.md) for details.
 
 ![Router Commands](docs/images/vf-router-commands.png)
-<!-- TODO: Screenshot showing command panel with vtysh output -->
+<!-- TODO: Screenshot showing terminal panel with vtysh session -->
 
 ### Deploy Constellations from the Wizard
 
@@ -92,7 +94,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/
 | `make all` | Build everything and start a constellation session |
 | `sudo make session` | Start a session (or switch to a different one) |
 | `sudo make teardown` | Stop the session and clean up |
-| `sudo make nuke` | Remove everything, back to a fresh checkout |
+| `sudo make nuke` | Remove everything including local registry and K3s image cache — true fresh slate |
 
 Start a specific session:
 ```bash

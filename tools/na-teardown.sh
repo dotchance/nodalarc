@@ -71,8 +71,8 @@ echo "[3/9] Cleaning host-side kernel state via Node Agent pods..."
 CLEANUP_SCRIPT='
 ip link show 2>/dev/null | grep -oE "vx[0-9]{5}" | xargs -r -I{} ip link del {} 2>/dev/null
 ip link show 2>/dev/null | grep -oE "vh[0-9]{5}" | xargs -r -I{} ip link del {} 2>/dev/null
-ip link show 2>/dev/null | grep -oE "[a-z0-9_]+_isl_[a-z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
-ip link show 2>/dev/null | grep -oE "[a-z0-9_]+_gnd_[a-z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
+ip link show 2>/dev/null | grep -oE "[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
+ip link show 2>/dev/null | grep -oE "[a-zA-Z0-9_]+_gnd_[a-zA-Z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
 ip link show 2>/dev/null | grep -oE "_gbr-[a-z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
 ip link show type bridge 2>/dev/null | grep -oE "br-gnd-[a-z0-9_]+" | xargs -r -I{} ip link del {} 2>/dev/null
 echo done
@@ -98,9 +98,9 @@ ip link show 2>/dev/null | grep -oE 'vx[0-9]{5}' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true
 ip link show 2>/dev/null | grep -oE 'vh[0-9]{5}' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '[a-z0-9_]+_isl_[a-z0-9_]+' | \
+ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '[a-z0-9_]+_gnd_[a-z0-9_]+' | \
+ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_gnd_[a-zA-Z0-9_]+' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true
 ip link show 2>/dev/null | grep -oE '_gbr-[a-z0-9_]+' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true
@@ -155,9 +155,9 @@ ip link show 2>/dev/null | grep -oE 'vx[0-9]{5}' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true
 ip link show 2>/dev/null | grep -oE 'vh[0-9]{5}' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '[a-z0-9_]+_isl_[a-z0-9_]+' | \
+ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '[a-z0-9_]+_gnd_[a-z0-9_]+' | \
+ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_gnd_[a-zA-Z0-9_]+' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true
 ip link show 2>/dev/null | grep -oE '_gbr-[a-z0-9_]+' | \
     xargs -r -I{} ip link del {} 2>/dev/null || true

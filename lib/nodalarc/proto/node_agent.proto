@@ -53,6 +53,9 @@ message InterfaceDown {
   int32 vni = 10;
   // Per-interface locality
   Locality locality = 11;
+  // Peer info for host-mediated ISL (host-side veth name computation)
+  string peer_node_id = 12;
+  string peer_interface_name = 13;
 }
 
 message BatchLinkDownRequest {
@@ -88,6 +91,9 @@ message InterfaceUp {
   int32 vni = 13;
   // Per-interface locality
   Locality locality = 14;
+  // Peer info for host-mediated ISL (host-side veth name computation)
+  string peer_node_id = 15;
+  string peer_interface_name = 16;
 }
 
 message BatchLinkUpRequest {

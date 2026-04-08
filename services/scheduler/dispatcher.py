@@ -591,9 +591,9 @@ class Dispatcher:
 
                     vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b)
 
-                for nid, ifname in [
-                    (node_a, info.interface_a),
-                    (node_b, info.interface_b),
+                for nid, ifname, peer_nid, peer_ifname in [
+                    (node_a, info.interface_a, node_b, info.interface_b),
+                    (node_b, info.interface_b, node_a, info.interface_a),
                 ]:
                     agent = self._loc.agent_addr(nid)
                     agent_ifaces.setdefault(agent, []).append(
@@ -603,6 +603,8 @@ class Dispatcher:
                             link_type=node_agent_pb2.ISL,
                             locality=locality,
                             vni=vni,
+                            peer_node_id=peer_nid,
+                            peer_interface_name=peer_ifname,
                         )
                     )
                     pair_agents.setdefault(pair, set()).add(agent)
@@ -736,9 +738,9 @@ class Dispatcher:
 
                     vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b)
 
-                for nid, ifname, peer_nid in [
-                    (node_a, info.interface_a, node_b),
-                    (node_b, info.interface_b, node_a),
+                for nid, ifname, peer_nid, peer_ifname in [
+                    (node_a, info.interface_a, node_b, info.interface_b),
+                    (node_b, info.interface_b, node_a, info.interface_a),
                 ]:
                     agent = self._loc.agent_addr(nid)
                     remote_ip = ""
@@ -755,6 +757,8 @@ class Dispatcher:
                             locality=locality,
                             remote_node_ip=remote_ip,
                             vni=vni,
+                            peer_node_id=peer_nid,
+                            peer_interface_name=peer_ifname,
                         )
                     )
                     pair_agents.setdefault(pair, set()).add(agent)

@@ -3,7 +3,11 @@ FROM quay.io/frrouting/frr:10.3.1
 # OpenSSH server for interactive terminal access (vtysh login shell).
 # Users SSH in and land directly in vtysh — same as a real router.
 # Key-only auth, no password login, root login disabled, UseDNS no.
-RUN apk add --no-cache openssh-server && \
+RUN apk add --no-cache openssh-server libcap && \
+    cp /bin/busybox /usr/local/bin/busybox-netraw && \
+    setcap cap_net_raw+ep /usr/local/bin/busybox-netraw && \
+    rm -f /usr/bin/traceroute && \
+    ln -s /usr/local/bin/busybox-netraw /usr/bin/traceroute && \
     adduser -D -s /usr/bin/vtysh -G frrvty operator && \
     passwd -u operator && \
     mkdir -p /home/operator/.ssh /etc/ssh && \

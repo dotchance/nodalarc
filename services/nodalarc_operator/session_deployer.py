@@ -1118,6 +1118,15 @@ def _create_session_pod(
             volumes=volumes,
             restart_policy="Never",
             automount_service_account_token=False,
+            # Fast DNS timeout: pod IPs have no PTR records in CoreDNS.
+            # Without this, every reverse DNS lookup (traceroute hops, sshd
+            # client lookup, any gethostbyaddr) waits 10+ seconds.
+            dns_config=kubernetes.client.V1PodDNSConfig(
+                options=[
+                    kubernetes.client.V1PodDNSConfigOption(name="timeout", value="1"),
+                    kubernetes.client.V1PodDNSConfigOption(name="attempts", value="1"),
+                ],
+            ),
         ),
     )
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Every satellite and ground station pod runs an SSH daemon (dropbear) with
+Every satellite and ground station pod runs an OpenSSH server (`sshd`) with
 key-only authentication. The login shell is `/usr/bin/vtysh` — you land
 directly in the FRR CLI, same as SSHing to a real Cisco/Juniper/Arista router.
 
@@ -88,51 +88,18 @@ blocks all egress except return traffic for SSH sessions. The name `cni0`
 reserves `mgmt0` for users to create their own management VRF and interface,
 matching real router conventions.
 
-## Security Model
-
-| Control | Implementation | Verified |
-|---------|---------------|----------|
-| Authentication | SSH key-only (dropbear -s, no passwords) | Audit passed |
-| Root login | Disabled (dropbear -g) | Audit passed |
-| Login shell | `/usr/bin/vtysh` (not bash) | Audit passed |
-| `terminal shell` | "Unknown command" (disabled in FRR 10.3.1) | Audit passed |
-| Root filesystem | Read-only (tmpfs for writable paths) | Audit passed |
-| CNI egress | iptables OUTPUT DROP on cni0 | Audit passed |
-| K8s SA token | Not mounted (automountServiceAccountToken: false) | Audit passed |
-| Idle timeout | 10 minutes (dropbear -I 600) | Configured |
-| Capabilities | NET_ADMIN, NET_RAW, SYS_ADMIN (FRR requirement) | Documented |
-| SCP/SFTP | Blocked (vtysh login shell, no scp subsystem) | Audit passed |
-| Command injection | Blocked (vtysh parser rejects ;|`$ etc.) | Audit passed |
-| SSH tunneling | Allowed (ISL/gnd use case), blocked on cni0 by iptables | Audit passed |
-
-### Security audit results
-
-A full penetration test was conducted covering:
-- vtysh shell escape attempts (all blocked)
-- SSH exec arbitrary commands (all passed to vtysh, rejected)
-- SSH port forwarding/SOCKS proxy (tunnel establishes, cni0 egress blocked)
-- Network access to K8s API, NATS, gateway (all blocked by iptables)
-- File system write attempts (read-only root blocks all)
-- Privilege escalation (su not suid, sudo not installed, operator has zero capabilities)
-- K8s service account token (not mounted)
-- nsenter (present as busybox applet, unreachable via vtysh)
-- FRR command injection via special characters (vtysh parser blocks all)
-
-### Known limitations
+## Known Limitations
 
 - `cni0` is visible in `show interface brief` with K8s CNI routes in the
-  routing table. Routes are non-functional (iptables blocks egress) but
-  visible. Management VRF isolation planned for future release.
-- FRR requires SYS_ADMIN capability (ospfd/mgmtd call privs_init).
-  Cannot be removed without breaking FRR. Mitigated by other hardening.
-- bash exists in the container (FRR's docker-start requires it). Not
-  accessible via SSH because login shell is vtysh with no shell escape.
+  routing table but cannot be used for data plane traffic.
+- vtysh's `traceroute` and `ping` commands use FRR's built-in syntax which
+  does not support all flags of the underlying system binary.
 
 ## Key Lifecycle
 
 - SSH keypair generated per session by the Operator at session creation
 - Stored in K8s Secret `nodalarc-terminal-keys` with ConstellationSpec owner ref
 - Public key mounted into session pods, copied to operator's authorized_keys
-- Private key read by VS-API on first terminal connection (lazy, cached)
+- Private key read by VS-API on first terminal connection (in-memory only, never on disk)
 - Secret garbage-collected on session teardown (owner reference)
 - Each new session deployment generates fresh keys

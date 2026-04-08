@@ -233,6 +233,59 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             log.warning(f"Default route removal failed for {node_id}: {exc}")
     log.info(f"Phase 7: removed default route from {removed} pods")
 
+    # Phase 8: Lock down cni0 egress with iptables
+    # The eth0 → cni0 rename happens in the FRR entrypoint BEFORE FRR starts,
+    # so zebra learns the correct interface name. The iptables rules are applied
+    # here by the Node Agent after wiring, blocking all egress on cni0 except
+    # return traffic for SSH and kubectl exec.
+    #
+    # Uses nsenter + subprocess for iptables (no pyroute2 equivalent;
+    # nsenter is the approved pattern — same as NDP ping in namespace_ops.py).
+    import subprocess
+
+    hardened = 0
+    for node_id in nodes:
+        pid = pid_map.get(node_id, 0)
+        if pid == 0:
+            continue
+        try:
+            ns_path = f"/proc/{pid}/ns/net"
+            for cmd in [
+                # Allow return traffic for established connections (SSH, kubectl exec)
+                [
+                    "nsenter",
+                    f"--net={ns_path}",
+                    "iptables",
+                    "-A",
+                    "OUTPUT",
+                    "-o",
+                    "cni0",
+                    "-m",
+                    "state",
+                    "--state",
+                    "ESTABLISHED,RELATED",
+                    "-j",
+                    "ACCEPT",
+                ],
+                # Drop all other egress on cni0
+                [
+                    "nsenter",
+                    f"--net={ns_path}",
+                    "iptables",
+                    "-A",
+                    "OUTPUT",
+                    "-o",
+                    "cni0",
+                    "-j",
+                    "DROP",
+                ],
+            ]:
+                subprocess.run(cmd, check=True, capture_output=True)
+            hardened += 1
+        except Exception as exc:
+            log.warning(f"CNI hardening failed for {node_id}: {exc}")
+    log.info(f"Phase 8: locked down cni0 egress on {hardened} pods")
+
     # Mark all nodes as wired
     for node_id in nodes:
         if pid_map.get(node_id, 0) > 0:

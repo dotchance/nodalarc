@@ -7,8 +7,9 @@ FROM python:3.14-slim
 WORKDIR /app
 
 # iputils-ping for substrate latency measurement between nodes (M10)
+# openssh-client for ssh-keygen (terminal access SSH keypair generation)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    iputils-ping iputils-tracepath \
+    iputils-ping iputils-tracepath openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \

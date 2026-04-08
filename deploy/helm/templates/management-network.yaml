@@ -19,6 +19,10 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "create", "update", "patch"]
+  # Secrets — read SSH private key for terminal proxy (nodalarc-terminal-keys)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
   - apiGroups: ["nodalarc.io"]
     resources: ["constellationspecs"]
     verbs: ["get", "list", "watch", "create", "delete"]

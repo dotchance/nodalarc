@@ -351,6 +351,13 @@ def deploy_session(
         owner_ref,
     )
 
+    # --- Step 7b: Generate SSH keypair for terminal access ---
+    # Per-session ED25519 keypair for secure interactive vtysh terminal.
+    # Public key mounted into session pods (SSH authorized_keys).
+    # Private key stored in Secret for VS-API SSH proxy.
+    # Owner reference ensures cleanup on session teardown.
+    _create_terminal_ssh_keys(v1, namespace, owner_ref)
+
     # --- Step 8: Compute pod placement ---
     available_nodes = discover_available_nodes()
     if not available_nodes:
@@ -786,6 +793,60 @@ def write_pod_ips_configmap(namespace: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# SSH terminal access
+# ---------------------------------------------------------------------------
+
+TERMINAL_SSH_SECRET_NAME = "nodalarc-terminal-keys"
+
+
+def _create_terminal_ssh_keys(
+    v1: kubernetes.client.CoreV1Api,
+    namespace: str,
+    owner_ref: dict | None,
+) -> None:
+    """Generate an ED25519 SSH keypair and store in a K8s Secret.
+
+    The public key is mounted into session pods for SSH authorized_keys.
+    The private key is read by the VS-API to SSH into pods for terminal proxy.
+    Owner reference ties the Secret lifecycle to the ConstellationSpec CR —
+    teardown deletes the Secret automatically.
+    """
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        key_path = f"{tmpdir}/id_ed25519"
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-f", key_path, "-N", "", "-q"],
+            check=True,
+        )
+        private_key = Path(key_path).read_text()
+        public_key = Path(f"{key_path}.pub").read_text().strip()
+
+    body = kubernetes.client.V1Secret(
+        metadata=kubernetes.client.V1ObjectMeta(
+            name=TERMINAL_SSH_SECRET_NAME,
+            namespace=namespace,
+            labels={"nodalarc.io/managed-by": "operator"},
+            owner_references=[owner_ref] if owner_ref else None,
+        ),
+        string_data={
+            "id_ed25519": private_key,
+            "id_ed25519.pub": public_key,
+        },
+    )
+    try:
+        v1.create_namespaced_secret(namespace, body)
+        log.info("Terminal SSH keypair created (Secret: %s)", TERMINAL_SSH_SECRET_NAME)
+    except kubernetes.client.rest.ApiException as e:
+        if e.status == 409:  # Already exists — replace
+            v1.replace_namespaced_secret(TERMINAL_SSH_SECRET_NAME, namespace, body)
+            log.info("Terminal SSH keypair updated (Secret: %s)", TERMINAL_SSH_SECRET_NAME)
+        else:
+            raise
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -931,19 +992,33 @@ def _create_session_pod(
     if gs_name:
         labels["nodalarc.io/gs-name"] = gs_name
 
-    # FRR container
+    # FRR container — hardened security context:
+    #   SYS_ADMIN: required by FRR's ospfd/mgmtd (privs_init requests it)
+    #   read_only_root_filesystem: writable paths via tmpfs only
     frr_container = kubernetes.client.V1Container(
         name="frr",
         image=os.environ.get("FRR_IMAGE", "nodalarc/frr:latest"),
         image_pull_policy="IfNotPresent",
         security_context=kubernetes.client.V1SecurityContext(
-            capabilities=kubernetes.client.V1Capabilities(add=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"])
+            capabilities=kubernetes.client.V1Capabilities(
+                add=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+            ),
+            read_only_root_filesystem=True,
         ),
         resources=kubernetes.client.V1ResourceRequirements(limits={"memory": "60Mi", "cpu": "50m"}),
         volume_mounts=[
             kubernetes.client.V1VolumeMount(
                 name="frr-config",
                 mount_path="/etc/frr-config",
+            ),
+            kubernetes.client.V1VolumeMount(name="frr-run", mount_path="/var/run/frr"),
+            kubernetes.client.V1VolumeMount(name="frr-etc", mount_path="/etc/frr"),
+            kubernetes.client.V1VolumeMount(name="tmp", mount_path="/tmp"),
+            kubernetes.client.V1VolumeMount(name="ssh-config", mount_path="/etc/ssh"),
+            kubernetes.client.V1VolumeMount(name="operator-home", mount_path="/home/operator"),
+            kubernetes.client.V1VolumeMount(name="var-log", mount_path="/var/log"),
+            kubernetes.client.V1VolumeMount(
+                name="ssh-keys", mount_path="/etc/ssh-keys", read_only=True
             ),
         ],
     )
@@ -954,6 +1029,41 @@ def _create_session_pod(
             name="frr-config",
             config_map=kubernetes.client.V1ConfigMapVolumeSource(
                 name=config_cm_name,
+            ),
+        ),
+        # Writable tmpfs for FRR runtime (read-only root filesystem)
+        kubernetes.client.V1Volume(
+            name="frr-run",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
+        ),
+        kubernetes.client.V1Volume(
+            name="frr-etc",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(),
+        ),
+        kubernetes.client.V1Volume(
+            name="tmp",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
+        ),
+        kubernetes.client.V1Volume(
+            name="var-log",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
+        ),
+        # Forward-compatible mounts for SSH terminal (Phase 1)
+        kubernetes.client.V1Volume(
+            name="ssh-config",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
+        ),
+        kubernetes.client.V1Volume(
+            name="operator-home",
+            empty_dir=kubernetes.client.V1EmptyDirVolumeSource(medium="Memory"),
+        ),
+        # SSH public key for terminal access (SSH authorized_keys)
+        kubernetes.client.V1Volume(
+            name="ssh-keys",
+            secret=kubernetes.client.V1SecretVolumeSource(
+                secret_name=TERMINAL_SSH_SECRET_NAME,
+                items=[kubernetes.client.V1KeyToPath(key="id_ed25519.pub", path="authorized_keys")],
+                optional=True,  # Don't fail pod start if terminal keys not yet created
             ),
         ),
     ]
@@ -1007,6 +1117,16 @@ def _create_session_pod(
             containers=containers,
             volumes=volumes,
             restart_policy="Never",
+            automount_service_account_token=False,
+            # Fast DNS timeout: pod IPs have no PTR records in CoreDNS.
+            # Without this, every reverse DNS lookup (traceroute hops, sshd
+            # client lookup, any gethostbyaddr) waits 10+ seconds.
+            dns_config=kubernetes.client.V1PodDNSConfig(
+                options=[
+                    kubernetes.client.V1PodDNSConfigOption(name="timeout", value="1"),
+                    kubernetes.client.V1PodDNSConfigOption(name="attempts", value="1"),
+                ],
+            ),
         ),
     )
 

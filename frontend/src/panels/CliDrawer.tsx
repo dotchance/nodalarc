@@ -1,10 +1,15 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-/** Bottom CLI drawer — run whitelisted vtysh commands on FRR nodes. */
+/** Bottom CLI drawer — commands mode (one-shot) + terminal mode (multi-session SSH). */
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useIntrospect } from "../hooks/useIntrospect";
+import { PersistentTerminal } from "./PersistentTerminal";
+import { REST_URL, authHeaders } from "../config";
 import type { StateSnapshot, Selection } from "../types";
+
+type CliMode = "commands" | "terminal";
+type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
 interface CliDrawerProps {
   open: boolean;
@@ -15,17 +20,23 @@ interface CliDrawerProps {
 
 const MIN_HEIGHT = 120;
 const MAX_HEIGHT_PCT = 0.6;
-const DEFAULT_HEIGHT = 240;
+const DEFAULT_HEIGHT = 300;
 
 export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps) {
   const { loading, output, error, commands, execute } = useIntrospect();
 
-  const [fontSize, setFontSize] = useState(11);
+  const [mode, setMode] = useState<CliMode>("terminal");
+  const [fontSize, setFontSize] = useState(12);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [selectedNode, setSelectedNode] = useState("");
   const [selectedCommand, setSelectedCommand] = useState("");
   const draggingRef = useRef(false);
   const drawerRef = useRef<HTMLDivElement>(null);
+
+  // Multi-session terminal state
+  const [openSessions, setOpenSessions] = useState<string[]>([]);
+  const [activeSession, setActiveSession] = useState<string | null>(null);
+  const [sessionStatuses, setSessionStatuses] = useState<Map<string, ConnectionStatus>>(new Map());
 
   // Auto-select node when selection changes
   useEffect(() => {
@@ -40,6 +51,53 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
       setSelectedCommand(commands[0] ?? "");
     }
   }, [commands, selectedCommand]);
+
+  // Open a terminal session for the selected node
+  const openTerminalSession = useCallback((nodeId: string) => {
+    if (!nodeId) return;
+    setOpenSessions((prev) => {
+      if (prev.includes(nodeId)) {
+        // Already open — just switch to it
+        setActiveSession(nodeId);
+        return prev;
+      }
+      setActiveSession(nodeId);
+      return [...prev, nodeId];
+    });
+  }, []);
+
+  // When node dropdown changes in terminal mode, open a session
+  useEffect(() => {
+    if (mode === "terminal" && selectedNode) {
+      openTerminalSession(selectedNode);
+    }
+  }, [selectedNode, mode, openTerminalSession]);
+
+  // Close a specific session
+  const closeSession = useCallback((nodeId: string) => {
+    setOpenSessions((prev) => {
+      const next = prev.filter((id) => id !== nodeId);
+      // If we closed the active session, switch to the last remaining
+      setActiveSession((current) =>
+        current === nodeId ? next[next.length - 1] ?? null : current
+      );
+      return next;
+    });
+    setSessionStatuses((prev) => {
+      const next = new Map(prev);
+      next.delete(nodeId);
+      return next;
+    });
+  }, []);
+
+  // Session status callback from PersistentTerminal
+  const handleSessionStatus = useCallback((nodeId: string, status: ConnectionStatus) => {
+    setSessionStatuses((prev) => {
+      const next = new Map(prev);
+      next.set(nodeId, status);
+      return next;
+    });
+  }, []);
 
   // Drag handle for resizing
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -72,11 +130,37 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
     }
   }, [selectedNode, selectedCommand, execute]);
 
+  const handleDownloadConfig = useCallback(async () => {
+    const target = mode === "terminal" ? activeSession : selectedNode;
+    if (!target) return;
+    try {
+      const resp = await fetch(
+        `${REST_URL}/api/v1/nodes/${encodeURIComponent(target)}/config`,
+        { headers: authHeaders() },
+      );
+      if (resp.ok) {
+        const text = await resp.text();
+        const blob = new Blob([text], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${target}.conf`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch { /* ignore */ }
+  }, [mode, activeSession, selectedNode]);
+
   const nodes = snapshot
     ? [...snapshot.nodes].sort((a, b) => a.node_id.localeCompare(b.node_id))
     : [];
 
   if (!open) return null;
+
+  const statusColor = (status?: ConnectionStatus) =>
+    status === "connected" ? "#44cc66" :
+    status === "connecting" ? "#ffaa00" :
+    status === "error" ? "#ff3333" : "#555577";
 
   return (
     <div
@@ -87,17 +171,44 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
         borderTop: "1px solid #2a2a4e", display: "flex", flexDirection: "column",
       }}
     >
+      {/* Drag handle */}
       <div
         onMouseDown={handleDragStart}
-        style={{
-          flexShrink: 0, height: 5, cursor: "ns-resize",
-          background: "#2a2a4e",
-        }}
+        style={{ flexShrink: 0, height: 5, cursor: "ns-resize", background: "#2a2a4e" }}
       />
+
+      {/* Toolbar */}
       <div style={{
         display: "flex", alignItems: "center", gap: 8,
         padding: "6px 12px", flexShrink: 0, borderBottom: "1px solid #2a2a4e",
       }}>
+        {/* Mode toggle */}
+        <div style={{
+          display: "flex", borderRadius: 4, overflow: "hidden",
+          border: "1px solid #2a2a4e",
+        }}>
+          <button
+            onClick={() => setMode("terminal")}
+            style={{
+              background: mode === "terminal" ? "#4488ff" : "#0d0d1a",
+              color: mode === "terminal" ? "#0d0d1a" : "#888899",
+              border: "none", fontSize: 11, padding: "3px 10px", cursor: "pointer",
+              fontWeight: mode === "terminal" ? 600 : 400,
+            }}
+          >Terminal</button>
+          <button
+            onClick={() => setMode("commands")}
+            style={{
+              background: mode === "commands" ? "#4488ff" : "#0d0d1a",
+              color: mode === "commands" ? "#0d0d1a" : "#888899",
+              border: "none", borderLeft: "1px solid #2a2a4e",
+              fontSize: 11, padding: "3px 10px", cursor: "pointer",
+              fontWeight: mode === "commands" ? 600 : 400,
+            }}
+          >Commands</button>
+        </div>
+
+        {/* Node selector */}
         <label style={{ fontSize: 11, color: "#888899", whiteSpace: "nowrap" }}>Node:</label>
         <select
           value={selectedNode}
@@ -113,32 +224,49 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
           ))}
         </select>
 
-        <label style={{ fontSize: 11, color: "#888899", whiteSpace: "nowrap" }}>Command:</label>
-        <select
-          value={selectedCommand}
-          onChange={(e) => setSelectedCommand(e.target.value)}
-          style={{
-            background: "#0d0d1a", color: "#e0e0e0", border: "1px solid #2a2a4e",
-            borderRadius: 4, padding: "4px 8px", fontSize: 12, maxWidth: 200,
-          }}
-        >
-          {commands.map((cmd) => (
-            <option key={cmd} value={cmd}>{cmd}</option>
-          ))}
-        </select>
+        {/* Commands mode controls */}
+        {mode === "commands" && (
+          <>
+            <label style={{ fontSize: 11, color: "#888899", whiteSpace: "nowrap" }}>Command:</label>
+            <select
+              value={selectedCommand}
+              onChange={(e) => setSelectedCommand(e.target.value)}
+              style={{
+                background: "#0d0d1a", color: "#e0e0e0", border: "1px solid #2a2a4e",
+                borderRadius: 4, padding: "4px 8px", fontSize: 12, maxWidth: 200,
+              }}
+            >
+              {commands.map((cmd) => (
+                <option key={cmd} value={cmd}>{cmd}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleRun}
+              disabled={loading || !selectedNode || !selectedCommand}
+              style={{
+                background: "#4488ff", color: "#0d0d1a", border: "none", borderRadius: 4,
+                padding: "4px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                opacity: (loading || !selectedNode || !selectedCommand) ? 0.4 : 1,
+              }}
+            >
+              {loading ? "Running..." : "Run"}
+            </button>
+          </>
+        )}
 
-        <button
-          onClick={handleRun}
-          disabled={loading || !selectedNode || !selectedCommand}
-          style={{
-            background: "#4488ff", color: "#0d0d1a", border: "none", borderRadius: 4,
-            padding: "4px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer",
-            opacity: (loading || !selectedNode || !selectedCommand) ? 0.4 : 1,
-          }}
-        >
-          {loading ? "Running..." : "Run"}
-        </button>
+        {/* Download config button */}
+        {(mode === "terminal" ? activeSession : selectedNode) && (
+          <button
+            onClick={handleDownloadConfig}
+            title="Download running config"
+            style={{
+              background: "none", border: "1px solid #2a2a4e", borderRadius: 4,
+              color: "#888899", fontSize: 11, cursor: "pointer", padding: "3px 8px",
+            }}
+          >⬇ Config</button>
+        )}
 
+        {/* Right side controls */}
         <span style={{
           marginLeft: "auto", display: "flex", alignItems: "center", gap: 0,
           borderLeft: "1px solid #2a2a4e", paddingLeft: 8,
@@ -172,26 +300,88 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
         >✕</button>
       </div>
 
-      <div style={{ flex: 1, overflow: "auto", padding: "8px 12px", minHeight: 0 }}>
-        {loading && (
-          <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#ffaa00" }}>
-            Running command...
-          </pre>
-        )}
-        {error && (
-          <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#ff3333" }}>
-            {error}
-          </pre>
-        )}
-        {output && (
-          <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#e0e0e0", whiteSpace: "pre" }}>
-            {output}
-          </pre>
-        )}
-        {!loading && !error && !output && (
-          <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#555577", fontStyle: "italic" }}>
-            Select a node and command, then click Run.
-          </pre>
+      {/* Session tabs (terminal mode only) */}
+      {mode === "terminal" && openSessions.length > 0 && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 2,
+          padding: "3px 12px", flexShrink: 0, borderBottom: "1px solid #1a1a2e",
+          overflowX: "auto", minHeight: 28,
+        }}>
+          {openSessions.map((nodeId) => {
+            const isActive = nodeId === activeSession;
+            const status = sessionStatuses.get(nodeId);
+            return (
+              <div
+                key={nodeId}
+                onClick={() => setActiveSession(nodeId)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 5,
+                  padding: "3px 8px", borderRadius: 4, cursor: "pointer",
+                  background: isActive ? "#1a2a4e" : "transparent",
+                  border: isActive ? "1px solid #2a4a7a" : "1px solid transparent",
+                  fontSize: 11, color: isActive ? "#e0e0e0" : "#888899",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span style={{
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: statusColor(status), display: "inline-block",
+                  flexShrink: 0,
+                }} />
+                {nodeId}
+                <span
+                  onClick={(e) => { e.stopPropagation(); closeSession(nodeId); }}
+                  title="Close session"
+                  style={{
+                    color: "#555577", cursor: "pointer", fontSize: 10,
+                    padding: "0 2px", marginLeft: 2,
+                  }}
+                >✕</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Content area */}
+      <div style={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
+        {mode === "terminal" ? (
+          openSessions.length > 0 ? (
+            <PersistentTerminal
+              sessions={openSessions}
+              activeNodeId={activeSession}
+              onSessionStatusChange={handleSessionStatus}
+              fontSize={fontSize}
+            />
+          ) : (
+            <div style={{ padding: "12px", color: "#555577", fontStyle: "italic", fontSize: 12 }}>
+              Select a node to open an interactive terminal.
+            </div>
+          )
+        ) : (
+          /* Commands mode output */
+          <div style={{ padding: "8px 12px", overflow: "auto", height: "100%" }}>
+            {loading && (
+              <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#ffaa00" }}>
+                Running command...
+              </pre>
+            )}
+            {error && (
+              <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#ff3333" }}>
+                {error}
+              </pre>
+            )}
+            {output && (
+              <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#e0e0e0", whiteSpace: "pre" }}>
+                {output}
+              </pre>
+            )}
+            {!loading && !error && !output && (
+              <pre style={{ margin: 0, fontFamily: "monospace", fontSize, color: "#555577", fontStyle: "italic" }}>
+                Select a node and command, then click Run.
+              </pre>
+            )}
+          </div>
         )}
       </div>
     </div>

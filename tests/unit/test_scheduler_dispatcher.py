@@ -20,7 +20,6 @@ from nodalarc.models.link_state import (
     RoutingState,
 )
 from nodalarc.proto import node_agent_pb2
-
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
@@ -134,7 +133,9 @@ class TestDispatcherActiveLinks:
 
     def test_visibility_lost_removes_from_active_links(self):
         d, _ = _make_dispatcher()
-        d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        info = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[("sat-P00S00", "sat-P00S01")] = info
+        d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=False, scheduled=False)
 
@@ -144,7 +145,9 @@ class TestDispatcherActiveLinks:
 
     def test_gs_deallocation_removes_from_active_links(self):
         d, _ = _make_dispatcher()
-        d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        info = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d._desired_links[("gs-ashburn", "sat-P00S00")] = info
+        d._active_links[("gs-ashburn", "sat-P00S00")] = info
 
         vis = _make_vis("gs-ashburn", "sat-P00S00", visible=True, scheduled=False)
 
@@ -154,7 +157,9 @@ class TestDispatcherActiveLinks:
 
     def test_isl_deallocation_does_not_remove(self):
         d, _ = _make_dispatcher()
-        d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        info = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[("sat-P00S00", "sat-P00S01")] = info
+        d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=False)
 

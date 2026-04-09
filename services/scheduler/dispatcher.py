@@ -37,6 +37,7 @@ from nodalarc.nats_channels import (
     SUBJECT_LINK_STATE_SNAPSHOT,
     SUBJECT_LINK_UP,
     SUBJECT_SNAPSHOT,
+    SUBJECT_SUBSTRATE_LATENCY,
     SUBJECT_VISIBILITY_EVENT,
     nats_url,
 )
@@ -120,7 +121,8 @@ class Dispatcher:
         self._current_sim_time: datetime | None = None
         self._running = False
         self._last_snapshot_seq: int = 0
-        self._substrate_latency: dict[str, float] = {}  # "nodeA-nodeB" -> ms
+        self._substrate_latency: dict[str, float] = {}  # "nodeA-nodeB" -> ms (legacy ConfigMap)
+        self._substrate_by_ip: dict[str, float] = {}  # peer_ip -> ms (live from Node Agent)
 
         # Pairs that failed dispatch and should not be retried.
         self._skip_pairs: set[tuple[str, str]] = set()
@@ -249,6 +251,20 @@ class Dispatcher:
                 )
                 await self._dispatch_queue.put(desired)
 
+        async def _on_substrate_latency(msg):
+            """Update substrate latency from live Node Agent measurements."""
+            data = json.loads(msg.data)
+            source = data.get("source_node", "")
+            peers = data.get("peers", {})
+            for peer_ip, latency_ms in peers.items():
+                self._substrate_by_ip[peer_ip] = latency_ms
+            if peers:
+                log.info(
+                    "Substrate update from %s: %s",
+                    source,
+                    ", ".join(f"{ip}={ms}ms" for ip, ms in peers.items()),
+                )
+
         subs = []
         try:
             subs.append(
@@ -285,6 +301,15 @@ class Dispatcher:
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
                     cb=_on_link_state_snapshot,
+                )
+            )
+            subs.append(
+                await js.subscribe(
+                    SUBJECT_SUBSTRATE_LATENCY,
+                    stream="NODALARC_LINKS",
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.NEW,
+                    cb=_on_substrate_latency,
                 )
             )
         except Exception as exc:
@@ -541,11 +566,21 @@ class Dispatcher:
             log.warning("Substrate latency load failed: %s", exc)
 
     def _get_substrate_ms(self, node_a: str, node_b: str) -> float:
-        """Get substrate latency for a link pair in ms."""
+        """Get substrate latency for a link pair in ms.
+
+        Prefers live measurements from Node Agent (by peer IP).
+        Falls back to ConfigMap value (by node name pair).
+        Returns 0.0 for LOCAL links (same node).
+        """
         k3s_a = self._loc.k3s_node(node_a)
         k3s_b = self._loc.k3s_node(node_b)
         if not k3s_a or not k3s_b or k3s_a == k3s_b:
             return 0.0
+        # Prefer live measurement (by IP) from Node Agent
+        ip_b = self._loc.node_ip(k3s_b)
+        if ip_b and ip_b in self._substrate_by_ip:
+            return self._substrate_by_ip[ip_b]
+        # Fallback to ConfigMap measurement (by node name pair)
         key = f"{k3s_a}-{k3s_b}"
         return self._substrate_latency.get(key, 0.0)
 

@@ -31,6 +31,7 @@ SUBJECT_LINK_STATE_SNAPSHOT = "nodalarc.links.state"
 SUBJECT_LINK_UP = "nodalarc.links.up"
 SUBJECT_LINK_DOWN = "nodalarc.links.down"
 SUBJECT_LATENCY_UPDATE = "nodalarc.links.latency"
+SUBJECT_SUBSTRATE_LATENCY = "nodalarc.links.substrate"
 
 # MI publications (JetStream — retained)
 SUBJECT_CONVERGENCE_RESULT = "nodalarc.mi.convergence"

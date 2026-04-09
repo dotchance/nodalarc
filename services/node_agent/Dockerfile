@@ -11,8 +11,9 @@ FROM python:3.14-slim
 
 # Install iproute2 (tc command for ground link mirred redirect)
 # Install iptables (cni0 egress lockdown for session pod security)
+# Install iputils-ping (substrate latency measurement to VXLAN peers)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    iproute2 iptables \
+    iproute2 iptables iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 # Install crictl for container PID discovery

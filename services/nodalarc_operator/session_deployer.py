@@ -103,9 +103,10 @@ def compute_pod_placement(
 def measure_substrate_latency(available_nodes: list[str]) -> dict[str, str]:
     """Measure baseline network latency between all node pairs.
 
-    Uses ICMP ping between node InternalIPs. 20 samples, takes median.
-    Stores results as a flat dict suitable for a ConfigMap:
-    {"nodal-nodal03": "0.23", "nodal03-nodal": "0.24"}
+    Uses ICMP ping between node InternalIPs. 50 samples, takes the
+    MEDIAN to reject outliers (first ping ARP resolution, CPU contention
+    during session deployment). Stores results as a flat dict suitable
+    for a ConfigMap: {"nodal-nodal03": "0.23", "nodal03-nodal": "0.24"}
 
     For single-node deployments, returns empty dict (no cross-node latency).
     """
@@ -133,23 +134,38 @@ def measure_substrate_latency(available_nodes: list[str]) -> dict[str, str]:
                 continue
             # Measure A→B latency. The Operator runs with hostNetwork: true
             # so ping goes directly through the physical network, not the
-            # CNI overlay. This gives accurate substrate latency for
-            # cross-node VXLAN compensation.
+            # CNI overlay. Uses 50 pings and computes MEDIAN to reject
+            # outliers (ARP cold start, CPU contention during deployment).
             try:
                 out = subprocess.run(
-                    ["ping", "-c", "20", "-q", "-W", "1", ip_b],
+                    ["ping", "-c", "50", "-i", "0.1", "-W", "1", ip_b],
                     capture_output=True,
                     text=True,
                     timeout=30,
                 )
-                # Parse avg from "rtt min/avg/max/mdev = 0.1/0.2/0.3/0.05 ms"
+                # Parse individual RTT values and compute median
+                rtts = []
                 for line in out.stdout.splitlines():
-                    if "avg" in line and "/" in line:
-                        parts = line.split("=")[1].strip().split("/")
-                        avg_ms = float(parts[1])
-                        results[f"{node_a}-{node_b}"] = f"{avg_ms:.3f}"
-                        results[f"{node_b}-{node_a}"] = f"{avg_ms:.3f}"
-                        break
+                    if "time=" in line:
+                        try:
+                            t = float(line.split("time=")[1].split()[0])
+                            rtts.append(t)
+                        except (IndexError, ValueError):
+                            pass
+                if rtts:
+                    rtts.sort()
+                    median_ms = rtts[len(rtts) // 2]
+                    results[f"{node_a}-{node_b}"] = f"{median_ms:.3f}"
+                    results[f"{node_b}-{node_a}"] = f"{median_ms:.3f}"
+                    log.info(
+                        "Substrate ping %s→%s: median=%.3fms (min=%.3f, max=%.3f, n=%d)",
+                        node_a,
+                        node_b,
+                        median_ms,
+                        rtts[0],
+                        rtts[-1],
+                        len(rtts),
+                    )
             except Exception as exc:
                 log.warning(
                     "Substrate latency measurement %s→%s failed: %s",
@@ -212,6 +228,31 @@ def deploy_session(
     v1 = kubernetes.client.CoreV1Api()
 
     session_id = f"{name}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+
+    # --- Step 0: Measure substrate latency FIRST, before any CPU-heavy work ---
+    # Must run before pod creation, config rendering, or any other work that
+    # saturates CPU. Under load, ICMP responses are delayed by kernel scheduling
+    # latency, producing falsely high measurements (12ms on a 0.15ms link).
+    available_nodes = discover_available_nodes()
+    if not available_nodes:
+        fallback = os.environ.get("SESSION_NODE_NAME", "nodal")
+        available_nodes = [fallback]
+        log.warning(
+            "No nodes with nodalarc.io/node-agent=true label — "
+            "falling back to SESSION_NODE_NAME=%s",
+            fallback,
+        )
+
+    if len(available_nodes) > 1:
+        substrate = measure_substrate_latency(available_nodes)
+        if substrate:
+            _create_or_update_configmap(
+                v1,
+                "nodalarc-substrate-latency",
+                namespace,
+                substrate,
+                owner_ref,
+            )
 
     # --- Step 1: Parse session YAML from the CRD spec ---
     session_yaml = spec.get("sessionYaml")
@@ -362,17 +403,7 @@ def deploy_session(
     _create_terminal_ssh_keys(v1, namespace, owner_ref)
 
     # --- Step 8: Compute pod placement ---
-    available_nodes = discover_available_nodes()
-    if not available_nodes:
-        # Fallback: use the env var if no labeled nodes found (backward compat)
-        fallback = os.environ.get("SESSION_NODE_NAME", "nodal")
-        available_nodes = [fallback]
-        log.warning(
-            "No nodes with nodalarc.io/node-agent=true label — "
-            "falling back to SESSION_NODE_NAME=%s",
-            fallback,
-        )
-
+    # available_nodes already discovered in Step 0 (substrate latency)
     pod_placement = compute_pod_placement(session.placement, node_vars, available_nodes)
     node_counts: dict[str, int] = {}
     for target in pod_placement.values():
@@ -384,19 +415,6 @@ def deploy_session(
         len(node_counts),
         ", ".join(f"{n}={c}" for n, c in sorted(node_counts.items())),
     )
-
-    # --- Step 8b: Measure and store substrate latency (multi-node only) ---
-    if len(available_nodes) > 1:
-        substrate = measure_substrate_latency(available_nodes)
-        if substrate:
-            _create_or_update_configmap(
-                v1,
-                "nodalarc-substrate-latency",
-                namespace,
-                substrate,
-                owner_ref,
-            )
-            log.info("Stored substrate latency ConfigMap with %d entries", len(substrate))
 
     # --- Step 9: Create session pods ---
     sidecar_config = _build_sidecar_config(resolved)

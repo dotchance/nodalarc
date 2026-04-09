@@ -245,12 +245,17 @@ def handle_batch_link_down(
         futures[fut] = iface
 
     # Collect results — wait for ALL before returning ACK
+    from node_agent import substrate_monitor
+
     for fut in as_completed(futures):
         iface = futures[fut]
         try:
             err = fut.result(timeout=10)
             if err is None:
                 downed += 1
+                # Track VXLAN peer removal for substrate measurement
+                if iface.locality == node_agent_pb2.CROSS_NODE and iface.remote_node_ip:
+                    substrate_monitor.remove_peer(iface.remote_node_ip)
             else:
                 errors.append(err)
         except Exception as exc:
@@ -463,6 +468,9 @@ def handle_batch_link_up(
                     vni=iface.vni,
                     sat_pid=sat_pid if is_sat else None,
                 )
+                from node_agent import substrate_monitor
+
+                substrate_monitor.add_peer(iface.remote_node_ip)
                 cross_node_ground.append(iface)
             except Exception as exc:
                 errors.append(
@@ -479,6 +487,9 @@ def handle_batch_link_up(
                     remote_ip=iface.remote_node_ip,
                     vni=iface.vni,
                 )
+                from node_agent import substrate_monitor
+
+                substrate_monitor.add_peer(iface.remote_node_ip)
             except Exception as exc:
                 errors.append(f"VXLAN create failed {iface.node_id}/{iface.interface_name}: {exc}")
 

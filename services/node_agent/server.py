@@ -13,6 +13,7 @@ Proto message definitions are unchanged — still used for serialization.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import socket
 
@@ -85,12 +86,22 @@ class NodeAgentServer:
         sub = await nc.subscribe(subject, cb=_handle_request)
         log.info("NodeAgent NATS listening on subject %s", subject)
 
+        # Start substrate latency monitor — measures physical network
+        # latency to active VXLAN peers and publishes to NATS.
+        from node_agent import substrate_monitor
+
+        substrate_monitor.init(nc, hostname, asyncio.get_running_loop())
+        monitor_task = asyncio.create_task(substrate_monitor.monitor_loop(nc, hostname))
+
         try:
             while self._running:
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             pass
         finally:
+            monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await monitor_task
             await sub.unsubscribe()
             await nc.close()
             log.info("NodeAgent NATS server stopped")

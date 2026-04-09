@@ -113,8 +113,16 @@ class Dispatcher:
         self._epsilon_ms = epsilon_ms
 
         self._position_table = PositionTable()
-        # _actual_links: confirmed active by Node Agent. Written by dispatch worker only.
+
+        # Decision engine state: what SHOULD be active (based on OME events).
+        # Written ONLY by callbacks. Snapshots replace entirely. Events modify
+        # incrementally. The queue carries copies to the dispatch worker.
+        self._desired_links: dict[tuple[str, str], ActiveLinkInfo] = {}
+
+        # Actuator state: what IS active (confirmed by Node Agent).
+        # Written ONLY by the dispatch worker after Node Agent ACK.
         self._actual_links: dict[tuple[str, str], ActiveLinkInfo] = {}
+
         self._last_latencies: dict[tuple[str, str], float] = {}
         self._steps_since_latency_update = 0
         self._latency_update_pending = False
@@ -215,7 +223,7 @@ class Dispatcher:
             if last_sim_time is not None and snap_sim != last_sim_time:
                 delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
                 if delta_ms > self._epsilon_ms and pending_vis:
-                    desired = self._build_desired_from_events(list(pending_vis))
+                    desired = self._apply_events_to_desired(list(pending_vis))
                     await self._dispatch_queue.put(desired)
                     pending_vis.clear()
             last_sim_time = snap_sim
@@ -232,7 +240,7 @@ class Dispatcher:
             if tick_sim_str:
                 self._current_sim_time = datetime.fromisoformat(tick_sim_str)
             if pending_vis:
-                desired = self._build_desired_from_events(list(pending_vis))
+                desired = self._apply_events_to_desired(list(pending_vis))
                 await self._dispatch_queue.put(desired)
                 pending_vis.clear()
             self._steps_since_latency_update += 1
@@ -341,17 +349,20 @@ class Dispatcher:
     # Decision Engine: build desired state (pure computation, no I/O)
     # ------------------------------------------------------------------
 
-    def _build_desired_from_events(
+    def _apply_events_to_desired(
         self,
         vis_events: list[VisibilityEvent],
     ) -> dict[tuple[str, str], ActiveLinkInfo]:
-        """Build desired link state from actual + visibility event deltas.
+        """Apply visibility events to _desired_links and return a copy.
 
-        Pure computation. No I/O. No await. Returns the desired dict
-        to be placed on the dispatch queue.
+        Modifies _desired_links in place (incremental updates between
+        snapshots). Returns a dict copy for the dispatch queue.
+
+        _desired_links is owned by the decision engine (callbacks).
+        Snapshots replace it entirely. Events modify it incrementally.
+        The dispatch worker never reads _desired_links directly — it
+        only receives copies via the queue.
         """
-        desired = dict(self._actual_links)
-
         for vis in vis_events:
             pair = (vis.node_a, vis.node_b)
             with self._override_lock:
@@ -359,7 +370,7 @@ class Dispatcher:
                     continue
 
             if vis.visible and vis.scheduled:
-                if pair not in desired:
+                if pair not in self._desired_links:
                     is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
                     if is_gs:
                         ifaces = ("gnd0", "gnd0")
@@ -373,26 +384,30 @@ class Dispatcher:
                     if latency is None:
                         latency = 3.0
 
-                    desired[pair] = ActiveLinkInfo(
+                    self._desired_links[pair] = ActiveLinkInfo(
                         interface_a=ifaces[0],
                         interface_b=ifaces[1],
                         latency_ms=latency,
                         bandwidth_mbps=bandwidth,
                     )
             elif not vis.visible:
-                desired.pop(pair, None)
+                self._desired_links.pop(pair, None)
             elif vis.visible and not vis.scheduled:
                 # Terminal deallocated (GS handoff) — INVARIANT
                 is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
                 if is_gs:
-                    desired.pop(pair, None)
+                    self._desired_links.pop(pair, None)
 
-        return desired
+        return dict(self._desired_links)
 
     def _build_desired_from_snapshot(
         self, snapshot: LinkStateSnapshot
     ) -> dict[tuple[str, str], ActiveLinkInfo] | None:
         """Build desired link state from a LinkStateSnapshot.
+
+        Replaces _desired_links entirely (replace-not-merge). This is the
+        authoritative full-state correction from the OME. Any drift in
+        _desired_links from missed events is corrected here.
 
         Returns the desired dict, or None if the snapshot is stale.
         Pure computation. No I/O.
@@ -433,6 +448,9 @@ class Dispatcher:
                     bandwidth_mbps=bandwidth,
                 )
 
+        # Replace _desired_links entirely — snapshot is authoritative
+        self._desired_links = desired
+
         isl = sum(1 for a, _ in desired if not a.startswith("gs-"))
         gs = sum(1 for a, _ in desired if a.startswith("gs-"))
         log.info(
@@ -463,7 +481,7 @@ class Dispatcher:
         sim_time = vis_events[0].sim_time
         self._current_sim_time = sim_time
 
-        desired = self._build_desired_from_events(vis_events)
+        desired = self._apply_events_to_desired(vis_events)
         await self._reconcile_links(desired, to_pub, sim_time)
 
     def stop(self) -> None:

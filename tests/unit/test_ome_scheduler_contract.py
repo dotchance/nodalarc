@@ -26,7 +26,6 @@ from nodalarc.models.link_state import (
     RoutingState,
 )
 from nodalarc.proto import node_agent_pb2
-
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
@@ -204,12 +203,9 @@ class TestGsDeallocationDispatchBatch:
 
     def test_gs_pair_removed_via_dispatch_batch(self):
         d = _make_dispatcher()
-        d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo(
-            "gnd0",
-            "gnd0",
-            3.0,
-            1000.0,
-        )
+        info = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d._desired_links[("gs-ashburn", "sat-P00S00")] = info
+        d._active_links[("gs-ashburn", "sat-P00S00")] = info
 
         vis = _make_vis("gs-ashburn", "sat-P00S00", True, False)
 
@@ -219,12 +215,9 @@ class TestGsDeallocationDispatchBatch:
 
     def test_isl_deallocation_not_removed(self):
         d = _make_dispatcher()
-        d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
-            "isl0",
-            "isl1",
-            3.0,
-            1000.0,
-        )
+        info = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[("sat-P00S00", "sat-P00S01")] = info
+        d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
         vis = _make_vis("sat-P00S00", "sat-P00S01", True, False)
 
@@ -252,7 +245,9 @@ class TestGsDeallocationConsistency:
 
         # Path 2: dispatch batch with deallocation event → _reconcile_links removes
         d2 = _make_dispatcher()
-        d2._active_links[pair] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        info = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d2._desired_links[pair] = info
+        d2._active_links[pair] = info
         vis = _make_vis("gs-ashburn", "sat-P00S00", True, False)
         asyncio.run(d2._dispatch_batch([vis], [], MockNats()))
 

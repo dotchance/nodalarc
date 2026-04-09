@@ -507,7 +507,7 @@ clean-images: ## Remove all nodalarc Docker images
 	@docker builder prune -af 2>/dev/null | tail -1
 	@echo "[clean-images] Docker images removed."
 
-clean-registry: ## Purge all images from local container registry and K3s containerd
+clean-registry: ## Purge all images from local container registry and K3s containerd on ALL nodes
 	@echo "[clean-registry] Purging local registry and K3s containerd cache..."
 	@if docker ps --format '{{.Names}}' | grep -q registry; then \
 		echo "  Stopping local registry..."; \
@@ -518,11 +518,25 @@ clean-registry: ## Purge all images from local container registry and K3s contai
 		docker run -d --restart=always -p 5000:5000 --name registry \
 			-v registry_data:/var/lib/registry registry:2 2>/dev/null || true; \
 	fi
-	@echo "  Purging K3s containerd nodalarc images..."
+	@echo "  Purging K3s containerd nodalarc images on ALL nodes..."
+	@NA_PODS=$$(kubectl get pods -n $(NAMESPACE) -l app=nodalarc-node-agent \
+		--no-headers -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName 2>/dev/null || true); \
+	if [ -n "$$NA_PODS" ]; then \
+		echo "$$NA_PODS" | while IFS= read -r line; do \
+			POD=$$(echo "$$line" | awk '{print $$1}'); \
+			NODE=$$(echo "$$line" | awk '{print $$2}'); \
+			echo "  Purging containerd on $$NODE via $$POD..."; \
+			kubectl exec "$$POD" -n $(NAMESPACE) -c node-agent -- \
+				nsenter --target 1 --mount --uts --ipc --pid -- \
+				sh -c 'for img in $$(k3s crictl images -q 2>/dev/null | grep nodalarc || true); do k3s crictl rmi "$$img" 2>/dev/null; done' \
+				2>/dev/null || echo "  WARNING: purge failed on $$NODE (non-fatal)"; \
+		done; \
+	fi
+	@echo "  Purging local K3s containerd..."
 	@for img in $$($(SUDO_CTR) k3s ctr images ls -q 2>/dev/null | grep nodalarc || true); do \
 		$(SUDO_CTR) k3s ctr images rm "$$img" 2>/dev/null || true; \
 	done
-	@echo "[clean-registry] Registry and containerd cache purged."
+	@echo "[clean-registry] Registry and containerd cache purged on all nodes."
 
 nuke: teardown clean clean-images clean-registry clean-deps ## Remove everything — teardown + images + registry + deps + artifacts
 	@echo ""

@@ -131,7 +131,10 @@ def measure_substrate_latency(available_nodes: list[str]) -> dict[str, str]:
             ip_b = node_ips.get(node_b)
             if not ip_b:
                 continue
-            # Measure A→B latency from the operator pod (runs on control plane)
+            # Measure A→B latency. The Operator runs with hostNetwork: true
+            # so ping goes directly through the physical network, not the
+            # CNI overlay. This gives accurate substrate latency for
+            # cross-node VXLAN compensation.
             try:
                 out = subprocess.run(
                     ["ping", "-c", "20", "-q", "-W", "1", ip_b],

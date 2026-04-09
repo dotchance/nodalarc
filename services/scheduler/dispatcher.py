@@ -761,6 +761,15 @@ class Dispatcher:
 
             substrate_ms = self._get_substrate_ms(node_a, node_b)
             netem_ms = max(0.0, info.latency_ms - substrate_ms)
+            if substrate_ms > 0 and netem_ms == 0.0:
+                log.warning(
+                    "Substrate latency %.1fms exceeds orbital %.1fms for %s<->%s — "
+                    "emulated latency will be higher than physical reality",
+                    substrate_ms,
+                    info.latency_ms,
+                    node_a,
+                    node_b,
+                )
 
             if is_gs:
                 gs_id = node_a if node_a.startswith("gs-") else node_b

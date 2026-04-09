@@ -27,4 +27,4 @@ COPY services/nodalarc_operator/ services/nodalarc_operator/
 # Copy configs (FRR templates, satellite types, ground stations, etc.)
 COPY configs/ configs/
 
-CMD ["kopf", "run", "-m", "nodalarc_operator", "--namespace", "nodalarc", "--liveness=http://0.0.0.0:8080/healthz"]
+CMD ["kopf", "run", "-m", "nodalarc_operator", "--namespace", "nodalarc", "--liveness=http://0.0.0.0:8090/healthz"]

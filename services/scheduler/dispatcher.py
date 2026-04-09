@@ -769,7 +769,8 @@ class Dispatcher:
         now = datetime.now(UTC)
         for pair in pairs:
             agents = pair_agents.get(pair, set())
-            if agents & successful_agents:
+            # ALL agents must succeed (see _send_batch_up for rationale)
+            if agents and agents <= successful_agents:
                 removed.add(pair)
                 info = self._actual_links.get(pair)
                 if info:
@@ -928,7 +929,10 @@ class Dispatcher:
         now = datetime.now(UTC)
         for pair in pairs:
             agents = pair_agents.get(pair, set())
-            if agents & successful_agents:
+            # ALL agents for this pair must succeed. For LOCAL links (1 agent),
+            # this is the same as ANY. For CROSS_NODE links (2 agents), BOTH
+            # must succeed — a half-wired VXLAN tunnel does not forward traffic.
+            if agents and agents <= successful_agents:
                 added.add(pair)
                 info = desired[pair]
                 event = LinkUp(

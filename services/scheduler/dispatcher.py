@@ -236,6 +236,11 @@ class Dispatcher:
             snapshot = LinkStateSnapshot.model_validate_json(msg.data)
             desired = self._build_desired_from_snapshot(snapshot)
             if desired is not None:
+                log.info(
+                    "Snapshot seq=%d queued: %d links desired",
+                    snapshot.snapshot_seq,
+                    len(desired),
+                )
                 await self._dispatch_queue.put(desired)
 
         subs = []
@@ -458,21 +463,30 @@ class Dispatcher:
                 break  # Shutdown sentinel
 
             # Drain queue to latest — discard stale intermediates
+            drained = 0
             while not self._dispatch_queue.empty():
                 try:
                     next_desired = self._dispatch_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
                 if next_desired is None:
-                    # Shutdown sentinel while draining
                     desired = None
                     break
                 desired = next_desired
+                drained += 1
 
             if desired is None:
                 break
 
+            if drained > 0:
+                log.info("Dispatch worker: drained %d stale entries from queue", drained)
+
             sim_time = self._current_sim_time or datetime.now(UTC)
+            log.info(
+                "Dispatch worker: processing desired with %d links (actual has %d)",
+                len(desired),
+                len(self._actual_links),
+            )
 
             # Reconcile desired vs actual
             await self._reconcile_links(desired, nc, sim_time)

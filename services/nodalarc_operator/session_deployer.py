@@ -100,86 +100,10 @@ def compute_pod_placement(
     raise ValueError(f"Unknown placement policy: {placement.policy}")
 
 
-def measure_substrate_latency(available_nodes: list[str]) -> dict[str, str]:
-    """Measure baseline network latency between all node pairs.
-
-    Uses ICMP ping between node InternalIPs. 50 samples, takes the
-    MEDIAN to reject outliers (first ping ARP resolution, CPU contention
-    during session deployment). Stores results as a flat dict suitable
-    for a ConfigMap: {"nodal-nodal03": "0.23", "nodal03-nodal": "0.24"}
-
-    For single-node deployments, returns empty dict (no cross-node latency).
-    """
-    import subprocess
-
-    if len(available_nodes) < 2:
-        return {}
-
-    # Discover node IPs
-    v1 = kubernetes.client.CoreV1Api()
-    node_ips: dict[str, str] = {}
-    for node in v1.list_node().items:
-        name = node.metadata.name
-        if name in available_nodes:
-            for addr in node.status.addresses or []:
-                if addr.type == "InternalIP":
-                    node_ips[name] = addr.address
-                    break
-
-    results: dict[str, str] = {}
-    for i, node_a in enumerate(available_nodes):
-        for node_b in available_nodes[i + 1 :]:
-            ip_b = node_ips.get(node_b)
-            if not ip_b:
-                continue
-            # Measure A→B latency. The Operator runs with hostNetwork: true
-            # so ping goes directly through the physical network, not the
-            # CNI overlay. Uses 50 pings and computes MEDIAN to reject
-            # outliers (ARP cold start, CPU contention during deployment).
-            try:
-                out = subprocess.run(
-                    ["ping", "-c", "50", "-i", "0.1", "-W", "1", ip_b],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                # Parse individual RTT values and compute median
-                rtts = []
-                for line in out.stdout.splitlines():
-                    if "time=" in line:
-                        try:
-                            t = float(line.split("time=")[1].split()[0])
-                            rtts.append(t)
-                        except (IndexError, ValueError):
-                            pass
-                if rtts:
-                    rtts.sort()
-                    median_ms = rtts[len(rtts) // 2]
-                    results[f"{node_a}-{node_b}"] = f"{median_ms:.3f}"
-                    results[f"{node_b}-{node_a}"] = f"{median_ms:.3f}"
-                    log.info(
-                        "Substrate ping %s→%s: median=%.3fms (min=%.3f, max=%.3f, n=%d)",
-                        node_a,
-                        node_b,
-                        median_ms,
-                        rtts[0],
-                        rtts[-1],
-                        len(rtts),
-                    )
-            except Exception as exc:
-                log.warning(
-                    "Substrate latency measurement %s→%s failed: %s",
-                    node_a,
-                    node_b,
-                    exc,
-                )
-
-    if results:
-        log.info(
-            "Substrate latency measured: %s",
-            ", ".join(f"{k}={v}ms" for k, v in sorted(results.items())),
-        )
-    return results
+# NOTE: Substrate latency measurement moved to Node Agent substrate_monitor.
+# Each Node Agent measures latency to its active VXLAN peers (peer-only,
+# continuous) and publishes to NATS. The Scheduler consumes live measurements.
+# See services/node_agent/substrate_monitor.py.
 
 
 # All known FRR daemons — used to generate the daemons file
@@ -229,10 +153,9 @@ def deploy_session(
 
     session_id = f"{name}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
-    # --- Step 0: Measure substrate latency FIRST, before any CPU-heavy work ---
-    # Must run before pod creation, config rendering, or any other work that
-    # saturates CPU. Under load, ICMP responses are delayed by kernel scheduling
-    # latency, producing falsely high measurements (12ms on a 0.15ms link).
+    # Discover available K8s nodes for pod placement.
+    # Substrate latency measurement is handled by Node Agent substrate_monitor
+    # (peer-only, continuous, published to NATS).
     available_nodes = discover_available_nodes()
     if not available_nodes:
         fallback = os.environ.get("SESSION_NODE_NAME", "nodal")
@@ -242,17 +165,6 @@ def deploy_session(
             "falling back to SESSION_NODE_NAME=%s",
             fallback,
         )
-
-    if len(available_nodes) > 1:
-        substrate = measure_substrate_latency(available_nodes)
-        if substrate:
-            _create_or_update_configmap(
-                v1,
-                "nodalarc-substrate-latency",
-                namespace,
-                substrate,
-                owner_ref,
-            )
 
     # --- Step 1: Parse session YAML from the CRD spec ---
     session_yaml = spec.get("sessionYaml")

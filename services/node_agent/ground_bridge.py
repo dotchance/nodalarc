@@ -18,12 +18,20 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
+from collections import defaultdict
 
 from pyroute2 import IPRoute
 
 from node_agent.namespace_ops import _in_namespace
 
 log = logging.getLogger(__name__)
+
+# Per-ground-station lock. Serializes attach/detach operations on the same
+# GS bridge port (_gbr-{gs}). Prevents the TOCTOU race where a concurrent
+# detach deletes the ingress qdisc that an attach just created.
+# defaultdict creates a new Lock for each GS on first access.
+_gs_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +147,20 @@ def attach_to_ground_bridge(
     Brings both host-side veths and satellite gnd0 admin UP, then
     installs bidirectional tc mirred redirect between the GS and
     satellite host-side veths.
+
+    Serialized per GS: concurrent attach/detach on the same GS bridge
+    port would corrupt the tc ingress qdisc (TOCTOU race). The per-GS
+    lock prevents this.
     """
+    with _gs_locks[gs_id]:
+        _attach_to_ground_bridge_unlocked(gs_id, sat_id, sat_pid)
+
+
+def _attach_to_ground_bridge_unlocked(
+    gs_id: str,
+    sat_id: str,
+    sat_pid: int,
+) -> None:
     gs_port = _gs_bridge_port_name(gs_id)
     host_veth = _sat_gnd_host_name(sat_id)
 
@@ -178,7 +199,18 @@ def detach_from_ground_bridge(
 
     Removes tc mirred redirect, then brings satellite gnd0 and
     host veth admin DOWN.
+
+    Serialized per GS: see attach_to_ground_bridge.
     """
+    with _gs_locks[gs_id]:
+        _detach_from_ground_bridge_unlocked(gs_id, sat_id, sat_pid)
+
+
+def _detach_from_ground_bridge_unlocked(
+    gs_id: str,
+    sat_id: str,
+    sat_pid: int,
+) -> None:
     gs_port = _gs_bridge_port_name(gs_id)
     host_veth = _sat_gnd_host_name(sat_id)
 

@@ -166,7 +166,11 @@ class Dispatcher:
         worker_task = asyncio.create_task(self._dispatch_worker(nc))
 
         # Subscribe to LinkStateSnapshot — get latest retained message
-        # and queue it for the dispatch worker (non-blocking)
+        # and queue it for the dispatch worker (non-blocking).
+        # CRITICAL: unsubscribe after pull. Leaving this subscription active
+        # causes 261KB messages to accumulate in its pending queue every 5s,
+        # hitting the 256MB pending_bytes_limit after ~17 minutes and
+        # triggering SlowConsumerError on the NATS connection.
         try:
             sub_snap = await js.subscribe(
                 SUBJECT_LINK_STATE_SNAPSHOT,
@@ -186,6 +190,8 @@ class Dispatcher:
                     )
             except nats.errors.TimeoutError:
                 log.info("No initial LinkStateSnapshot available — waiting for OME")
+            finally:
+                await sub_snap.unsubscribe()
         except Exception as exc:
             log.warning("LinkStateSnapshot subscription failed: %s", exc)
 

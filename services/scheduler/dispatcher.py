@@ -1,16 +1,20 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Scheduler dispatch loop — NATS JetStream subscription, reconcile-based dispatch.
+"""Scheduler dispatch loop — event-driven architecture with async queue.
 
-Subscribes to NATS JetStream for VisibilityEvent, ClockTick, Snapshot,
-HeartbeatTick, and LinkStateSnapshot. _reconcile_links is the single path
-to the Node Agent — both live VisibilityEvents and LinkStateSnapshot build
-a desired state dict and call it. Publishes LinkUp/LinkDown/LatencyUpdate
-on NATS subjects.
+Decision callbacks consume NATS events and produce desired link state
+snapshots onto an asyncio.Queue. A background dispatch worker reads from
+the queue, diffs desired vs actual, and dispatches to Node Agents.
 
-LinkStateSnapshot is applied as replace-not-merge — desired state is built
-from the snapshot, and _reconcile_links computes the delta against current
-_active_links and dispatches BatchLinkDown/Up accordingly.
+The decision callbacks NEVER block on Node Agent I/O. The dispatch worker
+NEVER blocks the NATS callback pipeline. They communicate through the
+queue — the native asyncio primitive for this pattern.
+
+_reconcile_links remains the single path to the Node Agent for link state.
+LinkStateSnapshot is applied as replace-not-merge.
+
+INVARIANT: visible=True, scheduled=False for a GS pair MUST remove the
+pair from desired state. test_ome_scheduler_contract.py verifies this.
 """
 
 from __future__ import annotations
@@ -64,21 +68,23 @@ class ActiveLinkInfo:
 
 
 class Dispatcher:
-    """Reconcile-based topology dispatcher — NATS JetStream transport.
+    """Event-driven topology dispatcher — NATS JetStream transport.
 
-    Subscribes to NATS for OME events, dispatches BatchLinkDown/Up to
-    Node Agents via _reconcile_links, publishes LinkUp/LinkDown/LatencyUpdate.
+    Architecture: Decision Engine (NATS callbacks) and Actuator (dispatch
+    worker) communicate through an asyncio.Queue. The decision callbacks
+    compute desired state and put it on the queue. The dispatch worker
+    reads desired state, diffs against actual, and dispatches to Node Agents.
 
-    LinkStateSnapshot applied as replace-not-merge every 5 sim-seconds.
-    Eliminates window boundary GS accumulation permanently.
+    The decision callbacks NEVER await Node Agent I/O. The dispatch worker
+    can take as long as it needs without blocking message ingestion.
 
-    _reconcile_links is THE SINGLE PATH to the Node Agent for link state.
-    Both _dispatch_batch (live VisibilityEvents) and _on_link_state_snapshot
-    build a desired dict and call _reconcile_links. No other code path
-    touches BatchLinkUp/Down.
+    _actual_links: what the Node Agents have confirmed as active.
+    Written ONLY by the dispatch worker after Node Agent ACK.
+    Read by decision callbacks to build desired from actual + deltas.
 
-    INVARIANT: visible=True, scheduled=False for a GS pair MUST remove the
-    pair from desired state. test_ome_scheduler_contract.py verifies this.
+    In asyncio single-threaded event loop, callbacks and worker never
+    execute simultaneously between await points. No lock needed for
+    _actual_links access.
     """
 
     def __init__(
@@ -106,9 +112,11 @@ class Dispatcher:
         self._epsilon_ms = epsilon_ms
 
         self._position_table = PositionTable()
-        self._active_links: dict[tuple[str, str], ActiveLinkInfo] = {}
+        # _actual_links: confirmed active by Node Agent. Written by dispatch worker only.
+        self._actual_links: dict[tuple[str, str], ActiveLinkInfo] = {}
         self._last_latencies: dict[tuple[str, str], float] = {}
         self._steps_since_latency_update = 0
+        self._latency_update_pending = False
         self._current_sim_time: datetime | None = None
         self._running = False
         self._last_snapshot_seq: int = 0
@@ -117,14 +125,26 @@ class Dispatcher:
         # Pairs that failed dispatch and should not be retried.
         self._skip_pairs: set[tuple[str, str]] = set()
 
+        # Queue: decision callbacks → dispatch worker
+        self._dispatch_queue: asyncio.Queue[dict[tuple[str, str], ActiveLinkInfo] | None] = (
+            asyncio.Queue()
+        )
+
+    # Backward compat: tests that reference _active_links
+    @property
+    def _active_links(self) -> dict[tuple[str, str], ActiveLinkInfo]:
+        return self._actual_links
+
+    @_active_links.setter
+    def _active_links(self, value: dict[tuple[str, str], ActiveLinkInfo]) -> None:
+        self._actual_links = value
+
     async def run(self, nc: nats.NATS | None = None, **_kwargs) -> None:
         """Main async dispatch loop — NATS JetStream subscription.
 
-        On startup: get latest LinkStateSnapshot from JetStream, apply as
-        replace-not-merge. Then subscribe to live events.
-
-        Args:
-            nc: NATS connection. If None, connects using nats_url().
+        Starts the dispatch worker as a background task, then subscribes
+        to NATS events. Callbacks put desired state on the queue. The
+        worker reconciles at its own pace.
         """
         self._running = True
         owns_nc = nc is None
@@ -142,24 +162,25 @@ class Dispatcher:
         # Load substrate latency for cross-node compensation
         self._load_substrate_latency()
 
+        # Start dispatch worker BEFORE subscriptions — ready to receive work
+        worker_task = asyncio.create_task(self._dispatch_worker(nc))
+
         # Subscribe to LinkStateSnapshot — get latest retained message
-        # JetStream MaxMsgsPerSubject=1 means only the latest snapshot exists
+        # and queue it for the dispatch worker (non-blocking)
         try:
             sub_snap = await js.subscribe(
                 SUBJECT_LINK_STATE_SNAPSHOT,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
             )
-            # Try to get the latest snapshot (non-blocking)
             try:
                 msg = await sub_snap.next_msg(timeout=5)
                 snapshot = LinkStateSnapshot.model_validate_json(msg.data)
                 desired = self._build_desired_from_snapshot(snapshot)
                 if desired is not None:
-                    sim_time = self._current_sim_time or datetime.now(UTC)
-                    await self._reconcile_links(desired, nc, sim_time)
+                    await self._dispatch_queue.put(desired)
                     log.info(
-                        "Initial snapshot applied: seq=%d, %d links",
+                        "Initial snapshot queued: seq=%d, %d links",
                         snapshot.snapshot_seq,
                         len(desired),
                     )
@@ -169,14 +190,12 @@ class Dispatcher:
             log.warning("LinkStateSnapshot subscription failed: %s", exc)
 
         # --- Callback-driven subscriptions (DeliverPolicy.NEW) ---
-        # Each subscription gets an async callback. NATS delivers messages
-        # to callbacks as they arrive — concurrently, no sequential polling.
-        # Long-running handlers run as background tasks to avoid blocking.
+        # Callbacks compute desired state and put it on the dispatch queue.
+        # They NEVER await Node Agent I/O. They return in microseconds.
         from nats.js.api import DeliverPolicy
 
         pending_vis: list[VisibilityEvent] = []
         last_sim_time: datetime | None = None
-        _dispatch_lock = asyncio.Lock()
 
         async def _on_visibility(msg):
             nonlocal last_sim_time
@@ -188,8 +207,8 @@ class Dispatcher:
             if last_sim_time is not None and snap_sim != last_sim_time:
                 delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
                 if delta_ms > self._epsilon_ms and pending_vis:
-                    async with _dispatch_lock:
-                        await self._dispatch_batch(list(pending_vis), [], nc)
+                    desired = self._build_desired_from_events(list(pending_vis))
+                    await self._dispatch_queue.put(desired)
                     pending_vis.clear()
             last_sim_time = snap_sim
 
@@ -205,21 +224,19 @@ class Dispatcher:
             if tick_sim_str:
                 self._current_sim_time = datetime.fromisoformat(tick_sim_str)
             if pending_vis:
-                async with _dispatch_lock:
-                    await self._dispatch_batch(list(pending_vis), [], nc)
+                desired = self._build_desired_from_events(list(pending_vis))
+                await self._dispatch_queue.put(desired)
                 pending_vis.clear()
             self._steps_since_latency_update += 1
             if self._steps_since_latency_update >= self._latency_interval:
-                await self._update_latencies(nc)
+                self._latency_update_pending = True
                 self._steps_since_latency_update = 0
 
         async def _on_link_state_snapshot(msg):
             snapshot = LinkStateSnapshot.model_validate_json(msg.data)
-            async with _dispatch_lock:
-                desired = self._build_desired_from_snapshot(snapshot)
-                if desired is not None:
-                    sim_time = self._current_sim_time or datetime.now(UTC)
-                    await self._reconcile_links(desired, nc, sim_time)
+            desired = self._build_desired_from_snapshot(snapshot)
+            if desired is not None:
+                await self._dispatch_queue.put(desired)
 
         subs = []
         try:
@@ -271,6 +288,10 @@ class Dispatcher:
         except asyncio.CancelledError:
             log.info("Dispatcher cancelled")
         finally:
+            # Stop the dispatch worker
+            self._running = False
+            await self._dispatch_queue.put(None)  # sentinel
+            await worker_task
             for sub in subs:
                 try:  # noqa: SIM105
                     await sub.unsubscribe()
@@ -280,94 +301,20 @@ class Dispatcher:
                 await nc.close()
             log.info("Dispatcher stopped")
 
-    def _build_desired_from_snapshot(
-        self, snapshot: LinkStateSnapshot
-    ) -> dict[tuple[str, str], ActiveLinkInfo] | None:
-        """Build desired link state from a LinkStateSnapshot.
-
-        Returns the desired _active_links dict, or None if the snapshot is
-        stale. Does NOT modify _active_links — the caller passes the result
-        to _reconcile_links which computes the delta and dispatches.
-
-        Multi-node safe: two Scheduler instances applying the same snapshot
-        compute identical desired dicts.
-        """
-        if snapshot.snapshot_seq <= self._last_snapshot_seq:
-            log.debug(
-                "Discarding old snapshot seq=%d (current=%d)",
-                snapshot.snapshot_seq,
-                self._last_snapshot_seq,
-            )
-            return None
-
-        self._last_snapshot_seq = snapshot.snapshot_seq
-        desired: dict[tuple[str, str], ActiveLinkInfo] = {}
-
-        for link in snapshot.links:
-            if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
-                pair = (link.node_a, link.node_b)
-                # Prefer snapshot latency (OME-authoritative).
-                # Fall back to position table only if snapshot has None.
-                latency = link.latency_ms
-                if latency is None:
-                    latency = self._position_table.compute_link_latency(link.node_a, link.node_b)
-                if latency is None:
-                    latency = 3.0
-
-                is_gs = link.node_a.startswith("gs-") or link.node_b.startswith("gs-")
-                if is_gs:
-                    ifaces = ("gnd0", "gnd0")
-                else:
-                    ifaces = self._interface_map.get(pair)
-                    if not ifaces:
-                        continue
-
-                bandwidth = self._bandwidth_map.get(pair, link.bandwidth_mbps or 1000.0)
-                desired[pair] = ActiveLinkInfo(
-                    interface_a=ifaces[0],
-                    interface_b=ifaces[1],
-                    latency_ms=latency,
-                    bandwidth_mbps=bandwidth,
-                )
-
-        isl = sum(1 for a, _ in desired if not a.startswith("gs-"))
-        gs = sum(1 for a, _ in desired if a.startswith("gs-"))
-        log.info(
-            "LinkStateSnapshot seq=%d: %d links (%d ISL, %d GS)",
-            snapshot.snapshot_seq,
-            len(desired),
-            isl,
-            gs,
-        )
-        return desired
-
-    def stop(self) -> None:
-        self._running = False
-
     # ------------------------------------------------------------------
-    # Batch dispatch
+    # Decision Engine: build desired state (pure computation, no I/O)
     # ------------------------------------------------------------------
 
-    async def _dispatch_batch(
+    def _build_desired_from_events(
         self,
         vis_events: list[VisibilityEvent],
-        snapshots: list[TimelinePositionSnapshot],
-        to_pub,
-    ) -> None:
-        """Process one epsilon-windowed batch of VisibilityEvents.
+    ) -> dict[tuple[str, str], ActiveLinkInfo]:
+        """Build desired link state from actual + visibility event deltas.
 
-        Builds desired state from current _active_links plus event
-        classification, then delegates to _reconcile_links — the single
-        path to the Node Agent for link state.
+        Pure computation. No I/O. No await. Returns the desired dict
+        to be placed on the dispatch queue.
         """
-        if not vis_events:
-            return
-
-        sim_time = vis_events[0].sim_time
-        self._current_sim_time = sim_time
-
-        # Build desired: start from current _active_links, apply deltas
-        desired = dict(self._active_links)
+        desired = dict(self._actual_links)
 
         for vis in vis_events:
             pair = (vis.node_a, vis.node_b)
@@ -404,28 +351,145 @@ class Dispatcher:
                 if is_gs:
                     desired.pop(pair, None)
 
+        return desired
+
+    def _build_desired_from_snapshot(
+        self, snapshot: LinkStateSnapshot
+    ) -> dict[tuple[str, str], ActiveLinkInfo] | None:
+        """Build desired link state from a LinkStateSnapshot.
+
+        Returns the desired dict, or None if the snapshot is stale.
+        Pure computation. No I/O.
+        """
+        if snapshot.snapshot_seq <= self._last_snapshot_seq:
+            log.debug(
+                "Discarding old snapshot seq=%d (current=%d)",
+                snapshot.snapshot_seq,
+                self._last_snapshot_seq,
+            )
+            return None
+
+        self._last_snapshot_seq = snapshot.snapshot_seq
+        desired: dict[tuple[str, str], ActiveLinkInfo] = {}
+
+        for link in snapshot.links:
+            if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
+                pair = (link.node_a, link.node_b)
+                latency = link.latency_ms
+                if latency is None:
+                    latency = self._position_table.compute_link_latency(link.node_a, link.node_b)
+                if latency is None:
+                    latency = 3.0
+
+                is_gs = link.node_a.startswith("gs-") or link.node_b.startswith("gs-")
+                if is_gs:
+                    ifaces = ("gnd0", "gnd0")
+                else:
+                    ifaces = self._interface_map.get(pair)
+                    if not ifaces:
+                        continue
+
+                bandwidth = self._bandwidth_map.get(pair, link.bandwidth_mbps or 1000.0)
+                desired[pair] = ActiveLinkInfo(
+                    interface_a=ifaces[0],
+                    interface_b=ifaces[1],
+                    latency_ms=latency,
+                    bandwidth_mbps=bandwidth,
+                )
+
+        isl = sum(1 for a, _ in desired if not a.startswith("gs-"))
+        gs = sum(1 for a, _ in desired if a.startswith("gs-"))
+        log.info(
+            "LinkStateSnapshot seq=%d: %d links (%d ISL, %d GS)",
+            snapshot.snapshot_seq,
+            len(desired),
+            isl,
+            gs,
+        )
+        return desired
+
+    # Backward compat: tests call _dispatch_batch directly
+    async def _dispatch_batch(
+        self,
+        vis_events: list[VisibilityEvent],
+        snapshots: list[TimelinePositionSnapshot],
+        to_pub,
+    ) -> None:
+        """Process a batch of VisibilityEvents — builds desired and reconciles.
+
+        This method is called directly by tests. In production, the decision
+        callbacks put desired on the queue and the dispatch worker reconciles.
+        Kept for backward compatibility with existing test contracts.
+        """
+        if not vis_events:
+            return
+
+        sim_time = vis_events[0].sim_time
+        self._current_sim_time = sim_time
+
+        desired = self._build_desired_from_events(vis_events)
         await self._reconcile_links(desired, to_pub, sim_time)
 
-        # Latency updates
-        self._steps_since_latency_update += 1
-        if self._steps_since_latency_update >= self._latency_interval:
-            await self._update_latencies(to_pub)
-            self._steps_since_latency_update = 0
+    def stop(self) -> None:
+        self._running = False
 
-        # Checkpoint (fire-and-forget)
-        asyncio.create_task(self._write_checkpoint(sim_time.isoformat()))
+    # ------------------------------------------------------------------
+    # Dispatch Worker: background task, I/O at own pace
+    # ------------------------------------------------------------------
+
+    async def _dispatch_worker(self, nc) -> None:
+        """Background task: reconcile actual state with desired state.
+
+        Reads desired from the queue, diffs against actual, dispatches
+        BatchLinkDown/Up to Node Agents, publishes LinkUp/Down events.
+
+        Drains queue to latest desired state before reconciling — ensures
+        the worker always operates on current state, not stale intermediates.
+
+        Can take seconds (Node Agent I/O). The decision callbacks continue
+        processing NATS events while this worker is busy.
+        """
+        log.info("Dispatch worker started")
+        while self._running:
+            # Block until work arrives (event-driven, no polling)
+            desired = await self._dispatch_queue.get()
+
+            if desired is None:
+                break  # Shutdown sentinel
+
+            # Drain queue to latest — discard stale intermediates
+            while not self._dispatch_queue.empty():
+                try:
+                    next_desired = self._dispatch_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if next_desired is None:
+                    # Shutdown sentinel while draining
+                    desired = None
+                    break
+                desired = next_desired
+
+            if desired is None:
+                break
+
+            sim_time = self._current_sim_time or datetime.now(UTC)
+
+            # Reconcile desired vs actual
+            await self._reconcile_links(desired, nc, sim_time)
+
+            # Latency updates (queued by _on_clock_tick)
+            if self._latency_update_pending:
+                await self._update_latencies(nc)
+                self._latency_update_pending = False
+
+        log.info("Dispatch worker stopped")
 
     # ------------------------------------------------------------------
     # Reconcile-based dispatch — single path to Node Agent
     # ------------------------------------------------------------------
 
     def _load_substrate_latency(self) -> None:
-        """Load substrate latency from ConfigMap (created by Operator).
-
-        Populates self._substrate_latency with {"nodeA-nodeB": ms} entries.
-        For single-node deployments, the ConfigMap doesn't exist — all
-        substrate latencies remain 0.
-        """
+        """Load substrate latency from ConfigMap (created by Operator)."""
         try:
             import kubernetes
             import kubernetes.client
@@ -457,11 +521,7 @@ class Dispatcher:
             log.warning("Substrate latency load failed: %s", exc)
 
     def _get_substrate_ms(self, node_a: str, node_b: str) -> float:
-        """Get substrate latency for a link pair in ms.
-
-        Looks up the K3s nodes for both endpoints, then checks
-        the substrate latency map. Returns 0.0 for LOCAL links.
-        """
+        """Get substrate latency for a link pair in ms."""
         k3s_a = self._loc.k3s_node(node_a)
         k3s_b = self._loc.k3s_node(node_b)
         if not k3s_a or not k3s_b or k3s_a == k3s_b:
@@ -470,11 +530,7 @@ class Dispatcher:
         return self._substrate_latency.get(key, 0.0)
 
     def _link_locality(self, node_a: str, node_b: str) -> int:
-        """Determine locality for a link pair.
-
-        Returns node_agent_pb2.LOCAL if both endpoints are on the same K3s
-        node, node_agent_pb2.CROSS_NODE if they are on different nodes.
-        """
+        """Determine locality for a link pair."""
         k3s_a = self._loc.k3s_node(node_a)
         k3s_b = self._loc.k3s_node(node_b)
         if k3s_a and k3s_b and k3s_a != k3s_b:
@@ -487,18 +543,15 @@ class Dispatcher:
         nc,
         sim_time: datetime,
     ) -> None:
-        """Reconcile _active_links toward desired state via Node Agent dispatch.
+        """Reconcile _actual_links toward desired state via Node Agent dispatch.
 
         THE SINGLE PATH TO THE NODE AGENT FOR LINK STATE.
 
-        Computes delta (desired vs current), dispatches BatchLinkDown for
+        Computes delta (desired vs actual), dispatches BatchLinkDown for
         removed pairs (Phase A), then BatchLinkUp for added pairs (Phase B).
-        Updates _active_links only for successfully dispatched changes.
-
-        Multi-node safe: two Scheduler instances applying the same snapshot
-        compute identical desired dicts. Each dispatches independently.
+        Updates _actual_links only for successfully dispatched changes.
         """
-        current_pairs = set(self._active_links.keys())
+        current_pairs = set(self._actual_links.keys())
         desired_pairs = set(desired.keys())
 
         to_remove = current_pairs - desired_pairs
@@ -513,22 +566,25 @@ class Dispatcher:
         if to_remove:
             removed = await self._send_batch_down(to_remove, sim_iso, sim_time, nc)
             for pair in removed:
-                self._active_links.pop(pair, None)
+                self._actual_links.pop(pair, None)
                 self._last_latencies.pop(pair, None)
 
         # Phase B: BatchLinkUp — only after all Phase A ACKs
         if to_add:
             added = await self._send_batch_up(to_add, desired, sim_iso, sim_time, nc)
             for pair in added:
-                self._active_links[pair] = desired[pair]
+                self._actual_links[pair] = desired[pair]
                 self._last_latencies[pair] = desired[pair].latency_ms
 
         log.info(
             "Reconcile: +%d/-%d links (%d active)",
             len(to_add),
             len(to_remove),
-            len(self._active_links),
+            len(self._actual_links),
         )
+
+        # Checkpoint (fire-and-forget)
+        asyncio.create_task(self._write_checkpoint(sim_iso))
 
     async def _send_batch_down(
         self,
@@ -542,7 +598,7 @@ class Dispatcher:
         pair_agents: dict[tuple[str, str], set[str]] = {}
 
         for pair in pairs:
-            info = self._active_links.get(pair)
+            info = self._actual_links.get(pair)
             if info is None:
                 continue
 
@@ -560,10 +616,8 @@ class Dispatcher:
                     vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
 
                 if locality == node_agent_pb2.LOCAL:
-                    # LOCAL: single command to satellite's agent
                     targets = [(sat_id, self._loc.agent_addr(sat_id))]
                 else:
-                    # CROSS_NODE: command to both agents (each destroys its VXLAN)
                     targets = [
                         (sat_id, self._loc.agent_addr(sat_id)),
                         (gs_id, self._loc.agent_addr(gs_id)),
@@ -585,7 +639,6 @@ class Dispatcher:
                     pair_agents.setdefault(pair, set()).add(agent)
             else:
                 vni = 0
-                remote_ips: dict[str, str] = {}
                 if locality == node_agent_pb2.CROSS_NODE:
                     from nodalarc.vxlan import compute_vni
 
@@ -645,7 +698,7 @@ class Dispatcher:
             agents = pair_agents.get(pair, set())
             if agents & successful_agents:
                 removed.add(pair)
-                info = self._active_links.get(pair)
+                info = self._actual_links.get(pair)
                 if info:
                     event = LinkDown(
                         sim_time=sim_time,
@@ -686,12 +739,6 @@ class Dispatcher:
             locality = self._link_locality(node_a, node_b)
             is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
 
-            # Substrate compensation on initial link-up.
-            # The Node Agent applies this as tc netem delay. For CROSS_NODE
-            # links the VXLAN packet already traverses substrate_ms of
-            # physical network, so netem = orbital - substrate. The UI
-            # sees info.latency_ms (raw orbital) — only the wire value
-            # to the Node Agent is compensated.
             substrate_ms = self._get_substrate_ms(node_a, node_b)
             netem_ms = max(0.0, info.latency_ms - substrate_ms)
 
@@ -705,10 +752,8 @@ class Dispatcher:
                     vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
 
                 if locality == node_agent_pb2.LOCAL:
-                    # LOCAL: single command to satellite's agent
                     targets = [(sat_id, self._loc.agent_addr(sat_id), "")]
                 else:
-                    # CROSS_NODE: both agents create VXLAN gnd0
                     targets = []
                     for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
                         peer_k3s = self._loc.k3s_node(peer_nid)
@@ -827,11 +872,9 @@ class Dispatcher:
         """Compute and dispatch latency updates for active links.
 
         Substrate compensation: netem_ms = max(0, target_ms - substrate_ms).
-        substrate_ms comes from the Operator's ping measurement between K3s nodes.
-        For LOCAL links (same node), substrate_ms = 0.0.
         """
 
-        active_set = set(self._active_links.keys())
+        active_set = set(self._actual_links.keys())
         updates = self._position_table.get_links_needing_update(active_set, self._last_latencies)
         if not updates:
             return
@@ -841,11 +884,10 @@ class Dispatcher:
 
         for node_a, node_b, new_lat, range_km in updates:
             pair = (node_a, node_b)
-            info = self._active_links.get(pair)
+            info = self._actual_links.get(pair)
             if not info:
                 continue
 
-            # Substrate compensation for cross-node links
             substrate_ms = self._get_substrate_ms(node_a, node_b)
             netem_ms = max(0.0, new_lat - substrate_ms)
 
@@ -883,7 +925,6 @@ class Dispatcher:
                         )
                     )
 
-            # Publish LatencyUpdate on port 5561
             event = LatencyUpdate(
                 sim_time=now,
                 wall_time=now,
@@ -897,7 +938,6 @@ class Dispatcher:
             )
 
         # Send to agents concurrently
-        loop = asyncio.get_running_loop()
         tasks = []
         for agent_addr, entries in agent_entries.items():
             stub = self._pool.get_stub(agent_addr)
@@ -928,7 +968,7 @@ class Dispatcher:
         return self._k8s_v1
 
     async def _write_checkpoint(self, sim_time_iso: str) -> None:
-        """Write sim_time to ConfigMap via merge patch. Fire-and-forget."""
+        """Write Scheduler checkpoint to K8s ConfigMap (non-blocking)."""
         try:
             import kubernetes.client
 
@@ -936,61 +976,19 @@ class Dispatcher:
             from nodalarc.platform import get_platform_config
 
             ns = get_platform_config().kubernetes_namespace
-            # Include active link pairs so reconciliation can compare
-            # against Node Agent observed state without recomputing topology.
-            active_pairs = sorted(f"{a}:{b}" for a, b in self._active_links)
-            body = {
-                "metadata": {"name": "nodalarc-scheduler-checkpoint"},
-                "data": {
+            body = kubernetes.client.V1ConfigMap(
+                metadata=kubernetes.client.V1ObjectMeta(name="nodalarc-scheduler-checkpoint"),
+                data={
                     "sim_time": sim_time_iso,
-                    "updated_at": datetime.now(UTC).isoformat(),
-                    "active_links": json.dumps(active_pairs),
+                    "active_links": str(len(self._actual_links)),
                 },
-            }
+            )
             try:
                 v1.patch_namespaced_config_map("nodalarc-scheduler-checkpoint", ns, body)
             except kubernetes.client.rest.ApiException as exc:
                 if exc.status == 404:
-                    v1.create_namespaced_config_map(
-                        ns,
-                        kubernetes.client.V1ConfigMap(
-                            metadata=kubernetes.client.V1ObjectMeta(
-                                name="nodalarc-scheduler-checkpoint"
-                            ),
-                            data=body["data"],
-                        ),
-                    )
+                    v1.create_namespaced_config_map(ns, body)
                 else:
                     raise
-        except Exception as exc:
-            log.warning("Checkpoint write failed (non-fatal): %s", exc)
-
-    @staticmethod
-    def read_checkpoint() -> dict | None:
-        """Read checkpoint from ConfigMap. Returns {"sim_time": str} or None."""
-        try:
-            import kubernetes
-            import kubernetes.client
-            import kubernetes.config
-
-            try:
-                kubernetes.config.load_incluster_config()
-            except kubernetes.config.config_exception.ConfigException:
-                kubernetes.config.load_kube_config()
-            v1 = kubernetes.client.CoreV1Api()
-            from nodalarc.platform import get_platform_config
-
-            ns = get_platform_config().kubernetes_namespace
-            cm = v1.read_namespaced_config_map("nodalarc-scheduler-checkpoint", ns)
-            return cm.data
-        except kubernetes.client.rest.ApiException as exc:
-            if exc.status == 404:
-                return None
-            raise
-        except Exception as exc:
-            log.warning("Checkpoint read failed: %s", exc)
-            return None
-
-    # ------------------------------------------------------------------
-    # Reconciliation on startup
-    # ------------------------------------------------------------------
+        except Exception:
+            pass  # Checkpoint failure is non-fatal

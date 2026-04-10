@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from nodalpath.orchestrator.link_state_store import LinkStateStore
 
 import nats
-from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
+from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.nats_channels import (
@@ -22,7 +22,6 @@ from nodalarc.nats_channels import (
     SUBJECT_LINK_DOWN,
     SUBJECT_LINK_STATE_SNAPSHOT,
     SUBJECT_LINK_UP,
-    SUBJECT_SNAPSHOT,
     SUBJECT_VISIBILITY_EVENT,
     nats_url,
 )
@@ -135,15 +134,6 @@ class LiveOrchestrator:
             )
             subs.append(
                 await js.subscribe(
-                    SUBJECT_SNAPSHOT,
-                    stream="NODALARC_OME",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=self._on_position_snapshot,
-                )
-            )
-            subs.append(
-                await js.subscribe(
                     SUBJECT_LINK_DOWN,
                     stream="NODALARC_LINKS",
                     ordered_consumer=True,
@@ -250,18 +240,6 @@ class LiveOrchestrator:
             self._builder.apply_link_event(event)
         except Exception as exc:
             log.warning("VisibilityEvent processing error: %s", exc, exc_info=True)
-
-    async def _on_position_snapshot(self, msg) -> None:
-        """NATS callback: TimelinePositionSnapshot from OME."""
-        try:
-            data = json.loads(msg.data)
-            snapshot = TimelinePositionSnapshot.model_validate(data)
-            self._builder.apply_position_record(snapshot)
-            if self._current_sim_time is not None and snapshot.sim_time != self._current_sim_time:
-                await self._check_transition(self._current_sim_time.isoformat())
-            self._current_sim_time = snapshot.sim_time
-        except Exception as exc:
-            log.warning("Snapshot processing error: %s", exc, exc_info=True)
 
     async def _on_link_down(self, msg) -> None:
         """NATS callback: LinkDown from Scheduler — deviation detection."""

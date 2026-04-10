@@ -433,7 +433,6 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
         SUBJECT_LINK_STATE_SNAPSHOT,
         SUBJECT_PLAYBACK_STATE,
         SUBJECT_SESSION_EPHEMERIS,
-        SUBJECT_SNAPSHOT,
         SUBJECT_VISIBILITY_EVENT,
     )
     from nodalarc.platform import get_platform_config
@@ -679,13 +678,12 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 current_rate = new_rate
 
             # --- Compute one step (Physicist role) ---
-            step_events = compute_step(
+            step_events, current_positions = compute_step(
                 step_ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state
             )
 
             # --- Emit events for this step ---
             sim_time = datetime.fromtimestamp(epoch_unix + step * step_seconds, UTC)
-            current_positions = None
 
             for te in step_events:
                 payload = te.data.model_dump_json().encode()
@@ -698,10 +696,6 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                         running_gs_state[pair] = (vis.visible, vis.scheduled)
                     else:
                         running_isl_state[pair] = (vis.visible, vis.scheduled)
-                elif te.event_type == "Snapshot":
-                    _enqueue(SUBJECT_SNAPSHOT, payload)
-                    current_positions = te.data.positions
-
             # ClockTick with real wall_time (not precomputed placeholder)
             ct = ClockTick(
                 sim_time=sim_time,

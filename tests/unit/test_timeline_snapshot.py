@@ -10,14 +10,14 @@ from nodalarc.constellation_loader import (
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.constellation import ConstellationConfig
-from nodalarc.models.events import ClockTick, TimelinePositionSnapshot, VisibilityEvent
-from pydantic import TypeAdapter
-
+from nodalarc.models.events import ClockTick, VisibilityEvent
 from ome.event_stream import (
     precompute_timeline,
     read_timeline_jsonl,
     write_timeline_jsonl,
 )
+from pydantic import TypeAdapter
+
 from tests.conftest import CONFIGS_DIR
 
 adapter = TypeAdapter(ConstellationConfig)
@@ -64,49 +64,6 @@ class TestClockTickEmission:
         assert first_tick.compression_ratio == 1.0
 
 
-class TestSnapshotEmission:
-    def test_snapshot_every_step(self, four_node_timeline):
-        """Snapshot emitted every step alongside ClockTick."""
-        snapshots = [e for e in four_node_timeline if e.event_type == "Snapshot"]
-        assert len(snapshots) == 7
-
-    def test_snapshot_contains_all_nodes(self, four_node_timeline):
-        """Each snapshot contains positions for all 4 satellites + 7 ground stations."""
-        snapshots = [e for e in four_node_timeline if e.event_type == "Snapshot"]
-        first = snapshots[0].data
-        assert isinstance(first, TimelinePositionSnapshot)
-        # 4 sats + 7 ground stations = 11 nodes
-        assert len(first.positions) == 11
-
-    def test_snapshot_has_satellite_positions(self, four_node_timeline):
-        snapshots = [e for e in four_node_timeline if e.event_type == "Snapshot"]
-        positions = snapshots[0].data.positions
-        assert "sat-P00S00" in positions
-        assert "sat-P00S01" in positions
-        assert "sat-P01S00" in positions
-        assert "sat-P01S01" in positions
-
-    def test_snapshot_has_gs_positions(self, four_node_timeline):
-        snapshots = [e for e in four_node_timeline if e.event_type == "Snapshot"]
-        positions = snapshots[0].data.positions
-        assert "gs-hawthorne" in positions
-        assert "gs-mcmurdo" in positions
-
-    def test_satellite_has_velocity(self, four_node_timeline):
-        snapshots = [e for e in four_node_timeline if e.event_type == "Snapshot"]
-        pos = snapshots[0].data.positions["sat-P00S00"]
-        # Satellite should have non-zero velocity
-        vel_mag = (pos.vel_x_km_s**2 + pos.vel_y_km_s**2 + pos.vel_z_km_s**2) ** 0.5
-        assert vel_mag > 7.0  # LEO velocity > 7 km/s
-
-    def test_gs_has_zero_velocity(self, four_node_timeline):
-        snapshots = [e for e in four_node_timeline if e.event_type == "Snapshot"]
-        pos = snapshots[0].data.positions["gs-hawthorne"]
-        assert pos.vel_x_km_s == 0.0
-        assert pos.vel_y_km_s == 0.0
-        assert pos.vel_z_km_s == 0.0
-
-
 class TestVisibilityEvents:
     def test_visibility_events_are_correct_type(self, four_node_timeline):
         vis_events = [e for e in four_node_timeline if e.event_type == "VisibilityEvent"]
@@ -150,15 +107,14 @@ class TestJsonLinesIO:
         ticks = [r for r in records if r["event_type"] == "ClockTick"]
         assert len(ticks) == 7
 
-    def test_snapshot_data_in_jsonl(self, four_node_timeline, tmp_path):
+    def test_no_snapshot_events_in_timeline(self, four_node_timeline, tmp_path):
+        """PRD v0.71: Snapshot events are no longer emitted by compute_step."""
         out_path = tmp_path / "timeline.jsonl"
         write_timeline_jsonl(four_node_timeline, out_path)
 
         records = read_timeline_jsonl(out_path)
         snapshots = [r for r in records if r["event_type"] == "Snapshot"]
-        assert len(snapshots) == 7
-        # First snapshot should have positions
-        assert "positions" in snapshots[0]["data"]
+        assert len(snapshots) == 0
 
 
 class TestNoGroundStations:
@@ -180,7 +136,6 @@ class TestNoGroundStations:
         )
         ticks = [e for e in events if e.event_type == "ClockTick"]
         assert len(ticks) == 3  # 0, 5, 10
-        # Only satellite positions (no GS)
+        # No Snapshot events (PRD v0.71 — positions distributed via SessionEphemeris)
         snapshots = [e for e in events if e.event_type == "Snapshot"]
-        positions = snapshots[0].data.positions
-        assert len(positions) == 4
+        assert len(snapshots) == 0

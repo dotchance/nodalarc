@@ -52,12 +52,15 @@ from nodalarc.models.vs_api import (
 )
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
+    STREAM_SESSION_EVENTS,
     SUBJECT_ALMANAC_EVENT,
+    SUBJECT_CLOCK_TICK,
     SUBJECT_LATENCY_UPDATE,
     SUBJECT_LINK_DOWN,
     SUBJECT_LINK_STATE_SNAPSHOT,
     SUBJECT_LINK_UP,
-    SUBJECT_SNAPSHOT,
+    SUBJECT_PLAYBACK_STATE,
+    SUBJECT_SESSION_EPHEMERIS,
     nats_url,
 )
 from nodalarc.platform import get_platform_config
@@ -212,8 +215,12 @@ _playback_speed: float = 1.0
 
 # Stale tracking per streaming architecture v1.2 Section 3.5
 _STALE_THRESHOLD_S: float = 15.0
-_last_snapshot_wall_time: float = 0.0  # monotonic time of last Snapshot
+_last_clock_tick_wall_time: float = 0.0  # monotonic time of last ClockTick
 _last_link_event_wall_time: float = 0.0  # monotonic time of last LinkUp/Down
+
+# Cached SessionEphemeris for local position propagation (PRD v0.71)
+_cached_ephemeris: dict | None = None  # JSON-serializable ephemeris for WebSocket delivery
+_cached_ephemeris_obj: object | None = None  # SessionEphemeris Pydantic object for propagation
 
 # Continuous tracer state
 _continuous_tracer: ContinuousTracer | None = None
@@ -231,89 +238,77 @@ _almanac_state: dict = {
 _almanac_lock = threading.Lock()
 
 
-def _update_position(event_data: dict) -> None:
-    """Update node positions from OME Snapshot.
+def _propagate_positions_from_ephemeris(sim_time_iso: str) -> None:
+    """Compute and update all node positions from cached SessionEphemeris.
 
-    Handles two formats:
-    - Per-node: top-level node_id, lat_deg, lon_deg, etc.
-    - Batch (Snapshot): positions dict/list of node dicts.
+    Called on each ClockTick. Propagates satellite positions using the
+    shared Keplerian propagator. Ground station positions are static.
+    This is the sole source of position data — no OME Snapshot fallback.
     """
+
+    from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian
+    from nodalarc.orbital import elements_from_params
+    from nodalarc.propagator import propagate_keplerian
+
+    if _cached_ephemeris_obj is None:
+        return
+
+    try:
+        sim_time_unix = datetime.fromisoformat(sim_time_iso).timestamp()
+    except (ValueError, TypeError):
+        return
+
     with _state_lock:
-        _state["sim_time"] = event_data.get("sim_time", _state["sim_time"])
+        _state["sim_time"] = sim_time_iso
 
-        # Per-node format (PositionEvent schema)
-        if "node_id" in event_data:
-            import re
+        for node_id, node in _cached_ephemeris_obj.nodes.items():
+            if isinstance(node, EphemerisNodeKeplerian):
+                elements = elements_from_params(
+                    node.altitude_km, node.inclination_deg, node.raan_deg, node.true_anomaly_deg
+                )
+                dt = sim_time_unix - _cached_ephemeris_obj.epoch_unix
+                _pos_ecef, vel_ecef, geo = propagate_keplerian(
+                    elements, _cached_ephemeris_obj.epoch_unix, dt
+                )
 
-            node_id = event_data["node_id"]
-            existing = _state["nodes"].get(node_id, {})
+                existing = _state["nodes"].get(node_id, {})
+                existing.update(
+                    {
+                        "node_id": node_id,
+                        "node_type": "satellite",
+                        "lat_deg": geo.lat_deg,
+                        "lon_deg": geo.lon_deg,
+                        "alt_km": geo.alt_km,
+                        "vel_x_km_s": vel_ecef.x,
+                        "vel_y_km_s": vel_ecef.y,
+                        "vel_z_km_s": vel_ecef.z,
+                        "plane": node.plane,
+                        "slot": node.slot,
+                    }
+                )
+                if existing.get("node_type") == "satellite":
+                    existing["beam_falloff_exponent"] = _beam_falloff_exponent
+                _state["nodes"][node_id] = existing
 
-            # Derive plane/slot from node_id if not already set
-            if "plane" not in existing or existing["plane"] is None:
-                m = re.match(r"sat-P(\d+)S(\d+)", node_id)
-                if m:
-                    existing["plane"] = int(m.group(1))
-                    existing["slot"] = int(m.group(2))
-                    existing["node_type"] = "satellite"
-                else:
-                    existing.setdefault("node_type", "ground_station")
-
-            existing.update(
-                {
-                    "node_id": node_id,
-                    "lat_deg": event_data.get("lat_deg", existing.get("lat_deg", 0.0)),
-                    "lon_deg": event_data.get("lon_deg", existing.get("lon_deg", 0.0)),
-                    "alt_km": event_data.get("alt_km", existing.get("alt_km", 0.0)),
-                    "vel_x_km_s": event_data.get("vel_x_km_s", existing.get("vel_x_km_s")),
-                    "vel_y_km_s": event_data.get("vel_y_km_s", existing.get("vel_y_km_s")),
-                    "vel_z_km_s": event_data.get("vel_z_km_s", existing.get("vel_z_km_s")),
-                }
-            )
-            if node_id in _gs_elevation_map:
-                existing["min_elevation_deg"] = _gs_elevation_map[node_id]
-            if existing.get("node_type") == "satellite":
-                existing["beam_falloff_exponent"] = _beam_falloff_exponent
-            _state["nodes"][node_id] = existing
-            return
-
-        # Batch format — supports both:
-        # - Snapshot dict: {"positions": {"node_id": {lat_deg, ...}}}
-        # - Legacy list: {"positions": [{"node_id": "...", lat_deg, ...}]}
-        raw_positions = event_data.get("positions", {})
-        if isinstance(raw_positions, dict):
-            items = raw_positions.items()
-        else:
-            items = [(n.get("node_id", ""), n) for n in raw_positions]
-        for node_id, node in items:
-            if not node_id:
-                continue
-            # Derive plane/slot from node_id (e.g. "sat-P00S05" → plane=0, slot=5)
-            import re
-
-            plane_val = node.get("plane")
-            slot_val = node.get("slot")
-            if plane_val is None and node_id.startswith("sat-"):
-                m = re.match(r"sat-P(\d+)S(\d+)", node_id)
-                if m:
-                    plane_val = int(m.group(1))
-                    slot_val = int(m.group(2))
-            node_dict = {
-                "node_id": node_id,
-                "node_type": "ground_station" if node_id.startswith("gs-") else "satellite",
-                "lat_deg": node.get("lat_deg", 0.0),
-                "lon_deg": node.get("lon_deg", 0.0),
-                "alt_km": node.get("alt_km", 0.0),
-                "vel_x_km_s": node.get("vel_x_km_s"),
-                "vel_y_km_s": node.get("vel_y_km_s"),
-                "vel_z_km_s": node.get("vel_z_km_s"),
-                "plane": plane_val,
-                "slot": slot_val,
-            }
-            if node_id in _gs_elevation_map:
-                node_dict["min_elevation_deg"] = _gs_elevation_map[node_id]
-            if node_dict.get("node_type") == "satellite":
-                node_dict["beam_falloff_exponent"] = _beam_falloff_exponent
-            _state["nodes"][node_id] = node_dict
+            elif isinstance(node, EphemerisNodeFixed):
+                existing = _state["nodes"].get(node_id, {})
+                existing.update(
+                    {
+                        "node_id": node_id,
+                        "node_type": "ground_station",
+                        "lat_deg": node.lat_deg,
+                        "lon_deg": node.lon_deg,
+                        "alt_km": node.alt_km,
+                        "vel_x_km_s": 0.0,
+                        "vel_y_km_s": 0.0,
+                        "vel_z_km_s": 0.0,
+                        "plane": None,
+                        "slot": None,
+                    }
+                )
+                if node_id in _gs_elevation_map:
+                    existing["min_elevation_deg"] = _gs_elevation_map[node_id]
+                _state["nodes"][node_id] = existing
 
 
 def _update_link_up(event_data: dict) -> None:
@@ -427,13 +422,13 @@ def _update_almanac_state(event_data: dict) -> None:
 
 
 def _is_stale() -> bool:
-    """Check if position or link data is stale per streaming architecture v1.2 Section 3.5."""
+    """Check if clock or link data is stale per streaming architecture v1.2 Section 3.5."""
     now = _time.monotonic()
     # Don't report stale until we've received at least one message of each type
-    if _last_snapshot_wall_time == 0.0 or _last_link_event_wall_time == 0.0:
+    if _last_clock_tick_wall_time == 0.0 or _last_link_event_wall_time == 0.0:
         return False
     return (
-        now - _last_snapshot_wall_time > _STALE_THRESHOLD_S
+        now - _last_clock_tick_wall_time > _STALE_THRESHOLD_S
         or now - _last_link_event_wall_time > _STALE_THRESHOLD_S
     )
 
@@ -523,7 +518,8 @@ async def _nats_subscriber() -> None:
     Stale detection: tracks wall-clock time of last snapshot and link event.
     If no messages for 15s, data is stale.
     """
-    global _nats_connection, _last_snapshot_wall_time, _last_link_event_wall_time
+    global _nats_connection, _last_clock_tick_wall_time, _last_link_event_wall_time
+    global _cached_ephemeris, _cached_ephemeris_obj
 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     _nats_connection = nc
@@ -538,12 +534,42 @@ async def _nats_subscriber() -> None:
 
     msg_count = 0
 
-    async def _on_snapshot(msg):
-        global _last_snapshot_wall_time
+    async def _on_session_ephemeris(msg):
+        global _cached_ephemeris, _cached_ephemeris_obj
         nonlocal msg_count
         msg_count += 1
-        _update_position(json.loads(msg.data))
-        _last_snapshot_wall_time = _time.monotonic()
+        from nodalarc.models.events import SessionEphemeris
+
+        eph = SessionEphemeris.model_validate_json(msg.data)
+        _cached_ephemeris_obj = eph
+        _cached_ephemeris = json.loads(msg.data)
+        _cached_ephemeris["msg_type"] = "session_ephemeris"
+        log.info(
+            "SessionEphemeris received: epoch_id=%d, %d nodes",
+            eph.epoch_id,
+            len(eph.nodes),
+        )
+        # Initialize node registry from ephemeris (positions computed on first ClockTick)
+        _propagate_positions_from_ephemeris(eph.sim_time.isoformat())
+
+    async def _on_playback_state(msg):
+        nonlocal msg_count
+        msg_count += 1
+        data = json.loads(msg.data)
+        with _state_lock:
+            _state["session_status"] = data.get("state", "unknown")
+
+    async def _on_clock_tick(msg):
+        global _last_clock_tick_wall_time
+        nonlocal msg_count
+        msg_count += 1
+        data = json.loads(msg.data)
+        sim_time_str = data.get("sim_time", "")
+        if sim_time_str:
+            _propagate_positions_from_ephemeris(sim_time_str)
+        with _state_lock:
+            _state["playback_speed"] = data.get("compression_ratio", 1.0)
+        _last_clock_tick_wall_time = _time.monotonic()
 
     async def _on_link_state_snapshot(msg):
         global _last_link_event_wall_time
@@ -582,15 +608,36 @@ async def _nats_subscriber() -> None:
 
     subs = []
     try:
+        # NODALARC_SESSION — SessionEphemeris and PlaybackState (MaxMsgsPerSubject=1)
         subs.append(
             await js.subscribe(
-                SUBJECT_SNAPSHOT,
+                SUBJECT_SESSION_EPHEMERIS,
+                stream=STREAM_SESSION_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                cb=_on_session_ephemeris,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                SUBJECT_PLAYBACK_STATE,
+                stream=STREAM_SESSION_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                cb=_on_playback_state,
+            )
+        )
+        # NODALARC_OME — ClockTick for sim_time advancement and position propagation
+        subs.append(
+            await js.subscribe(
+                SUBJECT_CLOCK_TICK,
                 stream="NODALARC_OME",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
-                cb=_on_snapshot,
+                cb=_on_clock_tick,
             )
         )
+        # NODALARC_LINKS — link state
         subs.append(
             await js.subscribe(
                 SUBJECT_LINK_STATE_SNAPSHOT,
@@ -1037,6 +1084,10 @@ async def ws_state(websocket: WebSocket) -> None:
     _audit_log.info(f"WS_CONNECT ip={ws_ip}")
 
     try:
+        # Send SessionEphemeris as first message if available (PRD v0.71)
+        if _cached_ephemeris:
+            await websocket.send_json(_cached_ephemeris)
+
         while True:
             snapshot = _build_snapshot()
             await websocket.send_json(snapshot)

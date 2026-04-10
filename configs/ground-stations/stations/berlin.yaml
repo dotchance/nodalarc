@@ -1,8 +1,8 @@
 ground_station:
-  name: london
-  lat_deg: 51.51
-  lon_deg: -0.13
-  alt_m: 11
+  name: berlin
+  lat_deg: 52.52
+  lon_deg: 13.40
+  alt_m: 34
   min_elevation_deg: 25
   terminals:
     - type: optical
@@ -10,5 +10,7 @@ ground_station:
       bandwidth_mbps: 1000
       tracking_capacity: 1
   terrestrial_prefixes:
-    - prefix: "172.16.4.0/24"
+    - prefix: "172.16.20.0/24"
       metric: 10
+    - prefix: "0.0.0.0/0"
+      metric: 100

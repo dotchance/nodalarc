@@ -5,7 +5,7 @@ ground_station:
   lat_deg: 11.55
   lon_deg: 43.15
   alt_m: 15
-  min_elevation_deg: 15
+  min_elevation_deg: 25
   terminals:
     - type: rf
       count: 1

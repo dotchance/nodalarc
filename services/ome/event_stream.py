@@ -39,7 +39,6 @@ from ome.visibility import (
     check_ground_visibility,
     check_isl_visibility,
     enforce_symmetric_scheduling,
-    schedule_ground_links,
     schedule_isl_terminals,
 )
 
@@ -129,6 +128,7 @@ class StepContext:
     gs_policies: dict[str, str]
     by_node: dict  # neighbors_by_node result
     sat_isl_terminals: dict[str, int]
+    sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity
     max_range_km: float
     max_tracking_rate_deg_s: float
     field_of_regard_deg: float
@@ -152,9 +152,11 @@ def build_step_context(
     by_node = neighbors_by_node(neighbors)
 
     sat_isl_terminals: dict[str, int] = {}
+    sat_ground_terminals: dict[str, int] = {}
     for sat in satellites:
         nid = addressing.sat_id(sat.plane, sat.slot)
         sat_isl_terminals[nid] = sat.isl_terminal_count
+        sat_ground_terminals[nid] = sat.ground_terminal_count
 
     gs_positions: dict[str, tuple[EcefVec3, GeoPosition]] = {}
     gs_min_elevations: dict[str, float] = {}
@@ -170,7 +172,9 @@ def build_step_context(
             gs_min_elevations[node_id] = (
                 station.min_elevation_deg or gs_file.default_min_elevation_deg or 25.0
             )
-            gs_terminal_counts[node_id] = 1
+            gs_terminal_counts[node_id] = (
+                sum(t.tracking_capacity for t in (station.terminals or [])) or 1
+            )
             gs_policies[node_id] = station.scheduling_policy or default_gs_policy
 
     return StepContext(
@@ -182,6 +186,7 @@ def build_step_context(
         gs_policies=gs_policies,
         by_node=by_node,
         sat_isl_terminals=sat_isl_terminals,
+        sat_ground_terminals=sat_ground_terminals,
         max_range_km=max_range_km,
         max_tracking_rate_deg_s=max_tracking_rate_deg_s,
         field_of_regard_deg=field_of_regard_deg,
@@ -346,14 +351,44 @@ def compute_step(
                 )
         gs_visible_per_station[gs_id] = visible_sats
 
-    # 7. Schedule ground links per station
+    # 7. Global capacity-aware ground link scheduling
+    #
+    # Both GS and satellite terminals are finite hardware resources.
+    # A GS with tracking_capacity=2 can connect to 2 satellites.
+    # A satellite with ground_terminal_count=1 can connect to 1 GS.
+    #
+    # Algorithm: build a global pool of all visible GS-satellite pairs,
+    # sort by elevation (best link quality first), then greedily allocate
+    # decrementing capacity on both sides.
     gs_scheduled: dict[tuple[str, str], bool] = {}
+
+    # Initialize capacity budgets (mutable copies for this step)
+    gs_capacity: dict[str, int] = {
+        gs_id: ctx.gs_terminal_counts.get(gs_id, 1) for gs_id in ctx.gs_positions
+    }
+    sat_capacity: dict[str, int] = {
+        ctx.addressing.sat_id(sat.plane, sat.slot): sat.ground_terminal_count
+        for sat in ctx.satellites
+    }
+
+    # Build flat global pool of all visible pairs
+    global_pairs: list[tuple[float, str, str, float]] = []  # (elev, gs_id, sat_id, range_km)
     for gs_id, visible_sats in gs_visible_per_station.items():
-        tc = ctx.gs_terminal_counts.get(gs_id, 1)
-        policy = ctx.gs_policies.get(gs_id, "highest-elevation")
-        for sl in schedule_ground_links(gs_id, visible_sats, tc, policy):
-            pair = (min(sl.node_a, sl.node_b), max(sl.node_a, sl.node_b))
-            gs_scheduled[pair] = sl.scheduled
+        for gv in visible_sats:
+            global_pairs.append((gv.elevation_deg, gs_id, gv.sat_id, gv.range_km))
+
+    # Sort descending by elevation — highest elevation = best link quality first
+    global_pairs.sort(key=lambda x: x[0], reverse=True)
+
+    # Greedy allocation: best pairs first, decrement both sides
+    for _elev, gs_id, sat_id, _range_km in global_pairs:
+        pair = (min(gs_id, sat_id), max(gs_id, sat_id))
+        if gs_capacity.get(gs_id, 0) > 0 and sat_capacity.get(sat_id, 0) > 0:
+            gs_scheduled[pair] = True
+            gs_capacity[gs_id] -= 1
+            sat_capacity[sat_id] -= 1
+        else:
+            gs_scheduled[pair] = False
 
     # 8. Emit ground visibility events on state changes
     for pair, (visible, range_km, elev_deg) in gs_vis_details.items():

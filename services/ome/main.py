@@ -118,6 +118,8 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
 _time_accel: float = 1.0  # current d(sim)/d(wall) multiplier
 _paused: bool = False  # emission halted?
 _seek_target: float | None = None  # Unix timestamp to seek to, or None
+_epoch_id: int = 0  # current epoch, incremented on each Tier 2 seek
+_seeking: bool = False  # True while seek in progress — mutex for pause/set_speed
 
 
 def run(session_path: str, output_dir: str | None = None) -> Path:
@@ -296,29 +298,51 @@ async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
     import queue
 
     import nats
+    from nodalarc.models.events import PlaybackState
     from nodalarc.nats_channels import (
         MAX_TIME_ACCEL,
         MIN_TIME_ACCEL,
         NATS_CONNECT_OPTIONS,
         SUBJECT_PLAYBACK_CONTROL,
+        SUBJECT_PLAYBACK_STATE,
         nats_url,
     )
 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+    js = nc.jetstream()
     logging.info("OME NATS publisher connected to %s", nats_url())
+
+    async def _publish_playback_state(state: str) -> None:
+        """Publish PlaybackState to NODALARC_SESSION stream."""
+        ps = PlaybackState(epoch_id=_epoch_id, state=state)
+        await js.publish(SUBJECT_PLAYBACK_STATE, ps.model_dump_json().encode())
+        logging.info("PlaybackState: state=%s epoch_id=%d", state, _epoch_id)
 
     # --- Playback control subscriber (R-OME-008B Tier 1) ---
 
     async def _handle_playback(msg) -> None:
-        global _time_accel, _paused
+        global _time_accel, _paused, _seeking, _seek_target, _epoch_id
         try:
             cmd = json.loads(msg.data)
             action = cmd.get("action", "")
+
+            # Seeking mutex: reject pause/set_speed during seek
+            if _seeking and action in ("pause", "set_speed"):
+                reply = {
+                    "error": f"cannot {action} during seek (epoch_id={_epoch_id})",
+                    "paused": _paused,
+                    "speed": _time_accel,
+                }
+                await msg.respond(json.dumps(reply).encode())
+                return
+
             if action == "pause":
                 _paused = True
+                await _publish_playback_state("paused")
                 logging.info("Playback paused (speed=%.1f)", _time_accel)
             elif action == "resume":
                 _paused = False
+                await _publish_playback_state("playing")
                 logging.info("Playback resumed (speed=%.1f)", _time_accel)
             elif action == "set_speed":
                 factor = float(cmd.get("factor", 1.0))
@@ -333,17 +357,17 @@ async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
                 _time_accel = factor
                 logging.info("Playback speed set to %.1fx", factor)
             elif action == "seek":
-                global _seek_target
+                _epoch_id += 1
+                _seeking = True
                 target_str = cmd.get("target_sim_time")
                 if target_str:
                     _seek_target = datetime.fromisoformat(target_str).timestamp()
                 else:
-                    # "Reset to now" — OME resolves authoritatively per R-OME-005
                     _seek_target = datetime.now(UTC).timestamp()
-                # Seek implies resume: user asked to go somewhere, show it.
                 _paused = False
+                await _publish_playback_state("seeking")
                 target_iso = datetime.fromtimestamp(_seek_target, UTC).isoformat()
-                logging.info("Seek requested: %s (auto-resumed)", target_iso)
+                logging.info("Seek requested: %s epoch_id=%d (auto-resumed)", target_iso, _epoch_id)
             elif action == "get_status":
                 pass  # fall through to reply with current state
             else:
@@ -354,7 +378,11 @@ async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
                 }
                 await msg.respond(json.dumps(reply).encode())
                 return
-            await msg.respond(json.dumps({"paused": _paused, "speed": _time_accel}).encode())
+            await msg.respond(
+                json.dumps(
+                    {"paused": _paused, "speed": _time_accel, "epoch_id": _epoch_id}
+                ).encode()
+            )
         except Exception as exc:
             logging.error("Playback control error: %s", exc)
             await msg.respond(json.dumps({"error": str(exc)}).encode())
@@ -375,7 +403,10 @@ async def _nats_publisher_loop(event_queue, shutdown_event) -> None:
                 break
 
             subject, payload = item
-            await nc.publish(subject, payload)
+            if subject.startswith("nodalarc.session."):
+                await js.publish(subject, payload)
+            else:
+                await nc.publish(subject, payload)
     except asyncio.CancelledError:
         pass
     except Exception as exc:
@@ -396,16 +427,18 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     """
     import queue
 
-    from nodalarc.models.events import ClockTick
+    from nodalarc.models.events import ClockTick, PlaybackState
     from nodalarc.nats_channels import (
         SUBJECT_CLOCK_TICK,
         SUBJECT_LINK_STATE_SNAPSHOT,
+        SUBJECT_PLAYBACK_STATE,
+        SUBJECT_SESSION_EPHEMERIS,
         SUBJECT_SNAPSHOT,
         SUBJECT_VISIBILITY_EVENT,
     )
     from nodalarc.platform import get_platform_config
 
-    from ome.event_stream import build_link_state_snapshot
+    from ome.event_stream import build_link_state_snapshot, build_session_ephemeris
 
     _start_health_server()
 
@@ -422,7 +455,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
 
     # Initialize Pacemaker rate from static compression (R-OME-008B Part 1).
     # Runtime set_speed commands replace this value dynamically.
-    global _time_accel, _seek_target
+    global _time_accel, _seek_target, _seeking
     _time_accel = float(compression)
     snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
@@ -531,6 +564,34 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
         period,
     )
 
+    # --- Session start sequence (epoch_id=0) ---
+    # Indistinguishable from seek to epoch 0 per PRD v0.71.
+    # Order: SessionEphemeris → LinkStateSnapshot → PlaybackState(playing)
+    # → then tick loop begins with first ClockTick(epoch_id=0).
+    eph = build_session_ephemeris(step_ctx, epoch_unix, _epoch_id)
+    _enqueue(SUBJECT_SESSION_EPHEMERIS, eph.model_dump_json().encode())
+    logging.info("Published SessionEphemeris epoch_id=%d (%d nodes)", _epoch_id, len(eph.nodes))
+
+    # Force initial LinkStateSnapshot with epoch_id (empty — no links at step 0)
+    snapshot_seq += 1
+    initial_snap = build_link_state_snapshot(
+        isl_state=running_isl_state,
+        gs_state=running_gs_state,
+        interface_map=interface_map,
+        sim_time=datetime.fromtimestamp(epoch_unix, UTC),
+        seq=snapshot_seq,
+        interval_s=snapshot_interval_s,
+        positions=None,
+        epoch_id=_epoch_id,
+    )
+    _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, initial_snap.model_dump_json().encode())
+    last_snapshot_sim_s = 0.0
+    force_first_snapshot = False
+
+    ps = PlaybackState(epoch_id=_epoch_id, state="playing")
+    _enqueue(SUBJECT_PLAYBACK_STATE, ps.model_dump_json().encode())
+    logging.info("Published PlaybackState(playing, epoch_id=%d)", _epoch_id)
+
     try:
         while not shutdown_event.is_set():
             step_start = time.monotonic()
@@ -552,12 +613,37 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 pace_ref_step = 0
                 current_rate = _time_accel
                 last_snapshot_sim_s = -snapshot_interval_s
-                force_first_snapshot = True
+                force_first_snapshot = False  # we publish it explicitly below
                 lookahead.cancel()
                 lookahead_launched_for_epoch = None
+
+                # Publish epoch dependencies for the new epoch_id
+                # (epoch_id was already incremented by the publisher thread's seek handler)
+                eph = build_session_ephemeris(step_ctx, epoch_unix, _epoch_id)
+                _enqueue(SUBJECT_SESSION_EPHEMERIS, eph.model_dump_json().encode())
+
+                snapshot_seq += 1
+                seek_snap = build_link_state_snapshot(
+                    isl_state=running_isl_state,
+                    gs_state=running_gs_state,
+                    interface_map=interface_map,
+                    sim_time=datetime.fromtimestamp(epoch_unix, UTC),
+                    seq=snapshot_seq,
+                    interval_s=snapshot_interval_s,
+                    positions=None,
+                    epoch_id=_epoch_id,
+                )
+                _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, seek_snap.model_dump_json().encode())
+                last_snapshot_sim_s = 0.0
+
+                ps = PlaybackState(epoch_id=_epoch_id, state="playing")
+                _enqueue(SUBJECT_PLAYBACK_STATE, ps.model_dump_json().encode())
+                _seeking = False  # Clear seeking mutex
+
                 logging.info(
-                    "Seek applied: new epoch %s",
+                    "Seek applied: new epoch %s epoch_id=%d",
                     datetime.fromtimestamp(seek_to, UTC).isoformat(),
+                    _epoch_id,
                 )
 
             # --- Launch look-ahead if not already running for this epoch ---
@@ -621,6 +707,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 sim_time=sim_time,
                 wall_time=datetime.now(UTC),
                 compression_ratio=float(current_rate),
+                epoch_id=_epoch_id,
             )
             _enqueue(SUBJECT_CLOCK_TICK, ct.model_dump_json().encode())
 
@@ -636,6 +723,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     seq=snapshot_seq,
                     interval_s=snapshot_interval_s,
                     positions=current_positions,
+                    epoch_id=_epoch_id,
                 )
                 _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, snap.model_dump_json().encode())
                 last_snapshot_sim_s = sim_s

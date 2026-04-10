@@ -5,9 +5,12 @@
 Published via NATS JetStream.
 """
 
-from datetime import datetime
+from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from datetime import datetime
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class NodePosition(BaseModel):
@@ -75,13 +78,19 @@ class VisibilityEvent(BaseModel):
 
 
 class ClockTick(BaseModel):
-    """Pacing clock signal — published once per tick during pacing."""
+    """Pacing clock signal — published once per tick during pacing.
+
+    epoch_id identifies which epoch this tick belongs to. Edges in
+    SUSPENDED state drop ClockTick messages until epoch_id matches
+    the expected epoch. See PRD v0.71 epoch synchronization protocol.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     sim_time: datetime
     wall_time: datetime
     compression_ratio: float
+    epoch_id: int = 0
 
 
 class HeartbeatTick(BaseModel):
@@ -104,3 +113,78 @@ class TimelinePositionSnapshot(BaseModel):
 
     sim_time: datetime
     positions: dict[str, NodePosition]  # node_id -> position for ALL nodes
+
+
+# ---------------------------------------------------------------------------
+# Distributed ephemeris model (PRD v0.71)
+# ---------------------------------------------------------------------------
+
+
+class EphemerisNodeKeplerian(BaseModel):
+    """Orbital elements for a parametric satellite.
+
+    Fields mirror OrbitalElements from constellation.py. The propagator
+    derives semi_major_axis from altitude_km and assumes circular orbit
+    (eccentricity=0).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["keplerian"] = "keplerian"
+    altitude_km: float
+    inclination_deg: float
+    raan_deg: float
+    true_anomaly_deg: float
+    plane: int
+    slot: int
+
+
+class EphemerisNodeFixed(BaseModel):
+    """Fixed geodetic position for a ground station."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["fixed"] = "fixed"
+    lat_deg: float
+    lon_deg: float
+    alt_km: float
+
+
+EphemerisNode = Annotated[
+    EphemerisNodeKeplerian | EphemerisNodeFixed,
+    Field(discriminator="type"),
+]
+
+
+class SessionEphemeris(BaseModel):
+    """Orbital elements for all nodes, distributed once per epoch.
+
+    Published to NODALARC_SESSION stream (MaxMsgsPerSubject=1) at
+    session start (epoch_id=0) and immediately after each Tier 2 seek.
+    Late-joining subscribers always get the current ephemeris.
+
+    Edges instantiate local propagators from this payload and compute
+    positions on demand. No per-tick position data is broadcast.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    epoch_id: int
+    sim_time: datetime
+    epoch_unix: float  # Unix timestamp for propagation dt calculation
+    nodes: dict[str, EphemerisNode]
+
+
+class PlaybackState(BaseModel):
+    """OME playback state — seeking/playing/paused.
+
+    Published to NODALARC_SESSION stream (MaxMsgsPerSubject=1) at every
+    state transition. Late-joining subscribers immediately know current
+    state. The 'seeking' state is a mutex — edges must suspend until
+    all epoch dependencies are satisfied.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    epoch_id: int
+    state: Literal["seeking", "playing", "paused"]

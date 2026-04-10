@@ -13,8 +13,8 @@ import {
   EARTH_RADIUS,
 } from "../config";
 import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, updateSunWorldDirection, setGlobeMode } from "./earth";
-import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites } from "./satellites";
-import { resetSimClock, interpolatedSimTimeMs, setPlaybackPaused } from "../sim/simClock";
+import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites, setEphemeris } from "./satellites";
+import { resetSimClock, interpolatedSimTimeMs, setPlaybackPaused, onSnapshot } from "../sim/simClock";
 import { gmstRadians, EARTH_ROTATION_RATE_RAD_S } from "./astronomy";
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
@@ -45,6 +45,7 @@ export interface GlobeActions {
 
 interface GlobeViewProps {
   snapshot: StateSnapshot | null;
+  ephemeris: import("../sim/ephemeris").SessionEphemeris | null;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
   colorMode: ColorMode;
@@ -59,6 +60,7 @@ interface GlobeViewProps {
 
 export function GlobeView({
   snapshot,
+  ephemeris,
   selection,
   onSelect,
   colorMode,
@@ -280,6 +282,8 @@ export function GlobeView({
       // Update entities when snapshot changes
       if (snap && snap !== lastSnapshotRef) {
         lastSnapshotRef = snap;
+        // Feed sim clock with snapshot's sim_time for interpolation
+        onSnapshot(snap.sim_time, performance.now());
         updateSatellites(snap.nodes, earthFrame, colorModeRef.current, snap.sim_time);
         updateGroundStations(snap.nodes, earthFrame, labelContainer);
         updateLinks(snap.links, earthFrame, showIslLinksRef.current);
@@ -380,9 +384,14 @@ export function GlobeView({
     setGlobeMode(globeMode);
   }, [globeMode]);
 
+  // Pass ephemeris to satellite renderer for local propagation (PRD v0.71)
+  useEffect(() => {
+    setEphemeris(ephemeris);
+  }, [ephemeris]);
+
   // Freeze/unfreeze simClock on pause/resume (R-OME-008B: d(sim)/d(wall) = 0).
   // When paused, interpolatedSimTimeMs returns a constant, freezing both
-  // satellite lerp timing and Earth rotation in lockstep.
+  // satellite propagation and Earth rotation in lockstep.
   useEffect(() => {
     setPlaybackPaused(playbackPaused);
   }, [playbackPaused]);

@@ -1,13 +1,16 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-/** WebSocket hook — connects to VS-API, parses StateSnapshot, drops intermediate frames. */
+/** WebSocket hook — connects to VS-API, parses StateSnapshot and SessionEphemeris. */
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getWsUrl, fetchApiKey } from "../config";
 import type { StateSnapshot } from "../types";
+import type { SessionEphemeris, PlaybackStateMsg } from "../sim/ephemeris";
 
 interface WebSocketState {
   snapshot: StateSnapshot | null;
+  ephemeris: SessionEphemeris | null;
+  playbackState: PlaybackStateMsg | null;
   connected: boolean;
   hasEverConnected: boolean;
   kicked: boolean;
@@ -15,6 +18,9 @@ interface WebSocketState {
 
 export function useWebSocket(): WebSocketState {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
+  const [ephemeris, setEphemeris] = useState<SessionEphemeris | null>(null);
+  const [playbackState, setPlaybackState] =
+    useState<PlaybackStateMsg | null>(null);
   const [connected, setConnected] = useState(false);
   const [hasEverConnected, setHasEverConnected] = useState(false);
   const [kicked, setKicked] = useState(false);
@@ -38,8 +44,27 @@ export function useWebSocket(): WebSocketState {
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data as string) as StateSnapshot;
-        setSnapshot(data);
+        const data = JSON.parse(event.data as string);
+
+        // SessionEphemeris — sent on connect and on epoch change
+        if (data.msg_type === "session_ephemeris") {
+          setEphemeris(data as SessionEphemeris);
+          return;
+        }
+
+        // PlaybackState — sent on state transitions
+        if (
+          data.state &&
+          data.epoch_id !== undefined &&
+          !data.sim_time &&
+          !data.schema_version
+        ) {
+          setPlaybackState(data as PlaybackStateMsg);
+          return;
+        }
+
+        // StateSnapshot — the regular per-tick payload
+        setSnapshot(data as StateSnapshot);
       } catch {
         // Drop malformed frames
       }
@@ -54,10 +79,8 @@ export function useWebSocket(): WebSocketState {
         return;
       }
       // Only auto-retry after having connected at least once (VF spec Section 14).
-      // On initial startup failure, show error screen with manual Retry button.
       if (everConnectedRef.current) {
         if (ev.code === 4401 || ev.code === 4003 || ev.code === 1008) {
-          // Auth failure — reset backoff, re-fetch key, then reconnect quickly
           retriesRef.current = 0;
         }
         fetchApiKey().finally(() => scheduleReconnect());
@@ -83,5 +106,12 @@ export function useWebSocket(): WebSocketState {
     };
   }, [connect]);
 
-  return { snapshot, connected, hasEverConnected, kicked };
+  return {
+    snapshot,
+    ephemeris,
+    playbackState,
+    connected,
+    hasEverConnected,
+    kicked,
+  };
 }

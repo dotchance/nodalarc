@@ -2,7 +2,7 @@
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** GlobeView — Three.js globe with satellites, ground stations, and links. */
 
-import { useEffect, useRef, type MutableRefObject } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
@@ -19,7 +19,7 @@ import { gmstRadians, EARTH_ROTATION_RATE_RAD_S } from "./astronomy";
 import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
-import { updateOrbitalTrails, flushTrails } from "./orbitalTrails";
+import { updateOrbitalTrails, flushTrails, notifyEpochChange } from "./orbitalTrails";
 import { updateOrbitPins, clearOrbitPins, reseedAllPins } from "./orbitPins";
 import { updateAllOrbits, clearAllOrbits } from "./allOrbits";
 import { setupRaycaster } from "./raycaster";
@@ -46,6 +46,7 @@ export interface GlobeActions {
 interface GlobeViewProps {
   snapshot: StateSnapshot | null;
   ephemeris: import("../sim/ephemeris").SessionEphemeris | null;
+  playbackState: import("../sim/ephemeris").PlaybackStateMsg | null;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
   colorMode: ColorMode;
@@ -61,6 +62,7 @@ interface GlobeViewProps {
 export function GlobeView({
   snapshot,
   ephemeris,
+  playbackState,
   selection,
   onSelect,
   colorMode,
@@ -387,7 +389,23 @@ export function GlobeView({
   // Pass ephemeris to satellite renderer for local propagation (PRD v0.71)
   useEffect(() => {
     setEphemeris(ephemeris);
+    if (ephemeris) {
+      notifyEpochChange(ephemeris.epoch_id);
+    }
   }, [ephemeris]);
+
+  // Epoch suspension overlay (PRD v0.71 seek protocol)
+  // On PlaybackState "seeking": show overlay, flush trails.
+  // Cleared when new ephemeris arrives (seeking → playing transition).
+  const [seeking, setSeeking] = useState(false);
+  useEffect(() => {
+    if (playbackState?.state === "seeking") {
+      setSeeking(true);
+      flushTrails();
+    } else if (playbackState?.state === "playing") {
+      setSeeking(false);
+    }
+  }, [playbackState]);
 
   // Freeze/unfreeze simClock on pause/resume (R-OME-008B: d(sim)/d(wall) = 0).
   // When paused, interpolatedSimTimeMs returns a constant, freezing both
@@ -431,6 +449,37 @@ export function GlobeView({
           overflow: "hidden",
         }}
       />
+      {seeking && (
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(0, 0, 0, 0.6)",
+            pointerEvents: "none",
+            zIndex: 10,
+          }}
+        >
+          <div
+            style={{
+              color: "#fff",
+              fontSize: "1.5rem",
+              fontFamily: "monospace",
+              padding: "1rem 2rem",
+              border: "1px solid rgba(255, 255, 255, 0.3)",
+              borderRadius: "8px",
+              backgroundColor: "rgba(0, 0, 0, 0.7)",
+            }}
+          >
+            Recalculating Epoch...
+          </div>
+        </div>
+      )}
     </div>
   );
 }

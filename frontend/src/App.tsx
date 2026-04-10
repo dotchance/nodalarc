@@ -374,6 +374,7 @@ function AppInner() {
           <GlobeView
             snapshot={augmentedSnapshot}
             ephemeris={ephemeris}
+            playbackState={playbackState}
             selection={selection}
             onSelect={select}
             colorMode={colorMode}

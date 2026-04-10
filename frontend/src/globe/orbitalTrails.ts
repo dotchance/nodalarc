@@ -40,6 +40,10 @@ interface TrailEntry {
 const trails = new Map<string, TrailEntry>();
 let trailsVisible = true;
 
+/** Last seen epoch_id. Trail buffers are flushed on epoch change (seek)
+ *  to avoid ghost lines from a previous orbital epoch. */
+let _lastEpochId: number | null = null;
+
 const TRAIL_COLOR = new THREE.Color(0x6699dd);
 
 // Reusable temporary for world-position sampling each frame.
@@ -77,6 +81,16 @@ function createTrail(scene: THREE.Scene): TrailEntry {
     colAttr,
     frame: 0,
   };
+}
+
+/** Notify trails of a new epoch_id. Flushes all trail history if the
+ *  epoch changed (seek occurred — old trail points are from a different
+ *  orbital epoch and would produce ghost lines). */
+export function notifyEpochChange(epochId: number): void {
+  if (_lastEpochId !== null && epochId !== _lastEpochId) {
+    flushTrails();
+  }
+  _lastEpochId = epochId;
 }
 
 /** Flush all trail history (call after tab-resume to avoid ghost lines). */

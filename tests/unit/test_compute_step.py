@@ -1,6 +1,11 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Tests for compute_step() — verifies per-step output matches batch window prefix."""
+"""Tests for compute_step() — verifies per-step output matches batch window prefix.
+
+compute_step() returns (events, positions) where events is a list of
+TimelineEvent (ClockTick + zero or more VisibilityEvents) and positions
+is a dict of NodePosition for all nodes at that step.
+"""
 
 from __future__ import annotations
 
@@ -68,7 +73,9 @@ class TestComputeStepMatchesWindow:
         gs_state: dict = {}
         step_events_all = []
         for step in range(n_steps + 1):
-            evts = compute_step(ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state)
+            evts, _positions = compute_step(
+                ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state
+            )
             step_events_all.extend(evts)
 
         # Must produce identical event count
@@ -136,18 +143,42 @@ class TestComputeStepMatchesWindow:
         gs_state: dict = {}
 
         # Step 0 may emit initial visibility events
-        events_0 = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state)
+        events_0, _pos0 = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state)
         vis_count_0 = sum(1 for e in events_0 if e.event_type == "VisibilityEvent")
 
         # Step 1 should emit fewer or zero VisibilityEvents (state hasn't changed in 1 second)
-        events_1 = compute_step(ctx, epoch_unix, 1, step_seconds, 0.0, isl_state, gs_state)
+        events_1, _pos1 = compute_step(ctx, epoch_unix, 1, step_seconds, 0.0, isl_state, gs_state)
         vis_count_1 = sum(1 for e in events_1 if e.event_type == "VisibilityEvent")
 
-        # Every step emits exactly 1 ClockTick and 1 Snapshot
+        # Every step emits exactly 1 ClockTick (Snapshot removed in PRD v0.71)
         non_vis_0 = [e for e in events_0 if e.event_type != "VisibilityEvent"]
-        assert len(non_vis_0) == 2  # ClockTick + Snapshot
+        assert len(non_vis_0) == 1  # ClockTick only
         non_vis_1 = [e for e in events_1 if e.event_type != "VisibilityEvent"]
-        assert len(non_vis_1) == 2
+        assert len(non_vis_1) == 1
 
         # Step 1 should have fewer visibility events than step 0 (or equal if nothing changed)
         assert vis_count_1 <= vis_count_0
+
+    def test_positions_returned_alongside_events(self):
+        """compute_step() returns positions dict alongside events."""
+        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        epoch_unix = 1704067200.0
+        step_seconds = session.time.step_seconds
+
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=addressing,
+            gs_file=gs_file,
+            neighbors=neighbors,
+        )
+        isl_state: dict = {}
+        gs_state: dict = {}
+
+        events, positions = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state)
+        assert isinstance(positions, dict)
+        assert len(positions) > 0
+        # Positions should include both satellites and ground stations
+        sat_count = sum(1 for k in positions if k.startswith("sat-"))
+        gs_count = sum(1 for k in positions if k.startswith("gs-"))
+        assert sat_count > 0
+        assert gs_count >= 0  # May be 0 if no GS configured

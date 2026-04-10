@@ -23,6 +23,8 @@ STREAM_SESSION_EVENTS = "NODALARC_SESSION"
 
 # OME publications (JetStream — retained)
 SUBJECT_VISIBILITY_EVENT = "nodalarc.ome.visibility"
+# DEPRECATED (PRD v0.71): No component publishes or subscribes to Snapshot.
+# Position data distributed via SessionEphemeris on NODALARC_SESSION stream.
 SUBJECT_SNAPSHOT = "nodalarc.ome.snapshot"
 SUBJECT_CLOCK_TICK = "nodalarc.ome.clock"
 SUBJECT_HEARTBEAT = "nodalarc.ome.heartbeat"

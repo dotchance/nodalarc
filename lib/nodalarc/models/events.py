@@ -103,10 +103,14 @@ class HeartbeatTick(BaseModel):
 
 
 class TimelinePositionSnapshot(BaseModel):
-    """Positions for ALL nodes at a given simulation time.
+    """DEPRECATED (PRD v0.71) — Retained as historical reference only.
 
-    Embedded in ClockTick events in the JSON Lines timeline file.
-    The TO uses these in Discrete-Event Mode for latency computation.
+    No component publishes or subscribes to this model. Position data is
+    distributed via SessionEphemeris (once per epoch) and computed locally
+    by each edge using the shared Keplerian propagator.
+
+    Previously: Positions for ALL nodes at a given simulation time,
+    published every tick via NATS JetStream.
     """
 
     model_config = ConfigDict(frozen=True)

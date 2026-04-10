@@ -5,14 +5,14 @@ ground_station:
   lat_deg: 35.68
   lon_deg: 139.69
   alt_m: 40
-  min_elevation_deg: 15
+  min_elevation_deg: 25
   terminals:
-    - type: rf
-      count: 1
+    - type: optical
+      count: 2
       bandwidth_mbps: 1000
       tracking_capacity: 1
   terrestrial_prefixes:
-    - prefix: "172.16.11.0/24"
+    - prefix: "172.16.14.0/24"
       metric: 10
     - prefix: "0.0.0.0/0"
       metric: 100

@@ -1,7 +1,7 @@
 session:
-  name: starlink-176-isis-te-area
+  name: starlink-176-isis-te
 constellation: configs/constellations/starlink-176.yaml
-ground_stations: configs/ground-stations/sets/global.yaml
+ground_stations: configs/ground-stations/sets/starlink-176.yaml
 routing:
   protocol: isis
   extensions:

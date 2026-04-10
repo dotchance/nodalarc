@@ -186,37 +186,15 @@ class Dispatcher:
         # Start dispatch worker BEFORE subscriptions — ready to receive work
         worker_task = asyncio.create_task(self._dispatch_worker(nc))
 
-        # Subscribe to LinkStateSnapshot — get latest retained message
-        # and queue it for the dispatch worker (non-blocking).
-        # CRITICAL: unsubscribe after pull. Leaving this subscription active
-        # causes 261KB messages to accumulate in its pending queue every 5s,
-        # hitting the 256MB pending_bytes_limit after ~17 minutes and
-        # triggering SlowConsumerError on the NATS connection.
-        try:
-            sub_snap = await js.subscribe(
-                SUBJECT_LINK_STATE_SNAPSHOT,
-                stream="NODALARC_LINKS",
-                ordered_consumer=True,
-            )
-            try:
-                msg = await sub_snap.next_msg(timeout=5)
-                snapshot = LinkStateSnapshot.model_validate_json(msg.data)
-                desired = self._build_desired_from_snapshot(snapshot)
-                if desired is not None:
-                    await self._dispatch_queue.put(desired)
-                    log.info(
-                        "Initial snapshot queued: seq=%d, %d links",
-                        snapshot.snapshot_seq,
-                        len(desired),
-                    )
-            except nats.errors.TimeoutError:
-                log.info("No initial LinkStateSnapshot available — waiting for OME")
-            finally:
-                await sub_snap.unsubscribe()
-        except Exception as exc:
-            log.warning("LinkStateSnapshot subscription failed: %s", exc)
+        # NOTE: No explicit catch-up pull. The SUSPENDED state machine is
+        # the single source of startup state. The live LinkStateSnapshot
+        # subscription below uses DeliverPolicy.LAST_PER_SUBJECT, which
+        # delivers the JetStream-retained snapshot (MaxMsgsPerSubject=1)
+        # immediately on subscribe. The _on_link_state_snapshot callback
+        # buffers it until the SUSPENDED state machine resumes on the
+        # first ClockTick(epoch_id=N) with all dependencies satisfied.
 
-        # --- Callback-driven subscriptions (DeliverPolicy.NEW) ---
+        # --- Callback-driven subscriptions ---
         # Callbacks compute desired state and put it on the dispatch queue.
         # They NEVER await Node Agent I/O. They return in microseconds.
         from nats.js.api import DeliverPolicy
@@ -228,9 +206,22 @@ class Dispatcher:
             nonlocal last_sim_time
             data = json.loads(msg.data)
             vis = VisibilityEvent.model_validate(data)
-            pending_vis.append(vis)
 
+            # While SUSPENDED: discard the event entirely. The buffered
+            # LinkStateSnapshot at resume is the authoritative full state
+            # for that epoch. Events arriving during suspension are either:
+            #   - already incorporated into the buffered snapshot (older
+            #     sim_time), or
+            #   - from the new epoch but pre-resume (not safe to apply
+            #     until ephemeris and snapshot for the new epoch are loaded)
+            # In either case, dropping them is correct — the next live
+            # snapshot or live event after resume will reconcile any drift.
+            if self._suspended:
+                return
+
+            pending_vis.append(vis)
             snap_sim = vis.sim_time
+
             if last_sim_time is not None and snap_sim != last_sim_time:
                 delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
                 if delta_ms > self._epsilon_ms and pending_vis:
@@ -385,12 +376,16 @@ class Dispatcher:
                 )
             )
             # NODALARC_LINKS stream — LinkStateSnapshot and SubstrateLatency
+            # LAST_PER_SUBJECT delivers the retained snapshot
+            # (MaxMsgsPerSubject=1 on NODALARC_LINKS) immediately on subscribe,
+            # then continues with new snapshots as OME publishes them.
+            # The buffered snapshot is the sole startup catch-up path.
             subs.append(
                 await js.subscribe(
                     SUBJECT_LINK_STATE_SNAPSHOT,
                     stream="NODALARC_LINKS",
                     ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
+                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
                     cb=_on_link_state_snapshot,
                 )
             )

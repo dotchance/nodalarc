@@ -1,9 +1,10 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Latency model — computes one-way latency from range.
+"""Latency model — computes one-way latency from local Keplerian propagation.
 
-Maintains a position table updated from TimelinePositionSnapshot events.
-Determines when latency changes exceed the update threshold.
+Holds orbital elements from SessionEphemeris. Propagates only the two
+endpoints of a link on demand (never the full constellation). Ground
+station positions are static ECEF.
 
 Does NOT apply tc commands, manage interfaces, or know about convergence.
 """
@@ -11,51 +12,97 @@ Does NOT apply tc commands, manage interfaces, or know about convergence.
 from __future__ import annotations
 
 from nodalarc.geo import compute_latency_ms, compute_range_km, geodetic_to_ecef
-from nodalarc.models.events import TimelinePositionSnapshot
+from nodalarc.models.events import (
+    EphemerisNodeFixed,
+    EphemerisNodeKeplerian,
+    SessionEphemeris,
+)
+from nodalarc.orbital import elements_from_params
+from nodalarc.propagator import propagate_keplerian
 
 
 class PositionTable:
-    """Maintains current ECEF positions for all nodes.
+    """Local Keplerian propagator for on-demand latency computation.
 
-    Updated from TimelinePositionSnapshot at each timestep. Internally
-    converts geodetic NodePosition (lat/lon/alt) to ECEF for distance
-    computation.
+    Initialized from SessionEphemeris. Propagates satellite positions
+    from orbital elements at the requested sim_time. Ground stations
+    are static ECEF positions.
     """
 
     def __init__(self) -> None:
-        self._positions: dict[str, tuple[float, float, float]] = {}
+        self._sat_elements: dict[str, object] = {}  # node_id -> OrbitalElements
+        self._gs_ecef: dict[str, tuple[float, float, float]] = {}  # node_id -> (x, y, z)
+        self._epoch_unix: float = 0.0
+        self._loaded = False
 
-    def update_from_snapshot(self, snapshot: TimelinePositionSnapshot) -> None:
-        """Update positions from a timeline snapshot (geodetic → ECEF)."""
-        for node_id, pos in snapshot.positions.items():
-            self._positions[node_id] = geodetic_to_ecef(
-                pos.lat_deg,
-                pos.lon_deg,
-                pos.alt_km,
-            )
+    @property
+    def loaded(self) -> bool:
+        """True if ephemeris has been loaded."""
+        return self._loaded
 
-    def get_position(self, node_id: str) -> tuple[float, float, float] | None:
-        """Get the current ECEF position for a node."""
-        return self._positions.get(node_id)
+    def load_ephemeris(self, ephemeris: SessionEphemeris) -> None:
+        """Load orbital elements from SessionEphemeris.
 
-    def compute_link_range(self, node_a: str, node_b: str) -> float | None:
-        """Compute range between two nodes in km.
-
-        Returns None if either node's position is unknown.
+        Satellites get OrbitalElements for on-demand propagation.
+        Ground stations get static ECEF positions (no propagation needed).
         """
-        pos_a = self._positions.get(node_a)
-        pos_b = self._positions.get(node_b)
+        self._sat_elements.clear()
+        self._gs_ecef.clear()
+        self._epoch_unix = ephemeris.epoch_unix
+
+        for node_id, node in ephemeris.nodes.items():
+            if isinstance(node, EphemerisNodeKeplerian):
+                self._sat_elements[node_id] = elements_from_params(
+                    node.altitude_km,
+                    node.inclination_deg,
+                    node.raan_deg,
+                    node.true_anomaly_deg,
+                )
+            elif isinstance(node, EphemerisNodeFixed):
+                ecef = geodetic_to_ecef(node.lat_deg, node.lon_deg, node.alt_km)
+                self._gs_ecef[node_id] = ecef
+
+        self._loaded = True
+
+    def _get_ecef(self, node_id: str, sim_time_unix: float) -> tuple[float, float, float] | None:
+        """Get ECEF position for a node at the given sim_time.
+
+        Satellites: propagate from orbital elements.
+        Ground stations: return cached static position.
+        """
+        if node_id in self._gs_ecef:
+            return self._gs_ecef[node_id]
+
+        elements = self._sat_elements.get(node_id)
+        if elements is None:
+            return None
+
+        dt = sim_time_unix - self._epoch_unix
+        pos_ecef, _vel, _geo = propagate_keplerian(elements, self._epoch_unix, dt)
+        return (pos_ecef.x, pos_ecef.y, pos_ecef.z)
+
+    def compute_link_range(
+        self, node_a: str, node_b: str, sim_time_unix: float = 0.0
+    ) -> float | None:
+        """Compute range between two nodes in km at the given sim_time.
+
+        Returns None if either node's elements are unknown.
+        """
+        pos_a = self._get_ecef(node_a, sim_time_unix)
+        pos_b = self._get_ecef(node_b, sim_time_unix)
         if pos_a is None or pos_b is None:
             return None
         return compute_range_km(pos_a, pos_b)
 
-    def compute_link_latency(self, node_a: str, node_b: str) -> float | None:
-        """Compute one-way latency between two nodes in ms.
+    def compute_link_latency(
+        self, node_a: str, node_b: str, sim_time_unix: float = 0.0
+    ) -> float | None:
+        """Compute one-way latency between two nodes in ms at the given sim_time.
 
-        Returns None if either node's position is unknown.
+        Returns None if either node's elements are unknown.
         """
-        pos_a = self._positions.get(node_a)
-        pos_b = self._positions.get(node_b)
+        pos_a = self._get_ecef(node_a, sim_time_unix)
+        pos_b = self._get_ecef(node_b, sim_time_unix)
         if pos_a is None or pos_b is None:
             return None
         range_km = compute_range_km(pos_a, pos_b)
@@ -65,17 +112,18 @@ class PositionTable:
         self,
         active_links: set[tuple[str, str]],
         last_latencies: dict[tuple[str, str], float],
+        sim_time_unix: float = 0.0,
         threshold_ms: float = 0.1,
     ) -> list[tuple[str, str, float, float]]:
         """Find active links where latency changed beyond threshold.
 
-        Returns list of (node_a, node_b, new_latency_ms, range_km) for
-        links that need a tc netem update.
+        Propagates only the endpoints of active links at sim_time_unix.
+        Returns list of (node_a, node_b, new_latency_ms, range_km).
         """
         updates: list[tuple[str, str, float, float]] = []
         for node_a, node_b in active_links:
-            pos_a = self._positions.get(node_a)
-            pos_b = self._positions.get(node_b)
+            pos_a = self._get_ecef(node_a, sim_time_unix)
+            pos_b = self._get_ecef(node_b, sim_time_unix)
             if pos_a is None or pos_b is None:
                 continue
             range_km = compute_range_km(pos_a, pos_b)

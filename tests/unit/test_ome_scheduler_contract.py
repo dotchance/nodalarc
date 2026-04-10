@@ -1,13 +1,14 @@
-"""B.3A Contract test: GS deallocation consistency across Scheduler code paths.
+"""B.3A Contract test: GS deallocation + distributed ephemeris contracts.
 
 Tests the ACTUAL Dispatcher code — no logic extraction, no duplication.
 Constructs a minimal Dispatcher with mocked Node Agent, feeds events through
 real _build_desired_from_snapshot() and _dispatch_batch() paths, asserts
 desired/active state.
 
-Covers PRD B.3A requirement: GS links must not accumulate. Two paths:
-  1. _build_desired_from_snapshot (replace-not-merge from R-OME-009)
-  2. _dispatch_batch (live VisibilityEvent → _reconcile_links)
+Covers:
+  PRD B.3A: GS links must not accumulate (two code paths)
+  PRD v0.71: SessionEphemeris, PlaybackState serialization contracts;
+             epoch_id presence on ClockTick and LinkStateSnapshot
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import threading
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import (
     AdminState,
@@ -254,3 +256,207 @@ class TestGsDeallocationConsistency:
         # Both must agree
         assert pair not in desired, "snapshot desired did not exclude GS pair"
         assert pair not in d2._active_links, "_dispatch_batch did not remove GS pair"
+
+
+# ---------------------------------------------------------------------------
+# PRD v0.71 — Distributed ephemeris serialization contracts
+# ---------------------------------------------------------------------------
+
+
+class TestSessionEphemerisContract:
+    """SessionEphemeris must serialize and deserialize faithfully.
+
+    This is the contract between the OME (publisher) and every edge
+    (Scheduler, VS-API, VF) that consumes ephemeris data. If any field
+    is silently dropped or mistyped, edges compute wrong positions.
+    """
+
+    def test_keplerian_node_round_trip(self):
+        from nodalarc.models.events import EphemerisNodeKeplerian, SessionEphemeris
+
+        eph = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            epoch_unix=1735689600.0,
+            nodes={
+                "sat-P00S00": EphemerisNodeKeplerian(
+                    altitude_km=550.0,
+                    inclination_deg=53.0,
+                    raan_deg=22.5,
+                    true_anomaly_deg=45.0,
+                    plane=0,
+                    slot=0,
+                ),
+            },
+        )
+        restored = SessionEphemeris.model_validate_json(eph.model_dump_json())
+        sat = restored.nodes["sat-P00S00"]
+        assert isinstance(sat, EphemerisNodeKeplerian)
+        assert sat.altitude_km == 550.0
+        assert sat.inclination_deg == 53.0
+        assert sat.raan_deg == 22.5
+        assert sat.true_anomaly_deg == 45.0
+        assert sat.plane == 0
+        assert sat.slot == 0
+
+    def test_fixed_node_round_trip(self):
+        from nodalarc.models.events import EphemerisNodeFixed, SessionEphemeris
+
+        eph = SessionEphemeris(
+            epoch_id=3,
+            sim_time=datetime(2025, 6, 15, tzinfo=UTC),
+            epoch_unix=1750000000.0,
+            nodes={
+                "gs-ashburn": EphemerisNodeFixed(
+                    lat_deg=39.04,
+                    lon_deg=-77.49,
+                    alt_km=0.095,
+                ),
+            },
+        )
+        restored = SessionEphemeris.model_validate_json(eph.model_dump_json())
+        gs = restored.nodes["gs-ashburn"]
+        assert isinstance(gs, EphemerisNodeFixed)
+        assert gs.lat_deg == 39.04
+        assert gs.lon_deg == -77.49
+        assert gs.alt_km == 0.095
+
+    def test_epoch_id_and_epoch_unix_preserved(self):
+        from nodalarc.models.events import SessionEphemeris
+
+        eph = SessionEphemeris(
+            epoch_id=42,
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            epoch_unix=1735689600.0,
+            nodes={},
+        )
+        restored = SessionEphemeris.model_validate_json(eph.model_dump_json())
+        assert restored.epoch_id == 42
+        assert restored.epoch_unix == 1735689600.0
+
+    def test_discriminated_union_dispatches_correctly(self):
+        """JSON with type='keplerian' must produce EphemerisNodeKeplerian,
+        type='fixed' must produce EphemerisNodeFixed."""
+        from nodalarc.models.events import (
+            EphemerisNodeFixed,
+            EphemerisNodeKeplerian,
+            SessionEphemeris,
+        )
+
+        eph = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            epoch_unix=1735689600.0,
+            nodes={
+                "sat-P00S00": EphemerisNodeKeplerian(
+                    altitude_km=550.0,
+                    inclination_deg=53.0,
+                    raan_deg=0.0,
+                    true_anomaly_deg=0.0,
+                    plane=0,
+                    slot=0,
+                ),
+                "gs-test": EphemerisNodeFixed(lat_deg=0.0, lon_deg=0.0, alt_km=0.0),
+            },
+        )
+        restored = SessionEphemeris.model_validate_json(eph.model_dump_json())
+        assert type(restored.nodes["sat-P00S00"]).__name__ == "EphemerisNodeKeplerian"
+        assert type(restored.nodes["gs-test"]).__name__ == "EphemerisNodeFixed"
+
+
+class TestPlaybackStateContract:
+    """PlaybackState must serialize faithfully and reject invalid states."""
+
+    def test_round_trip_all_states(self):
+        from nodalarc.models.events import PlaybackState
+
+        for state in ("seeking", "playing", "paused"):
+            ps = PlaybackState(epoch_id=5, state=state)
+            restored = PlaybackState.model_validate_json(ps.model_dump_json())
+            assert restored.state == state
+            assert restored.epoch_id == 5
+
+    def test_invalid_state_rejected(self):
+        from nodalarc.models.events import PlaybackState
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PlaybackState(epoch_id=0, state="rewinding")
+
+
+class TestEpochIdOnClockTickAndLinkStateSnapshot:
+    """epoch_id must be present on ClockTick and LinkStateSnapshot.
+
+    Without epoch_id, edges cannot distinguish messages from different
+    epochs and will apply stale state after a seek.
+    """
+
+    def test_clock_tick_has_epoch_id_field(self):
+        from nodalarc.models.events import ClockTick
+
+        ct = ClockTick(
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            wall_time=datetime(2025, 1, 1, tzinfo=UTC),
+            compression_ratio=1.0,
+            epoch_id=7,
+        )
+        data = ct.model_dump(mode="json")
+        assert "epoch_id" in data
+        assert data["epoch_id"] == 7
+
+    def test_clock_tick_epoch_id_survives_json(self):
+        from nodalarc.models.events import ClockTick
+
+        ct = ClockTick(
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            wall_time=datetime(2025, 1, 1, tzinfo=UTC),
+            compression_ratio=10.0,
+            epoch_id=99,
+        )
+        restored = ClockTick.model_validate_json(ct.model_dump_json())
+        assert restored.epoch_id == 99
+
+    def test_clock_tick_epoch_id_defaults_to_zero(self):
+        """Pre-v0.71 ClockTick payloads without epoch_id must default to 0."""
+        from nodalarc.models.events import ClockTick
+
+        json_str = '{"sim_time":"2025-01-01T00:00:00Z","wall_time":"2025-01-01T00:00:00Z","compression_ratio":1.0}'
+        ct = ClockTick.model_validate_json(json_str)
+        assert ct.epoch_id == 0
+
+    def test_link_state_snapshot_has_epoch_id_field(self):
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(),
+            interval_s=5.0,
+            epoch_id=3,
+        )
+        data = snapshot.model_dump(mode="json")
+        assert "epoch_id" in data
+        assert data["epoch_id"] == 3
+
+    def test_link_state_snapshot_epoch_id_survives_json(self):
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            snapshot_seq=50,
+            links=(),
+            interval_s=5.0,
+            epoch_id=12,
+        )
+        restored = LinkStateSnapshot.model_validate_json(snapshot.model_dump_json())
+        assert restored.epoch_id == 12
+        assert restored.snapshot_seq == 50  # seq NOT reset across epochs
+
+    def test_link_state_snapshot_epoch_id_defaults_to_zero(self):
+        """Pre-v0.71 LinkStateSnapshot payloads without epoch_id default to 0."""
+        import json
+
+        data = {
+            "sim_time": "2025-01-01T00:00:00Z",
+            "snapshot_seq": 1,
+            "links": [],
+            "interval_s": 5.0,
+        }
+        snapshot = LinkStateSnapshot.model_validate_json(json.dumps(data))
+        assert snapshot.epoch_id == 0

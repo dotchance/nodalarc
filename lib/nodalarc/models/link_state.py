@@ -79,6 +79,11 @@ class LinkStateSnapshot(BaseModel):
 
     Multi-node: N Scheduler instances applying the same snapshot
     arrive at identical _active_links state. No coordination needed.
+
+    epoch_id identifies which epoch produced this snapshot. Edges must
+    not apply a LinkStateSnapshot until SessionEphemeris with the same
+    epoch_id has been loaded. snapshot_seq continues monotonically
+    across epochs (never reset).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -87,3 +92,4 @@ class LinkStateSnapshot(BaseModel):
     snapshot_seq: int  # monotonically increasing, discard if <= current
     links: tuple[LinkState, ...]
     interval_s: float  # publication interval in sim-seconds
+    epoch_id: int = 0

@@ -96,6 +96,16 @@ export interface StateSnapshot {
   stale: boolean;
 }
 
+// Distributed ephemeris model (PRD v0.71)
+// Re-exported from sim/ephemeris.ts for convenience
+export type {
+  SessionEphemeris,
+  EphemerisNode,
+  EphemerisNodeKeplerian,
+  EphemerisNodeFixed,
+  PlaybackStateMsg,
+} from "./sim/ephemeris";
+
 export interface SessionInfo {
   name: string;
   file: string;

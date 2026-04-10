@@ -22,8 +22,10 @@ from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
+    EphemerisNodeFixed,
+    EphemerisNodeKeplerian,
     NodePosition,
-    TimelinePositionSnapshot,
+    SessionEphemeris,
     VisibilityEvent,
 )
 from nodalarc.models.ground_station import GroundStationFile
@@ -43,6 +45,48 @@ from ome.visibility import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def build_session_ephemeris(
+    ctx: StepContext,
+    epoch_unix: float,
+    epoch_id: int,
+) -> SessionEphemeris:
+    """Build SessionEphemeris from session context.
+
+    Maps satellites to EphemerisNodeKeplerian and ground stations to
+    EphemerisNodeFixed. Published once per epoch to NODALARC_SESSION.
+    """
+    import math
+
+    from nodalarc.constants import EARTH_RADIUS_KM
+
+    nodes: dict[str, EphemerisNodeKeplerian | EphemerisNodeFixed] = {}
+
+    for sat in ctx.satellites:
+        node_id = ctx.addressing.sat_id(sat.plane, sat.slot)
+        nodes[node_id] = EphemerisNodeKeplerian(
+            altitude_km=sat.elements.semi_major_axis_km - EARTH_RADIUS_KM,
+            inclination_deg=math.degrees(sat.elements.inclination_rad),
+            raan_deg=math.degrees(sat.elements.raan_rad),
+            true_anomaly_deg=math.degrees(sat.elements.true_anomaly_rad),
+            plane=sat.plane,
+            slot=sat.slot,
+        )
+
+    for gs_id, (_ecef, geo) in ctx.gs_positions.items():
+        nodes[gs_id] = EphemerisNodeFixed(
+            lat_deg=geo.lat_deg,
+            lon_deg=geo.lon_deg,
+            alt_km=geo.alt_km,
+        )
+
+    return SessionEphemeris(
+        epoch_id=epoch_id,
+        sim_time=datetime.fromtimestamp(epoch_unix, tz=UTC),
+        epoch_unix=epoch_unix,
+        nodes=nodes,
+    )
 
 
 class TimelineEvent:
@@ -75,7 +119,7 @@ def _compute_positions(
     return positions
 
 
-def _build_snapshot(
+def _build_positions(
     sat_positions: dict[str, tuple[EcefVec3, EcefVec3, GeoPosition]],
     gs_positions: dict[str, tuple[EcefVec3, GeoPosition]],
 ) -> dict[str, NodePosition]:
@@ -203,14 +247,16 @@ def compute_step(
     timestamp_offset: float,
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
     gs_state: dict[tuple[str, str], tuple[bool, bool]],
-) -> list[TimelineEvent]:
+) -> tuple[list[TimelineEvent], dict[str, NodePosition]]:
     """Compute one step of the timeline. Mutates isl_state and gs_state in place.
 
-    Returns list of events for this step (ClockTick, Snapshot, zero or more
-    VisibilityEvents). Pure computation — no I/O, no wall-time awareness.
+    Returns (events, positions) where events is a list of TimelineEvent
+    (ClockTick + zero or more VisibilityEvents) and positions is the
+    NodePosition dict for all nodes at this step (used by the pacing loop
+    for LinkStateSnapshot latency computation).
 
-    This is the Physicist role (R-OME-008B Part 2): pure functions of orbital
-    elements and sim_time. No wall-time concept.
+    Pure computation — no I/O, no wall-time awareness.
+    This is the Physicist role (R-OME-008B Part 2).
     """
     dt = step * step_seconds
     timestamp_s = dt + timestamp_offset
@@ -219,12 +265,8 @@ def compute_step(
     # 1. Compute all satellite positions
     sat_positions = _compute_positions(ctx.satellites, ctx.addressing, epoch_unix, dt)
 
-    # 2. Build ClockTick with snapshot
-    snapshot_positions = _build_snapshot(sat_positions, ctx.gs_positions)
-    snapshot = TimelinePositionSnapshot(
-        sim_time=sim_time,
-        positions=snapshot_positions,
-    )
+    # 2. Build positions dict (for LinkStateSnapshot latency) and ClockTick
+    positions = _build_positions(sat_positions, ctx.gs_positions)
     clock_tick = ClockTick(
         sim_time=sim_time,
         wall_time=sim_time,  # Placeholder — Pacemaker overrides with real wall_time at emission
@@ -232,7 +274,6 @@ def compute_step(
     )
     events: list[TimelineEvent] = [
         TimelineEvent(timestamp_s, "ClockTick", clock_tick),
-        TimelineEvent(timestamp_s, "Snapshot", snapshot),
     ]
 
     # 3. Check ISL visibility for all assigned neighbor pairs
@@ -410,7 +451,7 @@ def compute_step(
             )
             events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
 
-    return events
+    return events, positions
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +513,7 @@ def precompute_timeline_window(
     events: list[TimelineEvent] = []
     steps = int(duration_s / step_seconds)
     for step in range(steps + 1):
-        step_events = compute_step(
+        step_events, _positions = compute_step(
             ctx, epoch_unix, step, step_seconds, timestamp_offset, isl_state, gs_state
         )
         events.extend(step_events)
@@ -569,6 +610,7 @@ def build_link_state_snapshot(
     seq: int,
     interval_s: float,
     positions: dict[str, NodePosition] | None = None,
+    epoch_id: int = 0,
 ) -> LinkStateSnapshot:
     """Build a LinkStateSnapshot from OME internal state.
 
@@ -663,4 +705,5 @@ def build_link_state_snapshot(
         snapshot_seq=seq,
         links=tuple(links),
         interval_s=interval_s,
+        epoch_id=epoch_id,
     )

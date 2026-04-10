@@ -13,7 +13,8 @@
       NATS_URL="nats://nodalarc-nats:4222"
       DEADLINE=$(($(date +%s) + 30))
       until nats stream info NODALARC_OME --server="$NATS_URL" 2>/dev/null && \
-            nats stream info NODALARC_LINKS --server="$NATS_URL" 2>/dev/null; do
+            nats stream info NODALARC_LINKS --server="$NATS_URL" 2>/dev/null && \
+            nats stream info NODALARC_SESSION --server="$NATS_URL" 2>/dev/null; do
         if [ "$(date +%s)" -ge "$DEADLINE" ]; then
           echo "FATAL: NATS streams not found after 30s. Aborting."
           exit 1

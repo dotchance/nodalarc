@@ -26,17 +26,19 @@ import threading
 from datetime import UTC, datetime
 
 import nats
-from nodalarc.models.events import TimelinePositionSnapshot, VisibilityEvent
+from nodalarc.models.events import PlaybackState, SessionEphemeris, VisibilityEvent
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
+    STREAM_SESSION_EVENTS,
     SUBJECT_CLOCK_TICK,
     SUBJECT_LATENCY_UPDATE,
     SUBJECT_LINK_DOWN,
     SUBJECT_LINK_STATE_SNAPSHOT,
     SUBJECT_LINK_UP,
-    SUBJECT_SNAPSHOT,
+    SUBJECT_PLAYBACK_STATE,
+    SUBJECT_SESSION_EPHEMERIS,
     SUBJECT_SUBSTRATE_LATENCY,
     SUBJECT_VISIBILITY_EVENT,
     nats_url,
@@ -135,6 +137,15 @@ class Dispatcher:
         # Pairs that failed dispatch and should not be retried.
         self._skip_pairs: set[tuple[str, str]] = set()
 
+        # Epoch synchronization state machine (PRD v0.71)
+        self._suspended = True  # Start SUSPENDED — wait for epoch_id=0 deps
+        self._expected_epoch_id = 0
+        self._playback_playing_received = False
+        self._epoch_deps_met = {"ephemeris": False, "snapshot": False}
+        self._buffered_snapshot: LinkStateSnapshot | None = None
+        self._stale = False
+        self._watchdog_task: asyncio.Task | None = None
+
         # Queue: decision callbacks → dispatch worker
         self._dispatch_queue: asyncio.Queue[dict[tuple[str, str], ActiveLinkInfo] | None] = (
             asyncio.Queue()
@@ -175,37 +186,15 @@ class Dispatcher:
         # Start dispatch worker BEFORE subscriptions — ready to receive work
         worker_task = asyncio.create_task(self._dispatch_worker(nc))
 
-        # Subscribe to LinkStateSnapshot — get latest retained message
-        # and queue it for the dispatch worker (non-blocking).
-        # CRITICAL: unsubscribe after pull. Leaving this subscription active
-        # causes 261KB messages to accumulate in its pending queue every 5s,
-        # hitting the 256MB pending_bytes_limit after ~17 minutes and
-        # triggering SlowConsumerError on the NATS connection.
-        try:
-            sub_snap = await js.subscribe(
-                SUBJECT_LINK_STATE_SNAPSHOT,
-                stream="NODALARC_LINKS",
-                ordered_consumer=True,
-            )
-            try:
-                msg = await sub_snap.next_msg(timeout=5)
-                snapshot = LinkStateSnapshot.model_validate_json(msg.data)
-                desired = self._build_desired_from_snapshot(snapshot)
-                if desired is not None:
-                    await self._dispatch_queue.put(desired)
-                    log.info(
-                        "Initial snapshot queued: seq=%d, %d links",
-                        snapshot.snapshot_seq,
-                        len(desired),
-                    )
-            except nats.errors.TimeoutError:
-                log.info("No initial LinkStateSnapshot available — waiting for OME")
-            finally:
-                await sub_snap.unsubscribe()
-        except Exception as exc:
-            log.warning("LinkStateSnapshot subscription failed: %s", exc)
+        # NOTE: No explicit catch-up pull. The SUSPENDED state machine is
+        # the single source of startup state. The live LinkStateSnapshot
+        # subscription below uses DeliverPolicy.LAST_PER_SUBJECT, which
+        # delivers the JetStream-retained snapshot (MaxMsgsPerSubject=1)
+        # immediately on subscribe. The _on_link_state_snapshot callback
+        # buffers it until the SUSPENDED state machine resumes on the
+        # first ClockTick(epoch_id=N) with all dependencies satisfied.
 
-        # --- Callback-driven subscriptions (DeliverPolicy.NEW) ---
+        # --- Callback-driven subscriptions ---
         # Callbacks compute desired state and put it on the dispatch queue.
         # They NEVER await Node Agent I/O. They return in microseconds.
         from nats.js.api import DeliverPolicy
@@ -217,32 +206,125 @@ class Dispatcher:
             nonlocal last_sim_time
             data = json.loads(msg.data)
             vis = VisibilityEvent.model_validate(data)
-            pending_vis.append(vis)
+
+            # While SUSPENDED: discard the event entirely. The buffered
+            # LinkStateSnapshot at resume is the authoritative full state
+            # for that epoch. Events arriving during suspension are either:
+            #   - already incorporated into the buffered snapshot (older
+            #     sim_time), or
+            #   - from the new epoch but pre-resume (not safe to apply
+            #     until ephemeris and snapshot for the new epoch are loaded)
+            # In either case, dropping them is correct — the next live
+            # snapshot or live event after resume will reconcile any drift.
+            if self._suspended:
+                return
 
             snap_sim = vis.sim_time
+
+            # Flush BEFORE appending the new event. When an event from a
+            # new tick arrives, all events from the previous tick are
+            # complete and ready to dispatch atomically. The new event
+            # then starts accumulating for its own tick.
+            #
+            # The previous (broken) version appended first then flushed,
+            # which dispatched the first event of tick T as part of tick
+            # T-1's batch. Subsequent events from T accumulated alone and
+            # were dispatched in the NEXT cycle. For a GS handover where
+            # the OME emits two events at the same sim_time (the new sat
+            # scheduled + the old sat unscheduled), this split the pair
+            # across two reconciliation cycles, breaking break-before-make:
+            # the new attach completed in cycle N before the old detach
+            # completed in cycle N+1, and the detach brought the shared
+            # GS bridge port DOWN, killing the freshly-established carrier.
             if last_sim_time is not None and snap_sim != last_sim_time:
                 delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
                 if delta_ms > self._epsilon_ms and pending_vis:
                     desired = self._apply_events_to_desired(list(pending_vis))
                     await self._dispatch_queue.put(desired)
                     pending_vis.clear()
+
+            pending_vis.append(vis)
             last_sim_time = snap_sim
 
-        async def _on_snapshot(msg):
-            data = json.loads(msg.data)
-            snap = TimelinePositionSnapshot.model_validate(data)
-            self._position_table.update_from_snapshot(snap)
-            self._current_sim_time = snap.sim_time
+        async def _on_session_ephemeris(msg):
+            eph = SessionEphemeris.model_validate_json(msg.data)
+            if eph.epoch_id == self._expected_epoch_id:
+                self._position_table.load_ephemeris(eph)
+                self._epoch_deps_met["ephemeris"] = True
+                log.info(
+                    "SessionEphemeris epoch_id=%d loaded: %d nodes",
+                    eph.epoch_id,
+                    len(eph.nodes),
+                )
+                await self._check_epoch_resume()
+            else:
+                log.debug(
+                    "SessionEphemeris epoch_id=%d ignored (expected %d)",
+                    eph.epoch_id,
+                    self._expected_epoch_id,
+                )
+
+        async def _on_playback_state(msg):
+            ps = PlaybackState.model_validate_json(msg.data)
+            if ps.state == "seeking" and ps.epoch_id > self._expected_epoch_id:
+                # New seek — enter SUSPENDED state
+                self._suspended = True
+                self._stale = False
+                self._expected_epoch_id = ps.epoch_id
+                self._playback_playing_received = False
+                self._epoch_deps_met = {"ephemeris": False, "snapshot": False}
+                self._buffered_snapshot = None
+                self._latency_update_pending = False
+                self._steps_since_latency_update = 0
+                # Start watchdog
+                if self._watchdog_task and not self._watchdog_task.done():
+                    self._watchdog_task.cancel()
+                self._watchdog_task = asyncio.create_task(self._epoch_watchdog(ps.epoch_id))
+                log.info("SUSPENDED: seeking epoch_id=%d", ps.epoch_id)
+            elif ps.state == "playing" and ps.epoch_id == self._expected_epoch_id:
+                self._playback_playing_received = True
+                log.info("PlaybackState(playing, epoch_id=%d) received", ps.epoch_id)
+                await self._check_epoch_resume()
+            elif ps.state == "paused":
+                log.info("PlaybackState(paused, epoch_id=%d)", ps.epoch_id)
 
         async def _on_clock_tick(msg):
+            nonlocal last_sim_time
             data = json.loads(msg.data)
+            tick_epoch_id = data.get("epoch_id", 0)
+
+            # Drop ClockTick while SUSPENDED or wrong epoch
+            if self._suspended:
+                if tick_epoch_id == self._expected_epoch_id:
+                    # This is the resume trigger — check all conditions
+                    await self._try_resume_on_clock_tick(data)
+                return
+
             tick_sim_str = data.get("sim_time", "")
+            tick_sim_time: datetime | None = None
             if tick_sim_str:
-                self._current_sim_time = datetime.fromisoformat(tick_sim_str)
-            if pending_vis:
-                desired = self._apply_events_to_desired(list(pending_vis))
-                await self._dispatch_queue.put(desired)
-                pending_vis.clear()
+                tick_sim_time = datetime.fromisoformat(tick_sim_str)
+                self._current_sim_time = tick_sim_time
+
+            # Flush ONLY events from sim_times strictly OLDER than this tick.
+            # Events at the same sim_time as this tick may still be in flight
+            # on the visibility subject (cross-subject NATS ordering is not
+            # guaranteed). Flushing them now would split a tick's events
+            # across two dispatch cycles, breaking break-before-make for
+            # GS handovers (which emit two events at the same sim_time).
+            #
+            # When the next vis event from a later sim_time arrives, the
+            # _on_visibility flush-before-append will dispatch this tick's
+            # events atomically. If no later vis events arrive, the next
+            # ClockTick (with sim_time > pending_vis sim_time) will flush.
+            if pending_vis and tick_sim_time is not None:
+                pending_sim = pending_vis[0].sim_time
+                if pending_sim < tick_sim_time:
+                    desired = self._apply_events_to_desired(list(pending_vis))
+                    await self._dispatch_queue.put(desired)
+                    pending_vis.clear()
+                    last_sim_time = tick_sim_time
+
             self._steps_since_latency_update += 1
             if self._steps_since_latency_update >= self._latency_interval:
                 self._latency_update_pending = True
@@ -250,6 +332,20 @@ class Dispatcher:
 
         async def _on_link_state_snapshot(msg):
             snapshot = LinkStateSnapshot.model_validate_json(msg.data)
+
+            if self._suspended:
+                # Buffer if matching epoch_id, discard otherwise
+                if snapshot.epoch_id == self._expected_epoch_id:
+                    self._buffered_snapshot = snapshot
+                    self._epoch_deps_met["snapshot"] = True
+                    log.info(
+                        "Buffered LinkStateSnapshot seq=%d epoch_id=%d",
+                        snapshot.snapshot_seq,
+                        snapshot.epoch_id,
+                    )
+                    await self._check_epoch_resume()
+                return
+
             desired = self._build_desired_from_snapshot(snapshot)
             if desired is not None:
                 log.info(
@@ -275,6 +371,27 @@ class Dispatcher:
 
         subs = []
         try:
+            # NODALARC_SESSION stream — SessionEphemeris and PlaybackState
+            # MaxMsgsPerSubject=1 ensures late-joiner gets current truth
+            subs.append(
+                await js.subscribe(
+                    SUBJECT_SESSION_EPHEMERIS,
+                    stream=STREAM_SESSION_EVENTS,
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                    cb=_on_session_ephemeris,
+                )
+            )
+            subs.append(
+                await js.subscribe(
+                    SUBJECT_PLAYBACK_STATE,
+                    stream=STREAM_SESSION_EVENTS,
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                    cb=_on_playback_state,
+                )
+            )
+            # NODALARC_OME stream — VisibilityEvent and ClockTick
             subs.append(
                 await js.subscribe(
                     SUBJECT_VISIBILITY_EVENT,
@@ -286,15 +403,6 @@ class Dispatcher:
             )
             subs.append(
                 await js.subscribe(
-                    SUBJECT_SNAPSHOT,
-                    stream="NODALARC_OME",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_snapshot,
-                )
-            )
-            subs.append(
-                await js.subscribe(
                     SUBJECT_CLOCK_TICK,
                     stream="NODALARC_OME",
                     ordered_consumer=True,
@@ -302,12 +410,17 @@ class Dispatcher:
                     cb=_on_clock_tick,
                 )
             )
+            # NODALARC_LINKS stream — LinkStateSnapshot and SubstrateLatency
+            # LAST_PER_SUBJECT delivers the retained snapshot
+            # (MaxMsgsPerSubject=1 on NODALARC_LINKS) immediately on subscribe,
+            # then continues with new snapshots as OME publishes them.
+            # The buffered snapshot is the sole startup catch-up path.
             subs.append(
                 await js.subscribe(
                     SUBJECT_LINK_STATE_SNAPSHOT,
                     stream="NODALARC_LINKS",
                     ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
+                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
                     cb=_on_link_state_snapshot,
                 )
             )
@@ -380,7 +493,10 @@ class Dispatcher:
                             continue
 
                     bandwidth = self._bandwidth_map.get(pair, 1000.0)
-                    latency = self._position_table.compute_link_latency(vis.node_a, vis.node_b)
+                    sim_unix = vis.sim_time.timestamp() if vis.sim_time else 0.0
+                    latency = self._position_table.compute_link_latency(
+                        vis.node_a, vis.node_b, sim_unix
+                    )
                     if latency is None:
                         latency = 3.0
 
@@ -428,7 +544,10 @@ class Dispatcher:
                 pair = (link.node_a, link.node_b)
                 latency = link.latency_ms
                 if latency is None:
-                    latency = self._position_table.compute_link_latency(link.node_a, link.node_b)
+                    sim_unix = snapshot.sim_time.timestamp() if snapshot.sim_time else 0.0
+                    latency = self._position_table.compute_link_latency(
+                        link.node_a, link.node_b, sim_unix
+                    )
                 if latency is None:
                     latency = 3.0
 
@@ -466,7 +585,7 @@ class Dispatcher:
     async def _dispatch_batch(
         self,
         vis_events: list[VisibilityEvent],
-        snapshots: list[TimelinePositionSnapshot],
+        snapshots: list,
         to_pub,
     ) -> None:
         """Process a batch of VisibilityEvents — builds desired and reconciles.
@@ -935,7 +1054,8 @@ class Dispatcher:
             if agents and agents <= successful_agents:
                 added.add(pair)
                 info = desired[pair]
-                range_km = self._position_table.compute_link_range(pair[0], pair[1])
+                sim_unix = sim_time.timestamp() if sim_time else 0.0
+                range_km = self._position_table.compute_link_range(pair[0], pair[1], sim_unix)
                 event = LinkUp(
                     sim_time=sim_time,
                     wall_time=now,
@@ -963,7 +1083,10 @@ class Dispatcher:
         """
 
         active_set = set(self._actual_links.keys())
-        updates = self._position_table.get_links_needing_update(active_set, self._last_latencies)
+        sim_time_unix = self._current_sim_time.timestamp() if self._current_sim_time else 0.0
+        updates = self._position_table.get_links_needing_update(
+            active_set, self._last_latencies, sim_time_unix=sim_time_unix
+        )
         if not updates:
             return
 
@@ -1080,3 +1203,94 @@ class Dispatcher:
                     raise
         except Exception:
             pass  # Checkpoint failure is non-fatal
+
+    # ------------------------------------------------------------------
+    # Epoch synchronization state machine (PRD v0.71)
+    # ------------------------------------------------------------------
+
+    async def _check_epoch_resume(self) -> None:
+        """Check if all epoch dependencies are met for resume.
+
+        Does NOT resume — resume only happens on ClockTick. This just
+        logs readiness for debugging.
+        """
+        if not self._suspended:
+            return
+        deps = self._epoch_deps_met
+        if deps["ephemeris"] and deps["snapshot"] and self._playback_playing_received:
+            log.info(
+                "Epoch %d: all deps met — waiting for first ClockTick to resume",
+                self._expected_epoch_id,
+            )
+
+    async def _try_resume_on_clock_tick(self, tick_data: dict) -> None:
+        """Attempt to resume from SUSPENDED on a ClockTick with matching epoch_id.
+
+        ALL 4 conditions must be true:
+        1. PlaybackState(playing, N) received
+        2. SessionEphemeris(N) loaded
+        3. LinkStateSnapshot(N) buffered
+        4. ClockTick(epoch_id=N) received (this call)
+        """
+        if not self._suspended:
+            return
+
+        if not self._playback_playing_received:
+            return
+        if not self._epoch_deps_met["ephemeris"]:
+            return
+        if not self._epoch_deps_met["snapshot"]:
+            return
+
+        # All conditions met — RESUME
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+
+        self._suspended = False
+        self._stale = False
+
+        # Apply the buffered LinkStateSnapshot
+        if self._buffered_snapshot:
+            desired = self._build_desired_from_snapshot(self._buffered_snapshot)
+            if desired is not None:
+                log.info(
+                    "Epoch %d resume: applying buffered snapshot seq=%d (%d links)",
+                    self._expected_epoch_id,
+                    self._buffered_snapshot.snapshot_seq,
+                    len(desired),
+                )
+                await self._dispatch_queue.put(desired)
+            self._buffered_snapshot = None
+
+        # Process the triggering ClockTick normally
+        tick_sim_str = tick_data.get("sim_time", "")
+        if tick_sim_str:
+            self._current_sim_time = datetime.fromisoformat(tick_sim_str)
+
+        log.info(
+            "RESUMED: epoch_id=%d sim_time=%s",
+            self._expected_epoch_id,
+            self._current_sim_time,
+        )
+
+    async def _epoch_watchdog(self, epoch_id: int) -> None:
+        """30-second watchdog for epoch synchronization.
+
+        If the epoch doesn't resume within 30 seconds, log STALE/ERROR.
+        Do NOT crash. Wait for operator intervention (new seek clears stale).
+        """
+        try:
+            await asyncio.sleep(30)
+            if self._suspended and self._expected_epoch_id == epoch_id:
+                self._stale = True
+                deps = self._epoch_deps_met
+                log.error(
+                    "STALE/ERROR: seek epoch_id=%d timed out after 30s. "
+                    "deps: ephemeris=%s snapshot=%s playing=%s",
+                    epoch_id,
+                    deps["ephemeris"],
+                    deps["snapshot"],
+                    self._playback_playing_received,
+                )
+        except asyncio.CancelledError:
+            pass  # Normal — watchdog cancelled on successful resume

@@ -219,15 +219,31 @@ class Dispatcher:
             if self._suspended:
                 return
 
-            pending_vis.append(vis)
             snap_sim = vis.sim_time
 
+            # Flush BEFORE appending the new event. When an event from a
+            # new tick arrives, all events from the previous tick are
+            # complete and ready to dispatch atomically. The new event
+            # then starts accumulating for its own tick.
+            #
+            # The previous (broken) version appended first then flushed,
+            # which dispatched the first event of tick T as part of tick
+            # T-1's batch. Subsequent events from T accumulated alone and
+            # were dispatched in the NEXT cycle. For a GS handover where
+            # the OME emits two events at the same sim_time (the new sat
+            # scheduled + the old sat unscheduled), this split the pair
+            # across two reconciliation cycles, breaking break-before-make:
+            # the new attach completed in cycle N before the old detach
+            # completed in cycle N+1, and the detach brought the shared
+            # GS bridge port DOWN, killing the freshly-established carrier.
             if last_sim_time is not None and snap_sim != last_sim_time:
                 delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
                 if delta_ms > self._epsilon_ms and pending_vis:
                     desired = self._apply_events_to_desired(list(pending_vis))
                     await self._dispatch_queue.put(desired)
                     pending_vis.clear()
+
+            pending_vis.append(vis)
             last_sim_time = snap_sim
 
         async def _on_session_ephemeris(msg):
@@ -273,6 +289,7 @@ class Dispatcher:
                 log.info("PlaybackState(paused, epoch_id=%d)", ps.epoch_id)
 
         async def _on_clock_tick(msg):
+            nonlocal last_sim_time
             data = json.loads(msg.data)
             tick_epoch_id = data.get("epoch_id", 0)
 
@@ -284,12 +301,30 @@ class Dispatcher:
                 return
 
             tick_sim_str = data.get("sim_time", "")
+            tick_sim_time: datetime | None = None
             if tick_sim_str:
-                self._current_sim_time = datetime.fromisoformat(tick_sim_str)
-            if pending_vis:
-                desired = self._apply_events_to_desired(list(pending_vis))
-                await self._dispatch_queue.put(desired)
-                pending_vis.clear()
+                tick_sim_time = datetime.fromisoformat(tick_sim_str)
+                self._current_sim_time = tick_sim_time
+
+            # Flush ONLY events from sim_times strictly OLDER than this tick.
+            # Events at the same sim_time as this tick may still be in flight
+            # on the visibility subject (cross-subject NATS ordering is not
+            # guaranteed). Flushing them now would split a tick's events
+            # across two dispatch cycles, breaking break-before-make for
+            # GS handovers (which emit two events at the same sim_time).
+            #
+            # When the next vis event from a later sim_time arrives, the
+            # _on_visibility flush-before-append will dispatch this tick's
+            # events atomically. If no later vis events arrive, the next
+            # ClockTick (with sim_time > pending_vis sim_time) will flush.
+            if pending_vis and tick_sim_time is not None:
+                pending_sim = pending_vis[0].sim_time
+                if pending_sim < tick_sim_time:
+                    desired = self._apply_events_to_desired(list(pending_vis))
+                    await self._dispatch_queue.put(desired)
+                    pending_vis.clear()
+                    last_sim_time = tick_sim_time
+
             self._steps_since_latency_update += 1
             if self._steps_since_latency_update >= self._latency_interval:
                 self._latency_update_pending = True

@@ -23,6 +23,7 @@ class LinkUp(BaseModel):
     interface_b: str
     latency_ms: float
     bandwidth_mbps: float
+    range_km: float = 0.0
     reason: str  # vis_gained, gs_above_horizon, scenario_inject_up, scenario_reconciliation
 
 

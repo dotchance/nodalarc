@@ -331,8 +331,10 @@ def _update_link_up(event_data: dict) -> None:
             "link_reason": event_data.get("reason", ""),
             "latency_ms": event_data.get("latency_ms", 0.0),
             "bandwidth_mbps": event_data.get("bandwidth_mbps", 0.0),
-            "range_km": 0.0,
+            "range_km": event_data.get("range_km", 0.0),
             "traffic_load_pct": None,
+            "interface_a": event_data.get("interface_a", ""),
+            "interface_b": event_data.get("interface_b", ""),
         }
     # Only notify tracer on actual state change
     if is_new and _continuous_tracer is not None:
@@ -691,6 +693,8 @@ def _apply_link_state_snapshot(data: dict) -> None:
                     "bandwidth_mbps": link.bandwidth_mbps or 0.0,
                     "range_km": 0.0,
                     "traffic_load_pct": None,
+                    "interface_a": link.interface_a,
+                    "interface_b": link.interface_b,
                 }
 
     isl = sum(1 for k in _state["links"] if not k.startswith("gs-"))

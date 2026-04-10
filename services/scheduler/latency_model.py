@@ -38,6 +38,17 @@ class PositionTable:
         """Get the current ECEF position for a node."""
         return self._positions.get(node_id)
 
+    def compute_link_range(self, node_a: str, node_b: str) -> float | None:
+        """Compute range between two nodes in km.
+
+        Returns None if either node's position is unknown.
+        """
+        pos_a = self._positions.get(node_a)
+        pos_b = self._positions.get(node_b)
+        if pos_a is None or pos_b is None:
+            return None
+        return compute_range_km(pos_a, pos_b)
+
     def compute_link_latency(self, node_a: str, node_b: str) -> float | None:
         """Compute one-way latency between two nodes in ms.
 

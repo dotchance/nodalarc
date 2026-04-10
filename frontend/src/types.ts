@@ -34,6 +34,8 @@ export interface LinkState {
   bandwidth_mbps: number;
   range_km: number;
   traffic_load_pct: number | null;
+  interface_a: string;
+  interface_b: string;
 }
 
 export interface TracedPath {

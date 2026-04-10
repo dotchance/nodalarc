@@ -88,6 +88,7 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
           <h3>ISL Links</h3>
           {islLinks.map((l) => {
             const peer = l.node_a === node.node_id ? l.node_b : l.node_a;
+            const localIface = l.node_a === node.node_id ? l.interface_a : l.interface_b;
             const stateUp = l.state === "active";
             return (
               <div className="detail-row detail-row--clickable" key={`${l.node_a}:${l.node_b}`}>
@@ -96,7 +97,7 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
                   onClick={() => selectPeer(peer)}
                   title={`Select ${peer}`}
                 >
-                  {peer}
+                  {localIface ? `${localIface}: ` : ""}{peer}
                 </span>
                 <span
                   className="detail-value"
@@ -120,6 +121,7 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
           <h3>Ground Links</h3>
           {gndLinks.map((l) => {
             const peer = l.node_a === node.node_id ? l.node_b : l.node_a;
+            const localIface = l.node_a === node.node_id ? l.interface_a : l.interface_b;
             return (
               <div className="detail-row detail-row--clickable" key={`${l.node_a}:${l.node_b}`}>
                 <span
@@ -127,7 +129,7 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
                   onClick={() => selectPeer(peer)}
                   title={`Select ${peer}`}
                 >
-                  {peer}
+                  {localIface ? `${localIface}: ` : ""}{peer}
                 </span>
                 <span
                   className="detail-value"

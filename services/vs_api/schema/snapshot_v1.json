@@ -93,6 +93,16 @@
             }
           ],
           "title": "Traffic Load Pct"
+        },
+        "interface_a": {
+          "default": "",
+          "title": "Interface A",
+          "type": "string"
+        },
+        "interface_b": {
+          "default": "",
+          "title": "Interface B",
+          "type": "string"
         }
       },
       "required": [
@@ -239,17 +249,21 @@
               "type": "null"
             }
           ],
+          "default": null,
           "title": "Routing Area"
         },
         "neighbor_count": {
+          "default": 0,
           "title": "Neighbor Count",
           "type": "integer"
         },
         "isl_count": {
+          "default": 0,
           "title": "Isl Count",
           "type": "integer"
         },
         "gnd_count": {
+          "default": 0,
           "title": "Gnd Count",
           "type": "integer"
         },
@@ -264,6 +278,30 @@
           ],
           "default": null,
           "title": "Prefix"
+        },
+        "min_elevation_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Elevation Deg"
+        },
+        "beam_falloff_exponent": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Beam Falloff Exponent"
         }
       },
       "required": [
@@ -276,11 +314,7 @@
         "vel_y_km_s",
         "vel_z_km_s",
         "plane",
-        "slot",
-        "routing_area",
-        "neighbor_count",
-        "isl_count",
-        "gnd_count"
+        "slot"
       ],
       "title": "NodeState",
       "type": "object"
@@ -336,6 +370,100 @@
           },
           "title": "Hops",
           "type": "array"
+        },
+        "reverse_hops": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Reverse Hops",
+          "type": "array"
+        },
+        "hop_rtts": {
+          "default": [],
+          "items": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Hop Rtts",
+          "type": "array"
+        },
+        "reverse_hop_rtts": {
+          "default": [],
+          "items": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Reverse Hop Rtts",
+          "type": "array"
+        },
+        "rtt_ms": {
+          "default": 0.0,
+          "title": "Rtt Ms",
+          "type": "number"
+        },
+        "reverse_rtt_ms": {
+          "default": 0.0,
+          "title": "Reverse Rtt Ms",
+          "type": "number"
+        },
+        "asymmetry_detected": {
+          "default": false,
+          "title": "Asymmetry Detected",
+          "type": "boolean"
+        },
+        "method": {
+          "default": "tracepath",
+          "title": "Method",
+          "type": "string"
+        },
+        "path_valid_until": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path Valid Until"
+        },
+        "path_valid_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path Valid Seconds"
+        },
+        "traced_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Traced At"
         }
       },
       "required": [
@@ -449,6 +577,21 @@
       ],
       "default": null,
       "title": "Session Status Detail"
+    },
+    "playback_paused": {
+      "default": false,
+      "title": "Playback Paused",
+      "type": "boolean"
+    },
+    "playback_speed": {
+      "default": 1.0,
+      "title": "Playback Speed",
+      "type": "number"
+    },
+    "stale": {
+      "default": false,
+      "title": "Stale",
+      "type": "boolean"
     }
   },
   "required": [

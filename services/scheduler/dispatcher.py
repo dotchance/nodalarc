@@ -935,6 +935,7 @@ class Dispatcher:
             if agents and agents <= successful_agents:
                 added.add(pair)
                 info = desired[pair]
+                range_km = self._position_table.compute_link_range(pair[0], pair[1])
                 event = LinkUp(
                     sim_time=sim_time,
                     wall_time=now,
@@ -944,6 +945,7 @@ class Dispatcher:
                     interface_b=info.interface_b,
                     latency_ms=info.latency_ms,
                     bandwidth_mbps=info.bandwidth_mbps,
+                    range_km=range_km or 0.0,
                     reason="vis_gained",
                 )
                 asyncio.ensure_future(nc.publish(SUBJECT_LINK_UP, event.model_dump_json().encode()))

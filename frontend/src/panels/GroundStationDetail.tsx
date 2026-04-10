@@ -72,6 +72,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
       <h3>Uplinks ({connectedLinks.length})</h3>
       {connectedLinks.map((l) => {
         const peer = l.node_a === node.node_id ? l.node_b : l.node_a;
+        const localIface = l.node_a === node.node_id ? l.interface_a : l.interface_b;
         return (
           <div className="detail-row detail-row--clickable" key={`${l.node_a}:${l.node_b}`}>
             <span
@@ -79,7 +80,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
               onClick={() => selectPeer(peer)}
               title={`Select ${peer}`}
             >
-              {peer}
+              {localIface ? `${localIface}: ` : ""}{peer}
             </span>
             <span className="detail-value">
               {l.state === "active" ? "UP" : "DOWN"} {l.latency_ms.toFixed(1)}ms

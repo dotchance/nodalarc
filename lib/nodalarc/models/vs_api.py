@@ -48,6 +48,8 @@ class LinkState(BaseModel):
     bandwidth_mbps: float
     range_km: float
     traffic_load_pct: float | None  # None = no probe data (distinct from 0)
+    interface_a: str = ""
+    interface_b: str = ""
 
 
 class TracedPath(BaseModel):

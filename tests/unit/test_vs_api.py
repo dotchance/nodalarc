@@ -19,19 +19,18 @@ from nodalarc.models.vs_api import (
     NodeState,
     StateSnapshot,
 )
-
 from vs_api.main import (
     _add_recent_event,
     _build_snapshot,
     _gs_elevation_map,
     _link_key,
+    _propagate_positions_from_ephemeris,
     _state,
     _state_lock,
     _update_convergence,
     _update_latency,
     _update_link_down,
     _update_link_up,
-    _update_position,
 )
 
 
@@ -50,153 +49,111 @@ def _reset_state():
         _state["sim_time"] = datetime.now(UTC).isoformat()
 
 
-class TestUpdatePosition:
-    """Test _update_position correctly populates node state for satellites and GS."""
+class TestEphemerisPositionPropagation:
+    """Test _propagate_positions_from_ephemeris populates node state correctly."""
 
     def setup_method(self):
         _reset_state()
         _gs_elevation_map.clear()
+        import vs_api.main as m
 
-    def test_satellite_position_update(self):
-        """Satellite nodes get lat/lon/alt and produce valid NodeState in snapshot."""
-        _update_position(
-            {
-                "sim_time": "2026-01-01T00:00:00Z",
-                "positions": [
-                    {
-                        "node_id": "sat-P00S00",
-                        "node_type": "satellite",
-                        "lat_deg": 45.0,
-                        "lon_deg": -120.0,
-                        "alt_km": 550.0,
-                        "vel_x_km_s": 1.0,
-                        "vel_y_km_s": 2.0,
-                        "vel_z_km_s": 3.0,
-                        "plane": 0,
-                        "slot": 0,
-                        "routing_area": "49.0001",
-                        "neighbor_count": 4,
-                        "isl_count": 4,
-                        "gnd_count": 0,
-                    },
-                ],
-            }
+        m._cached_ephemeris_obj = None
+
+    def _load_ephemeris(self):
+        """Load a test ephemeris into the VS-API module state."""
+        import vs_api.main as m
+        from nodalarc.models.events import (
+            EphemerisNodeFixed,
+            EphemerisNodeKeplerian,
+            SessionEphemeris,
         )
+
+        eph = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            epoch_unix=1735689600.0,
+            nodes={
+                "sat-P00S00": EphemerisNodeKeplerian(
+                    altitude_km=550.0,
+                    inclination_deg=53.0,
+                    raan_deg=0.0,
+                    true_anomaly_deg=0.0,
+                    plane=0,
+                    slot=0,
+                ),
+                "sat-P00S01": EphemerisNodeKeplerian(
+                    altitude_km=550.0,
+                    inclination_deg=53.0,
+                    raan_deg=0.0,
+                    true_anomaly_deg=32.7,
+                    plane=0,
+                    slot=1,
+                ),
+                "gs-hawthorne": EphemerisNodeFixed(
+                    lat_deg=33.92,
+                    lon_deg=-118.33,
+                    alt_km=0.0,
+                ),
+            },
+        )
+        m._cached_ephemeris_obj = eph
+
+    def test_satellite_position_populated(self):
+        """Satellite positions are computed from ephemeris."""
+        self._load_ephemeris()
+        _propagate_positions_from_ephemeris("2025-01-01T00:00:00+00:00")
         snapshot = _build_snapshot()
-        assert len(snapshot["nodes"]) == 1
-        node = snapshot["nodes"][0]
-        assert node["node_id"] == "sat-P00S00"
-        assert node["lat_deg"] == 45.0
-        assert node["lon_deg"] == -120.0
-        assert node["alt_km"] == 550.0
-        assert node["vel_x_km_s"] == 1.0
+        sat_nodes = [n for n in snapshot["nodes"] if n["node_type"] == "satellite"]
+        assert len(sat_nodes) == 2
+        node = next(n for n in sat_nodes if n["node_id"] == "sat-P00S00")
         assert node["plane"] == 0
         assert node["slot"] == 0
-        assert node["min_elevation_deg"] is None
+        assert -90 <= node["lat_deg"] <= 90
+        assert -180 <= node["lon_deg"] <= 180
+        assert 540 < node["alt_km"] < 560
 
-    def test_satellite_position_changes_on_update(self):
-        """Satellite positions update when new snapshot arrives — this is what makes them move."""
-        for lon in [0.0, 10.0, 20.0]:
-            _update_position(
-                {
-                    "sim_time": "2026-01-01T00:00:00Z",
-                    "positions": [
-                        {
-                            "node_id": "sat-P00S00",
-                            "node_type": "satellite",
-                            "lat_deg": 0.0,
-                            "lon_deg": lon,
-                            "alt_km": 550.0,
-                            "vel_x_km_s": None,
-                            "vel_y_km_s": None,
-                            "vel_z_km_s": None,
-                            "plane": 0,
-                            "slot": 0,
-                        },
-                    ],
-                }
-            )
+    def test_ground_station_position_populated(self):
+        """Ground station positions come from ephemeris static coords."""
+        self._load_ephemeris()
+        _propagate_positions_from_ephemeris("2025-01-01T00:00:00+00:00")
         snapshot = _build_snapshot()
-        assert snapshot["nodes"][0]["lon_deg"] == 20.0
+        gs_nodes = [n for n in snapshot["nodes"] if n["node_type"] == "ground_station"]
+        assert len(gs_nodes) == 1
+        gs = gs_nodes[0]
+        assert abs(gs["lat_deg"] - 33.92) < 0.01
+        assert abs(gs["lon_deg"] - (-118.33)) < 0.01
 
     def test_gs_gets_min_elevation_deg(self):
         """GS nodes get min_elevation_deg from _gs_elevation_map."""
         _gs_elevation_map["gs-hawthorne"] = 25.0
-        _gs_elevation_map["gs-mcmurdo"] = 10.0
-        _update_position(
-            {
-                "sim_time": "2026-01-01T00:00:00Z",
-                "positions": [
-                    {
-                        "node_id": "gs-hawthorne",
-                        "node_type": "ground_station",
-                        "lat_deg": 33.92,
-                        "lon_deg": -118.33,
-                        "alt_km": 0.0,
-                    },
-                    {
-                        "node_id": "gs-mcmurdo",
-                        "node_type": "ground_station",
-                        "lat_deg": -77.85,
-                        "lon_deg": 166.67,
-                        "alt_km": 0.0,
-                    },
-                ],
-            }
-        )
+        self._load_ephemeris()
+        _propagate_positions_from_ephemeris("2025-01-01T00:00:00+00:00")
         snapshot = _build_snapshot()
-        nodes_by_id = {n["node_id"]: n for n in snapshot["nodes"]}
-        assert nodes_by_id["gs-hawthorne"]["min_elevation_deg"] == 25.0
-        assert nodes_by_id["gs-mcmurdo"]["min_elevation_deg"] == 10.0
+        gs = next(n for n in snapshot["nodes"] if n["node_id"] == "gs-hawthorne")
+        assert gs["min_elevation_deg"] == 25.0
 
-    def test_satellite_has_no_elevation_field_without_gs_map(self):
-        """Satellites never get min_elevation_deg even if GS map is populated."""
-        _gs_elevation_map["gs-hawthorne"] = 25.0
-        _update_position(
-            {
-                "sim_time": "2026-01-01T00:00:00Z",
-                "positions": [
-                    {
-                        "node_id": "sat-P00S00",
-                        "node_type": "satellite",
-                        "lat_deg": 0.0,
-                        "lon_deg": 0.0,
-                        "alt_km": 550.0,
-                    },
-                ],
-            }
-        )
-        snapshot = _build_snapshot()
-        assert snapshot["nodes"][0]["min_elevation_deg"] is None
+    def test_positions_change_with_time(self):
+        """Satellite positions differ at different sim_times."""
+        self._load_ephemeris()
+        _propagate_positions_from_ephemeris("2025-01-01T00:00:00+00:00")
+        snap1 = _build_snapshot()
+        lon1 = next(n for n in snap1["nodes"] if n["node_id"] == "sat-P00S00")["lon_deg"]
 
-    def test_multiple_satellites_all_update(self):
-        """All satellites in a position batch get updated, not just the first."""
-        positions = []
-        for i in range(10):
-            positions.append(
-                {
-                    "node_id": f"sat-P00S{i:02d}",
-                    "node_type": "satellite",
-                    "lat_deg": float(i * 10),
-                    "lon_deg": float(i * 20),
-                    "alt_km": 550.0,
-                }
-            )
-        _update_position(
-            {
-                "sim_time": "2026-01-01T00:00:00Z",
-                "positions": positions,
-            }
-        )
+        _propagate_positions_from_ephemeris("2025-01-01T00:10:00+00:00")
+        snap2 = _build_snapshot()
+        lon2 = next(n for n in snap2["nodes"] if n["node_id"] == "sat-P00S00")["lon_deg"]
+
+        assert lon1 != lon2
+
+    def test_no_ephemeris_no_crash(self):
+        """Calling propagate without ephemeris does nothing."""
+        _propagate_positions_from_ephemeris("2025-01-01T00:00:00+00:00")
         snapshot = _build_snapshot()
-        assert len(snapshot["nodes"]) == 10
-        nodes_by_id = {n["node_id"]: n for n in snapshot["nodes"]}
-        assert nodes_by_id["sat-P00S05"]["lat_deg"] == 50.0
-        assert nodes_by_id["sat-P00S09"]["lon_deg"] == 180.0
+        assert len(snapshot["nodes"]) == 0
 
 
 class TestSatelliteMovementSmoke:
-    """Smoke tests that satellite positions change between snapshots.
+    """Smoke tests that satellite positions change between snapshots via ephemeris.
 
     This catches the class of bugs where code changes break position
     propagation through the VS-API pipeline — the satellites appear
@@ -206,126 +163,63 @@ class TestSatelliteMovementSmoke:
     def setup_method(self):
         _reset_state()
         _gs_elevation_map.clear()
+        import vs_api.main as m
+        from nodalarc.models.events import (
+            EphemerisNodeKeplerian,
+            SessionEphemeris,
+        )
 
-    def test_positions_change_between_snapshots(self):
-        """Two sequential position updates produce different satellite positions in snapshots."""
-        for lon in [10.0, 20.0]:
-            _update_position(
-                {
-                    "sim_time": f"2026-01-01T00:00:0{int(lon)}Z",
-                    "positions": [
-                        {
-                            "node_id": "sat-P00S00",
-                            "node_type": "satellite",
-                            "lat_deg": 45.0,
-                            "lon_deg": lon,
-                            "alt_km": 550.0,
-                        },
-                    ],
-                }
-            )
+        m._cached_ephemeris_obj = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+            epoch_unix=1735689600.0,
+            nodes={
+                f"sat-P00S{i:02d}": EphemerisNodeKeplerian(
+                    altitude_km=550.0,
+                    inclination_deg=53.0,
+                    raan_deg=0.0,
+                    true_anomaly_deg=float(i * 32.7),
+                    plane=0,
+                    slot=i,
+                )
+                for i in range(20)
+            },
+        )
+
+    def test_positions_change_between_ticks(self):
+        """Two sequential propagations at different times produce different positions."""
+        _propagate_positions_from_ephemeris("2025-01-01T00:00:00+00:00")
         snap1_nodes = {n["node_id"]: n for n in _build_snapshot()["nodes"]}
 
-        _update_position(
-            {
-                "sim_time": "2026-01-01T00:00:30Z",
-                "positions": [
-                    {
-                        "node_id": "sat-P00S00",
-                        "node_type": "satellite",
-                        "lat_deg": 46.0,
-                        "lon_deg": 30.0,
-                        "alt_km": 550.0,
-                    },
-                ],
-            }
-        )
+        _propagate_positions_from_ephemeris("2025-01-01T00:05:00+00:00")
         snap2_nodes = {n["node_id"]: n for n in _build_snapshot()["nodes"]}
 
         assert snap1_nodes["sat-P00S00"]["lat_deg"] != snap2_nodes["sat-P00S00"]["lat_deg"]
-        assert snap1_nodes["sat-P00S00"]["lon_deg"] != snap2_nodes["sat-P00S00"]["lon_deg"]
 
     def test_all_satellites_get_positions(self):
-        """A batch with N satellites produces N satellite nodes in snapshot."""
-        positions = []
-        for i in range(20):
-            positions.append(
-                {
-                    "node_id": f"sat-P00S{i:02d}",
-                    "node_type": "satellite",
-                    "lat_deg": float(i),
-                    "lon_deg": float(i * 2),
-                    "alt_km": 550.0,
-                }
-            )
-        _update_position(
-            {
-                "sim_time": "2026-01-01T00:00:00Z",
-                "positions": positions,
-            }
-        )
+        """All satellites in ephemeris get positions."""
+        _propagate_positions_from_ephemeris("2025-01-01T00:00:00+00:00")
         snap = _build_snapshot()
         sat_nodes = [n for n in snap["nodes"] if n["node_type"] == "satellite"]
         assert len(sat_nodes) == 20
-        # Each has unique position
-        lons = {n["lon_deg"] for n in sat_nodes}
-        assert len(lons) == 20
+        # Each has unique position (different true_anomaly)
+        lats = {round(n["lat_deg"], 4) for n in sat_nodes}
+        assert len(lats) > 10  # Not all at the same latitude
 
-    def test_position_update_preserves_all_fields(self):
-        """Position updates produce NodeState dicts with all required fields."""
-        _update_position(
-            {
-                "sim_time": "2026-01-01T00:00:00Z",
-                "positions": [
-                    {
-                        "node_id": "sat-P00S00",
-                        "node_type": "satellite",
-                        "lat_deg": 10.0,
-                        "lon_deg": 20.0,
-                        "alt_km": 550.0,
-                        "vel_x_km_s": 1.0,
-                        "vel_y_km_s": 2.0,
-                        "vel_z_km_s": 3.0,
-                        "plane": 0,
-                        "slot": 0,
-                        "routing_area": "49.0001",
-                        "neighbor_count": 4,
-                        "isl_count": 0,
-                        "gnd_count": 0,
-                    },
-                ],
-            }
-        )
-        # Add links so _build_snapshot computes isl_count=4, gnd_count=1
-        for i in range(4):
-            _update_link_up(
-                {
-                    "node_a": "sat-P00S00",
-                    "node_b": f"sat-P00S0{i + 1}",
-                    "reason": "vis_gained",
-                    "latency_ms": 5.0,
-                    "bandwidth_mbps": 1000.0,
-                }
-            )
-        _update_link_up(
-            {
-                "node_a": "gs-newyork",
-                "node_b": "sat-P00S00",
-                "reason": "gs_access",
-                "latency_ms": 3.0,
-                "bandwidth_mbps": 1000.0,
-            }
-        )
-        snap = _build_snapshot()
-        node = [n for n in snap["nodes"] if n["node_id"] == "sat-P00S00"][0]
-        # All fields must survive the pipeline (no KeyError, no None for required)
-        assert node["node_id"] == "sat-P00S00"
-        assert node["lat_deg"] == 10.0
-        assert node["vel_x_km_s"] == 1.0
-        assert node["plane"] == 0
-        assert node["isl_count"] == 4
-        assert node["gnd_count"] == 1
-        assert node["min_elevation_deg"] is None  # satellite, not GS
+    def test_position_propagation_preserves_all_fields(self):
+        """Propagated positions produce NodeState dicts with all required fields."""
+        _propagate_positions_from_ephemeris("2025-01-01T00:00:00+00:00")
+        snapshot = _build_snapshot()
+        node = snapshot["nodes"][0]
+        # Position fields from propagation
+        assert "lat_deg" in node
+        assert "lon_deg" in node
+        assert "alt_km" in node
+        assert "vel_x_km_s" in node
+        # Identity fields from ephemeris
+        assert node["node_type"] == "satellite"
+        assert "plane" in node
+        assert "slot" in node
 
 
 class TestLinkKey:

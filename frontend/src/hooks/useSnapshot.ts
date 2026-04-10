@@ -6,9 +6,12 @@ import { useState, useCallback } from "react";
 import { REST_URL, authHeaders } from "../config";
 import { useWebSocket } from "./useWebSocket";
 import type { StateSnapshot } from "../types";
+import type { SessionEphemeris, PlaybackStateMsg } from "../sim/ephemeris";
 
 interface SnapshotState {
   snapshot: StateSnapshot | null;
+  ephemeris: SessionEphemeris | null;
+  playbackState: PlaybackStateMsg | null;
   connected: boolean;
   hasEverConnected: boolean;
   kicked: boolean;
@@ -18,7 +21,14 @@ interface SnapshotState {
 }
 
 export function useSnapshot(): SnapshotState {
-  const { snapshot: liveSnapshot, connected, hasEverConnected, kicked } = useWebSocket();
+  const {
+    snapshot: liveSnapshot,
+    ephemeris,
+    playbackState,
+    connected,
+    hasEverConnected,
+    kicked,
+  } = useWebSocket();
   const [historicalMode, setHistoricalMode] = useState(false);
   const [historicalSnapshot, setHistoricalSnapshot] = useState<StateSnapshot | null>(null);
 
@@ -38,6 +48,8 @@ export function useSnapshot(): SnapshotState {
 
   return {
     snapshot: historicalMode ? historicalSnapshot : liveSnapshot,
+    ephemeris,
+    playbackState,
     connected,
     hasEverConnected,
     kicked,

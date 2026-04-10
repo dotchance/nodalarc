@@ -566,7 +566,10 @@ async def _nats_subscriber() -> None:
         data = json.loads(msg.data)
         sim_time_str = data.get("sim_time", "")
         if sim_time_str:
-            _propagate_positions_from_ephemeris(sim_time_str)
+            try:
+                _propagate_positions_from_ephemeris(sim_time_str)
+            except Exception as exc:
+                log.error("Position propagation failed: %s", exc, exc_info=True)
         with _state_lock:
             _state["playback_speed"] = data.get("compression_ratio", 1.0)
         _last_clock_tick_wall_time = _time.monotonic()

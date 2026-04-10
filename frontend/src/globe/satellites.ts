@@ -16,7 +16,6 @@
 import * as THREE from "three";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../config";
 import { geoToWorld } from "./geo";
-import { simTimeIsoToUnixSeconds } from "./astronomy";
 import { interpolatedSimTimeMs } from "../sim/simClock";
 import { propagateNode } from "../sim/ephemeris";
 import type { SessionEphemeris } from "../sim/ephemeris";

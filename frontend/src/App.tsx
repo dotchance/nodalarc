@@ -41,7 +41,7 @@ export function App() {
 }
 
 function AppInner() {
-  const { snapshot, connected, hasEverConnected, kicked, historicalMode, setHistoricalMode, fetchHistorical } =
+  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, historicalMode, setHistoricalMode, fetchHistorical } =
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
 
@@ -373,6 +373,7 @@ function AppInner() {
         >
           <GlobeView
             snapshot={augmentedSnapshot}
+            ephemeris={ephemeris}
             selection={selection}
             onSelect={select}
             colorMode={colorMode}

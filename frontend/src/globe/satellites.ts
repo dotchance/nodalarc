@@ -2,20 +2,24 @@
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** Satellite mesh management — shared geometry, per-sat mesh + smooth motion.
  *
- *  Motion model: linear interpolation between consecutive snapshot positions.
+ *  Motion model (PRD v0.71): local Keplerian propagation from SessionEphemeris
+ *  at 60fps via propagateNode(). Positions computed every frame from orbital
+ *  elements — no lerp interpolation between snapshots.
  *
- *  Distance comes from sim_time (deterministic orbital mechanics).
- *  Duration comes from an EMA-smoothed wall-clock delivery rate owned by
- *  the shared simClock module (so Earth-frame rotation and sat lerp are
- *  driven by the same clock and cannot drift relative to each other).
+ *  Fallback: when ephemeris is unavailable (pre-v0.71 VS-API), falls back to
+ *  NodeState positions updated at ~1Hz.
  *
- *  This decouples visual speed from packet delivery jitter.
+ *  Metadata (plane, slot, routing_area, neighbor_count, etc.) still comes
+ *  from NodeState via the WebSocket StateSnapshot.
  */
 
 import * as THREE from "three";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../config";
 import { geoToWorld } from "./geo";
-import { onSnapshot, wallMsPerSimMs } from "../sim/simClock";
+import { simTimeIsoToUnixSeconds } from "./astronomy";
+import { interpolatedSimTimeMs } from "../sim/simClock";
+import { propagateNode } from "../sim/ephemeris";
+import type { SessionEphemeris } from "../sim/ephemeris";
 import type { NodeState, ColorMode } from "../types";
 
 /** Shared geometry for all satellites. */
@@ -45,14 +49,6 @@ function getGlowTexture(): THREE.Texture {
 export interface SatelliteEntry {
   mesh: THREE.Mesh;
   glow: THREE.Sprite;
-  /** Start of current lerp (set from mesh.position to avoid discontinuity). */
-  prevPosition: THREE.Vector3;
-  /** End of current lerp (ground-truth snapshot position). */
-  currPosition: THREE.Vector3;
-  /** performance.now() when this lerp segment started. */
-  snapshotTime: number;
-  /** Duration of current lerp segment in wall-ms (from sim_time × EMA rate). */
-  interval: number;
   nodeState: NodeState;
 }
 
@@ -62,57 +58,51 @@ export function getSatellites(): Map<string, SatelliteEntry> {
   return satellites;
 }
 
-// Reusable temporary
-const _tmpPos = new THREE.Vector3();
+/** Current ephemeris for local propagation. Set from the WebSocket handler. */
+let _ephemeris: SessionEphemeris | null = null;
 
+export function setEphemeris(eph: SessionEphemeris | null): void {
+  _ephemeris = eph;
+}
+
+export function getEphemeris(): SessionEphemeris | null {
+  return _ephemeris;
+}
+
+/**
+ * Update satellite metadata from WebSocket StateSnapshot.
+ *
+ * Creates new meshes for satellites that appear, removes meshes for
+ * satellites that disappear, and updates metadata (routing_area,
+ * neighbor_count, etc.) for existing satellites.
+ *
+ * Positions are NOT set here when ephemeris is available — they are
+ * computed every frame in animateSatellites(). When ephemeris is null
+ * (fallback), positions come from NodeState.
+ */
 export function updateSatellites(
   nodes: NodeState[],
   earthFrame: THREE.Object3D,
   colorMode: ColorMode,
-  simTime: string,
+  _simTime: string,
 ): void {
   const seen = new Set<string>();
-  const now = performance.now();
 
-  // Advance the shared sim clock with this snapshot's timestamp; the
-  // simDelta drives per-sat lerp duration below. Returns null on the
-  // seeding snapshot or when sim_time didn't advance (defensive).
-  const tick = onSnapshot(simTime, now);
-  const simDeltaMs = tick?.simDeltaMs ?? 0;
-
-  // --- Per-satellite updates ---
   for (const node of nodes) {
     if (node.node_type !== "satellite") continue;
     seen.add(node.node_id);
 
-    const newPos = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
-
     const existing = satellites.get(node.node_id);
     if (existing) {
-      // Skip duplicate positions (WS pushes faster than dispatcher)
-      if (newPos.distanceTo(existing.currPosition) < 0.0001) {
-        existing.nodeState = node;
-        updateSatColor(existing, colorMode);
-        continue;
-      }
-
-      // Start new lerp from current visual position (no snap-back).
-      existing.prevPosition.copy(existing.mesh.position);
-      existing.currPosition.copy(newPos);
-      // Duration from sim_time delta × smoothed delivery rate.
-      // Falls back to previous interval if sim_time didn't advance (shouldn't
-      // happen since we already skip duplicate positions, but defensive).
-      if (simDeltaMs > 0) {
-        existing.interval = simDeltaMs * wallMsPerSimMs();
-      }
-      existing.snapshotTime = now;
       existing.nodeState = node;
       updateSatColor(existing, colorMode);
     } else {
+      // New satellite — create mesh at initial position
+      const pos = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
       const color = getSatColor(node, colorMode);
       const material = new THREE.MeshBasicMaterial({ color });
       const mesh = new THREE.Mesh(sharedGeo, material);
-      mesh.position.copy(newPos);
+      mesh.position.copy(pos);
       mesh.userData["nodeId"] = node.node_id;
       mesh.userData["nodeType"] = "satellite";
       earthFrame.add(mesh);
@@ -126,19 +116,11 @@ export function updateSatellites(
       });
       const glow = new THREE.Sprite(glowMat);
       glow.scale.set(SAT_RADIUS * 5, SAT_RADIUS * 5, 1);
-      glow.position.copy(newPos);
-      glow.visible = false;  // Only shown on selection/highlight
+      glow.position.copy(pos);
+      glow.visible = false;
       earthFrame.add(glow);
 
-      satellites.set(node.node_id, {
-        mesh,
-        glow,
-        prevPosition: newPos.clone(),
-        currPosition: newPos.clone(),
-        snapshotTime: now,
-        interval: 1000,
-        nodeState: node,
-      });
+      satellites.set(node.node_id, { mesh, glow, nodeState: node });
     }
   }
 
@@ -151,24 +133,34 @@ export function updateSatellites(
   }
 }
 
-export function animateSatellites(dt: number): void {
+/**
+ * Animate satellites — called every frame (~60fps).
+ *
+ * When ephemeris is available: propagates each satellite from orbital
+ * elements at the current interpolated sim_time. Smooth 60fps motion
+ * with no lerp artifacts.
+ *
+ * When ephemeris is null: positions are set from NodeState in
+ * updateSatellites() and remain static between snapshots.
+ */
+export function animateSatellites(_dt: number): void {
+  if (!_ephemeris) return;
+
   const now = performance.now();
-  const tabResumed = dt > 0.2;
+  const simMs = interpolatedSimTimeMs(now);
+  if (simMs === null) return;
 
-  for (const entry of satellites.values()) {
-    if (tabResumed) {
-      // Tab was backgrounded — snap to ground truth, reset lerp.
-      entry.mesh.position.copy(entry.currPosition);
-      entry.glow.position.copy(entry.currPosition);
-      entry.prevPosition.copy(entry.currPosition);
-      entry.snapshotTime = now;
-      continue;
-    }
+  const simTimeUnix = simMs / 1000;
+  const epochUnix = _ephemeris.epoch_unix;
 
-    const t = Math.min((now - entry.snapshotTime) / entry.interval, 1.5);
-    _tmpPos.lerpVectors(entry.prevPosition, entry.currPosition, t);
-    entry.mesh.position.copy(_tmpPos);
-    entry.glow.position.copy(_tmpPos);
+  for (const [nodeId, entry] of satellites) {
+    const ephNode = _ephemeris.nodes[nodeId];
+    if (!ephNode || ephNode.type !== "keplerian") continue;
+
+    const pos = propagateNode(ephNode, epochUnix, simTimeUnix);
+    const worldPos = geoToWorld(pos.latDeg, pos.lonDeg, pos.altKm);
+    entry.mesh.position.copy(worldPos);
+    entry.glow.position.copy(worldPos);
   }
 }
 

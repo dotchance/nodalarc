@@ -15,6 +15,7 @@ from __future__ import annotations
 STREAM_OME_EVENTS = "NODALARC_OME"
 STREAM_LINK_EVENTS = "NODALARC_LINKS"
 STREAM_MI_EVENTS = "NODALARC_MI"
+STREAM_SESSION_EVENTS = "NODALARC_SESSION"
 
 # ---------------------------------------------------------------------------
 # Subject definitions — hierarchical, dot-separated
@@ -32,6 +33,10 @@ SUBJECT_LINK_UP = "nodalarc.links.up"
 SUBJECT_LINK_DOWN = "nodalarc.links.down"
 SUBJECT_LATENCY_UPDATE = "nodalarc.links.latency"
 SUBJECT_SUBSTRATE_LATENCY = "nodalarc.links.substrate"
+
+# Session-level state (JetStream — MaxMsgsPerSubject=1 on NODALARC_SESSION)
+SUBJECT_SESSION_EPHEMERIS = "nodalarc.session.ephemeris"
+SUBJECT_PLAYBACK_STATE = "nodalarc.session.playback_state"
 
 # MI publications (JetStream — retained)
 SUBJECT_CONVERGENCE_RESULT = "nodalarc.mi.convergence"
@@ -141,6 +146,29 @@ def link_stream_config() -> dict:
         "max_msgs_per_subject": 1,
         "max_age": _TWO_PERIODS_S,
         "max_bytes": 64 * 1024 * 1024,
+    }
+
+
+def session_stream_config() -> dict:
+    """StreamConfig for NODALARC_SESSION stream.
+
+    MaxMsgsPerSubject=1 ensures late-joining subscribers always receive
+    exactly the current SessionEphemeris and PlaybackState — no history
+    replay, no application-level filtering. The infrastructure enforces
+    single-message-per-subject state.
+
+    Separate from NODALARC_OME because OME needs unlimited per-subject
+    retention for VisibilityEvent history. NATS JetStream does not support
+    per-subject MaxMsgsPerSubject within a single stream.
+    """
+    return {
+        "name": STREAM_SESSION_EVENTS,
+        "subjects": ["nodalarc.session.>"],
+        "retention": "limits",
+        "storage": "memory",
+        "max_msgs_per_subject": 1,
+        "max_age": _TWO_PERIODS_S,
+        "max_bytes": 1 * 1024 * 1024,
     }
 
 

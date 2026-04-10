@@ -22,7 +22,10 @@ from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
+    EphemerisNodeFixed,
+    EphemerisNodeKeplerian,
     NodePosition,
+    SessionEphemeris,
     TimelinePositionSnapshot,
     VisibilityEvent,
 )
@@ -43,6 +46,48 @@ from ome.visibility import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def build_session_ephemeris(
+    ctx: StepContext,
+    epoch_unix: float,
+    epoch_id: int,
+) -> SessionEphemeris:
+    """Build SessionEphemeris from session context.
+
+    Maps satellites to EphemerisNodeKeplerian and ground stations to
+    EphemerisNodeFixed. Published once per epoch to NODALARC_SESSION.
+    """
+    import math
+
+    from nodalarc.constants import EARTH_RADIUS_KM
+
+    nodes: dict[str, EphemerisNodeKeplerian | EphemerisNodeFixed] = {}
+
+    for sat in ctx.satellites:
+        node_id = ctx.addressing.sat_id(sat.plane, sat.slot)
+        nodes[node_id] = EphemerisNodeKeplerian(
+            altitude_km=sat.elements.semi_major_axis_km - EARTH_RADIUS_KM,
+            inclination_deg=math.degrees(sat.elements.inclination_rad),
+            raan_deg=math.degrees(sat.elements.raan_rad),
+            true_anomaly_deg=math.degrees(sat.elements.true_anomaly_rad),
+            plane=sat.plane,
+            slot=sat.slot,
+        )
+
+    for gs_id, (_ecef, geo) in ctx.gs_positions.items():
+        nodes[gs_id] = EphemerisNodeFixed(
+            lat_deg=geo.lat_deg,
+            lon_deg=geo.lon_deg,
+            alt_km=geo.alt_km,
+        )
+
+    return SessionEphemeris(
+        epoch_id=epoch_id,
+        sim_time=datetime.fromtimestamp(epoch_unix, tz=UTC),
+        epoch_unix=epoch_unix,
+        nodes=nodes,
+    )
 
 
 class TimelineEvent:
@@ -569,6 +614,7 @@ def build_link_state_snapshot(
     seq: int,
     interval_s: float,
     positions: dict[str, NodePosition] | None = None,
+    epoch_id: int = 0,
 ) -> LinkStateSnapshot:
     """Build a LinkStateSnapshot from OME internal state.
 
@@ -663,4 +709,5 @@ def build_link_state_snapshot(
         snapshot_seq=seq,
         links=tuple(links),
         interval_s=interval_s,
+        epoch_id=epoch_id,
     )

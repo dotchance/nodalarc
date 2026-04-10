@@ -41,11 +41,11 @@ from nodalarc.models.coverage import (
     IslPreview,
 )
 from nodalarc.models.session import AddressingConfig
+from nodalarc.propagator import orbital_period, propagate_keplerian
 from nodalarc.session_generator import merge_constellation_with_satellite_type
 
 from ome.coverage_insights import describe_gs_coverage, generate_insights
 from ome.event_stream import precompute_timeline_window
-from ome.propagator import orbital_period, propagate_keplerian
 from ome.visibility import check_isl_visibility
 
 log = logging.getLogger(__name__)

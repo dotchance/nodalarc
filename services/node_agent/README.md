@@ -6,7 +6,7 @@ and executes kernel operations via pyroute2.
 
 ## Operations
 
-- Create/destroy veth pairs between pod network namespaces
+- Create host-mediated veth pairs with tc mirred redirect (carrier-gated model: pod-side always admin UP, host-side admin state controls carrier)
 - Apply tc netem (latency) and tc tbf (bandwidth) shaping
 - Manage ground station bridge and tc mirred redirect attachments
 - Enable MPLS forwarding on interfaces

@@ -6,10 +6,17 @@ publishes events to NATS JetStream.
 
 ## Published Events
 
+**NODALARC_OME stream:**
 - **VisibilityEvent** — ISL and ground link state changes (1Hz per active pair)
-- **TimelinePositionSnapshot** — all satellite/GS positions (1Hz)
-- **LinkStateSnapshot** — complete admin/carrier/latency state, replace-not-merge (every 5 sim-seconds)
-- **ClockTick** — sim-time heartbeat (1Hz)
+- **ClockTick** — sim-time heartbeat with epoch_id (1Hz)
+- **HeartbeatTick** — wall-clock liveness signal
+
+**NODALARC_LINKS stream:**
+- **LinkStateSnapshot** — complete admin/carrier/latency state with epoch_id, replace-not-merge (every 5 sim-seconds)
+
+**NODALARC_SESSION stream (MaxMsgsPerSubject=1):**
+- **SessionEphemeris** — orbital elements for all satellites + fixed positions for ground stations, published once per epoch (session start and seek). Edges propagate locally.
+- **PlaybackState** — playback control state (seeking/playing/paused) with epoch_id
 
 ## Architecture
 

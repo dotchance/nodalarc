@@ -77,15 +77,25 @@ The OME is the physics engine. It takes a constellation definition (number of or
 
 The OME computes in windows. One window covers one orbital period (~95 minutes for a 550 km LEO constellation). For each window, the OME precomputes every visibility event (every ISL that becomes possible or impossible, every ground station pass) along with the continuously changing range and latency for each visible pair. This precomputed timeline is then paced out at simulation speed.
 
-The OME produces four event types, all published to NATS JetStream:
+The OME publishes events to three NATS JetStream streams:
 
-**TimelinePositionSnapshot** - Full-constellation position data (latitude, longitude, altitude, velocity) for every satellite and ground station. Published at 1 Hz simulation time. This drives the 3D visualization.
+**NODALARC_OME stream:**
 
 **VisibilityEvent** - A link becoming visible or invisible. Contains the satellite pair (or satellite-ground station pair), the scheduling decision (whether the Scheduler should activate this link), and the current range/latency. VisibilityEvents carry scheduling semantics: the OME decides which ground station gets which satellite based on elevation angle, tracking capacity, and scheduling policy.
 
-**LinkStateSnapshot** - The complete admin/carrier/latency state for every link in the constellation. Published every 5 simulation seconds. This is a replace-not-merge snapshot. The Scheduler uses it to reconcile its internal state, eliminating accumulation bugs at orbital window boundaries. If the OME says a link exists, the Scheduler activates it. If the OME doesn't mention a link, the Scheduler deactivates it. There is no other path.
+**ClockTick** - Simulation time heartbeat with `epoch_id`. Consumers use this to detect stale data, synchronize displays, and resume from epoch transitions.
 
-**ClockTick** - Simulation time heartbeat. Consumers use this to detect stale data and synchronize displays.
+**NODALARC_LINKS stream:**
+
+**LinkStateSnapshot** - The complete admin/carrier/latency state for every link in the constellation, with `epoch_id`. Published every 5 simulation seconds. This is a replace-not-merge snapshot. The Scheduler uses it to reconcile its internal state, eliminating accumulation bugs at orbital window boundaries. If the OME says a link exists, the Scheduler activates it. If the OME doesn't mention a link, the Scheduler deactivates it. There is no other path.
+
+**NODALARC_SESSION stream (MaxMsgsPerSubject=1):**
+
+**SessionEphemeris** - Keplerian orbital elements for all satellites and fixed positions for all ground stations. Published once per epoch (session start and on seek). Downstream consumers (Scheduler, VS-API, VF) run local Keplerian propagation from these elements to compute positions on demand. No per-tick position data is published — NATS bandwidth for position data is effectively zero regardless of constellation size.
+
+**PlaybackState** - Playback control state (`seeking`, `playing`, `paused`) with `epoch_id`. Late-joining subscribers instantly know the current playback state. The `seeking` state is a mutex — pause/set_speed commands are rejected during a seek.
+
+The OME does not publish per-tick position data. Edges propagate locally from SessionEphemeris.
 
 The OME uses a producer-consumer threading model. A synchronous pacing thread calls `time.sleep()` for wall-clock precision and puts events into a Python queue. An async NATS publisher thread drains the queue and publishes to JetStream. This separation keeps the pacing thread free from network I/O blocking and prevents the publisher from affecting timing accuracy.
 
@@ -97,9 +107,9 @@ The Scheduler maintains a single data structure: `_active_links`, a dict of curr
 
 `_reconcile_links` is the single path to the Node Agent for all link state changes. There is no other mechanism for creating or destroying links. This invariant eliminates an entire class of state synchronization bugs that plagued earlier architectures with multiple dispatch paths.
 
-For each link pair, the Scheduler determines locality: LOCAL (both endpoints on the same K3s node) or CROSS_NODE (endpoints on different nodes). LOCAL links use kernel veth pairs. CROSS_NODE links use VXLAN tunnels. The locality is set per-interface on the protobuf message, not per-batch, because a single batch to one Node Agent may contain both LOCAL and CROSS_NODE interfaces.
+For each link pair, the Scheduler determines locality: LOCAL (both endpoints on the same K3s node) or CROSS_NODE (endpoints on different nodes). LOCAL links use host-mediated veth pairs with tc mirred redirect (pod-side interfaces are always admin UP; carrier is controlled by host-side veth admin state). CROSS_NODE links use VXLAN tunnels. The locality is set per-interface on the protobuf message, not per-batch, because a single batch to one Node Agent may contain both LOCAL and CROSS_NODE interfaces.
 
-The Scheduler also handles latency updates. As satellites move, the range between connected pairs changes continuously. The OME provides updated ranges, and the Scheduler computes the new one-way latency (`range_km / 299792.458 * 1000` ms) and sends `SetLatency` commands to the Node Agent, which updates tc netem on each interface. For CROSS_NODE links, the Scheduler applies substrate compensation: `netem_ms = max(0, orbital_latency - physical_substrate_latency)`. The physical substrate latency is measured by the Operator at session start via ICMP ping between K3s nodes. The total packet delay (netem + physical network) then equals the orbital latency regardless of the physical network between nodes.
+The Scheduler also handles latency updates. As satellites move, the range between connected pairs changes continuously. The Scheduler loads `SessionEphemeris` orbital elements once per epoch and propagates active link endpoints locally via Keplerian propagation on its 10-second update interval. It computes the new one-way latency (`range_km / 299792.458 * 1000` ms) and sends `SetLatency` commands to the Node Agent, which updates tc netem on each interface. For CROSS_NODE links, the Scheduler applies substrate compensation: `netem_ms = max(0, orbital_latency - physical_substrate_latency)`. The physical substrate latency is measured by the Operator at session start via ICMP ping between K3s nodes. The total packet delay (netem + physical network) then equals the orbital latency regardless of the physical network between nodes.
 
 The Scheduler communicates with the Node Agent via NATS request/reply. Each K3s node has a NATS subject (`nodalarc.agent.{hostname}`). The Scheduler serializes protobuf messages, sends them as NATS requests, and waits for the Node Agent's protobuf response. The timeout is 60 seconds to accommodate the initial batch of VXLAN tunnel creation on cold start.
 
@@ -109,7 +119,7 @@ The Node Agent runs on every K3s node as a DaemonSet pod with `hostPID: true` an
 
 When the Node Agent starts, it reads the topology wiring manifest from a ConfigMap and creates the base network infrastructure for every pod on its node:
 
-- **ISL interfaces**: veth pairs between pod network namespaces. Each satellite has 2-4 ISL interfaces (isl0/isl1 for intra-plane, isl2/isl3 for cross-plane).
+- **ISL interfaces**: host-mediated veth pairs with tc mirred redirect (v0.70 carrier-gated model). Each satellite has 2-4 ISL interfaces (isl0/isl1 for intra-plane, isl2/isl3 for cross-plane). Pod-side interfaces are always admin UP; host-side veth admin state controls carrier. This faithfully models real satellite hardware: transceivers are always powered, link signal comes and goes.
 - **Ground interfaces**: A `gnd0` interface inside each satellite and ground station pod, connected via a host-side bridge with tc mirred redirect rules. Ground links are dynamic. The bridge attachment changes as satellites pass over ground stations.
 - **Sysctls**: IPv4/IPv6 forwarding, rp_filter disabled, MPLS input enabled on each interface.
 - **Default route removal**: The K8s default route (via eth0 to the CNI network) is removed so FRR's IGP-learned routes are the only forwarding paths.
@@ -130,11 +140,13 @@ The Node Agent's NATS server does not subscribe until the wiring thread has comp
 
 All inter-component messaging uses NATS JetStream. There are no other transports: no ZMQ, no gRPC (except for NodalPath sessions), no direct HTTP between backend components.
 
-Two JetStream streams handle all traffic:
+Three JetStream streams handle all traffic:
 
-**NODALARC_OME** - OME events (visibility, position snapshots, clock ticks, heartbeats). Limits-based retention, 128 MB. Multiple consumers (Scheduler, VS-API) each maintain independent consumer positions.
+**NODALARC_OME** - OME events (VisibilityEvent, ClockTick, HeartbeatTick). Limits-based retention, 128 MB. Multiple consumers (Scheduler, VS-API) each maintain independent consumer positions.
 
 **NODALARC_LINKS** - Link state events (LinkUp, LinkDown, LatencyUpdate, LinkStateSnapshot). Limits-based retention with MaxMsgsPerSubject=1 for the snapshot subject, so the latest snapshot is always available for catch-up on Scheduler restart.
+
+**NODALARC_SESSION** - Session-level state (SessionEphemeris, PlaybackState). MaxMsgsPerSubject=1 ensures late-joining subscribers always receive exactly the current ephemeris and playback state — no history replay, no application-level filtering. Separate from NODALARC_OME because OME needs unlimited per-subject retention for VisibilityEvent history, while session state needs single-message-per-subject semantics.
 
 Subject definitions are centralized in `lib/nodalarc/nats_channels.py`. No component uses literal subject strings. All subjects are imported from this single file.
 
@@ -142,7 +154,7 @@ NATS request/reply (not JetStream) is used for Scheduler-to-Node Agent communica
 
 ### VS-API - Visualization State API
 
-The VS-API is a FastAPI server that aggregates constellation state from all other components and serves it to visualization clients. It subscribes to all NATS JetStream subjects and maintains an in-memory representation of the current constellation state: node positions, active links, link latencies, recent events.
+The VS-API is a FastAPI server that aggregates constellation state from all other components and serves it to visualization clients. It subscribes to NATS JetStream streams (NODALARC_OME, NODALARC_LINKS, NODALARC_SESSION) and maintains an in-memory representation of the current constellation state: active links, link latencies, recent events. On WebSocket connect, the VS-API sends the cached `SessionEphemeris` so the browser can run local Keplerian propagation for satellite positions. Node positions are computed locally by each consumer from the ephemeris — the VS-API does not proxy per-tick position data.
 
 The VS-API provides:
 - **WebSocket** at `ws://host:8080/ws/v1/state` - full constellation state snapshot at ~1 Hz
@@ -188,13 +200,13 @@ A complete cycle from orbital mechanics to user-visible routing behavior:
 
 4. FRR inside each pod detects the interface state changes. When an ISL interface comes UP with carrier, FRR sends IS-IS hellos (or OSPF hellos), forms an adjacency with the peer, floods LSPs/LSAs, and runs SPF to recompute the routing table. When an interface goes DOWN, FRR tears down the adjacency and reconverges. This is real protocol behavior, the same code that runs on production routers.
 
-5. The VS-API subscribes to all NATS subjects, maintains the latest constellation state, and pushes it to connected WebSocket clients at ~1 Hz. The VF renders the 3D globe, topology graph, and event log from this stream.
+5. The VS-API subscribes to NATS JetStream, caches the latest `SessionEphemeris`, and pushes it to connected WebSocket clients on connect and on epoch changes. The VF runs local Keplerian propagation from the ephemeris to render satellite positions at 60fps. Link state, latencies, and events are pushed via WebSocket at ~1 Hz from ClockTick and LinkStateSnapshot.
 
-6. As satellites continue orbiting, latencies change continuously. The Scheduler sends `SetLatency` updates to the Node Agent, which adjusts tc netem delay values. FRR sees the metric change (IS-IS wide metrics are derived from bandwidth, not latency) and may recompute SPF if the topology changes are significant enough.
+6. As satellites continue orbiting, latencies change continuously. The Scheduler propagates active link endpoints locally from the SessionEphemeris orbital elements and sends `SetLatency` updates to the Node Agent, which adjusts tc netem delay values. FRR sees the metric change (IS-IS wide metrics are derived from bandwidth, not latency) and may recompute SPF if the topology changes are significant enough.
 
 ## Multi-Node Architecture
 
-On a single-node K3s cluster, all satellite pods run on one machine and ISL links are kernel veth pairs: fast, zero-copy, no encapsulation. This is the default and covers the majority of deployments.
+On a single-node K3s cluster, all satellite pods run on one machine and ISL links are host-mediated veth pairs with tc mirred redirect: fast, no encapsulation overhead beyond the mirred indirection. This is the default and covers the majority of deployments.
 
 When the constellation exceeds what a single node can handle (roughly 500 satellites on a 32 GB machine), pods are distributed across multiple K3s nodes using placement policies:
 

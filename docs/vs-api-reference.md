@@ -104,13 +104,14 @@ asyncio.run(main())
 
 ### `ws://host:8080/ws/v1/state`
 
-Full StateSnapshot pushed at ~1Hz. No delta encoding. Each message is the complete constellation state.
+Constellation state pushed at ~1Hz. On connect, the server sends the cached `SessionEphemeris` (orbital elements for local propagation, `msg_type: "session_ephemeris"`) followed by the current link state snapshot. Subsequent messages at ~1Hz include link state updates, latency changes, and events. Position data is NOT pushed per-tick — the browser runs local Keplerian propagation from the ephemeris.
 
 **Connection flow:**
 1. Client connects to the WebSocket endpoint
-2. Server sends an initial snapshot immediately on connect
-3. Server broadcasts updated snapshots at ~1Hz to all connected clients
-4. Client should drop intermediate frames if processing is slower than 1Hz
+2. Server sends `SessionEphemeris` immediately on connect (contains orbital elements for all satellites, fixed positions for all ground stations)
+3. Server sends current link state and node metadata
+4. Server broadcasts link state updates, ClockTick, and events at ~1Hz to all connected clients
+5. On epoch change (seek), server pushes new `SessionEphemeris`
 
 **Message format:** JSON-encoded `StateSnapshot` (see schema below).
 

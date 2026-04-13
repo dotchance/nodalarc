@@ -722,18 +722,6 @@ def set_link_metric(
     )
 
 
-def remove_link_shaping(pid: int, ifname: str) -> None:
-    """Remove all tc qdiscs from an interface."""
-    ns = NetNS(f"/proc/{pid}/ns/net")
-    try:
-        idx = ns.link_lookup(ifname=ifname)[0]
-        ns.tc("del", index=idx, root=True)
-    except Exception:
-        pass  # Interface may already be gone or no qdisc set
-    finally:
-        ns.close()
-
-
 # ---------------------------------------------------------------------------
 # Ground station link infrastructure (tc mirred redirect)
 #

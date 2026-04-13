@@ -89,16 +89,15 @@ def _isl_link_down(
 ) -> str | None:
     """Deactivate an ISL link. Returns error string or None.
 
-    LOCAL ISLs: removes tc shaping from pod-side, then detaches host-side
-    veths (removes mirred, brings host-side DOWN → carrier drops on pod-side).
-    Pod-side interface remains admin UP in LOWERLAYERDOWN state.
+    LOCAL ISLs: detaches host-side veths (brings host-side DOWN → carrier
+    drops on pod-side). Pod-side interface remains admin UP in LOWERLAYERDOWN
+    state. Pod-side tc qdiscs are left in place — apply_link_shaping uses
+    replace semantics on the next LinkUp, so orphaned qdiscs are harmless.
 
-    CROSS_NODE ISLs: removes tc shaping, then destroys the VXLAN tunnel
-    (handled separately in the batch handler's Phase 0 teardown).
+    CROSS_NODE ISLs: destroys the VXLAN tunnel (handled separately in the
+    batch handler's Phase 0 teardown).
     """
     try:
-        pid = _require_pid(iface.node_id, pid_map or {})
-        namespace_ops.remove_link_shaping(pid, iface.interface_name)
         if iface.locality == node_agent_pb2.LOCAL:
             ground_bridge.detach_isl(
                 iface.node_id,
@@ -124,15 +123,15 @@ def _ground_link_down(
        automatically (UP → LOWERLAYERDOWN), FRR tears down adjacency
     3. Bring satellite gnd0 DOWN
 
+    Pod-side tc qdiscs on both gnd0 interfaces are left in place —
+    apply_link_shaping uses replace semantics on the next LinkUp.
+
     No explicit admin state manipulation on GS gnd0 — host-side veth state
     drives carrier which drives FRR behavior.
     """
     try:
         pm = pid_map or {}
         sat_pid = _require_pid(iface.sat_id, pm)
-        gs_pid = _require_pid(iface.gs_id, pm)
-        namespace_ops.remove_link_shaping(sat_pid, "gnd0")
-        namespace_ops.remove_link_shaping(gs_pid, "gnd0")
         ground_bridge.detach_from_ground_bridge(iface.gs_id, iface.sat_id, sat_pid)
         return None
     except Exception as exc:
@@ -298,8 +297,6 @@ def _isl_link_up_phase1(
     """
     try:
         pid = _require_pid(iface.node_id, pid_map or {})
-        if iface.peer_mac:
-            namespace_ops.disable_dad(pid, iface.interface_name)
         if iface.locality == node_agent_pb2.LOCAL:
             ground_bridge.attach_isl(
                 iface.node_id,

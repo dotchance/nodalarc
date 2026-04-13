@@ -241,11 +241,16 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
                 node_id_b=nid_b,
             )
             futures[fut] = (nid_a, nid_b)
+        total_isls = len(futures)
         for fut in as_completed(futures):
             nid_a, nid_b = futures[fut]
             try:
                 fut.result()
                 created_links.add((min(nid_a, nid_b), max(nid_a, nid_b)))
+                if len(created_links) % 25 == 0 or len(created_links) == total_isls:
+                    _write_progress(
+                        f"Creating ISL interfaces: {len(created_links)}/{total_isls} pairs"
+                    )
             except Exception as exc:
                 log.warning(f"Failed to create mediated ISL {nid_a}<->{nid_b}: {exc}")
     log.info(f"Phase 2: created {len(created_links)} host-mediated ISL pairs")

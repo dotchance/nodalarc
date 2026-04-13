@@ -326,3 +326,103 @@ def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str, timeout_ms: int = 
         elapsed,
     )
     return False
+
+
+# ---------------------------------------------------------------------------
+# Wiring-time operations (moved from link_ops.py, rewritten to use setns)
+# ---------------------------------------------------------------------------
+
+
+def _write_sysctl_in_netns(
+    pid: int, sysctl_key: str, value: str, already_in_ns: bool = False
+) -> str | None:
+    """Write a sysctl value inside a network namespace.
+
+    Uses _in_namespace() with setns() instead of spawning a throwaway
+    thread. Returns None on success, error string on failure.
+
+    When already_in_ns=True, writes directly to /proc/sys (caller is
+    already inside the correct namespace via _in_namespace). This
+    prevents _ns_lock deadlock — threading.Lock is not reentrant.
+    """
+    from pathlib import Path
+
+    def _do_write(_ipr: IPRoute) -> None:
+        sysctl_path = Path("/proc/sys") / sysctl_key.replace(".", "/")
+        sysctl_path.write_text(str(value))
+
+    try:
+        if already_in_ns:
+            _do_write(None)
+        else:
+            _in_namespace(pid, _do_write)
+        return None
+    except Exception as exc:
+        return str(exc)
+
+
+def disable_ipv6_autoconfig(pid: int, ifname: str, ipr: IPRoute | None = None) -> None:
+    """Disable IPv6 autoconfig on an interface inside a namespace.
+
+    If ipr is provided, we're already inside _in_namespace — write
+    sysctls directly with already_in_ns=True to avoid deadlock.
+    """
+    in_ns = ipr is not None
+    for param in ("accept_ra", "autoconf"):
+        err = _write_sysctl_in_netns(
+            pid, f"net.ipv6.conf.{ifname}.{param}", "0", already_in_ns=in_ns
+        )
+        if err:
+            log.warning("Failed to set %s=0 for %s in ns(%d): %s", param, ifname, pid, err)
+
+
+def configure_interface(pid: int, ifname: str, node_id: str, ipr: IPRoute | None = None) -> None:
+    """Apply post-creation configuration to an interface in a namespace.
+
+    Disables IPv6 autoconfig and sets a deterministic MAC address.
+    MTU is set during veth creation, not here.
+
+    If ipr is provided, uses the handle directly (already inside
+    _in_namespace — zero additional setns hops). If not, wraps all
+    work in one _in_namespace call.
+    """
+    mac = deterministic_mac(node_id, ifname)
+
+    def _do_configure(handle: IPRoute) -> None:
+        idx = handle.link_lookup(ifname=ifname)
+        if not idx:
+            raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
+        handle.link("set", index=idx[0], address=mac)
+        # Disable IPv6 autoconfig — already in namespace, pass handle
+        disable_ipv6_autoconfig(pid, ifname, ipr=handle)
+
+    if ipr is not None:
+        _do_configure(ipr)
+    else:
+        _in_namespace(pid, _do_configure)
+    log.debug("Configured %s in ns(%d): mac=%s, ipv6_autoconfig=off", ifname, pid, mac)
+
+
+def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
+    """Create a dummy interface inside a namespace with given addresses.
+
+    Used for terrestrial prefix interfaces (terr0) on ground station pods.
+    """
+
+    def _op(ipr: IPRoute) -> None:
+        ipr.link("add", ifname=ifname, kind="dummy")
+        idx = ipr.link_lookup(ifname=ifname)[0]
+        ipr.link("set", index=idx, state="up")
+        for addr in addresses:
+            ip_addr, prefixlen = addr.split("/")
+            ipr.addr("add", index=idx, address=ip_addr, prefixlen=int(prefixlen))
+
+    _in_namespace(pid, _op)
+    log.info("Created dummy %s in ns(%d) with %d addrs", ifname, pid, len(addresses))
+
+
+def enable_mpls_input(pid: int, ifname: str) -> None:
+    """Enable MPLS input on an interface inside a namespace."""
+    err = _write_sysctl_in_netns(pid, f"net.mpls.conf.{ifname}.input", "1")
+    if err:
+        log.warning("Failed to enable MPLS input for %s in ns(%d): %s", ifname, pid, err)

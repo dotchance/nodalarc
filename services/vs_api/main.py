@@ -742,15 +742,16 @@ def _apply_link_state_snapshot(data: dict) -> None:
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 key = _link_key(link.node_a, link.node_b)
+                lat_ms = link.latency_ms or 0.0
                 _state["links"][key] = {
                     "node_a": link.node_a,
                     "node_b": link.node_b,
                     "state": "active",
                     "link_type": _derive_link_type(link.node_a, link.node_b),
                     "link_reason": "",
-                    "latency_ms": link.latency_ms or 0.0,
+                    "latency_ms": lat_ms,
                     "bandwidth_mbps": link.bandwidth_mbps or 0.0,
-                    "range_km": 0.0,
+                    "range_km": lat_ms * 299792.458 / 1000.0,
                     "traffic_load_pct": None,
                     "interface_a": link.interface_a,
                     "interface_b": link.interface_b,

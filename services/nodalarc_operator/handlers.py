@@ -96,9 +96,12 @@ async def on_create(spec, name, namespace, meta, **_):
         raise kopf.PermanentError("Old session pods did not terminate within 120s")
 
     # Deploy session (blocking — run in executor to not block kopf)
+    def _deploy_progress(msg: str) -> None:
+        _update_status(name, namespace, {"phase": "Pending", "message": msg})
+
     try:
         result = await loop.run_in_executor(
-            None, deploy_session, dict(spec), name, namespace, owner_ref
+            None, deploy_session, dict(spec), name, namespace, owner_ref, _deploy_progress
         )
     except Exception as exc:
         _update_status(
@@ -115,10 +118,15 @@ async def on_create(spec, name, namespace, meta, **_):
 
     # Set NodalPath mode based on session protocol before restarting
     protocol = spec.get("routing", {}).get("protocol", "isis")
+    _update_status(name, namespace, {"phase": "Creating", "message": "Configuring NodalPath mode"})
     await loop.run_in_executor(None, set_nodalpath_mode, namespace, protocol)
 
     # Restart platform pods to pick up new session ConfigMaps
-    # (OME, Scheduler, VS-API, NodalPath need the session config to operate)
+    _update_status(
+        name,
+        namespace,
+        {"phase": "Creating", "message": "Restarting platform services (OME, Scheduler, VS-API)"},
+    )
     await loop.run_in_executor(None, restart_platform_pods, namespace)
     log.info("Restarted platform pods for new session")
 
@@ -126,19 +134,18 @@ async def on_create(spec, name, namespace, meta, **_):
     if result.get("phase") == "Creating":
         pod_count = result.get("podCount", 0)
         all_pods_ready = False
-        for i in range(600):  # 10 minutes max
+        for _i in range(600):  # 10 minutes max
             total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-            if i % 10 == 0:
-                _update_status(
-                    name,
-                    namespace,
-                    {
-                        "phase": "Creating",
-                        "readyPods": ready,
-                        "podCount": pod_count,
-                        "message": f"{ready}/{pod_count} pods running",
-                    },
-                )
+            _update_status(
+                name,
+                namespace,
+                {
+                    "phase": "Creating",
+                    "readyPods": ready,
+                    "podCount": pod_count,
+                    "message": f"Waiting for pods: {ready}/{pod_count} running",
+                },
+            )
             if ready >= pod_count:
                 all_pods_ready = True
                 break
@@ -159,12 +166,42 @@ async def on_create(spec, name, namespace, meta, **_):
             raise kopf.PermanentError(f"Session pods did not reach Running: {ready}/{pod_count}")
 
         # Signal FRR config-ready in each pod
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "readyPods": pod_count,
+                "podCount": pod_count,
+                "message": f"Signaling FRR config ready in {pod_count} pods",
+            },
+        )
         await loop.run_in_executor(None, signal_frr_config_ready, namespace)
 
         # Write pod-IPs ConfigMap (needs running pods)
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "readyPods": pod_count,
+                "podCount": pod_count,
+                "message": "Writing pod IP addresses",
+            },
+        )
         await loop.run_in_executor(None, write_pod_ips_configmap, namespace)
 
         # Write topology wiring manifest for Node Agent (7b)
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "readyPods": pod_count,
+                "podCount": pod_count,
+                "message": "Writing topology wiring manifest",
+            },
+        )
         await loop.run_in_executor(None, write_wiring_manifest, dict(spec), namespace, owner_ref)
 
         # Set Wiring phase — Node Agent will read manifest and wire data plane
@@ -175,7 +212,7 @@ async def on_create(spec, name, namespace, meta, **_):
                 "phase": "Wiring",
                 "readyPods": pod_count,
                 "podCount": pod_count,
-                "message": f"All {pod_count} pods running. Awaiting data plane wiring.",
+                "message": f"All {pod_count} pods running. Node Agent wiring data plane.",
             },
         )
         log.info(f"Session deployed: {pod_count} pods running, waiting for wiring")
@@ -183,7 +220,7 @@ async def on_create(spec, name, namespace, meta, **_):
         # Wait for Node Agent to write wiring-complete status
         kubernetes.config.load_incluster_config()
         v1 = kubernetes.client.CoreV1Api()
-        for _i in range(120):  # 2 minutes max
+        for _i in range(300):  # 5 minutes max (large constellations can take several minutes)
             try:
                 cm = await loop.run_in_executor(
                     None,
@@ -192,6 +229,17 @@ async def on_create(spec, name, namespace, meta, **_):
                     namespace,
                 )
                 wired_count = len(cm.data) if cm.data else 0
+                _update_status(
+                    name,
+                    namespace,
+                    {
+                        "phase": "Wiring",
+                        "readyPods": pod_count,
+                        "podCount": pod_count,
+                        "wiredPods": wired_count,
+                        "message": f"Data plane wiring: {wired_count}/{pod_count} nodes wired",
+                    },
+                )
                 if wired_count >= pod_count:
                     _update_status(
                         name,
@@ -207,7 +255,18 @@ async def on_create(spec, name, namespace, meta, **_):
                     log.info(f"Session ready: {wired_count}/{pod_count} nodes wired")
                     return
             except kubernetes.client.rest.ApiException as e:
-                if e.status != 404:
+                if e.status == 404:
+                    _update_status(
+                        name,
+                        namespace,
+                        {
+                            "phase": "Wiring",
+                            "readyPods": pod_count,
+                            "podCount": pod_count,
+                            "message": "Waiting for Node Agent to begin wiring",
+                        },
+                    )
+                else:
                     log.warning(f"Wiring status check error: {e}")
             await asyncio.sleep(1)
 

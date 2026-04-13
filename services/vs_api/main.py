@@ -503,6 +503,7 @@ def _build_snapshot() -> dict:
 # --- NATS subscriber ---
 
 _nats_connection: nats.NATS | None = None
+_pending_cr_poll: bool = False
 
 
 async def _nats_subscriber() -> None:
@@ -526,6 +527,14 @@ async def _nats_subscriber() -> None:
     js = nc.jetstream()
 
     log.info("VS-API NATS connected to %s", nats_url())
+
+    # If main() detected a CR in Wiring/Creating phase, start polling from
+    # this event loop (main() runs before uvicorn and has no event loop).
+    global _pending_cr_poll
+    if _pending_cr_poll:
+        _pending_cr_poll = False
+        log.info("NATS subscriber: launching _poll_cr_until_ready background task")
+        asyncio.ensure_future(_poll_cr_until_ready())
 
     # --- Callback-driven subscriptions (DeliverPolicy.NEW) ---
     # NATS delivers messages to callbacks as they arrive — concurrently,
@@ -2258,6 +2267,61 @@ async def _run_switch(session_path: str) -> None:
             log.error("_run_switch safety net caught: %s", exc)
 
 
+async def _poll_cr_until_ready() -> None:
+    """Poll ConstellationSpec CR until Ready, updating session status_detail.
+
+    Runs as a background task when VS-API starts and finds a CR in
+    Wiring/Creating phase (i.e., the session was deployed via make session
+    or kubectl apply, not through the wizard). Mirrors the polling in
+    session_manager.switch() so the frontend sees progress messages
+    regardless of deploy path.
+    """
+    log.info("_poll_cr_until_ready: starting background CR polling task")
+    import kubernetes.client
+    import kubernetes.config
+
+    try:
+        kubernetes.config.load_incluster_config()
+    except kubernetes.config.ConfigException:
+        kubernetes.config.load_kube_config()
+    api = kubernetes.client.CustomObjectsApi()
+    ns = get_platform_config().kubernetes_namespace
+
+    for _ in range(600):  # 10 minutes max
+        await asyncio.sleep(1)
+        try:
+            cr = api.get_namespaced_custom_object(
+                group="nodalarc.io",
+                version="v1alpha1",
+                namespace=ns,
+                plural="constellationspecs",
+                name="current-session",
+            )
+            phase = cr.get("status", {}).get("phase", "")
+            message = cr.get("status", {}).get("message", "")
+            if _session_manager:
+                _session_manager._status_detail = message or f"Phase: {phase}"
+            if phase == "Ready":
+                if _session_manager:
+                    _session_manager._status = "ready"
+                    _session_manager._status_detail = ""
+                log.info("CR reached Ready — session is now operational")
+                return
+            if phase == "Error":
+                if _session_manager:
+                    _session_manager._status = "error"
+                    _session_manager._status_detail = message or "Operator reported error"
+                log.error("CR reached Error during wiring: %s", message)
+                return
+        except Exception as exc:
+            log.warning("_poll_cr_until_ready: %s", exc)
+
+    if _session_manager:
+        _session_manager._status = "error"
+        _session_manager._status_detail = "Wiring timed out (10 minutes)"
+    log.error("_poll_cr_until_ready timed out")
+
+
 def main() -> None:
     import uvicorn
 
@@ -2306,7 +2370,8 @@ def main() -> None:
         _constellation_name, \
         _session_manager, \
         _gs_elevation_map, \
-        _beam_falloff_exponent
+        _beam_falloff_exponent, \
+        _pending_cr_poll
 
     # Initialize SessionManager
     _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
@@ -2356,7 +2421,37 @@ def main() -> None:
                     if _s.get("name") == _loaded_name:
                         _session_manager.set_active(_s["file"])
                         break
-            _session_manager._status = "ready"
+            # Check CR phase — don't claim ready if data plane is still wiring
+            _cr_phase = ""
+            _cr_message = ""
+            try:
+                import kubernetes.client as _k8s_client
+                import kubernetes.config as _k8s_config
+
+                try:
+                    _k8s_config.load_incluster_config()
+                except _k8s_config.ConfigException:
+                    _k8s_config.load_kube_config()
+                _cr_api = _k8s_client.CustomObjectsApi()
+                _cr = _cr_api.get_namespaced_custom_object(
+                    group="nodalarc.io",
+                    version="v1alpha1",
+                    namespace=get_platform_config().kubernetes_namespace,
+                    plural="constellationspecs",
+                    name="current-session",
+                )
+                _cr_phase = _cr.get("status", {}).get("phase", "")
+                _cr_message = _cr.get("status", {}).get("message", "")
+            except Exception:
+                pass  # CR may not exist yet — treat as ready
+
+            if _cr_phase in ("Wiring", "Creating"):
+                log.info(f"Session config loaded but CR phase={_cr_phase} — wiring in progress")
+                _session_manager._status = "wiring"
+                _session_manager._status_detail = _cr_message or f"Phase: {_cr_phase}"
+                _pending_cr_poll = True
+            else:
+                _session_manager._status = "ready"
         else:
             log.info("No session loaded — VS-API starting in idle mode")
             # Check if Operator has an active session (CR with phase Ready/Wiring)
@@ -2377,12 +2472,19 @@ def main() -> None:
                     name="current-session",
                 )
                 phase = cr.get("status", {}).get("phase", "")
-                if phase in ("Ready", "Wiring", "Creating"):
-                    log.info(
-                        f"Active ConstellationSpec CR found (phase={phase}) — setting status to ready"
-                    )
+                message = cr.get("status", {}).get("message", "")
+                if phase == "Ready":
+                    log.info("Active ConstellationSpec CR found (phase=Ready)")
                     _session_manager._status = "ready"
-                    # Try to match session name from mounted config
+                elif phase in ("Wiring", "Creating"):
+                    log.info(
+                        f"Active ConstellationSpec CR found (phase={phase}) — wiring in progress"
+                    )
+                    _session_manager._status = "wiring"
+                    _session_manager._status_detail = message or f"Phase: {phase}"
+                    _pending_cr_poll = True
+                # Try to match session name from mounted config
+                if phase in ("Ready", "Wiring", "Creating"):
                     _sp = Path(args.session)
                     if _sp.is_file():
                         _sd = yaml.safe_load(_sp.read_text())

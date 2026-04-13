@@ -136,6 +136,7 @@ def deploy_session(
     name: str,
     namespace: str,
     owner_ref: dict,
+    progress_fn: Any | None = None,
 ) -> dict:
     """Deploy a full session from a ConstellationSpec CR spec.
 
@@ -144,10 +145,17 @@ def deploy_session(
         name: CR metadata.name (used for session_id).
         namespace: K8s namespace.
         owner_ref: ownerReferences entry for garbage collection.
+        progress_fn: Optional callback(message: str) for status updates.
 
     Returns:
         Status dict with phase, podCount, readyPods, sessionId, message.
     """
+
+    def _progress(msg: str) -> None:
+        log.info(msg)
+        if progress_fn:
+            progress_fn(msg)
+
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
 
@@ -156,6 +164,7 @@ def deploy_session(
     # Discover available K8s nodes for pod placement.
     # Substrate latency measurement is handled by Node Agent substrate_monitor
     # (peer-only, continuous, published to NATS).
+    _progress("Discovering available K8s nodes")
     available_nodes = discover_available_nodes()
     if not available_nodes:
         fallback = os.environ.get("SESSION_NODE_NAME", "nodal")
@@ -167,12 +176,14 @@ def deploy_session(
         )
 
     # --- Step 1: Parse session YAML from the CRD spec ---
+    _progress("Parsing session configuration")
     session_yaml = spec.get("sessionYaml")
     if not session_yaml:
         return {"phase": "Error", "message": "spec.sessionYaml is required"}
     session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
 
     # --- Step 2: Load constellation and ground stations ---
+    _progress("Loading constellation and ground station definitions")
     # Handle inline constellation dicts: write to ephemeral file, then load
     constellation_source = session.constellation
     if isinstance(constellation_source, dict):
@@ -210,6 +221,10 @@ def deploy_session(
 
     gs_file = load_ground_stations(gs_source)
     satellites = expand_constellation(constellation)
+    num_planes = max((s.plane for s in satellites), default=0) + 1
+    _progress(
+        f"Expanded {len(satellites)} satellites across {num_planes} planes, {len(gs_file.stations)} ground stations"
+    )
     if not satellites:
         return {"phase": "Error", "message": "No satellites in constellation"}
 
@@ -217,6 +232,7 @@ def deploy_session(
     neighbors = assign_isl_neighbors(constellation, addressing)
 
     # --- Step 3: Resolve routing stack ---
+    _progress(f"Resolving routing stack: {session.routing.protocol}")
     resolved = resolve_stack(
         session.routing.protocol,
         session.routing.extensions,
@@ -225,6 +241,8 @@ def deploy_session(
     config_overrides.update(session.routing.config_overrides)
 
     # --- Step 4: Build template vars per node ---
+    total_nodes = len(satellites) + len(gs_file.stations)
+    _progress(f"Building template variables for {total_nodes} nodes")
     node_vars: dict[str, dict] = {}
     for sat in satellites:
         node_id = addressing.sat_id(sat.plane, sat.slot)
@@ -252,6 +270,7 @@ def deploy_session(
         )
 
     # --- Step 5: Render FRR configs ---
+    _progress(f"Rendering FRR configurations for {len(node_vars)} nodes")
     template_dir = str(Path("configs/templates/frr").resolve())
     # nosec B701 — these are FRR router config templates, not HTML; autoescape would break config syntax
     env = Environment(loader=FileSystemLoader(template_dir), keep_trailing_newline=True)
@@ -291,12 +310,14 @@ def deploy_session(
         rendered_configs[node_id] = configs
 
     # --- Step 6: Create per-node FRR config ConfigMaps ---
+    _progress(f"Creating {len(rendered_configs)} FRR config ConfigMaps")
     for node_id, configs in rendered_configs.items():
         cm_name = f"frr-config-{node_id.lower()}"
         _create_or_update_configmap(v1, cm_name, namespace, configs, owner_ref)
     log.info(f"Created {len(rendered_configs)} FRR config ConfigMaps")
 
     # --- Step 7: Create session-level ConfigMaps ---
+    _progress("Creating session-level ConfigMaps")
     _create_session_configmaps(
         v1,
         session,
@@ -308,6 +329,7 @@ def deploy_session(
     )
 
     # --- Step 7b: Generate SSH keypair for terminal access ---
+    _progress("Generating SSH keypair for terminal access")
     # Per-session ED25519 keypair for secure interactive vtysh terminal.
     # Public key mounted into session pods (SSH authorized_keys).
     # Private key stored in Secret for VS-API SSH proxy.
@@ -315,6 +337,7 @@ def deploy_session(
     _create_terminal_ssh_keys(v1, namespace, owner_ref)
 
     # --- Step 8: Compute pod placement ---
+    _progress(f"Computing pod placement ({session.placement.policy} policy)")
     # available_nodes already discovered in Step 0 (substrate latency)
     pod_placement = compute_pod_placement(session.placement, node_vars, available_nodes)
     node_counts: dict[str, int] = {}
@@ -329,6 +352,8 @@ def deploy_session(
     )
 
     # --- Step 9: Create session pods ---
+    total_pods = len(node_vars)
+    _progress(f"Creating {total_pods} session pods")
     sidecar_config = _build_sidecar_config(resolved)
     env_list = resolved.env
 
@@ -357,6 +382,8 @@ def deploy_session(
             owner_ref=owner_ref,
         )
         created_pods += 1
+        if created_pods % 10 == 0 or created_pods == total_pods:
+            _progress(f"Creating session pods: {created_pods}/{total_pods}")
 
     log.info(f"Created {created_pods} session pods")
 

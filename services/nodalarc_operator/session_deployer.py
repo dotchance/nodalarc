@@ -357,11 +357,24 @@ def deploy_session(
     sidecar_config = _build_sidecar_config(resolved)
     env_list = resolved.env
 
+    import time as _time
+
     created_pods = 0
+    last_progress_time = _time.monotonic()
     for node_id, vars in node_vars.items():
         node_type = vars["node_type"]
         pod_name = node_id.lower()
         cm_name = f"frr-config-{pod_name}"
+        created_pods += 1
+        elapsed_since_last = _time.monotonic() - last_progress_time
+        if elapsed_since_last > 5:
+            _progress(
+                f"Creating session pod {created_pods}/{total_pods}: {pod_name} "
+                f"(K8s scheduling — please wait)"
+            )
+        else:
+            _progress(f"Creating session pod {created_pods}/{total_pods}: {pod_name}")
+        last_progress_time = _time.monotonic()
 
         sidecar_env = _build_sidecar_env(node_id, vars, env_list) if sidecar_config else None
 
@@ -381,10 +394,6 @@ def deploy_session(
             target_node=pod_placement.get(node_id),
             owner_ref=owner_ref,
         )
-        created_pods += 1
-        if created_pods % 10 == 0 or created_pods == total_pods:
-            _progress(f"Creating session pods: {created_pods}/{total_pods}")
-
     log.info(f"Created {created_pods} session pods")
 
     return {

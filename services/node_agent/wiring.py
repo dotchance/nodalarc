@@ -155,11 +155,38 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
     log.info("PID discovery: %d/%d pods found", len(pid_map), len(expected_nodes))
 
     wired: dict[str, str] = {}
+    total_nodes = len([n for n in nodes if pid_map.get(n, 0) > 0])
+
+    def _write_progress(phase_msg: str) -> None:
+        """Write incremental wiring progress to ConfigMap so the Operator can surface it."""
+        try:
+            kubernetes.config.load_incluster_config()
+            v1 = kubernetes.client.CoreV1Api()
+            body = kubernetes.client.V1ConfigMap(
+                metadata=kubernetes.client.V1ObjectMeta(
+                    name="nodalarc-wiring-status",
+                    namespace=namespace,
+                    labels={"nodalarc.io/managed-by": "node-agent"},
+                ),
+                data={"_progress": phase_msg},
+            )
+            try:
+                v1.create_namespaced_config_map(namespace, body)
+            except kubernetes.client.rest.ApiException as e:
+                if e.status == 409:
+                    existing = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
+                    if existing.data is None:
+                        existing.data = {}
+                    existing.data["_progress"] = phase_msg
+                    v1.replace_namespaced_config_map("nodalarc-wiring-status", namespace, existing)
+        except Exception:
+            pass  # Non-fatal — progress reporting failure shouldn't block wiring
 
     # Phase 0: Clean stale interfaces from host and pod namespaces.
     # Must run BEFORE the ThreadPoolExecutor starts creating interfaces.
     # Without this, 32 concurrent threads racing to create and clean
     # interfaces produce EEXIST race conditions.
+    _write_progress(f"Cleaning stale interfaces for {total_nodes} nodes")
     _phase0_cleanup(pid_map, nodes)
 
     # Phase 1: Set sysctls in each pod namespace (via os.setns)
@@ -173,6 +200,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             if err:
                 log.warning(f"sysctl {key}={value} failed in {node_id}: {err}")
     log.info(f"Phase 1: sysctls set for {len(nodes)} nodes")
+    _write_progress(f"Sysctls configured for {total_nodes} nodes. Creating ISL interfaces...")
 
     # Phase 2: Create ISL veth pairs (deduplicate A→B and B→A, parallelized)
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -221,6 +249,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             except Exception as exc:
                 log.warning(f"Failed to create mediated ISL {nid_a}<->{nid_b}: {exc}")
     log.info(f"Phase 2: created {len(created_links)} host-mediated ISL pairs")
+    _write_progress(f"Created {len(created_links)} ISL pairs. Enabling MPLS...")
 
     # Phase 3: Enable MPLS input on ISL interfaces (parallelized)
     mpls_tasks = []
@@ -243,6 +272,9 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             except Exception as exc:
                 log.warning(f"MPLS enable failed {nid}:{ifname}: {exc}")
     log.info(f"Phase 3: MPLS input enabled on {len(mpls_tasks)} ISL interfaces")
+    _write_progress(
+        f"MPLS enabled on {len(mpls_tasks)} interfaces. Creating ground infrastructure..."
+    )
 
     # Phase 4+5: Create ground infrastructure (parallelized)
     # Ground bridges (GS-side) and satellite ground veths are independent
@@ -290,6 +322,9 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             except Exception as exc:
                 log.warning(f"Ground setup failed for {nid}: {exc}")
     log.info(f"Phase 4+5: {gs_created} ground bridges, {sat_gnd_created} satellite ground veths")
+    _write_progress(
+        f"Ground infrastructure ready: {gs_created} GS, {sat_gnd_created} satellites. Creating terrestrial interfaces..."
+    )
 
     # Phase 6: Create terr0 dummy interfaces for ground stations (parallelized)
     terr0_tasks = []
@@ -315,6 +350,9 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             except Exception as exc:
                 log.warning(f"terr0 creation failed for {nid}: {exc}")
     log.info(f"Phase 6: {len(terr0_tasks)} terr0 dummy interfaces created")
+    _write_progress(
+        f"Terrestrial interfaces created. Finalizing {total_nodes} pods (routes + security)..."
+    )
 
     # Phase 7+8: Per-pod finalization (parallelized)
     # Default route removal + cni0 iptables lockdown per pod.
@@ -389,6 +427,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             except Exception as exc:
                 log.warning(f"Pod finalization error for {nid}: {exc}")
     log.info(f"Phase 7+8: finalized {finalized} pods (default route + cni0 lockdown)")
+    _write_progress(f"Finalized {finalized}/{total_nodes} pods. Wiring complete.")
 
     # Mark all nodes as wired
     for node_id in nodes:

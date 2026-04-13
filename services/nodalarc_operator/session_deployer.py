@@ -428,6 +428,8 @@ def write_wiring_manifest(
         "net.ipv6.conf.all.forwarding": "1",
         "net.ipv4.conf.all.rp_filter": "0",
         "net.ipv4.conf.default.rp_filter": "0",
+        "net.ipv6.conf.all.dad_transmits": "0",
+        "net.ipv6.conf.default.dad_transmits": "0",
     }
     node_sysctls = {**base_sysctls, **resolved.sysctls}
 

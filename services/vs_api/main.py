@@ -195,7 +195,7 @@ _state = {
     "recent_events": [],  # list of RecentEvent dicts (last 50)
     "active_flows": [],  # list of ActiveFlow dicts
     "network_health": {
-        "status": "unknown",
+        "status": "no measurement",
         "converging_since_ms": None,
         "unreachable_flows": 0,
         "last_convergence_ms": None,
@@ -920,7 +920,7 @@ def _clear_state() -> None:
         _state["recent_events"].clear()
         _state["active_flows"].clear()
         _state["network_health"] = {
-            "status": "unknown",
+            "status": "no measurement",
             "converging_since_ms": None,
             "unreachable_flows": 0,
             "last_convergence_ms": None,

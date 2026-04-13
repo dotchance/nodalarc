@@ -228,7 +228,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             seen_pairs.add(pair)
 
     created_links: set[tuple[str, str]] = set()
-    with ThreadPoolExecutor(max_workers=32) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {}
         for pid_a, pid_b, ifname_a, ifname_b, nid_a, nid_b in isl_tasks:
             fut = pool.submit(
@@ -265,7 +265,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
         for iface in node_spec.get("isl_interfaces", []):
             mpls_tasks.append((pid, iface["name"], node_id))
 
-    with ThreadPoolExecutor(max_workers=32) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {
             pool.submit(enable_mpls_input, pid, ifname): (nid, ifname)
             for pid, ifname, nid in mpls_tasks
@@ -297,7 +297,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
         configure_interface(pid, "gnd0", node_id)
         enable_mpls_input(pid, "gnd0")
 
-    with ThreadPoolExecutor(max_workers=32) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         gnd_futures = {}
         for gs_id, _bridge_spec in ground_bridges.items():
             gs_pid = pid_map.get(gs_id, 0)
@@ -343,7 +343,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
         if addrs:
             terr0_tasks.append((pid, node_id, addrs))
 
-    with ThreadPoolExecutor(max_workers=32) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         terr_futures = {
             pool.submit(create_dummy_interface, pid, "terr0", addrs): nid
             for pid, nid, addrs in terr0_tasks
@@ -414,7 +414,7 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
             return f"{node_id}: {exc}"
 
     finalized = 0
-    with ThreadPoolExecutor(max_workers=32) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         fin_futures = {}
         for node_id in nodes:
             pid = pid_map.get(node_id, 0)

@@ -382,8 +382,7 @@ def deploy_session(
             owner_ref=owner_ref,
         )
         created_pods += 1
-        if created_pods % 10 == 0 or created_pods == total_pods:
-            _progress(f"Creating session pods: {created_pods}/{total_pods}")
+        _progress(f"Creating session pods: {created_pods}/{total_pods}")
 
     log.info(f"Created {created_pods} session pods")
 

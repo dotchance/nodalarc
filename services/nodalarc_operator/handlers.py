@@ -228,7 +228,12 @@ async def on_create(spec, name, namespace, meta, **_):
                     "nodalarc-wiring-status",
                     namespace,
                 )
-                wired_count = len(cm.data) if cm.data else 0
+                data = cm.data or {}
+                progress_msg = data.pop("_progress", None)
+                wired_count = len(data)
+                display_msg = (
+                    progress_msg or f"Data plane wiring: {wired_count}/{pod_count} nodes wired"
+                )
                 _update_status(
                     name,
                     namespace,
@@ -237,7 +242,7 @@ async def on_create(spec, name, namespace, meta, **_):
                         "readyPods": pod_count,
                         "podCount": pod_count,
                         "wiredPods": wired_count,
-                        "message": f"Data plane wiring: {wired_count}/{pod_count} nodes wired",
+                        "message": display_msg,
                     },
                 )
                 if wired_count >= pod_count:

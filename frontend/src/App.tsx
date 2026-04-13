@@ -62,7 +62,7 @@ function AppInner() {
   const [hasEverDeployed, setHasEverDeployed] = useState(false);
 
   const sessionStatus = snapshot?.session_status ?? "idle";
-  const hasActiveSession = sessionStatus === "ready" || sessionStatus === "switching";
+  const hasActiveSession = sessionStatus === "ready" || sessionStatus === "switching" || sessionStatus === "wiring";
   const activeSessionName = snapshot?.constellation_name ?? null;
 
   // If VS-API already has an active session (e.g. after page reload), close wizard
@@ -352,7 +352,17 @@ function AppInner() {
             </div>
           </div>
         )}
-        {connected && !switching && (!snapshot || snapshot.nodes.length === 0) && (
+        {!switching && sessionStatus === "wiring" && (
+          <div className="session-switching-overlay">
+            <div className="switching-box">
+              <p>Data plane wiring in progress</p>
+              <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
+                {snapshot?.session_status_detail ?? "Waiting for Node Agent..."}
+              </p>
+            </div>
+          </div>
+        )}
+        {connected && !switching && sessionStatus !== "wiring" && (!snapshot || snapshot.nodes.length === 0) && (
           <div className="connection-banner">
             Initializing constellation...
           </div>

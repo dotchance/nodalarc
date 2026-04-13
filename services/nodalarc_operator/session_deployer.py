@@ -362,6 +362,8 @@ def deploy_session(
         node_type = vars["node_type"]
         pod_name = node_id.lower()
         cm_name = f"frr-config-{pod_name}"
+        created_pods += 1
+        _progress(f"Creating session pod {created_pods}/{total_pods}: {pod_name}")
 
         sidecar_env = _build_sidecar_env(node_id, vars, env_list) if sidecar_config else None
 
@@ -381,9 +383,6 @@ def deploy_session(
             target_node=pod_placement.get(node_id),
             owner_ref=owner_ref,
         )
-        created_pods += 1
-        _progress(f"Creating session pods: {created_pods}/{total_pods}")
-
     log.info(f"Created {created_pods} session pods")
 
     return {

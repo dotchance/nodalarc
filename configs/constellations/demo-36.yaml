@@ -5,7 +5,7 @@
 # Frankfurt (50N). The ring sweeps diagonally across the US, giving
 # passes over Hawthorne, Denver, and Ashburn.
 #
-# Intra-plane ISL distance: ~2400 km (well within Starlink V2's 5000 km range).
+# Intra-plane ISL distance: ~1206 km (chord distance at 550 km altitude, 10° separation).
 # Cross-plane ISLs: none (single plane).
 
 mode: parametric

@@ -40,8 +40,8 @@ scheduler:
 # Executes privileged netlink operations on behalf of the Scheduler.
 nodeAgent:
   grpcPort: 50100
-  memoryLimit: 256Mi
-  cpuLimit: 500m
+  memoryLimit: 512Mi
+  cpuLimit: "1"
 
 # VS-API: FastAPI server for visualization state
 vsApi:

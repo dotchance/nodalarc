@@ -11,7 +11,6 @@ Never use pyroute2 NetNS() directly in the Node Agent.
 
 from __future__ import annotations
 
-import contextlib
 import ctypes
 import hashlib
 import logging
@@ -139,33 +138,6 @@ def set_interface_up(pid: int, ifname: str) -> None:
     _in_namespace(pid, _op)
 
 
-def disable_dad(pid: int, ifname: str) -> None:
-    """Disable IPv6 DAD on an interface to avoid ~1s tentative delay.
-
-    When an interface goes admin UP, the kernel runs Duplicate Address
-    Detection on the link-local address. This takes ~1 second (one NS
-    probe + retransmit timer). During DAD the address is tentative and
-    NDP resolution from peers will fail.
-
-    ISL and ground interfaces use deterministic MACs, so DAD is unnecessary.
-    Disabling it allows NDP to resolve in <100ms instead of >1000ms.
-    """
-    subprocess.run(
-        [
-            "nsenter",
-            "--target",
-            str(pid),
-            "--net",
-            "--",
-            "sysctl",
-            "-w",
-            f"net.ipv6.conf.{ifname}.dad_transmits=0",
-        ],
-        capture_output=True,
-        text=True,
-    )
-
-
 def set_interface_down(pid: int, ifname: str) -> None:
     """Bring an interface down inside a namespace."""
 
@@ -191,10 +163,17 @@ def apply_link_shaping(
 ) -> None:
     """Apply tc tbf root + netem child for bandwidth and delay.
 
-    Called once when a link goes up. Subsequent delay changes use
-    update_delay().
+    Strictly idempotent via NLM_F_REPLACE | NLM_F_CREATE: creates the
+    qdisc if it doesn't exist, replaces it in-place if it does. No
+    need to delete first, no race window, safe to call regardless of
+    prior interface state (fresh, previously shaped, or orphaned from
+    a prior LinkDown that skipped shaping removal).
 
-    Uses tbf root qdisc with netem child for combined shaping.
+    Deterministic handle hierarchy:
+      TBF root:   handle 0x00010000  (1:0 in tc notation)
+      netem child: handle 0x00100000  (16:0) parent 0x00010001 (1:1)
+
+    Called on LinkUp. Subsequent delay-only changes use update_delay().
     """
     rate_bps = int(rate_mbps * 1_000_000)
     burst = max(9000, rate_bps // 250)
@@ -206,10 +185,8 @@ def apply_link_shaping(
         if not links:
             raise FileNotFoundError(f"Interface {ifname} not found in ns({pid})")
         idx = links[0]
-        with contextlib.suppress(Exception):
-            ipr.tc("del", index=idx, root=True)
         ipr.tc(
-            "add",
+            "replace",
             kind="tbf",
             index=idx,
             handle=0x00010000,
@@ -217,7 +194,9 @@ def apply_link_shaping(
             burst=burst,
             latency=latency_us,
         )
-        ipr.tc("add", kind="netem", index=idx, handle=0x00100000, parent=0x00010001, delay=delay_us)
+        ipr.tc(
+            "replace", kind="netem", index=idx, handle=0x00100000, parent=0x00010001, delay=delay_us
+        )
 
     _in_namespace(pid, _op)
     log.info(f"Applied shaping on ns({pid})/{ifname}: {delay_ms}ms, {rate_mbps}Mbps")
@@ -245,17 +224,6 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
         )
 
     _in_namespace(pid, _op)
-
-
-def remove_link_shaping(pid: int, ifname: str) -> None:
-    """Remove all tc qdiscs from an interface."""
-
-    def _op(ipr: IPRoute) -> None:
-        idx = ipr.link_lookup(ifname=ifname)[0]
-        ipr.tc("del", index=idx, root=True)
-
-    with contextlib.suppress(Exception):
-        _in_namespace(pid, _op)
 
 
 # ---------------------------------------------------------------------------

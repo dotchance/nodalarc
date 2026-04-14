@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import signal
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -53,6 +54,7 @@ class SessionManager:
         self._current_session_file: str | None = None
         self._status: str = "idle"
         self._status_detail: str = ""
+        self._detail_lock = threading.Lock()
         self._available: list[dict] = []
 
         # Derive initial data_dir from db_path parent if provided
@@ -68,7 +70,13 @@ class SessionManager:
 
     @property
     def status_detail(self) -> str:
-        return self._status_detail
+        with self._detail_lock:
+            return self._status_detail
+
+    @status_detail.setter
+    def status_detail(self, value: str) -> None:
+        with self._detail_lock:
+            self._status_detail = value
 
     def scan_sessions(self) -> list[dict]:
         """Read each YAML in sessions_dir, parse with SessionConfig, return metadata."""
@@ -201,7 +209,7 @@ class SessionManager:
                 if session_config:
                     self._current_session_file = session_config
                 self._status = "ready"
-                self._status_detail = ""
+                self.status_detail = ""
                 return state
 
         log.info("No live session found during recovery scan")
@@ -325,7 +333,7 @@ class SessionManager:
         self.rescan()
         if session_path not in self._valid_session_files():
             self._status = "error"
-            self._status_detail = f"Unknown session: {Path(session_path).name}"
+            self.status_detail = f"Unknown session: {Path(session_path).name}"
             log.error(f"Rejected switch to unknown session path: {session_path}")
             return
 
@@ -340,7 +348,7 @@ class SessionManager:
 
         try:
             self._status = "switching"
-            self._status_detail = "Tearing down current session"
+            self.status_detail = "Tearing down current session"
             log.info(f"Session switch: deploying {session_path} via CRD")
 
             # === Delete existing ConstellationSpec CR ===
@@ -354,7 +362,7 @@ class SessionManager:
                 )
                 log.info("Deleted existing ConstellationSpec CR")
                 # Wait for CR to be fully deleted (avoid 409 Conflict on recreate)
-                self._status_detail = "Waiting for old CR to finalize"
+                self.status_detail = "Waiting for old CR to finalize"
                 for _ in range(60):
                     try:
                         api.get_namespaced_custom_object(
@@ -370,7 +378,7 @@ class SessionManager:
                             break  # Gone
                         raise
                 # Wait for pods to terminate
-                self._status_detail = "Waiting for old session pods to terminate"
+                self.status_detail = "Waiting for old session pods to terminate"
                 v1 = kubernetes.client.CoreV1Api()
                 for _ in range(60):
                     pods = v1.list_namespaced_pod(ns, label_selector="nodalarc.io/node-id")
@@ -382,13 +390,13 @@ class SessionManager:
                     raise
 
             # === Clear VS-API state ===
-            self._status_detail = "Clearing in-memory state"
+            self.status_detail = "Clearing in-memory state"
             clear_state_fn()
 
             # === Build ConstellationSpec CR with session YAML content ===
             # The CRD carries the complete session YAML so both pods can
             # read it without shared filesystem access.
-            self._status_detail = "Building constellation spec"
+            self.status_detail = "Building constellation spec"
             session_yaml_content = Path(session_path).read_text()
             cr_body = {
                 "apiVersion": "nodalarc.io/v1alpha1",
@@ -400,7 +408,7 @@ class SessionManager:
             }
 
             # === Apply ConstellationSpec CR ===
-            self._status_detail = "Deploying constellation"
+            self.status_detail = "Deploying constellation"
             api.create_namespaced_custom_object(
                 group="nodalarc.io",
                 version="v1alpha1",
@@ -411,7 +419,7 @@ class SessionManager:
             log.info(f"Applied ConstellationSpec CR for {session_path}")
 
             # === Poll CR status until Ready ===
-            self._status_detail = "Waiting for constellation to deploy"
+            self.status_detail = "Waiting for constellation to deploy"
             cr_ready = False
             for _ in range(300):  # 5 minutes max
                 cr = api.get_namespaced_custom_object(
@@ -423,7 +431,7 @@ class SessionManager:
                 )
                 phase = cr.get("status", {}).get("phase", "")
                 message = cr.get("status", {}).get("message", "")
-                self._status_detail = message or f"Phase: {phase}"
+                self.status_detail = message or f"Phase: {phase}"
                 if phase == "Ready":
                     cr_ready = True
                     break
@@ -434,21 +442,21 @@ class SessionManager:
             if not cr_ready:
                 # CR never reached Ready within timeout — set error, don't claim ready
                 self._status = "error"
-                self._status_detail = "Deploy timed out waiting for CR Ready"
+                self.status_detail = "Deploy timed out waiting for CR Ready"
                 log.warning("Session switch timed out waiting for CR Ready")
                 return
 
             # === Update VS-API globals ===
-            self._status_detail = "Updating VS-API configuration"
+            self.status_detail = "Updating VS-API configuration"
             update_globals_fn(session_path, "")
 
             # === Update internal state ===
             self._current_session_file = session_path
             self._status = "ready"
-            self._status_detail = ""
+            self.status_detail = ""
             log.info(f"Session switch complete: {session_path}")
 
         except Exception as exc:
             self._status = "error"
-            self._status_detail = str(exc)
+            self.status_detail = str(exc)
             log.error(f"Session switch failed: {exc}")

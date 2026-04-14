@@ -431,7 +431,9 @@ class SessionManager:
                 )
                 phase = cr.get("status", {}).get("phase", "")
                 message = cr.get("status", {}).get("message", "")
-                self.status_detail = message or f"Phase: {phase}"
+                if phase != "Wiring":
+                    # During Wiring, Node Agent NATS progress owns status_detail
+                    self.status_detail = message or f"Phase: {phase}"
                 if phase == "Ready":
                     cr_ready = True
                     break

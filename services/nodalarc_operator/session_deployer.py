@@ -734,54 +734,57 @@ def check_pods_ready(namespace: str) -> tuple[int, int]:
     return total, ready
 
 
-def signal_frr_config_ready(namespace: str) -> int:
-    """Copy FRR configs from ConfigMap staging dir and touch the config-ready sentinel.
+def signal_frr_config_ready(
+    namespace: str,
+    progress_fn: Any | None = None,
+) -> int:
+    """Copy FRR configs and touch config-ready sentinel in all session pods.
 
-    Replicates na_deploy.py's two-step config delivery:
-      1. cp /etc/frr-config/* /etc/frr/  (ConfigMap mount → FRR config dir)
-      2. touch /etc/frr/.config-ready     (sentinel that unblocks the entrypoint)
-
-    The FRR entrypoint waits for the sentinel before starting daemons.
+    Single atomic exec per pod: cp + touch in one shell command.
+    Sentinel is only created if config copy succeeds (&&).
+    Parallelized with ThreadPoolExecutor(16).
 
     Returns the number of pods signaled.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     from kubernetes.stream import stream
 
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+    total = len(pods.items)
+
+    def _signal_one(pod_name: str) -> bool:
+        stream(
+            v1.connect_get_namespaced_pod_exec,
+            pod_name,
+            namespace,
+            container="frr",
+            command=["sh", "-c", "cp /etc/frr-config/* /etc/frr/ && touch /etc/frr/.config-ready"],
+            stderr=True,
+            stdout=True,
+            stdin=False,
+            tty=False,
+        )
+        return True
+
     signaled = 0
-    for pod in pods.items:
-        pod_name = pod.metadata.name
-        try:
-            # Step 1: Copy configs from ConfigMap staging dir to /etc/frr/
-            stream(
-                v1.connect_get_namespaced_pod_exec,
-                pod_name,
-                namespace,
-                container="frr",
-                command=["sh", "-c", "cp /etc/frr-config/* /etc/frr/"],
-                stderr=True,
-                stdout=True,
-                stdin=False,
-                tty=False,
-            )
-            # Step 2: Touch sentinel to unblock entrypoint
-            stream(
-                v1.connect_get_namespaced_pod_exec,
-                pod_name,
-                namespace,
-                container="frr",
-                command=["touch", "/etc/frr/.config-ready"],
-                stderr=True,
-                stdout=True,
-                stdin=False,
-                tty=False,
-            )
-            signaled += 1
-        except Exception as exc:
-            log.warning(f"Failed to signal config-ready in {pod_name}: {exc}")
-    log.info(f"Signaled FRR config-ready in {signaled}/{len(pods.items)} pods")
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = {
+            pool.submit(_signal_one, pod.metadata.name): pod.metadata.name for pod in pods.items
+        }
+        for fut in as_completed(futures):
+            pod_name = futures[fut]
+            try:
+                fut.result()
+                signaled += 1
+                if progress_fn and (signaled % 10 == 0 or signaled == total):
+                    progress_fn(f"Signaling FRR config ready: {signaled}/{total}")
+            except Exception as exc:
+                log.warning(f"Failed to signal config-ready in {pod_name}: {exc}")
+
+    log.info(f"Signaled FRR config-ready in {signaled}/{total} pods")
     return signaled
 
 

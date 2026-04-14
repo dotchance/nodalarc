@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -504,6 +505,7 @@ def _build_snapshot() -> dict:
 
 _nats_connection: nats.NATS | None = None
 _pending_cr_poll: bool = False
+_ws_clients: set = set()  # Active WebSocket connections for instant broadcast
 
 
 async def _nats_subscriber() -> None:
@@ -697,6 +699,32 @@ async def _nats_subscriber() -> None:
         )
     except Exception as exc:
         log.warning("NATS subscription setup failed: %s — streams may not exist yet", exc)
+
+    # Core NATS subscription for wiring progress (not JetStream — transient, no retention).
+    # Wildcard subscription receives progress from all Node Agents: nodalarc.agent.progress.*
+    async def _on_wiring_progress(msg):
+        nonlocal msg_count
+        msg_count += 1
+        try:
+            data = json.loads(msg.data)
+            progress_msg = data.get("message", "")
+            if _session_manager and progress_msg:
+                _session_manager.status_detail = progress_msg
+                # Instant broadcast to all WebSockets — bypass 1-second snapshot cycle
+                frame = json.dumps({"msg_type": "wiring_progress", "message": progress_msg})
+                for ws in list(_ws_clients):
+                    with contextlib.suppress(Exception):
+                        await ws.send_text(frame)
+        except Exception:
+            pass
+
+    try:
+        wiring_progress_sub = await nc.subscribe(
+            "nodalarc.agent.progress.*", cb=_on_wiring_progress
+        )
+        subs.append(wiring_progress_sub)
+    except Exception as exc:
+        log.warning("Wiring progress subscription failed: %s", exc)
 
     log.info("VS-API NATS subscriber started — %d callback subscriptions active", len(subs))
 
@@ -1094,6 +1122,7 @@ async def ws_state(websocket: WebSocket) -> None:
             await websocket.close(code=4401, reason="Unauthorized")
             return
     await websocket.accept()
+    _ws_clients.add(websocket)
     _audit_log.info(f"WS_CONNECT ip={ws_ip}")
 
     try:
@@ -1110,6 +1139,7 @@ async def ws_state(websocket: WebSocket) -> None:
     except Exception as exc:
         log.warning(f"WS send error for {ws_ip}: {type(exc).__name__} {exc}")
     finally:
+        _ws_clients.discard(websocket)
         _audit_log.info(f"WS_DISCONNECT ip={ws_ip}")
 
 
@@ -2264,7 +2294,7 @@ async def _run_switch(session_path: str) -> None:
         # Safety net: reset status if switch() raised without setting it
         if _session_manager and _session_manager.status == "switching":
             _session_manager._status = "error"
-            _session_manager._status_detail = f"Unhandled: {exc}"
+            _session_manager.status_detail = f"Unhandled: {exc}"
             log.error("_run_switch safety net caught: %s", exc)
 
 
@@ -2301,17 +2331,17 @@ async def _poll_cr_until_ready() -> None:
             phase = cr.get("status", {}).get("phase", "")
             message = cr.get("status", {}).get("message", "")
             if _session_manager:
-                _session_manager._status_detail = message or f"Phase: {phase}"
+                _session_manager.status_detail = message or f"Phase: {phase}"
             if phase == "Ready":
                 if _session_manager:
                     _session_manager._status = "ready"
-                    _session_manager._status_detail = ""
+                    _session_manager.status_detail = ""
                 log.info("CR reached Ready — session is now operational")
                 return
             if phase == "Error":
                 if _session_manager:
                     _session_manager._status = "error"
-                    _session_manager._status_detail = message or "Operator reported error"
+                    _session_manager.status_detail = message or "Operator reported error"
                 log.error("CR reached Error during wiring: %s", message)
                 return
         except Exception as exc:
@@ -2319,7 +2349,7 @@ async def _poll_cr_until_ready() -> None:
 
     if _session_manager:
         _session_manager._status = "error"
-        _session_manager._status_detail = "Wiring timed out (10 minutes)"
+        _session_manager.status_detail = "Wiring timed out (10 minutes)"
     log.error("_poll_cr_until_ready timed out")
 
 
@@ -2449,7 +2479,7 @@ def main() -> None:
             if _cr_phase in ("Wiring", "Creating"):
                 log.info(f"Session config loaded but CR phase={_cr_phase} — wiring in progress")
                 _session_manager._status = "wiring"
-                _session_manager._status_detail = _cr_message or f"Phase: {_cr_phase}"
+                _session_manager.status_detail = _cr_message or f"Phase: {_cr_phase}"
                 _pending_cr_poll = True
             else:
                 _session_manager._status = "ready"
@@ -2482,7 +2512,7 @@ def main() -> None:
                         f"Active ConstellationSpec CR found (phase={phase}) — wiring in progress"
                     )
                     _session_manager._status = "wiring"
-                    _session_manager._status_detail = message or f"Phase: {phase}"
+                    _session_manager.status_detail = message or f"Phase: {phase}"
                     _pending_cr_poll = True
                 # Try to match session name from mounted config
                 if phase in ("Ready", "Wiring", "Creating"):

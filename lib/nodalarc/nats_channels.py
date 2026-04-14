@@ -59,6 +59,10 @@ SUBJECT_MI_TRACE = "nodalarc.mi.trace"
 SUBJECT_MI_CONVERGENCE_GATE = "nodalarc.mi.convergence_gate"
 SUBJECT_NODE_AGENT = "nodalarc.agent.{node_id}"
 
+# Wiring progress — transient core NATS (not JetStream, no retention).
+# Hierarchical per-node subject: VS-API subscribes to wildcard nodalarc.agent.progress.*
+SUBJECT_WIRING_PROGRESS = "nodalarc.agent.progress.{node_id}"
+
 # Playback speed bounds — safety clamp on the OME Pacemaker's time_accel.
 # Below MIN, callers should use pause() rather than extreme slow-motion;
 # above MAX, the pacing thread cannot reliably keep up with NATS publish
@@ -110,6 +114,11 @@ def nats_url() -> str:
 def node_agent_subject(node_id: str) -> str:
     """Build per-node subject for Node Agent request/reply."""
     return SUBJECT_NODE_AGENT.format(node_id=node_id)
+
+
+def wiring_progress_subject(node_id: str) -> str:
+    """Build per-node subject for wiring progress updates."""
+    return SUBJECT_WIRING_PROGRESS.format(node_id=node_id)
 
 
 # ---------------------------------------------------------------------------

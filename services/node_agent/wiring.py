@@ -12,7 +12,9 @@ giving it access to all pod network namespaces on this node.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from collections.abc import Callable
 
 import kubernetes.client
 import kubernetes.config
@@ -35,7 +37,11 @@ from node_agent.pid_discovery import discover_local_pod_pids
 log = logging.getLogger(__name__)
 
 
-def _phase0_cleanup(pid_map: dict[str, int], nodes: dict) -> None:
+def _phase0_cleanup(
+    pid_map: dict[str, int],
+    nodes: dict,
+    progress_fn: Callable[[str], None] | None = None,
+) -> None:
     """Phase 0: Clean stale interfaces from host and pod namespaces.
 
     Must run synchronously BEFORE the ThreadPoolExecutor starts.
@@ -43,6 +49,8 @@ def _phase0_cleanup(pid_map: dict[str, int], nodes: dict) -> None:
     concurrently on a Node Agent that restarted with stale kernel state.
     """
     # Host namespace: remove all NodalArc-managed interfaces
+    if progress_fn:
+        progress_fn(f"Cleaning stale interfaces for {len(pid_map)} pods")
     ipr = IPRoute()
     try:
         host_cleaned = 0
@@ -87,12 +95,17 @@ def _phase0_cleanup(pid_map: dict[str, int], nodes: dict) -> None:
         log.info(f"Phase 0: cleaned {pod_cleaned} stale pod interfaces across {len(pid_map)} pods")
 
 
-def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str]:
+def execute_wiring(
+    manifest: dict,
+    namespace: str = "nodalarc",
+    progress_fn: Callable[[str], None] | None = None,
+) -> dict[str, str]:
     """Execute all data plane wiring operations from a topology manifest.
 
     Args:
         manifest: Parsed wiring manifest from ConfigMap.
         namespace: K8s namespace for pod discovery.
+        progress_fn: Optional callback for real-time progress via NATS.
 
     Returns:
         Dict of {node_id: "wired"} for successfully wired nodes.
@@ -157,37 +170,45 @@ def execute_wiring(manifest: dict, namespace: str = "nodalarc") -> dict[str, str
     wired: dict[str, str] = {}
     total_nodes = len([n for n in nodes if pid_map.get(n, 0) > 0])
 
+    # K8s client — ONE instance, reused for all ConfigMap writes.
+    # No per-call load_incluster_config() or client instantiation.
+    kubernetes.config.load_incluster_config()
+    v1 = kubernetes.client.CoreV1Api()
+
     def _write_progress(phase_msg: str) -> None:
-        """Write incremental wiring progress to ConfigMap so the Operator can surface it."""
+        """Publish wiring progress via NATS (fast) and K8s ConfigMap (fallback)."""
+        # NATS fast path (<1ms to VS-API)
+        if progress_fn is not None:
+            with contextlib.suppress(Exception):
+                progress_fn(phase_msg)
+        # K8s PATCH fallback (for Operator CR status updates)
         try:
-            kubernetes.config.load_incluster_config()
-            v1 = kubernetes.client.CoreV1Api()
-            body = kubernetes.client.V1ConfigMap(
-                metadata=kubernetes.client.V1ObjectMeta(
-                    name="nodalarc-wiring-status",
-                    namespace=namespace,
-                    labels={"nodalarc.io/managed-by": "node-agent"},
-                ),
-                data={"_progress": phase_msg},
+            v1.patch_namespaced_config_map(
+                "nodalarc-wiring-status",
+                namespace,
+                {"data": {"_progress": phase_msg}},
             )
-            try:
-                v1.create_namespaced_config_map(namespace, body)
-            except kubernetes.client.rest.ApiException as e:
-                if e.status == 409:
-                    existing = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
-                    if existing.data is None:
-                        existing.data = {}
-                    existing.data["_progress"] = phase_msg
-                    v1.replace_namespaced_config_map("nodalarc-wiring-status", namespace, existing)
+        except kubernetes.client.rest.ApiException as e:
+            if e.status == 404:
+                body = kubernetes.client.V1ConfigMap(
+                    metadata=kubernetes.client.V1ObjectMeta(
+                        name="nodalarc-wiring-status",
+                        namespace=namespace,
+                        labels={"nodalarc.io/managed-by": "node-agent"},
+                    ),
+                    data={"_progress": phase_msg},
+                )
+                with contextlib.suppress(Exception):
+                    v1.create_namespaced_config_map(namespace, body)
         except Exception:
-            pass  # Non-fatal — progress reporting failure shouldn't block wiring
+            pass  # Non-fatal
 
     # Phase 0: Clean stale interfaces from host and pod namespaces.
     # Must run BEFORE the ThreadPoolExecutor starts creating interfaces.
-    # Without this, 32 concurrent threads racing to create and clean
+    # Without this, 8 concurrent threads racing to create and clean
     # interfaces produce EEXIST race conditions.
     _write_progress(f"Cleaning stale interfaces for {total_nodes} nodes")
-    _phase0_cleanup(pid_map, nodes)
+    _phase0_cleanup(pid_map, nodes, progress_fn=progress_fn)
 
     # Phase 1: Set sysctls in each pod namespace (via os.setns)
     for node_id, node_spec in nodes.items():

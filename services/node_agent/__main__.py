@@ -1,37 +1,41 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Node Agent entry point — NATS request/reply server for netlink operations.
+"""Node Agent entry point — async NATS-native actor for netlink operations.
 
-Runs as a DaemonSet on each K3s node. Subscribes to NATS subject
-nodalarc.agent.{hostname} and executes privileged namespace operations
-on behalf of the Scheduler.
+Runs as a DaemonSet on each K3s node. Connects to NATS IMMEDIATELY on
+startup, then runs wiring in a thread pool executor. Progress publishes
+to NATS in real-time (<10ms to VS-API) instead of through K8s ConfigMap
+polling (2-3.5s latency).
 
-Startup ordering (enforced, not hoped for):
-  1. Wiring watcher thread starts, waits for topology manifest
-  2. Wiring completes — PIDs discovered, veth pairs created, status written
-  3. Wiring thread signals ready and shares pid_map
-  4. NATS server subscribes and begins accepting requests
-  5. Requests use the wiring thread's pid_map — no rediscovery
+Architecture:
+  1. Connect to NATS (first act of life)
+  2. Run wiring watcher in ThreadPoolExecutor (synchronous kernel work)
+     - progress_fn publishes to NATS via loop.call_soon_threadsafe
+  3. After first wiring pass: subscribe to request/reply subject
+  4. Serve until SIGTERM/SIGINT
 
-This is the same principle as the Scheduler wiring gate.
-The NATS server must NOT accept requests until wiring is complete.
+One event loop. One NATS connection. No daemon threads. No second loops.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import signal
-import threading
+import socket
 from pathlib import Path
+
+import nats
+from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url, wiring_progress_subject
 
 from node_agent.reconcile import (
     clean_nodalarc_kernel_state,
     get_actual_nodalarc_interfaces,
     wiring_status_is_current,
 )
-from node_agent.server import NodeAgentServer
+from node_agent.server import dispatch
 from node_agent.wiring import execute_wiring, write_wiring_status
 
 log = logging.getLogger(__name__)
@@ -39,7 +43,7 @@ log = logging.getLogger(__name__)
 _LOG_FORMAT = "%(asctime)s %(levelname)-8s [node-agent] %(name)s — %(message)s"
 
 
-def main() -> None:
+async def main() -> None:
     logging.basicConfig(format=_LOG_FORMAT, level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="Nodal Arc Node Agent")
@@ -65,18 +69,44 @@ def main() -> None:
     except Exception:
         pass
 
-    # Shared state between wiring thread and NATS server
-    wiring_ready = threading.Event()
-    shared_pid_map: dict[str, int] = {}
+    # -----------------------------------------------------------------------
+    # Connect to NATS FIRST — the Node Agent is a NATS-native actor.
+    # This connection is used for wiring progress, request/reply, and
+    # substrate monitoring. One connection for the lifetime of the process.
+    # -----------------------------------------------------------------------
+    nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+    hostname = socket.gethostname()
+    progress_subject = wiring_progress_subject(hostname)
+    loop = asyncio.get_running_loop()
+    log.info("NATS connected to %s as %s", nats_url(), hostname)
 
-    # If --pid-map provided, skip wiring discovery — use the file directly
+    # Synchronous progress publisher for the wiring thread.
+    # The wiring thread is synchronous Python (kernel netlink work).
+    # loop.call_soon_threadsafe schedules the async publish on the
+    # main event loop without blocking or requiring a second loop.
+    def _publish_progress(msg: str) -> None:
+        payload = json.dumps({"node": hostname, "message": msg}).encode()
+        loop.call_soon_threadsafe(
+            lambda p=payload: asyncio.ensure_future(nc.publish(progress_subject, p))
+        )
+
+    # -----------------------------------------------------------------------
+    # Shared state between wiring and request/reply server
+    # -----------------------------------------------------------------------
+    shared_pid_map: dict[str, int] = {}
+    first_wiring_done = asyncio.Event()
+
+    # If --pid-map provided, skip wiring discovery
     if args.pid_map:
         shared_pid_map.update(json.loads(Path(args.pid_map).read_text()))
         log.info("Loaded pid_map from %s (%d entries)", args.pid_map, len(shared_pid_map))
-        wiring_ready.set()
+        first_wiring_done.set()
 
-    # Wiring watcher thread — discovers PIDs, creates interfaces, signals ready
-    def _wiring_watcher():
+    # -----------------------------------------------------------------------
+    # Wiring watcher — runs in thread pool executor (synchronous code).
+    # Watches nodalarc-topology-wiring ConfigMap, executes wiring on change.
+    # -----------------------------------------------------------------------
+    def _wiring_watcher() -> None:
         import time
 
         try:
@@ -86,7 +116,7 @@ def main() -> None:
             kubernetes.config.load_incluster_config()
         except Exception:
             log.info("Not running in K8s — wiring watcher disabled")
-            wiring_ready.set()  # Don't block NATS server in non-K8s env
+            loop.call_soon_threadsafe(first_wiring_done.set)
             return
 
         try:
@@ -122,9 +152,8 @@ def main() -> None:
                         "Wiring verified — status matches manifest (%d nodes), no-op",
                         len(nodes),
                     )
-                    # Even on no-op, refresh PIDs and signal ready
                     _refresh_pids(shared_pid_map)
-                    wiring_ready.set()
+                    loop.call_soon_threadsafe(first_wiring_done.set)
                     time.sleep(5)
                     continue
 
@@ -140,16 +169,15 @@ def main() -> None:
                     cleaned = clean_nodalarc_kernel_state()
                     log.info("Cleaned %d stale kernel interfaces", cleaned)
 
-                wired = execute_wiring(manifest, namespace=ns)
+                wired = execute_wiring(manifest, namespace=ns, progress_fn=_publish_progress)
                 write_wiring_status(wired, namespace=ns)
                 log.info("Wiring complete: %d nodes wired", len(wired))
 
-                # Share PIDs from wiring discovery with the NATS server
                 _refresh_pids(shared_pid_map)
-                wiring_ready.set()
+                loop.call_soon_threadsafe(first_wiring_done.set)
 
-            except kubernetes.client.rest.ApiException as e:
-                if e.status == 404:
+            except Exception as exc:
+                if hasattr(exc, "status") and exc.status == 404:
                     if last_resource_version:
                         log.info("Wiring manifest removed — cleaning kernel state")
                         actual = get_actual_nodalarc_interfaces()
@@ -157,38 +185,58 @@ def main() -> None:
                             clean_nodalarc_kernel_state()
                         last_resource_version = ""
                 else:
-                    log.warning("Wiring watcher error: %s", e)
-            except Exception as exc:
-                log.warning("Wiring watcher error: %s", exc)
+                    log.warning("Wiring watcher error: %s", exc)
             time.sleep(5)
 
-    wiring_thread = threading.Thread(target=_wiring_watcher, daemon=True)
-    wiring_thread.start()
+    # Start wiring watcher in thread pool
+    wiring_task = loop.run_in_executor(None, _wiring_watcher)
 
-    # Wait for wiring to complete before starting NATS server
+    # Wait for first wiring pass to complete before accepting requests
     log.info("Waiting for wiring to complete before accepting NATS requests...")
-    wiring_ready.wait()
+    await first_wiring_done.wait()
     log.info("Wiring ready — pid_map has %d entries", len(shared_pid_map))
 
-    server = NodeAgentServer(pid_map=shared_pid_map)
+    # -----------------------------------------------------------------------
+    # NATS request/reply server — subscribes AFTER wiring (pid_map gate)
+    # -----------------------------------------------------------------------
+    agent_subject = f"nodalarc.agent.{hostname}"
 
-    def _shutdown(signum, frame):
-        log.info("Shutting down (signal %d)...", signum)
-        server.stop()
+    async def _handle_request(msg):
+        try:
+            response_bytes = await loop.run_in_executor(None, dispatch, msg.data, shared_pid_map)
+            await msg.respond(response_bytes)
+        except Exception as exc:
+            log.error("Handler error: %s", exc, exc_info=True)
+            await msg.respond(b"")
 
-    signal.signal(signal.SIGTERM, _shutdown)
-    signal.signal(signal.SIGINT, _shutdown)
+    sub = await nc.subscribe(agent_subject, cb=_handle_request)
+    log.info("NodeAgent NATS listening on subject %s", agent_subject)
 
-    server.run()
+    # Start substrate latency monitor
+    from node_agent import substrate_monitor
+
+    substrate_monitor.init(nc, hostname, loop)
+    monitor_task = asyncio.create_task(substrate_monitor.monitor_loop(nc, hostname))
+
+    # -----------------------------------------------------------------------
+    # Serve until signal
+    # -----------------------------------------------------------------------
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+
+    await stop.wait()
+    log.info("Shutting down...")
+
+    monitor_task.cancel()
+    # wiring_task is a long-lived executor task — it dies with the process
+    await sub.unsubscribe()
+    await nc.close()
     log.info("Node Agent stopped")
 
 
 def _refresh_pids(shared_pid_map: dict[str, int]) -> None:
-    """Refresh the shared pid_map from local pod discovery.
-
-    Called by the wiring thread after wiring completes. The NATS server
-    uses this map directly — no separate discovery needed.
-    """
+    """Refresh the shared pid_map from local pod discovery."""
     try:
         from node_agent.pid_discovery import discover_local_pod_pids
 
@@ -201,4 +249,4 @@ def _refresh_pids(shared_pid_map: dict[str, int]) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

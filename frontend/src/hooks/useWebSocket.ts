@@ -52,6 +52,14 @@ export function useWebSocket(): WebSocketState {
           return;
         }
 
+        // Wiring progress — instant update from Node Agent via NATS
+        if (data.msg_type === "wiring_progress") {
+          setSnapshot((prev) =>
+            prev ? { ...prev, session_status_detail: data.message } : prev,
+          );
+          return;
+        }
+
         // PlaybackState — sent on state transitions
         if (
           data.state &&

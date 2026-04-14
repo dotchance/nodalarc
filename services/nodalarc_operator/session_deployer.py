@@ -378,8 +378,27 @@ def deploy_session(
             }
         )
 
+    import threading
+
     created_pods = 0
     errors = []
+    _pod_creation_done = threading.Event()
+
+    # Heartbeat thread: if no pod completes for 10 seconds, update the
+    # progress message so the UI knows the system is still working.
+    def _heartbeat():
+        last_count = 0
+        while not _pod_creation_done.wait(timeout=10):
+            if created_pods == last_count and created_pods < total_pods:
+                _progress(
+                    f"Creating session pods: {created_pods}/{total_pods} "
+                    f"(K8s scheduling {total_pods - created_pods} remaining — please wait)"
+                )
+            last_count = created_pods
+
+    heartbeat = threading.Thread(target=_heartbeat, daemon=True)
+    heartbeat.start()
+
     with ThreadPoolExecutor(max_workers=16) as pool:
         futures = {}
         for spec in pod_specs:
@@ -411,6 +430,8 @@ def deploy_session(
             except Exception as exc:
                 errors.append(f"{node_id}: {exc}")
                 log.warning(f"Pod creation failed for {node_id}: {exc}")
+
+    _pod_creation_done.set()
 
     if errors:
         log.warning(f"Pod creation: {len(errors)} failures out of {total_pods}")

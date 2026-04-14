@@ -218,6 +218,10 @@ _playback_speed: float = 1.0
 _STALE_THRESHOLD_S: float = 15.0
 _last_clock_tick_wall_time: float = 0.0  # monotonic time of last ClockTick
 _last_link_event_wall_time: float = 0.0  # monotonic time of last LinkUp/Down
+_last_topology_change: float = 0.0  # monotonic time of last LinkUp/Down for convergence heuristic
+_session_ready_time: float = 0.0  # monotonic time when session reached Ready
+_CONVERGENCE_DWELL_S: float = 15.0  # seconds after Ready before checking link stability
+_CONVERGENCE_SETTLE_S: float = 5.0  # seconds of no topology changes → "converged"
 
 # Cached SessionEphemeris for local position propagation (PRD v0.71)
 _cached_ephemeris: dict | None = None  # JSON-serializable ephemeris for WebSocket delivery
@@ -312,8 +316,44 @@ def _propagate_positions_from_ephemeris(sim_time_iso: str) -> None:
                 _state["nodes"][node_id] = existing
 
 
+def _compute_convergence_state() -> None:
+    """Compute convergence status from link-state heuristic (no MI required).
+
+    Only runs when MI hasn't set a value (status is "no measurement").
+    When MI is active, its convergence results take precedence.
+
+    Heuristic state machine:
+    - "no measurement" → no links exist
+    - "stabilizing" → session just reached Ready, dwell timer running
+    - "converging" → topology recently changed (link up/down in last SETTLE seconds)
+    - "converged" → links exist and stable for SETTLE seconds after dwell
+    """
+    # If MI has set a value, don't override with heuristic
+    if _state["network_health"].get("_mi_active"):
+        return
+
+    now = _time.monotonic()
+    active_links = len(_state["links"])
+
+    if active_links == 0:
+        _state["network_health"]["status"] = "no measurement"
+        return
+
+    # If session just became ready, start dwell period
+    if _session_ready_time > 0 and (now - _session_ready_time) < _CONVERGENCE_DWELL_S:
+        _state["network_health"]["status"] = "stabilizing"
+        return
+
+    # After dwell: check link stability
+    if _last_topology_change > 0 and (now - _last_topology_change) < _CONVERGENCE_SETTLE_S:
+        _state["network_health"]["status"] = "converging"
+    else:
+        _state["network_health"]["status"] = "converged"
+
+
 def _update_link_up(event_data: dict) -> None:
     """Update link state on LinkUp."""
+    global _last_topology_change
     node_a = event_data.get("node_a", "")
     node_b = event_data.get("node_b", "")
     key = _link_key(node_a, node_b)
@@ -332,19 +372,20 @@ def _update_link_up(event_data: dict) -> None:
             "interface_a": event_data.get("interface_a", ""),
             "interface_b": event_data.get("interface_b", ""),
         }
-    # Only notify tracer on actual state change
+    _last_topology_change = _time.monotonic()
     if is_new and _continuous_tracer is not None:
         _continuous_tracer.notify_topology_change(node_a, node_b)
 
 
 def _update_link_down(event_data: dict) -> None:
     """Remove link state on LinkDown."""
+    global _last_topology_change
     node_a = event_data.get("node_a", "")
     node_b = event_data.get("node_b", "")
     key = _link_key(node_a, node_b)
     with _state_lock:
         _state["links"].pop(key, None)
-    # Wake continuous tracer to re-trace after convergence
+    _last_topology_change = _time.monotonic()
     if _continuous_tracer is not None:
         _continuous_tracer.notify_topology_change(node_a, node_b)
 
@@ -374,8 +415,14 @@ def _add_recent_event(event_data: dict, event_type: str) -> None:
 
 
 def _update_convergence(event_data: dict) -> None:
-    """Update network health from convergence result."""
+    """Update network health from MI convergence result.
+
+    When MI provides real convergence data, it takes precedence over
+    the link-state heuristic. The _mi_active flag prevents the heuristic
+    from overriding MI-sourced state.
+    """
     with _state_lock:
+        _state["network_health"]["_mi_active"] = True
         if event_data.get("converged"):
             _state["network_health"]["status"] = "converged"
             _state["network_health"]["converging_since_ms"] = None
@@ -470,6 +517,8 @@ def _build_snapshot() -> dict:
             )
             for e in _state["recent_events"]
         ]
+        # Compute convergence heuristic (no MI required)
+        _compute_convergence_state()
         health = NetworkHealth(**_state["network_health"])
 
         _traced: list[TracedPath] = []
@@ -939,7 +988,9 @@ def get_auth_token() -> dict:
 
 def _clear_state() -> None:
     """Reset in-memory state during session switch."""
-    global _continuous_tracer
+    global _continuous_tracer, _last_topology_change, _session_ready_time
+    _last_topology_change = 0.0
+    _session_ready_time = 0.0
     if _continuous_tracer is not None:
         # Best-effort stop — we're in a sync context during session switch
         _continuous_tracer = None
@@ -2333,6 +2384,8 @@ async def _poll_cr_until_ready() -> None:
             if _session_manager:
                 _session_manager.status_detail = message or f"Phase: {phase}"
             if phase == "Ready":
+                global _session_ready_time
+                _session_ready_time = _time.monotonic()
                 if _session_manager:
                     _session_manager._status = "ready"
                     _session_manager.status_detail = ""
@@ -2483,6 +2536,7 @@ def main() -> None:
                 _pending_cr_poll = True
             else:
                 _session_manager._status = "ready"
+                _session_ready_time = _time.monotonic()
         else:
             log.info("No session loaded — VS-API starting in idle mode")
             # Check if Operator has an active session (CR with phase Ready/Wiring)

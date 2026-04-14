@@ -24,11 +24,22 @@ from nodalarc_operator.session_deployer import (
 log = logging.getLogger(__name__)
 
 
+# Module-level K8s clients — initialized once on first use, reused for all calls.
+# Eliminates per-call load_incluster_config() + client instantiation overhead.
+_custom_api: kubernetes.client.CustomObjectsApi | None = None
+
+
+def _get_custom_api() -> kubernetes.client.CustomObjectsApi:
+    global _custom_api
+    if _custom_api is None:
+        kubernetes.config.load_incluster_config()
+        _custom_api = kubernetes.client.CustomObjectsApi()
+    return _custom_api
+
+
 def _update_status(name: str, namespace: str, status: dict) -> None:
-    """Update the ConstellationSpec CR status subresource directly."""
-    kubernetes.config.load_incluster_config()
-    api = kubernetes.client.CustomObjectsApi()
-    api.patch_namespaced_custom_object_status(
+    """Update the ConstellationSpec CR status subresource."""
+    _get_custom_api().patch_namespaced_custom_object_status(
         group="nodalarc.io",
         version="v1alpha1",
         namespace=namespace,

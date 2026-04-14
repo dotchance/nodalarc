@@ -218,10 +218,11 @@ _playback_speed: float = 1.0
 _STALE_THRESHOLD_S: float = 15.0
 _last_clock_tick_wall_time: float = 0.0  # monotonic time of last ClockTick
 _last_link_event_wall_time: float = 0.0  # monotonic time of last LinkUp/Down
-_last_topology_change: float = 0.0  # monotonic time of last LinkUp/Down for convergence heuristic
 _session_ready_time: float = 0.0  # monotonic time when session reached Ready
-_CONVERGENCE_DWELL_S: float = 15.0  # seconds after Ready before checking link stability
-_CONVERGENCE_SETTLE_S: float = 5.0  # seconds of no topology changes → "converged"
+_prev_snapshot_active_count: int = 0  # link count from previous LinkStateSnapshot
+_curr_snapshot_active_count: int = 0  # link count from current LinkStateSnapshot
+_CONVERGENCE_DWELL_S: float = 15.0  # seconds after Ready before declaring converged
+_BULK_CHANGE_THRESHOLD: float = 0.10  # 10% link delta between snapshots = converging
 
 # Cached SessionEphemeris for local position propagation (PRD v0.71)
 _cached_ephemeris: dict | None = None  # JSON-serializable ephemeris for WebSocket delivery
@@ -317,35 +318,37 @@ def _propagate_positions_from_ephemeris(sim_time_iso: str) -> None:
 
 
 def _compute_convergence_state() -> None:
-    """Compute convergence status from link-state heuristic (no MI required).
+    """Compute convergence status from LinkStateSnapshot delta (no MI required).
 
-    Only runs when MI hasn't set a value (status is "no measurement").
-    When MI is active, its convergence results take precedence.
+    Stateless and declarative: compares consecutive LinkStateSnapshot link
+    counts. The OME publishes the complete truth every 5 sim-seconds.
+    No event counting, no timers, survives VS-API restarts.
 
-    Heuristic state machine:
     - "no measurement" → no links exist
-    - "stabilizing" → session just reached Ready, dwell timer running
-    - "converging" → topology recently changed (link up/down in last SETTLE seconds)
-    - "converged" → links exist and stable for SETTLE seconds after dwell
+    - "stabilizing" → session just reached Ready, dwell period
+    - "converging" → link count delta > 10% between consecutive snapshots
+    - "converged" → link count stable (delta < 10%)
     """
-    # If MI has set a value, don't override with heuristic
+    # MI takes precedence when active
     if _state["network_health"].get("_mi_active"):
         return
 
-    now = _time.monotonic()
-    active_links = len(_state["links"])
+    active = _curr_snapshot_active_count
 
-    if active_links == 0:
+    if active == 0:
         _state["network_health"]["status"] = "no measurement"
         return
 
-    # If session just became ready, start dwell period
+    # Dwell period after session Ready — routing protocols starting
+    now = _time.monotonic()
     if _session_ready_time > 0 and (now - _session_ready_time) < _CONVERGENCE_DWELL_S:
         _state["network_health"]["status"] = "stabilizing"
         return
 
-    # After dwell: check link stability
-    if _last_topology_change > 0 and (now - _last_topology_change) < _CONVERGENCE_SETTLE_S:
+    # Compare consecutive snapshots — declarative, not event-based
+    total = max(active, _prev_snapshot_active_count, 1)
+    delta = abs(active - _prev_snapshot_active_count)
+    if delta / total > _BULK_CHANGE_THRESHOLD:
         _state["network_health"]["status"] = "converging"
     else:
         _state["network_health"]["status"] = "converged"
@@ -353,7 +356,6 @@ def _compute_convergence_state() -> None:
 
 def _update_link_up(event_data: dict) -> None:
     """Update link state on LinkUp."""
-    global _last_topology_change
     node_a = event_data.get("node_a", "")
     node_b = event_data.get("node_b", "")
     key = _link_key(node_a, node_b)
@@ -372,20 +374,17 @@ def _update_link_up(event_data: dict) -> None:
             "interface_a": event_data.get("interface_a", ""),
             "interface_b": event_data.get("interface_b", ""),
         }
-    _last_topology_change = _time.monotonic()
     if is_new and _continuous_tracer is not None:
         _continuous_tracer.notify_topology_change(node_a, node_b)
 
 
 def _update_link_down(event_data: dict) -> None:
     """Remove link state on LinkDown."""
-    global _last_topology_change
     node_a = event_data.get("node_a", "")
     node_b = event_data.get("node_b", "")
     key = _link_key(node_a, node_b)
     with _state_lock:
         _state["links"].pop(key, None)
-    _last_topology_change = _time.monotonic()
     if _continuous_tracer is not None:
         _continuous_tracer.notify_topology_change(node_a, node_b)
 
@@ -834,6 +833,11 @@ def _apply_link_state_snapshot(data: dict) -> None:
                     "interface_b": link.interface_b,
                 }
 
+    # Track snapshot link counts for convergence heuristic
+    global _prev_snapshot_active_count, _curr_snapshot_active_count
+    _prev_snapshot_active_count = _curr_snapshot_active_count
+    _curr_snapshot_active_count = len(_state["links"])
+
     isl = sum(1 for k in _state["links"] if not k.startswith("gs-"))
     gs = sum(1 for k in _state["links"] if k.startswith("gs-"))
     log.info(
@@ -988,9 +992,14 @@ def get_auth_token() -> dict:
 
 def _clear_state() -> None:
     """Reset in-memory state during session switch."""
-    global _continuous_tracer, _last_topology_change, _session_ready_time
-    _last_topology_change = 0.0
+    global \
+        _continuous_tracer, \
+        _session_ready_time, \
+        _prev_snapshot_active_count, \
+        _curr_snapshot_active_count
     _session_ready_time = 0.0
+    _prev_snapshot_active_count = 0
+    _curr_snapshot_active_count = 0
     if _continuous_tracer is not None:
         # Best-effort stop — we're in a sync context during session switch
         _continuous_tracer = None
@@ -2381,7 +2390,9 @@ async def _poll_cr_until_ready() -> None:
             )
             phase = cr.get("status", {}).get("phase", "")
             message = cr.get("status", {}).get("message", "")
-            if _session_manager:
+            if _session_manager and phase != "Wiring":
+                # During Wiring, Node Agent NATS progress owns _status_detail.
+                # Only update from CR for non-Wiring phases.
                 _session_manager.status_detail = message or f"Phase: {phase}"
             if phase == "Ready":
                 global _session_ready_time

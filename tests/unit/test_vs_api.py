@@ -243,7 +243,7 @@ class TestStateSnapshot:
         assert snapshot["schema_version"] == 1
         assert snapshot["nodes"] == []
         assert snapshot["links"] == []
-        assert snapshot["network_health"]["status"] == "converged"
+        assert snapshot["network_health"]["status"] == "no measurement"
 
     def test_snapshot_with_links(self):
         _update_link_up(

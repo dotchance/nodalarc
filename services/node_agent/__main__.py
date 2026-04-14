@@ -138,6 +138,11 @@ async def main() -> None:
                     continue
                 last_resource_version = rv
 
+                # New manifest detected — immediately clear stale pid_map.
+                # Any BatchLinkUp arriving from this point forward will be
+                # cleanly deferred until wiring completes and PIDs refresh.
+                shared_pid_map.clear()
+
                 manifest_json = cm.data.get("manifest.json", "{}")
                 manifest = json.loads(manifest_json)
                 nodes = manifest.get("nodes", {})
@@ -170,10 +175,15 @@ async def main() -> None:
                     log.info("Cleaned %d stale kernel interfaces", cleaned)
 
                 wired = execute_wiring(manifest, namespace=ns, progress_fn=_publish_progress)
-                write_wiring_status(wired, namespace=ns)
                 log.info("Wiring complete: %d nodes wired", len(wired))
 
+                # Refresh pid_map BEFORE writing wiring status. Once the status
+                # is written, the Operator advances to Ready and the Scheduler
+                # dispatches immediately. The pid_map must be current before
+                # any BatchLinkUp arrives, or the handler rejects with
+                # "PID not found."
                 _refresh_pids(shared_pid_map)
+                write_wiring_status(wired, namespace=ns)
                 loop.call_soon_threadsafe(first_wiring_done.set)
 
             except Exception as exc:

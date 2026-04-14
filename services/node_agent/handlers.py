@@ -416,7 +416,11 @@ def handle_batch_link_up(
         msg = f"PID not found for {len(unique)} node(s): {', '.join(unique[:10])}"
         if len(unique) > 10:
             msg += f" ... and {len(unique) - 10} more"
-        log.error("BatchLinkUp %s REJECTED: %s", request.batch_id, msg)
+        if not pm:
+            # pid_map is empty — wiring in progress, not a real error
+            log.info("BatchLinkUp %s deferred: wiring in progress, pid_map empty", request.batch_id)
+        else:
+            log.error("BatchLinkUp %s REJECTED: %s", request.batch_id, msg)
         return node_agent_pb2.BatchLinkUpResponse(
             success=False,
             error_message=msg,

@@ -177,7 +177,7 @@ async def on_create(spec, name, namespace, meta, **_):
                 "message": f"Signaling FRR config ready in {pod_count} pods",
             },
         )
-        await loop.run_in_executor(None, signal_frr_config_ready, namespace)
+        await loop.run_in_executor(None, signal_frr_config_ready, namespace, _deploy_progress)
 
         # Write pod-IPs ConfigMap (needs running pods)
         _update_status(

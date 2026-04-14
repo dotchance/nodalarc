@@ -380,16 +380,24 @@ def execute_wiring(
         f"Terrestrial interfaces created. Finalizing {total_nodes} pods (routes + security)..."
     )
 
-    # Phase 7+8: Per-pod finalization (parallelized)
-    # Default route removal + cni0 iptables lockdown per pod.
+    # Phase 7+8: Per-pod finalization — default route removal + cni0 lockdown.
+    # iptables uses a single iptables-restore call per pod (1 nsenter fork
+    # instead of 2, halves the fork count vs separate iptables calls).
     import subprocess
 
     from node_agent.namespace_ops import _in_namespace
 
+    _IPTABLES_RULES = (
+        "*filter\n"
+        "-A OUTPUT -o cni0 -m state --state ESTABLISHED,RELATED -j ACCEPT\n"
+        "-A OUTPUT -o cni0 -j DROP\n"
+        "COMMIT\n"
+    )
+
     def _finalize_pod(node_id: str, pid: int) -> str | None:
         """Remove default route and lock down cni0. Returns error or None."""
         try:
-            # Phase 7: Remove default route
+
             def _remove_default(ipr: IPRoute) -> bool:
                 for route in ipr.get_routes(family=2):
                     if route.get_attr("RTA_DST") is None and route["dst_len"] == 0:
@@ -399,37 +407,14 @@ def execute_wiring(
 
             _in_namespace(pid, _remove_default)
 
-            # Phase 8: iptables cni0 lockdown
-            ns_path = f"/proc/{pid}/ns/net"
-            for cmd in [
-                [
-                    "nsenter",
-                    f"--net={ns_path}",
-                    "iptables",
-                    "-A",
-                    "OUTPUT",
-                    "-o",
-                    "cni0",
-                    "-m",
-                    "state",
-                    "--state",
-                    "ESTABLISHED,RELATED",
-                    "-j",
-                    "ACCEPT",
-                ],
-                [
-                    "nsenter",
-                    f"--net={ns_path}",
-                    "iptables",
-                    "-A",
-                    "OUTPUT",
-                    "-o",
-                    "cni0",
-                    "-j",
-                    "DROP",
-                ],
-            ]:
-                subprocess.run(cmd, check=True, capture_output=True)
+            # Phase 8: iptables cni0 lockdown — single iptables-restore call
+            subprocess.run(
+                ["nsenter", f"--net=/proc/{pid}/ns/net", "iptables-restore", "--noflush"],
+                input=_IPTABLES_RULES,
+                text=True,
+                check=True,
+                capture_output=True,
+            )
             return None
         except Exception as exc:
             return f"{node_id}: {exc}"
@@ -453,7 +438,7 @@ def execute_wiring(
                     finalized += 1
                 if finalized % 10 == 0 or finalized == total_to_finalize:
                     _write_progress(
-                        f"Finalizing pods: {finalized}/{total_to_finalize} (routes + security)"
+                        f"Finalizing pods: {finalized}/{total_to_finalize} (default route removal)"
                     )
             except Exception as exc:
                 log.warning(f"Pod finalization error for {nid}: {exc}")
@@ -472,30 +457,32 @@ def execute_wiring(
 def write_wiring_status(wired: dict[str, str], namespace: str = "nodalarc") -> None:
     """Write per-node wiring status to nodalarc-wiring-status ConfigMap.
 
-    Uses PATCH (merge) so multiple Node Agents on different K3s nodes
-    can each write their local pods without overwriting each other.
+    Uses JSON Merge Patch (application/merge-patch+json) so multiple
+    Node Agents on different K3s nodes can each write their local pods
+    without overwriting each other. Each agent sends only its delta
+    (the nodes it wired), and K8s merges into the existing data.
     """
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
 
-    body = kubernetes.client.V1ConfigMap(
-        metadata=kubernetes.client.V1ObjectMeta(
-            name="nodalarc-wiring-status",
-            namespace=namespace,
-            labels={"nodalarc.io/managed-by": "node-agent"},
-        ),
-        data=wired,
-    )
     try:
-        v1.create_namespaced_config_map(namespace, body)
+        v1.patch_namespaced_config_map(
+            "nodalarc-wiring-status",
+            namespace,
+            {"data": wired},
+        )
     except kubernetes.client.rest.ApiException as e:
-        if e.status == 409:
-            # ConfigMap exists — read existing, merge, update
-            existing = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
-            merged = dict(existing.data or {})
-            merged.update(wired)
-            existing.data = merged
-            v1.replace_namespaced_config_map("nodalarc-wiring-status", namespace, existing)
+        if e.status == 404:
+            # ConfigMap doesn't exist — create it
+            body = kubernetes.client.V1ConfigMap(
+                metadata=kubernetes.client.V1ObjectMeta(
+                    name="nodalarc-wiring-status",
+                    namespace=namespace,
+                    labels={"nodalarc.io/managed-by": "node-agent"},
+                ),
+                data=wired,
+            )
+            v1.create_namespaced_config_map(namespace, body)
         else:
             raise
     log.info(f"Wrote wiring status: {len(wired)} nodes wired")

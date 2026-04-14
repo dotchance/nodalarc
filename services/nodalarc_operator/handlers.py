@@ -136,6 +136,7 @@ async def on_create(spec, name, namespace, meta, **_):
         all_pods_ready = False
         for _i in range(600):  # 10 minutes max
             total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
+            pending = pod_count - ready
             _update_status(
                 name,
                 namespace,
@@ -143,7 +144,7 @@ async def on_create(spec, name, namespace, meta, **_):
                     "phase": "Creating",
                     "readyPods": ready,
                     "podCount": pod_count,
-                    "message": f"Waiting for pods: {ready}/{pod_count} running",
+                    "message": f"Pods: {ready} running, {pending} starting",
                 },
             )
             if ready >= pod_count:

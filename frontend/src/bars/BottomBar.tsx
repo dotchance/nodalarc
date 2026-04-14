@@ -22,7 +22,7 @@ export function BottomBar({ snapshot, connected, historicalMode }: BottomBarProp
   const convColor =
     convergence === "converged"
       ? "var(--ws-connected)"
-      : convergence === "converging"
+      : convergence === "converging" || convergence === "stabilizing"
         ? "var(--ws-reconnecting)"
         : convergence === "degraded"
           ? "var(--ws-disconnected)"

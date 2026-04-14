@@ -351,49 +351,69 @@ def deploy_session(
         ", ".join(f"{n}={c}" for n, c in sorted(node_counts.items())),
     )
 
-    # --- Step 9: Create session pods ---
+    # --- Step 9: Create session pods (parallel, batches of 8) ---
     total_pods = len(node_vars)
     _progress(f"Creating {total_pods} session pods")
     sidecar_config = _build_sidecar_config(resolved)
     env_list = resolved.env
 
-    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    pod_specs: list[dict] = []
+    for node_id, vars in node_vars.items():
+        pod_specs.append(
+            {
+                "pod_name": node_id.lower(),
+                "node_id": node_id,
+                "node_type": vars["node_type"],
+                "plane": vars.get("plane"),
+                "slot": vars.get("slot"),
+                "gs_name": vars.get("gs_name"),
+                "config_cm_name": f"frr-config-{node_id.lower()}",
+                "sidecar_env": _build_sidecar_env(node_id, vars, env_list)
+                if sidecar_config
+                else None,
+                "probe_enabled": session.mi.enabled if session.mi else False,
+                "target_node": pod_placement.get(node_id),
+            }
+        )
 
     created_pods = 0
-    last_progress_time = _time.monotonic()
-    for node_id, vars in node_vars.items():
-        node_type = vars["node_type"]
-        pod_name = node_id.lower()
-        cm_name = f"frr-config-{pod_name}"
-        created_pods += 1
-        elapsed_since_last = _time.monotonic() - last_progress_time
-        if elapsed_since_last > 5:
-            _progress(
-                f"Creating session pod {created_pods}/{total_pods}: {pod_name} "
-                f"(K8s scheduling — please wait)"
+    errors = []
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        futures = {}
+        for spec in pod_specs:
+            fut = pool.submit(
+                _create_session_pod,
+                v1=v1,
+                pod_name=spec["pod_name"],
+                namespace=namespace,
+                node_id=spec["node_id"],
+                node_type=spec["node_type"],
+                plane=spec["plane"],
+                slot=spec["slot"],
+                gs_name=spec["gs_name"],
+                config_cm_name=spec["config_cm_name"],
+                sidecar_config=sidecar_config,
+                sidecar_env=spec["sidecar_env"],
+                probe_enabled=spec["probe_enabled"],
+                target_node=spec["target_node"],
+                owner_ref=owner_ref,
             )
-        else:
-            _progress(f"Creating session pod {created_pods}/{total_pods}: {pod_name}")
-        last_progress_time = _time.monotonic()
+            futures[fut] = spec["node_id"]
 
-        sidecar_env = _build_sidecar_env(node_id, vars, env_list) if sidecar_config else None
+        for fut in as_completed(futures):
+            node_id = futures[fut]
+            try:
+                fut.result()
+                created_pods += 1
+                _progress(f"Creating session pods: {created_pods}/{total_pods}")
+            except Exception as exc:
+                errors.append(f"{node_id}: {exc}")
+                log.warning(f"Pod creation failed for {node_id}: {exc}")
 
-        _create_session_pod(
-            v1=v1,
-            pod_name=pod_name,
-            namespace=namespace,
-            node_id=node_id,
-            node_type=node_type,
-            plane=vars.get("plane"),
-            slot=vars.get("slot"),
-            gs_name=vars.get("gs_name"),
-            config_cm_name=cm_name,
-            sidecar_config=sidecar_config,
-            sidecar_env=sidecar_env,
-            probe_enabled=session.mi.enabled if session.mi else False,
-            target_node=pod_placement.get(node_id),
-            owner_ref=owner_ref,
-        )
+    if errors:
+        log.warning(f"Pod creation: {len(errors)} failures out of {total_pods}")
     log.info(f"Created {created_pods} session pods")
 
     return {

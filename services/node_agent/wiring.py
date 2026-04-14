@@ -442,6 +442,7 @@ def execute_wiring(
             if pid == 0:
                 continue
             fin_futures[pool.submit(_finalize_pod, node_id, pid)] = node_id
+        total_to_finalize = len(fin_futures)
         for fut in as_completed(fin_futures):
             nid = fin_futures[fut]
             try:
@@ -450,6 +451,10 @@ def execute_wiring(
                     log.warning(f"Pod finalization failed: {err}")
                 else:
                     finalized += 1
+                if finalized % 10 == 0 or finalized == total_to_finalize:
+                    _write_progress(
+                        f"Finalizing pods: {finalized}/{total_to_finalize} (routes + security)"
+                    )
             except Exception as exc:
                 log.warning(f"Pod finalization error for {nid}: {exc}")
     log.info(f"Phase 7+8: finalized {finalized} pods (default route + cni0 lockdown)")

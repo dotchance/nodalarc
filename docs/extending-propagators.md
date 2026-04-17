@@ -1,6 +1,6 @@
 # Extending the Orbital Propagator
 
-NodalArc uses a Keplerian orbital propagator to compute satellite positions. It's pure math with no I/O, under 260 lines, and handles circular orbits (eccentricity = 0). This is sufficient for LEO constellation emulation where you care about topology dynamics, not precise orbit determination.
+NodalArc uses a Keplerian orbital propagator to compute satellite positions. It's pure math with no I/O, implemented in `lib/nodalarc/propagator.py` (≈300 lines), and handles circular orbits (eccentricity = 0). This is sufficient for LEO constellation emulation where you care about topology dynamics, not precise orbit determination.
 
 If you need higher fidelity (TLE-based propagation, J2 perturbations, drag modeling), the propagator is designed to be replaced.
 
@@ -8,7 +8,8 @@ If you need higher fidelity (TLE-based propagation, J2 perturbations, drag model
 
 | File | What it contains |
 |------|-----------------|
-| `services/ome/propagator.py` | The propagator: ECI propagation, coordinate conversions, the `propagate_keplerian()` entry point |
+| `lib/nodalarc/propagator.py` | The propagator: ECI propagation, coordinate conversions, the `propagate_keplerian()` entry point |
+| `services/ome/propagator.py` | Thin re-export of `lib/nodalarc/propagator.py` — lets OME and other services `from ome.propagator import X` without cross-service imports |
 | `lib/nodalarc/orbital.py` | `OrbitalElements` and `elements_from_params()` data types |
 | `lib/nodalarc/constants.py` | Physical constants: EARTH_MU, EARTH_RADIUS_KM, WGS84 ellipsoid parameters |
 | `services/ome/event_stream.py` | The OME event stream, which calls `propagate_keplerian()` for every satellite at every time step |
@@ -34,7 +35,7 @@ def propagate_keplerian(
     """
 ```
 
-This is called in `services/ome/event_stream.py` line 68:
+This is called in `services/ome/event_stream.py` line 117:
 
 ```python
 ecef, vel_eci, geo = propagate_keplerian(sat.elements, epoch_unix, dt)
@@ -44,7 +45,7 @@ A replacement propagator must return the same 3-tuple. Everything downstream (vi
 
 ## Supporting Functions
 
-All in `services/ome/propagator.py`:
+All in `lib/nodalarc/propagator.py` (re-exported from `services/ome/propagator.py` for backward compat):
 
 | Function | What it does |
 |----------|-------------|
@@ -127,7 +128,7 @@ For higher fidelity using Two-Line Element sets. The `sgp4` Python package is al
    ) -> tuple[Vec3, Vec3, GeoPosition]:
    ```
 4. sgp4 returns ECI position/velocity directly. Reuse `eci_to_ecef()`, `eci_to_ecef_velocity()`, and `ecef_to_geodetic()` from the existing propagator for coordinate conversion.
-5. Wire it in at `services/ome/event_stream.py` line 68 for TLE-mode constellations.
+5. Wire it in at `services/ome/event_stream.py` line 117 for TLE-mode constellations.
 
 ### Option 2: J2 Perturbation
 
@@ -153,7 +154,7 @@ For arbitrary force models (drag, solar radiation pressure, third-body effects):
 
 ## Wiring a New Propagator In
 
-The call site is `services/ome/event_stream.py` line 68:
+The call site is `services/ome/event_stream.py` line 117:
 
 ```python
 ecef, vel_eci, geo = propagate_keplerian(sat.elements, epoch_unix, dt)

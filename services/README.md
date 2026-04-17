@@ -12,7 +12,7 @@ package with its own Dockerfile. All share `lib/nodalarc/` as a dependency.
 | **node_agent/** | DaemonSet — executes privileged kernel operations (veth pairs, tc shaping, bridge management) on each K3s node. Receives commands from the Scheduler. | `python -m node_agent` |
 | **vs_api/** | Visualization State API — FastAPI server aggregating all NATS events into an in-memory state snapshot. Serves REST + WebSocket to the frontend. | `python -m vs_api.main` |
 | **nodalarc_operator/** | K8s Operator — watches ConstellationSpec CRDs, manages session lifecycle (create, switch, teardown). | `kopf run -m nodalarc_operator` |
-| **measurement/** | Measurement Infrastructure — FRR protocol adapters, convergence detection, probe daemon. Not yet containerized. | `python -m measurement.mi_main` |
+| **measurement/** | Measurement Infrastructure — FRR protocol adapters, convergence detection, probe daemon. Containerised but opt-in per session (`mi.enabled` flag); active development deferred until NodalArc + NodalPath are solid. | `python -m measurement.mi_main` |
 
 ## Startup Order
 

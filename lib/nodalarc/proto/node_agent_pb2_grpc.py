@@ -58,12 +58,6 @@ class NodeAgentServiceStub:
             response_deserializer=node__agent__pb2.SetLatencyResponse.FromString,
             _registered_method=True,
         )
-        self.GetTopology = channel.unary_unary(
-            "/nodalarc.node_agent.NodeAgentService/GetTopology",
-            request_serializer=node__agent__pb2.GetTopologyRequest.SerializeToString,
-            response_deserializer=node__agent__pb2.GetTopologyResponse.FromString,
-            _registered_method=True,
-        )
 
 
 class NodeAgentServiceServicer:
@@ -83,8 +77,11 @@ class NodeAgentServiceServicer:
         raise NotImplementedError("Method not implemented!")
 
     def BatchLinkUp(self, request, context):
-        """Bring up a batch of interfaces with tc shaping and NDP resolution.
+        """Bring up a batch of interfaces with tc shaping.
         All operations execute concurrently. ACK returned when all complete.
+        Layer 3 neighbor resolution (NDP) is NOT the Node Agent's responsibility:
+        FRR hello packets (IGP sessions) and the kernel NDP state machine
+        (NodalPath sessions) own neighbor resolution. See PRD §13.22.6.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -92,12 +89,6 @@ class NodeAgentServiceServicer:
 
     def SetLatency(self, request, context):
         """Update netem delay on active interfaces."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def GetTopology(self, request, context):
-        """Return observed interface state for reconciliation."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
@@ -119,11 +110,6 @@ def add_NodeAgentServiceServicer_to_server(servicer, server):
             servicer.SetLatency,
             request_deserializer=node__agent__pb2.SetLatencyRequest.FromString,
             response_serializer=node__agent__pb2.SetLatencyResponse.SerializeToString,
-        ),
-        "GetTopology": grpc.unary_unary_rpc_method_handler(
-            servicer.GetTopology,
-            request_deserializer=node__agent__pb2.GetTopologyRequest.FromString,
-            response_serializer=node__agent__pb2.GetTopologyResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -223,36 +209,6 @@ class NodeAgentService:
             "/nodalarc.node_agent.NodeAgentService/SetLatency",
             node__agent__pb2.SetLatencyRequest.SerializeToString,
             node__agent__pb2.SetLatencyResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def GetTopology(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/nodalarc.node_agent.NodeAgentService/GetTopology",
-            node__agent__pb2.GetTopologyRequest.SerializeToString,
-            node__agent__pb2.GetTopologyResponse.FromString,
             options,
             channel_credentials,
             insecure,

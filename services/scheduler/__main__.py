@@ -35,20 +35,39 @@ def _build_interface_map(
     session: SessionConfig,
     addressing: AddressingScheme,
 ) -> tuple[dict[tuple[str, str], tuple[str, str]], dict[tuple[str, str], float]]:
-    """Build interface and bandwidth maps — migrated from orchestrator/main.py."""
+    """Build (interface_map, bandwidth_map) keyed by canonical (min, max) node-id pairs.
+
+    interface_map[pair] = (interface_on_node_min, interface_on_node_max)
+    bandwidth_map[pair] = emulated bandwidth in Mbps for that link
+
+    Bandwidth (R-TO-003) comes from the satellite-type and ground-station
+    terminal configs — NOT a hardcoded value. For ISL pairs we take
+    min(a.terminal_bandwidth, b.terminal_bandwidth); for GS-satellite pairs
+    we take min(gs_terminal_bandwidth, sat_ground_terminal_bandwidth).
+    """
     from nodalarc.constellation_loader import (
         expand_constellation,
+        ground_link_bandwidth_mbps,
+        isl_link_bandwidth_mbps,
         load_constellation,
         load_ground_stations,
     )
 
     constellation = load_constellation(session.constellation)
+    satellites = expand_constellation(constellation)
     neighbors = assign_isl_neighbors(constellation, addressing)
     by_node = neighbors_by_node(neighbors)
+
+    # node_id -> (plane, slot) — needed to resolve per-satellite terminal config
+    # for bandwidth lookup (supports per-plane and per-satellite overrides).
+    sat_location: dict[str, tuple[int, int]] = {
+        addressing.sat_id(sat.plane, sat.slot): (sat.plane, sat.slot) for sat in satellites
+    }
 
     interface_map: dict[tuple[str, str], tuple[str, str]] = {}
     bandwidth_map: dict[tuple[str, str], float] = {}
 
+    # Pass 1 — populate interface_map symmetrically across both endpoints.
     for node_id, assignments in by_node.items():
         for na in assignments:
             pair = (min(node_id, na.peer_node_id), max(node_id, na.peer_node_id))
@@ -57,7 +76,6 @@ def _build_interface_map(
                     interface_map[pair] = (na.interface, "")
                 else:
                     interface_map[pair] = ("", na.interface)
-                bandwidth_map[pair] = 1000.0
             else:
                 existing = interface_map[pair]
                 if node_id == pair[0] and not existing[0]:
@@ -65,15 +83,53 @@ def _build_interface_map(
                 elif node_id == pair[1] and not existing[1]:
                     interface_map[pair] = (existing[0], na.interface)
 
+    # Pass 2 — resolve ISL bandwidth now that both interfaces are known.
+    for pair, (iface_a, iface_b) in interface_map.items():
+        node_a, node_b = pair
+        if not iface_a or not iface_b:
+            log.warning(
+                "Interface map incomplete for pair %s (%s, %s) — skipping bandwidth resolution",
+                pair,
+                iface_a or "<empty>",
+                iface_b or "<empty>",
+            )
+            continue
+        plane_a, slot_a = sat_location[node_a]
+        plane_b, slot_b = sat_location[node_b]
+        bandwidth_map[pair] = isl_link_bandwidth_mbps(
+            constellation,
+            plane_a,
+            slot_a,
+            iface_a,
+            plane_b,
+            slot_b,
+            iface_b,
+        )
+
+    # Ground station pairs — every (GS, sat) combination is a potential link;
+    # the scheduler activates pairs based on OME visibility events at runtime.
     gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation)
     for station in gs_file.stations:
         gs_id = addressing.gs_id(station.name)
         for sat in satellites:
             sat_id = addressing.sat_id(sat.plane, sat.slot)
             pair = (min(gs_id, sat_id), max(gs_id, sat_id))
             interface_map[pair] = ("gnd0", "gnd0")
-            bandwidth_map[pair] = 1000.0
+            try:
+                bandwidth_map[pair] = ground_link_bandwidth_mbps(
+                    constellation, gs_file, sat.plane, sat.slot, station.name
+                )
+            except ValueError as exc:
+                # Satellite has no ground terminals, or GS has none — the link
+                # isn't wireable at emulation level. Log and skip bandwidth;
+                # the pair still appears in interface_map so visibility events
+                # can be observed, but this link cannot be physically activated.
+                log.warning(
+                    "Ground link bandwidth unresolved for %s<->%s: %s",
+                    gs_id,
+                    sat_id,
+                    exc,
+                )
 
     return interface_map, bandwidth_map
 

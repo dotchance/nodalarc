@@ -15,7 +15,6 @@ import ctypes
 import hashlib
 import logging
 import os
-import subprocess
 import threading
 from collections.abc import Callable
 from typing import TypeVar
@@ -84,31 +83,13 @@ def _in_namespace(pid: int, fn: Callable[[IPRoute], _T]) -> _T:
 
 
 # ---------------------------------------------------------------------------
-# MAC / link-local helpers (link_manager.py L234-254, L357-364)
+# MAC helper (link_manager.py L357-364)
 # ---------------------------------------------------------------------------
-
-
-def mac_to_link_local(mac_str: str) -> str:
-    """Derive canonical IPv6 link-local from MAC via EUI-64.
-
-    '02:ee:d2:0a:a9:36' -> 'fe80::ee:d2ff:fe0a:a936'
-
-    Used to compute the peer's link-local address for NDP solicitation
-    and for ``via inet6`` in MPLS routes.
-    """
-    import ipaddress
-
-    parts = [int(x, 16) for x in mac_str.split(":")]
-    parts[0] ^= 0x02  # flip U/L bit
-    eui64 = parts[:3] + [0xFF, 0xFE] + parts[3:]
-    groups = [
-        f"{eui64[0]:02x}{eui64[1]:02x}",
-        f"{eui64[2]:02x}{eui64[3]:02x}",
-        f"{eui64[4]:02x}{eui64[5]:02x}",
-        f"{eui64[6]:02x}{eui64[7]:02x}",
-    ]
-    raw = "fe80::" + ":".join(groups)
-    return str(ipaddress.IPv6Address(raw))
+# `mac_to_link_local` (EUI-64 derivation of IPv6 link-local from MAC) was
+# removed with the v0.72 NDP deletion. The Node Agent does not do L3 work.
+# The `nodalpath-fwd` sidecar carries its own copy at
+# `nodalpath/push/grpc_push.py:_mac_to_link_local` for `via inet6` route
+# construction.
 
 
 def deterministic_mac(node_id: str, ifname: str) -> str:
@@ -224,108 +205,6 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
         )
 
     _in_namespace(pid, _op)
-
-
-# ---------------------------------------------------------------------------
-# NDP resolution (link_manager.py L257-354)
-# ---------------------------------------------------------------------------
-
-
-def trigger_ndp_and_wait(pid: int, ifname: str, peer_ll: str, timeout_ms: int = 1500) -> bool:
-    """Trigger NDP solicitation and wait for the peer to become REACHABLE.
-
-    After the TO brings an ISL or ground interface admin UP, call this
-    before emitting LinkUp. This ensures the kernel's neighbor table has
-    a resolved L2 entry for the peer's link-local, so MPLS routes with
-    ``via inet6 <peer_ll>`` can forward immediately.
-
-    Returns True if resolved within timeout, False otherwise.
-    """
-    import time as _time
-
-    # Get interface index
-    def _get_iface_idx(ipr: IPRoute) -> int:
-        links = ipr.link_lookup(ifname=ifname)
-        if not links:
-            return -1
-        return links[0]
-
-    iface_idx = _in_namespace(pid, _get_iface_idx)
-    if iface_idx < 0:
-        log.warning("NDP: interface %s not found in ns(%d)", ifname, pid)
-        return False
-
-    # Trigger NS by pinging the peer's link-local via nsenter.
-    # nsenter is a separate process — it doesn't fork from our process.
-    subprocess.run(
-        [
-            "nsenter",
-            "--target",
-            str(pid),
-            "--net",
-            "--",
-            "ping",
-            "-6",
-            "-c",
-            "1",
-            "-W",
-            "2",
-            f"{peer_ll}%{ifname}",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
-
-    # Poll neighbor table
-    start = _time.monotonic()
-    deadline = start + (timeout_ms / 1000)
-    NUD_REACHABLE = 0x02
-    NUD_STALE = 0x04
-    NUD_FAILED = 0x20
-
-    while _time.monotonic() < deadline:
-
-        def _check_neighbors(ipr: IPRoute) -> int | None:
-            """Returns NUD state if peer found, None otherwise."""
-            for n in ipr.get_neighbours(family=10, ifindex=iface_idx):
-                attrs = dict(n["attrs"])
-                if attrs.get("NDA_DST") == peer_ll:
-                    return n["state"]
-            return None
-
-        state = _in_namespace(pid, _check_neighbors)
-        if state is not None:
-            elapsed = (_time.monotonic() - start) * 1000
-            if state & (NUD_REACHABLE | NUD_STALE):
-                log.debug(
-                    "NDP resolved %s on %s in ns(%d) in %.1fms",
-                    peer_ll,
-                    ifname,
-                    pid,
-                    elapsed,
-                )
-                return True
-            if state & NUD_FAILED:
-                log.error(
-                    "NDP FAILED for %s on %s in ns(%d) after %.1fms",
-                    peer_ll,
-                    ifname,
-                    pid,
-                    elapsed,
-                )
-                return False
-        _time.sleep(0.010)
-
-    elapsed = (_time.monotonic() - start) * 1000
-    log.warning(
-        "NDP timeout for %s on %s in ns(%d) after %.1fms — proceeding, sidecar retry will catch it",
-        peer_ll,
-        ifname,
-        pid,
-        elapsed,
-    )
-    return False
 
 
 # ---------------------------------------------------------------------------

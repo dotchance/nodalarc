@@ -16,7 +16,6 @@ from nodalarc.proto import node_agent_pb2
 from node_agent.handlers import (
     handle_batch_link_down,
     handle_batch_link_up,
-    handle_get_topology,
     handle_set_latency,
 )
 
@@ -56,12 +55,6 @@ def dispatch(data: bytes, pid_map: dict[str, int]) -> bytes:
         request = node_agent_pb2.SetLatencyRequest()
         request.ParseFromString(payload)
         response = handle_set_latency(request, context=None, pid_map=pid_map)
-        return response.SerializeToString()
-
-    elif msg_type == b"GetTopology":
-        request = node_agent_pb2.GetTopologyRequest()
-        request.ParseFromString(payload)
-        response = handle_get_topology(request, context=None, pid_map=pid_map)
         return response.SerializeToString()
 
     else:

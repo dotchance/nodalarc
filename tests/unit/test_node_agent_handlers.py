@@ -4,7 +4,6 @@ Tests handler logic:
 - Per-interface locality (LOCAL/CROSS_NODE)
 - Empty batches succeed
 - Bad PIDs return structured errors
-- GetTopology with various pid_map states
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ from nodalarc.proto import node_agent_pb2
 from node_agent.handlers import (
     handle_batch_link_down,
     handle_batch_link_up,
-    handle_get_topology,
     handle_set_latency,
 )
 
@@ -129,24 +127,3 @@ class TestSetLatency:
         resp = handle_set_latency(req)
         assert resp.success is False
         assert resp.entries_updated == 0
-
-
-class TestGetTopology:
-    def test_empty_pid_map_returns_empty(self):
-        resp = handle_get_topology(node_agent_pb2.GetTopologyRequest())
-        assert len(resp.interfaces) == 0
-
-    def test_bad_pid_returns_empty(self):
-        resp = handle_get_topology(
-            node_agent_pb2.GetTopologyRequest(),
-            pid_map={"sat-P00S00": 999999},
-        )
-        assert len(resp.interfaces) == 0
-
-    def test_pid_map_with_real_pid(self):
-        # PID 1 (init) has no isl/gnd interfaces
-        resp = handle_get_topology(
-            node_agent_pb2.GetTopologyRequest(),
-            pid_map={"test-node": 1},
-        )
-        assert resp is not None

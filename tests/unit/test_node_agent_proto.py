@@ -10,14 +10,16 @@ def test_proto_stubs_importable():
     assert hasattr(node_agent_pb2, "BatchLinkDownRequest")
     assert hasattr(node_agent_pb2, "BatchLinkUpRequest")
     assert hasattr(node_agent_pb2, "SetLatencyRequest")
-    assert hasattr(node_agent_pb2, "GetTopologyRequest")
     assert hasattr(node_agent_pb2, "InterfaceDown")
     assert hasattr(node_agent_pb2, "InterfaceUp")
     assert hasattr(node_agent_pb2, "LatencyEntry")
-    assert hasattr(node_agent_pb2, "InterfaceState")
     assert hasattr(node_agent_pb2_grpc, "NodeAgentServiceServicer")
     assert hasattr(node_agent_pb2_grpc, "NodeAgentServiceStub")
     assert hasattr(node_agent_pb2_grpc, "add_NodeAgentServiceServicer_to_server")
+    # GetTopology was removed per PRD v0.72 §1D (forbidden in IGP sessions).
+    assert not hasattr(node_agent_pb2, "GetTopologyRequest")
+    assert not hasattr(node_agent_pb2, "GetTopologyResponse")
+    assert not hasattr(node_agent_pb2, "InterfaceState")
 
 
 def test_enum_values():
@@ -66,22 +68,6 @@ def test_latency_entry():
         link_type=node_agent_pb2.ISL,
     )
     assert entry.latency_ms == 3.45
-
-
-def test_get_topology_response():
-    """GetTopologyResponse holds interface state list."""
-    from nodalarc.proto import node_agent_pb2
-
-    iface = node_agent_pb2.InterfaceState(
-        node_id="sat-p00s00",
-        interface_name="isl0",
-        admin_up=True,
-        oper_up=True,
-        current_latency_ms=3.0,
-    )
-    resp = node_agent_pb2.GetTopologyResponse(interfaces=[iface])
-    assert len(resp.interfaces) == 1
-    assert resp.interfaces[0].admin_up is True
 
 
 def test_node_agent_grpc_port():

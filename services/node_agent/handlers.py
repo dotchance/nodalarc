@@ -150,10 +150,14 @@ def _ground_link_up(
        — carrier arrives on GS gnd0 automatically (LOWERLAYERDOWN → UP)
     2. Apply tc shaping on GS gnd0
     3. Apply tc shaping on satellite gnd0
-    4. If peer_mac present: NDP on gnd0 (synchronous, before ACK)
 
     No explicit admin state manipulation on GS gnd0 — host-side veth state
     drives carrier which drives FRR behavior.
+
+    Layer 3 neighbor resolution (NDP) is NOT performed here. NDP is owned
+    by FRR (IGP sessions, via IS-IS/OSPF hello) and the kernel NDP state
+    machine (NodalPath sessions, on first forwarding attempt). See PRD
+    §13.22.6 — v0.72 reversal.
     """
     try:
         pm = pid_map or {}
@@ -162,9 +166,6 @@ def _ground_link_up(
         ground_bridge.attach_to_ground_bridge(iface.gs_id, iface.sat_id, sat_pid)
         namespace_ops.apply_link_shaping(gs_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps)
         namespace_ops.apply_link_shaping(sat_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps)
-        if iface.peer_mac:
-            peer_ll = namespace_ops.mac_to_link_local(iface.peer_mac)
-            namespace_ops.trigger_ndp_and_wait(sat_pid, "gnd0", peer_ll)
         return None
     except Exception as exc:
         msg = f"Ground up failed {iface.gs_id}<->{iface.sat_id}: {exc}"
@@ -314,63 +315,6 @@ def _isl_link_up_phase1(
         return msg
 
 
-def _isl_ndp_phase2(
-    iface: node_agent_pb2.InterfaceUp, pid_map: dict[str, int] | None = None
-) -> str | None:
-    """Phase 2 of ISL link-up: NDP resolution (synchronous).
-
-    Called AFTER all interfaces in the batch are admin UP, so the peer's
-    link-local is no longer tentative and NDP will resolve quickly.
-
-    Uses a direct nsenter ping with a 2-second timeout. The ping itself
-    triggers NDP and creates the neighbor entry. The kernel's NDP retransmit
-    timer is ~1s (RFC 4861), so the first successful resolution takes ~1.1s
-    on a fresh interface. On subsequent UP transitions with warm cache, it
-    resolves in <100ms.
-    """
-    if not iface.peer_mac:
-        return None
-    try:
-        import subprocess
-
-        pid = _require_pid(iface.node_id, pid_map or {})
-        peer_ll = namespace_ops.mac_to_link_local(iface.peer_mac)
-        result = subprocess.run(
-            [
-                "nsenter",
-                "--target",
-                str(pid),
-                "--net",
-                "--",
-                "ping",
-                "-6",
-                "-c",
-                "1",
-                "-W",
-                "2",
-                f"{peer_ll}%{iface.interface_name}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            log.debug("NDP resolved %s on %s for %s", peer_ll, iface.interface_name, iface.node_id)
-        else:
-            log.warning(
-                "NDP ping failed for %s on %s for %s: %s",
-                peer_ll,
-                iface.interface_name,
-                iface.node_id,
-                result.stderr.strip(),
-            )
-        return None
-    except Exception as exc:
-        msg = f"ISL NDP failed {iface.node_id}/{iface.interface_name}: {exc}"
-        log.warning(msg)
-        return msg
-
-
 def handle_batch_link_up(
     request: node_agent_pb2.BatchLinkUpRequest,
     context=None,
@@ -378,19 +322,21 @@ def handle_batch_link_up(
 ) -> node_agent_pb2.BatchLinkUpResponse:
     """Handle BatchLinkUp RPC.
 
-    Two-phase execution for ISL links:
-      Phase 1 (concurrent): admin UP + tc shaping on ALL interfaces
-      Phase 2 (concurrent): NDP resolution on ALL interfaces
+    Phase 0 (sequential): Create VXLAN tunnels for CROSS_NODE interfaces.
+    Phase 1 (concurrent): Bring host-side veth carrier UP and apply
+      tc tbf + tc netem shaping on every interface. ACK as soon as Phase 1
+      is complete — Layer 2 carrier transitions are the Node Agent's
+      contract with the Scheduler.
 
-    Phase 2 runs after ALL phase 1 operations complete, ensuring every
-    peer's link-local address is non-tentative before NDP solicitations
-    are sent. Without this split, the first NS goes out while the peer
-    is still in IPv6 DAD tentative state, causing a 1-second retransmit
-    wait (RFC 4861).
-
-    Ground links run their full sequence in phase 1 (they don't use the
-    same NDP-after-UP pattern because attach_to_ground_bridge handles
-    the UP transition internally).
+    Layer 3 neighbor resolution (NDP) is NOT performed. Per PRD §13.22.6
+    (v0.72 reversal), NDP is owned by FRR (IGP sessions — IS-IS/OSPF hello
+    fires NS naturally on carrier-up) and the kernel NDP state machine
+    (NodalPath sessions — resolves on first forwarding attempt). The
+    previous `_isl_ndp_phase2` nsenter-ping storm and its `trigger_ndp_and_wait`
+    polling loop are deleted: a Layer 2 substrate actuator must not do
+    Layer 3 work, the subprocess.run-per-link pattern did not scale, and
+    the per-attempt `_ns_lock` contention defeated the entire simultaneity
+    goal.
     """
     start = _time.monotonic()
     errors: list[str] = []
@@ -507,17 +453,15 @@ def handle_batch_link_up(
         else:
             phase1_futures[_BATCH_POOL.submit(_isl_link_up_phase1, iface, pm)] = iface
 
-    # Wait for ALL phase 1 to complete
-    isl_phase1_ok: list[node_agent_pb2.InterfaceUp] = []
+    # Wait for ALL phase 1 to complete. ACK on completion — Layer 3
+    # neighbor resolution happens asynchronously in FRR / kernel NDP
+    # (see docstring and PRD §13.22.6).
     for fut in as_completed(phase1_futures):
         iface = phase1_futures[fut]
         try:
             err = fut.result(timeout=10)
             if err is None:
-                if iface.link_type == node_agent_pb2.GROUND:
-                    upped += 1  # Ground links are fully done after phase 1
-                else:
-                    isl_phase1_ok.append(iface)
+                upped += 1
             else:
                 errors.append(err)
         except Exception as exc:
@@ -525,31 +469,6 @@ def handle_batch_link_up(
 
     # Count cross-node ground links handled in Phase 0
     upped += len(cross_node_ground)
-
-    # Phase 2: NDP resolution for ISL links that succeeded in phase 1
-    # By now all peers are admin UP and non-tentative.
-    if isl_phase1_ok:
-        ndp_futures = {}
-        for iface in isl_phase1_ok:
-            ndp_futures[_BATCH_POOL.submit(_isl_ndp_phase2, iface, pm)] = iface
-
-        for fut in as_completed(ndp_futures):
-            iface = ndp_futures[fut]
-            try:
-                err = fut.result(timeout=30)
-                if err is None:
-                    upped += 1
-                else:
-                    # NDP failure is non-fatal — sidecar retry handles it
-                    upped += 1  # Interface IS up, NDP just didn't resolve yet
-                    log.warning(
-                        "NDP did not resolve for %s/%s — sidecar retry will catch it",
-                        iface.node_id,
-                        iface.interface_name,
-                    )
-            except Exception as exc:
-                upped += 1  # Interface IS up
-                log.warning("NDP error for %s/%s: %s", iface.node_id, iface.interface_name, exc)
 
     elapsed = (_time.monotonic() - start) * 1000
     error_msg = "; ".join(errors) if errors else ""
@@ -600,104 +519,3 @@ def handle_set_latency(
         error_message=error_msg,
         entries_updated=updated,
     )
-
-
-def _read_psched_tick_factor() -> float:
-    """Read kernel psched parameters for tc delay tick-to-microsecond conversion.
-
-    Returns the factor to convert netem delay ticks to microseconds:
-        delay_us = delay_ticks * factor
-
-    Reads /proc/net/psched which contains: t2us us2t clock_res tick_res
-    The conversion is: delay_us = delay_ticks * us2t / t2us
-    """
-    try:
-        parts = open("/proc/net/psched").read().strip().split()
-        t2us = int(parts[0], 16)
-        us2t = int(parts[1], 16)
-        if t2us > 0:
-            return us2t / t2us
-    except Exception:
-        pass
-    return 1.0  # Fallback: assume ticks = microseconds
-
-
-# Cache the tick factor (constant for the lifetime of the process)
-_TICK_TO_US = _read_psched_tick_factor()
-
-
-def handle_get_topology(
-    request: node_agent_pb2.GetTopologyRequest,
-    context=None,
-    pid_map: dict[str, int] | None = None,
-) -> node_agent_pb2.GetTopologyResponse:
-    """Handle GetTopology RPC — return observed interface state.
-
-    Enumerates ISL and ground interfaces in pod namespaces on this node
-    and reports admin/oper state and current netem delay.
-    Used for reconciliation on Scheduler restart.
-
-    The pid_map is injected by the server (from PID discovery or --pid-map).
-    """
-    from pyroute2 import IPRoute
-
-    from node_agent.namespace_ops import _in_namespace
-
-    interfaces: list[node_agent_pb2.InterfaceState] = []
-    pids = pid_map or {}
-
-    # If pid_map is empty, try fresh discovery (handles startup timing)
-    if not pids:
-        try:
-            from node_agent.pid_discovery import discover_local_pod_pids
-
-            pids = discover_local_pod_pids()
-        except Exception as exc:
-            log.warning("GetTopology: PID discovery failed: %s", exc)
-
-    for node_id, pid in pids.items():
-        try:
-
-            def _read_interfaces(ipr: IPRoute, _node_id: str = node_id) -> list:
-                result = []
-                for link in ipr.get_links():
-                    ifname = link.get_attr("IFLA_IFNAME")
-                    if ifname is None:
-                        continue
-                    if not (ifname.startswith("isl") or ifname.startswith("gnd")):
-                        continue
-
-                    flags = link["flags"]
-                    admin_up = bool(flags & 0x1)
-                    oper_up = bool(flags & 0x40)
-
-                    current_latency = 0.0
-                    try:
-                        idx = link["index"]
-                        qdiscs = ipr.get_qdiscs(index=idx)
-                        for qd in qdiscs:
-                            if qd.get_attr("TCA_KIND") == "netem":
-                                opts = qd.get_attr("TCA_OPTIONS")
-                                if opts:
-                                    delay_ticks = opts.get("delay", 0)
-                                    delay_us = delay_ticks * _TICK_TO_US
-                                    current_latency = delay_us / 1000.0
-                    except Exception:
-                        pass
-
-                    result.append(
-                        node_agent_pb2.InterfaceState(
-                            node_id=_node_id,
-                            interface_name=ifname,
-                            admin_up=admin_up,
-                            oper_up=oper_up,
-                            current_latency_ms=current_latency,
-                        )
-                    )
-                return result
-
-            interfaces.extend(_in_namespace(pid, _read_interfaces))
-        except Exception as exc:
-            log.warning("GetTopology: failed to read ns(%d) for %s: %s", pid, node_id, exc)
-
-    return node_agent_pb2.GetTopologyResponse(interfaces=interfaces)

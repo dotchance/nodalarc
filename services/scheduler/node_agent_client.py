@@ -93,18 +93,5 @@ class NodeAgentClient:
 
         return asyncio.get_event_loop().run_until_complete(self.async_set_latency(request))
 
-    def get_topology(self, request=None):
-        if request is None:
-            request = node_agent_pb2.GetTopologyRequest()
-        import asyncio
-
-        async def _do():
-            resp_bytes = await self._request_async(b"GetTopology", request.SerializeToString())
-            resp = node_agent_pb2.GetTopologyResponse()
-            resp.ParseFromString(resp_bytes)
-            return resp
-
-        return asyncio.get_event_loop().run_until_complete(_do())
-
     def close(self) -> None:
         pass  # Shared connection — closed by Scheduler

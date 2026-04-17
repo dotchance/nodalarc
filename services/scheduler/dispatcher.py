@@ -492,7 +492,14 @@ class Dispatcher:
                         if not ifaces:
                             continue
 
-                    bandwidth = self._bandwidth_map.get(pair, 1000.0)
+                    bandwidth = self._bandwidth_map.get(pair)
+                    if bandwidth is None:
+                        log.warning(
+                            "No bandwidth configured for pair %s — "
+                            "skipping LinkUp (check satellite/GS terminal config)",
+                            pair,
+                        )
+                        continue
                     sim_unix = vis.sim_time.timestamp() if vis.sim_time else 0.0
                     latency = self._position_table.compute_link_latency(
                         vis.node_a, vis.node_b, sim_unix
@@ -559,7 +566,22 @@ class Dispatcher:
                     if not ifaces:
                         continue
 
-                bandwidth = self._bandwidth_map.get(pair, link.bandwidth_mbps or 1000.0)
+                # Prefer the pre-computed, config-derived bandwidth (authoritative).
+                # Fall back to the snapshot's value only if the config didn't
+                # resolve (e.g., missing terminal data). Skip the link entirely
+                # if neither source yields a positive bandwidth — a silent
+                # default would emulate the wrong link rate.
+                bandwidth = self._bandwidth_map.get(pair)
+                if bandwidth is None and link.bandwidth_mbps:
+                    bandwidth = link.bandwidth_mbps
+                if bandwidth is None or bandwidth <= 0:
+                    log.warning(
+                        "No bandwidth for pair %s (config_map=missing, snapshot=%s) "
+                        "— skipping in snapshot reconciliation",
+                        pair,
+                        link.bandwidth_mbps,
+                    )
+                    continue
                 desired[pair] = ActiveLinkInfo(
                     interface_a=ifaces[0],
                     interface_b=ifaces[1],

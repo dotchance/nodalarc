@@ -14,15 +14,15 @@ service NodeAgentService {
   // All operations execute concurrently. ACK returned when all complete.
   rpc BatchLinkDown(BatchLinkDownRequest) returns (BatchLinkDownResponse);
 
-  // Bring up a batch of interfaces with tc shaping and NDP resolution.
+  // Bring up a batch of interfaces with tc shaping.
   // All operations execute concurrently. ACK returned when all complete.
+  // Layer 3 neighbor resolution (NDP) is NOT the Node Agent's responsibility:
+  // FRR hello packets (IGP sessions) and the kernel NDP state machine
+  // (NodalPath sessions) own neighbor resolution. See PRD §13.22.6.
   rpc BatchLinkUp(BatchLinkUpRequest) returns (BatchLinkUpResponse);
 
   // Update netem delay on active interfaces.
   rpc SetLatency(SetLatencyRequest) returns (SetLatencyResponse);
-
-  // Return observed interface state for reconciliation.
-  rpc GetTopology(GetTopologyRequest) returns (GetTopologyResponse);
 }
 
 enum LinkType {
@@ -84,8 +84,9 @@ message InterfaceUp {
   string gs_id = 7;
   string sat_id = 8;
   // fields 9-10 reserved — PID looked up by Node Agent internally
-  // NDP: peer MAC for deriving link-local address (ISL only)
-  string peer_mac = 11;
+  // field 11 reserved — peer_mac removed with v0.72 NDP deletion
+  //   (Node Agent no longer performs L3 neighbor resolution; see §13.22.6)
+  reserved 11;
   // CROSS_NODE VXLAN parameters (empty/zero for LOCAL)
   string remote_node_ip = 12;
   int32 vni = 13;
@@ -131,20 +132,4 @@ message SetLatencyResponse {
   bool success = 1;
   string error_message = 2;
   int32 entries_updated = 3;
-}
-
-// --- GetTopology ---
-
-message GetTopologyRequest {}
-
-message InterfaceState {
-  string node_id = 1;
-  string interface_name = 2;
-  bool admin_up = 3;
-  bool oper_up = 4;
-  double current_latency_ms = 5;
-}
-
-message GetTopologyResponse {
-  repeated InterfaceState interfaces = 1;
 }

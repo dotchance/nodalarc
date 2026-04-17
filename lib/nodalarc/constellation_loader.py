@@ -468,3 +468,163 @@ def expand_constellation(config: ConstellationConfig) -> list[SatelliteNode]:
     if isinstance(config, TLEConstellation):
         return expand_tle(config)
     raise ValueError(f"Unknown constellation type: {type(config)}")
+
+
+# ---------------------------------------------------------------------------
+# Terminal-bandwidth resolution (R-TO-003)
+# ---------------------------------------------------------------------------
+#
+# A satellite's ISL interfaces are named `isl0`, `isl1`, ..., with the index
+# running over consecutive blocks defined by the satellite's ISL terminal list.
+# A terminal entry like `{type: optical, count: 2}` owns two consecutive
+# interface indices starting at the block's base. Per-interface bandwidth
+# comes from the owning block's `bandwidth_mbps` field.
+#
+# Ground-facing interfaces are all named `gnd0`. A satellite typically has
+# one ground terminal type; if multiple are defined we use the minimum
+# bandwidth as the conservative emulation value (the slowest terminal governs
+# the emulated rate).
+#
+# For a link, the emulated bandwidth is `min(side_a_bw, side_b_bw)` — the
+# slower endpoint is always the bottleneck in real-world RF / optical links.
+
+
+def _terminals_for_node(
+    config: ConstellationConfig,
+    plane: int,
+    slot: int,
+) -> tuple[list, list]:
+    """Return (isl_terminals, ground_terminals) for the satellite at (plane, slot).
+
+    Resolves per-satellite overrides (ExplicitConstellation.satellites[*].satellite_type),
+    per-plane overrides (ParametricConstellation.plane_overrides), and falls back to
+    the constellation-level `default_terminals` (which `resolve_constellation_terminals`
+    populates from `satellite_type` if inline terminals aren't specified).
+
+    The returned terminal objects duck-type-match on `.count` and `.bandwidth_mbps`;
+    they may be constellation.IslTerminal/GroundTerminal or satellite_type.IslTerminalDef/
+    GroundTerminalDef depending on which code path populated them.
+    """
+    if isinstance(config, ExplicitConstellation):
+        for sat_cfg in config.satellites:
+            if sat_cfg.plane == plane and sat_cfg.slot == slot:
+                if sat_cfg.satellite_type is not None:
+                    sat_type = load_satellite_type(sat_cfg.satellite_type)
+                    return list(sat_type.isl_terminals), list(sat_type.ground_terminals)
+                if sat_cfg.terminals is not None:
+                    return list(sat_cfg.terminals.isl), list(sat_cfg.terminals.ground)
+                break  # Fall through to constellation default
+
+    if isinstance(config, ParametricConstellation) and config.plane_overrides:
+        for ovr in config.plane_overrides:
+            if plane in ovr.planes:
+                if ovr.satellite_type is not None:
+                    sat_type = load_satellite_type(ovr.satellite_type)
+                    return list(sat_type.isl_terminals), list(sat_type.ground_terminals)
+                if ovr.terminals is not None:
+                    return list(ovr.terminals.isl), list(ovr.terminals.ground)
+                break  # Fall through to constellation default
+
+    # Constellation-level fallback — prefer inline default_terminals (already
+    # resolved from satellite_type by resolve_constellation_terminals).
+    if config.default_terminals is not None:
+        return list(config.default_terminals.isl), list(config.default_terminals.ground)
+    if config.satellite_type is not None:
+        sat_type = load_satellite_type(config.satellite_type)
+        return list(sat_type.isl_terminals), list(sat_type.ground_terminals)
+
+    raise ValueError(f"Satellite at plane={plane}, slot={slot} has no resolvable terminal config")
+
+
+def isl_terminal_bandwidth_mbps(isl_terminals: list, interface_name: str) -> float:
+    """Return the ISL terminal bandwidth for the given interface index.
+
+    Interface naming maps to the flattened terminal index: `isl0` is the
+    first terminal slot across the concatenated terminal blocks, `isl1` the
+    second, etc. A terminal block of `count=N` owns N consecutive indices.
+
+    Example:
+      isl_terminals = [
+          {type: optical, count: 2, bandwidth_mbps: 100000},
+          {type: rf,      count: 2, bandwidth_mbps: 10000},
+      ]
+      isl0, isl1 -> 100000 (optical block)
+      isl2, isl3 -> 10000  (rf block)
+    """
+    if not interface_name.startswith("isl"):
+        raise ValueError(f"Expected 'islN' interface name, got {interface_name!r}")
+    try:
+        idx = int(interface_name[3:])
+    except ValueError as exc:
+        raise ValueError(f"Invalid ISL interface name {interface_name!r}") from exc
+
+    cumulative = 0
+    for block in isl_terminals:
+        if idx < cumulative + block.count:
+            return float(block.bandwidth_mbps)
+        cumulative += block.count
+    raise ValueError(
+        f"ISL interface index {idx} (from {interface_name!r}) out of range — "
+        f"satellite has only {cumulative} ISL terminals total"
+    )
+
+
+def satellite_ground_bandwidth_mbps(ground_terminals: list) -> float:
+    """Return the minimum bandwidth across a satellite's ground terminals.
+
+    Satellites may declare multiple ground terminal types (optical + RF, for
+    instance). The emulated link uses the slowest — in practice all ground
+    connections share `gnd0` and the bottleneck governs.
+    """
+    if not ground_terminals:
+        raise ValueError("Satellite has no ground terminals")
+    return min(float(t.bandwidth_mbps) for t in ground_terminals)
+
+
+def gs_terminal_bandwidth_mbps(gs_file: GroundStationFile, station_name: str) -> float:
+    """Return the minimum bandwidth across a ground station's terminals.
+
+    Per-station `terminals` override the file's `default_terminals` when set.
+    """
+    station = next((s for s in gs_file.stations if s.name == station_name), None)
+    if station is None:
+        raise ValueError(f"Ground station {station_name!r} not found in file")
+    terminals = station.terminals or gs_file.default_terminals
+    if not terminals:
+        raise ValueError(f"Ground station {station_name!r} has no terminals")
+    return min(float(t.bandwidth_mbps) for t in terminals)
+
+
+def isl_link_bandwidth_mbps(
+    config: ConstellationConfig,
+    node_a_plane: int,
+    node_a_slot: int,
+    node_a_interface: str,
+    node_b_plane: int,
+    node_b_slot: int,
+    node_b_interface: str,
+) -> float:
+    """Return the emulated bandwidth for an ISL link between two satellites.
+
+    Min of both endpoints' terminal bandwidths at their respective interfaces.
+    Slow side governs — matches real-world RF/optical link behavior.
+    """
+    isl_a, _ = _terminals_for_node(config, node_a_plane, node_a_slot)
+    isl_b, _ = _terminals_for_node(config, node_b_plane, node_b_slot)
+    bw_a = isl_terminal_bandwidth_mbps(isl_a, node_a_interface)
+    bw_b = isl_terminal_bandwidth_mbps(isl_b, node_b_interface)
+    return min(bw_a, bw_b)
+
+
+def ground_link_bandwidth_mbps(
+    config: ConstellationConfig,
+    gs_file: GroundStationFile,
+    sat_plane: int,
+    sat_slot: int,
+    station_name: str,
+) -> float:
+    """Return the emulated bandwidth for a ground link between a satellite and GS."""
+    _, ground_terminals = _terminals_for_node(config, sat_plane, sat_slot)
+    sat_bw = satellite_ground_bandwidth_mbps(ground_terminals)
+    gs_bw = gs_terminal_bandwidth_mbps(gs_file, station_name)
+    return min(sat_bw, gs_bw)

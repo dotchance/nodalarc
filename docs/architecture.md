@@ -61,11 +61,10 @@ A kopf-based operator watches for `ConstellationSpec` custom resources. When you
 2. Renders per-node FRR configuration from Jinja2 templates
 3. Creates FRR config ConfigMaps for each node
 4. Computes pod placement across available K3s nodes using the configured placement policy
-5. Measures baseline network latency between K3s nodes (for substrate compensation)
-6. Creates session pods with the FRR container and ConfigMap volume mounts
-7. Execs into each pod to copy configs and touch the FRR startup sentinel
-8. Writes the topology wiring manifest ConfigMap
-9. Monitors wiring progress and advances the session to Ready
+5. Creates session pods with the FRR container and ConfigMap volume mounts
+6. Execs into each pod to copy configs and touch the FRR startup sentinel
+7. Writes the topology wiring manifest ConfigMap
+8. Monitors wiring progress and advances the session to Ready
 
 Session teardown is handled by deleting the ConstellationSpec CR. Kubernetes garbage collection (via ownerReferences) cascades the deletion to all session pods and ConfigMaps.
 
@@ -109,7 +108,7 @@ The Scheduler maintains a single data structure: `_active_links`, a dict of curr
 
 For each link pair, the Scheduler determines locality: LOCAL (both endpoints on the same K3s node) or CROSS_NODE (endpoints on different nodes). LOCAL links use host-mediated veth pairs with tc mirred redirect (pod-side interfaces are always admin UP; carrier is controlled by host-side veth admin state). CROSS_NODE links use VXLAN tunnels. The locality is set per-interface on the protobuf message, not per-batch, because a single batch to one Node Agent may contain both LOCAL and CROSS_NODE interfaces.
 
-The Scheduler also handles latency updates. As satellites move, the range between connected pairs changes continuously. The Scheduler loads `SessionEphemeris` orbital elements once per epoch and propagates active link endpoints locally via Keplerian propagation on its 10-second update interval. It computes the new one-way latency (`range_km / 299792.458 * 1000` ms) and sends `SetLatency` commands to the Node Agent, which updates tc netem on each interface. For CROSS_NODE links, the Scheduler applies substrate compensation: `netem_ms = max(0, orbital_latency - physical_substrate_latency)`. The physical substrate latency is measured by the Operator at session start via ICMP ping between K3s nodes. The total packet delay (netem + physical network) then equals the orbital latency regardless of the physical network between nodes.
+The Scheduler also handles latency updates. As satellites move, the range between connected pairs changes continuously. The Scheduler loads `SessionEphemeris` orbital elements once per epoch and propagates active link endpoints locally via Keplerian propagation on its 10-second update interval. It computes the new one-way latency (`range_km / 299792.458 * 1000` ms) and sends `SetLatency` commands to the Node Agent, which updates tc netem on each interface. For CROSS_NODE links, the Scheduler applies substrate compensation: `netem_ms = max(0, orbital_latency - physical_substrate_latency)`. The physical substrate latency is measured continuously by the Node Agent's `substrate_monitor` — on the first VXLAN tunnel to each new peer and every 60 seconds thereafter (median of 10 ICMP samples on the K8s management network) — and published to `SUBJECT_SUBSTRATE_LATENCY` on NATS. The Scheduler subscribes and updates its in-memory map on every measurement. The total packet delay (netem + physical network) then equals the orbital latency regardless of the physical network between nodes.
 
 The Scheduler communicates with the Node Agent via NATS request/reply. Each K3s node has a NATS subject (`nodalarc.agent.{hostname}`). The Scheduler serializes protobuf messages, sends them as NATS requests, and waits for the Node Agent's protobuf response. The timeout is 60 seconds to accommodate the initial batch of VXLAN tunnel creation on cold start.
 
@@ -216,7 +215,7 @@ When the constellation exceeds what a single node can handle (roughly 500 satell
 
 Cross-node links use point-to-point VXLAN tunnels created by the Node Agent in the host network namespace. Each tunnel has a deterministic VNI computed from the endpoint node IDs and interface names. The Scheduler sets per-interface locality (LOCAL or CROSS_NODE) on every BatchLinkUp/Down message so the Node Agent knows whether to create a veth pair or a VXLAN tunnel.
 
-Substrate latency compensation keeps cross-node link latency accurate. The physical network between K3s nodes adds real latency to every VXLAN-encapsulated packet. The Operator measures this baseline latency at session start (ICMP ping between nodes), stores it in a ConfigMap, and the Scheduler subtracts it from the orbital latency when setting tc netem: `netem_ms = max(0, orbital_ms - substrate_ms)`. The total packet delay (netem plus physical network) equals the orbital latency. The UI shows the orbital latency (what the user cares about), not the tc netem value.
+Substrate latency compensation keeps cross-node link latency accurate. The physical network between K3s nodes adds real latency to every VXLAN-encapsulated packet. The Node Agent's `substrate_monitor` measures this baseline continuously — on the first VXLAN tunnel to each new peer and every 60 seconds thereafter (median of 10 ICMP samples on the K8s management network) — and publishes results to `SUBJECT_SUBSTRATE_LATENCY` on NATS. The Scheduler subscribes, keeps an in-memory per-peer map, and subtracts the baseline from the orbital latency when setting tc netem: `netem_ms = max(0, orbital_ms - substrate_ms)`. The total packet delay (netem plus physical network) equals the orbital latency. The UI shows the orbital latency (what the user cares about), not the tc netem value.
 
 For multi-node deployments, images must be available on all nodes. Single-node deployments import images directly into K3s containerd (`imagePullPolicy: Never`). Multi-node deployments push images to a container registry and nodes pull from it (`imagePullPolicy: IfNotPresent`). The registry configuration is set via `REGISTRY_PREFIX` and `HELM_EXTRA_ARGS` in `config.mk`, not hardcoded in the platform.
 

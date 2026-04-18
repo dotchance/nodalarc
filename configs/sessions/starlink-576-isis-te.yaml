@@ -1,0 +1,40 @@
+session:
+  name: starlink-576-isis-te
+
+# Constellation inlined for self-contained session YAML.
+# Operator rewrites this to /etc/nodalarc/constellation.yaml unconditionally,
+# so session pods always get a path string downstream. No defect trigger.
+constellation:
+  mode: parametric
+  name: starlink-576
+  satellite_type: starlink-v2
+  orbit:
+    altitude_km: 550
+    inclination_deg: 53
+    pattern: walker-delta
+  planes:
+    count: 48
+    raan_spacing_deg: 7.5
+    sats_per_plane: 12
+    phase_offset_deg: 0.625
+
+# Ground stations as a file-path reference — same shape the wizard emits
+# (frontend/src/hooks/useWizardApi.ts sends state.groundStationSet.file).
+# Session pods receive ground_stations as a string in session.yaml; the
+# Operator also mounts the file contents at /etc/nodalarc/ground-stations.yaml
+# via the nodalarc-ground-stations ConfigMap. The file must be baked into
+# the Operator image — configs/ground-stations/sets/starlink-scale.yaml is.
+ground_stations: configs/ground-stations/sets/starlink-scale.yaml
+
+routing:
+  protocol: isis
+  extensions:
+    - traffic-engineering
+  area_assignment:
+    strategy: per-plane
+
+placement:
+  policy: planePerNode
+
+time:
+  step_seconds: 1

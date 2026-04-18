@@ -139,6 +139,34 @@ check-deps:
 	@command -v node >/dev/null 2>&1   || { echo "ERROR: node not found. Run: sudo scripts/bootstrap-host.sh"; exit 1; }
 
 # ---------------------------------------------------------------------------
+# check-registry — diagnose multi-node registry config
+# ---------------------------------------------------------------------------
+
+check-registry: ## Report resolved REGISTRY_HOST and verify the registry is reachable
+	@if [ -z "$(REGISTRY_HOST)" ]; then \
+		echo "[check-registry] REGISTRY_HOST is empty — single-node mode."; \
+		echo "[check-registry]   'make load' will import images directly into K3s containerd."; \
+		echo "[check-registry]   Set REGISTRY_HOST (or populate /etc/rancher/k3s/registries.yaml"; \
+		echo "[check-registry]   with a mirror entry) to enable multi-node mode."; \
+	else \
+		echo "[check-registry] REGISTRY_HOST   = $(REGISTRY_HOST)"; \
+		echo "[check-registry] REGISTRY_PREFIX = $(REGISTRY_PREFIX)"; \
+		printf "[check-registry] Probing http://%s/v2/_catalog ... " "$(REGISTRY_HOST)"; \
+		if curl -sf --max-time 5 "http://$(REGISTRY_HOST)/v2/_catalog" >/dev/null 2>&1; then \
+			echo "OK"; \
+		else \
+			echo "FAIL"; \
+			echo "[check-registry] ERROR: registry at $(REGISTRY_HOST) is not reachable from this host."; \
+			echo "[check-registry]   - Is the registry running?  (docker ps | grep registry)"; \
+			echo "[check-registry]   - Is the hostname resolvable here?  (getent hosts $(REGISTRY_HOST))"; \
+			echo "[check-registry]   - Does /etc/rancher/k3s/registries.yaml on every cluster node"; \
+			echo "[check-registry]     declare this host as a mirror?  (that is the cluster operator's"; \
+			echo "[check-registry]     job; we don't check remote nodes from here)"; \
+			exit 1; \
+		fi; \
+	fi
+
+# ---------------------------------------------------------------------------
 # build
 # ---------------------------------------------------------------------------
 
@@ -502,7 +530,7 @@ clean-deps: ## Remove installed dependencies (.venv, node_modules)
 	@echo "[clean-deps] Dependencies removed."
 
 clean-images: ## Remove all nodalarc Docker images
-	@docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'nodalarc|localhost:5000/nodalarc' | \
+	@docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'nodalarc/' | \
 		xargs -r docker rmi -f 2>/dev/null || true
 	@docker builder prune -af 2>/dev/null | tail -1
 	@echo "[clean-images] Docker images removed."

@@ -80,7 +80,7 @@ The OME publishes events to three NATS JetStream streams:
 
 **NODALARC_OME stream:**
 
-**VisibilityEvent** - A link becoming visible or invisible. Contains the satellite pair (or satellite-ground station pair), the scheduling decision (whether the Scheduler should activate this link), and the current range/latency. VisibilityEvents carry scheduling semantics: the OME decides which ground station gets which satellite based on elevation angle, tracking capacity, and scheduling policy.
+**VisibilityEvent** - A link becoming visible or invisible. Contains the satellite pair (or satellite-ground station pair), the scheduling decision (whether the Scheduler should activate this link), and the current range/latency. VisibilityEvents carry scheduling semantics: the OME allocates ground-satellite links bipartitely, respecting both the ground station's tracking capacity and the satellite's `ground_terminal_count`, using elevation angle and the configured scheduling policy to pick which pairs win when either side is over-subscribed.
 
 **ClockTick** - Simulation time heartbeat with `epoch_id`. Consumers use this to detect stale data, synchronize displays, and resume from epoch transitions.
 

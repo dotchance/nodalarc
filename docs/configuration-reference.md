@@ -358,7 +358,7 @@ A ground link forms when a satellite's **ground terminal** can reach a ground st
 - The ground station's `min_elevation_deg` determines when the satellite is high enough to establish a link
 - The satellite's `beam_falloff_exponent` models signal degradation at low elevation angles
 
-This separation means you can experiment: What happens if you put optical ground stations under a constellation with RF downlinks? The links won't form. What if you increase tracking capacity at a ground station from 1 to 3? It can connect to multiple satellites simultaneously. Each component is independently configurable.
+This separation means you can experiment: What happens if you put optical ground stations under a constellation with RF downlinks? The links won't form. What if you increase tracking capacity at a ground station from 1 to 3? It can connect to multiple satellites simultaneously. What if a satellite has only 1 ground terminal but is visible from five ground stations at once? Only one of those ground stations gets the link — the OME picks the best candidate by the configured scheduling policy (elevation angle, by default). Capacity is enforced on both sides: the ground station's tracking capacity and the satellite's `ground_terminal_count` each bound the number of simultaneous links. Each component is independently configurable.
 
 ## Putting It Together
 

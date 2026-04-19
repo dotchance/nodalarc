@@ -97,8 +97,7 @@ all: deps build ## Full pipeline: checkout → running constellation
 	sudo make load install session
 	@echo ""
 	@echo "=== NodalArc is running ==="
-	@echo "VF:     http://localhost:3000"
-	@echo "VS-API: http://localhost:8080"
+	@$(MAKE) status
 	@echo ""
 
 # ---------------------------------------------------------------------------
@@ -276,6 +275,12 @@ endif
 # install
 # ---------------------------------------------------------------------------
 
+# install waits for EVERY platform Deployment to reach Available AND the
+# Node Agent DaemonSet to finish rolling out. Any failure (timeout,
+# missing node label, readiness probe failing) surfaces as exit-nonzero
+# — no silent "Platform ready" lie. The desired=0 check catches the
+# common footgun where no nodes carry the nodalarc.io/node-agent=true
+# label and the DaemonSet silently schedules zero pods.
 install: ## Helm install/upgrade the platform chart
 	@echo "[install] Installing Helm chart..."
 	@if helm status nodalarc -n $(NAMESPACE) >/dev/null 2>&1; then \
@@ -293,13 +298,25 @@ install: ## Helm install/upgrade the platform chart
 		else \
 			helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace $(HELM_EXTRA_ARGS); \
 		fi
-	@echo "[install] Waiting for platform pods..."
-	@kubectl wait --for=condition=Ready pod -l app=nodalarc-nats \
-		-n $(NAMESPACE) --timeout=60s 2>/dev/null || true
-	@kubectl wait --for=condition=Ready pod -l app=nodalarc-operator \
-		-n $(NAMESPACE) --timeout=60s 2>/dev/null || true
-	@sleep 5
-	@echo "[install] Platform ready."
+	@echo "[install] Waiting for all platform Deployments to be Available..."
+	@kubectl wait --for=condition=Available deployment --all \
+		-n $(NAMESPACE) --timeout=180s
+	@echo "[install] Waiting for Node Agent DaemonSet rollout..."
+	@kubectl rollout status daemonset/nodalarc-node-agent \
+		-n $(NAMESPACE) --timeout=180s
+	@DESIRED=$$(kubectl get ds nodalarc-node-agent -n $(NAMESPACE) \
+		-o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null); \
+	if [ "$$DESIRED" = "0" ] || [ -z "$$DESIRED" ]; then \
+		echo "ERROR: Node Agent DaemonSet has 0 desired pods."; \
+		echo "       No nodes carry the 'nodalarc.io/node-agent=true' label."; \
+		echo "       Fix:  kubectl label nodes --all nodalarc.io/node-agent=true"; \
+		exit 1; \
+	fi
+	@READY=$$(kubectl get pods -n $(NAMESPACE) -l app=nodalarc-node-agent \
+		--field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l); \
+	TOTAL=$$(kubectl get pods -n $(NAMESPACE) -l app=nodalarc-node-agent \
+		--no-headers 2>/dev/null | wc -l); \
+	echo "[install] Platform ready: $$READY/$$TOTAL Node Agent pods running, all platform Deployments Available."
 
 # ---------------------------------------------------------------------------
 # deploy
@@ -458,10 +475,32 @@ status: ## Show cluster status (pods, phase, links)
 		echo ""; \
 		\
 		echo "Services:"; \
-		VF_PORT=$$(kubectl get svc -n $(NAMESPACE) --no-headers 2>/dev/null | grep "nodalarc-vf" | grep -oP "\\d+:30\\d+" | head -1 || true); \
-		API_PORT=$$(kubectl get pods -n $(NAMESPACE) --no-headers -o wide 2>/dev/null | grep "vs-api" | awk "{print \$$6}" | head -1 || true); \
-		echo "  Visualization:  http://localhost:3000"; \
-		echo "  VS-API:         http://localhost:8080"; \
+		VF_NODE=$$(kubectl get pod -n $(NAMESPACE) -l app=nodalarc-vf -o jsonpath="{.items[0].spec.nodeName}" 2>/dev/null); \
+		VF_IP=""; \
+		if [ -n "$$VF_NODE" ]; then \
+			VF_IP=$$(kubectl get node "$$VF_NODE" -o jsonpath="{.status.addresses[?(@.type==\"ExternalIP\")].address}" 2>/dev/null); \
+			if [ -z "$$VF_IP" ]; then \
+				VF_IP=$$(kubectl get node "$$VF_NODE" -o jsonpath="{.status.addresses[?(@.type==\"InternalIP\")].address}" 2>/dev/null); \
+			fi; \
+		fi; \
+		API_NODE=$$(kubectl get pod -n $(NAMESPACE) -l app=nodalarc-vs-api -o jsonpath="{.items[0].spec.nodeName}" 2>/dev/null); \
+		API_IP=""; \
+		if [ -n "$$API_NODE" ]; then \
+			API_IP=$$(kubectl get node "$$API_NODE" -o jsonpath="{.status.addresses[?(@.type==\"ExternalIP\")].address}" 2>/dev/null); \
+			if [ -z "$$API_IP" ]; then \
+				API_IP=$$(kubectl get node "$$API_NODE" -o jsonpath="{.status.addresses[?(@.type==\"InternalIP\")].address}" 2>/dev/null); \
+			fi; \
+		fi; \
+		if [ -n "$$VF_IP" ]; then \
+			echo "  Visualization:  http://$$VF_IP:3000  (on $$VF_NODE)"; \
+		else \
+			echo "  Visualization:  NOT AVAILABLE"; \
+		fi; \
+		if [ -n "$$API_IP" ]; then \
+			echo "  VS-API:         http://$$API_IP:8080  (on $$API_NODE)"; \
+		else \
+			echo "  VS-API:         NOT AVAILABLE"; \
+		fi; \
 		echo ""; \
 		\
 		echo "Session:"; \
@@ -494,19 +533,23 @@ status: ## Show cluster status (pods, phase, links)
 		echo ""; \
 		\
 		echo "Links:"; \
-		TOKEN=$$(curl -s http://localhost:8080/api/v1/auth/token 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get(\"token\",\"\"))" 2>/dev/null || true); \
-		if [ -n "$$TOKEN" ]; then \
-			curl -s -H "Authorization: Bearer $$TOKEN" http://localhost:8080/api/v1/state 2>/dev/null | \
-				python3 -c "import json,sys; s=json.load(sys.stdin); \
-					intra=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"intra_plane_isl\"); \
-					cross=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"cross_plane_isl\"); \
-					gnd=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"ground\"); \
-					print(f\"  Intra-plane ISL: {intra}\"); \
-					print(f\"  Cross-plane ISL: {cross}\"); \
-					print(f\"  Ground links: {gnd}\"); \
-					print(f\"  Total active: {len(s[\"links\"])}\")" 2>/dev/null || echo "  Unable to query VS-API"; \
+		if [ -z "$$API_IP" ]; then \
+			echo "  VS-API not running"; \
 		else \
-			echo "  VS-API not reachable"; \
+			TOKEN=$$(curl -s http://$$API_IP:8080/api/v1/auth/token 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get(\"token\",\"\"))" 2>/dev/null || true); \
+			if [ -n "$$TOKEN" ]; then \
+				curl -s -H "Authorization: Bearer $$TOKEN" http://$$API_IP:8080/api/v1/state 2>/dev/null | \
+					python3 -c "import json,sys; s=json.load(sys.stdin); \
+						intra=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"intra_plane_isl\"); \
+						cross=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"cross_plane_isl\"); \
+						gnd=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"ground\"); \
+						print(f\"  Intra-plane ISL: {intra}\"); \
+						print(f\"  Cross-plane ISL: {cross}\"); \
+						print(f\"  Ground links: {gnd}\"); \
+						print(f\"  Total active: {len(s[\"links\"])}\")" 2>/dev/null || echo "  Unable to query VS-API at http://$$API_IP:8080"; \
+			else \
+				echo "  VS-API not reachable at http://$$API_IP:8080"; \
+			fi; \
 		fi'
 
 test: ## Run unit tests (868+, no sudo needed)

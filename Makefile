@@ -535,18 +535,17 @@ clean-images: ## Remove all nodalarc Docker images
 	@docker builder prune -af 2>/dev/null | tail -1
 	@echo "[clean-images] Docker images removed."
 
-clean-registry: ## Purge all images from local container registry and K3s containerd on ALL nodes
-	@echo "[clean-registry] Purging local registry and K3s containerd cache..."
-	@if docker ps --format '{{.Names}}' | grep -q registry; then \
-		echo "  Stopping local registry..."; \
-		docker stop registry 2>/dev/null || true; \
-		docker rm registry 2>/dev/null || true; \
-		docker volume rm registry_data 2>/dev/null || true; \
-		echo "  Starting fresh registry..."; \
-		docker run -d --restart=always -p 5000:5000 --name registry \
-			-v registry_data:/var/lib/registry registry:2 2>/dev/null || true; \
-	fi
-	@echo "  Purging K3s containerd nodalarc images on ALL nodes..."
+# clean-registry does two things:
+#   1. Remote purge of nodalarc/* from REGISTRY_HOST via Registry V2 API (crane).
+#      Works for any OCI-compliant registry — CNCF distribution, Harbor, GHCR,
+#      ECR, etc. See tools/clean-registry.sh for single-node + HTTP-vs-HTTPS
+#      + dep handling. No-ops cleanly when REGISTRY_HOST is empty.
+#   2. K3s containerd per-node image cache purge — via the running node-agent
+#      DaemonSet pods (kubectl exec + nsenter + k3s crictl rmi). Requires the
+#      platform to be installed; no-ops cleanly when it's not.
+clean-registry: ## Purge nodalarc images from REGISTRY_HOST and K3s containerd cache on all nodes
+	@REGISTRY_HOST='$(REGISTRY_HOST)' tools/clean-registry.sh
+	@echo "[clean-registry] Purging K3s containerd nodalarc images on all nodes..."
 	@NA_PODS=$$(kubectl get pods -n $(NAMESPACE) -l app=nodalarc-node-agent \
 		--no-headers -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName 2>/dev/null || true); \
 	if [ -n "$$NA_PODS" ]; then \
@@ -559,13 +558,23 @@ clean-registry: ## Purge all images from local container registry and K3s contai
 				sh -c 'for img in $$(k3s crictl images -q 2>/dev/null | grep nodalarc || true); do k3s crictl rmi "$$img" 2>/dev/null; done' \
 				2>/dev/null || echo "  WARNING: purge failed on $$NODE (non-fatal)"; \
 		done; \
+	else \
+		echo "  (node-agent pods not running — skipping containerd purge)"; \
 	fi
+	@# Build host's own K3s containerd (for single-node dev where host == node).
 	@echo "  Purging local K3s containerd..."
 	@for img in $$($(SUDO_CTR) k3s ctr images ls -q 2>/dev/null | grep nodalarc || true); do \
 		$(SUDO_CTR) k3s ctr images rm "$$img" 2>/dev/null || true; \
 	done
-	@echo "[clean-registry] Registry and containerd cache purged on all nodes."
+	@echo "[clean-registry] Done."
 
-nuke: teardown clean clean-images clean-registry clean-deps ## Remove everything — teardown + images + registry + deps + artifacts
+# Ordering matters: clean-registry needs node-agent pods alive for the
+# per-node containerd purge step, so it must run BEFORE teardown.
+nuke: ## Remove everything — registry + teardown + images + deps + artifacts
+	$(MAKE) clean-registry
+	$(MAKE) teardown
+	$(MAKE) clean
+	$(MAKE) clean-images
+	$(MAKE) clean-deps
 	@echo ""
 	@echo "=== Nuke complete. Fresh slate. ==="

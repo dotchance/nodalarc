@@ -219,7 +219,8 @@ class _LookAheadThread:
         duration_s: float,
         initial_isl_state: dict | None,
         initial_gs_state: dict | None,
-        timestamp_offset: float,
+        initial_associations: frozenset[tuple[str, str]] | None = None,
+        timestamp_offset: float = 0.0,
     ) -> None:
         """Start background window precomputation. Non-blocking."""
         import threading
@@ -242,6 +243,7 @@ class _LookAheadThread:
                     duration_s=duration_s,
                     initial_isl_state=dict(initial_isl_state) if initial_isl_state else None,
                     initial_gs_state=dict(initial_gs_state) if initial_gs_state else None,
+                    initial_associations=initial_associations,
                     timestamp_offset=timestamp_offset,
                 )
                 if not self._cancelled.is_set():
@@ -538,6 +540,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     running_isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     running_gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    current_associations: frozenset[tuple[str, str]] = frozenset()
     step = 0
     snapshot_seq = 0
     last_snapshot_sim_s: float = -snapshot_interval_s  # force immediate on first step
@@ -607,6 +610,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 gs_state = {}
                 running_isl_state = {}
                 running_gs_state = {}
+                current_associations = frozenset()
                 step = 0
                 pace_ref_wall = time.monotonic()
                 pace_ref_step = 0
@@ -653,6 +657,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     duration_s=period,
                     initial_isl_state=isl_state if isl_state else None,
                     initial_gs_state=gs_state if gs_state else None,
+                    initial_associations=current_associations if current_associations else None,
                     timestamp_offset=0.0,
                 )
                 lookahead_launched_for_epoch = epoch_unix
@@ -678,8 +683,15 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 current_rate = new_rate
 
             # --- Compute one step (Physicist role) ---
-            step_events, current_positions = compute_step(
-                step_ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state
+            step_events, current_positions, current_associations = compute_step(
+                step_ctx,
+                epoch_unix,
+                step,
+                step_seconds,
+                0.0,
+                isl_state,
+                gs_state,
+                current_associations,
             )
 
             # --- Emit events for this step ---

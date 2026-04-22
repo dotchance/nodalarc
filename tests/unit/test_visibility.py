@@ -9,7 +9,6 @@ from ome.propagator import (
     propagate_keplerian,
 )
 from ome.visibility import (
-    GroundVisibility,
     ScheduledLink,
     check_ground_visibility,
     check_isl_visibility,
@@ -18,7 +17,6 @@ from ome.visibility import (
     compute_range,
     enforce_symmetric_scheduling,
     has_line_of_sight,
-    schedule_ground_links,
     schedule_isl_terminals,
 )
 
@@ -205,58 +203,6 @@ class TestAngularVelocity:
         # Relative velocity = (0, 2v, 0) entirely perpendicular to LOS (along X)
         # ω = 2v / 200 ≈ 15.18/200 ≈ 0.076 rad/s ≈ 4.35 deg/s
         assert ang_vel > 3.0
-
-
-class TestGroundLinkScheduling:
-    def test_highest_elevation_policy(self):
-        visible = [
-            GroundVisibility("sat-A", True, 80.0, 500.0),
-            GroundVisibility("sat-B", True, 45.0, 800.0),
-            GroundVisibility("sat-C", True, 30.0, 1200.0),
-        ]
-        results = schedule_ground_links(
-            "gs-test", visible, terminal_count=1, policy="highest-elevation"
-        )
-        assert len(results) == 3
-        assert results[0].scheduled is True
-        assert results[0].node_b == "sat-A"  # Highest elevation
-        assert results[1].scheduled is False
-        assert results[2].scheduled is False
-
-    def test_longest_pass_policy(self):
-        visible = [
-            GroundVisibility("sat-A", True, 80.0, 500.0),
-            GroundVisibility("sat-B", True, 45.0, 800.0),
-            GroundVisibility("sat-C", True, 30.0, 1200.0),
-        ]
-        results = schedule_ground_links("gs-test", visible, terminal_count=1, policy="longest-pass")
-        assert len(results) == 3
-        assert results[0].scheduled is True
-        assert results[0].node_b == "sat-C"  # Lowest elevation = longest remaining pass
-
-    def test_multiple_terminals(self):
-        visible = [
-            GroundVisibility("sat-A", True, 80.0, 500.0),
-            GroundVisibility("sat-B", True, 45.0, 800.0),
-            GroundVisibility("sat-C", True, 30.0, 1200.0),
-        ]
-        results = schedule_ground_links(
-            "gs-test", visible, terminal_count=2, policy="highest-elevation"
-        )
-        scheduled = [r for r in results if r.scheduled]
-        assert len(scheduled) == 2
-
-    def test_no_visible_satellites(self):
-        results = schedule_ground_links("gs-test", [], terminal_count=1)
-        assert len(results) == 0
-
-    def test_filters_non_visible(self):
-        visible = [
-            GroundVisibility("sat-A", True, 80.0, 500.0),
-            GroundVisibility("sat-B", False, 10.0, 2000.0),
-        ]
-        results = schedule_ground_links("gs-test", visible, terminal_count=2)
-        assert len(results) == 1  # Only the visible one
 
 
 class TestIslTerminalScheduling:

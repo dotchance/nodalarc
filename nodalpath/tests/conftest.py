@@ -8,7 +8,7 @@ from nodalpath.models.topology import TopologyEdge, TopologyNode, TopologySnapsh
 @pytest.fixture(autouse=True, scope="session")
 def _init_platform_configs():
     """Initialize PlatformConfig and NodalPathPlatformConfig for all NodalPath tests."""
-    from nodalarc.platform import PlatformConfig, init_platform_config, reset_platform_config
+    from nodalarc.platform_config import PlatformConfig, init_platform_config, reset_platform_config
 
     from nodalpath.platform import (
         NodalPathPlatformConfig,

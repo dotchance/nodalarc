@@ -79,7 +79,7 @@ def create_vxlan_link(
     from pyroute2 import IPRoute
 
     if mtu is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         mtu = get_platform_config().veth_interface_mtu_bytes - VXLAN_OVERHEAD_BYTES
 

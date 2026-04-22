@@ -8,7 +8,61 @@ Three formats are supported:
 - Monolithic legacy file (top-level keys: 'default_terminals', 'stations', etc.)
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, field_validator, model_validator
+
+
+class HysteresisParameters(BaseModel):
+    """Parameters for ground segment handover dampening (hysteresis)."""
+
+    discount_factor: float = 1.15  # Score multiplier for active links
+    mask_fade_range_deg: float = 5.0  # Taper discount as elevation hits mask
+
+    @field_validator("discount_factor")
+    @classmethod
+    def _positive_discount(cls, v: float) -> float:
+        if v < 1.0:
+            raise ValueError(f"discount_factor must be >= 1.0, got {v}")
+        return v
+
+    @field_validator("mask_fade_range_deg")
+    @classmethod
+    def _fade_range(cls, v: float) -> float:
+        if not 0.0 < v <= 90.0:
+            raise ValueError(f"mask_fade_range_deg must be in (0, 90], got {v}")
+        return v
+
+
+class GroundSegment(BaseModel):
+    """Base class for all ground segment entities (Ground Stations, UTs).
+
+    Aligns with NMTS PLATFORM_DEFINITION / NETWORK_NODE mapping.
+    Every ground segment has a tenant ID, a reference body (default Earth),
+    and a mobility class.
+    """
+
+    tenant_id: str = "default"
+    reference_body: str = "earth"
+    mobility: str = "fixed"  # "fixed", "terrestrial", "maritime", "aerial"
+    service_class: Literal["gold", "silver"] = "silver"
+    hysteresis: HysteresisParameters = HysteresisParameters()
+
+    @field_validator("mobility")
+    @classmethod
+    def _valid_mobility(cls, v: str) -> str:
+        valid_classes = ("fixed", "terrestrial", "maritime", "aerial")
+        if v not in valid_classes:
+            raise ValueError(f"mobility must be one of {valid_classes}, got {v!r}")
+        return v
+
+    @field_validator("reference_body")
+    @classmethod
+    def _valid_body(cls, v: str) -> str:
+        valid_bodies = ("earth", "luna", "mars", "sun")
+        if v not in valid_bodies:
+            raise ValueError(f"reference_body must be one of {valid_bodies}, got {v!r}")
+        return v
 
 
 class TerrestrialPrefix(BaseModel):
@@ -59,7 +113,7 @@ class GroundTerminalDef(BaseModel):
         return v
 
 
-class GroundStationConfig(BaseModel):
+class GroundStationConfig(GroundSegment):
     """Configuration for a single ground station."""
 
     name: str

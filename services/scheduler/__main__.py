@@ -151,7 +151,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from nodalarc.platform import init_platform_config
+    from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
 
@@ -184,7 +184,7 @@ def main() -> None:
     # Same check the Operator uses (handlers.py:188-189).
     # K8s config already loaded by loc.load_from_k8s_api() above.
     import kubernetes.client
-    from nodalarc.platform import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
     k8s_v1 = kubernetes.client.CoreV1Api()
     expected_nodes = set(loc.node_ids)

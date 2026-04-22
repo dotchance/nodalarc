@@ -59,7 +59,7 @@ class LivePathTracer:
         for node_id, node in node_registry.items():
             self._ip_to_node[node.loopback_ipv4] = node_id
         if deploy_socket is None:
-            from nodalarc.platform import get_platform_config
+            from nodalarc.platform_config import get_platform_config
 
             deploy_socket = get_platform_config().deploy_daemon_unix_socket_path
         self._deploy_socket = deploy_socket

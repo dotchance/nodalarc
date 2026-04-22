@@ -1,9 +1,9 @@
 """Tests for vs_api/continuous_tracer.py — unit tests for helper methods."""
 
 from nodalarc.models.path import LiveTraceLink, PathHop, TracepathHop, TracepathResult
+from vs_api.continuous_tracer import ContinuousTracer
 
 from nodalpath.models.topology import TopologyNode
-from vs_api.continuous_tracer import ContinuousTracer
 
 
 def _make_tracer(
@@ -57,7 +57,7 @@ def _make_tracer(
             "gs-beta": 1004,
         }
 
-    from nodalarc.platform import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
     config = get_platform_config()
 
@@ -133,7 +133,7 @@ def test_build_delay_queries():
 
 def test_adaptive_interval():
     """Fast interval when near path change, normal otherwise."""
-    from nodalarc.platform import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
     config = get_platform_config()
 

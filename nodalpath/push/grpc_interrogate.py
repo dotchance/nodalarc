@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 
 def _default_grpc_port() -> int:
-    from nodalarc.platform import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
     return get_platform_config().nodalpath_fwd_grpc_port
 

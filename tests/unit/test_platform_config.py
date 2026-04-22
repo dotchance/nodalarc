@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from nodalarc.platform import (
+from nodalarc.platform_config import (
     PlatformConfig,
     get_platform_config,
     init_platform_config,

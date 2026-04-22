@@ -225,6 +225,35 @@ def main() -> None:
     # Agent pool
     pool = AgentPool()
 
+    # Build capacity maps for MBB dispatch ordering
+    from nodalarc.constellation_loader import (
+        expand_constellation,
+        load_constellation,
+        load_ground_stations,
+    )
+
+    constellation = load_constellation(session.constellation)
+    satellites = expand_constellation(constellation)
+    gs_file = load_ground_stations(session.ground_stations)
+
+    gs_terminal_capacities: dict[str, int] = {}
+    for station in gs_file.stations:
+        gs_id = addressing.gs_id(station.name)
+        gs_terminal_capacities[gs_id] = (
+            sum(t.tracking_capacity for t in (station.terminals or [])) or 1
+        )
+
+    sat_ground_terminal_capacities: dict[str, int] = {}
+    for sat in satellites:
+        sat_id = addressing.sat_id(sat.plane, sat.slot)
+        sat_ground_terminal_capacities[sat_id] = sat.ground_terminal_count
+
+    # Resolve mbb_dispatch: explicit override > protocol-based default
+    mbb_dispatch = session.routing.mbb_dispatch
+    if mbb_dispatch is None:
+        mbb_dispatch = session.routing.protocol == "nodalpath"
+    log.info("MBB dispatch: %s (protocol=%s)", mbb_dispatch, session.routing.protocol)
+
     # Override set (shared between dispatcher and scenario handler)
     override_set: set[tuple[str, str]] = set()
     override_lock = threading.Lock()
@@ -238,6 +267,9 @@ def main() -> None:
         override_lock=override_lock,
         compression_factor=session.time.compression,
         latency_update_interval_s=session.time.latency_update_interval_seconds,
+        gs_terminal_capacities=gs_terminal_capacities,
+        sat_ground_terminal_capacities=sat_ground_terminal_capacities,
+        mbb_dispatch=mbb_dispatch,
     )
 
     # Scenario handler — NATS request/reply.

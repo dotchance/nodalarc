@@ -518,6 +518,25 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
 
     step_seconds = session.time.step_seconds
 
+    # --- MBB capability validation (R-OME-004a) ---
+    is_nodalpath = session.routing.protocol == "nodalpath" if session.routing else False
+    if cfg.gs_file:
+        for station in cfg.gs_file.stations:
+            gs_id = cfg.addressing.gs_id(station.name)
+            cap = step_ctx.gs_terminal_counts.get(gs_id, 1)
+            if cap <= 1 and not is_nodalpath:
+                logging.warning(
+                    "MBB-INFEASIBLE: %s has tracking_capacity=%d and no "
+                    "proactive control plane (routing=%s). Physical-layer MBB "
+                    "requires spare terminal capacity; routing-layer MBB "
+                    "requires NodalPath. This segment will use cold handover "
+                    "(break-before-make) with expected packet loss during "
+                    "handoff events.",
+                    gs_id,
+                    cap,
+                    session.routing.protocol if session.routing else "none",
+                )
+
     # Look-ahead thread — background precomputation for NodalPath proactive scheduling.
     # Precomputes the next orbital period's events concurrently with real-time emission.
     # Results available for NodalPath almanac consumption.

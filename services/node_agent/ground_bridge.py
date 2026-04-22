@@ -340,7 +340,7 @@ def create_ground_bridge(
     Returns host-side veth name.
     """
     if mtu is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         mtu = get_platform_config().veth_interface_mtu_bytes
 
@@ -407,7 +407,7 @@ def create_satellite_ground_veth(
     Returns (host_side_name, "gnd0").
     """
     if mtu is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         mtu = get_platform_config().veth_interface_mtu_bytes
 
@@ -485,7 +485,7 @@ def create_mediated_isl(
     from node_agent.namespace_ops import configure_interface
 
     if mtu is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         mtu = get_platform_config().veth_interface_mtu_bytes
 

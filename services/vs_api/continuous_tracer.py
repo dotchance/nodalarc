@@ -31,7 +31,7 @@ from nodalarc.models.path import (
     TracepathResult,
 )
 from nodalarc.models.vs_api import TracedPath
-from nodalarc.platform import PlatformConfig
+from nodalarc.platform_config import PlatformConfig
 from nodalarc.tracepath_parser import parse_tracepath
 
 from nodalpath.models.topology import TopologyNode
@@ -400,7 +400,7 @@ class ContinuousTracer:
     async def _trace_cspf(self, sim_time: str, now: str) -> LiveTraceResult | None:
         """Run CSPF path derivation via NodalPath HTTP API."""
         import httpx
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         cfg = get_platform_config()
         # NodalPath may run in a K8s container (NodePort 31100) or on the host (port 3100)

@@ -64,7 +64,7 @@ def resolve_src_pod_ip(
     Returns the pod's cluster IP for probe daemon HTTP access.
     """
     if namespace is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         namespace = get_platform_config().kubernetes_namespace
     import subprocess
@@ -103,7 +103,7 @@ class FlowManager:
         namespace: str | None = None,
     ) -> None:
         if namespace is None:
-            from nodalarc.platform import get_platform_config
+            from nodalarc.platform_config import get_platform_config
 
             namespace = get_platform_config().kubernetes_namespace
         self._session = session

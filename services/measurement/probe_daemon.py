@@ -38,7 +38,7 @@ app = FastAPI(title="Nodal Arc Probe Daemon", version="1.0", lifespan=_lifespan)
 
 # UDP probe packet format: 8-byte sequence number + 8-byte send timestamp (microseconds)
 # Total: 16 bytes per probe packet
-from nodalarc.platform import get_platform_config
+from nodalarc.platform_config import get_platform_config
 
 PROBE_PACKET_FMT = "!Qq"  # network byte order: unsigned long long + signed long long
 PROBE_PACKET_SIZE = struct.calcsize(PROBE_PACKET_FMT)

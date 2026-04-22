@@ -16,7 +16,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 @pytest.fixture(autouse=True, scope="session")
 def _init_platform_config():
     """Initialize PlatformConfig for all tests from standard values."""
-    from nodalarc.platform import PlatformConfig, init_platform_config, reset_platform_config
+    from nodalarc.platform_config import PlatformConfig, init_platform_config, reset_platform_config
 
     cfg = PlatformConfig(
         kubernetes_namespace="nodalarc",

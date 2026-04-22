@@ -212,7 +212,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from nodalarc.platform import init_platform_config
+    from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
 

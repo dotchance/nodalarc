@@ -44,7 +44,7 @@ def discover_local_pod_pids(
     import kubernetes.config
 
     if namespace is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         namespace = get_platform_config().kubernetes_namespace
 

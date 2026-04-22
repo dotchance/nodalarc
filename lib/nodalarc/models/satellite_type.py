@@ -118,9 +118,18 @@ class SatelliteTypeConfig(BaseModel):
     """
 
     name: str
+    tenant_id: str = "default"
     description: str | None = None
+    ut_serving_capacity: int = 100  # Number of logical UTs this sat can serve
     isl_terminals: list[IslTerminalDef]
     ground_terminals: list[GroundTerminalDef] = []
+
+    @field_validator("ut_serving_capacity")
+    @classmethod
+    def _ut_capacity_range(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(f"ut_serving_capacity must be at least 1, got {v}")
+        return v
 
     @model_validator(mode="after")
     def _validate_terminal_counts(self):

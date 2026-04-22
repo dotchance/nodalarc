@@ -22,7 +22,7 @@ from pathlib import Path
 
 import yaml
 from nodalarc.models.session import SessionConfig
-from nodalarc.platform import get_platform_config
+from nodalarc.platform_config import get_platform_config
 
 log = logging.getLogger(__name__)
 

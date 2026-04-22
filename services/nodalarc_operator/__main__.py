@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 
 from nodalarc.constants import LOG_FORMAT
-from nodalarc.platform import init_platform_config
+from nodalarc.platform_config import init_platform_config
 
 logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
 

@@ -3,8 +3,7 @@
 from unittest.mock import patch
 
 import pytest
-from nodalarc.platform import get_platform_config
-
+from nodalarc.platform_config import get_platform_config
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 
 

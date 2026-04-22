@@ -58,7 +58,7 @@ def build_app(
     @app.get("/api/config")
     async def frontend_config() -> JSONResponse:
         """Runtime config for the console frontend — no hardcoded ports."""
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         cfg = get_platform_config()
         return JSONResponse(
@@ -394,7 +394,7 @@ def build_app(
     async def _proxy_to_vsapi(method: str, path: str, body: dict | None = None) -> JSONResponse:
         """Proxy a request to the VS-API server."""
         import httpx
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         cfg = get_platform_config()
         vs_host = cfg.service_host("vs-api")

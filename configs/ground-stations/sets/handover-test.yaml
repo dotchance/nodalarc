@@ -1,0 +1,18 @@
+ground_station_set:
+  name: handover-test
+  description: >-
+    Two mid-latitude US stations with 10° elevation mask.
+    Verified continuous coverage on starlink-176 (min 2 sats
+    visible at all times). Designed for handover packet-loss
+    measurement — coverage gaps eliminated so all link drops
+    are handover events, not geometry holes.
+  stations:
+    - hawthorne
+    - ashburn
+  default_min_elevation_deg: 10
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10
+    default_route: true
+    default_route_metric: 100

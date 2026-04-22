@@ -1021,7 +1021,7 @@ def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
     """Load per-station min_elevation_deg from ground station config."""
     from nodalarc.constellation_loader import load_ground_stations
 
-    if isinstance(session.ground_stations, list):
+    if isinstance(session.ground_stations, list | dict):
         gs_file = load_ground_stations(session.ground_stations)
     else:
         gs_path = Path(session.ground_stations)

@@ -435,7 +435,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
         SUBJECT_SESSION_EPHEMERIS,
         SUBJECT_VISIBILITY_EVENT,
     )
-    from nodalarc.platform import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
     from ome.event_stream import build_link_state_snapshot, build_session_ephemeris
 
@@ -796,7 +796,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from nodalarc.platform import init_platform_config
+    from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
 

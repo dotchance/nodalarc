@@ -704,7 +704,7 @@ class Dispatcher:
             except kubernetes.config.config_exception.ConfigException:
                 kubernetes.config.load_kube_config()
 
-            from nodalarc.platform import get_platform_config
+            from nodalarc.platform_config import get_platform_config
 
             ns = get_platform_config().kubernetes_namespace
             v1 = kubernetes.client.CoreV1Api()
@@ -1206,7 +1206,7 @@ class Dispatcher:
             import kubernetes.client
 
             v1 = self._get_k8s_v1()
-            from nodalarc.platform import get_platform_config
+            from nodalarc.platform_config import get_platform_config
 
             ns = get_platform_config().kubernetes_namespace
             body = kubernetes.client.V1ConfigMap(

@@ -64,7 +64,7 @@ from nodalarc.nats_channels import (
     SUBJECT_SESSION_EPHEMERIS,
     nats_url,
 )
-from nodalarc.platform import get_platform_config
+from nodalarc.platform_config import get_platform_config
 
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
@@ -130,7 +130,7 @@ _rate_session_switch: _TokenBucket | None = None
 def _get_rate_introspect() -> _TokenBucket:
     global _rate_introspect
     if _rate_introspect is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         cfg = get_platform_config()
         r = cfg.vs_api_introspect_max_requests_per_minute
@@ -141,7 +141,7 @@ def _get_rate_introspect() -> _TokenBucket:
 def _get_rate_playback() -> _TokenBucket:
     global _rate_playback
     if _rate_playback is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         cfg = get_platform_config()
         r = cfg.vs_api_playback_max_requests_per_minute
@@ -152,7 +152,7 @@ def _get_rate_playback() -> _TokenBucket:
 def _get_rate_session_switch() -> _TokenBucket:
     global _rate_session_switch
     if _rate_session_switch is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         cfg = get_platform_config()
         r = cfg.vs_api_session_switch_max_requests_per_minute
@@ -1487,7 +1487,7 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
     """
 
     import grpc
-    from nodalarc.platform import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
     cfg = get_platform_config()
     grpc_port = cfg.nodalpath_fwd_grpc_port
@@ -1783,7 +1783,7 @@ def trace_path(body: dict) -> dict:
 
     # Fall back to NodalPath CSPF
     try:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         np_port = get_platform_config().nodalpath_console_http_port
         np_resp = httpx.get(
@@ -2443,7 +2443,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from nodalarc.platform import init_platform_config
+    from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
 

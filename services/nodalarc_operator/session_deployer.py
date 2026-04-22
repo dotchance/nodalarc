@@ -25,7 +25,7 @@ from nodalarc.constellation_loader import (
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
 from nodalarc.models.session import PlacementConfig, SessionConfig
-from nodalarc.platform import get_platform_config
+from nodalarc.platform_config import get_platform_config
 from nodalarc.stack_resolver import resolve_stack
 from nodalarc.template_vars import build_template_vars
 

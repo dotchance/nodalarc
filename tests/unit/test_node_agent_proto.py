@@ -72,7 +72,7 @@ def test_latency_entry():
 
 def test_node_agent_grpc_port():
     """Port accessor returns 50100 from platform config."""
-    from nodalarc.platform import PlatformConfig, init_platform_config, reset_platform_config
+    from nodalarc.platform_config import PlatformConfig, init_platform_config, reset_platform_config
 
     reset_platform_config()
     cfg = PlatformConfig(
@@ -110,7 +110,7 @@ def test_node_agent_grpc_port():
     )
     init_platform_config(cfg)
     try:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         assert get_platform_config().node_agent_grpc_port == 50100
     finally:

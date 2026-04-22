@@ -23,7 +23,7 @@ def _deploy_socket_path() -> str:
     val = os.environ.get("NODAL_DEPLOY_SOCKET")
     if val:
         return val
-    from nodalarc.platform import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
     return get_platform_config().deploy_daemon_unix_socket_path
 
@@ -416,7 +416,7 @@ def load_pod_ip_map(
     if socket_path is None:
         socket_path = _deploy_socket_path()
     if namespace is None:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         namespace = get_platform_config().kubernetes_namespace
     from nodalpath.push.kubectl_exec import node_id_to_pod_name

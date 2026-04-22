@@ -85,14 +85,14 @@ NATS_CONNECT_OPTIONS: dict = {
 
 def probe_daemon_port() -> int:
     """HTTP port for the per-pod probe daemon sidecar."""
-    from nodalarc.platform import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
     return get_platform_config().probe_daemon_http_api_port
 
 
 def nodalpath_console_port() -> int:
     """HTTP port for the NodalPath console server."""
-    from nodalarc.platform import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
     return get_platform_config().nodalpath_console_http_port
 
@@ -104,7 +104,7 @@ def nats_url() -> str:
     (test environment, development).
     """
     try:
-        from nodalarc.platform import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
         return get_platform_config().nats_url
     except RuntimeError:

@@ -63,7 +63,7 @@ async def main() -> None:
 
     # Init platform config (required for NATS URL)
     try:
-        from nodalarc.platform import init_platform_config
+        from nodalarc.platform_config import init_platform_config
 
         init_platform_config(Path(args.platform_config))
     except Exception:
@@ -120,7 +120,7 @@ async def main() -> None:
             return
 
         try:
-            from nodalarc.platform import get_platform_config
+            from nodalarc.platform_config import get_platform_config
 
             ns = get_platform_config().kubernetes_namespace
         except RuntimeError:

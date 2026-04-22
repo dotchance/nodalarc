@@ -342,7 +342,7 @@ def main() -> None:
     parser.add_argument("--nodalpath-config", default="configs/nodalpath.yaml")
     args = parser.parse_args()
 
-    from nodalarc.platform import init_platform_config
+    from nodalarc.platform_config import init_platform_config
 
     from nodalpath.platform import init_nodalpath_config
 

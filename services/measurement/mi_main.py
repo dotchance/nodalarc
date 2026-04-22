@@ -48,7 +48,7 @@ from nodalarc.nats_channels import (
     SUBJECT_PROBE_RESULT,
     nats_url,
 )
-from nodalarc.platform import get_platform_config
+from nodalarc.platform_config import get_platform_config
 
 from measurement.adapters import create_adapter
 from measurement.convergence_gate import ConvergenceGate
@@ -364,7 +364,7 @@ def main() -> None:
     parser.add_argument("--platform-config", default="configs/platform.yaml")
     args = parser.parse_args()
 
-    from nodalarc.platform import init_platform_config
+    from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
 

@@ -340,52 +340,6 @@ def check_ground_visibility(
 # ---------------------------------------------------------------------------
 
 
-def schedule_ground_links(
-    gs_name: str,
-    visible_sats: list[GroundVisibility],
-    terminal_count: int,
-    policy: str = "highest-elevation",
-) -> list[ScheduledLink]:
-    """Schedule ground station links based on scheduling policy.
-
-    Args:
-        gs_name: Ground station identifier
-        visible_sats: List of visible satellites with elevations
-        terminal_count: Number of ground terminals available
-        policy: "highest-elevation" or "longest-pass"
-
-    Returns:
-        List of ScheduledLink results (scheduled=True for allocated terminals)
-    """
-    # Filter to only visible satellites
-    vis = [v for v in visible_sats if v.visible]
-
-    if policy == "highest-elevation":
-        # Sort by elevation descending
-        vis.sort(key=lambda v: v.elevation_deg, reverse=True)
-    elif policy == "longest-pass":
-        # For longest-pass, we'd need pass duration info.
-        # At a single timestep, approximate by lower elevation = longer remaining pass.
-        # Higher elevation satellites are near closest approach (shorter remaining).
-        vis.sort(key=lambda v: v.elevation_deg)
-    else:
-        vis.sort(key=lambda v: v.elevation_deg, reverse=True)
-
-    results: list[ScheduledLink] = []
-    for i, v in enumerate(vis):
-        scheduled = i < terminal_count
-        results.append(
-            ScheduledLink(
-                node_a=gs_name,
-                node_b=v.sat_id,
-                scheduled=scheduled,
-                range_km=v.range_km,
-            )
-        )
-
-    return results
-
-
 def schedule_isl_terminals(
     node_id: str,
     feasible_isls: list[tuple[str, int, float]],

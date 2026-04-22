@@ -159,6 +159,8 @@ def _build_positions(
 
 from dataclasses import dataclass
 
+from nodalarc.models.ground_station import HysteresisParameters
+
 
 @dataclass(frozen=True)
 class StepContext:
@@ -170,6 +172,8 @@ class StepContext:
     gs_min_elevations: dict[str, float]
     gs_terminal_counts: dict[str, int]
     gs_policies: dict[str, str]
+    gs_hysteresis: dict[str, HysteresisParameters]
+    gs_service_priorities: dict[str, int]
     by_node: dict  # neighbors_by_node result
     sat_isl_terminals: dict[str, int]
     sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity
@@ -178,6 +182,34 @@ class StepContext:
     field_of_regard_deg: float
     polar_seam_enabled: bool
     latitude_threshold_deg: float
+
+
+def _compute_pair_score(elevation_deg: float, policy: str) -> float:
+    """Score a GS-satellite pair. Always positive, higher = better."""
+    if policy == "longest-pass":
+        return 90.0 - elevation_deg
+    return elevation_deg
+
+
+def _compute_effective_discount(
+    elevation_deg: float,
+    min_elevation_deg: float,
+    hyst: HysteresisParameters,
+) -> float:
+    """Compute the hysteresis discount factor with mask-edge fade.
+
+    INVARIANT: elevation_deg is the raw physical elevation, never a
+    policy-adjusted score. The fade is a geometric property of the
+    link's proximity to the elevation mask.
+    """
+    fade_bottom = min_elevation_deg
+    fade_top = min_elevation_deg + hyst.mask_fade_range_deg
+    if elevation_deg <= fade_bottom:
+        return 1.0
+    if elevation_deg >= fade_top:
+        return hyst.discount_factor
+    t = (elevation_deg - fade_bottom) / hyst.mask_fade_range_deg
+    return 1.0 + (hyst.discount_factor - 1.0) * t
 
 
 def build_step_context(
@@ -206,6 +238,8 @@ def build_step_context(
     gs_min_elevations: dict[str, float] = {}
     gs_terminal_counts: dict[str, int] = {}
     gs_policies: dict[str, str] = {}
+    gs_hysteresis: dict[str, HysteresisParameters] = {}
+    gs_service_priorities: dict[str, int] = {}
     if gs_file:
         default_gs_policy = gs_file.default_scheduling_policy or "highest-elevation"
         for _i, station in enumerate(gs_file.stations):
@@ -220,6 +254,8 @@ def build_step_context(
                 sum(t.tracking_capacity for t in (station.terminals or [])) or 1
             )
             gs_policies[node_id] = station.scheduling_policy or default_gs_policy
+            gs_hysteresis[node_id] = station.hysteresis
+            gs_service_priorities[node_id] = station.service_priority
 
     return StepContext(
         satellites=satellites,
@@ -228,6 +264,8 @@ def build_step_context(
         gs_min_elevations=gs_min_elevations,
         gs_terminal_counts=gs_terminal_counts,
         gs_policies=gs_policies,
+        gs_hysteresis=gs_hysteresis,
+        gs_service_priorities=gs_service_priorities,
         by_node=by_node,
         sat_isl_terminals=sat_isl_terminals,
         sat_ground_terminals=sat_ground_terminals,
@@ -247,13 +285,15 @@ def compute_step(
     timestamp_offset: float,
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
     gs_state: dict[tuple[str, str], tuple[bool, bool]],
-) -> tuple[list[TimelineEvent], dict[str, NodePosition]]:
+    current_associations: frozenset[tuple[str, str]] = frozenset(),
+) -> tuple[list[TimelineEvent], dict[str, NodePosition], frozenset[tuple[str, str]]]:
     """Compute one step of the timeline. Mutates isl_state and gs_state in place.
 
-    Returns (events, positions) where events is a list of TimelineEvent
-    (ClockTick + zero or more VisibilityEvents) and positions is the
-    NodePosition dict for all nodes at this step (used by the pacing loop
-    for LinkStateSnapshot latency computation).
+    Returns (events, positions, new_associations) where events is a list of
+    TimelineEvent (ClockTick + zero or more VisibilityEvents), positions is the
+    NodePosition dict for all nodes at this step, and new_associations is the
+    set of (gs_id, sat_id) normalized pairs allocated this tick (the fold state
+    for the next tick's hysteresis discount).
 
     Pure computation — no I/O, no wall-time awareness.
     This is the Physicist role (R-OME-008B Part 2).
@@ -392,18 +432,15 @@ def compute_step(
                 )
         gs_visible_per_station[gs_id] = visible_sats
 
-    # 7. Global capacity-aware ground link scheduling
+    # 7. Scored, hysteresis-aware ground link allocation
     #
     # Both GS and satellite terminals are finite hardware resources.
-    # A GS with tracking_capacity=2 can connect to 2 satellites.
-    # A satellite with ground_terminal_count=1 can connect to 1 GS.
-    #
-    # Algorithm: build a global pool of all visible GS-satellite pairs,
-    # sort by elevation (best link quality first), then greedily allocate
-    # decrementing capacity on both sides.
+    # Pairs are scored by the per-GS scheduling policy, then active
+    # pairs receive a hysteresis discount (boosting their score to
+    # resist displacement). Sorted by (service_priority asc, score desc)
+    # for strict-preemption service tiers.
     gs_scheduled: dict[tuple[str, str], bool] = {}
 
-    # Initialize capacity budgets (mutable copies for this step)
     gs_capacity: dict[str, int] = {
         gs_id: ctx.gs_terminal_counts.get(gs_id, 1) for gs_id in ctx.gs_positions
     }
@@ -412,22 +449,37 @@ def compute_step(
         for sat in ctx.satellites
     }
 
-    # Build flat global pool of all visible pairs
-    global_pairs: list[tuple[float, str, str, float]] = []  # (elev, gs_id, sat_id, range_km)
+    # Score all visible pairs with policy + hysteresis discount
+    scored_pairs: list[tuple[int, float, str, str, float]] = []
     for gs_id, visible_sats in gs_visible_per_station.items():
+        policy = ctx.gs_policies.get(gs_id, "highest-elevation")
+        min_elev = ctx.gs_min_elevations.get(gs_id, 25.0)
+        hyst = ctx.gs_hysteresis.get(gs_id, HysteresisParameters())
+        priority = ctx.gs_service_priorities.get(gs_id, 10)
+
         for gv in visible_sats:
-            global_pairs.append((gv.elevation_deg, gs_id, gv.sat_id, gv.range_km))
+            score = _compute_pair_score(gv.elevation_deg, policy)
+            pair = (min(gs_id, gv.sat_id), max(gs_id, gv.sat_id))
 
-    # Sort descending by elevation — highest elevation = best link quality first
-    global_pairs.sort(key=lambda x: x[0], reverse=True)
+            if pair in current_associations:
+                # Fade uses raw physical elevation, not policy score
+                discount = _compute_effective_discount(gv.elevation_deg, min_elev, hyst)
+                score *= discount
 
-    # Greedy allocation: best pairs first, decrement both sides
-    for _elev, gs_id, sat_id, _range_km in global_pairs:
+            scored_pairs.append((priority, score, gs_id, gv.sat_id, gv.range_km))
+
+    # Sort: service_priority ascending (lower=higher priority),
+    # then score descending (higher=better) within each tier
+    scored_pairs.sort(key=lambda x: (x[0], -x[1]))
+
+    new_associations: set[tuple[str, str]] = set()
+    for _prio, _score, gs_id, sat_id, _range_km in scored_pairs:
         pair = (min(gs_id, sat_id), max(gs_id, sat_id))
         if gs_capacity.get(gs_id, 0) > 0 and sat_capacity.get(sat_id, 0) > 0:
             gs_scheduled[pair] = True
             gs_capacity[gs_id] -= 1
             sat_capacity[sat_id] -= 1
+            new_associations.add(pair)
         else:
             gs_scheduled[pair] = False
 
@@ -451,7 +503,7 @@ def compute_step(
             )
             events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
 
-    return events, positions
+    return events, positions, frozenset(new_associations)
 
 
 # ---------------------------------------------------------------------------
@@ -475,11 +527,13 @@ def precompute_timeline_window(
     default_min_elevation_deg: float = 25.0,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
+    initial_associations: frozenset[tuple[str, str]] | None = None,
     timestamp_offset: float = 0.0,
 ) -> tuple[
     list[TimelineEvent],
     dict[tuple[str, str], tuple[bool, bool]],
     dict[tuple[str, str], tuple[bool, bool]],
+    frozenset[tuple[str, str]],
 ]:
     """Precompute a single window of the timeline (batch mode).
 
@@ -487,8 +541,9 @@ def precompute_timeline_window(
     thread for NodalPath almanac and by offline tools (coverage preview, JSONL
     generation). The real-time Pacemaker calls compute_step() directly.
 
-    Returns (events, isl_state, gs_state) so the caller can carry boundary
-    state into the next window for continuous operation.
+    Returns (events, isl_state, gs_state, associations) so the caller can
+    carry boundary state — including the fold state for hysteresis — into the
+    next window for continuous operation.
     """
     ctx = build_step_context(
         satellites=satellites,
@@ -509,16 +564,24 @@ def precompute_timeline_window(
     gs_state: dict[tuple[str, str], tuple[bool, bool]] = (
         dict(initial_gs_state) if initial_gs_state else {}
     )
+    associations: frozenset[tuple[str, str]] = initial_associations or frozenset()
 
     events: list[TimelineEvent] = []
     steps = int(duration_s / step_seconds)
     for step in range(steps + 1):
-        step_events, _positions = compute_step(
-            ctx, epoch_unix, step, step_seconds, timestamp_offset, isl_state, gs_state
+        step_events, _positions, associations = compute_step(
+            ctx,
+            epoch_unix,
+            step,
+            step_seconds,
+            timestamp_offset,
+            isl_state,
+            gs_state,
+            associations,
         )
         events.extend(step_events)
 
-    return events, isl_state, gs_state
+    return events, isl_state, gs_state, associations
 
 
 def precompute_timeline(
@@ -540,7 +603,7 @@ def precompute_timeline(
 
     Returns only events, discarding boundary state.
     """
-    events, _, _ = precompute_timeline_window(
+    events, _, _, _ = precompute_timeline_window(
         satellites=satellites,
         addressing=addressing,
         gs_file=gs_file,

@@ -67,6 +67,7 @@ class RoutingConfig(BaseModel):
     compression_factor: int = 1
     config_overrides: dict[str, Any] = {}
     area_assignment: AreaAssignmentConfig | None = None
+    mbb_dispatch: bool | None = None  # Default: True for nodalpath, False for IGP
 
     @model_validator(mode="after")
     def _require_stack_or_protocol(self):

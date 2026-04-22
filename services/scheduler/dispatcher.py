@@ -101,6 +101,9 @@ class Dispatcher:
         compression_factor: int = 1,
         latency_update_interval_s: int = 10,
         epsilon_ms: float = 100.0,
+        gs_terminal_capacities: dict[str, int] | None = None,
+        sat_ground_terminal_capacities: dict[str, int] | None = None,
+        mbb_dispatch: bool = False,
         # Legacy — kept for test compatibility, ignored at runtime
         ome_endpoint: str = "",
     ) -> None:
@@ -113,6 +116,9 @@ class Dispatcher:
         self._compression = max(1, compression_factor)
         self._latency_interval = latency_update_interval_s
         self._epsilon_ms = epsilon_ms
+        self._gs_capacities = gs_terminal_capacities or {}
+        self._sat_capacities = sat_ground_terminal_capacities or {}
+        self._mbb_dispatch = mbb_dispatch
 
         self._position_table = PositionTable()
 
@@ -124,6 +130,11 @@ class Dispatcher:
         # Actuator state: what IS active (confirmed by Node Agent).
         # Written ONLY by the dispatch worker after Node Agent ACK.
         self._actual_links: dict[tuple[str, str], ActiveLinkInfo] = {}
+
+        # Incremental active-link counters for O(1) MBB capacity checks.
+        # Re-baselined from _actual_links on every LinkStateSnapshot.
+        self._gs_active_count: dict[str, int] = {}
+        self._sat_active_count: dict[str, int] = {}
 
         self._last_latencies: dict[tuple[str, str], float] = {}
         self._steps_since_latency_update = 0
@@ -155,6 +166,43 @@ class Dispatcher:
     @property
     def _active_links(self) -> dict[tuple[str, str], ActiveLinkInfo]:
         return self._actual_links
+
+    def _rebaseline_active_counts(self) -> None:
+        """Re-derive incremental counters from _actual_links (source of truth).
+
+        Called on every LinkStateSnapshot to bound any drift from lost ACKs.
+        O(actual_links) — runs at snapshot frequency (every 5 sim-seconds),
+        not at tick frequency.
+        """
+        self._gs_active_count.clear()
+        self._sat_active_count.clear()
+        for node_a, node_b in self._actual_links:
+            if node_a.startswith("gs-"):
+                self._gs_active_count[node_a] = self._gs_active_count.get(node_a, 0) + 1
+                self._sat_active_count[node_b] = self._sat_active_count.get(node_b, 0) + 1
+            elif node_b.startswith("gs-"):
+                self._gs_active_count[node_b] = self._gs_active_count.get(node_b, 0) + 1
+                self._sat_active_count[node_a] = self._sat_active_count.get(node_a, 0) + 1
+
+    def _increment_active_counts(self, pair: tuple[str, str]) -> None:
+        """O(1) increment after a successful LinkUp ACK."""
+        node_a, node_b = pair
+        if node_a.startswith("gs-"):
+            self._gs_active_count[node_a] = self._gs_active_count.get(node_a, 0) + 1
+            self._sat_active_count[node_b] = self._sat_active_count.get(node_b, 0) + 1
+        elif node_b.startswith("gs-"):
+            self._gs_active_count[node_b] = self._gs_active_count.get(node_b, 0) + 1
+            self._sat_active_count[node_a] = self._sat_active_count.get(node_a, 0) + 1
+
+    def _decrement_active_counts(self, pair: tuple[str, str]) -> None:
+        """O(1) decrement after a successful LinkDown ACK."""
+        node_a, node_b = pair
+        if node_a.startswith("gs-"):
+            self._gs_active_count[node_a] = max(0, self._gs_active_count.get(node_a, 0) - 1)
+            self._sat_active_count[node_b] = max(0, self._sat_active_count.get(node_b, 0) - 1)
+        elif node_b.startswith("gs-"):
+            self._gs_active_count[node_b] = max(0, self._gs_active_count.get(node_b, 0) - 1)
+            self._sat_active_count[node_a] = max(0, self._sat_active_count.get(node_a, 0) - 1)
 
     @_active_links.setter
     def _active_links(self, value: dict[tuple[str, str], ActiveLinkInfo]) -> None:
@@ -592,6 +640,9 @@ class Dispatcher:
         # Replace _desired_links entirely — snapshot is authoritative
         self._desired_links = desired
 
+        # Re-baseline incremental active-link counters from source of truth
+        self._rebaseline_active_counts()
+
         isl = sum(1 for a, _ in desired if not a.startswith("gs-"))
         gs = sum(1 for a, _ in desired if a.startswith("gs-"))
         log.info(
@@ -761,9 +812,13 @@ class Dispatcher:
 
         THE SINGLE PATH TO THE NODE AGENT FOR LINK STATE.
 
-        Computes delta (desired vs actual), dispatches BatchLinkDown for
-        removed pairs (Phase A), then BatchLinkUp for added pairs (Phase B).
-        Updates _actual_links only for successfully dispatched changes.
+        When mbb_dispatch is enabled, uses three-phase capacity-aware
+        dispatch for ground links:
+          Phase 1: BBM downs + ISL downs (frees capacity)
+          Phase 2: All ups (MBB + BBM, using freed + existing spare)
+          Phase 3: MBB downs (only where Phase 2 up succeeded)
+        When mbb_dispatch is disabled, uses original two-phase BBM
+        (all downs then all ups).
         """
         current_pairs = set(self._actual_links.keys())
         desired_pairs = set(desired.keys())
@@ -776,29 +831,201 @@ class Dispatcher:
 
         sim_iso = sim_time.isoformat()
 
-        # Phase A: BatchLinkDown — downs first, always
-        if to_remove:
-            removed = await self._send_batch_down(to_remove, sim_iso, sim_time, nc)
-            for pair in removed:
-                self._actual_links.pop(pair, None)
-                self._last_latencies.pop(pair, None)
+        if not self._mbb_dispatch:
+            # Original two-phase BBM dispatch
+            if to_remove:
+                removed = await self._send_batch_down(to_remove, sim_iso, sim_time, nc)
+                for pair in removed:
+                    self._actual_links.pop(pair, None)
+                    self._last_latencies.pop(pair, None)
+                    self._decrement_active_counts(pair)
 
-        # Phase B: BatchLinkUp — only after all Phase A ACKs
-        if to_add:
-            added = await self._send_batch_up(to_add, desired, sim_iso, sim_time, nc)
-            for pair in added:
-                self._actual_links[pair] = desired[pair]
-                self._last_latencies[pair] = desired[pair].latency_ms
+            if to_add:
+                added = await self._send_batch_up(to_add, desired, sim_iso, sim_time, nc)
+                for pair in added:
+                    self._actual_links[pair] = desired[pair]
+                    self._last_latencies[pair] = desired[pair].latency_ms
+                    self._increment_active_counts(pair)
+        else:
+            await self._reconcile_mbb(to_remove, to_add, desired, sim_iso, sim_time, nc)
 
         log.info(
-            "Reconcile: +%d/-%d links (%d active)",
+            "Reconcile: +%d/-%d links (%d active, mbb=%s)",
             len(to_add),
             len(to_remove),
             len(self._actual_links),
+            self._mbb_dispatch,
         )
 
         # Checkpoint (fire-and-forget)
         asyncio.create_task(self._write_checkpoint(sim_iso))
+
+    async def _reconcile_mbb(
+        self,
+        to_remove: set[tuple[str, str]],
+        to_add: set[tuple[str, str]],
+        desired: dict[tuple[str, str], ActiveLinkInfo],
+        sim_iso: str,
+        sim_time: datetime,
+        nc,
+    ) -> None:
+        """Three-phase capacity-aware MBB dispatch for ground links.
+
+        Phase 1: BBM downs + ISL downs (free capacity)
+        Phase 2: All ups (greedy-reserved, no over-subscription)
+        Phase 3: MBB downs (where Phase 2 up succeeded)
+        """
+
+        def _gs_id_for_pair(pair: tuple[str, str]) -> str | None:
+            if pair[0].startswith("gs-"):
+                return pair[0]
+            if pair[1].startswith("gs-"):
+                return pair[1]
+            return None
+
+        def _sat_id_for_gs_pair(pair: tuple[str, str]) -> str | None:
+            if pair[0].startswith("gs-"):
+                return pair[1]
+            if pair[1].startswith("gs-"):
+                return pair[0]
+            return None
+
+        # --- Classify changes ---
+        isl_downs: set[tuple[str, str]] = set()
+        isl_ups: set[tuple[str, str]] = set()
+        gs_downs: dict[str, set[tuple[str, str]]] = {}  # gs_id → pairs
+        gs_ups: dict[str, set[tuple[str, str]]] = {}
+
+        for pair in to_remove:
+            gs_id = _gs_id_for_pair(pair)
+            if gs_id:
+                gs_downs.setdefault(gs_id, set()).add(pair)
+            else:
+                isl_downs.add(pair)
+
+        for pair in to_add:
+            gs_id = _gs_id_for_pair(pair)
+            if gs_id:
+                gs_ups.setdefault(gs_id, set()).add(pair)
+            else:
+                isl_ups.add(pair)
+
+        # --- MBB eligibility: dual-sided capacity check ---
+        # Dirty segments = GSes and sats involved in this tick's changes
+        dirty_gs = set(gs_downs.keys()) | set(gs_ups.keys())
+
+        mbb_segments: set[str] = set()  # gs_ids eligible for MBB
+        bbm_segments: set[str] = set()  # gs_ids forced to BBM
+
+        for gs_id in dirty_gs:
+            ups = gs_ups.get(gs_id, set())
+            if not ups:
+                # Pure down, no MBB needed
+                bbm_segments.add(gs_id)
+                continue
+            downs = gs_downs.get(gs_id, set())
+            if not downs:
+                # Pure up — check if capacity allows without a preceding down
+                gs_spare = self._gs_capacities.get(gs_id, 1) - self._gs_active_count.get(gs_id, 0)
+                all_sats_ok = all(
+                    self._sat_capacities.get(_sat_id_for_gs_pair(p), 1)
+                    - self._sat_active_count.get(_sat_id_for_gs_pair(p), 0)
+                    > 0
+                    for p in ups
+                )
+                if gs_spare >= len(ups) and all_sats_ok:
+                    mbb_segments.add(gs_id)
+                else:
+                    bbm_segments.add(gs_id)
+                continue
+
+            # Handover: has both ups and downs
+            gs_spare = self._gs_capacities.get(gs_id, 1) - self._gs_active_count.get(gs_id, 0)
+            all_sats_ok = all(
+                self._sat_capacities.get(_sat_id_for_gs_pair(p), 1)
+                - self._sat_active_count.get(_sat_id_for_gs_pair(p), 0)
+                > 0
+                for p in ups
+            )
+            if gs_spare >= len(ups) and all_sats_ok:
+                mbb_segments.add(gs_id)
+            else:
+                bbm_segments.add(gs_id)
+
+        # --- PHASE 1: Free capacity (BBM downs + ISL downs) ---
+        phase1_downs: set[tuple[str, str]] = set(isl_downs)
+        for gs_id in bbm_segments:
+            phase1_downs.update(gs_downs.get(gs_id, set()))
+
+        if phase1_downs:
+            removed = await self._send_batch_down(phase1_downs, sim_iso, sim_time, nc)
+            failed_bbm_gs: set[str] = set()
+            for pair in phase1_downs:
+                gs_id = _gs_id_for_pair(pair)
+                if pair in removed:
+                    self._actual_links.pop(pair, None)
+                    self._last_latencies.pop(pair, None)
+                    self._decrement_active_counts(pair)
+                elif gs_id:
+                    failed_bbm_gs.add(gs_id)
+        else:
+            removed = set()
+            failed_bbm_gs = set()
+
+        # --- INTER-PHASE: Greedy reservation for Phase 2 ups ---
+        # Work with post-Phase-1 capacity (real, not projected)
+        phase2_ups: set[tuple[str, str]] = set(isl_ups)
+
+        # MBB ups (existing spare, no dependency on Phase 1 frees)
+        for gs_id in mbb_segments:
+            phase2_ups.update(gs_ups.get(gs_id, set()))
+
+        # BBM ups (capacity freed in Phase 1) — skip if Phase 1 down failed
+        # Greedy reservation: walk ups in arbitrary order, check capacity
+        for gs_id in bbm_segments:
+            if gs_id in failed_bbm_gs:
+                continue  # Phase 1 down failed — terminal still occupied
+            for pair in gs_ups.get(gs_id, set()):
+                sat_id = _sat_id_for_gs_pair(pair)
+                gs_spare = self._gs_capacities.get(gs_id, 1) - self._gs_active_count.get(gs_id, 0)
+                sat_spare = self._sat_capacities.get(sat_id, 1) - self._sat_active_count.get(
+                    sat_id, 0
+                )
+                if gs_spare > 0 and sat_spare > 0:
+                    phase2_ups.add(pair)
+                else:
+                    log.debug(
+                        "Greedy skip: %s→%s (gs_spare=%d, sat_spare=%d)",
+                        gs_id,
+                        sat_id,
+                        gs_spare,
+                        sat_spare,
+                    )
+
+        # --- PHASE 2: All ups ---
+        if phase2_ups:
+            added = await self._send_batch_up(phase2_ups, desired, sim_iso, sim_time, nc)
+            for pair in added:
+                self._actual_links[pair] = desired[pair]
+                self._last_latencies[pair] = desired[pair].latency_ms
+                self._increment_active_counts(pair)
+        else:
+            added = set()
+
+        # --- PHASE 3: MBB downs (only where Phase 2 up succeeded) ---
+        phase3_downs: set[tuple[str, str]] = set()
+        for gs_id in mbb_segments:
+            ups_for_gs = gs_ups.get(gs_id, set())
+            if ups_for_gs & added:
+                # At least one up succeeded for this segment — safe to tear down old
+                phase3_downs.update(gs_downs.get(gs_id, set()))
+
+        if phase3_downs:
+            removed3 = await self._send_batch_down(phase3_downs, sim_iso, sim_time, nc)
+            for pair in removed3:
+                self._actual_links.pop(pair, None)
+                self._last_latencies.pop(pair, None)
+                self._decrement_active_counts(pair)
 
     async def _send_batch_down(
         self,

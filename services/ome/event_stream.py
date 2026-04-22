@@ -450,7 +450,8 @@ def compute_step(
     }
 
     # Score all visible pairs with policy + hysteresis discount
-    scored_pairs: list[tuple[int, float, str, str, float]] = []
+    # Tuple: (priority, score, gs_id, sat_id, range_km, sat_gnd_cap)
+    scored_pairs: list[tuple[int, float, str, str, float, int]] = []
     for gs_id, visible_sats in gs_visible_per_station.items():
         policy = ctx.gs_policies.get(gs_id, "highest-elevation")
         min_elev = ctx.gs_min_elevations.get(gs_id, 25.0)
@@ -466,14 +467,15 @@ def compute_step(
                 discount = _compute_effective_discount(gv.elevation_deg, min_elev, hyst)
                 score *= discount
 
-            scored_pairs.append((priority, score, gs_id, gv.sat_id, gv.range_km))
+            sat_gnd_cap = ctx.sat_ground_terminals.get(gv.sat_id, 1)
+            scored_pairs.append((priority, score, gs_id, gv.sat_id, gv.range_km, sat_gnd_cap))
 
-    # Sort: service_priority ascending (lower=higher priority),
-    # then score descending (higher=better) within each tier
-    scored_pairs.sort(key=lambda x: (x[0], -x[1]))
+    # Sort: service_priority asc, score desc, sat_ground_terminals asc
+    # (§4.3 tiebreaker: favor the more-constrained satellite resource)
+    scored_pairs.sort(key=lambda x: (x[0], -x[1], x[5]))
 
     new_associations: set[tuple[str, str]] = set()
-    for _prio, _score, gs_id, sat_id, _range_km in scored_pairs:
+    for _prio, _score, gs_id, sat_id, _range_km, _cap in scored_pairs:
         pair = (min(gs_id, sat_id), max(gs_id, sat_id))
         if gs_capacity.get(gs_id, 0) > 0 and sat_capacity.get(sat_id, 0) > 0:
             gs_scheduled[pair] = True

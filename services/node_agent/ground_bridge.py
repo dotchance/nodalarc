@@ -50,9 +50,17 @@ def _gs_short_name(gs_id: str) -> str:
     return gs_id[3:] if gs_id.startswith("gs-") else gs_id
 
 
-def _gs_bridge_port_name(gs_id: str) -> str:
-    """Host-side veth name for GS bridge port. <=15 chars."""
-    return f"_gbr-{_gs_short_name(gs_id)}"[:15]
+def _gs_bridge_port_name(gs_id: str, idx: int = 0) -> str:
+    """Host-side veth name for GS bridge port. <=15 chars.
+
+    Format: _g{idx}-{name} — prefix shrunk to fit index + separator
+    within the 15-char Linux interface name limit.
+    """
+    name = _gs_short_name(gs_id)
+    result = f"_g{idx}-{name}"
+    if len(result) > 15:
+        result = result[:15]
+    return result
 
 
 def _sat_gnd_host_name(sat_id: str) -> str:
@@ -159,8 +167,8 @@ def _attach_to_ground_bridge_unlocked(
     sat_pid: int,
     gs_ifname: str = "term0",
 ) -> None:
-    gs_idx = gs_ifname.replace("term", "")
-    gs_port = f"{_gs_bridge_port_name(gs_id)}-{gs_idx}"[:15]
+    gs_idx = int(gs_ifname.replace("term", "") or "0")
+    gs_port = _gs_bridge_port_name(gs_id, gs_idx)
     host_veth = f"{_sat_gnd_host_name(sat_id)}-0"[:15]
 
     ipr = IPRoute()
@@ -212,8 +220,8 @@ def _detach_from_ground_bridge_unlocked(
     sat_pid: int,
     gs_ifname: str = "term0",
 ) -> None:
-    gs_idx = gs_ifname.replace("term", "")
-    gs_port = f"{_gs_bridge_port_name(gs_id)}-{gs_idx}"[:15]
+    gs_idx = int(gs_ifname.replace("term", "") or "0")
+    gs_port = _gs_bridge_port_name(gs_id, gs_idx)
     host_veth = f"{_sat_gnd_host_name(sat_id)}-0"[:15]
 
     # Remove tc redirect first
@@ -351,9 +359,8 @@ def create_ground_bridge(
 
         mtu = get_platform_config().veth_interface_mtu_bytes
 
-    # Extract index from ifname (e.g., "term0" → "0") for unique host-side naming
-    idx_str = ifname.replace("term", "")
-    gs_port = f"{_gs_bridge_port_name(gs_id)}-{idx_str}"[:15]
+    idx = int(ifname.replace("term", "") or "0")
+    gs_port = _gs_bridge_port_name(gs_id, idx)
 
     ipr = IPRoute()
     try:

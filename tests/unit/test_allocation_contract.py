@@ -60,7 +60,7 @@ class TestAllocationContractInvariants:
         associations: dict = {}
 
         for step in range(121):
-            _events, _positions, associations = compute_step(
+            _events, _positions, associations, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -112,7 +112,7 @@ class TestAllocationContractInvariants:
         associations: dict = {}
 
         for step in range(61):
-            _events, _positions, associations = compute_step(
+            _events, _positions, associations, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -127,7 +127,8 @@ class TestAllocationContractInvariants:
             for pair in associations:
                 state = gs_state.get(pair)
                 assert state is not None, f"Step {step}: allocated pair {pair} not in gs_state"
-                visible, scheduled = state
+                visible = state[0]
+                scheduled = state[1]
                 assert visible, f"Step {step}: allocated pair {pair} is not visible"
                 assert scheduled, f"Step {step}: allocated pair {pair} is not scheduled"
 
@@ -152,7 +153,7 @@ class TestAllocationContractInvariants:
         assoc_h: frozenset = {}
         hyst_transitions = 0
         for step in range(n_steps + 1):
-            _e, _p, new_assoc_h = compute_step(
+            _e, _p, new_assoc_h, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -174,7 +175,7 @@ class TestAllocationContractInvariants:
         amnesiac_transitions = 0
         prev_assoc: frozenset = {}
         for step in range(n_steps + 1):
-            _e, _p, new_assoc_a = compute_step(
+            _e, _p, new_assoc_a, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,

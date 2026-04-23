@@ -37,7 +37,7 @@ def test_lookahead_submit_and_get_result():
 
     result = la.get_result(timeout=10.0)
     assert result is not None, "Look-ahead should produce a result"
-    events, isl_state, gs_state, associations = result
+    events, isl_state, gs_state, associations, _pending = result
     assert len(events) > 0, "Should produce events"
     assert isinstance(isl_state, dict)
     assert isinstance(gs_state, dict)

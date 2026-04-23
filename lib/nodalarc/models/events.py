@@ -68,6 +68,7 @@ class VisibilityEvent(BaseModel):
     link_type: str = "isl"  # "isl" or "ground" — set by OME from node type registry
     gs_terminal_index: int | None = None  # None for ISL events
     sat_terminal_index: int | None = None  # None for ISL events
+    scheduling_state: str = "active"  # "active" | "teardown"
 
     @model_validator(mode="before")
     @classmethod

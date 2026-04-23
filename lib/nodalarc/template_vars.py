@@ -285,7 +285,16 @@ def build_template_vars(
         result["gs_index"] = gs_index
         result["ipv4_loopback"] = addressing.gs_ipv4(gs_index)
         result["ipv6_loopback"] = addressing.gs_ipv6(gs_index)
-        result["gnd_interfaces"] = addressing.term_interfaces(gnd_count)
+        gs_station = next((s for s in ground_stations.stations if s.name == gs_name), None)
+        gs_terminal_count = (
+            sum(
+                t.tracking_capacity
+                for t in (gs_station.terminals or ground_stations.default_terminals)
+            )
+            if gs_station
+            else 1
+        ) or 1
+        result["gnd_interfaces"] = addressing.term_interfaces(gs_terminal_count)
         result["isl_interfaces"] = []
         result["isl_count"] = 0
         result["interface_info"] = {}

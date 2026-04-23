@@ -8,8 +8,6 @@ Three formats are supported:
 - Monolithic legacy file (top-level keys: 'default_terminals', 'stations', etc.)
 """
 
-from typing import Literal
-
 from pydantic import BaseModel, field_validator, model_validator
 
 
@@ -45,8 +43,15 @@ class GroundSegment(BaseModel):
     tenant_id: str = "default"
     reference_body: str = "earth"
     mobility: str = "fixed"  # "fixed", "terrestrial", "maritime", "aerial"
-    service_class: Literal["gold", "silver"] = "silver"
+    service_priority: int = 10  # Lower = higher priority. Headroom: 1, 5, 10, 20...
     hysteresis: HysteresisParameters = HysteresisParameters()
+
+    @field_validator("service_priority")
+    @classmethod
+    def _valid_priority(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(f"service_priority must be >= 1, got {v}")
+        return v
 
     @field_validator("mobility")
     @classmethod

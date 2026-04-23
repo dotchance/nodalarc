@@ -114,7 +114,7 @@ def _build_interface_map(
         for sat in satellites:
             sat_id = addressing.sat_id(sat.plane, sat.slot)
             pair = (min(gs_id, sat_id), max(gs_id, sat_id))
-            interface_map[pair] = ("gnd0", "gnd0")
+            interface_map[pair] = ("term0", "gnd0")
             try:
                 bandwidth_map[pair] = ground_link_bandwidth_mbps(
                     constellation, gs_file, sat.plane, sat.slot, station.name

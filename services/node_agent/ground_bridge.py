@@ -353,11 +353,11 @@ def create_ground_bridge(
             log.debug(f"GS port {gs_port} already exists")
             return gs_port
 
-        # Check if gnd0 already exists in GS namespace
-        def _check_gnd0(ns_ipr: IPRoute) -> bool:
+        # Check if term0 already exists in GS namespace
+        def _check_term0(ns_ipr: IPRoute) -> bool:
             return bool(ns_ipr.link_lookup(ifname="gnd0"))
 
-        if _in_namespace(gs_pid, _check_gnd0):
+        if _in_namespace(gs_pid, _check_term0):
             log.debug(f"gnd0 already exists in GS ns({gs_pid})")
             return gs_port
 
@@ -381,16 +381,16 @@ def create_ground_bridge(
         ns_idx = ipr.link_lookup(ifname=tmp_ns)[0]
         ipr.link("set", index=ns_idx, net_ns_pid=gs_pid)
 
-        # ONE JUMP: rename to gnd0 inside GS namespace, leave DOWN
+        # ONE JUMP: rename to term0 inside GS namespace, leave DOWN
         _tmp_ns = tmp_ns  # capture for closure
 
-        def _rename_gnd0(ns_ipr: IPRoute) -> None:
+        def _rename_term0(ns_ipr: IPRoute) -> None:
             idx = ns_ipr.link_lookup(ifname=_tmp_ns)[0]
-            ns_ipr.link("set", index=idx, ifname="gnd0", mtu=mtu)
+            ns_ipr.link("set", index=idx, ifname="term0", mtu=mtu)
 
-        _in_namespace(gs_pid, _rename_gnd0)
+        _in_namespace(gs_pid, _rename_term0)
 
-        log.info(f"Created GS port {gs_port} → gnd0 in ns({gs_pid})")
+        log.info(f"Created GS port {gs_port} → term0 in ns({gs_pid})")
     finally:
         ipr.close()
 

@@ -578,7 +578,7 @@ def write_wiring_manifest(
             "gs_index": i,
             "sysctls": dict(node_sysctls),
             "isl_interfaces": [],
-            "gnd_interfaces": [{"name": "gnd0"}],
+            "gnd_interfaces": [{"name": "term0"}],
             "terrestrial": {"addresses": addrs},
             "mpls_enable": True,
             "segment_routing": segment_routing,

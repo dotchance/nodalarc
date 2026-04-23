@@ -154,7 +154,7 @@ class TestSatelliteVars:
             plane=0,
             slot=0,
         )
-        assert result["gnd_interfaces"] == ["gnd0"]  # 4-node has 1 ground terminal
+        assert result["gnd_interfaces"] == ["gnd0"]  # satellite ground terminal stays gndN
 
     def test_neighbors_dict(self, flat_session, four_node_config, gs_file, addressing):
         result = build_template_vars(

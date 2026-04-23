@@ -515,7 +515,12 @@ class ContinuousTracer:
             link_type = None
             if iface_pair:
                 iface = iface_pair[0] if a == key[0] else iface_pair[1]
-                link_type = "ground" if "gnd" in iface_pair[0] and "gnd" in iface_pair[1] else "isl"
+                link_type = (
+                    "ground"
+                    if ("term" in iface_pair[0] or "gnd" in iface_pair[0])
+                    and ("term" in iface_pair[1] or "gnd" in iface_pair[1])
+                    else "isl"
+                )
             links.append(
                 LiveTraceLink(
                     from_node=a,

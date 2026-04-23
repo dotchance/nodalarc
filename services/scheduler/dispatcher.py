@@ -541,7 +541,7 @@ class Dispatcher:
                 if pair not in self._desired_links:
                     is_gs = vis.link_type == "ground"
                     if is_gs:
-                        ifaces = ("gnd0", "gnd0")
+                        ifaces = ("term0", "gnd0")
                     else:
                         ifaces = self._interface_map.get(pair)
                         if not ifaces:
@@ -616,7 +616,7 @@ class Dispatcher:
 
                 is_gs = link.link_type == "ground"
                 if is_gs:
-                    ifaces = ("gnd0", "gnd0")
+                    ifaces = ("term0", "gnd0")
                 else:
                     ifaces = self._interface_map.get(pair)
                     if not ifaces:
@@ -1063,7 +1063,7 @@ class Dispatcher:
                 if locality == node_agent_pb2.CROSS_NODE:
                     from nodalarc.vxlan import compute_vni
 
-                    vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
+                    vni = compute_vni(gs_id, sat_id, "term0", "gnd0")
 
                 if locality == node_agent_pb2.LOCAL:
                     targets = [(sat_id, self._loc.agent_addr(sat_id))]
@@ -1074,10 +1074,11 @@ class Dispatcher:
                     ]
 
                 for nid, agent in targets:
+                    iface = "term0" if nid == gs_id else "gnd0"
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceDown(
                             node_id=nid,
-                            interface_name="gnd0",
+                            interface_name=iface,
                             link_type=node_agent_pb2.GROUND,
                             gs_id=gs_id,
                             sat_id=sat_id,
@@ -1209,7 +1210,7 @@ class Dispatcher:
                 if locality == node_agent_pb2.CROSS_NODE:
                     from nodalarc.vxlan import compute_vni
 
-                    vni = compute_vni(gs_id, sat_id, "gnd0", "gnd0")
+                    vni = compute_vni(gs_id, sat_id, "term0", "gnd0")
 
                 if locality == node_agent_pb2.LOCAL:
                     targets = [(sat_id, self._loc.agent_addr(sat_id), "")]
@@ -1221,10 +1222,11 @@ class Dispatcher:
                         targets.append((nid, self._loc.agent_addr(nid), remote_ip))
 
                 for nid, agent, remote_ip in targets:
+                    iface = "term0" if nid == gs_id else "gnd0"
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceUp(
                             node_id=nid,
-                            interface_name="gnd0",
+                            interface_name=iface,
                             link_type=node_agent_pb2.GROUND,
                             latency_ms=netem_ms,
                             bandwidth_mbps=info.bandwidth_mbps,

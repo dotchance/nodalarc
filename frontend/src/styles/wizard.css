@@ -228,6 +228,31 @@
   font-size: 12px;
 }
 
+.wizard-select--sm {
+  padding: 4px 8px;
+  font-size: 11px;
+  min-width: 80px;
+}
+
+.wizard-timer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+}
+
+.wizard-timer-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wizard-timer-label {
+  font-size: 11px;
+  color: var(--text-dim, #aaa);
+  white-space: nowrap;
+}
+
 .wizard-nav {
   display: flex;
   gap: 8px;

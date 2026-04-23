@@ -182,6 +182,8 @@ class StepContext:
     field_of_regard_deg: float
     polar_seam_enabled: bool
     latitude_threshold_deg: float
+    mbb_overlap_ticks: int = 3
+    mbb_reserve: int = 0
 
 
 def _compute_pair_score(elevation_deg: float, policy: str) -> float:
@@ -220,6 +222,8 @@ def build_step_context(
     max_range_km: float = 5016.0,
     max_tracking_rate_deg_s: float = 3.0,
     field_of_regard_deg: float = 360.0,
+    mbb_overlap_ticks: int = 3,
+    mbb_reserve: int = 0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
@@ -273,7 +277,12 @@ def build_step_context(
         field_of_regard_deg=field_of_regard_deg,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
     )
+
+
+_MbbTeardownState = dict[tuple[str, str], tuple[int, tuple[str, str]]]
 
 
 def compute_step(
@@ -283,22 +292,26 @@ def compute_step(
     step_seconds: int,
     timestamp_offset: float,
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
-    gs_state: dict[tuple[str, str], tuple[bool, bool]],
+    gs_state: dict[tuple[str, str], tuple[bool, bool, str]],
     current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
-) -> tuple[list[TimelineEvent], dict[str, NodePosition], dict[tuple[str, str], tuple[int, int]]]:
+    mbb_pending_teardowns: _MbbTeardownState | None = None,
+) -> tuple[
+    list[TimelineEvent],
+    dict[str, NodePosition],
+    dict[tuple[str, str], tuple[int, int]],
+    _MbbTeardownState,
+]:
     """Compute one step of the timeline. Mutates isl_state and gs_state in place.
 
-    Returns (events, positions, new_associations) where events is a list of
-    TimelineEvent (ClockTick + zero or more VisibilityEvents), positions is the
-    NodePosition dict for all nodes at this step, and new_associations is the
-    set of (gs_id, sat_id) normalized pairs allocated this tick (the fold state
-    for the next tick's hysteresis discount).
+    Returns (events, positions, new_associations, new_pending_teardowns).
 
     Pure computation — no I/O, no wall-time awareness.
     This is the Physicist role (R-OME-008B Part 2).
     """
     if current_associations is None:
         current_associations = {}
+    if mbb_pending_teardowns is None:
+        mbb_pending_teardowns = {}
     dt = step * step_seconds
     timestamp_s = dt + timestamp_offset
     sim_time = datetime.fromtimestamp(epoch_unix + dt, tz=UTC)
@@ -433,26 +446,16 @@ def compute_step(
                 )
         gs_visible_per_station[gs_id] = visible_sats
 
-    # 7. Scored, hysteresis-aware ground link allocation
-    #
-    # Both GS and satellite terminals are finite hardware resources.
-    # Pairs are scored by the per-GS scheduling policy, then active
-    # pairs receive a hysteresis discount (boosting their score to
-    # resist displacement). Sorted by (service_priority asc, score desc)
-    # for strict-preemption service tiers.
+    # 7. Scored, hysteresis-aware ground link allocation (two-step walk)
     gs_scheduled: dict[tuple[str, str], bool] = {}
 
-    gs_capacity: dict[str, int] = {
-        gs_id: ctx.gs_terminal_counts.get(gs_id, 1) for gs_id in ctx.gs_positions
-    }
     sat_capacity: dict[str, int] = {
         ctx.addressing.sat_id(sat.plane, sat.slot): sat.ground_terminal_count
         for sat in ctx.satellites
     }
 
-    # Score all visible pairs with policy + hysteresis discount
-    # Tuple: (priority, score, gs_id, sat_id, range_km, sat_gnd_cap)
     scored_pairs: list[tuple[int, float, str, str, float, int]] = []
+    score_lookup: dict[tuple[str, str], tuple[float, int]] = {}
     for gs_id, visible_sats in gs_visible_per_station.items():
         policy = ctx.gs_policies.get(gs_id, "highest-elevation")
         min_elev = ctx.gs_min_elevations.get(gs_id, 25.0)
@@ -464,65 +467,160 @@ def compute_step(
             pair = (min(gs_id, gv.sat_id), max(gs_id, gv.sat_id))
 
             if pair in current_associations:
-                # Fade uses raw physical elevation, not policy score
                 discount = _compute_effective_discount(gv.elevation_deg, min_elev, hyst)
                 score *= discount
 
             sat_gnd_cap = ctx.sat_ground_terminals.get(gv.sat_id, 1)
             scored_pairs.append((priority, score, gs_id, gv.sat_id, gv.range_km, sat_gnd_cap))
+            score_lookup[pair] = (score, priority)
 
-    # Sort: service_priority asc, score desc, sat_ground_terminals asc
-    # (§4.3 tiebreaker: favor the more-constrained satellite resource)
     scored_pairs.sort(key=lambda x: (x[0], -x[1], x[5]))
 
-    # Build terminal occupancy from previous tick's fold state (both sides)
+    visible_set: set[tuple[str, str]] = {
+        (min(gs, sat), max(gs, sat)) for _, _, gs, sat, _, _ in scored_pairs
+    }
+
+    # PRE-WALK: physical occupancy from ALL current_associations
     gs_occupied: dict[str, set[int]] = {}
     sat_gnd_occupied: dict[str, set[int]] = {}
     for (na, nb), (gs_idx, sat_idx) in current_associations.items():
-        gs_id_prev = na if na in ctx.gs_positions else nb
-        sat_id_prev = nb if na in ctx.gs_positions else na
-        gs_occupied.setdefault(gs_id_prev, set()).add(gs_idx)
-        sat_gnd_occupied.setdefault(sat_id_prev, set()).add(sat_idx)
+        gs_id_ca = na if na in ctx.gs_positions else nb
+        sat_id_ca = nb if na in ctx.gs_positions else na
+        gs_occupied.setdefault(gs_id_ca, set()).add(gs_idx)
+        sat_gnd_occupied.setdefault(sat_id_ca, set()).add(sat_idx)
 
     new_associations: dict[tuple[str, str], tuple[int, int]] = {}
-    for _prio, _score, gs_id, sat_id, _range_km, _cap in scored_pairs:
-        pair = (min(gs_id, sat_id), max(gs_id, sat_id))
+    new_pending_teardowns: _MbbTeardownState = {}
 
-        # CONTINUITY: active link keeps both indices
-        if pair in current_associations:
-            new_associations[pair] = current_associations[pair]
-            gs_capacity[gs_id] -= 1
-            sat_capacity[sat_id] -= 1
-            gs_scheduled[pair] = True
+    # STEP A: Steady-state continuity — O(active_links)
+    for pair, (gs_idx, sat_idx) in current_associations.items():
+        gs_id_a = pair[0] if pair[0] in ctx.gs_positions else pair[1]
+        sat_id_a = pair[1] if pair[0] in ctx.gs_positions else pair[0]
+
+        if pair in mbb_pending_teardowns:
+            continue
+        if pair not in visible_set:
+            gs_occupied[gs_id_a].discard(gs_idx)
+            sat_gnd_occupied[sat_id_a].discard(sat_idx)
             continue
 
-        # NEW LINK: lowest available index on BOTH sides
-        if gs_capacity.get(gs_id, 0) > 0 and sat_capacity.get(sat_id, 0) > 0:
-            gs_occ = gs_occupied.get(gs_id, set())
-            sat_occ = sat_gnd_occupied.get(sat_id, set())
-            gs_cap = ctx.gs_terminal_counts.get(gs_id, 1)
-            sat_cap_total = ctx.sat_ground_terminals.get(sat_id, 1)
+        new_associations[pair] = (gs_idx, sat_idx)
+        sat_capacity[sat_id_a] -= 1
+        gs_scheduled[pair] = True
 
-            gs_idx = next((i for i in range(gs_cap) if i not in gs_occ), None)
-            sat_idx = next((i for i in range(sat_cap_total) if i not in sat_occ), None)
+    # TEARDOWN CLEANUP: expire/free before Step BC — O(overlap_count)
+    valid_teardowns: _MbbTeardownState = {}
+    for pair, (start_tick, successor) in mbb_pending_teardowns.items():
+        if pair not in current_associations:
+            continue
+        gs_id_td = pair[0] if pair[0] in ctx.gs_positions else pair[1]
+        sat_id_td = pair[1] if pair[0] in ctx.gs_positions else pair[0]
+        gs_idx, sat_idx = current_associations[pair]
+        elapsed = step - start_tick
 
-            if gs_idx is not None and sat_idx is not None:
+        if elapsed >= ctx.mbb_overlap_ticks or pair not in visible_set:
+            gs_occupied[gs_id_td].discard(gs_idx)
+            sat_gnd_occupied[sat_id_td].discard(sat_idx)
+        else:
+            valid_teardowns[pair] = (start_tick, successor)
+
+    # STEP BC: Merged new + overlap allocation — O(visible)
+    merged: list[tuple[int, int, float, tuple[str, str], str, int, tuple[str, str] | None]] = []
+    for prio, score, gs_id, sat_id, _range_km, _cap in scored_pairs:
+        pair = (min(gs_id, sat_id), max(gs_id, sat_id))
+        if pair in new_associations:
+            continue
+        if pair in valid_teardowns:
+            start_tick_td, successor_td = valid_teardowns[pair]
+            merged.append((prio, 1, -score, pair, "overlap", start_tick_td, successor_td))
+        else:
+            merged.append((prio, 2, -score, pair, "new", 0, None))
+
+    merged.sort()
+
+    for prio, _rank, neg_score, pair, kind, start_tick_m, successor_m in merged:
+        gs_id_m = pair[0] if pair[0] in ctx.gs_positions else pair[1]
+        sat_id_m = pair[1] if pair[0] in ctx.gs_positions else pair[0]
+
+        if kind == "overlap":
+            gs_idx, sat_idx = current_associations[pair]
+            if sat_capacity.get(sat_id_m, 0) > 0:
                 new_associations[pair] = (gs_idx, sat_idx)
-                gs_occupied.setdefault(gs_id, set()).add(gs_idx)
-                sat_gnd_occupied.setdefault(sat_id, set()).add(sat_idx)
-                gs_capacity[gs_id] -= 1
-                sat_capacity[sat_id] -= 1
+                sat_capacity[sat_id_m] -= 1
+                new_pending_teardowns[pair] = (start_tick_m, successor_m)
                 gs_scheduled[pair] = True
             else:
-                gs_scheduled[pair] = False
+                gs_occupied[gs_id_m].discard(gs_idx)
+                sat_gnd_occupied[sat_id_m].discard(sat_idx)
         else:
-            gs_scheduled[pair] = False
+            tc = ctx.gs_terminal_counts.get(gs_id_m, 1)
+            gs_steady = sum(
+                1
+                for p in new_associations
+                if (p[0] if p[0] in ctx.gs_positions else p[1]) == gs_id_m
+                and p not in new_pending_teardowns
+            )
+            gs_physical = len(gs_occupied.get(gs_id_m, set()))
+            logical_room = gs_steady < (tc - ctx.mbb_reserve)
+            physical_room = gs_physical < tc
 
-    # 8. Emit ground visibility events on state changes
+            if logical_room and physical_room and sat_capacity.get(sat_id_m, 0) > 0:
+                gs_occ = gs_occupied.get(gs_id_m, set())
+                sat_occ = sat_gnd_occupied.get(sat_id_m, set())
+                sat_cap_total = ctx.sat_ground_terminals.get(sat_id_m, 1)
+                gs_idx = next((i for i in range(tc) if i not in gs_occ), None)
+                sat_idx = next((i for i in range(sat_cap_total) if i not in sat_occ), None)
+                if gs_idx is not None and sat_idx is not None:
+                    new_associations[pair] = (gs_idx, sat_idx)
+                    gs_occupied.setdefault(gs_id_m, set()).add(gs_idx)
+                    sat_gnd_occupied.setdefault(sat_id_m, set()).add(sat_idx)
+                    sat_capacity[sat_id_m] -= 1
+                    gs_scheduled[pair] = True
+
+            elif not logical_room and physical_room and sat_capacity.get(sat_id_m, 0) > 0:
+                worst_pair: tuple[str, str] | None = None
+                worst_score = float("inf")
+                worst_prio = 0
+                for p in new_associations:
+                    p_gs = p[0] if p[0] in ctx.gs_positions else p[1]
+                    if p_gs != gs_id_m or p in new_pending_teardowns:
+                        continue
+                    p_score, p_prio = score_lookup.get(p, (0.0, 10))
+                    if p_score < worst_score:
+                        worst_pair, worst_score, worst_prio = p, p_score, p_prio
+
+                score = -neg_score
+                if worst_pair is not None and score > worst_score and prio <= worst_prio:
+                    gs_occ = gs_occupied.get(gs_id_m, set())
+                    sat_occ = sat_gnd_occupied.get(sat_id_m, set())
+                    sat_cap_total = ctx.sat_ground_terminals.get(sat_id_m, 1)
+                    gs_idx = next((i for i in range(tc) if i not in gs_occ), None)
+                    sat_idx = next((i for i in range(sat_cap_total) if i not in sat_occ), None)
+                    if gs_idx is not None and sat_idx is not None:
+                        new_associations[pair] = (gs_idx, sat_idx)
+                        gs_occupied.setdefault(gs_id_m, set()).add(gs_idx)
+                        sat_gnd_occupied.setdefault(sat_id_m, set()).add(sat_idx)
+                        sat_capacity[sat_id_m] -= 1
+                        new_pending_teardowns[worst_pair] = (step, pair)
+                        gs_scheduled[pair] = True
+
+    # POST-WALK: Successor-aware abort check
+    for pair in list(new_pending_teardowns.keys()):
+        _start, successor = new_pending_teardowns[pair]
+        if successor not in new_associations or successor in new_pending_teardowns:
+            del new_pending_teardowns[pair]
+
+    # Mark all allocated pairs as scheduled
+    for pair in new_associations:
+        if pair not in gs_scheduled:
+            gs_scheduled[pair] = True
+
+    # 8. Emit ground visibility events on state changes (triple state)
     for pair, (visible, range_km, elev_deg) in gs_vis_details.items():
         scheduled = gs_scheduled.get(pair, False) if visible else False
-        prev_state = gs_state.get(pair, (False, False))
-        new_state = (visible, scheduled)
+        sched_state = "teardown" if pair in new_pending_teardowns else "active"
+        prev_state = gs_state.get(pair, (False, False, "active"))
+        new_state = (visible, scheduled, sched_state)
 
         if new_state != prev_state:
             gs_state[pair] = new_state
@@ -539,10 +637,11 @@ def compute_step(
                 link_type="ground",
                 gs_terminal_index=indices[0] if indices else None,
                 sat_terminal_index=indices[1] if indices else None,
+                scheduling_state=sched_state,
             )
             events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
 
-    return events, positions, new_associations
+    return events, positions, new_associations, new_pending_teardowns
 
 
 # ---------------------------------------------------------------------------
@@ -567,12 +666,14 @@ def precompute_timeline_window(
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
+    initial_pending_teardowns: _MbbTeardownState | None = None,
     timestamp_offset: float = 0.0,
 ) -> tuple[
     list[TimelineEvent],
     dict[tuple[str, str], tuple[bool, bool]],
-    dict[tuple[str, str], tuple[bool, bool]],
+    dict[tuple[str, str], tuple[bool, bool, str]],
     dict[tuple[str, str], tuple[int, int]],
+    _MbbTeardownState,
 ]:
     """Precompute a single window of the timeline (batch mode).
 
@@ -580,9 +681,8 @@ def precompute_timeline_window(
     thread for NodalPath almanac and by offline tools (coverage preview, JSONL
     generation). The real-time Pacemaker calls compute_step() directly.
 
-    Returns (events, isl_state, gs_state, associations) so the caller can
-    carry boundary state — including the fold state for hysteresis — into the
-    next window for continuous operation.
+    Returns (events, isl_state, gs_state, associations, pending_teardowns)
+    so the caller can carry boundary state into the next window.
     """
     ctx = build_step_context(
         satellites=satellites,
@@ -600,29 +700,33 @@ def precompute_timeline_window(
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = (
         dict(initial_isl_state) if initial_isl_state else {}
     )
-    gs_state: dict[tuple[str, str], tuple[bool, bool]] = (
+    gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = (
         dict(initial_gs_state) if initial_gs_state else {}
     )
     associations: dict[tuple[str, str], tuple[int, int]] = (
         dict(initial_associations) if initial_associations else {}
     )
+    pending_teardowns: _MbbTeardownState = (
+        dict(initial_pending_teardowns) if initial_pending_teardowns else {}
+    )
 
     events: list[TimelineEvent] = []
     steps = int(duration_s / step_seconds)
-    for step in range(steps + 1):
-        step_events, _positions, associations = compute_step(
+    for s in range(steps + 1):
+        step_events, _positions, associations, pending_teardowns = compute_step(
             ctx,
             epoch_unix,
-            step,
+            s,
             step_seconds,
             timestamp_offset,
             isl_state,
             gs_state,
             associations,
+            pending_teardowns,
         )
         events.extend(step_events)
 
-    return events, isl_state, gs_state, associations
+    return events, isl_state, gs_state, associations, pending_teardowns
 
 
 def precompute_timeline(
@@ -644,7 +748,7 @@ def precompute_timeline(
 
     Returns only events, discarding boundary state.
     """
-    events, _, _, _ = precompute_timeline_window(
+    events, _, _, _, _ = precompute_timeline_window(
         satellites=satellites,
         addressing=addressing,
         gs_file=gs_file,
@@ -708,7 +812,7 @@ def read_timeline_jsonl(path: Path) -> list[dict]:
 
 def build_link_state_snapshot(
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
-    gs_state: dict[tuple[str, str], tuple[bool, bool]],
+    gs_state: dict[tuple[str, str], tuple[bool, bool, str]],
     interface_map: dict[tuple[str, str], tuple[str, str]],
     sim_time: datetime,
     seq: int,
@@ -716,6 +820,9 @@ def build_link_state_snapshot(
     positions: dict[str, NodePosition] | None = None,
     epoch_id: int = 0,
     current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
+    mbb_pending_teardowns: _MbbTeardownState | None = None,
+    mbb_overlap_ticks: int = 3,
+    current_step: int = 0,
 ) -> LinkStateSnapshot:
     """Build a LinkStateSnapshot from OME internal state.
 
@@ -775,9 +882,13 @@ def build_link_state_snapshot(
             )
         )
 
-    # GS links (gs_state is populated exclusively from ground visibility — Step 8)
+    # GS links — gs_state is now (visible, scheduled, scheduling_state) triple
     assoc = current_associations or {}
-    for pair, (visible, scheduled) in gs_state.items():
+    td_state = mbb_pending_teardowns or {}
+    for pair, state_tuple in gs_state.items():
+        visible = state_tuple[0]
+        scheduled = state_tuple[1]
+        sched_state = state_tuple[2] if len(state_tuple) > 2 else "active"
         if visible and scheduled:
             admin = AdminState.UP
             carrier = CarrierState.UP
@@ -789,6 +900,11 @@ def build_link_state_snapshot(
             carrier = CarrierState.DOWN
         latency = _link_latency(pair[0], pair[1]) if carrier == CarrierState.UP else None
         gs_ti, sat_ti = assoc.get(pair, (0, 0))
+        td_remaining = None
+        successor = None
+        if pair in td_state:
+            start_tick, successor = td_state[pair]
+            td_remaining = max(0, mbb_overlap_ticks - (current_step - start_tick))
         links.append(
             LinkState(
                 node_a=pair[0],
@@ -803,6 +919,9 @@ def build_link_state_snapshot(
                 link_type="ground",
                 gs_terminal_index=gs_ti,
                 sat_terminal_index=sat_ti,
+                scheduling_state=sched_state,
+                teardown_remaining_ticks=td_remaining,
+                successor_pair=successor,
                 sim_time=sim_time,
             )
         )

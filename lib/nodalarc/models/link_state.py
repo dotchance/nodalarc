@@ -69,6 +69,9 @@ class LinkState(BaseModel):
     link_type: Literal["isl", "ground"]
     gs_terminal_index: int | None = None
     sat_terminal_index: int | None = None
+    scheduling_state: str = "active"
+    teardown_remaining_ticks: int | None = None
+    successor_pair: tuple[str, str] | None = None
     sim_time: datetime
 
 

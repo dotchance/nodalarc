@@ -220,6 +220,7 @@ class _LookAheadThread:
         initial_isl_state: dict | None,
         initial_gs_state: dict | None,
         initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
+        initial_pending_teardowns: dict | None = None,
         timestamp_offset: float = 0.0,
     ) -> None:
         """Start background window precomputation. Non-blocking."""
@@ -244,6 +245,7 @@ class _LookAheadThread:
                     initial_isl_state=dict(initial_isl_state) if initial_isl_state else None,
                     initial_gs_state=dict(initial_gs_state) if initial_gs_state else None,
                     initial_associations=initial_associations,
+                    initial_pending_teardowns=initial_pending_teardowns,
                     timestamp_offset=timestamp_offset,
                 )
                 if not self._cancelled.is_set():
@@ -503,6 +505,21 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
 
     from ome.event_stream import build_step_context, compute_step
 
+    mbb_dispatch = session.routing.mbb_dispatch if session.routing else False
+    mbb_overlap_ticks = session.routing.mbb_overlap_ticks if session.routing else 3
+    mbb_reserve = (
+        1
+        if mbb_dispatch
+        and any(
+            ctx_tc > 1
+            for ctx_tc in (
+                sum(t.tracking_capacity for t in (st.terminals or cfg.gs_file.default_terminals))
+                for st in (cfg.gs_file.stations if cfg.gs_file else [])
+            )
+        )
+        else 0
+    )
+
     step_ctx = build_step_context(
         satellites=cfg.satellites,
         addressing=cfg.addressing,
@@ -514,6 +531,8 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         default_min_elevation_deg=cfg.default_min_elevation_deg,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
     )
 
     step_seconds = session.time.step_seconds
@@ -556,10 +575,11 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     )
     lookahead_launched_for_epoch: float | None = None
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
-    gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
     running_isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
-    running_gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    running_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
     current_associations: dict[tuple[str, str], tuple[int, int]] = {}
+    mbb_pending_teardowns: dict[tuple[str, str], tuple[int, tuple[str, str]]] = {}
     step = 0
     snapshot_seq = 0
     last_snapshot_sim_s: float = -snapshot_interval_s  # force immediate on first step
@@ -630,6 +650,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 running_isl_state = {}
                 running_gs_state = {}
                 current_associations = {}
+                mbb_pending_teardowns = {}
                 step = 0
                 pace_ref_wall = time.monotonic()
                 pace_ref_step = 0
@@ -677,6 +698,9 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     initial_isl_state=isl_state if isl_state else None,
                     initial_gs_state=gs_state if gs_state else None,
                     initial_associations=current_associations if current_associations else None,
+                    initial_pending_teardowns=mbb_pending_teardowns
+                    if mbb_pending_teardowns
+                    else None,
                     timestamp_offset=0.0,
                 )
                 lookahead_launched_for_epoch = epoch_unix
@@ -702,15 +726,18 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 current_rate = new_rate
 
             # --- Compute one step (Physicist role) ---
-            step_events, current_positions, current_associations = compute_step(
-                step_ctx,
-                epoch_unix,
-                step,
-                step_seconds,
-                0.0,
-                isl_state,
-                gs_state,
-                current_associations,
+            step_events, current_positions, current_associations, mbb_pending_teardowns = (
+                compute_step(
+                    step_ctx,
+                    epoch_unix,
+                    step,
+                    step_seconds,
+                    0.0,
+                    isl_state,
+                    gs_state,
+                    current_associations,
+                    mbb_pending_teardowns,
+                )
             )
 
             # --- Emit events for this step ---
@@ -723,7 +750,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     vis = te.data
                     pair = (vis.node_a, vis.node_b)
                     if vis.link_type == "ground":
-                        running_gs_state[pair] = (vis.visible, vis.scheduled)
+                        running_gs_state[pair] = (vis.visible, vis.scheduled, vis.scheduling_state)
                     else:
                         running_isl_state[pair] = (vis.visible, vis.scheduled)
             # ClockTick with real wall_time (not precomputed placeholder)
@@ -749,6 +776,9 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     positions=current_positions,
                     epoch_id=_epoch_id,
                     current_associations=current_associations,
+                    mbb_pending_teardowns=mbb_pending_teardowns,
+                    mbb_overlap_ticks=mbb_overlap_ticks,
+                    current_step=step,
                 )
                 _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, snap.model_dump_json().encode())
                 last_snapshot_sim_s = sim_s

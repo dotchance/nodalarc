@@ -52,7 +52,7 @@ class TestComputeStepMatchesWindow:
         step_seconds = session.time.step_seconds
 
         # Batch: compute a window of n_steps
-        window_events, window_isl, window_gs, _window_assoc = precompute_timeline_window(
+        window_events, window_isl, window_gs, _window_assoc, _ = precompute_timeline_window(
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -73,7 +73,7 @@ class TestComputeStepMatchesWindow:
         gs_state: dict = {}
         step_events_all = []
         for step in range(n_steps + 1):
-            evts, _positions, _assoc = compute_step(
+            evts, _positions, _assoc, _ = compute_step(
                 ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state
             )
             step_events_all.extend(evts)
@@ -103,7 +103,7 @@ class TestComputeStepMatchesWindow:
         n_steps = 10
         step_seconds = session.time.step_seconds
 
-        _, window_isl, window_gs, _window_assoc = precompute_timeline_window(
+        _, window_isl, window_gs, _window_assoc, _ = precompute_timeline_window(
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -143,13 +143,13 @@ class TestComputeStepMatchesWindow:
         gs_state: dict = {}
 
         # Step 0 may emit initial visibility events
-        events_0, _pos0, _assoc0 = compute_step(
+        events_0, _pos0, _assoc0, _ = compute_step(
             ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state
         )
         vis_count_0 = sum(1 for e in events_0 if e.event_type == "VisibilityEvent")
 
         # Step 1 should emit fewer or zero VisibilityEvents (state hasn't changed in 1 second)
-        events_1, _pos1, _assoc1 = compute_step(
+        events_1, _pos1, _assoc1, _ = compute_step(
             ctx, epoch_unix, 1, step_seconds, 0.0, isl_state, gs_state
         )
         vis_count_1 = sum(1 for e in events_1 if e.event_type == "VisibilityEvent")
@@ -178,7 +178,7 @@ class TestComputeStepMatchesWindow:
         isl_state: dict = {}
         gs_state: dict = {}
 
-        events, positions, _assoc = compute_step(
+        events, positions, _assoc, _ = compute_step(
             ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state
         )
         assert isinstance(positions, dict)

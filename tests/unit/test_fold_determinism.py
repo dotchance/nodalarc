@@ -47,7 +47,7 @@ class TestFoldDeterminism:
         n_steps = 60
         step_seconds = session.time.step_seconds
 
-        window_events, _wisl, _wgs, _wassoc = precompute_timeline_window(
+        window_events, _wisl, _wgs, _wassoc, _ = precompute_timeline_window(
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -68,7 +68,7 @@ class TestFoldDeterminism:
         associations: dict = {}
         step_events_all = []
         for step in range(n_steps + 1):
-            evts, _pos, associations = compute_step(
+            evts, _pos, associations, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -107,7 +107,7 @@ class TestFoldDeterminism:
         gs_state: dict = {}
         associations: dict = {}
         for step in range(11):
-            _, _, associations = compute_step(
+            _, _, associations, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -125,7 +125,7 @@ class TestFoldDeterminism:
         associations_fresh: frozenset = {}
 
         # Run first tick from both: seeded and fresh
-        events_seeded, _, assoc_seeded = compute_step(
+        events_seeded, _, assoc_seeded, _ = compute_step(
             ctx,
             epoch_unix,
             0,
@@ -135,7 +135,7 @@ class TestFoldDeterminism:
             gs_state.copy(),
             associations,
         )
-        events_fresh, _, assoc_fresh = compute_step(
+        events_fresh, _, assoc_fresh, _ = compute_step(
             ctx,
             epoch_unix,
             0,
@@ -172,7 +172,7 @@ class TestFoldDeterminism:
         seed_gs: dict = {}
         seed_assoc: frozenset = {}
         for step in range(11):
-            _, _, seed_assoc = compute_step(
+            _, _, seed_assoc, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -186,7 +186,7 @@ class TestFoldDeterminism:
         # Now run from the seeded state: batch vs tick-by-tick
         seed_epoch = epoch_unix + 11 * step_seconds
 
-        window_events, _wisl, _wgs, window_assoc = precompute_timeline_window(
+        window_events, _wisl, _wgs, window_assoc, _ = precompute_timeline_window(
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -204,7 +204,7 @@ class TestFoldDeterminism:
         tick_assoc = seed_assoc
         tick_events = []
         for step in range(n_steps + 1):
-            evts, _pos, tick_assoc = compute_step(
+            evts, _pos, tick_assoc, _ = compute_step(
                 ctx,
                 seed_epoch,
                 step,
@@ -254,7 +254,7 @@ class TestFoldDeterminism:
         a_assoc: frozenset = {}
         a_events = []
         for step in range(61):
-            evts, _pos, a_assoc = compute_step(
+            evts, _pos, a_assoc, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -274,7 +274,7 @@ class TestFoldDeterminism:
 
         # First half: steps 0..boundary
         for step in range(boundary + 1):
-            evts, _pos, b_assoc = compute_step(
+            evts, _pos, b_assoc, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -292,7 +292,7 @@ class TestFoldDeterminism:
 
         # Second half: steps boundary+1..60, seeded from boundary state
         for step in range(boundary + 1, 61):
-            evts, _pos, b_assoc = compute_step(
+            evts, _pos, b_assoc, _ = compute_step(
                 ctx,
                 epoch_unix,
                 step,

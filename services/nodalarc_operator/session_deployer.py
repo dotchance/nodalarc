@@ -540,7 +540,7 @@ def write_wiring_manifest(
             "slot": sat.slot,
             "sysctls": dict(node_sysctls),
             "isl_interfaces": isl_interfaces,
-            "gnd_interfaces": [{"name": "gnd0"}],
+            "gnd_interfaces": [{"name": f"gnd{g}"} for g in range(sat.ground_terminal_count)],
             "mpls_enable": True,
             "segment_routing": segment_routing,
             "mtu": 9000,
@@ -578,7 +578,16 @@ def write_wiring_manifest(
             "gs_index": i,
             "sysctls": dict(node_sysctls),
             "isl_interfaces": [],
-            "gnd_interfaces": [{"name": "term0"}],
+            "gnd_interfaces": [
+                {"name": f"term{t}"}
+                for t in range(
+                    sum(
+                        t.tracking_capacity
+                        for t in (station.terminals or gs_file.default_terminals)
+                    )
+                    or 1
+                )
+            ],
             "terrestrial": {"addresses": addrs},
             "mpls_enable": True,
             "segment_routing": segment_routing,

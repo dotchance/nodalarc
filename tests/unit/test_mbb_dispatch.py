@@ -28,7 +28,7 @@ def _make_dispatcher(
     bmap = {}
     if pairs:
         for p in pairs:
-            imap[p] = ("gnd0", "gnd0")
+            imap[p] = ("term0", "gnd0")
             bmap[p] = 1000.0
 
     loc = MagicMock()
@@ -78,14 +78,14 @@ class TestMBBCapacityClassification:
             sat_caps={"sat-01": 1, "sat-02": 1},
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._actual_links[pair_old] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-A"] = 1
         d._sat_active_count["sat-01"] = 1
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
         sim = datetime.now(UTC)
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
+        desired = {pair_new: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, sim))
 
@@ -102,13 +102,13 @@ class TestMBBCapacityClassification:
             sat_caps={"sat-01": 1, "sat-02": 1},
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._actual_links[pair_old] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-B"] = 1
         d._sat_active_count["sat-01"] = 1
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
+        desired = {pair_new: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
 
@@ -124,7 +124,7 @@ class TestMBBCapacityClassification:
             sat_caps={"sat-X": 1, "sat-Y": 1},
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._actual_links[pair_old] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-C"] = 1
         d._sat_active_count["sat-X"] = 1
         # sat-Y is also occupied by another GS
@@ -132,7 +132,7 @@ class TestMBBCapacityClassification:
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
+        desired = {pair_new: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
 
@@ -153,7 +153,7 @@ class TestMBBRollback:
             sat_caps={"sat-01": 1, "sat-02": 1},
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._actual_links[pair_old] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-A"] = 1
         d._sat_active_count["sat-01"] = 1
 
@@ -167,7 +167,7 @@ class TestMBBRollback:
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
+        desired = {pair_new: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
 
@@ -187,11 +187,11 @@ class TestMBBDispatchFlag:
             mbb=False,
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._actual_links[pair_old] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
+        desired = {pair_new: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
 
@@ -207,7 +207,7 @@ class TestCounterIntegrity:
             sat_caps={"sat-01": 1},
         )
         pair = ("gs-A", "sat-01")
-        d._actual_links[pair] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._actual_links[pair] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-A"] = 5
         d._sat_active_count["sat-01"] = 5
 
@@ -224,7 +224,7 @@ class TestCounterIntegrity:
         )
         pairs = [("gs-A", "sat-01"), ("gs-A", "sat-02"), ("gs-B", "sat-01")]
         for p in pairs:
-            d._actual_links[p] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
+            d._actual_links[p] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
             d._increment_active_counts(p)
 
         assert d._gs_active_count["gs-A"] == 2

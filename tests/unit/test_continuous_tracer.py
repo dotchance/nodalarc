@@ -45,9 +45,9 @@ def _make_tracer(
         }
     if interface_map is None:
         interface_map = {
-            ("gs-alpha", "sat-P00S00"): ("gnd0", "gnd0"),
+            ("gs-alpha", "sat-P00S00"): ("term0", "gnd0"),
             ("sat-P00S00", "sat-P00S01"): ("isl0", "isl0"),
-            ("gs-beta", "sat-P00S01"): ("gnd0", "gnd0"),
+            ("gs-beta", "sat-P00S01"): ("term0", "gnd0"),
         }
     if pid_map is None:
         pid_map = {
@@ -107,7 +107,7 @@ def test_build_links():
     assert len(links) == 3
     assert links[0].from_node == "gs-alpha"
     assert links[0].to_node == "sat-P00S00"
-    assert links[0].interface == "gnd0"
+    assert links[0].interface == "term0"
     assert links[0].link_type == "ground"
     assert links[1].from_node == "sat-P00S00"
     assert links[1].to_node == "sat-P00S01"
@@ -120,13 +120,13 @@ def test_build_delay_queries():
     """Hop pairs + interface_map -> correct delay queries."""
     tracer = _make_tracer()
     links = [
-        LiveTraceLink(from_node="gs-alpha", to_node="sat-P00S00", interface="gnd0"),
+        LiveTraceLink(from_node="gs-alpha", to_node="sat-P00S00", interface="term0"),
         LiveTraceLink(from_node="sat-P00S00", to_node="sat-P00S01", interface="isl0"),
     ]
     queries = tracer._build_delay_queries(links)
     assert len(queries) == 2
     assert queries[0]["pid"] == 1001
-    assert queries[0]["ifname"] == "gnd0"
+    assert queries[0]["ifname"] == "term0"
     assert queries[1]["pid"] == 1002
     assert queries[1]["ifname"] == "isl0"
 

@@ -99,8 +99,27 @@ class AddressingScheme:
         return [f"isl{i}" for i in range(count)]
 
     @staticmethod
+    def term_interfaces(count: int) -> list[str]:
+        return [f"term{i}" for i in range(count)]
+
+    @staticmethod
     def gnd_interfaces(count: int) -> list[str]:
         return [f"gnd{i}" for i in range(count)]
+
+    def ground_link_interfaces(
+        self,
+        pair: tuple[str, str],
+        gs_terminal_index: int = 0,
+        sat_terminal_index: int = 0,
+    ) -> tuple[str, str]:
+        """Return (iface_for_pair[0], iface_for_pair[1]) for a ground link.
+
+        Uses the type registry to determine which node is the ground
+        segment (gets termN) and which is the satellite (gets gndN).
+        """
+        if self.is_ground_segment(pair[0]):
+            return (f"term{gs_terminal_index}", f"gnd{sat_terminal_index}")
+        return (f"gnd{sat_terminal_index}", f"term{gs_terminal_index}")
 
 
 # ---------------------------------------------------------------------------

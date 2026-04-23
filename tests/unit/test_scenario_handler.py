@@ -39,7 +39,7 @@ class TestOverrideSetManagement:
             ("sat-P00S00", "sat-P00S01"): ("isl0", "isl1"),
             ("sat-P00S00", "sat-P00S02"): ("isl1", "isl0"),
             ("sat-P00S01", "sat-P00S02"): ("isl2", "isl2"),
-            ("gs-ashburn", "sat-P00S00"): ("gnd0", "gnd0"),
+            ("gs-ashburn", "sat-P00S00"): ("term0", "gnd0"),
         }
         override_set: set[tuple[str, str]] = set()
         node = "sat-P00S00"

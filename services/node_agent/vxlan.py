@@ -70,7 +70,7 @@ def create_vxlan_link(
 
     Args:
         pid: PID of the target pod.
-        ifname: Target interface name inside the pod (e.g., "isl0", "gnd0").
+        ifname: Target interface name inside the pod (e.g., "isl0", "term0", "gnd0").
         local_ip: This node's IP (VXLAN local endpoint).
         remote_ip: Peer node's IP (VXLAN remote endpoint).
         vni: VXLAN Network Identifier.

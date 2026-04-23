@@ -752,7 +752,7 @@ def build_link_state_snapshot(
             LinkState(
                 node_a=pair[0],
                 node_b=pair[1],
-                interface_a="gnd0",
+                interface_a="term0",
                 interface_b="gnd0",
                 admin=admin,
                 carrier=carrier,

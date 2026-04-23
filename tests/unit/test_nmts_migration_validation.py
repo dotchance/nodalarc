@@ -18,12 +18,12 @@ def test_ground_segment_nmts_fields():
         tenant_id="tenant-a",
         reference_body="luna",
         mobility="maritime",
-        service_class="gold",
+        service_priority=1,
     )
     assert gs.tenant_id == "tenant-a"
     assert gs.reference_body == "luna"
     assert gs.mobility == "maritime"
-    assert gs.service_class == "gold"
+    assert gs.service_priority == 1
 
 
 def test_ground_segment_validation():
@@ -32,9 +32,9 @@ def test_ground_segment_validation():
     with pytest.raises(ValidationError, match="mobility must be one of"):
         GroundStationConfig(name="gs", lat_deg=0, lon_deg=0, mobility="warp-speed")
 
-    # Invalid service_class
-    with pytest.raises(ValidationError, match="Input should be 'gold' or 'silver'"):
-        GroundStationConfig(name="gs", lat_deg=0, lon_deg=0, service_class="platinum")
+    # Invalid service_priority
+    with pytest.raises(ValidationError, match="service_priority must be >= 1"):
+        GroundStationConfig(name="gs", lat_deg=0, lon_deg=0, service_priority=0)
 
     # Invalid reference_body
     with pytest.raises(ValidationError, match="reference_body must be one of"):

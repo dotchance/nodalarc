@@ -164,7 +164,7 @@ def _ground_link_up(
         sat_pid = _require_pid(iface.sat_id, pm)
         gs_pid = _require_pid(iface.gs_id, pm)
         ground_bridge.attach_to_ground_bridge(iface.gs_id, iface.sat_id, sat_pid)
-        namespace_ops.apply_link_shaping(gs_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps)
+        namespace_ops.apply_link_shaping(gs_pid, "term0", iface.latency_ms, iface.bandwidth_mbps)
         namespace_ops.apply_link_shaping(sat_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps)
         return None
     except Exception as exc:
@@ -185,7 +185,7 @@ def _update_latency_entry(
         if entry.link_type == node_agent_pb2.GROUND:
             gs_pid = _require_pid(entry.gs_id, pm)
             sat_pid = _require_pid(entry.sat_id, pm)
-            namespace_ops.update_delay(gs_pid, "gnd0", entry.latency_ms)
+            namespace_ops.update_delay(gs_pid, "term0", entry.latency_ms)
             namespace_ops.update_delay(sat_pid, "gnd0", entry.latency_ms)
         else:
             pid = _require_pid(entry.node_id, pm)

@@ -7,7 +7,7 @@ ground_station_set:
     visibility band. No McMurdo, Svalbard, or Fairbanks — those are useless
     at 53 deg inclination. Default terminal definitions come from each
     station's individual YAML in configs/ground-stations/stations/.
-  default_min_elevation_deg: 15
+  default_min_elevation_deg: 25
   stations:
     # Americas (west to east)
     - hawthorne

@@ -69,7 +69,7 @@ class TestIndividualStationDetails:
 
     def test_mcmurdo_polar_config(self):
         s = load_ground_station_individual("mcmurdo")
-        assert s.min_elevation_deg == 10
+        assert s.min_elevation_deg == 15
         assert s.scheduling_policy == "longest-pass"
         assert s.terminals is not None
         assert s.terminals[0].type == "rf"
@@ -85,7 +85,7 @@ class TestIndividualStationDetails:
 
     def test_svalbard_polar_config(self):
         s = load_ground_station_individual("svalbard")
-        assert s.min_elevation_deg == 10
+        assert s.min_elevation_deg == 15
         assert s.scheduling_policy == "longest-pass"
         assert s.terminals[0].type == "rf"
 

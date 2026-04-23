@@ -14,8 +14,8 @@ log file /var/log/frr/isisd.log informational
 {% set isis_hello_multiplier = isis_hello_multiplier | default(3) %}
 {% set spf_init_delay = spf_init_delay | default(50) %}
 {% set spf_short_delay = spf_short_delay | default(200) %}
-{% set spf_long_delay = spf_long_delay | default(5000) %}
-{% set spf_holddown = spf_holddown | default(10000) %}
+{% set spf_long_delay = spf_long_delay | default(1000) %}
+{% set spf_holddown = spf_holddown | default(2000) %}
 {% set spf_time_to_learn = spf_time_to_learn | default(500) %}
 
 {# BFD — disabled by default, enabled via extensions: [bfd] #}

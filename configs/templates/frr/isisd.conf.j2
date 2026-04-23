@@ -9,6 +9,21 @@ log file /var/log/frr/isisd.log informational
 {% set system_id = "00ff.%04x.0002" | format(gs_index) %}
 {% endif %}
 
+{# IS-IS timer defaults — overridable from session config_overrides #}
+{% set isis_hello_interval = isis_hello_interval | default(1) %}
+{% set isis_hello_multiplier = isis_hello_multiplier | default(3) %}
+{% set spf_init_delay = spf_init_delay | default(50) %}
+{% set spf_short_delay = spf_short_delay | default(200) %}
+{% set spf_long_delay = spf_long_delay | default(5000) %}
+{% set spf_holddown = spf_holddown | default(10000) %}
+{% set spf_time_to_learn = spf_time_to_learn | default(500) %}
+
+{# BFD — disabled by default, enabled via extensions: [bfd] #}
+{% set bfd_enabled = bfd_enabled | default(false) %}
+{% set bfd_detect_multiplier = bfd_detect_multiplier | default(3) %}
+{% set bfd_rx_interval = bfd_rx_interval | default(300) %}
+{% set bfd_tx_interval = bfd_tx_interval | default(300) %}
+
 router isis NODAL
  net {{ area_id }}.{{ system_id }}.00
  is-type level-1-2
@@ -24,7 +39,7 @@ router isis NODAL
  segment-routing prefix {{ ipv4_loopback }}/32 index {{ sid_index }}
 {% endif %}
  lsp-gen-interval 1
- spf-delay-ietf init-delay 50 short-delay 200 long-delay 5000 holddown 10000 time-to-learn 500
+ spf-delay-ietf init-delay {{ spf_init_delay }} short-delay {{ spf_short_delay }} long-delay {{ spf_long_delay }} holddown {{ spf_holddown }} time-to-learn {{ spf_time_to_learn }}
  max-lsp-lifetime 1200
  lsp-refresh-interval 150
 exit
@@ -34,9 +49,11 @@ interface {{ iface_name }}
  ip router isis NODAL
  isis network point-to-point
  isis metric {{ (reference_bandwidth / info.bandwidth_mbps) | int }}
- isis hello-interval 1
- isis hello-multiplier 3
+ isis hello-interval {{ isis_hello_interval }}
+ isis hello-multiplier {{ isis_hello_multiplier }}
+{% if bfd_enabled %}
  isis bfd
+{% endif %}
 exit
 {% endfor %}
 
@@ -45,9 +62,11 @@ interface {{ iface }}
  ip router isis NODAL
  isis network point-to-point
  isis metric 10
- isis hello-interval 1
- isis hello-multiplier 3
+ isis hello-interval {{ isis_hello_interval }}
+ isis hello-multiplier {{ isis_hello_multiplier }}
+{% if bfd_enabled %}
  isis bfd
+{% endif %}
 exit
 {% endfor %}
 

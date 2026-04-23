@@ -80,7 +80,9 @@ def _phase0_cleanup(
         cleaned = 0
         for link in ns_ipr.get_links():
             ifname = link.get_attr("IFLA_IFNAME")
-            if ifname and (ifname.startswith("isl") or ifname == "gnd0"):
+            if ifname and (
+                ifname.startswith("isl") or ifname.startswith("term") or ifname.startswith("gnd")
+            ):
                 with contextlib.suppress(Exception):
                     ns_ipr.link("del", index=link["index"])
                     cleaned += 1
@@ -310,8 +312,8 @@ def execute_wiring(
 
     def _create_ground_bridge_task(gs_id: str, gs_pid: int) -> None:
         create_ground_bridge(gs_id, gs_pid)
-        configure_interface(gs_pid, "gnd0", gs_id)
-        enable_mpls_input(gs_pid, "gnd0")
+        configure_interface(gs_pid, "term0", gs_id)
+        enable_mpls_input(gs_pid, "term0")
 
     def _create_sat_ground_task(node_id: str, pid: int) -> None:
         create_satellite_ground_veth(node_id, pid)

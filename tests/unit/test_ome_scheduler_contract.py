@@ -58,7 +58,7 @@ def _make_link_state(
     return LinkState(
         node_a=node_a,
         node_b=node_b,
-        interface_a="isl0" if link_type == "isl" else "gnd0",
+        interface_a="isl0" if link_type == "isl" else "term0",
         interface_b="isl1" if link_type == "isl" else "gnd0",
         admin=admin,
         carrier=carrier,
@@ -73,7 +73,7 @@ def _make_link_state(
 def _make_dispatcher(interface_map=None):
     if interface_map is None:
         interface_map = {
-            ("gs-ashburn", "sat-P00S00"): ("gnd0", "gnd0"),
+            ("gs-ashburn", "sat-P00S00"): ("term0", "gnd0"),
             ("sat-P00S00", "sat-P00S01"): ("isl0", "isl1"),
         }
     bandwidth_map = {k: 1000.0 for k in interface_map}
@@ -156,8 +156,8 @@ class TestGsDeallocationSnapshot:
     def test_snapshot_handoff_keeps_new_satellite(self):
         d = _make_dispatcher(
             {
-                ("gs-ashburn", "sat-P00S00"): ("gnd0", "gnd0"),
-                ("gs-ashburn", "sat-P00S01"): ("gnd0", "gnd0"),
+                ("gs-ashburn", "sat-P00S00"): ("term0", "gnd0"),
+                ("gs-ashburn", "sat-P00S01"): ("term0", "gnd0"),
                 ("sat-P00S00", "sat-P00S01"): ("isl0", "isl1"),
             }
         )
@@ -208,7 +208,7 @@ class TestGsDeallocationDispatchBatch:
 
     def test_gs_pair_removed_via_dispatch_batch(self):
         d = _make_dispatcher()
-        info = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        info = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0)
         d._desired_links[("gs-ashburn", "sat-P00S00")] = info
         d._active_links[("gs-ashburn", "sat-P00S00")] = info
 
@@ -239,7 +239,7 @@ class TestGsDeallocationConsistency:
 
         # Path 1: snapshot with no GS link — desired dict excludes pair
         d1 = _make_dispatcher()
-        d1._active_links[pair] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d1._active_links[pair] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0)
         snapshot = LinkStateSnapshot(
             sim_time=datetime(2026, 1, 1, tzinfo=UTC),
             snapshot_seq=1,
@@ -250,7 +250,7 @@ class TestGsDeallocationConsistency:
 
         # Path 2: dispatch batch with deallocation event → _reconcile_links removes
         d2 = _make_dispatcher()
-        info = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        info = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0)
         d2._desired_links[pair] = info
         d2._active_links[pair] = info
         vis = _make_vis("gs-ashburn", "sat-P00S00", True, False, link_type="ground")

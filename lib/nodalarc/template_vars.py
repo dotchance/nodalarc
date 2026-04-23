@@ -285,7 +285,7 @@ def build_template_vars(
         result["gs_index"] = gs_index
         result["ipv4_loopback"] = addressing.gs_ipv4(gs_index)
         result["ipv6_loopback"] = addressing.gs_ipv6(gs_index)
-        result["gnd_interfaces"] = addressing.gnd_interfaces(gnd_count)
+        result["gnd_interfaces"] = addressing.term_interfaces(gnd_count)
         result["isl_interfaces"] = []
         result["isl_count"] = 0
         result["interface_info"] = {}

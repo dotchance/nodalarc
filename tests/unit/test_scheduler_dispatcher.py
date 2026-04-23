@@ -64,7 +64,7 @@ def _make_link(
 def _make_dispatcher(interface_map=None, stub_success=True):
     if interface_map is None:
         interface_map = {
-            ("gs-ashburn", "sat-P00S00"): ("gnd0", "gnd0"),
+            ("gs-ashburn", "sat-P00S00"): ("term0", "gnd0"),
             ("sat-P00S00", "sat-P00S01"): ("isl0", "isl1"),
         }
     bandwidth_map = {k: 1000.0 for k in interface_map}
@@ -150,7 +150,7 @@ class TestDispatcherActiveLinks:
 
     def test_gs_deallocation_removes_from_active_links(self):
         d, _ = _make_dispatcher()
-        info = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        info = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0)
         d._desired_links[("gs-ashburn", "sat-P00S00")] = info
         d._active_links[("gs-ashburn", "sat-P00S00")] = info
 
@@ -195,7 +195,7 @@ class TestDispatcherLinkStateSnapshot:
 
     def test_snapshot_gs_exclusion(self):
         d, _ = _make_dispatcher()
-        d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d._active_links[("gs-ashburn", "sat-P00S00")] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0)
 
         snapshot = LinkStateSnapshot(
             sim_time=datetime(2026, 1, 1, tzinfo=UTC),

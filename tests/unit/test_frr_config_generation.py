@@ -400,6 +400,126 @@ class TestTimerScaling:
         assert "spf-delay-ietf" in rendered
 
 
+class TestBfdAndTimerRendering:
+    """Verify BFD and timer values render into FRR templates correctly."""
+
+    def test_bfd_enabled_renders_isis_bfd(
+        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
+    ):
+        vars = _get_vars(
+            stripe_session,
+            starlink_config,
+            gs_file,
+            addressing,
+            isis_stack,
+            node_type="satellite",
+            plane=0,
+            slot=0,
+        )
+        vars["bfd_enabled"] = True
+        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
+        assert "isis bfd" in rendered
+
+    def test_bfd_disabled_no_isis_bfd(
+        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
+    ):
+        vars = _get_vars(
+            stripe_session,
+            starlink_config,
+            gs_file,
+            addressing,
+            isis_stack,
+            node_type="satellite",
+            plane=0,
+            slot=0,
+        )
+        vars["bfd_enabled"] = False
+        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
+        assert "isis bfd" not in rendered
+
+    def test_custom_isis_timers_render(
+        self, stripe_session, starlink_config, gs_file, addressing, isis_stack
+    ):
+        vars = _get_vars(
+            stripe_session,
+            starlink_config,
+            gs_file,
+            addressing,
+            isis_stack,
+            node_type="satellite",
+            plane=0,
+            slot=0,
+        )
+        vars["isis_hello_interval"] = 3
+        vars["isis_hello_multiplier"] = 5
+        vars["spf_init_delay"] = 100
+        vars["spf_long_delay"] = 2000
+        rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
+        assert "isis hello-interval 3" in rendered
+        assert "isis hello-multiplier 5" in rendered
+        assert "init-delay 100" in rendered
+        assert "long-delay 2000" in rendered
+
+    def test_ospf_bfd_renders(self, flat_session, four_node_config, gs_file, addressing):
+        from nodalarc.stack_resolver import resolve_stack
+
+        ospf_stack = resolve_stack("ospf", [])
+        vars = _get_vars(
+            flat_session,
+            four_node_config,
+            gs_file,
+            addressing,
+            ospf_stack,
+            node_type="satellite",
+            plane=0,
+            slot=0,
+        )
+        vars["bfd_enabled"] = True
+        rendered = _render_template("frr-ospf", "ospfd.conf.j2", vars)
+        assert "ip ospf bfd" in rendered
+
+    def test_ospf_no_bfd(self, flat_session, four_node_config, gs_file, addressing):
+        from nodalarc.stack_resolver import resolve_stack
+
+        ospf_stack = resolve_stack("ospf", [])
+        vars = _get_vars(
+            flat_session,
+            four_node_config,
+            gs_file,
+            addressing,
+            ospf_stack,
+            node_type="satellite",
+            plane=0,
+            slot=0,
+        )
+        vars["bfd_enabled"] = False
+        rendered = _render_template("frr-ospf", "ospfd.conf.j2", vars)
+        assert "ip ospf bfd" not in rendered
+
+    def test_ospf_custom_timers(self, flat_session, four_node_config, gs_file, addressing):
+        from nodalarc.stack_resolver import resolve_stack
+
+        ospf_stack = resolve_stack("ospf", [])
+        vars = _get_vars(
+            flat_session,
+            four_node_config,
+            gs_file,
+            addressing,
+            ospf_stack,
+            node_type="satellite",
+            plane=0,
+            slot=0,
+        )
+        vars["ospf_hello_interval"] = 10
+        vars["ospf_dead_interval"] = 40
+        vars["ospf_spf_delay"] = 200
+        vars["ospf_spf_max_hold"] = 5000
+        rendered = _render_template("frr-ospf", "ospfd.conf.j2", vars)
+        assert "ip ospf hello-interval 10" in rendered
+        assert "ip ospf dead-interval 40" in rendered
+        assert "timers throttle spf 200" in rendered
+
+
 class TestZebraConfig:
     def test_hostname(self, flat_session, four_node_config, gs_file, addressing, isis_stack):
         vars = _get_vars(

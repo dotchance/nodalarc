@@ -7,7 +7,7 @@ ground_stations:
       count: 2
       bandwidth_mbps: 1000
       tracking_capacity: 2
-  default_min_elevation_deg: 10
+  default_min_elevation_deg: 25
   default_scheduling_policy: highest-elevation
   default_terrestrial_prefixes:
     ipv4_template: "172.16.{gs_index}.0/24"

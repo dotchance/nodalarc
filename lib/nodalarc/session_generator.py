@@ -79,6 +79,7 @@ def generate_session_yaml(
     satellite_type: str | None = None,
     custom_constellation: dict | None = None,
     custom_ground_stations: list[dict] | None = None,
+    routing_config: dict | None = None,
 ) -> tuple[str, list[str]]:
     """Generate a session YAML from wizard selections.
 
@@ -188,6 +189,8 @@ def generate_session_yaml(
 
     if area_assignment:
         session_dict["routing"]["area_assignment"] = area_assignment
+    if routing_config:
+        session_dict["routing"].update(routing_config)
 
     if preset and preset.time:
         session_dict["time"] = preset.time

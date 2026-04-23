@@ -70,6 +70,28 @@ class RoutingConfig(BaseModel):
     mbb_dispatch: bool | None = None  # Default: True for nodalpath, False for IGP
     mbb_overlap_ticks: int = 3  # Resource hold duration for MBB overlap
 
+    # BFD — cross-protocol, independent of IS-IS/OSPF choice
+    bfd: bool = False
+    bfd_detect_multiplier: int = 3
+    bfd_rx_interval: int = 300  # ms
+    bfd_tx_interval: int = 300  # ms
+
+    # IS-IS timers (used when protocol=isis)
+    isis_hello_interval: int = 1  # seconds
+    isis_hello_multiplier: int = 3
+    spf_init_delay: int = 50  # ms — IETF SPF backoff algorithm
+    spf_short_delay: int = 200  # ms
+    spf_long_delay: int = 1000  # ms
+    spf_holddown: int = 2000  # ms
+    spf_time_to_learn: int = 500  # ms
+
+    # OSPF timers (used when protocol=ospf)
+    ospf_hello_interval: int = 1  # seconds
+    ospf_dead_interval: int = 3  # seconds
+    ospf_spf_delay: int = 50  # ms — SPF throttle
+    ospf_spf_initial_hold: int = 200  # ms
+    ospf_spf_max_hold: int = 1000  # ms
+
     @model_validator(mode="after")
     def _require_stack_or_protocol(self):
         if self.stack is None and self.protocol is None:

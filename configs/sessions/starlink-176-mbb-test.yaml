@@ -50,7 +50,6 @@ routing:
   area_assignment:
     strategy: per-plane
   mbb_dispatch: true
-  config_overrides:
-    bfd_enabled: true
+  bfd: true
 time:
   step_seconds: 1

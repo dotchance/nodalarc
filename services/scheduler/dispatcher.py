@@ -151,6 +151,10 @@ class Dispatcher:
         # Pairs that failed dispatch and should not be retried.
         self._skip_pairs: set[tuple[str, str]] = set()
 
+        # Ground links currently in MBB teardown state (held for overlap).
+        # Used by the safety check to identify teardown-expired removals.
+        self._teardown_pairs: set[tuple[str, str]] = set()
+
         # Epoch synchronization state machine (PRD v0.71)
         self._suspended = True  # Start SUSPENDED — wait for epoch_id=0 deps
         self._expected_epoch_id = 0
@@ -545,6 +549,12 @@ class Dispatcher:
                     continue
 
             if vis.visible and vis.scheduled:
+                sched_state = getattr(vis, "scheduling_state", "active")
+                if sched_state == "teardown":
+                    self._teardown_pairs.add(pair)
+                else:
+                    self._teardown_pairs.discard(pair)
+
                 if pair not in self._desired_links:
                     is_gs = vis.link_type == "ground"
                     if is_gs:
@@ -580,11 +590,27 @@ class Dispatcher:
                     )
             elif not vis.visible:
                 self._desired_links.pop(pair, None)
+                self._teardown_pairs.discard(pair)
             elif vis.visible and not vis.scheduled:
-                # Terminal deallocated (GS handoff) — INVARIANT
                 is_gs = vis.link_type == "ground"
                 if is_gs:
+                    was_teardown = pair in self._teardown_pairs
+                    if was_teardown:
+                        gs_id = pair[0] if pair[0] in self._gs_capacities else pair[1]
+                        gs_has_other = any(
+                            p != pair and info.link_type == "ground"
+                            for p, info in self._actual_links.items()
+                            if (p[0] if p[0] in self._gs_capacities else p[1]) == gs_id
+                        )
+                        if not gs_has_other:
+                            log.warning(
+                                "MBB teardown blocked: %s has no other active "
+                                "ground link — keeping link alive",
+                                gs_id,
+                            )
+                            continue
                     self._desired_links.pop(pair, None)
+                    self._teardown_pairs.discard(pair)
 
         return dict(self._desired_links)
 
@@ -656,6 +682,11 @@ class Dispatcher:
                     bandwidth_mbps=bandwidth,
                     link_type=link.link_type,
                 )
+                sched_state = getattr(link, "scheduling_state", "active")
+                if sched_state == "teardown":
+                    self._teardown_pairs.add(pair)
+                else:
+                    self._teardown_pairs.discard(pair)
 
         # Replace _desired_links entirely — snapshot is authoritative
         self._desired_links = desired

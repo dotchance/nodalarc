@@ -22,9 +22,17 @@ class AddressingScheme:
     """Derives all node identifiers and IPs from plane/slot/station indices.
 
     Constructed once per session from the AddressingConfig in the session YAML.
+    Optionally initialized with satellite and GS lists to populate the
+    node type registry — required for any caller that needs node_type(),
+    is_ground_segment(), or is_satellite().
     """
 
-    def __init__(self, config: AddressingConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: AddressingConfig | None = None,
+        satellites: list | None = None,
+        gs_file: object | None = None,
+    ) -> None:
         cfg = config or AddressingConfig()
         self._sat_id_tpl = cfg.sat_id_template
         self._gs_id_tpl = cfg.gs_id_template
@@ -32,6 +40,35 @@ class AddressingScheme:
         self._ipv4_gs_tpl = cfg.ipv4_gs_template
         self._ipv6_sat_tpl = cfg.ipv6_sat_template
         self._ipv6_gs_tpl = cfg.ipv6_gs_template
+        self._node_types: dict[str, str] = {}
+
+        if satellites:
+            for sat in satellites:
+                nid = self.sat_id(sat.plane, sat.slot)
+                self._node_types[nid] = "satellite"
+        if gs_file and hasattr(gs_file, "stations"):
+            for station in gs_file.stations:
+                nid = self.gs_id(station.name)
+                self._node_types[nid] = "ground_station"
+
+    def node_type(self, node_id: str) -> str:
+        if node_id not in self._node_types:
+            raise KeyError(
+                f"node_id {node_id!r} not in type registry. "
+                "AddressingScheme must be initialized with "
+                "satellites and gs_file to use type queries."
+            )
+        return self._node_types[node_id]
+
+    def is_ground_segment(self, node_id: str) -> bool:
+        return self.node_type(node_id) in ("ground_station", "user_terminal")
+
+    def is_satellite(self, node_id: str) -> bool:
+        return self.node_type(node_id) == "satellite"
+
+    @property
+    def has_type_registry(self) -> bool:
+        return len(self._node_types) > 0
 
     # -- Node IDs --
 

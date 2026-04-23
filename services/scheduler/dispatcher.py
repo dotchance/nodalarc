@@ -53,9 +53,9 @@ log = logging.getLogger(__name__)
 
 
 class ActiveLinkInfo:
-    """Mutable internal state for an active link (migrated from realtime_dispatcher)."""
+    """Mutable internal state for an active link."""
 
-    __slots__ = ("interface_a", "interface_b", "latency_ms", "bandwidth_mbps")
+    __slots__ = ("interface_a", "interface_b", "latency_ms", "bandwidth_mbps", "link_type")
 
     def __init__(
         self,
@@ -63,11 +63,13 @@ class ActiveLinkInfo:
         interface_b: str,
         latency_ms: float,
         bandwidth_mbps: float,
+        link_type: str = "isl",
     ) -> None:
         self.interface_a = interface_a
         self.interface_b = interface_b
         self.latency_ms = latency_ms
         self.bandwidth_mbps = bandwidth_mbps
+        self.link_type = link_type
 
 
 class Dispatcher:
@@ -176,33 +178,38 @@ class Dispatcher:
         """
         self._gs_active_count.clear()
         self._sat_active_count.clear()
-        for node_a, node_b in self._actual_links:
-            if node_a.startswith("gs-"):
-                self._gs_active_count[node_a] = self._gs_active_count.get(node_a, 0) + 1
-                self._sat_active_count[node_b] = self._sat_active_count.get(node_b, 0) + 1
-            elif node_b.startswith("gs-"):
-                self._gs_active_count[node_b] = self._gs_active_count.get(node_b, 0) + 1
-                self._sat_active_count[node_a] = self._sat_active_count.get(node_a, 0) + 1
+        for (node_a, node_b), info in self._actual_links.items():
+            if info.link_type == "ground":
+                for nid in (node_a, node_b):
+                    if nid in self._gs_capacities:
+                        self._gs_active_count[nid] = self._gs_active_count.get(nid, 0) + 1
+                    elif nid in self._sat_capacities:
+                        self._sat_active_count[nid] = self._sat_active_count.get(nid, 0) + 1
 
     def _increment_active_counts(self, pair: tuple[str, str]) -> None:
-        """O(1) increment after a successful LinkUp ACK."""
-        node_a, node_b = pair
-        if node_a.startswith("gs-"):
-            self._gs_active_count[node_a] = self._gs_active_count.get(node_a, 0) + 1
-            self._sat_active_count[node_b] = self._sat_active_count.get(node_b, 0) + 1
-        elif node_b.startswith("gs-"):
-            self._gs_active_count[node_b] = self._gs_active_count.get(node_b, 0) + 1
-            self._sat_active_count[node_a] = self._sat_active_count.get(node_a, 0) + 1
+        """O(1) increment after a successful ground LinkUp ACK."""
+        info = self._actual_links.get(pair)
+        if not info or info.link_type != "ground":
+            return
+        for nid in pair:
+            if nid in self._gs_capacities:
+                self._gs_active_count[nid] = self._gs_active_count.get(nid, 0) + 1
+            elif nid in self._sat_capacities:
+                self._sat_active_count[nid] = self._sat_active_count.get(nid, 0) + 1
 
-    def _decrement_active_counts(self, pair: tuple[str, str]) -> None:
-        """O(1) decrement after a successful LinkDown ACK."""
-        node_a, node_b = pair
-        if node_a.startswith("gs-"):
-            self._gs_active_count[node_a] = max(0, self._gs_active_count.get(node_a, 0) - 1)
-            self._sat_active_count[node_b] = max(0, self._sat_active_count.get(node_b, 0) - 1)
-        elif node_b.startswith("gs-"):
-            self._gs_active_count[node_b] = max(0, self._gs_active_count.get(node_b, 0) - 1)
-            self._sat_active_count[node_a] = max(0, self._sat_active_count.get(node_a, 0) - 1)
+    def _decrement_active_counts(
+        self, pair: tuple[str, str], info: ActiveLinkInfo | None = None
+    ) -> None:
+        """O(1) decrement after a successful ground LinkDown ACK."""
+        if info is None:
+            info = self._actual_links.get(pair)
+        if not info or info.link_type != "ground":
+            return
+        for nid in pair:
+            if nid in self._gs_capacities:
+                self._gs_active_count[nid] = max(0, self._gs_active_count.get(nid, 0) - 1)
+            elif nid in self._sat_capacities:
+                self._sat_active_count[nid] = max(0, self._sat_active_count.get(nid, 0) - 1)
 
     @_active_links.setter
     def _active_links(self, value: dict[tuple[str, str], ActiveLinkInfo]) -> None:
@@ -532,7 +539,7 @@ class Dispatcher:
 
             if vis.visible and vis.scheduled:
                 if pair not in self._desired_links:
-                    is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                    is_gs = vis.link_type == "ground"
                     if is_gs:
                         ifaces = ("gnd0", "gnd0")
                     else:
@@ -560,12 +567,13 @@ class Dispatcher:
                         interface_b=ifaces[1],
                         latency_ms=latency,
                         bandwidth_mbps=bandwidth,
+                        link_type=vis.link_type,
                     )
             elif not vis.visible:
                 self._desired_links.pop(pair, None)
             elif vis.visible and not vis.scheduled:
                 # Terminal deallocated (GS handoff) — INVARIANT
-                is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+                is_gs = vis.link_type == "ground"
                 if is_gs:
                     self._desired_links.pop(pair, None)
 
@@ -606,7 +614,7 @@ class Dispatcher:
                 if latency is None:
                     latency = 3.0
 
-                is_gs = link.node_a.startswith("gs-") or link.node_b.startswith("gs-")
+                is_gs = link.link_type == "ground"
                 if is_gs:
                     ifaces = ("gnd0", "gnd0")
                 else:
@@ -635,6 +643,7 @@ class Dispatcher:
                     interface_b=ifaces[1],
                     latency_ms=latency,
                     bandwidth_mbps=bandwidth,
+                    link_type=link.link_type,
                 )
 
         # Replace _desired_links entirely — snapshot is authoritative
@@ -643,8 +652,8 @@ class Dispatcher:
         # Re-baseline incremental active-link counters from source of truth
         self._rebaseline_active_counts()
 
-        isl = sum(1 for a, _ in desired if not a.startswith("gs-"))
-        gs = sum(1 for a, _ in desired if a.startswith("gs-"))
+        isl = sum(1 for info in desired.values() if info.link_type == "isl")
+        gs = sum(1 for info in desired.values() if info.link_type == "ground")
         log.info(
             "LinkStateSnapshot seq=%d: %d links (%d ISL, %d GS)",
             snapshot.snapshot_seq,
@@ -836,9 +845,9 @@ class Dispatcher:
             if to_remove:
                 removed = await self._send_batch_down(to_remove, sim_iso, sim_time, nc)
                 for pair in removed:
-                    self._actual_links.pop(pair, None)
+                    info = self._actual_links.pop(pair, None)
                     self._last_latencies.pop(pair, None)
-                    self._decrement_active_counts(pair)
+                    self._decrement_active_counts(pair, info)
 
             if to_add:
                 added = await self._send_batch_up(to_add, desired, sim_iso, sim_time, nc)
@@ -877,16 +886,16 @@ class Dispatcher:
         """
 
         def _gs_id_for_pair(pair: tuple[str, str]) -> str | None:
-            if pair[0].startswith("gs-"):
+            if pair[0] in self._gs_capacities:
                 return pair[0]
-            if pair[1].startswith("gs-"):
+            if pair[1] in self._gs_capacities:
                 return pair[1]
             return None
 
         def _sat_id_for_gs_pair(pair: tuple[str, str]) -> str | None:
-            if pair[0].startswith("gs-"):
+            if pair[0] in self._gs_capacities:
                 return pair[1]
-            if pair[1].startswith("gs-"):
+            if pair[1] in self._gs_capacities:
                 return pair[0]
             return None
 
@@ -963,9 +972,9 @@ class Dispatcher:
             for pair in phase1_downs:
                 gs_id = _gs_id_for_pair(pair)
                 if pair in removed:
-                    self._actual_links.pop(pair, None)
+                    info = self._actual_links.pop(pair, None)
                     self._last_latencies.pop(pair, None)
-                    self._decrement_active_counts(pair)
+                    self._decrement_active_counts(pair, info)
                 elif gs_id:
                     failed_bbm_gs.add(gs_id)
         else:
@@ -1023,9 +1032,9 @@ class Dispatcher:
         if phase3_downs:
             removed3 = await self._send_batch_down(phase3_downs, sim_iso, sim_time, nc)
             for pair in removed3:
-                self._actual_links.pop(pair, None)
+                info = self._actual_links.pop(pair, None)
                 self._last_latencies.pop(pair, None)
-                self._decrement_active_counts(pair)
+                self._decrement_active_counts(pair, info)
 
     async def _send_batch_down(
         self,
@@ -1045,11 +1054,11 @@ class Dispatcher:
 
             node_a, node_b = pair
             locality = self._link_locality(node_a, node_b)
-            is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
+            is_gs = info.link_type == "ground" if info else False
 
             if is_gs:
-                gs_id = node_a if node_a.startswith("gs-") else node_b
-                sat_id = node_b if node_a.startswith("gs-") else node_a
+                gs_id = node_a if node_a in self._gs_capacities else node_b
+                sat_id = node_b if node_a in self._gs_capacities else node_a
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
                     from nodalarc.vxlan import compute_vni
@@ -1179,7 +1188,7 @@ class Dispatcher:
 
             node_a, node_b = pair
             locality = self._link_locality(node_a, node_b)
-            is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
+            is_gs = info.link_type == "ground" if info else False
 
             substrate_ms = self._get_substrate_ms(node_a, node_b)
             netem_ms = max(0.0, info.latency_ms - substrate_ms)
@@ -1194,8 +1203,8 @@ class Dispatcher:
                 )
 
             if is_gs:
-                gs_id = node_a if node_a.startswith("gs-") else node_b
-                sat_id = node_b if node_a.startswith("gs-") else node_a
+                gs_id = node_a if node_a in self._gs_capacities else node_b
+                sat_id = node_b if node_a in self._gs_capacities else node_a
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
                     from nodalarc.vxlan import compute_vni
@@ -1354,11 +1363,11 @@ class Dispatcher:
             info.latency_ms = new_lat
             self._last_latencies[pair] = new_lat
 
-            is_gs = node_a.startswith("gs-") or node_b.startswith("gs-")
+            is_gs = info.link_type == "ground" if info else False
 
             if is_gs:
-                gs_id = node_a if node_a.startswith("gs-") else node_b
-                sat_id = node_b if node_a.startswith("gs-") else node_a
+                gs_id = node_a if node_a in self._gs_capacities else node_b
+                sat_id = node_b if node_a in self._gs_capacities else node_a
                 agent = self._loc.agent_addr(sat_id)
                 agent_entries.setdefault(agent, []).append(
                     node_agent_pb2.LatencyEntry(

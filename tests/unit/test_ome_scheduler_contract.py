@@ -32,7 +32,9 @@ from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
 
-def _make_vis(node_a: str, node_b: str, visible: bool, scheduled: bool) -> VisibilityEvent:
+def _make_vis(
+    node_a: str, node_b: str, visible: bool, scheduled: bool, link_type: str = "isl"
+) -> VisibilityEvent:
     return VisibilityEvent(
         sim_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
         node_a=node_a,
@@ -42,6 +44,7 @@ def _make_vis(node_a: str, node_b: str, visible: bool, scheduled: bool) -> Visib
         range_km=500.0,
         elevation_deg=45.0,
         terminal_type="optical",
+        link_type=link_type,
     )
 
 
@@ -209,7 +212,7 @@ class TestGsDeallocationDispatchBatch:
         d._desired_links[("gs-ashburn", "sat-P00S00")] = info
         d._active_links[("gs-ashburn", "sat-P00S00")] = info
 
-        vis = _make_vis("gs-ashburn", "sat-P00S00", True, False)
+        vis = _make_vis("gs-ashburn", "sat-P00S00", True, False, link_type="ground")
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
@@ -250,7 +253,7 @@ class TestGsDeallocationConsistency:
         info = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
         d2._desired_links[pair] = info
         d2._active_links[pair] = info
-        vis = _make_vis("gs-ashburn", "sat-P00S00", True, False)
+        vis = _make_vis("gs-ashburn", "sat-P00S00", True, False, link_type="ground")
         asyncio.run(d2._dispatch_batch([vis], [], MockNats()))
 
         # Both must agree

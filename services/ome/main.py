@@ -722,8 +722,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     _enqueue(SUBJECT_VISIBILITY_EVENT, payload)
                     vis = te.data
                     pair = (vis.node_a, vis.node_b)
-                    is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
-                    if is_gs:
+                    if vis.link_type == "ground":
                         running_gs_state[pair] = (vis.visible, vis.scheduled)
                     else:
                         running_isl_state[pair] = (vis.visible, vis.scheduled)

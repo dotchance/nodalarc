@@ -1,15 +1,23 @@
 hostname {{ hostname }}
 log file /var/log/frr/ospfd.log informational
 
+{# OSPF timer defaults — overridable from session config_overrides #}
+{% set ospf_hello_interval = ospf_hello_interval | default(1) %}
+{% set ospf_dead_interval = ospf_dead_interval | default(3) %}
+{% set ospf_spf_delay = ospf_spf_delay | default(50) %}
+{% set ospf_spf_initial_hold = ospf_spf_initial_hold | default(200) %}
+{% set ospf_spf_max_hold = ospf_spf_max_hold | default(5000) %}
+
+{# BFD — independent of protocol, controlled by bfd_enabled #}
+{% set bfd_enabled = bfd_enabled | default(false) %}
+
 router ospf
  ospf router-id {{ ipv4_loopback }}
 {% if te_enabled | default(false) %}
  mpls-te on
  mpls-te router-address {{ ipv4_loopback }}
 {% endif %}
-{% set hello_interval = 1 %}
-{% set dead_interval = 3 %}
- timers throttle spf 50 50 1000
+ timers throttle spf {{ ospf_spf_delay }} {{ ospf_spf_initial_hold }} {{ ospf_spf_max_hold }}
 exit
 
 interface lo
@@ -26,8 +34,11 @@ interface {{ iface_name }}
 {% endif %}
  ip ospf network point-to-point
  ip ospf cost {{ (reference_bandwidth / info.bandwidth_mbps) | int }}
- ip ospf hello-interval {{ hello_interval }}
- ip ospf dead-interval {{ dead_interval }}
+ ip ospf hello-interval {{ ospf_hello_interval }}
+ ip ospf dead-interval {{ ospf_dead_interval }}
+{% if bfd_enabled %}
+ ip ospf bfd
+{% endif %}
 exit
 {% endfor %}
 
@@ -36,8 +47,11 @@ interface {{ iface }}
  ip ospf area 0.0.0.0
  ip ospf network point-to-point
  ip ospf cost 10
- ip ospf hello-interval {{ hello_interval }}
- ip ospf dead-interval {{ dead_interval }}
+ ip ospf hello-interval {{ ospf_hello_interval }}
+ ip ospf dead-interval {{ ospf_dead_interval }}
+{% if bfd_enabled %}
+ ip ospf bfd
+{% endif %}
 exit
 {% endfor %}
 

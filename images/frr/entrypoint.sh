@@ -88,8 +88,11 @@ if ip link show eth0 >/dev/null 2>&1; then
     echo "Renamed eth0 → cni0"
 fi
 
-# Hand off to FRR's stock docker-start (watchfrr reads /etc/frr/daemons).
-# bfdd=yes is set in the image (Dockerfile COPY). The daemon is always
-# available but only creates sessions when IS-IS config includes "isis bfd"
-# on an interface — controlled by the session's bfd_enabled config_override.
+# Ensure BFD daemon is enabled. The Dockerfile COPYs daemons with bfdd=yes,
+# but stale image caches may serve the base image's bfdd=no. This sed is
+# idempotent and guarantees bfdd runs regardless of which image layer wins.
+# The daemon is idle (zero overhead) when no protocol config requests BFD.
+sed -i 's/^bfdd=no/bfdd=yes/' /etc/frr/daemons
+
+# Hand off to FRR's stock docker-start (watchfrr reads /etc/frr/daemons)
 exec /usr/lib/frr/docker-start

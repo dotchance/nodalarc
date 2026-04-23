@@ -239,9 +239,8 @@ def main() -> None:
     gs_terminal_capacities: dict[str, int] = {}
     for station in gs_file.stations:
         gs_id = addressing.gs_id(station.name)
-        gs_terminal_capacities[gs_id] = (
-            sum(t.tracking_capacity for t in (station.terminals or [])) or 1
-        )
+        effective_terminals = station.terminals or gs_file.default_terminals
+        gs_terminal_capacities[gs_id] = sum(t.tracking_capacity for t in effective_terminals) or 1
 
     sat_ground_terminal_capacities: dict[str, int] = {}
     for sat in satellites:

@@ -250,9 +250,8 @@ def build_step_context(
             gs_min_elevations[node_id] = (
                 station.min_elevation_deg or gs_file.default_min_elevation_deg or 25.0
             )
-            gs_terminal_counts[node_id] = (
-                sum(t.tracking_capacity for t in (station.terminals or [])) or 1
-            )
+            effective_terminals = station.terminals or gs_file.default_terminals
+            gs_terminal_counts[node_id] = sum(t.tracking_capacity for t in effective_terminals) or 1
             gs_policies[node_id] = station.scheduling_policy or default_gs_policy
             gs_hysteresis[node_id] = station.hysteresis
             gs_service_priorities[node_id] = station.service_priority

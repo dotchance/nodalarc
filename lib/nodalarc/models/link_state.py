@@ -67,6 +67,8 @@ class LinkState(BaseModel):
     latency_ms: float | None  # None when carrier is not UP
     bandwidth_mbps: float | None  # None when carrier is not UP
     link_type: Literal["isl", "ground"]
+    gs_terminal_index: int | None = None
+    sat_terminal_index: int | None = None
     sim_time: datetime
 
 

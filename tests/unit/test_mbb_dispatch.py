@@ -78,14 +78,14 @@ class TestMBBCapacityClassification:
             sat_caps={"sat-01": 1, "sat-02": 1},
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-A"] = 1
         d._sat_active_count["sat-01"] = 1
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
         sim = datetime.now(UTC)
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)}
+        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, sim))
 
@@ -102,13 +102,13 @@ class TestMBBCapacityClassification:
             sat_caps={"sat-01": 1, "sat-02": 1},
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-B"] = 1
         d._sat_active_count["sat-01"] = 1
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)}
+        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
 
@@ -124,7 +124,7 @@ class TestMBBCapacityClassification:
             sat_caps={"sat-X": 1, "sat-Y": 1},
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-C"] = 1
         d._sat_active_count["sat-X"] = 1
         # sat-Y is also occupied by another GS
@@ -132,7 +132,7 @@ class TestMBBCapacityClassification:
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)}
+        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
 
@@ -153,7 +153,7 @@ class TestMBBRollback:
             sat_caps={"sat-01": 1, "sat-02": 1},
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-A"] = 1
         d._sat_active_count["sat-01"] = 1
 
@@ -167,7 +167,7 @@ class TestMBBRollback:
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)}
+        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
 
@@ -187,11 +187,11 @@ class TestMBBDispatchFlag:
             mbb=False,
             pairs=[pair_old, pair_new],
         )
-        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+        d._actual_links[pair_old] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)}
+        desired = {pair_new: ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")}
 
         _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
 
@@ -202,10 +202,12 @@ class TestMBBDispatchFlag:
 class TestCounterIntegrity:
     def test_rebaseline_corrects_drift(self):
         """Simulate counter drift and verify snapshot rebaseline corrects it."""
-        d = _make_dispatcher()
+        d = _make_dispatcher(
+            gs_caps={"gs-A": 2},
+            sat_caps={"sat-01": 1},
+        )
         pair = ("gs-A", "sat-01")
-        d._actual_links[pair] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
-        # Simulate drift: counter says 5 but only 1 link exists
+        d._actual_links[pair] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-A"] = 5
         d._sat_active_count["sat-01"] = 5
 
@@ -216,10 +218,13 @@ class TestCounterIntegrity:
 
     def test_increment_decrement_consistent(self):
         """O(1) increment/decrement produces counts matching _actual_links."""
-        d = _make_dispatcher()
+        d = _make_dispatcher(
+            gs_caps={"gs-A": 4, "gs-B": 2},
+            sat_caps={"sat-01": 2, "sat-02": 1},
+        )
         pairs = [("gs-A", "sat-01"), ("gs-A", "sat-02"), ("gs-B", "sat-01")]
         for p in pairs:
-            d._actual_links[p] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0)
+            d._actual_links[p] = ActiveLinkInfo("gnd0", "gnd0", 3.0, 1000.0, link_type="ground")
             d._increment_active_counts(p)
 
         assert d._gs_active_count["gs-A"] == 2
@@ -227,14 +232,19 @@ class TestCounterIntegrity:
         assert d._sat_active_count["sat-01"] == 2
         assert d._sat_active_count["sat-02"] == 1
 
-        # Remove one
         d._decrement_active_counts(("gs-A", "sat-01"))
         assert d._gs_active_count["gs-A"] == 1
         assert d._sat_active_count["sat-01"] == 1
 
     def test_decrement_floors_at_zero(self):
         """Decrement never goes negative."""
-        d = _make_dispatcher()
+        d = _make_dispatcher(
+            gs_caps={"gs-A": 1},
+            sat_caps={"sat-01": 1},
+        )
+        d._actual_links[("gs-A", "sat-01")] = ActiveLinkInfo(
+            "gnd0", "gnd0", 3.0, 1000.0, link_type="ground"
+        )
         d._decrement_active_counts(("gs-A", "sat-01"))
         assert d._gs_active_count.get("gs-A", 0) == 0
         assert d._sat_active_count.get("sat-01", 0) == 0

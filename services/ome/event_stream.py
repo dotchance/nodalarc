@@ -502,6 +502,7 @@ def compute_step(
                 range_km=range_km,
                 elevation_deg=elev_deg,
                 terminal_type="optical",
+                link_type="ground",
             )
             events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
 
@@ -735,10 +736,8 @@ def build_link_state_snapshot(
             )
         )
 
-    # GS links
+    # GS links (gs_state is populated exclusively from ground visibility — Step 8)
     for pair, (visible, scheduled) in gs_state.items():
-        if not (pair[0].startswith("gs-") or pair[1].startswith("gs-")):
-            continue
         if visible and scheduled:
             admin = AdminState.UP
             carrier = CarrierState.UP

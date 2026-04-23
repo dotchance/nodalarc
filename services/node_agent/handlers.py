@@ -132,7 +132,10 @@ def _ground_link_down(
     try:
         pm = pid_map or {}
         sat_pid = _require_pid(iface.sat_id, pm)
-        ground_bridge.detach_from_ground_bridge(iface.gs_id, iface.sat_id, sat_pid)
+        gs_ifname = iface.interface_name if iface.node_id == iface.gs_id else "term0"
+        ground_bridge.detach_from_ground_bridge(
+            iface.gs_id, iface.sat_id, sat_pid, gs_ifname=gs_ifname
+        )
         return None
     except Exception as exc:
         msg = f"Ground down failed {iface.gs_id}<->{iface.sat_id}: {exc}"
@@ -163,9 +166,15 @@ def _ground_link_up(
         pm = pid_map or {}
         sat_pid = _require_pid(iface.sat_id, pm)
         gs_pid = _require_pid(iface.gs_id, pm)
-        ground_bridge.attach_to_ground_bridge(iface.gs_id, iface.sat_id, sat_pid)
-        namespace_ops.apply_link_shaping(gs_pid, "term0", iface.latency_ms, iface.bandwidth_mbps)
-        namespace_ops.apply_link_shaping(sat_pid, "gnd0", iface.latency_ms, iface.bandwidth_mbps)
+        gs_ifname = iface.interface_name if iface.node_id == iface.gs_id else "term0"
+        sat_ifname = iface.interface_name if iface.node_id == iface.sat_id else "gnd0"
+        ground_bridge.attach_to_ground_bridge(
+            iface.gs_id, iface.sat_id, sat_pid, gs_ifname=gs_ifname
+        )
+        namespace_ops.apply_link_shaping(gs_pid, gs_ifname, iface.latency_ms, iface.bandwidth_mbps)
+        namespace_ops.apply_link_shaping(
+            sat_pid, sat_ifname, iface.latency_ms, iface.bandwidth_mbps
+        )
         return None
     except Exception as exc:
         msg = f"Ground up failed {iface.gs_id}<->{iface.sat_id}: {exc}"

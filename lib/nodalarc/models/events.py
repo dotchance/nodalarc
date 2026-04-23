@@ -66,6 +66,8 @@ class VisibilityEvent(BaseModel):
     elevation_deg: float | None  # None for ISLs, float for ground links
     terminal_type: str  # "optical" or "rf"
     link_type: str = "isl"  # "isl" or "ground" — set by OME from node type registry
+    gs_terminal_index: int | None = None  # None for ISL events
+    sat_terminal_index: int | None = None  # None for ISL events
 
     @model_validator(mode="before")
     @classmethod

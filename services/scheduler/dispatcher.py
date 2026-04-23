@@ -541,7 +541,9 @@ class Dispatcher:
                 if pair not in self._desired_links:
                     is_gs = vis.link_type == "ground"
                     if is_gs:
-                        ifaces = ("term0", "gnd0")
+                        gs_ti = vis.gs_terminal_index if vis.gs_terminal_index is not None else 0
+                        sat_ti = vis.sat_terminal_index if vis.sat_terminal_index is not None else 0
+                        ifaces = (f"term{gs_ti}", f"gnd{sat_ti}")
                     else:
                         ifaces = self._interface_map.get(pair)
                         if not ifaces:

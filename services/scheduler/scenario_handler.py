@@ -180,12 +180,12 @@ def _dispatch_link_down(
         return
 
     ifaces = interface_map.get(pair, ("", ""))
-    is_gs = pair[0].startswith("gs-") or pair[1].startswith("gs-")
+    is_gs = info.link_type == "ground" if hasattr(info, "link_type") else False
     now_iso = datetime.now(UTC).isoformat()
 
     if is_gs:
-        gs_id = pair[0] if pair[0].startswith("gs-") else pair[1]
-        sat_id = pair[1] if pair[0].startswith("gs-") else pair[0]
+        # GS sorts before sat alphabetically in normalized pairs
+        gs_id, sat_id = pair[0], pair[1]
         agent_addr = pod_locator.agent_addr(sat_id)
         interfaces = [
             node_agent_pb2.InterfaceDown(

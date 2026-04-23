@@ -341,7 +341,7 @@ def execute_wiring(
             nid = gnd_futures[fut]
             try:
                 fut.result()
-                if nid.startswith("gs-"):
+                if nid in ground_bridges:
                     gs_created += 1
                 else:
                     sat_gnd_created += 1

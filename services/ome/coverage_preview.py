@@ -267,11 +267,10 @@ def _count_events(events, neighbors, gs_file, period: float) -> tuple[dict, dict
         if event.event_type == "VisibilityEvent":
             vis = event.data
             key = (vis.node_a, vis.node_b)
-            is_gs = vis.node_a.startswith("gs-") or vis.node_b.startswith("gs-")
+            is_gs = vis.link_type == "ground"
 
             if is_gs:
-                gs_id = vis.node_a if vis.node_a.startswith("gs-") else vis.node_b
-                sat_id = vis.node_b if vis.node_a.startswith("gs-") else vis.node_a
+                gs_id, sat_id = vis.node_a, vis.node_b
                 if vis.visible and vis.scheduled:
                     gs_active[gs_id].add(sat_id)
                 else:

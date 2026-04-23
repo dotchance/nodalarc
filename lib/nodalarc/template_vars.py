@@ -247,6 +247,30 @@ def build_template_vars(
     if config_overrides:
         result.update(config_overrides)
 
+    # Routing config — first-class fields from RoutingConfig
+    routing = session.routing
+    if routing:
+        result.update(
+            {
+                "bfd_enabled": routing.bfd,
+                "bfd_detect_multiplier": routing.bfd_detect_multiplier,
+                "bfd_rx_interval": routing.bfd_rx_interval,
+                "bfd_tx_interval": routing.bfd_tx_interval,
+                "isis_hello_interval": routing.isis_hello_interval,
+                "isis_hello_multiplier": routing.isis_hello_multiplier,
+                "spf_init_delay": routing.spf_init_delay,
+                "spf_short_delay": routing.spf_short_delay,
+                "spf_long_delay": routing.spf_long_delay,
+                "spf_holddown": routing.spf_holddown,
+                "spf_time_to_learn": routing.spf_time_to_learn,
+                "ospf_hello_interval": routing.ospf_hello_interval,
+                "ospf_dead_interval": routing.ospf_dead_interval,
+                "ospf_spf_delay": routing.ospf_spf_delay,
+                "ospf_spf_initial_hold": routing.ospf_spf_initial_hold,
+                "ospf_spf_max_hold": routing.ospf_spf_max_hold,
+            }
+        )
+
     # Core variables (always override config_overrides)
     result.update(
         {

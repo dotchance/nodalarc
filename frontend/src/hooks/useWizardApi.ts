@@ -61,6 +61,7 @@ export function useWizardApi() {
               : state.groundStationSet?.stations ?? undefined,
             satellite_type: state.satelliteType?.name ?? undefined,
             custom_constellation: isCustomConstellation ? constellationValue : undefined,
+            routing_config: state.routingTimers ?? undefined,
           }),
         });
         const data = await resp.json();

@@ -12,11 +12,13 @@ import { useState, useCallback } from "react";
 import type {
   ConstellationPreset,
   Protocol,
+  RoutingTimers,
   SatelliteTypePreset,
   GroundStationSet,
   LegacyWizardState,
   WizardStep,
 } from "../catalog/wizardTypes";
+import { DEFAULT_ROUTING_TIMERS } from "../catalog/wizardTypes";
 import { useWizardData } from "./useWizardData";
 import { useWizardNav } from "./useWizardNav";
 import { useWizardApi } from "./useWizardApi";
@@ -33,6 +35,7 @@ export function useWizard() {
     protocol: null,
     extensions: [],
     areaStrategy: "flat",
+    routingTimers: { ...DEFAULT_ROUTING_TIMERS },
   });
 
   const nav = useWizardNav(setState);
@@ -103,6 +106,14 @@ export function useWizard() {
     api.clearYaml();
   }, [api]);
 
+  const updateTimers = useCallback((patch: Partial<RoutingTimers>) => {
+    setState((s) => ({
+      ...s,
+      routingTimers: { ...s.routingTimers, ...patch },
+    }));
+    api.clearYaml();
+  }, [api]);
+
   // --- Extension constraint checks ---
 
   const isExtensionAllowed = useCallback(
@@ -142,6 +153,7 @@ export function useWizard() {
       protocol: null,
       extensions: [],
       areaStrategy: "flat",
+      routingTimers: { ...DEFAULT_ROUTING_TIMERS },
     });
     api.clearYaml();
     api.clearError();
@@ -168,6 +180,7 @@ export function useWizard() {
     selectProtocol,
     toggleExtension,
     setAreaStrategy,
+    updateTimers,
     // Navigation
     goToStep: nav.goToStep,
     goBack: nav.goBack,

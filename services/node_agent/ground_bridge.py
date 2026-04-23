@@ -137,6 +137,7 @@ def attach_to_ground_bridge(
     gs_id: str,
     sat_id: str,
     sat_pid: int,
+    gs_ifname: str = "term0",
 ) -> None:
     """Connect satellite to GS via tc mirred redirect.
 
@@ -149,16 +150,18 @@ def attach_to_ground_bridge(
     lock prevents this.
     """
     with _gs_locks[gs_id]:
-        _attach_to_ground_bridge_unlocked(gs_id, sat_id, sat_pid)
+        _attach_to_ground_bridge_unlocked(gs_id, sat_id, sat_pid, gs_ifname)
 
 
 def _attach_to_ground_bridge_unlocked(
     gs_id: str,
     sat_id: str,
     sat_pid: int,
+    gs_ifname: str = "term0",
 ) -> None:
-    gs_port = _gs_bridge_port_name(gs_id)
-    host_veth = _sat_gnd_host_name(sat_id)
+    gs_idx = gs_ifname.replace("term", "")
+    gs_port = f"{_gs_bridge_port_name(gs_id)}-{gs_idx}"[:15]
+    host_veth = f"{_sat_gnd_host_name(sat_id)}-0"[:15]
 
     ipr = IPRoute()
     try:
@@ -190,6 +193,7 @@ def detach_from_ground_bridge(
     gs_id: str,
     sat_id: str,
     sat_pid: int,
+    gs_ifname: str = "term0",
 ) -> None:
     """Disconnect satellite from GS.
 
@@ -199,16 +203,18 @@ def detach_from_ground_bridge(
     Serialized per GS: see attach_to_ground_bridge.
     """
     with _gs_locks[gs_id]:
-        _detach_from_ground_bridge_unlocked(gs_id, sat_id, sat_pid)
+        _detach_from_ground_bridge_unlocked(gs_id, sat_id, sat_pid, gs_ifname)
 
 
 def _detach_from_ground_bridge_unlocked(
     gs_id: str,
     sat_id: str,
     sat_pid: int,
+    gs_ifname: str = "term0",
 ) -> None:
-    gs_port = _gs_bridge_port_name(gs_id)
-    host_veth = _sat_gnd_host_name(sat_id)
+    gs_idx = gs_ifname.replace("term", "")
+    gs_port = f"{_gs_bridge_port_name(gs_id)}-{gs_idx}"[:15]
+    host_veth = f"{_sat_gnd_host_name(sat_id)}-0"[:15]
 
     # Remove tc redirect first
     _tc_mirred_remove(gs_port)

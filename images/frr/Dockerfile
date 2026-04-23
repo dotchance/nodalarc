@@ -25,6 +25,7 @@ RUN apk add --no-cache openssh-server libcap && \
 
 # Our entrypoint configures SSH, then hands off to FRR's stock
 # docker-start which uses watchfrr to manage daemons.
+COPY daemons /etc/frr/daemons
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

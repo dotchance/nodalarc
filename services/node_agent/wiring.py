@@ -60,6 +60,7 @@ def _phase0_cleanup(
                 ifname.startswith("_isl_")
                 or ifname.startswith("_gnd_")
                 or ifname.startswith("_gbr-")
+                or (ifname.startswith("_g") and len(ifname) > 2 and ifname[2:3].isdigit())
                 or ifname.startswith("_na_")
             ):
                 try:

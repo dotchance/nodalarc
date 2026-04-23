@@ -88,5 +88,8 @@ if ip link show eth0 >/dev/null 2>&1; then
     echo "Renamed eth0 → cni0"
 fi
 
-# Hand off to FRR's stock docker-start (watchfrr reads /etc/frr/daemons)
+# Hand off to FRR's stock docker-start (watchfrr reads /etc/frr/daemons).
+# bfdd=yes is set in the image (Dockerfile COPY). The daemon is always
+# available but only creates sessions when IS-IS config includes "isis bfd"
+# on an interface — controlled by the session's bfd_enabled config_override.
 exec /usr/lib/frr/docker-start

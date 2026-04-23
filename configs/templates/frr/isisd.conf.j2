@@ -24,7 +24,7 @@ router isis NODAL
  segment-routing prefix {{ ipv4_loopback }}/32 index {{ sid_index }}
 {% endif %}
  lsp-gen-interval 1
- spf-interval 50
+ spf-delay-ietf init-delay 50 short-delay 200 long-delay 5000 holddown 10000 time-to-learn 500
  max-lsp-lifetime 1200
  lsp-refresh-interval 150
 exit
@@ -36,6 +36,7 @@ interface {{ iface_name }}
  isis metric {{ (reference_bandwidth / info.bandwidth_mbps) | int }}
  isis hello-interval 1
  isis hello-multiplier 3
+ isis bfd
 exit
 {% endfor %}
 
@@ -46,6 +47,7 @@ interface {{ iface }}
  isis metric 10
  isis hello-interval 1
  isis hello-multiplier 3
+ isis bfd
 exit
 {% endfor %}
 

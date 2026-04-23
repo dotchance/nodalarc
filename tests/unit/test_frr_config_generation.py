@@ -397,7 +397,7 @@ class TestTimerScaling:
             slot=0,
         )
         rendered = _render_template("frr-isis-sr", "isisd.conf.j2", vars)
-        assert "spf-interval" in rendered
+        assert "spf-delay-ietf" in rendered
 
 
 class TestZebraConfig:

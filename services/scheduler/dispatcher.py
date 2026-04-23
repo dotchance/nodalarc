@@ -1110,19 +1110,11 @@ class Dispatcher:
                     vni = compute_vni(gs_id, sat_id, gs_iface, sat_iface)
 
                 if locality == node_agent_pb2.LOCAL:
-                    targets = [(sat_id, self._loc.agent_addr(sat_id))]
-                else:
-                    targets = [
-                        (sat_id, self._loc.agent_addr(sat_id)),
-                        (gs_id, self._loc.agent_addr(gs_id)),
-                    ]
-
-                for nid, agent in targets:
-                    iface = gs_iface if nid == gs_id else sat_iface
+                    agent = self._loc.agent_addr(sat_id)
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceDown(
-                            node_id=nid,
-                            interface_name=iface,
+                            node_id=gs_id,
+                            interface_name=gs_iface,
                             link_type=node_agent_pb2.GROUND,
                             gs_id=gs_id,
                             sat_id=sat_id,
@@ -1132,6 +1124,25 @@ class Dispatcher:
                         )
                     )
                     pair_agents.setdefault(pair, set()).add(agent)
+                else:
+                    for nid, agent_addr in [
+                        (sat_id, self._loc.agent_addr(sat_id)),
+                        (gs_id, self._loc.agent_addr(gs_id)),
+                    ]:
+                        iface = gs_iface if nid == gs_id else sat_iface
+                        agent_ifaces.setdefault(agent_addr, []).append(
+                            node_agent_pb2.InterfaceDown(
+                                node_id=nid,
+                                interface_name=iface,
+                                link_type=node_agent_pb2.GROUND,
+                                gs_id=gs_id,
+                                sat_id=sat_id,
+                                locality=locality,
+                                remote_node_ip="",
+                                vni=vni,
+                            )
+                        )
+                        pair_agents.setdefault(pair, set()).add(agent_addr)
             else:
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
@@ -1259,31 +1270,43 @@ class Dispatcher:
                     vni = compute_vni(gs_id, sat_id, gs_iface, sat_iface)
 
                 if locality == node_agent_pb2.LOCAL:
-                    targets = [(sat_id, self._loc.agent_addr(sat_id), "")]
-                else:
-                    targets = []
-                    for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
-                        peer_k3s = self._loc.k3s_node(peer_nid)
-                        remote_ip = self._loc.node_ip(peer_k3s)
-                        targets.append((nid, self._loc.agent_addr(nid), remote_ip))
-
-                for nid, agent, remote_ip in targets:
-                    iface = gs_iface if nid == gs_id else sat_iface
+                    agent = self._loc.agent_addr(sat_id)
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceUp(
-                            node_id=nid,
-                            interface_name=iface,
+                            node_id=gs_id,
+                            interface_name=gs_iface,
                             link_type=node_agent_pb2.GROUND,
                             latency_ms=netem_ms,
                             bandwidth_mbps=info.bandwidth_mbps,
                             gs_id=gs_id,
                             sat_id=sat_id,
                             locality=locality,
-                            remote_node_ip=remote_ip,
+                            remote_node_ip="",
                             vni=vni,
                         )
                     )
                     pair_agents.setdefault(pair, set()).add(agent)
+                else:
+                    for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
+                        peer_k3s = self._loc.k3s_node(peer_nid)
+                        remote_ip = self._loc.node_ip(peer_k3s)
+                        iface = gs_iface if nid == gs_id else sat_iface
+                        agent_addr = self._loc.agent_addr(nid)
+                        agent_ifaces.setdefault(agent_addr, []).append(
+                            node_agent_pb2.InterfaceUp(
+                                node_id=nid,
+                                interface_name=iface,
+                                link_type=node_agent_pb2.GROUND,
+                                latency_ms=netem_ms,
+                                bandwidth_mbps=info.bandwidth_mbps,
+                                gs_id=gs_id,
+                                sat_id=sat_id,
+                                locality=locality,
+                                remote_node_ip=remote_ip,
+                                vni=vni,
+                            )
+                        )
+                        pair_agents.setdefault(pair, set()).add(agent_addr)
             else:
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:

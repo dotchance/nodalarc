@@ -527,6 +527,7 @@ def compute_step(
 
         if new_state != prev_state:
             gs_state[pair] = new_state
+            indices = new_associations.get(pair)
             vis_event = VisibilityEvent(
                 sim_time=sim_time,
                 node_a=pair[0],
@@ -537,6 +538,8 @@ def compute_step(
                 elevation_deg=elev_deg,
                 terminal_type="optical",
                 link_type="ground",
+                gs_terminal_index=indices[0] if indices else None,
+                sat_terminal_index=indices[1] if indices else None,
             )
             events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
 

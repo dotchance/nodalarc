@@ -365,7 +365,7 @@ def _update_link_up(event_data: dict) -> None:
             "node_a": node_a,
             "node_b": node_b,
             "state": "active",
-            "link_type": _derive_link_type(node_a, node_b),
+            "link_type": _derive_link_type(node_a, node_b, event_data.get("link_type", "isl")),
             "link_reason": event_data.get("reason", ""),
             "latency_ms": event_data.get("latency_ms", 0.0),
             "bandwidth_mbps": event_data.get("bandwidth_mbps", 0.0),
@@ -434,12 +434,12 @@ def _link_key(node_a: str, node_b: str) -> str:
     return f"{min(node_a, node_b)}:{max(node_a, node_b)}"
 
 
-def _derive_link_type(node_a: str, node_b: str) -> str:
-    """Derive link type from node IDs.
+def _derive_link_type(node_a: str, node_b: str, link_type: str = "isl") -> str:
+    """Derive detailed link type.
 
     Returns: "ground", "intra_plane_isl", or "cross_plane_isl".
     """
-    if node_a.startswith("gs-") or node_b.startswith("gs-"):
+    if link_type == "ground":
         return "ground"
     # Parse plane from sat-P##S## format
     import re
@@ -491,7 +491,7 @@ def _build_snapshot() -> dict:
         _gnd_counts: dict[str, int] = {}
         for ldata in _state["links"].values():
             a, b = ldata["node_a"], ldata["node_b"]
-            is_gnd = a.startswith("gs-") or b.startswith("gs-")
+            is_gnd = ldata.get("link_type", "isl") == "ground"
             for nid in (a, b):
                 if is_gnd:
                     _gnd_counts[nid] = _gnd_counts.get(nid, 0) + 1
@@ -823,7 +823,7 @@ def _apply_link_state_snapshot(data: dict) -> None:
                     "node_a": link.node_a,
                     "node_b": link.node_b,
                     "state": "active",
-                    "link_type": _derive_link_type(link.node_a, link.node_b),
+                    "link_type": _derive_link_type(link.node_a, link.node_b, link.link_type),
                     "link_reason": "",
                     "latency_ms": lat_ms,
                     "bandwidth_mbps": link.bandwidth_mbps or 0.0,
@@ -838,8 +838,8 @@ def _apply_link_state_snapshot(data: dict) -> None:
     _prev_snapshot_active_count = _curr_snapshot_active_count
     _curr_snapshot_active_count = len(_state["links"])
 
-    isl = sum(1 for k in _state["links"] if not k.startswith("gs-"))
-    gs = sum(1 for k in _state["links"] if k.startswith("gs-"))
+    isl = sum(1 for v in _state["links"].values() if v.get("link_type", "isl") != "ground")
+    gs = sum(1 for v in _state["links"].values() if v.get("link_type", "isl") == "ground")
     log.info(
         "LinkStateSnapshot applied: seq=%d, %d links (%d ISL, %d GS)",
         snapshot.snapshot_seq,
@@ -1572,7 +1572,7 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
                 sid_to_node[node_obj.sid] = nid
         else:
             # Fallback: compute SIDs from plane/slot
-            sats = [n for n in nodes if n["node_id"].startswith("sat-")]
+            sats = [n for n in nodes if n.get("node_type") == "satellite"]
             max_slot = max((n.get("slot", 0) or 0) for n in sats) if sats else 0
             spp = max_slot + 1
             for n in sats:
@@ -1580,7 +1580,7 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
                 slot = n.get("slot", 0) or 0
                 sid = np_cfg.satellite_sid_range_start + (plane * spp + slot) + 1
                 sid_to_node[sid] = n["node_id"]
-            gs_names = sorted(n["node_id"] for n in nodes if n["node_id"].startswith("gs-"))
+            gs_names = sorted(n["node_id"] for n in nodes if n.get("node_type") == "ground_station")
             for gs_idx, gs_name in enumerate(gs_names):
                 sid = np_cfg.ground_station_sid_range_start + gs_idx
                 sid_to_node[sid] = gs_name

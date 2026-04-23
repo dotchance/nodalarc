@@ -37,6 +37,7 @@ from nodalarc.nats_channels import (
     SUBJECT_LINK_DOWN,
     SUBJECT_LINK_STATE_SNAPSHOT,
     SUBJECT_LINK_UP,
+    SUBJECT_OME_ALL,
     SUBJECT_PLAYBACK_STATE,
     SUBJECT_SESSION_EPHEMERIS,
     SUBJECT_SUBSTRATE_LATENCY,
@@ -446,23 +447,29 @@ class Dispatcher:
                     cb=_on_playback_state,
                 )
             )
-            # NODALARC_OME stream — VisibilityEvent and ClockTick
+
+            # NODALARC_OME stream — single wildcard consumer for stream-
+            # sequence ordering across subjects.  Two separate consumers
+            # (one per subject) have independent server-side push loops
+            # that can interleave: ClockTick(T+1) may arrive before
+            # VisibilityEvent(T), splitting a handover's paired events
+            # across dispatch cycles and preventing MBB classification.
+            # A single consumer on the wildcard delivers all messages in
+            # stream publish order, matching the OME's per-tick sequence:
+            # VisibilityEvents first, ClockTick last.
+            async def _on_ome_event(msg):
+                if msg.subject == SUBJECT_VISIBILITY_EVENT:
+                    await _on_visibility(msg)
+                elif msg.subject == SUBJECT_CLOCK_TICK:
+                    await _on_clock_tick(msg)
+
             subs.append(
                 await js.subscribe(
-                    SUBJECT_VISIBILITY_EVENT,
+                    SUBJECT_OME_ALL,
                     stream="NODALARC_OME",
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_visibility,
-                )
-            )
-            subs.append(
-                await js.subscribe(
-                    SUBJECT_CLOCK_TICK,
-                    stream="NODALARC_OME",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_clock_tick,
+                    cb=_on_ome_event,
                 )
             )
             # NODALARC_LINKS stream — LinkStateSnapshot and SubstrateLatency
@@ -618,7 +625,9 @@ class Dispatcher:
 
                 is_gs = link.link_type == "ground"
                 if is_gs:
-                    ifaces = ("term0", "gnd0")
+                    gs_ti = link.gs_terminal_index if link.gs_terminal_index is not None else 0
+                    sat_ti = link.sat_terminal_index if link.sat_terminal_index is not None else 0
+                    ifaces = (f"term{gs_ti}", f"gnd{sat_ti}")
                 else:
                     ifaces = self._interface_map.get(pair)
                     if not ifaces:
@@ -1061,11 +1070,13 @@ class Dispatcher:
             if is_gs:
                 gs_id = node_a if node_a in self._gs_capacities else node_b
                 sat_id = node_b if node_a in self._gs_capacities else node_a
+                gs_iface = info.interface_a if node_a in self._gs_capacities else info.interface_b
+                sat_iface = info.interface_b if node_a in self._gs_capacities else info.interface_a
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
                     from nodalarc.vxlan import compute_vni
 
-                    vni = compute_vni(gs_id, sat_id, "term0", "gnd0")
+                    vni = compute_vni(gs_id, sat_id, gs_iface, sat_iface)
 
                 if locality == node_agent_pb2.LOCAL:
                     targets = [(sat_id, self._loc.agent_addr(sat_id))]
@@ -1076,7 +1087,7 @@ class Dispatcher:
                     ]
 
                 for nid, agent in targets:
-                    iface = "term0" if nid == gs_id else "gnd0"
+                    iface = gs_iface if nid == gs_id else sat_iface
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceDown(
                             node_id=nid,
@@ -1208,11 +1219,13 @@ class Dispatcher:
             if is_gs:
                 gs_id = node_a if node_a in self._gs_capacities else node_b
                 sat_id = node_b if node_a in self._gs_capacities else node_a
+                gs_iface = info.interface_a if node_a in self._gs_capacities else info.interface_b
+                sat_iface = info.interface_b if node_a in self._gs_capacities else info.interface_a
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
                     from nodalarc.vxlan import compute_vni
 
-                    vni = compute_vni(gs_id, sat_id, "term0", "gnd0")
+                    vni = compute_vni(gs_id, sat_id, gs_iface, sat_iface)
 
                 if locality == node_agent_pb2.LOCAL:
                     targets = [(sat_id, self._loc.agent_addr(sat_id), "")]
@@ -1224,7 +1237,7 @@ class Dispatcher:
                         targets.append((nid, self._loc.agent_addr(nid), remote_ip))
 
                 for nid, agent, remote_ip in targets:
-                    iface = "term0" if nid == gs_id else "gnd0"
+                    iface = gs_iface if nid == gs_id else sat_iface
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceUp(
                             node_id=nid,
@@ -1372,11 +1385,12 @@ class Dispatcher:
             if is_gs:
                 gs_id = node_a if node_a in self._gs_capacities else node_b
                 sat_id = node_b if node_a in self._gs_capacities else node_a
+                sat_iface = info.interface_b if node_a in self._gs_capacities else info.interface_a
                 agent = self._loc.agent_addr(sat_id)
                 agent_entries.setdefault(agent, []).append(
                     node_agent_pb2.LatencyEntry(
                         node_id=sat_id,
-                        interface_name="gnd0",
+                        interface_name=sat_iface,
                         latency_ms=netem_ms,
                         link_type=node_agent_pb2.GROUND,
                         gs_id=gs_id,

@@ -189,8 +189,10 @@ export function SessionWizard({
             extensions={wizard.state.extensions}
             areaStrategy={wizard.state.areaStrategy}
             rules={wizard.rules}
+            routingTimers={wizard.state.routingTimers}
             onToggleExtension={wizard.toggleExtension}
             onSetAreaStrategy={wizard.setAreaStrategy}
+            onUpdateTimers={wizard.updateTimers}
             isExtensionAllowed={wizard.isExtensionAllowed}
             isExtensionEnabled={wizard.isExtensionEnabled}
           />

@@ -107,6 +107,44 @@ export type WizardPhase = "selections" | "preview" | "protocol" | "extensions" |
 /** Which selection card is currently expanded in group A. */
 export type ActiveCard = "constellation" | "satellite-type" | "ground-stations" | null;
 
+export interface RoutingTimers {
+  bfd: boolean;
+  bfd_detect_multiplier: number;
+  bfd_rx_interval: number;
+  bfd_tx_interval: number;
+  isis_hello_interval: number;
+  isis_hello_multiplier: number;
+  spf_init_delay: number;
+  spf_short_delay: number;
+  spf_long_delay: number;
+  spf_holddown: number;
+  spf_time_to_learn: number;
+  ospf_hello_interval: number;
+  ospf_dead_interval: number;
+  ospf_spf_delay: number;
+  ospf_spf_initial_hold: number;
+  ospf_spf_max_hold: number;
+}
+
+export const DEFAULT_ROUTING_TIMERS: RoutingTimers = {
+  bfd: false,
+  bfd_detect_multiplier: 3,
+  bfd_rx_interval: 300,
+  bfd_tx_interval: 300,
+  isis_hello_interval: 1,
+  isis_hello_multiplier: 3,
+  spf_init_delay: 50,
+  spf_short_delay: 200,
+  spf_long_delay: 1000,
+  spf_holddown: 2000,
+  spf_time_to_learn: 500,
+  ospf_hello_interval: 1,
+  ospf_dead_interval: 3,
+  ospf_spf_delay: 50,
+  ospf_spf_initial_hold: 200,
+  ospf_spf_max_hold: 1000,
+};
+
 export interface WizardState {
   phase: WizardPhase;
   activeCard: ActiveCard;
@@ -123,6 +161,7 @@ export interface WizardState {
   protocol: Protocol | null;
   extensions: string[];
   areaStrategy: string;
+  routingTimers: RoutingTimers;
 }
 
 // --- Backward compatibility during refactor ---
@@ -149,4 +188,5 @@ export interface LegacyWizardState {
   protocol: Protocol | null;
   extensions: string[];
   areaStrategy: string;
+  routingTimers: RoutingTimers;
 }

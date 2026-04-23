@@ -716,6 +716,7 @@ def build_link_state_snapshot(
     interval_s: float,
     positions: dict[str, NodePosition] | None = None,
     epoch_id: int = 0,
+    current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
 ) -> LinkStateSnapshot:
     """Build a LinkStateSnapshot from OME internal state.
 
@@ -776,6 +777,7 @@ def build_link_state_snapshot(
         )
 
     # GS links (gs_state is populated exclusively from ground visibility — Step 8)
+    assoc = current_associations or {}
     for pair, (visible, scheduled) in gs_state.items():
         if visible and scheduled:
             admin = AdminState.UP
@@ -787,18 +789,21 @@ def build_link_state_snapshot(
             admin = AdminState.UP
             carrier = CarrierState.DOWN
         latency = _link_latency(pair[0], pair[1]) if carrier == CarrierState.UP else None
+        gs_ti, sat_ti = assoc.get(pair, (0, 0))
         links.append(
             LinkState(
                 node_a=pair[0],
                 node_b=pair[1],
-                interface_a="term0",
-                interface_b="gnd0",
+                interface_a=f"term{gs_ti}",
+                interface_b=f"gnd{sat_ti}",
                 admin=admin,
                 carrier=carrier,
                 routing=RoutingState.UNKNOWN,
                 latency_ms=latency,
                 bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
                 link_type="ground",
+                gs_terminal_index=gs_ti,
+                sat_terminal_index=sat_ti,
                 sim_time=sim_time,
             )
         )

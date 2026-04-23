@@ -748,6 +748,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     interval_s=snapshot_interval_s,
                     positions=current_positions,
                     epoch_id=_epoch_id,
+                    current_associations=current_associations,
                 )
                 _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, snap.model_dump_json().encode())
                 last_snapshot_sim_s = sim_s

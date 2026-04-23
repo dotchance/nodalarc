@@ -98,3 +98,154 @@ class TestNodalPathNoAreaAssignment:
         raw = yaml.safe_load(yaml_str)
         session = SessionConfig.model_validate(raw)
         assert session.routing.area_assignment is None
+
+
+class TestRoutingConfigRoundtrip:
+    """Verify routing config fields survive generate → YAML → parse."""
+
+    @pytest.mark.parametrize(
+        "protocol,bfd",
+        [
+            ("isis", False),
+            ("isis", True),
+            ("ospf", False),
+            ("ospf", True),
+        ],
+    )
+    def test_bfd_toggle(self, protocol, bfd):
+        yaml_str, _ = generate_session_yaml(
+            constellation="iridium-small-36",
+            protocol=protocol,
+            extensions=[],
+            routing_config={"bfd": bfd},
+        )
+        raw = yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+        assert session.routing.bfd is bfd
+
+    def test_isis_timers(self):
+        timers = {
+            "isis_hello_interval": 3,
+            "isis_hello_multiplier": 5,
+            "spf_init_delay": 100,
+            "spf_short_delay": 500,
+            "spf_long_delay": 2000,
+            "spf_holddown": 5000,
+            "spf_time_to_learn": 1000,
+        }
+        yaml_str, _ = generate_session_yaml(
+            constellation="iridium-small-36",
+            protocol="isis",
+            extensions=[],
+            routing_config=timers,
+        )
+        raw = yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+        assert session.routing.isis_hello_interval == 3
+        assert session.routing.isis_hello_multiplier == 5
+        assert session.routing.spf_init_delay == 100
+        assert session.routing.spf_short_delay == 500
+        assert session.routing.spf_long_delay == 2000
+        assert session.routing.spf_holddown == 5000
+        assert session.routing.spf_time_to_learn == 1000
+
+    def test_ospf_timers(self):
+        timers = {
+            "ospf_hello_interval": 10,
+            "ospf_dead_interval": 40,
+            "ospf_spf_delay": 200,
+            "ospf_spf_initial_hold": 1000,
+            "ospf_spf_max_hold": 5000,
+        }
+        yaml_str, _ = generate_session_yaml(
+            constellation="iridium-small-36",
+            protocol="ospf",
+            extensions=[],
+            routing_config=timers,
+        )
+        raw = yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+        assert session.routing.ospf_hello_interval == 10
+        assert session.routing.ospf_dead_interval == 40
+        assert session.routing.ospf_spf_delay == 200
+        assert session.routing.ospf_spf_initial_hold == 1000
+        assert session.routing.ospf_spf_max_hold == 5000
+
+    def test_bfd_timers(self):
+        timers = {
+            "bfd": True,
+            "bfd_detect_multiplier": 5,
+            "bfd_rx_interval": 100,
+            "bfd_tx_interval": 100,
+        }
+        yaml_str, _ = generate_session_yaml(
+            constellation="iridium-small-36",
+            protocol="isis",
+            extensions=["te"],
+            routing_config=timers,
+        )
+        raw = yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+        assert session.routing.bfd is True
+        assert session.routing.bfd_detect_multiplier == 5
+        assert session.routing.bfd_rx_interval == 100
+        assert session.routing.bfd_tx_interval == 100
+
+    def test_defaults_when_no_routing_config(self):
+        yaml_str, _ = generate_session_yaml(
+            constellation="iridium-small-36",
+            protocol="isis",
+            extensions=[],
+        )
+        raw = yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+        assert session.routing.bfd is False
+        assert session.routing.isis_hello_interval == 1
+        assert session.routing.spf_long_delay == 1000
+
+    @pytest.mark.parametrize(
+        "protocol,extensions",
+        [
+            ("isis", []),
+            ("isis", ["te"]),
+            ("isis", ["te", "mpls"]),
+            ("isis", ["sr"]),
+            ("ospf", []),
+            ("ospf", ["te"]),
+            ("ospf", ["te", "mpls"]),
+            ("ospf", ["sr"]),
+        ],
+    )
+    def test_full_routing_config_all_combos(self, protocol, extensions):
+        """Every protocol+extension combo with full routing config produces valid YAML."""
+        routing_config = {
+            "bfd": True,
+            "bfd_detect_multiplier": 3,
+            "bfd_rx_interval": 300,
+            "bfd_tx_interval": 300,
+            "isis_hello_interval": 1,
+            "isis_hello_multiplier": 3,
+            "spf_init_delay": 50,
+            "spf_short_delay": 200,
+            "spf_long_delay": 1000,
+            "spf_holddown": 2000,
+            "spf_time_to_learn": 500,
+            "ospf_hello_interval": 1,
+            "ospf_dead_interval": 3,
+            "ospf_spf_delay": 50,
+            "ospf_spf_initial_hold": 200,
+            "ospf_spf_max_hold": 1000,
+            "mbb_dispatch": True,
+            "mbb_overlap_ticks": 3,
+        }
+        yaml_str, _ = generate_session_yaml(
+            constellation="iridium-small-36",
+            protocol=protocol,
+            extensions=extensions,
+            routing_config=routing_config,
+        )
+        raw = yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+        assert session.routing.protocol == protocol
+        assert session.routing.bfd is True
+        assert session.routing.mbb_dispatch is True

@@ -57,7 +57,7 @@ class TestAllocationContractInvariants:
 
         isl_state: dict = {}
         gs_state: dict = {}
-        associations: frozenset = frozenset()
+        associations: dict = {}
 
         for step in range(121):
             _events, _positions, associations = compute_step(
@@ -109,7 +109,7 @@ class TestAllocationContractInvariants:
 
         isl_state: dict = {}
         gs_state: dict = {}
-        associations: frozenset = frozenset()
+        associations: dict = {}
 
         for step in range(61):
             _events, _positions, associations = compute_step(
@@ -149,7 +149,7 @@ class TestAllocationContractInvariants:
         # Run with hysteresis (stateful fold)
         isl_h: dict = {}
         gs_h: dict = {}
-        assoc_h: frozenset = frozenset()
+        assoc_h: frozenset = {}
         hyst_transitions = 0
         for step in range(n_steps + 1):
             _e, _p, new_assoc_h = compute_step(
@@ -163,14 +163,16 @@ class TestAllocationContractInvariants:
                 assoc_h,
             )
             if step > 0:
-                hyst_transitions += len(new_assoc_h.symmetric_difference(assoc_h))
+                hyst_transitions += len(
+                    set(new_assoc_h.keys()).symmetric_difference(set(assoc_h.keys()))
+                )
             assoc_h = new_assoc_h
 
         # Run without hysteresis (amnesiac — pass empty frozenset every tick)
         isl_a: dict = {}
         gs_a: dict = {}
         amnesiac_transitions = 0
-        prev_assoc: frozenset = frozenset()
+        prev_assoc: frozenset = {}
         for step in range(n_steps + 1):
             _e, _p, new_assoc_a = compute_step(
                 ctx,
@@ -180,10 +182,12 @@ class TestAllocationContractInvariants:
                 0.0,
                 isl_a,
                 gs_a,
-                frozenset(),
+                {},
             )
             if step > 0:
-                amnesiac_transitions += len(new_assoc_a.symmetric_difference(prev_assoc))
+                amnesiac_transitions += len(
+                    set(new_assoc_a.keys()).symmetric_difference(set(prev_assoc.keys()))
+                )
             prev_assoc = new_assoc_a
 
         # Hysteresis should produce <= transitions than amnesiac.

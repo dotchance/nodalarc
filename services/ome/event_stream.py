@@ -285,8 +285,8 @@ def compute_step(
     timestamp_offset: float,
     isl_state: dict[tuple[str, str], tuple[bool, bool]],
     gs_state: dict[tuple[str, str], tuple[bool, bool]],
-    current_associations: frozenset[tuple[str, str]] = frozenset(),
-) -> tuple[list[TimelineEvent], dict[str, NodePosition], frozenset[tuple[str, str]]]:
+    current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
+) -> tuple[list[TimelineEvent], dict[str, NodePosition], dict[tuple[str, str], tuple[int, int]]]:
     """Compute one step of the timeline. Mutates isl_state and gs_state in place.
 
     Returns (events, positions, new_associations) where events is a list of
@@ -298,6 +298,8 @@ def compute_step(
     Pure computation — no I/O, no wall-time awareness.
     This is the Physicist role (R-OME-008B Part 2).
     """
+    if current_associations is None:
+        current_associations = {}
     dt = step * step_seconds
     timestamp_s = dt + timestamp_offset
     sim_time = datetime.fromtimestamp(epoch_unix + dt, tz=UTC)
@@ -474,14 +476,46 @@ def compute_step(
     # (§4.3 tiebreaker: favor the more-constrained satellite resource)
     scored_pairs.sort(key=lambda x: (x[0], -x[1], x[5]))
 
-    new_associations: set[tuple[str, str]] = set()
+    # Build terminal occupancy from previous tick's fold state (both sides)
+    gs_occupied: dict[str, set[int]] = {}
+    sat_gnd_occupied: dict[str, set[int]] = {}
+    for (na, nb), (gs_idx, sat_idx) in current_associations.items():
+        gs_id_prev = na if na in ctx.gs_positions else nb
+        sat_id_prev = nb if na in ctx.gs_positions else na
+        gs_occupied.setdefault(gs_id_prev, set()).add(gs_idx)
+        sat_gnd_occupied.setdefault(sat_id_prev, set()).add(sat_idx)
+
+    new_associations: dict[tuple[str, str], tuple[int, int]] = {}
     for _prio, _score, gs_id, sat_id, _range_km, _cap in scored_pairs:
         pair = (min(gs_id, sat_id), max(gs_id, sat_id))
-        if gs_capacity.get(gs_id, 0) > 0 and sat_capacity.get(sat_id, 0) > 0:
-            gs_scheduled[pair] = True
+
+        # CONTINUITY: active link keeps both indices
+        if pair in current_associations:
+            new_associations[pair] = current_associations[pair]
             gs_capacity[gs_id] -= 1
             sat_capacity[sat_id] -= 1
-            new_associations.add(pair)
+            gs_scheduled[pair] = True
+            continue
+
+        # NEW LINK: lowest available index on BOTH sides
+        if gs_capacity.get(gs_id, 0) > 0 and sat_capacity.get(sat_id, 0) > 0:
+            gs_occ = gs_occupied.get(gs_id, set())
+            sat_occ = sat_gnd_occupied.get(sat_id, set())
+            gs_cap = ctx.gs_terminal_counts.get(gs_id, 1)
+            sat_cap_total = ctx.sat_ground_terminals.get(sat_id, 1)
+
+            gs_idx = next((i for i in range(gs_cap) if i not in gs_occ), None)
+            sat_idx = next((i for i in range(sat_cap_total) if i not in sat_occ), None)
+
+            if gs_idx is not None and sat_idx is not None:
+                new_associations[pair] = (gs_idx, sat_idx)
+                gs_occupied.setdefault(gs_id, set()).add(gs_idx)
+                sat_gnd_occupied.setdefault(sat_id, set()).add(sat_idx)
+                gs_capacity[gs_id] -= 1
+                sat_capacity[sat_id] -= 1
+                gs_scheduled[pair] = True
+            else:
+                gs_scheduled[pair] = False
         else:
             gs_scheduled[pair] = False
 
@@ -506,7 +540,7 @@ def compute_step(
             )
             events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
 
-    return events, positions, frozenset(new_associations)
+    return events, positions, new_associations
 
 
 # ---------------------------------------------------------------------------
@@ -530,13 +564,13 @@ def precompute_timeline_window(
     default_min_elevation_deg: float = 25.0,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
-    initial_associations: frozenset[tuple[str, str]] | None = None,
+    initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     timestamp_offset: float = 0.0,
 ) -> tuple[
     list[TimelineEvent],
     dict[tuple[str, str], tuple[bool, bool]],
     dict[tuple[str, str], tuple[bool, bool]],
-    frozenset[tuple[str, str]],
+    dict[tuple[str, str], tuple[int, int]],
 ]:
     """Precompute a single window of the timeline (batch mode).
 
@@ -567,7 +601,9 @@ def precompute_timeline_window(
     gs_state: dict[tuple[str, str], tuple[bool, bool]] = (
         dict(initial_gs_state) if initial_gs_state else {}
     )
-    associations: frozenset[tuple[str, str]] = initial_associations or frozenset()
+    associations: dict[tuple[str, str], tuple[int, int]] = (
+        dict(initial_associations) if initial_associations else {}
+    )
 
     events: list[TimelineEvent] = []
     steps = int(duration_s / step_seconds)

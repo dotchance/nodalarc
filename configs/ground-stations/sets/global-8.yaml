@@ -1,7 +1,7 @@
 ground_station_set:
   name: global-8
   description: "8 stations across major population centers and hemispheres. Coverage depends on constellation geometry — use coverage preview to verify."
-  default_min_elevation_deg: 15
+  default_min_elevation_deg: 25
   stations:
     - frankfurt
     - tokyo

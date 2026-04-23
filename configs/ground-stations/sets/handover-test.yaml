@@ -9,7 +9,7 @@ ground_station_set:
   stations:
     - hawthorne
     - ashburn
-  default_min_elevation_deg: 10
+  default_min_elevation_deg: 25
   default_terrestrial_prefixes:
     ipv4_template: "172.16.{gs_index}.0/24"
     ipv6_template: "fd10::{gs_index}:0/112"

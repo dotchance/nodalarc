@@ -331,11 +331,12 @@ def create_ground_bridge(
     gs_id: str,
     gs_pid: int,
     mtu: int | None = None,
+    ifname: str = "term0",
 ) -> str:
     """Create GS-side veth pair for ground link. Idempotent.
 
-    Creates a veth pair: host end (_gbr-{gs}) stays in host ns (DOWN),
-    GS end moved into GS namespace as gnd0 (DOWN).
+    Creates a veth pair: host end (_gbr-{gs}-{idx}) stays in host ns (DOWN),
+    GS end moved into GS namespace as {ifname} (DOWN).
 
     Returns host-side veth name.
     """
@@ -344,24 +345,25 @@ def create_ground_bridge(
 
         mtu = get_platform_config().veth_interface_mtu_bytes
 
-    gs_port = _gs_bridge_port_name(gs_id)
+    # Extract index from ifname (e.g., "term0" → "0") for unique host-side naming
+    idx_str = ifname.replace("term", "")
+    gs_port = f"{_gs_bridge_port_name(gs_id)}-{idx_str}"[:15]
 
     ipr = IPRoute()
     try:
-        # Idempotent: skip if host port already exists
         if ipr.link_lookup(ifname=gs_port):
             log.debug(f"GS port {gs_port} already exists")
             return gs_port
 
-        # Check if term0 already exists in GS namespace
-        def _check_term0(ns_ipr: IPRoute) -> bool:
-            return bool(ns_ipr.link_lookup(ifname="gnd0"))
+        _target_ifname = ifname
 
-        if _in_namespace(gs_pid, _check_term0):
-            log.debug(f"gnd0 already exists in GS ns({gs_pid})")
+        def _check_iface(ns_ipr: IPRoute) -> bool:
+            return bool(ns_ipr.link_lookup(ifname=_target_ifname))
+
+        if _in_namespace(gs_pid, _check_iface):
+            log.debug(f"{ifname} already exists in GS ns({gs_pid})")
             return gs_port
 
-        # Create veth pair with temp names
         rand = os.urandom(3).hex()
         tmp_host = f"_na_h{rand}"[:15]
         tmp_ns = f"_na_n{rand}"[:15]
@@ -373,24 +375,21 @@ def create_ground_bridge(
 
         ipr.link("add", ifname=tmp_host, peer={"ifname": tmp_ns}, kind="veth")
 
-        # Host end: rename, set MTU — leave DOWN
         host_idx = ipr.link_lookup(ifname=tmp_host)[0]
         ipr.link("set", index=host_idx, ifname=gs_port, mtu=mtu)
 
-        # Move NS end into GS namespace
         ns_idx = ipr.link_lookup(ifname=tmp_ns)[0]
         ipr.link("set", index=ns_idx, net_ns_pid=gs_pid)
 
-        # ONE JUMP: rename to term0 inside GS namespace, leave DOWN
-        _tmp_ns = tmp_ns  # capture for closure
+        _tmp_ns = tmp_ns
 
-        def _rename_term0(ns_ipr: IPRoute) -> None:
+        def _rename_iface(ns_ipr: IPRoute) -> None:
             idx = ns_ipr.link_lookup(ifname=_tmp_ns)[0]
-            ns_ipr.link("set", index=idx, ifname="term0", mtu=mtu)
+            ns_ipr.link("set", index=idx, ifname=_target_ifname, mtu=mtu)
 
-        _in_namespace(gs_pid, _rename_term0)
+        _in_namespace(gs_pid, _rename_iface)
 
-        log.info(f"Created GS port {gs_port} → term0 in ns({gs_pid})")
+        log.info(f"Created GS port {gs_port} → {ifname} in ns({gs_pid})")
     finally:
         ipr.close()
 
@@ -401,30 +400,34 @@ def create_satellite_ground_veth(
     sat_id: str,
     sat_pid: int,
     mtu: int | None = None,
+    ifname: str = "gnd0",
 ) -> tuple[str, str]:
     """Pre-create satellite ground veth pair at deploy time. Idempotent.
 
-    Returns (host_side_name, "gnd0").
+    Returns (host_side_name, ifname).
     """
     if mtu is None:
         from nodalarc.platform_config import get_platform_config
 
         mtu = get_platform_config().veth_interface_mtu_bytes
 
-    host_name = _sat_gnd_host_name(sat_id)
+    idx_str = ifname.replace("gnd", "")
+    host_name = f"{_sat_gnd_host_name(sat_id)}-{idx_str}"[:15]
 
     ipr = IPRoute()
     try:
         if ipr.link_lookup(ifname=host_name):
             log.debug(f"Satellite ground veth {host_name} already exists")
-            return (host_name, "gnd0")
+            return (host_name, ifname)
 
-        def _check_gnd0(ns_ipr: IPRoute) -> bool:
-            return bool(ns_ipr.link_lookup(ifname="gnd0"))
+        _target_ifname = ifname
 
-        if _in_namespace(sat_pid, _check_gnd0):
-            log.debug(f"gnd0 already exists in sat ns({sat_pid})")
-            return (host_name, "gnd0")
+        def _check_iface(ns_ipr: IPRoute) -> bool:
+            return bool(ns_ipr.link_lookup(ifname=_target_ifname))
+
+        if _in_namespace(sat_pid, _check_iface):
+            log.debug(f"{ifname} already exists in sat ns({sat_pid})")
+            return (host_name, ifname)
 
         rand = os.urandom(3).hex()
         tmp_host = f"_na_h{rand}"[:15]
@@ -445,16 +448,16 @@ def create_satellite_ground_veth(
 
         _tmp_ns = tmp_ns
 
-        def _rename_gnd0(ns_ipr: IPRoute) -> None:
+        def _rename_iface(ns_ipr: IPRoute) -> None:
             idx = ns_ipr.link_lookup(ifname=_tmp_ns)[0]
-            ns_ipr.link("set", index=idx, ifname="gnd0", mtu=mtu)
+            ns_ipr.link("set", index=idx, ifname=_target_ifname, mtu=mtu)
 
-        _in_namespace(sat_pid, _rename_gnd0)
+        _in_namespace(sat_pid, _rename_iface)
     finally:
         ipr.close()
 
-    log.info(f"Created satellite ground veth {host_name} ↔ gnd0 in ns({sat_pid})")
-    return (host_name, "gnd0")
+    log.info(f"Created satellite ground veth {host_name} ↔ {ifname} in ns({sat_pid})")
+    return (host_name, ifname)
 
 
 def create_mediated_isl(

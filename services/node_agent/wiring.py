@@ -310,15 +310,19 @@ def execute_wiring(
     # brings it admin UP (no `shutdown` in config). With no host-side veth
     # connected, gnd0 enters LOWERLAYERDOWN (admin UP, no carrier).
 
-    def _create_ground_bridge_task(gs_id: str, gs_pid: int) -> None:
-        create_ground_bridge(gs_id, gs_pid)
-        configure_interface(gs_pid, "term0", gs_id)
-        enable_mpls_input(gs_pid, "term0")
+    def _create_ground_bridge_task(gs_id: str, gs_pid: int, gnd_ifaces: list) -> None:
+        for iface_spec in gnd_ifaces:
+            ifname = iface_spec["name"]
+            create_ground_bridge(gs_id, gs_pid, ifname=ifname)
+            configure_interface(gs_pid, ifname, gs_id)
+            enable_mpls_input(gs_pid, ifname)
 
-    def _create_sat_ground_task(node_id: str, pid: int) -> None:
-        create_satellite_ground_veth(node_id, pid)
-        configure_interface(pid, "gnd0", node_id)
-        enable_mpls_input(pid, "gnd0")
+    def _create_sat_ground_task(node_id: str, pid: int, gnd_ifaces: list) -> None:
+        for iface_spec in gnd_ifaces:
+            ifname = iface_spec["name"]
+            create_satellite_ground_veth(node_id, pid, ifname=ifname)
+            configure_interface(pid, ifname, node_id)
+            enable_mpls_input(pid, ifname)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         gnd_futures = {}
@@ -327,7 +331,8 @@ def execute_wiring(
             if gs_pid == 0:
                 log.warning(f"No PID for ground station {gs_id}")
                 continue
-            gnd_futures[pool.submit(_create_ground_bridge_task, gs_id, gs_pid)] = gs_id
+            gs_ifaces = ground_bridges[gs_id].get("gnd_interfaces", [{"name": "term0"}])
+            gnd_futures[pool.submit(_create_ground_bridge_task, gs_id, gs_pid, gs_ifaces)] = gs_id
 
         for node_id, node_spec in nodes.items():
             if node_spec.get("node_type") != "satellite":
@@ -335,7 +340,8 @@ def execute_wiring(
             pid = pid_map.get(node_id, 0)
             if pid == 0:
                 continue
-            gnd_futures[pool.submit(_create_sat_ground_task, node_id, pid)] = node_id
+            sat_ifaces = node_spec.get("gnd_interfaces", [{"name": "gnd0"}])
+            gnd_futures[pool.submit(_create_sat_ground_task, node_id, pid, sat_ifaces)] = node_id
 
         gs_created = 0
         sat_gnd_created = 0

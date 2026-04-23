@@ -332,7 +332,8 @@ def execute_wiring(
             if gs_pid == 0:
                 log.warning(f"No PID for ground station {gs_id}")
                 continue
-            gs_ifaces = ground_bridges[gs_id].get("gnd_interfaces", [{"name": "term0"}])
+            gs_node = nodes.get(gs_id, {})
+            gs_ifaces = gs_node.get("gnd_interfaces", [{"name": "term0"}])
             gnd_futures[pool.submit(_create_ground_bridge_task, gs_id, gs_pid, gs_ifaces)] = gs_id
 
         for node_id, node_spec in nodes.items():

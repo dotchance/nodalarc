@@ -515,7 +515,7 @@ class ContinuousTracer:
             link_type = None
             if iface_pair:
                 iface = iface_pair[0] if a == key[0] else iface_pair[1]
-                link_type = "ground" if a.startswith("gs-") or b.startswith("gs-") else "isl"
+                link_type = "ground" if "gnd" in iface_pair[0] and "gnd" in iface_pair[1] else "isl"
             links.append(
                 LiveTraceLink(
                     from_node=a,
@@ -600,7 +600,7 @@ class ContinuousTracer:
                         interface=h.get("out_interface", ""),
                         netem_delay_ms=h.get("latency_to_next_ms"),
                         link_type="ground"
-                        if from_id.startswith("gs-") or to_id.startswith("gs-")
+                        if h.get("out_interface", "").startswith("gnd")
                         else "isl",
                     )
                 )

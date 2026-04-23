@@ -219,7 +219,7 @@ def handle_batch_link_down(
         if iface.locality == node_agent_pb2.CROSS_NODE and iface.vni:
             if iface.link_type == node_agent_pb2.GROUND:
                 # CROSS_NODE GROUND: detach VXLAN from existing host-side interface
-                is_sat = not iface.node_id.startswith("gs-")
+                is_sat = iface.node_id == iface.sat_id
                 if is_sat:
                     host_ifname = ground_bridge._sat_gnd_host_name(iface.node_id)
                     sat_pid = pm.get(iface.node_id, 0)
@@ -401,7 +401,7 @@ def handle_batch_link_up(
             # GROUND: attach via existing host-side infrastructure
             try:
                 # Determine local host-side interface name
-                is_sat = not iface.node_id.startswith("gs-")
+                is_sat = iface.node_id == iface.sat_id
                 if is_sat:
                     host_ifname = ground_bridge._sat_gnd_host_name(iface.node_id)
                     sat_pid = pm.get(iface.node_id, 0)

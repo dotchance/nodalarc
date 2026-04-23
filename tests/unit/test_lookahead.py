@@ -41,7 +41,7 @@ def test_lookahead_submit_and_get_result():
     assert len(events) > 0, "Should produce events"
     assert isinstance(isl_state, dict)
     assert isinstance(gs_state, dict)
-    assert isinstance(associations, frozenset)
+    assert isinstance(associations, dict)
 
 
 def test_lookahead_cancel_discards_result():

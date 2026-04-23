@@ -172,7 +172,7 @@ class TestHysteresisDiscount:
             sat_elevations=[40.0, 44.0],
             gs_terminal_count=1,
             policy="highest-elevation",
-            current_assoc=frozenset(),
+            current_assoc={},
         )
         assert scored[0][3] == "sat-P00S01"  # 44° > 40°
 

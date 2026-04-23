@@ -65,7 +65,7 @@ class TestFoldDeterminism:
         )
         isl_state: dict = {}
         gs_state: dict = {}
-        associations: frozenset = frozenset()
+        associations: dict = {}
         step_events_all = []
         for step in range(n_steps + 1):
             evts, _pos, associations = compute_step(
@@ -105,7 +105,7 @@ class TestFoldDeterminism:
         # Run 10 ticks to build up association state
         isl_state: dict = {}
         gs_state: dict = {}
-        associations: frozenset = frozenset()
+        associations: dict = {}
         for step in range(11):
             _, _, associations = compute_step(
                 ctx,
@@ -122,7 +122,7 @@ class TestFoldDeterminism:
         # Simulate seek: reset all state
         isl_state_fresh: dict = {}
         gs_state_fresh: dict = {}
-        associations_fresh: frozenset = frozenset()
+        associations_fresh: frozenset = {}
 
         # Run first tick from both: seeded and fresh
         events_seeded, _, assoc_seeded = compute_step(
@@ -170,7 +170,7 @@ class TestFoldDeterminism:
         )
         seed_isl: dict = {}
         seed_gs: dict = {}
-        seed_assoc: frozenset = frozenset()
+        seed_assoc: frozenset = {}
         for step in range(11):
             _, _, seed_assoc = compute_step(
                 ctx,
@@ -251,7 +251,7 @@ class TestFoldDeterminism:
         # --- Path A: continuous 60 ticks ---
         a_isl: dict = {}
         a_gs: dict = {}
-        a_assoc: frozenset = frozenset()
+        a_assoc: frozenset = {}
         a_events = []
         for step in range(61):
             evts, _pos, a_assoc = compute_step(
@@ -269,7 +269,7 @@ class TestFoldDeterminism:
         # --- Path B: two halves with explicit state handoff ---
         b_isl: dict = {}
         b_gs: dict = {}
-        b_assoc: frozenset = frozenset()
+        b_assoc: frozenset = {}
         b_events = []
 
         # First half: steps 0..boundary

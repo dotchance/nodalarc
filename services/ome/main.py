@@ -219,7 +219,7 @@ class _LookAheadThread:
         duration_s: float,
         initial_isl_state: dict | None,
         initial_gs_state: dict | None,
-        initial_associations: frozenset[tuple[str, str]] | None = None,
+        initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
         timestamp_offset: float = 0.0,
     ) -> None:
         """Start background window precomputation. Non-blocking."""
@@ -559,7 +559,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     running_isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     running_gs_state: dict[tuple[str, str], tuple[bool, bool]] = {}
-    current_associations: frozenset[tuple[str, str]] = frozenset()
+    current_associations: dict[tuple[str, str], tuple[int, int]] = {}
     step = 0
     snapshot_seq = 0
     last_snapshot_sim_s: float = -snapshot_interval_s  # force immediate on first step
@@ -629,7 +629,7 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 gs_state = {}
                 running_isl_state = {}
                 running_gs_state = {}
-                current_associations = frozenset()
+                current_associations = {}
                 step = 0
                 pace_ref_wall = time.monotonic()
                 pace_ref_step = 0

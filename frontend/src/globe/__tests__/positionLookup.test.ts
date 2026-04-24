@@ -3,8 +3,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as THREE from "three";
 import { getNodeLocalPosition, getNodeWorldPosition, setEarthFrame } from "../positionLookup";
-import { updateSatellites, getSatellites } from "../satellites";
+import { updateSatellites, animateSatellites, setEphemeris, getSatellites } from "../satellites";
 import { updateGroundStations, getGroundStations } from "../groundStations";
+import { onSnapshot } from "../../sim/simClock";
+import { SCENE_EARTH_RADIUS, SCENE_KM_PER_UNIT } from "../../sim/orbitalMath";
+import type { SessionEphemeris } from "../../sim/ephemeris";
 import type { NodeState } from "../../types";
 
 // JSDOM has no canvas implementation. Stub getContext to return a
@@ -212,6 +215,105 @@ describe("positionLookup", () => {
       expect(getNodeLocalPosition("gs-london", gsPos)).toBe(true);
 
       expect(satPos.length()).toBeGreaterThan(gsPos.length());
+    });
+  });
+
+  describe("animateSatellites integration", () => {
+    it("propagates satellite positions from ephemeris via animateSatellites", () => {
+      const epoch = "2026-04-01T00:00:00Z";
+      const epochUnix = new Date(epoch).getTime() / 1000;
+
+      const ephemeris: SessionEphemeris = {
+        epoch_id: 1,
+        sim_time: epoch,
+        epoch_unix: epochUnix,
+        nodes: {
+          "sat-P00S00": {
+            type: "keplerian",
+            altitude_km: 550,
+            inclination_deg: 53,
+            raan_deg: 0,
+            true_anomaly_deg: 0,
+            plane: 0,
+            slot: 0,
+          },
+        },
+      };
+
+      const nodes = [makeSatNode("sat-P00S00", 0, 0, 550)];
+      updateSatellites(nodes, earthFrame, "area", epoch);
+
+      setEphemeris(ephemeris);
+      onSnapshot(epoch, performance.now());
+
+      const posBefore = new THREE.Vector3();
+      getNodeLocalPosition("sat-P00S00", posBefore);
+
+      animateSatellites(0.016);
+
+      const posAfter = new THREE.Vector3();
+      getNodeLocalPosition("sat-P00S00", posAfter);
+
+      // Position should have been updated by propagation
+      const dist = posAfter.length();
+      const expectedDist = SCENE_EARTH_RADIUS + 550 / SCENE_KM_PER_UNIT;
+      expect(Math.abs(dist - expectedDist)).toBeLessThan(0.5);
+
+      // Position should be non-zero (propagation actually ran)
+      expect(dist).toBeGreaterThan(SCENE_EARTH_RADIUS);
+    });
+
+    it("two satellites at different orbital elements have different positions", () => {
+      const epoch = "2026-04-01T00:00:00Z";
+      const epochUnix = new Date(epoch).getTime() / 1000;
+
+      const ephemeris: SessionEphemeris = {
+        epoch_id: 1,
+        sim_time: epoch,
+        epoch_unix: epochUnix,
+        nodes: {
+          "sat-P00S00": {
+            type: "keplerian",
+            altitude_km: 550,
+            inclination_deg: 53,
+            raan_deg: 0,
+            true_anomaly_deg: 0,
+            plane: 0,
+            slot: 0,
+          },
+          "sat-P05S10": {
+            type: "keplerian",
+            altitude_km: 550,
+            inclination_deg: 53,
+            raan_deg: 90,
+            true_anomaly_deg: 180,
+            plane: 5,
+            slot: 10,
+          },
+        },
+      };
+
+      const nodes = [
+        makeSatNode("sat-P00S00", 0, 0, 550),
+        makeSatNode("sat-P05S10", 0, 90, 550),
+      ];
+      updateSatellites(nodes, earthFrame, "area", epoch);
+
+      setEphemeris(ephemeris);
+      onSnapshot(epoch, performance.now());
+      animateSatellites(0.016);
+
+      const pos1 = new THREE.Vector3();
+      const pos2 = new THREE.Vector3();
+      getNodeLocalPosition("sat-P00S00", pos1);
+      getNodeLocalPosition("sat-P05S10", pos2);
+
+      // Different orbital elements → different positions
+      const separation = pos1.distanceTo(pos2);
+      expect(separation).toBeGreaterThan(10);
+
+      // Both at same altitude → similar distance from origin
+      expect(pos1.length()).toBeCloseTo(pos2.length(), 0);
     });
   });
 });

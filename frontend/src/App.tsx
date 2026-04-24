@@ -10,6 +10,7 @@ import { InfoPanel } from "./panels/InfoPanel";
 import { FilterPanel } from "./panels/FilterPanel";
 import { CliDrawer } from "./panels/CliDrawer";
 import { NodePopover } from "./panels/NodePopover";
+import { Toasts } from "./panels/Toasts";
 import { Toolbar } from "./toolbar/Toolbar";
 import { TopBar } from "./bars/TopBar";
 import { BottomBar } from "./bars/BottomBar";
@@ -444,6 +445,8 @@ function AppInner() {
     <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} />
   );
 
+  const toastsContent = <Toasts events={snapshot?.recent_events} />;
+
   const overlayContent = showCatalog ? (
     <SessionWizard
       onDeployStarted={() => { setShowCatalog(false); setHasEverDeployed(true); }}
@@ -472,6 +475,7 @@ function AppInner() {
       rightPanel={rightPanelContent}
       bottomBar={bottomBarContent}
       overlay={overlayContent}
+      toasts={toastsContent}
       historicalControls={historicalControlsContent}
       historicalMode={historicalMode}
       panelOpen={panelOpen}

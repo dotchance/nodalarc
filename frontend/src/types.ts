@@ -125,7 +125,7 @@ export interface Selection {
 /** View modes */
 export type ViewMode = "globe" | "topology" | "split";
 export type ColorMode = "area" | "plane";
-export type GlobeMode = "blue-marble" | "day-night";
+export type GlobeMode = "blue-marble" | "day-night" | "political";
 
 /** Reference frame for the globe view.
  *  - "earth-fixed": Earth static, satellites trace ground tracks, stars rotate

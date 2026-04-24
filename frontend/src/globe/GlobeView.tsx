@@ -28,6 +28,7 @@ import { setupGpuPicker } from "./gpuPicker";
 import { updateLabels, animateLabels, clearLabels } from "./labels";
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
+import { loadBoundaries, setBoundariesVisible } from "./boundaries";
 import type { StateSnapshot, Selection, ColorMode, GlobeMode, ReferenceFrame } from "../types";
 
 // Reusable temporaries for camera-math helpers (flyToNode, getNodeScreenPosition,
@@ -157,6 +158,7 @@ export function GlobeView({
     createEarth(earthFrame);
     createAtmosphere(earthFrame);
     createLights(scene, earthFrame);
+    loadBoundaries(earthFrame);
 
     // Raycaster closes over getters that read current earthFrame rotation
     // and active frame angular velocity so Ctrl+click orbit-pin seeds use
@@ -371,6 +373,7 @@ export function GlobeView({
   // Switch globe rendering mode
   useEffect(() => {
     setGlobeMode(globeMode);
+    setBoundariesVisible(globeMode === "political" || globeMode === "day-night");
   }, [globeMode]);
 
   // Pass ephemeris to satellite renderer and Worker for propagation

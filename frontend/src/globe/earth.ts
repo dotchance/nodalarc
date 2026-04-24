@@ -243,4 +243,6 @@ export function setGlobeMode(mode: GlobeMode): void {
   if (_sunLight) {
     _sunLight.intensity = mode === "day-night" ? 0.0 : 1.0;
   }
+  // "political" mode: both earth meshes hidden, boundaries handle rendering
+  // The dark background (scene.background) remains visible as the globe base
 }

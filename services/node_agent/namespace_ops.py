@@ -157,7 +157,11 @@ def apply_link_shaping(
     Called on LinkUp. Subsequent delay-only changes use update_delay().
     """
     rate_bps = int(rate_mbps * 1_000_000)
+    if rate_bps > 0xFFFFFFFF:
+        rate_bps = 0xFFFFFFFF
     burst = max(9000, rate_bps // 250)
+    if burst > 0xFFFFFFFF:
+        burst = 0xFFFFFFFF
     latency_us = 50000  # 50ms buffer
     delay_us = int(delay_ms * 1000)
 

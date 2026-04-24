@@ -1,0 +1,25 @@
+# Starlink v2 Mini — optical laser ISL platform
+#
+# Orbital parameters from FCC filing SAT-MOD-20200417-00037 (Shell 1).
+# ISL specs from SpaceX laser ISL disclosures: 4 optical terminals,
+# bidirectional, max range ~5,016 km (geometry-limited at 550 km).
+# Ground terminal: Ka-band gateway downlink.
+
+satellite_type:
+  name: starlink-v2-laser
+  description: "Starlink v2 Mini with optical laser ISLs"
+
+  isl_terminals:
+    - type: optical
+      band: "1550nm"
+      count: 4
+      max_range_km: 5016
+      bandwidth_mbps: 5000
+      max_tracking_rate_deg_s: 3.0
+      field_of_regard_deg: 140
+
+  ground_terminals:
+    - type: rf
+      count: 1
+      bandwidth_mbps: 2000
+      band: Ka

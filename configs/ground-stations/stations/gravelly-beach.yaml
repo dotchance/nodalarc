@@ -1,0 +1,9 @@
+# Gravelly Beach, Tasmania, Australia — Starlink Gateway
+# Southern hemisphere near the orbital inclination mirror (41°S vs 53°).
+# Provides Australian coverage and southern ISL path anchoring.
+ground_station:
+  name: gravelly-beach
+  lat_deg: -41.27
+  lon_deg: 146.05
+  alt_m: 10
+  min_elevation_deg: 25

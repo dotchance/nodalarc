@@ -1,0 +1,90 @@
+# Starlink Shell 1 — Realistic 1/7 Scale
+#
+# 220 satellites in 10 planes × 22 sats, 550 km, 53° inclination.
+# 8 gateway ground stations at actual Starlink FCC-filed locations.
+# IS-IS with BFD, IETF SPF delay, MBB enabled with 3-tick overlap.
+#
+# This session demonstrates:
+#   - Realistic LEO orbital mechanics with visible satellite trains
+#   - Polar seam ISL deactivation above 75° latitude
+#   - Make-before-break ground station handovers (tracking_capacity=2)
+#   - Sub-second IS-IS reconvergence with BFD
+#   - Global routing across 8 gateways on 4 continents
+
+session:
+  name: starlink-shell1-realistic
+constellation: configs/constellations/starlink-shell1-220.yaml
+ground_stations:
+  default_terminals:
+    - type: rf
+      count: 2
+      bandwidth_mbps: 2000
+      tracking_capacity: 2
+      band: Ka
+  default_min_elevation_deg: 25
+  default_scheduling_policy: highest-elevation
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10
+    default_route: true
+    default_route_metric: 100
+  stations:
+    # --- North America (3 gateways) ---
+    - name: conrad
+      lat_deg: 48.17
+      lon_deg: -111.94
+      alt_m: 1100
+    - name: greenville
+      lat_deg: 41.40
+      lon_deg: -80.38
+      alt_m: 340
+    - name: boca-chica
+      lat_deg: 25.99
+      lon_deg: -97.16
+      alt_m: 3
+    # --- Europe (2 gateways) ---
+    - name: goonhilly
+      lat_deg: 50.05
+      lon_deg: -5.18
+      alt_m: 80
+    - name: usingen
+      lat_deg: 50.33
+      lon_deg: 8.53
+      alt_m: 290
+    # --- Southern hemisphere (3 gateways) ---
+    - name: warkworth
+      lat_deg: -36.43
+      lon_deg: 174.66
+      alt_m: 60
+    - name: gravelly-beach
+      lat_deg: -41.27
+      lon_deg: 146.05
+      alt_m: 10
+    - name: sao-paulo
+      lat_deg: -23.55
+      lon_deg: -46.63
+      alt_m: 760
+routing:
+  protocol: isis
+  extensions:
+    - traffic-engineering
+  area_assignment:
+    strategy: per-plane
+  mbb_dispatch: true
+  mbb_overlap_ticks: 3
+  bfd: true
+  bfd_detect_multiplier: 3
+  bfd_rx_interval: 300
+  bfd_tx_interval: 300
+  isis_hello_interval: 1
+  isis_hello_multiplier: 3
+  spf_init_delay: 50
+  spf_short_delay: 200
+  spf_long_delay: 1000
+  spf_holddown: 2000
+  spf_time_to_learn: 500
+time:
+  step_seconds: 1
+placement:
+  policy: planePerNode

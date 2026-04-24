@@ -40,6 +40,7 @@ export function getNodeWorldPosition(nodeId: string, target: THREE.Vector3): boo
   if (!getNodeLocalPosition(nodeId, _tmpLocal)) return false;
 
   if (earthFrameRef) {
+    earthFrameRef.updateWorldMatrix(true, false);
     target.copy(_tmpLocal);
     earthFrameRef.localToWorld(target);
   } else {

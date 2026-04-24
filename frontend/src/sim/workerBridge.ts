@@ -127,6 +127,44 @@ export function requestFlush(simTimeUnix: number, playbackSpeed: number): void {
   worker.postMessage({ type: "flush", simTimeUnix, playbackSpeed });
 }
 
+export function interpolateFromBuffer(
+  header: Float64Array,
+  positions: Float32Array,
+  satIndex: number,
+  simTimeUnix: number,
+  samplesPerWindow: number,
+  target: { x: number; y: number; z: number },
+): boolean {
+  const windowStart = header[0]!;
+  const sampleInterval = header[1]!;
+
+  if (sampleInterval <= 0) return false;
+
+  const relativeTime = simTimeUnix - windowStart;
+  const sampleF = relativeTime / sampleInterval;
+
+  if (sampleF < 0 || sampleF >= samplesPerWindow - 1) return false;
+
+  const sampleLow = Math.floor(sampleF);
+  const frac = sampleF - sampleLow;
+
+  const offsetLow = (satIndex * samplesPerWindow + sampleLow) * 3;
+  const offsetHigh = offsetLow + 3;
+
+  const x0 = positions[offsetLow]!;
+  const y0 = positions[offsetLow + 1]!;
+  const z0 = positions[offsetLow + 2]!;
+  const x1 = positions[offsetHigh]!;
+  const y1 = positions[offsetHigh + 1]!;
+  const z1 = positions[offsetHigh + 2]!;
+
+  target.x = x0 + (x1 - x0) * frac;
+  target.y = y0 + (y1 - y0) * frac;
+  target.z = z0 + (z1 - z0) * frac;
+
+  return true;
+}
+
 export function readPosition(
   nodeId: string,
   simTimeUnix: number,
@@ -140,34 +178,10 @@ export function readPosition(
   const activeIdx = Atomics.load(control, 0);
   const buf = activeIdx === 0 ? bufferA : bufferB;
 
-  const windowStart = buf.header[0]!;
-  const sampleInterval = buf.header[1]!;
-
-  if (sampleInterval <= 0) return false;
-
-  const relativeTime = simTimeUnix - windowStart;
-  const sampleF = relativeTime / sampleInterval;
-
-  if (sampleF < 0 || sampleF >= SAMPLES_PER_WINDOW - 1) return false;
-
-  const sampleLow = Math.floor(sampleF);
-  const frac = sampleF - sampleLow;
-
-  const offsetLow = (satIndex * SAMPLES_PER_WINDOW + sampleLow) * 3;
-  const offsetHigh = offsetLow + 3;
-
-  const x0 = buf.positions[offsetLow]!;
-  const y0 = buf.positions[offsetLow + 1]!;
-  const z0 = buf.positions[offsetLow + 2]!;
-  const x1 = buf.positions[offsetHigh]!;
-  const y1 = buf.positions[offsetHigh + 1]!;
-  const z1 = buf.positions[offsetHigh + 2]!;
-
-  target.x = x0 + (x1 - x0) * frac;
-  target.y = y0 + (y1 - y0) * frac;
-  target.z = z0 + (z1 - z0) * frac;
-
-  return true;
+  return interpolateFromBuffer(
+    buf.header, buf.positions, satIndex, simTimeUnix,
+    SAMPLES_PER_WINDOW, target,
+  );
 }
 
 export function getWorkerSatIds(): readonly string[] {

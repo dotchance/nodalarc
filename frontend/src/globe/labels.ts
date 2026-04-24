@@ -12,8 +12,23 @@ import { getSatellites } from "./satellites";
 import { getNodeLocalPosition, earthFrameRef } from "./positionLookup";
 import { EARTH_RADIUS } from "../config";
 
-const FADE_IN_DIST = 150;
-const FADE_OUT_DIST = 350;
+const FADE_IN_DIST = 200;
+const FADE_OUT_DIST = 500;
+
+let labelsEnabled = true;
+
+export function setLabelsEnabled(enabled: boolean): void {
+  labelsEnabled = enabled;
+  if (!enabled) {
+    for (const entry of labels.values()) {
+      entry.div.style.display = "none";
+    }
+  }
+}
+
+export function getLabelsEnabled(): boolean {
+  return labelsEnabled;
+}
 
 interface LabelEntry {
   div: HTMLDivElement;
@@ -70,7 +85,7 @@ export function updateLabels(_earthFrame: THREE.Object3D): void {
 }
 
 export function animateLabels(camera: THREE.Camera): void {
-  if (!labelContainer || !earthFrameRef) return;
+  if (!labelContainer || !earthFrameRef || !labelsEnabled) return;
 
   const width = labelContainer.clientWidth;
   const height = labelContainer.clientHeight;
@@ -106,13 +121,17 @@ export function animateLabels(camera: THREE.Camera): void {
       continue;
     }
 
-    // Earth occlusion
-    _dirToLabel.copy(_labelWorldPos).sub(cameraPos).normalize();
-    _dirToCenter.copy(cameraPos).multiplyScalar(-1).normalize();
-    const dot = _dirToLabel.dot(_dirToCenter);
-    if (dot > occlusionThreshold && _labelWorldPos.length() < distToCenter) {
-      entry.div.style.display = "none";
-      continue;
+    // Earth occlusion — only cull labels on the far side of the earth.
+    // When zoomed in close, skip occlusion to avoid hiding labels in
+    // the direct field of view.
+    if (distToCenter > EARTH_RADIUS * 2) {
+      _dirToLabel.copy(_labelWorldPos).sub(cameraPos).normalize();
+      _dirToCenter.copy(cameraPos).multiplyScalar(-1).normalize();
+      const dot = _dirToLabel.dot(_dirToCenter);
+      if (dot > occlusionThreshold && _labelWorldPos.length() < distToCenter) {
+        entry.div.style.display = "none";
+        continue;
+      }
     }
 
     const x = (_labelNdc.x * 0.5 + 0.5) * width;

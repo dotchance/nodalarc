@@ -10,6 +10,7 @@
 import * as THREE from "three";
 import { EARTH_RADIUS } from "../config";
 import { getSatellites } from "./satellites";
+import { getNodeLocalPosition } from "./positionLookup";
 import { computeConeRadius } from "./groundStations";
 import type { Selection } from "../types";
 
@@ -81,6 +82,7 @@ function hideCoverageFootprint(): void {
 }
 
 // Reusable temporaries for per-frame footprint positioning.
+const _footprintLocalPos = new THREE.Vector3();
 const _outward = new THREE.Vector3();
 const _surfacePos = new THREE.Vector3();
 
@@ -118,11 +120,11 @@ export function updateCoverageFootprint(
     }
   }
 
-  // Position disc on surface below satellite. Sat and footprint share
-  // earthFrame, so both computations are in local (ECEF) coords.
-  // Orient via direct quaternion (plan §1.12): lookAt() takes world-space
-  // targets, which would give wrong rotations under group rotation.
-  _outward.copy(sat.mesh.position).normalize();
+  if (!getNodeLocalPosition(selection.id, _footprintLocalPos)) {
+    hideCoverageFootprint();
+    return;
+  }
+  _outward.copy(_footprintLocalPos).normalize();
   _surfacePos.copy(_outward).multiplyScalar(EARTH_RADIUS * 1.002);
 
   footprintMesh!.position.copy(_surfacePos);

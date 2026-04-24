@@ -42,7 +42,7 @@
   overflow: hidden;
   width: 0;
   min-width: 0;
-  transition: width 0.2s ease, min-width 0.2s ease;
+  transition: width var(--transition-normal), min-width var(--transition-normal);
 }
 
 .app-layout--panel-open .area-panel {
@@ -57,9 +57,9 @@
   left: 0;
   top: 0;
   bottom: 0;
-  width: 4px;
+  width: var(--space-2);
   cursor: col-resize;
-  z-index: 10;
+  z-index: var(--z-panel);
   background: transparent;
 }
 
@@ -74,20 +74,20 @@
   top: 50%;
   transform: translateY(-50%);
   width: 20px;
-  height: 48px;
-  z-index: 20;
+  height: var(--touch-target-comfortable);
+  z-index: var(--z-popover);
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-right: none;
-  border-radius: 4px 0 0 4px;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   color: var(--text-secondary);
-  font-size: 16px;
+  font-size: var(--font-size-xl);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
-  transition: right 0.2s ease;
+  transition: right var(--transition-normal);
 }
 
 .panel-toggle-tab:hover {
@@ -109,11 +109,11 @@
   top: 0;
   left: 0;
   right: 0;
-  z-index: 100;
-  padding: 6px 16px;
-  background: rgba(26, 26, 46, 0.9);
+  z-index: var(--z-overlay);
+  padding: var(--space-3) var(--space-8);
+  background: var(--bg-overlay-90);
   color: var(--ws-reconnecting);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-align: center;
   pointer-events: none;
 }
@@ -125,40 +125,40 @@
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 200;
+  z-index: var(--z-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(13, 13, 26, 0.95);
+  background: var(--bg-scrim);
 }
 
 .startup-error-box {
   text-align: center;
-  padding: 32px 48px;
+  padding: var(--space-16) var(--space-24);
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-xl);
 }
 
 .startup-error-box h2 {
   color: var(--accent-red);
-  font-size: 16px;
-  margin-bottom: 8px;
+  font-size: var(--font-size-xl);
+  margin-bottom: var(--space-4);
 }
 
 .startup-error-box p {
   color: var(--text-secondary);
-  font-size: 12px;
-  margin-bottom: 16px;
-  font-family: monospace;
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--space-8);
+  font-family: var(--font-family);
 }
 
 .startup-error-box button {
   background: var(--accent-blue);
   color: var(--bg-main);
-  padding: 8px 24px;
-  border-radius: 4px;
-  font-weight: 600;
+  padding: var(--space-4) var(--space-12);
+  border-radius: var(--radius-md);
+  font-weight: var(--font-weight-semibold);
   cursor: pointer;
 }
 
@@ -170,17 +170,17 @@
 .session-switching-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--bg-switching);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 100;
+  z-index: var(--z-overlay);
 }
 
 .switching-box {
   text-align: center;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--font-size-lg);
 }
 
 /* Split view: side by side globe + topology */

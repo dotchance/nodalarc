@@ -20,7 +20,7 @@ import { getNodeLocalPosition } from "./positionLookup";
 import { tokens } from "../styles/tokens";
 
 const FONT_URL = "/fonts/Inter.woff2";
-const LABEL_FONT_SIZE = 0.3;
+const LABEL_FONT_SIZE = 1.5;
 const FADE_IN_DIST = 150;
 const FADE_OUT_DIST = 300;
 
@@ -54,8 +54,9 @@ export function updateLabels(earthFrame: THREE.Object3D): void {
     text.color = tokens.textPrimary;
     text.anchorX = "center";
     text.anchorY = "bottom";
-    text.outlineWidth = 0.02;
+    text.outlineWidth = 0.05;
     text.outlineColor = "#000000";
+    text.depthOffset = -1;
     text.renderOrder = 10;
     text.visible = false;
     text.sync();
@@ -85,15 +86,15 @@ export function animateLabels(camera: THREE.Camera): void {
     }
 
     entry.text.position.copy(_labelPos);
-    entry.text.position.y += tokens.satRadius * 2;
+    entry.text.position.y += tokens.satRadius * 3;
 
     entry.highlighted = highlightedNodes.has(id);
 
     if (entry.highlighted) {
       entry.text.visible = true;
-      entry.text.fontSize = LABEL_FONT_SIZE * 1.5;
+      entry.text.fontSize = LABEL_FONT_SIZE * 1.2;
     } else {
-      labelsParent.localToWorld(_labelPos);
+      labelsParent!.localToWorld(_labelPos);
       const dist = _labelPos.distanceTo(camWorldPos);
 
       if (dist < FADE_IN_DIST) {
@@ -101,8 +102,7 @@ export function animateLabels(camera: THREE.Camera): void {
         entry.text.fontSize = LABEL_FONT_SIZE;
       } else if (dist < FADE_OUT_DIST) {
         entry.text.visible = true;
-        const t = (dist - FADE_IN_DIST) / (FADE_OUT_DIST - FADE_IN_DIST);
-        entry.text.fontSize = LABEL_FONT_SIZE * (1 - t * 0.5);
+        entry.text.fontSize = LABEL_FONT_SIZE * 0.6;
       } else {
         entry.text.visible = false;
       }

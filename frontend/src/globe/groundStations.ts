@@ -192,15 +192,15 @@ export function updateGroundStations(
       label.textContent = node.node_id.replace("gs-", "");
       label.style.cssText = `
         position: absolute;
-        color: #00d4aa;
-        font-size: 11px;
-        font-weight: bold;
+        color: var(--accent-teal);
+        font-size: var(--font-size-xs);
+        font-weight: var(--font-weight-bold);
         pointer-events: none;
         white-space: nowrap;
         text-shadow: 0 0 6px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
-        background: rgba(13, 13, 26, 0.6);
+        background: var(--bg-scrim-light);
         padding: 1px 4px;
-        border-radius: 2px;
+        border-radius: var(--radius-xs);
       `;
       labelContainer.appendChild(label);
 

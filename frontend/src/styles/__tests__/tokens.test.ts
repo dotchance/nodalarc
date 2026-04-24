@@ -10,8 +10,13 @@ import {
   EARTH_RADIUS, SAT_RADIUS, SAT_SEGMENTS, GS_SIZE,
   CAMERA_FOV, AREA_COLORS, PLANE_COLORS, getPlaneColor,
 } from "../../config";
-import * as fs from "fs";
-import * as path from "path";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore -- Node built-ins available at vitest runtime
+import { readFileSync, readdirSync } from "node:fs";
+// @ts-ignore
+import { resolve, dirname } from "node:path";
+// @ts-ignore
+import { fileURLToPath } from "node:url";
 
 beforeAll(() => {
   injectCssTokens();
@@ -132,23 +137,25 @@ describe("token system", () => {
 
   describe("CSS files only reference variables that are injected", () => {
     it("every var() reference in CSS files resolves to an injected property", () => {
-      const stylesDir = path.resolve(__dirname, "..");
-      const cssFiles = fs.readdirSync(stylesDir).filter((f) => f.endsWith(".css"));
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      const stylesDir = resolve(thisDir, "..");
+      const cssFiles = (readdirSync(stylesDir) as string[]).filter((f) => f.endsWith(".css"));
 
       const style = document.documentElement.style;
       const injectedVars = new Set<string>();
       for (let i = 0; i < style.length; i++) {
-        injectedVars.add(style[i]);
+        const prop = style.item(i);
+        if (prop) injectedVars.add(prop);
       }
 
       expect(injectedVars.size).toBeGreaterThan(40);
 
       const missingVars: string[] = [];
 
-      for (const file of cssFiles) {
-        const content = fs.readFileSync(path.join(stylesDir, file), "utf-8");
+      for (const file of cssFiles as string[]) {
+        const content = readFileSync(resolve(stylesDir, file), "utf-8") as string;
         const varRefs = content.match(/var\(--[\w-]+/g) ?? [];
-        const uniqueRefs = [...new Set(varRefs.map((r) => r.replace("var(", "")))];
+        const uniqueRefs = [...new Set(varRefs.map((r: string) => r.replace("var(", "")))];
 
         for (const varName of uniqueRefs) {
           if (!injectedVars.has(varName)) {
@@ -180,9 +187,9 @@ describe("token system", () => {
       ];
       for (let i = 1; i < layers.length; i++) {
         expect(
-          layers[i],
+          layers[i]!,
           `z-index layer ${i} (${layers[i]}) must be > layer ${i - 1} (${layers[i - 1]})`,
-        ).toBeGreaterThan(layers[i - 1]);
+        ).toBeGreaterThan(layers[i - 1]!);
       }
     });
 
@@ -233,7 +240,7 @@ describe("token system", () => {
     });
 
     it("returns darkened variant for second cycle", () => {
-      const base = tokens.planeColors[0];
+      const base = tokens.planeColors[0]!;
       const darkened = getPlaneColor(tokens.planeColors.length);
       expect(darkened).not.toBe(base);
       const baseR = (base >> 16) & 0xff;

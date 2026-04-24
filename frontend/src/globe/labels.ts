@@ -94,13 +94,14 @@ export function animateLabels(camera: THREE.Camera): void {
   const sinAngle = EARTH_RADIUS / distToCenter;
   const occlusionThreshold = Math.sqrt(1 - sinAngle * sinAngle);
 
+  earthFrameRef.updateWorldMatrix(true, false);
+
   for (const [id, entry] of labels) {
     if (!getNodeLocalPosition(id, _labelLocalPos)) {
       entry.div.style.display = "none";
       continue;
     }
 
-    // Convert local to world
     _labelWorldPos.copy(_labelLocalPos);
     earthFrameRef.localToWorld(_labelWorldPos);
 

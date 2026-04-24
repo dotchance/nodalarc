@@ -10,7 +10,6 @@
   --text-dim: #7777aa;
 
   --border: #2a2a4e;
-  --border-active: #4444aa;
 
   --accent-blue: #4488ff;
   --accent-teal: #00d4aa;
@@ -19,11 +18,6 @@
   --accent-green: #44cc66;
   --accent-amber: #ffaa00;
 
-  --area-red: #cc4444;
-  --area-green: #44aa44;
-  --area-blue: #4477bb;
-  --area-amber: #cc8844;
-
   --ws-connected: #44cc66;
   --ws-reconnecting: #ffaa00;
   --ws-disconnected: #ff3333;
@@ -31,5 +25,4 @@
   --topbar-height: 48px;
   --bottombar-height: 32px;
   --panel-width: 420px;
-  --toolbar-width: 48px;
 }

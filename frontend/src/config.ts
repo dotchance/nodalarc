@@ -134,9 +134,3 @@ export const SELECTION_COLOR = 0xffffff;
 /** Fail-flash timing */
 export const FAIL_HOLD_MS = 1500;
 export const FAIL_FADE_MS = 1000;
-
-/** Snapshot recording interval */
-export const SNAPSHOT_INTERVAL_S = 10;
-
-/** Animation */
-export const LERP_FACTOR = 0.1;

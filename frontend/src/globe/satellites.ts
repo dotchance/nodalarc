@@ -1,17 +1,12 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-/** Satellite mesh management — shared geometry, per-sat mesh + smooth motion.
- *
- *  Motion model (PRD v0.71): local Keplerian propagation from SessionEphemeris
- *  at 60fps via propagateNode(). Positions computed every frame from orbital
- *  elements — no lerp interpolation between snapshots.
- *
- *  Fallback: when ephemeris is unavailable (pre-v0.71 VS-API), falls back to
- *  NodeState positions updated at ~1Hz.
- *
- *  Metadata (plane, slot, routing_area, neighbor_count, etc.) still comes
- *  from NodeState via the WebSocket StateSnapshot.
- */
+// Satellite rendering — InstancedMesh for O(1) draw calls at any scale.
+//
+// Before: 220 Mesh + 220 Sprite = 440 draw calls
+// After:  1 InstancedMesh + 1 glow Sprite (selected only) = 2 draw calls
+//
+// All position consumers read via positionLookup.ts, which reads from
+// the positionCache Float32Array — not from individual mesh objects.
 
 import * as THREE from "three";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../config";
@@ -22,44 +17,44 @@ import { propagateToSceneXYZ } from "../sim/orbitalMath";
 import type { SessionEphemeris } from "../sim/ephemeris";
 import type { NodeState, ColorMode } from "../types";
 
-/** Shared geometry for all satellites. */
-const sharedGeo = new THREE.SphereGeometry(SAT_RADIUS, SAT_SEGMENTS, SAT_SEGMENTS);
-
-/** Shared glow texture for satellite visibility at distance. */
-let glowTexture: THREE.Texture | null = null;
-function getGlowTexture(): THREE.Texture {
-  if (!glowTexture) {
-    const size = 64;
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d")!;
-    const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    gradient.addColorStop(0, "rgba(255, 255, 255, 0.6)");
-    gradient.addColorStop(0.3, "rgba(255, 255, 255, 0.15)");
-    gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, size, size);
-    glowTexture = new THREE.CanvasTexture(canvas);
-    glowTexture.needsUpdate = true;
-  }
-  return glowTexture;
-}
+const MAX_SATELLITES = 10_000;
 
 export interface SatelliteEntry {
-  mesh: THREE.Mesh;
-  glow: THREE.Sprite;
+  instanceIndex: number;
   nodeState: NodeState;
 }
 
 const satellites = new Map<string, SatelliteEntry>();
+const indexToId: string[] = [];
+let satCount = 0;
+
+let instancedMesh: THREE.InstancedMesh | null = null;
+export let satEarthFrame: THREE.Object3D | null = null;
+
+const positionCache = new Float32Array(MAX_SATELLITES * 3);
+
+const sharedGeo = new THREE.SphereGeometry(SAT_RADIUS, SAT_SEGMENTS, SAT_SEGMENTS);
+const sharedMat = new THREE.MeshBasicMaterial({ vertexColors: false });
+
+const _tmpMatrix = new THREE.Matrix4();
+const _tmpColor = new THREE.Color();
+
+let glowSprite: THREE.Sprite | null = null;
+let glowTarget: string | null = null;
+
+let _ephemeris: SessionEphemeris | null = null;
 
 export function getSatellites(): Map<string, SatelliteEntry> {
   return satellites;
 }
 
-/** Current ephemeris for local propagation. Set from the WebSocket handler. */
-let _ephemeris: SessionEphemeris | null = null;
+export function getPositionCache(): Float32Array {
+  return positionCache;
+}
+
+export function getSatCount(): number {
+  return satCount;
+}
 
 export function setEphemeris(eph: SessionEphemeris | null): void {
   _ephemeris = eph;
@@ -69,23 +64,73 @@ export function getEphemeris(): SessionEphemeris | null {
   return _ephemeris;
 }
 
-/**
- * Update satellite metadata from WebSocket StateSnapshot.
- *
- * Creates new meshes for satellites that appear, removes meshes for
- * satellites that disappear, and updates metadata (routing_area,
- * neighbor_count, etc.) for existing satellites.
- *
- * Positions are NOT set here when ephemeris is available — they are
- * computed every frame in animateSatellites(). When ephemeris is null
- * (fallback), positions come from NodeState.
- */
+export function setSelectedGlow(nodeId: string | null): void {
+  glowTarget = nodeId;
+  if (glowSprite) {
+    glowSprite.visible = nodeId !== null;
+  }
+}
+
+function getOrCreateGlowSprite(parent: THREE.Object3D): THREE.Sprite {
+  if (!glowSprite) {
+    const size = 64;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d")!;
+    if (ctx.createRadialGradient) {
+      const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      gradient.addColorStop(0, "rgba(255, 255, 255, 0.6)");
+      gradient.addColorStop(0.3, "rgba(255, 255, 255, 0.15)");
+      gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    glowSprite = new THREE.Sprite(mat);
+    glowSprite.scale.set(SAT_RADIUS * 5, SAT_RADIUS * 5, 1);
+    glowSprite.visible = false;
+    parent.add(glowSprite);
+  }
+  return glowSprite;
+}
+
+function ensureInstancedMesh(parent: THREE.Object3D): THREE.InstancedMesh {
+  if (!instancedMesh) {
+    instancedMesh = new THREE.InstancedMesh(sharedGeo, sharedMat, MAX_SATELLITES);
+    instancedMesh.count = 0;
+    instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    instancedMesh.name = "satellites";
+    parent.add(instancedMesh);
+    satEarthFrame = parent;
+    getOrCreateGlowSprite(parent);
+  }
+  return instancedMesh;
+}
+
+function getSatColor(node: NodeState, mode: ColorMode): number {
+  if (mode === "area" && node.routing_area) {
+    return AREA_COLORS[node.routing_area] ?? 0xaabbcc;
+  }
+  if (mode === "plane" && node.plane != null) {
+    return getPlaneColor(node.plane);
+  }
+  return 0xccddee;
+}
+
 export function updateSatellites(
   nodes: NodeState[],
   earthFrame: THREE.Object3D,
   colorMode: ColorMode,
   _simTime: string,
 ): void {
+  const mesh = ensureInstancedMesh(earthFrame);
   const seen = new Set<string>();
 
   for (const node of nodes) {
@@ -95,63 +140,51 @@ export function updateSatellites(
     const existing = satellites.get(node.node_id);
     if (existing) {
       existing.nodeState = node;
-      updateSatColor(existing, colorMode);
+      _tmpColor.setHex(getSatColor(node, colorMode));
+      mesh.setColorAt(existing.instanceIndex, _tmpColor);
     } else {
-      // New satellite — create mesh at initial position
+      const idx = satCount;
+      satCount++;
+      indexToId[idx] = node.node_id;
+
       const pos = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
-      const color = getSatColor(node, colorMode);
-      const material = new THREE.MeshBasicMaterial({ color });
-      const mesh = new THREE.Mesh(sharedGeo, material);
-      mesh.position.copy(pos);
-      mesh.userData["nodeId"] = node.node_id;
-      mesh.userData["nodeType"] = "satellite";
-      earthFrame.add(mesh);
+      positionCache[idx * 3] = pos.x;
+      positionCache[idx * 3 + 1] = pos.y;
+      positionCache[idx * 3 + 2] = pos.z;
 
-      const glowMat = new THREE.SpriteMaterial({
-        map: getGlowTexture(),
-        color,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const glow = new THREE.Sprite(glowMat);
-      glow.scale.set(SAT_RADIUS * 5, SAT_RADIUS * 5, 1);
-      glow.position.copy(pos);
-      glow.visible = false;
-      earthFrame.add(glow);
+      _tmpMatrix.makeTranslation(pos.x, pos.y, pos.z);
+      mesh.setMatrixAt(idx, _tmpMatrix);
 
-      satellites.set(node.node_id, { mesh, glow, nodeState: node });
+      _tmpColor.setHex(getSatColor(node, colorMode));
+      mesh.setColorAt(idx, _tmpColor);
+
+      satellites.set(node.node_id, { instanceIndex: idx, nodeState: node });
     }
   }
 
+  // Mark removed satellites by zeroing their matrix (degenerate at origin)
   for (const [id, entry] of satellites) {
     if (!seen.has(id)) {
-      earthFrame.remove(entry.mesh);
-      earthFrame.remove(entry.glow);
+      _tmpMatrix.makeScale(0, 0, 0);
+      mesh.setMatrixAt(entry.instanceIndex, _tmpMatrix);
+      positionCache[entry.instanceIndex * 3] = 0;
+      positionCache[entry.instanceIndex * 3 + 1] = 0;
+      positionCache[entry.instanceIndex * 3 + 2] = 0;
       satellites.delete(id);
     }
   }
+
+  mesh.count = satCount;
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 }
 
 const _workerPos = { x: 0, y: 0, z: 0 };
 let _lastPropagateRequestTime = 0;
 let _workerWasReady = false;
 
-/**
- * Animate satellites — called every frame (~60fps).
- *
- * Uses main-thread propagation via propagateToSceneXYZ. The Worker
- * (Phase 1-2) will replace this by writing directly into the
- * InstancedMesh matrix buffer — not via a silent fallback, but by
- * swapping the implementation in positionLookup.ts.
- *
- * For now: Worker populates positions when ready, main-thread
- * propagation runs when Worker has no data (bootstrap/seek). Both
- * paths call the same orbital math (verified by orbitalMath.test.ts).
- * The Worker path is an optimization, not a separate behavior.
- */
 export function animateSatellites(_dt: number): void {
-  if (!_ephemeris) return;
+  if (!_ephemeris || !instancedMesh) return;
 
   const now = performance.now();
   const simMs = interpolatedSimTimeMs(now);
@@ -188,29 +221,36 @@ export function animateSatellites(_dt: number): void {
       [x, y, z] = propagateToSceneXYZ(ephNode, epochUnix, simTimeUnix);
     }
 
-    entry.mesh.position.set(x, y, z);
-    entry.glow.position.set(x, y, z);
-  }
-}
+    const idx = entry.instanceIndex;
+    positionCache[idx * 3] = x;
+    positionCache[idx * 3 + 1] = y;
+    positionCache[idx * 3 + 2] = z;
 
-function getSatColor(node: NodeState, mode: ColorMode): number {
-  if (mode === "area" && node.routing_area) {
-    return AREA_COLORS[node.routing_area] ?? 0xaabbcc;
+    _tmpMatrix.makeTranslation(x, y, z);
+    instancedMesh.setMatrixAt(idx, _tmpMatrix);
   }
-  if (mode === "plane" && node.plane != null) {
-    return getPlaneColor(node.plane);
-  }
-  return 0xccddee;
-}
 
-function updateSatColor(entry: SatelliteEntry, mode: ColorMode): void {
-  const color = getSatColor(entry.nodeState, mode);
-  (entry.mesh.material as THREE.MeshBasicMaterial).color.setHex(color);
-  (entry.glow.material as THREE.SpriteMaterial).color.setHex(color);
+  instancedMesh.instanceMatrix.needsUpdate = true;
+
+  if (glowSprite && glowTarget) {
+    const entry = satellites.get(glowTarget);
+    if (entry) {
+      const idx = entry.instanceIndex;
+      glowSprite.position.set(
+        positionCache[idx * 3]!,
+        positionCache[idx * 3 + 1]!,
+        positionCache[idx * 3 + 2]!,
+      );
+      glowSprite.visible = true;
+    }
+  }
 }
 
 export function recolorAllSatellites(colorMode: ColorMode): void {
+  if (!instancedMesh) return;
   for (const entry of satellites.values()) {
-    updateSatColor(entry, colorMode);
+    _tmpColor.setHex(getSatColor(entry.nodeState, colorMode));
+    instancedMesh.setColorAt(entry.instanceIndex, _tmpColor);
   }
+  if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
 }

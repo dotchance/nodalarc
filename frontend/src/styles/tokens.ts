@@ -161,7 +161,7 @@ export const tokens = {
   cameraFov: 45,
   cameraDistance: 250,
   cameraMinDistance: 105,
-  cameraMaxDistance: 600,
+  cameraMaxDistance: 1200,
 } as const;
 
 export type Tokens = typeof tokens;

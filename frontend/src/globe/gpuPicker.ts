@@ -13,7 +13,7 @@
 // strips instanceMatrix and custom vertex attributes).
 
 import * as THREE from "three";
-import { getSatellites } from "./satellites";
+import { getSatellites, indexToId } from "./satellites";
 import { getGroundStations } from "./groundStations";
 import { getLinks } from "./links";
 import { getNodeWorldPosition } from "./positionLookup";
@@ -24,7 +24,7 @@ const _v3b = new THREE.Vector3();
 const LINK_HIT_THRESHOLD = 0.02;
 
 let tooltip: HTMLDivElement | null = null;
-let hoveredNodeId: string | null = null;
+export let hoveredNodeId: string | null = null;
 
 function getTooltip(): HTMLDivElement {
   if (!tooltip) {
@@ -109,14 +109,25 @@ function hitTestLinks(
   return bestHit;
 }
 
-// GPU picking via InstancedMesh raycasting. Three.js InstancedMesh
-// does support raycasting natively — at 220 sats, the per-frame
-// raycasting cost is negligible (~0.5ms). At 10K sats, we'll need
-// the offscreen color-buffer approach. For now, use native raycast
-// which is simpler and correct.
-//
-// TODO: When satellite count exceeds 1000, switch to offscreen
-// color-buffer picking per A4 (dedicated pick materials + fenceSync).
+function resolveIntersection(
+  intersects: THREE.Intersection[],
+): { nodeId: string; nodeType: string } | null {
+  for (const hit of intersects) {
+    if (hit.object.userData["nodeId"]) {
+      return {
+        nodeId: hit.object.userData["nodeId"] as string,
+        nodeType: hit.object.userData["nodeType"] as string,
+      };
+    }
+    if (hit.instanceId !== undefined && hit.object.name === "satellites") {
+      const nodeId = indexToId[hit.instanceId];
+      if (nodeId) {
+        return { nodeId, nodeType: "satellite" };
+      }
+    }
+  }
+  return null;
+}
 
 export function setupGpuPicker(
   canvas: HTMLCanvasElement,
@@ -141,15 +152,12 @@ export function setupGpuPicker(
 
     raycaster.setFromCamera(mouse, camera);
     const intersects = raycaster.intersectObjects(scene.children, true);
-    const nodeHit = intersects.find((i) => i.object.userData["nodeId"]);
+    const nodeHit = resolveIntersection(intersects);
 
-    if (hoveredNodeId) {
-      hoveredNodeId = null;
-    }
+    hoveredNodeId = null;
 
     if (nodeHit) {
-      const nodeId = nodeHit.object.userData["nodeId"] as string;
-      const nodeType = nodeHit.object.userData["nodeType"] as string;
+      const { nodeId, nodeType } = nodeHit;
       hoveredNodeId = nodeId;
       tip.innerHTML = buildTooltipContent(nodeId, nodeType).replace(/\n/g, "<br>");
       tip.style.display = "block";
@@ -176,34 +184,24 @@ export function setupGpuPicker(
     mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-    // Ctrl+click: orbit pin
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(scene.children, true);
+    const nodeHit = resolveIntersection(intersects);
+
     if (event.ctrlKey || event.metaKey) {
-      raycaster.setFromCamera(mouse, camera);
-      const intersects = raycaster.intersectObjects(scene.children, true);
-      const nodeHit = intersects.find((i) => i.object.userData["nodeId"]);
-      if (nodeHit) {
-        const nodeId = nodeHit.object.userData["nodeId"] as string;
-        const nodeType = nodeHit.object.userData["nodeType"] as string;
-        if (nodeType === "satellite") {
-          const { rotationRad, angularVelocityRadS } = getViewFrameRotation();
-          import("./orbitPins").then(({ toggleOrbitPin }) => {
-            toggleOrbitPin(nodeId, scene, rotationRad, angularVelocityRadS);
-          });
-        }
+      if (nodeHit && nodeHit.nodeType === "satellite") {
+        const { rotationRad, angularVelocityRadS } = getViewFrameRotation();
+        import("./orbitPins").then(({ toggleOrbitPin }) => {
+          toggleOrbitPin(nodeHit.nodeId, scene, rotationRad, angularVelocityRadS);
+        });
       }
       return;
     }
 
-    raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObjects(scene.children, true);
-    const nodeHit = intersects.find((i) => i.object.userData["nodeId"]);
-
     if (nodeHit) {
-      const nodeId = nodeHit.object.userData["nodeId"] as string;
-      const nodeType = nodeHit.object.userData["nodeType"] as string;
       onSelect({
-        type: nodeType === "satellite" ? "satellite" : "ground_station",
-        id: nodeId,
+        type: nodeHit.nodeType === "satellite" ? "satellite" : "ground_station",
+        id: nodeHit.nodeId,
       });
       return;
     }
@@ -241,15 +239,13 @@ export function setupGpuPicker(
     mouse.y = -((touch.clientY - rect.top) / rect.height) * 2 + 1;
 
     raycaster.setFromCamera(mouse, camera);
-    const intersects = raycaster.intersectObjects(scene.children, true);
-    const nodeHit = intersects.find((i) => i.object.userData["nodeId"]);
+    const touchIntersects = raycaster.intersectObjects(scene.children, true);
+    const touchNodeHit = resolveIntersection(touchIntersects);
 
-    if (nodeHit) {
-      const nodeId = nodeHit.object.userData["nodeId"] as string;
-      const nodeType = nodeHit.object.userData["nodeType"] as string;
+    if (touchNodeHit) {
       onSelect({
-        type: nodeType === "satellite" ? "satellite" : "ground_station",
-        id: nodeId,
+        type: touchNodeHit.nodeType === "satellite" ? "satellite" : "ground_station",
+        id: touchNodeHit.nodeId,
       });
       return;
     }

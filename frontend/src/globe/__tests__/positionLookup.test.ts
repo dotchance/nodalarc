@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as THREE from "three";
 import { getNodeLocalPosition, getNodeWorldPosition, setEarthFrame } from "../positionLookup";
-import { updateSatellites, animateSatellites, setEphemeris, getSatellites } from "../satellites";
+import { updateSatellites, animateSatellites, setEphemeris, getSatellites, getPositionCache } from "../satellites";
 import { updateGroundStations, getGroundStations } from "../groundStations";
 import { onSnapshot } from "../../sim/simClock";
 import { SCENE_EARTH_RADIUS, SCENE_KM_PER_UNIT } from "../../sim/orbitalMath";
@@ -63,10 +63,8 @@ describe("positionLookup", () => {
   });
 
   afterEach(() => {
-    for (const [, entry] of getSatellites()) {
-      earthFrame.remove(entry.mesh);
-      earthFrame.remove(entry.glow);
-    }
+    // Clear satellite and GS state between tests.
+    // InstancedMesh is managed by satellites.ts internally.
     getSatellites().clear();
     for (const [, entry] of getGroundStations()) {
       earthFrame.remove(entry.sprite);
@@ -85,7 +83,7 @@ describe("positionLookup", () => {
       expect(target.x).toBe(999);
     });
 
-    it("returns satellite position in earthFrame-local coords", () => {
+    it("returns satellite position from positionCache", () => {
       const nodes = [makeSatNode("sat-P00S00", 0, 0, 550)];
       updateSatellites(nodes, earthFrame, "area", "2026-01-01T00:00:00Z");
 
@@ -95,7 +93,7 @@ describe("positionLookup", () => {
       expect(target.length()).toBeGreaterThan(0);
     });
 
-    it("returns ground station position in earthFrame-local coords", () => {
+    it("returns ground station position", () => {
       const nodes = [makeGsNode("gs-test", 51.0, -1.0)];
       updateGroundStations(nodes, earthFrame, labelContainer);
 
@@ -105,18 +103,19 @@ describe("positionLookup", () => {
       expect(target.length()).toBeGreaterThan(0);
     });
 
-    it("writes into caller's target without allocating", () => {
+    it("position cache matches what updateSatellites wrote", () => {
       const nodes = [makeSatNode("sat-P00S00", 10, 20, 550)];
       updateSatellites(nodes, earthFrame, "area", "2026-01-01T00:00:00Z");
 
       const target = new THREE.Vector3();
-      const returned = getNodeLocalPosition("sat-P00S00", target);
-      expect(returned).toBe(true);
+      getNodeLocalPosition("sat-P00S00", target);
 
-      const satEntry = getSatellites().get("sat-P00S00")!;
-      expect(target.x).toBe(satEntry.mesh.position.x);
-      expect(target.y).toBe(satEntry.mesh.position.y);
-      expect(target.z).toBe(satEntry.mesh.position.z);
+      const cache = getPositionCache();
+      const entry = getSatellites().get("sat-P00S00")!;
+      const idx = entry.instanceIndex * 3;
+      expect(target.x).toBe(cache[idx]);
+      expect(target.y).toBe(cache[idx + 1]);
+      expect(target.z).toBe(cache[idx + 2]);
     });
 
     it("satellite at equator/prime meridian has positive X, near-zero Y and Z", () => {
@@ -246,20 +245,14 @@ describe("positionLookup", () => {
       setEphemeris(ephemeris);
       onSnapshot(epoch, performance.now());
 
-      const posBefore = new THREE.Vector3();
-      getNodeLocalPosition("sat-P00S00", posBefore);
-
       animateSatellites(0.016);
 
       const posAfter = new THREE.Vector3();
       getNodeLocalPosition("sat-P00S00", posAfter);
 
-      // Position should have been updated by propagation
       const dist = posAfter.length();
       const expectedDist = SCENE_EARTH_RADIUS + 550 / SCENE_KM_PER_UNIT;
       expect(Math.abs(dist - expectedDist)).toBeLessThan(0.5);
-
-      // Position should be non-zero (propagation actually ran)
       expect(dist).toBeGreaterThan(SCENE_EARTH_RADIUS);
     });
 
@@ -308,12 +301,48 @@ describe("positionLookup", () => {
       getNodeLocalPosition("sat-P00S00", pos1);
       getNodeLocalPosition("sat-P05S10", pos2);
 
-      // Different orbital elements → different positions
       const separation = pos1.distanceTo(pos2);
       expect(separation).toBeGreaterThan(10);
-
-      // Both at same altitude → similar distance from origin
       expect(pos1.length()).toBeCloseTo(pos2.length(), 0);
+    });
+
+    it("positionCache is updated by animateSatellites", () => {
+      const epoch = "2026-04-01T00:00:00Z";
+      const epochUnix = new Date(epoch).getTime() / 1000;
+
+      const ephemeris: SessionEphemeris = {
+        epoch_id: 1,
+        sim_time: epoch,
+        epoch_unix: epochUnix,
+        nodes: {
+          "sat-P00S00": {
+            type: "keplerian",
+            altitude_km: 550,
+            inclination_deg: 53,
+            raan_deg: 45,
+            true_anomaly_deg: 90,
+            plane: 0,
+            slot: 0,
+          },
+        },
+      };
+
+      const nodes = [makeSatNode("sat-P00S00", 0, 0, 550)];
+      updateSatellites(nodes, earthFrame, "area", epoch);
+
+      const cacheBefore = getPositionCache();
+      const entry = getSatellites().get("sat-P00S00")!;
+      const idx = entry.instanceIndex * 3;
+      const xBefore = cacheBefore[idx]!;
+
+      setEphemeris(ephemeris);
+      onSnapshot(epoch, performance.now());
+      animateSatellites(0.016);
+
+      const xAfter = cacheBefore[idx]!;
+      // Propagation from orbital elements should produce a different
+      // position than the initial NodeState lat/lon placement
+      expect(xAfter).not.toBeCloseTo(xBefore, 1);
     });
   });
 });

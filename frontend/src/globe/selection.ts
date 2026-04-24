@@ -4,7 +4,7 @@
 
 import * as THREE from "three";
 import { SELECTION_COLOR, SAT_RADIUS } from "../config";
-import { getSatellites } from "./satellites";
+import { setSelectedGlow } from "./satellites";
 import { getNodeWorldPosition } from "./positionLookup";
 import type { Selection } from "../types";
 
@@ -28,10 +28,8 @@ export function updateSelection(
   scene: THREE.Scene,
   camera: THREE.Camera,
 ): void {
-  // Hide glow on previously selected satellite
   if (currentSelection?.type === "satellite") {
-    const prevSat = getSatellites().get(currentSelection.id);
-    if (prevSat) prevSat.glow.visible = false;
+    setSelectedGlow(null);
   }
 
   if (!selection || selection.type === "link") {
@@ -56,8 +54,7 @@ export function updateSelection(
   if (selection.type === "satellite") {
     hasTarget = getNodeWorldPosition(selection.id, _selWorldPos);
     if (hasTarget) {
-      const sat = getSatellites().get(selection.id);
-      if (sat) sat.glow.visible = true;
+      setSelectedGlow(selection.id);
     }
   } else if (selection.type === "ground_station") {
     hasTarget = getNodeWorldPosition(selection.id, _selWorldPos);

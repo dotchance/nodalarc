@@ -5,7 +5,7 @@
 import * as THREE from "three";
 import { SELECTION_COLOR, SAT_RADIUS } from "../config";
 import { getSatellites } from "./satellites";
-import { getGroundStations } from "./groundStations";
+import { getNodeWorldPosition } from "./positionLookup";
 import type { Selection } from "../types";
 
 let selectionRing: THREE.Mesh | null = null;
@@ -50,29 +50,18 @@ export function updateSelection(
     scene.add(selectionRing);
   }
 
-  // Find the target position
-  const sats = getSatellites();
-  const gss = getGroundStations();
-
-  // Selection ring lives in scene root; entity positions live in earthFrame.
-  // Read world coords so the ring tracks through the group rotation.
   let hasTarget = false;
   let scale = SAT_RADIUS * 3;
 
   if (selection.type === "satellite") {
-    const sat = sats.get(selection.id);
-    if (sat) {
-      sat.mesh.getWorldPosition(_selWorldPos);
-      sat.glow.visible = true;
-      hasTarget = true;
+    hasTarget = getNodeWorldPosition(selection.id, _selWorldPos);
+    if (hasTarget) {
+      const sat = getSatellites().get(selection.id);
+      if (sat) sat.glow.visible = true;
     }
   } else if (selection.type === "ground_station") {
-    const gs = gss.get(selection.id);
-    if (gs) {
-      gs.sprite.getWorldPosition(_selWorldPos);
-      scale = SAT_RADIUS * 4;
-      hasTarget = true;
-    }
+    hasTarget = getNodeWorldPosition(selection.id, _selWorldPos);
+    scale = SAT_RADIUS * 4;
   }
 
   if (hasTarget) {
@@ -88,23 +77,7 @@ export function updateSelection(
 export function animateSelection(camera: THREE.Camera): void {
   if (!selectionRing || !selectionRing.visible || !currentSelection) return;
 
-  const sats = getSatellites();
-  const gss = getGroundStations();
-
-  let hasTarget = false;
-  if (currentSelection.type === "satellite") {
-    const sat = sats.get(currentSelection.id);
-    if (sat) {
-      sat.mesh.getWorldPosition(_selWorldPos);
-      hasTarget = true;
-    }
-  } else if (currentSelection.type === "ground_station") {
-    const gs = gss.get(currentSelection.id);
-    if (gs) {
-      gs.sprite.getWorldPosition(_selWorldPos);
-      hasTarget = true;
-    }
-  }
+  const hasTarget = getNodeWorldPosition(currentSelection.id, _selWorldPos);
 
   if (hasTarget) {
     selectionRing.position.copy(_selWorldPos);

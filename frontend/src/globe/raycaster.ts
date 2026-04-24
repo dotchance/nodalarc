@@ -6,6 +6,7 @@ import * as THREE from "three";
 import { getSatellites } from "./satellites";
 import { getGroundStations } from "./groundStations";
 import { getLinks } from "./links";
+import { getNodeWorldPosition } from "./positionLookup";
 import { toggleOrbitPin, isOrbitPinned } from "./orbitPins";
 import type { Selection } from "../types";
 
@@ -91,26 +92,13 @@ function hitTestLinks(
   camera: THREE.PerspectiveCamera,
   threshold: number = 0.02,
 ): { key: string; nodeA: string; nodeB: string; tooltipText: string } | null {
-  const sats = getSatellites();
-  const gss = getGroundStations();
   let bestDist = threshold;
   let bestHit: { key: string; nodeA: string; nodeB: string; tooltipText: string } | null = null;
 
   for (const [key, entry] of getLinks()) {
     if (!entry.line.visible) continue;
-    // World-space endpoints required: Vector3.project(camera) takes
-    // world coords. Sats/GS live in earthFrame; their local positions
-    // are ECEF and misproject under a rotated group.
-    const satA = sats.get(entry.nodeA);
-    const satB = sats.get(entry.nodeB);
-    const gsA = satA ? null : gss.get(entry.nodeA);
-    const gsB = satB ? null : gss.get(entry.nodeB);
-    if (satA) satA.mesh.getWorldPosition(_v3a);
-    else if (gsA) gsA.sprite.getWorldPosition(_v3a);
-    else continue;
-    if (satB) satB.mesh.getWorldPosition(_v3b);
-    else if (gsB) gsB.sprite.getWorldPosition(_v3b);
-    else continue;
+    if (!getNodeWorldPosition(entry.nodeA, _v3a)) continue;
+    if (!getNodeWorldPosition(entry.nodeB, _v3b)) continue;
 
     // Project endpoints to NDC (-1..1)
     _v3a.project(camera);

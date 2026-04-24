@@ -1,0 +1,9 @@
+# Warkworth, New Zealand — Starlink Gateway
+# Southern hemisphere gateway. Rural site north of Auckland.
+# Provides coverage for Oceania and trans-Pacific routing.
+ground_station:
+  name: warkworth
+  lat_deg: -36.43
+  lon_deg: 174.66
+  alt_m: 60
+  min_elevation_deg: 25

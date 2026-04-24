@@ -1,0 +1,9 @@
+# Goonhilly, Cornwall, UK — Starlink Gateway
+# Historic earth station site (Telstar, 1962). Near the orbital
+# inclination (50°N vs 53°) — high handover rate.
+ground_station:
+  name: goonhilly
+  lat_deg: 50.05
+  lon_deg: -5.18
+  alt_m: 80
+  min_elevation_deg: 25

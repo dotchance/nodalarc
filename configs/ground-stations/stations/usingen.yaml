@@ -1,0 +1,9 @@
+# Usingen, Germany — Starlink Gateway
+# Central European gateway. Near orbital inclination (50.3°N).
+# Hilly terrain (Taunus mountains to the south).
+ground_station:
+  name: usingen
+  lat_deg: 50.33
+  lon_deg: 8.53
+  alt_m: 290
+  min_elevation_deg: 25

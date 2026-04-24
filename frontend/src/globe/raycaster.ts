@@ -18,16 +18,16 @@ function getTooltip(): HTMLDivElement {
     tooltip = document.createElement("div");
     tooltip.style.cssText = `
       position: fixed;
-      background: rgba(26, 26, 46, 0.92);
-      border: 1px solid #2a2a4a;
-      color: #e0e0e0;
+      background: var(--bg-overlay-92);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-primary);
       padding: 4px 10px;
-      border-radius: 4px;
-      font-size: 11px;
+      border-radius: var(--radius-md);
+      font-size: var(--font-size-xs);
       pointer-events: none;
       display: none;
-      z-index: 100;
-      font-family: "JetBrains Mono", monospace;
+      z-index: var(--z-tooltip);
+      font-family: var(--font-family);
       line-height: 1.4;
     `;
     document.body.appendChild(tooltip);

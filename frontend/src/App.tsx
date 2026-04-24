@@ -11,6 +11,7 @@ import { FilterPanel } from "./panels/FilterPanel";
 import { CliDrawer } from "./panels/CliDrawer";
 import { NodePopover } from "./panels/NodePopover";
 import { Toasts } from "./panels/Toasts";
+import { Dashboard } from "./panels/Dashboard";
 import { Toolbar } from "./toolbar/Toolbar";
 import { TopBar } from "./bars/TopBar";
 import { BottomBar } from "./bars/BottomBar";
@@ -337,7 +338,7 @@ function AppInner() {
       )}
       <div
         className={viewMode === "split" ? "split-pane" : "full-pane"}
-        style={{ display: viewMode === "topology" ? "none" : undefined }}
+        style={{ display: (viewMode === "topology" || viewMode === "dashboard") ? "none" : undefined }}
       >
         <GlobeView
           snapshot={augmentedSnapshot}
@@ -357,7 +358,7 @@ function AppInner() {
       </div>
       <div
         className={viewMode === "split" ? "split-pane" : "full-pane"}
-        style={{ display: viewMode === "globe" ? "none" : undefined }}
+        style={{ display: (viewMode === "globe" || viewMode === "dashboard") ? "none" : undefined }}
       >
         <TopologyView
           snapshot={augmentedSnapshot}
@@ -369,6 +370,11 @@ function AppInner() {
           showGroundLinks={showGroundLinks}
         />
       </div>
+      {viewMode === "dashboard" && (
+        <div className="full-pane" style={{ background: "var(--bg-main)", overflow: "auto" }}>
+          <Dashboard snapshot={augmentedSnapshot} />
+        </div>
+      )}
       <Toolbar
         viewMode={viewMode}
         colorMode={colorMode}

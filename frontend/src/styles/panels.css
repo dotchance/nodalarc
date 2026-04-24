@@ -393,6 +393,68 @@
   border-color: var(--text-secondary);
 }
 
+/* --- Dashboard --- */
+
+.dashboard {
+  padding: var(--space-8);
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.dashboard-empty {
+  color: var(--text-dim);
+  text-align: center;
+  padding: var(--space-24);
+}
+
+.dashboard-title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.dashboard-time {
+  font-size: var(--font-size-xs);
+  color: var(--text-dim);
+  font-family: var(--font-family);
+  margin-bottom: var(--space-8);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--space-4);
+}
+
+.dashboard-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.dashboard-card-value {
+  font-size: var(--font-size-xxl);
+  font-weight: var(--font-weight-bold);
+  line-height: 1.2;
+}
+
+.dashboard-card-sub {
+  font-size: var(--font-size-sm);
+  color: var(--text-dim);
+  font-weight: var(--font-weight-normal);
+}
+
+.dashboard-card-label {
+  font-size: var(--font-size-xxs);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: var(--space-2);
+}
+
 /* Filter panel overlay — slide-over drawer from left */
 .filter-panel-overlay {
   position: absolute;

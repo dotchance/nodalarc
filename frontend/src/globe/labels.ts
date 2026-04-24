@@ -10,6 +10,7 @@
 import * as THREE from "three";
 import { getSatellites } from "./satellites";
 import { getNodeLocalPosition, earthFrameRef } from "./positionLookup";
+import { EARTH_RADIUS } from "../config";
 
 const FADE_IN_DIST = 200;
 const FADE_OUT_DIST = 500;
@@ -38,6 +39,8 @@ let labelContainer: HTMLDivElement | null = null;
 const _labelLocalPos = new THREE.Vector3();
 const _labelWorldPos = new THREE.Vector3();
 const _labelNdc = new THREE.Vector3();
+const _dirToLabel = new THREE.Vector3();
+const _camDir = new THREE.Vector3();
 
 const highlightedNodes = new Set<string>();
 
@@ -114,6 +117,24 @@ export function animateLabels(camera: THREE.Camera): void {
     if (_labelNdc.z > 1) {
       entry.div.style.display = "none";
       continue;
+    }
+
+    // Earth occlusion for far-side satellites. Project the satellite
+    // position onto the camera→origin line. If the projection lands
+    // between camera and origin AND the perpendicular distance to the
+    // line is less than earth radius, the satellite is behind the earth.
+    _dirToLabel.copy(_labelWorldPos).sub(cameraPos);
+    _camDir.copy(cameraPos).negate().normalize();
+    const projDist = _dirToLabel.dot(_camDir);
+    if (projDist > 0) {
+      const closestX = cameraPos.x + _camDir.x * projDist;
+      const closestY = cameraPos.y + _camDir.y * projDist;
+      const closestZ = cameraPos.z + _camDir.z * projDist;
+      const perpDist = Math.sqrt(closestX * closestX + closestY * closestY + closestZ * closestZ);
+      if (perpDist < EARTH_RADIUS && _labelWorldPos.length() > cameraPos.length()) {
+        entry.div.style.display = "none";
+        continue;
+      }
     }
 
     const x = (_labelNdc.x * 0.5 + 0.5) * width;

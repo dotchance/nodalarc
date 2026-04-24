@@ -17,7 +17,8 @@ import * as THREE from "three";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../config";
 import { geoToWorld } from "./geo";
 import { interpolatedSimTimeMs } from "../sim/simClock";
-import { propagateNode } from "../sim/ephemeris";
+import { isWorkerReady, readPosition, requestPropagate } from "../sim/workerBridge";
+import { propagateToSceneXYZ } from "../sim/orbitalMath";
 import type { SessionEphemeris } from "../sim/ephemeris";
 import type { NodeState, ColorMode } from "../types";
 
@@ -132,15 +133,22 @@ export function updateSatellites(
   }
 }
 
+const _workerPos = { x: 0, y: 0, z: 0 };
+let _lastPropagateRequestTime = 0;
+let _workerWasReady = false;
+
 /**
  * Animate satellites — called every frame (~60fps).
  *
- * When ephemeris is available: propagates each satellite from orbital
- * elements at the current interpolated sim_time. Smooth 60fps motion
- * with no lerp artifacts.
+ * Uses main-thread propagation via propagateToSceneXYZ. The Worker
+ * (Phase 1-2) will replace this by writing directly into the
+ * InstancedMesh matrix buffer — not via a silent fallback, but by
+ * swapping the implementation in positionLookup.ts.
  *
- * When ephemeris is null: positions are set from NodeState in
- * updateSatellites() and remain static between snapshots.
+ * For now: Worker populates positions when ready, main-thread
+ * propagation runs when Worker has no data (bootstrap/seek). Both
+ * paths call the same orbital math (verified by orbitalMath.test.ts).
+ * The Worker path is an optimization, not a separate behavior.
  */
 export function animateSatellites(_dt: number): void {
   if (!_ephemeris) return;
@@ -151,15 +159,37 @@ export function animateSatellites(_dt: number): void {
 
   const simTimeUnix = simMs / 1000;
   const epochUnix = _ephemeris.epoch_unix;
+  const workerReady = isWorkerReady();
+
+  if (workerReady && now - _lastPropagateRequestTime > 2000) {
+    requestPropagate(simTimeUnix, 1.0);
+    _lastPropagateRequestTime = now;
+  }
+
+  if (workerReady && !_workerWasReady) {
+    console.log("[satellites] Worker ready — using Worker positions");
+    _workerWasReady = true;
+  } else if (!workerReady && _workerWasReady) {
+    console.log("[satellites] Worker not ready — using main-thread propagation");
+    _workerWasReady = false;
+  }
 
   for (const [nodeId, entry] of satellites) {
     const ephNode = _ephemeris.nodes[nodeId];
     if (!ephNode || ephNode.type !== "keplerian") continue;
 
-    const pos = propagateNode(ephNode, epochUnix, simTimeUnix);
-    const worldPos = geoToWorld(pos.latDeg, pos.lonDeg, pos.altKm);
-    entry.mesh.position.copy(worldPos);
-    entry.glow.position.copy(worldPos);
+    let x: number, y: number, z: number;
+
+    if (workerReady && readPosition(nodeId, simTimeUnix, _workerPos)) {
+      x = _workerPos.x;
+      y = _workerPos.y;
+      z = _workerPos.z;
+    } else {
+      [x, y, z] = propagateToSceneXYZ(ephNode, epochUnix, simTimeUnix);
+    }
+
+    entry.mesh.position.set(x, y, z);
+    entry.glow.position.set(x, y, z);
   }
 }
 

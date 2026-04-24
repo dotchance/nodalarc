@@ -15,6 +15,7 @@ import {
 import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, updateSunWorldDirection, setGlobeMode } from "./earth";
 import { updateSatellites, animateSatellites, recolorAllSatellites, setEphemeris } from "./satellites";
 import { getNodeWorldPosition, setEarthFrame } from "./positionLookup";
+import { initWorkerBridge, sendEphemeris, requestFlush, destroyWorkerBridge } from "../sim/workerBridge";
 import { resetSimClock, interpolatedSimTimeMs, setPlaybackPaused, onSnapshot } from "../sim/simClock";
 import { gmstRadians, EARTH_ROTATION_RATE_RAD_S } from "./astronomy";
 import { updateGroundStations, updateGSLabels } from "./groundStations";
@@ -352,6 +353,7 @@ export function GlobeView({
       renderer.setAnimationLoop(null);
       clearOrbitPins(scene);
       clearAllOrbits(scene);
+      destroyWorkerBridge();
       renderer.dispose();
       container.removeChild(renderer.domElement);
     };
@@ -367,11 +369,15 @@ export function GlobeView({
     setGlobeMode(globeMode);
   }, [globeMode]);
 
-  // Pass ephemeris to satellite renderer for local propagation (PRD v0.71)
+  // Pass ephemeris to satellite renderer and Worker for propagation
   useEffect(() => {
     setEphemeris(ephemeris);
     if (ephemeris) {
       notifyEpochChange(ephemeris.epoch_id);
+      initWorkerBridge();
+      sendEphemeris(ephemeris);
+      const simMs = new Date(ephemeris.sim_time).getTime();
+      requestFlush(simMs / 1000, 1.0);
     }
   }, [ephemeris]);
 

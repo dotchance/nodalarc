@@ -226,7 +226,7 @@ function AppInner() {
           playback.paused ? playback.resume() : playback.pause();
         }
       },
-      onToggleGlobeMode: () => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble"),
+      onToggleGlobeMode: () => setGlobeMode((m) => m === "blue-marble" ? "day-night" : m === "day-night" ? "political" : "blue-marble"),
       onToggleReferenceFrame: toggleReferenceFrame,
       onFollowNode: handleFollowNode,
       onTopView: handleTopView,

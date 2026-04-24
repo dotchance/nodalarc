@@ -254,6 +254,7 @@ def attach_cross_node_ground(
     remote_ip: str,
     vni: int,
     sat_pid: int | None = None,
+    sat_ifname: str = "",
 ) -> None:
     """Connect a local host-side interface to a remote node via VXLAN.
 
@@ -317,15 +318,17 @@ def attach_cross_node_ground(
         finally:
             pass
 
-    # Bring satellite gnd0 UP if this is the satellite side
     if sat_pid:
+        if not sat_ifname:
+            raise ValueError("sat_ifname required when sat_pid is provided")
+        _target = sat_ifname
 
-        def _up_gnd0(ns_ipr):
-            gnd_idx = ns_ipr.link_lookup(ifname="gnd0")
-            if gnd_idx:
-                ns_ipr.link("set", index=gnd_idx[0], state="up")
+        def _up_sat_iface(ns_ipr):
+            idx = ns_ipr.link_lookup(ifname=_target)
+            if idx:
+                ns_ipr.link("set", index=idx[0], state="up")
 
-        _in_namespace(sat_pid, _up_gnd0)
+        _in_namespace(sat_pid, _up_sat_iface)
 
     log.info(
         "Attached cross-node ground: %s ↔ VXLAN VNI=%d (%s→%s)",
@@ -340,28 +343,31 @@ def detach_cross_node_ground(
     local_host_ifname: str,
     vni: int,
     sat_pid: int | None = None,
+    sat_ifname: str = "",
 ) -> None:
     """Disconnect a cross-node ground link.
 
     Removes tc mirred redirect, destroys VXLAN, brings host-side interface DOWN.
-    If sat_pid provided, brings satellite gnd0 DOWN.
+    If sat_pid provided, brings satellite pod-side interface DOWN.
     """
     import ctypes
 
     vxlan_if, _, _ = _host_ifnames(vni)
 
-    # Bring satellite gnd0 DOWN first
     if sat_pid:
+        if not sat_ifname:
+            raise ValueError("sat_ifname required when sat_pid is provided")
+        _target = sat_ifname
 
-        def _down_gnd0(ns_ipr):
-            gnd_idx = ns_ipr.link_lookup(ifname="gnd0")
-            if gnd_idx:
-                ns_ipr.link("set", index=gnd_idx[0], state="down")
+        def _down_sat_iface(ns_ipr):
+            idx = ns_ipr.link_lookup(ifname=_target)
+            if idx:
+                ns_ipr.link("set", index=idx[0], state="down")
 
         try:
-            _in_namespace(sat_pid, _down_gnd0)
+            _in_namespace(sat_pid, _down_sat_iface)
         except Exception as exc:
-            log.warning("Failed to down gnd0 in ns(%d): %s", sat_pid, exc)
+            log.warning("Failed to down %s in ns(%d): %s", sat_ifname, sat_pid, exc)
 
     with _ns_lock:
         host_fd = _get_host_ns_fd()

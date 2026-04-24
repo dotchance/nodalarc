@@ -24,7 +24,8 @@ import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
 import { updateOrbitalTrails, flushTrails, notifyEpochChange } from "./orbitalTrails";
 import { updateOrbitPins, clearOrbitPins, reseedAllPins } from "./orbitPins";
 import { updateAllOrbits, clearAllOrbits } from "./allOrbits";
-import { setupRaycaster } from "./raycaster";
+import { setupGpuPicker } from "./gpuPicker";
+import { updateLabels, animateLabels, clearLabels } from "./labels";
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
 import type { StateSnapshot, Selection, ColorMode, GlobeMode, ReferenceFrame } from "../types";
@@ -160,7 +161,7 @@ export function GlobeView({
     // Raycaster closes over getters that read current earthFrame rotation
     // and active frame angular velocity so Ctrl+click orbit-pin seeds use
     // the view frame that's active at click time.
-    setupRaycaster(
+    setupGpuPicker(
       renderer.domElement,
       camera,
       scene,
@@ -279,6 +280,7 @@ export function GlobeView({
         updateGroundStations(snap.nodes, earthFrame, labelContainer);
         updateLinks(snap.links, earthFrame, showIslLinksRef.current);
         updateFlowPaths(snap.traced_paths, earthFrame);
+        updateLabels(earthFrame);
         updateSunPosition(snap.sim_time);
       }
 
@@ -332,6 +334,7 @@ export function GlobeView({
       updateSelection(selectionRef.current, scene, camera);
       animateSelection(camera);
       updateCoverageFootprint(selectionRef.current, earthFrame, camera);
+      animateLabels(camera);
       controls.update();
       updateGSLabels(camera, labelContainer);
       renderer.render(scene, camera);
@@ -353,6 +356,7 @@ export function GlobeView({
       renderer.setAnimationLoop(null);
       clearOrbitPins(scene);
       clearAllOrbits(scene);
+      clearLabels();
       destroyWorkerBridge();
       renderer.dispose();
       container.removeChild(renderer.domElement);

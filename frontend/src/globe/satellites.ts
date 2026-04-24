@@ -25,7 +25,7 @@ export interface SatelliteEntry {
 }
 
 const satellites = new Map<string, SatelliteEntry>();
-const indexToId: string[] = [];
+export const indexToId: string[] = [];
 let satCount = 0;
 
 let instancedMesh: THREE.InstancedMesh | null = null;

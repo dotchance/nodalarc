@@ -7,12 +7,14 @@ import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getSatellites } from "./satellites";
+import { getNodeLocalPosition, getNodeWorldPosition } from "./positionLookup";
 import { getPlaneColor } from "../config";
 import { velocityToScene } from "./geo";
 import { worldVelocity } from "./astronomy";
 
-// Reusable temporaries for world-space seed sampling.
+// Reusable temporaries for seed sampling.
 const _pinWorldPos = new THREE.Vector3();
+const _pinLocalPos = new THREE.Vector3();
 const _pinVelEcef = new THREE.Vector3();
 const _pinVelWorld = new THREE.Vector3();
 
@@ -93,12 +95,11 @@ export function toggleOrbitPin(
     }
   }
 
-  // Seed from world pos + WORLD velocity (plan §1.5, §1.6). In earth-fixed
-  // view (frameAngularVelocityRadS = 0) this reduces to the ECEF values.
-  sat.mesh.getWorldPosition(_pinWorldPos);
+  if (!getNodeWorldPosition(nodeId, _pinWorldPos)) return;
+  if (!getNodeLocalPosition(nodeId, _pinLocalPos)) return;
   _pinVelEcef.copy(velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s));
   worldVelocity(
-    sat.mesh.position,
+    _pinLocalPos,
     _pinVelEcef,
     viewFrameRotationRad,
     frameAngularVelocityRadS,
@@ -148,10 +149,11 @@ export function reseedAllPins(
     const ns = sat.nodeState;
     if (ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
 
-    sat.mesh.getWorldPosition(_pinWorldPos);
+    if (!getNodeWorldPosition(pin.nodeId, _pinWorldPos)) continue;
+    if (!getNodeLocalPosition(pin.nodeId, _pinLocalPos)) continue;
     _pinVelEcef.copy(velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s));
     worldVelocity(
-      sat.mesh.position,
+      _pinLocalPos,
       _pinVelEcef,
       viewFrameRotationRad,
       frameAngularVelocityRadS,

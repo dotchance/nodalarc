@@ -24,6 +24,7 @@ interface ShellProps {
   rightPanel: ReactNode | null;
   bottomBar: ReactNode;
   overlay?: ReactNode;
+  toasts?: ReactNode;
   historicalControls?: ReactNode;
   historicalMode?: boolean;
   panelOpen: boolean;
@@ -38,6 +39,7 @@ export function Shell({
   rightPanel,
   bottomBar,
   overlay,
+  toasts,
   historicalControls,
   historicalMode,
   panelOpen,
@@ -72,6 +74,7 @@ export function Shell({
       {topBar}
 
       {overlay}
+      {toasts}
 
       <div className="area-viewport">
         {center}

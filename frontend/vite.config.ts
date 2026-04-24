@@ -1,10 +1,10 @@
 import { defineConfig } from "vite";
 import { execSync } from "child_process";
 
-let commitHash = "dev";
+let commitHash = process.env.VITE_BUILD_HASH || "dev";
 try {
   commitHash = execSync("git rev-parse --short=8 HEAD").toString().trim();
-} catch { /* not in git */ }
+} catch { /* not in git — use VITE_BUILD_HASH from Docker ARG */ }
 
 export default defineConfig({
   envPrefix: "VITE_",

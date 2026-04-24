@@ -21,8 +21,8 @@ import { tokens } from "../styles/tokens";
 
 const FONT_URL = "/fonts/Inter.woff2";
 const LABEL_FONT_SIZE = 0.3;
-const FADE_IN_DIST = 60;
-const FADE_OUT_DIST = 120;
+const FADE_IN_DIST = 150;
+const FADE_OUT_DIST = 300;
 
 interface LabelEntry {
   text: InstanceType<typeof Text>;

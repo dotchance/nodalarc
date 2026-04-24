@@ -1115,6 +1115,8 @@ class Dispatcher:
                         node_agent_pb2.InterfaceDown(
                             node_id=gs_id,
                             interface_name=gs_iface,
+                            peer_node_id=sat_id,
+                            peer_interface_name=sat_iface,
                             link_type=node_agent_pb2.GROUND,
                             gs_id=gs_id,
                             sat_id=sat_id,
@@ -1130,10 +1132,14 @@ class Dispatcher:
                         (gs_id, self._loc.agent_addr(gs_id)),
                     ]:
                         iface = gs_iface if nid == gs_id else sat_iface
+                        peer_nid = sat_id if nid == gs_id else gs_id
+                        peer_iface = sat_iface if nid == gs_id else gs_iface
                         agent_ifaces.setdefault(agent_addr, []).append(
                             node_agent_pb2.InterfaceDown(
                                 node_id=nid,
                                 interface_name=iface,
+                                peer_node_id=peer_nid,
+                                peer_interface_name=peer_iface,
                                 link_type=node_agent_pb2.GROUND,
                                 gs_id=gs_id,
                                 sat_id=sat_id,
@@ -1275,6 +1281,8 @@ class Dispatcher:
                         node_agent_pb2.InterfaceUp(
                             node_id=gs_id,
                             interface_name=gs_iface,
+                            peer_node_id=sat_id,
+                            peer_interface_name=sat_iface,
                             link_type=node_agent_pb2.GROUND,
                             latency_ms=netem_ms,
                             bandwidth_mbps=info.bandwidth_mbps,
@@ -1291,11 +1299,14 @@ class Dispatcher:
                         peer_k3s = self._loc.k3s_node(peer_nid)
                         remote_ip = self._loc.node_ip(peer_k3s)
                         iface = gs_iface if nid == gs_id else sat_iface
+                        peer_iface = sat_iface if nid == gs_id else gs_iface
                         agent_addr = self._loc.agent_addr(nid)
                         agent_ifaces.setdefault(agent_addr, []).append(
                             node_agent_pb2.InterfaceUp(
                                 node_id=nid,
                                 interface_name=iface,
+                                peer_node_id=peer_nid,
+                                peer_interface_name=peer_iface,
                                 link_type=node_agent_pb2.GROUND,
                                 latency_ms=netem_ms,
                                 bandwidth_mbps=info.bandwidth_mbps,

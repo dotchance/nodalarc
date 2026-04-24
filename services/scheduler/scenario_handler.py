@@ -184,13 +184,16 @@ def _dispatch_link_down(
     now_iso = datetime.now(UTC).isoformat()
 
     if is_gs:
-        # GS sorts before sat alphabetically in normalized pairs
         gs_id, sat_id = pair[0], pair[1]
+        gs_iface = info.interface_a
+        sat_iface = info.interface_b
         agent_addr = pod_locator.agent_addr(sat_id)
         interfaces = [
             node_agent_pb2.InterfaceDown(
-                node_id=sat_id,
-                interface_name="gnd0",
+                node_id=gs_id,
+                interface_name=gs_iface,
+                peer_node_id=sat_id,
+                peer_interface_name=sat_iface,
                 link_type=node_agent_pb2.GROUND,
                 gs_id=gs_id,
                 sat_id=sat_id,

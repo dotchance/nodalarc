@@ -50,6 +50,26 @@ def _gs_short_name(gs_id: str) -> str:
     return gs_id[3:] if gs_id.startswith("gs-") else gs_id
 
 
+def _gs_host_veth(gs_id: str, gs_ifname: str) -> str:
+    """Derive host-side GS veth from pod-side interface name.
+
+    gs_ifname comes from the Scheduler via protobuf — never
+    constructed here, never defaulted.
+    """
+    idx = int(gs_ifname.removeprefix("term"))
+    return _gs_bridge_port_name(gs_id, idx)
+
+
+def _sat_host_veth(sat_id: str, sat_ifname: str) -> str:
+    """Derive host-side satellite veth from pod-side interface name.
+
+    sat_ifname comes from the Scheduler via protobuf — never
+    constructed here, never defaulted.
+    """
+    idx = int(sat_ifname.removeprefix("gnd"))
+    return f"{_sat_gnd_host_name(sat_id)}-{idx}"[:15]
+
+
 def _gs_bridge_port_name(gs_id: str, idx: int = 0) -> str:
     """Host-side veth name for GS bridge port. <=15 chars.
 
@@ -145,31 +165,32 @@ def attach_to_ground_bridge(
     gs_id: str,
     sat_id: str,
     sat_pid: int,
-    gs_ifname: str = "term0",
+    gs_ifname: str,
+    sat_ifname: str,
 ) -> None:
     """Connect satellite to GS via tc mirred redirect.
 
-    Brings both host-side veths and satellite gnd0 admin UP, then
-    installs bidirectional tc mirred redirect between the GS and
-    satellite host-side veths.
+    Brings both host-side veths and satellite pod-side interface admin
+    UP, then installs bidirectional tc mirred redirect between the GS
+    and satellite host-side veths.
 
     Serialized per GS: concurrent attach/detach on the same GS bridge
     port would corrupt the tc ingress qdisc (TOCTOU race). The per-GS
     lock prevents this.
     """
     with _gs_locks[gs_id]:
-        _attach_to_ground_bridge_unlocked(gs_id, sat_id, sat_pid, gs_ifname)
+        _attach_to_ground_bridge_unlocked(gs_id, sat_id, sat_pid, gs_ifname, sat_ifname)
 
 
 def _attach_to_ground_bridge_unlocked(
     gs_id: str,
     sat_id: str,
     sat_pid: int,
-    gs_ifname: str = "term0",
+    gs_ifname: str,
+    sat_ifname: str,
 ) -> None:
-    gs_idx = int(gs_ifname.replace("term", "") or "0")
-    gs_port = _gs_bridge_port_name(gs_id, gs_idx)
-    host_veth = f"{_sat_gnd_host_name(sat_id)}-0"[:15]
+    gs_port = _gs_host_veth(gs_id, gs_ifname)
+    host_veth = _sat_host_veth(sat_id, sat_ifname)
 
     ipr = IPRoute()
     try:
@@ -181,16 +202,16 @@ def _attach_to_ground_bridge_unlocked(
     finally:
         ipr.close()
 
-    # Bring satellite gnd0 UP
-    def _up_gnd0(ipr: IPRoute) -> None:
-        gnd_idx = ipr.link_lookup(ifname="gnd0")
-        if not gnd_idx:
-            raise FileNotFoundError(f"gnd0 not found in sat ns({sat_pid})")
-        ipr.link("set", index=gnd_idx[0], state="up")
+    _target_ifname = sat_ifname
 
-    _in_namespace(sat_pid, _up_gnd0)
+    def _up_sat_iface(ipr: IPRoute) -> None:
+        idx = ipr.link_lookup(ifname=_target_ifname)
+        if not idx:
+            raise FileNotFoundError(f"{_target_ifname} not found in sat ns({sat_pid})")
+        ipr.link("set", index=idx[0], state="up")
 
-    # Bidirectional tc mirred redirect between host-side veths
+    _in_namespace(sat_pid, _up_sat_iface)
+
     _tc_mirred_redirect(gs_port, host_veth)
     _tc_mirred_redirect(host_veth, gs_port)
 
@@ -201,40 +222,41 @@ def detach_from_ground_bridge(
     gs_id: str,
     sat_id: str,
     sat_pid: int,
-    gs_ifname: str = "term0",
+    gs_ifname: str,
+    sat_ifname: str,
 ) -> None:
     """Disconnect satellite from GS.
 
-    Removes tc mirred redirect, then brings satellite gnd0 and
-    host veth admin DOWN.
+    Removes tc mirred redirect, then brings satellite pod-side
+    interface and host veths admin DOWN.
 
     Serialized per GS: see attach_to_ground_bridge.
     """
     with _gs_locks[gs_id]:
-        _detach_from_ground_bridge_unlocked(gs_id, sat_id, sat_pid, gs_ifname)
+        _detach_from_ground_bridge_unlocked(gs_id, sat_id, sat_pid, gs_ifname, sat_ifname)
 
 
 def _detach_from_ground_bridge_unlocked(
     gs_id: str,
     sat_id: str,
     sat_pid: int,
-    gs_ifname: str = "term0",
+    gs_ifname: str,
+    sat_ifname: str,
 ) -> None:
-    gs_idx = int(gs_ifname.replace("term", "") or "0")
-    gs_port = _gs_bridge_port_name(gs_id, gs_idx)
-    host_veth = f"{_sat_gnd_host_name(sat_id)}-0"[:15]
+    gs_port = _gs_host_veth(gs_id, gs_ifname)
+    host_veth = _sat_host_veth(sat_id, sat_ifname)
 
-    # Remove tc redirect first
     _tc_mirred_remove(gs_port)
     _tc_mirred_remove(host_veth)
 
-    # Bring satellite gnd0 DOWN
-    def _down_gnd0(ipr: IPRoute) -> None:
-        gnd_idx = ipr.link_lookup(ifname="gnd0")
-        if gnd_idx:
-            ipr.link("set", index=gnd_idx[0], state="down")
+    _target_ifname = sat_ifname
 
-    _in_namespace(sat_pid, _down_gnd0)
+    def _down_sat_iface(ipr: IPRoute) -> None:
+        idx = ipr.link_lookup(ifname=_target_ifname)
+        if idx:
+            ipr.link("set", index=idx[0], state="down")
+
+    _in_namespace(sat_pid, _down_sat_iface)
 
     # Bring satellite host veth and GS bridge port DOWN.
     # GS bridge port DOWN drops carrier on gnd0 inside the GS pod
@@ -344,8 +366,8 @@ def detach_isl(
 def create_ground_bridge(
     gs_id: str,
     gs_pid: int,
+    ifname: str,
     mtu: int | None = None,
-    ifname: str = "term0",
 ) -> str:
     """Create GS-side veth pair for ground link. Idempotent.
 
@@ -359,8 +381,7 @@ def create_ground_bridge(
 
         mtu = get_platform_config().veth_interface_mtu_bytes
 
-    idx = int(ifname.replace("term", "") or "0")
-    gs_port = _gs_bridge_port_name(gs_id, idx)
+    gs_port = _gs_host_veth(gs_id, ifname)
 
     ipr = IPRoute()
     try:
@@ -412,8 +433,8 @@ def create_ground_bridge(
 def create_satellite_ground_veth(
     sat_id: str,
     sat_pid: int,
+    ifname: str,
     mtu: int | None = None,
-    ifname: str = "gnd0",
 ) -> tuple[str, str]:
     """Pre-create satellite ground veth pair at deploy time. Idempotent.
 
@@ -424,8 +445,7 @@ def create_satellite_ground_veth(
 
         mtu = get_platform_config().veth_interface_mtu_bytes
 
-    idx_str = ifname.replace("gnd", "")
-    host_name = f"{_sat_gnd_host_name(sat_id)}-{idx_str}"[:15]
+    host_name = _sat_host_veth(sat_id, ifname)
 
     ipr = IPRoute()
     try:

@@ -79,6 +79,23 @@ def _require_pid(node_id: str, pid_map: dict[str, int]) -> int:
     return pid
 
 
+def _extract_ground_ifaces(iface) -> tuple[str, str]:
+    """Extract (gs_ifname, sat_ifname) from a ground link protobuf.
+
+    The Scheduler sets interface_name for node_id's side and
+    peer_interface_name for the other side. Both must be present.
+    """
+    if not iface.peer_interface_name:
+        raise ValueError(
+            f"Ground link {iface.gs_id}<->{iface.sat_id}: "
+            "peer_interface_name not set — "
+            "Scheduler must populate both interface names"
+        )
+    if iface.node_id == iface.gs_id:
+        return iface.interface_name, iface.peer_interface_name
+    return iface.peer_interface_name, iface.interface_name
+
+
 # ---------------------------------------------------------------------------
 # Per-link operation functions (called concurrently within batches)
 # ---------------------------------------------------------------------------
@@ -132,9 +149,13 @@ def _ground_link_down(
     try:
         pm = pid_map or {}
         sat_pid = _require_pid(iface.sat_id, pm)
-        gs_ifname = iface.interface_name if iface.node_id == iface.gs_id else "term0"
+        gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
         ground_bridge.detach_from_ground_bridge(
-            iface.gs_id, iface.sat_id, sat_pid, gs_ifname=gs_ifname
+            iface.gs_id,
+            iface.sat_id,
+            sat_pid,
+            gs_ifname=gs_ifname,
+            sat_ifname=sat_ifname,
         )
         return None
     except Exception as exc:
@@ -166,10 +187,13 @@ def _ground_link_up(
         pm = pid_map or {}
         sat_pid = _require_pid(iface.sat_id, pm)
         gs_pid = _require_pid(iface.gs_id, pm)
-        gs_ifname = iface.interface_name if iface.node_id == iface.gs_id else "term0"
-        sat_ifname = iface.interface_name if iface.node_id == iface.sat_id else "gnd0"
+        gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
         ground_bridge.attach_to_ground_bridge(
-            iface.gs_id, iface.sat_id, sat_pid, gs_ifname=gs_ifname
+            iface.gs_id,
+            iface.sat_id,
+            sat_pid,
+            gs_ifname=gs_ifname,
+            sat_ifname=sat_ifname,
         )
         namespace_ops.apply_link_shaping(gs_pid, gs_ifname, iface.latency_ms, iface.bandwidth_mbps)
         namespace_ops.apply_link_shaping(
@@ -222,19 +246,20 @@ def handle_batch_link_down(
         if iface.locality == node_agent_pb2.CROSS_NODE and iface.vni:
             if iface.link_type == node_agent_pb2.GROUND:
                 # CROSS_NODE GROUND: detach VXLAN from existing host-side interface
+                gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
                 is_sat = iface.node_id == iface.sat_id
                 if is_sat:
-                    host_ifname = ground_bridge._sat_gnd_host_name(iface.node_id)
+                    host_ifname = ground_bridge._sat_host_veth(iface.node_id, sat_ifname)
                     sat_pid = pm.get(iface.node_id, 0)
                 else:
-                    gs_idx = int(iface.interface_name.replace("term", "") or "0")
-                    host_ifname = ground_bridge._gs_bridge_port_name(iface.node_id, gs_idx)
+                    host_ifname = ground_bridge._gs_host_veth(iface.node_id, gs_ifname)
                     sat_pid = None
                 fut = _BATCH_POOL.submit(
                     vxlan.detach_cross_node_ground,
                     host_ifname,
                     iface.vni,
                     sat_pid if is_sat else None,
+                    sat_ifname,
                 )
             else:
                 # CROSS_NODE ISL: destroy full VXLAN + veth pair
@@ -404,14 +429,13 @@ def handle_batch_link_up(
         if iface.link_type == node_agent_pb2.GROUND:
             # GROUND: attach via existing host-side infrastructure
             try:
-                # Determine local host-side interface name from interface_name
+                gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
                 is_sat = iface.node_id == iface.sat_id
                 if is_sat:
-                    host_ifname = ground_bridge._sat_gnd_host_name(iface.node_id)
+                    host_ifname = ground_bridge._sat_host_veth(iface.node_id, sat_ifname)
                     sat_pid = pm.get(iface.node_id, 0)
                 else:
-                    gs_idx = int(iface.interface_name.replace("term", "") or "0")
-                    host_ifname = ground_bridge._gs_bridge_port_name(iface.node_id, gs_idx)
+                    host_ifname = ground_bridge._gs_host_veth(iface.node_id, gs_ifname)
                     sat_pid = None
                 vxlan.attach_cross_node_ground(
                     local_host_ifname=host_ifname,
@@ -419,6 +443,7 @@ def handle_batch_link_up(
                     remote_ip=iface.remote_node_ip,
                     vni=iface.vni,
                     sat_pid=sat_pid if is_sat else None,
+                    sat_ifname=sat_ifname,
                 )
                 from node_agent import substrate_monitor
 

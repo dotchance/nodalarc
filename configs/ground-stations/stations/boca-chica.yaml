@@ -1,0 +1,9 @@
+# Boca Chica, Texas — Starlink Gateway at Starbase
+# SpaceX launch facility. Low latitude = longer satellite passes,
+# fewer handovers, different orbital geometry from mid-latitude sites.
+ground_station:
+  name: boca-chica
+  lat_deg: 25.99
+  lon_deg: -97.16
+  alt_m: 3
+  min_elevation_deg: 25

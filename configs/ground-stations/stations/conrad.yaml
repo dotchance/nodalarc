@@ -1,0 +1,9 @@
+# Conrad, Montana — Starlink Gateway
+# FCC earth station filing E190023. One of the earliest operational
+# gateways. Open prairie terrain, clear horizon in all directions.
+ground_station:
+  name: conrad
+  lat_deg: 48.17
+  lon_deg: -111.94
+  alt_m: 1100
+  min_elevation_deg: 25

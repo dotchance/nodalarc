@@ -1,0 +1,8 @@
+# Greenville, Pennsylvania — Starlink Gateway
+# FCC earth station filing. Eastern US gateway, rolling terrain.
+ground_station:
+  name: greenville
+  lat_deg: 41.40
+  lon_deg: -80.38
+  alt_m: 340
+  min_elevation_deg: 25

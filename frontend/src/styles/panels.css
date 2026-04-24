@@ -280,3 +280,135 @@
 .panel-divider:hover {
   background: var(--accent-blue);
 }
+
+/* --- Filter panel --- */
+
+.filter-panel {
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.filter-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.filter-section-title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.filter-plane-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.filter-quick-btn {
+  font-size: var(--font-size-xxs);
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  transition: all var(--transition-fast);
+}
+
+.filter-quick-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.filter-plane-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.filter-plane-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.filter-plane-item:hover {
+  background: var(--bg-panel-hover);
+}
+
+.filter-plane-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-xs);
+  flex-shrink: 0;
+}
+
+.filter-plane-label {
+  color: var(--text-primary);
+}
+
+.filter-toggle-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.filter-toggle-item:hover {
+  background: var(--bg-panel-hover);
+}
+
+.filter-color-modes {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.filter-color-btn {
+  font-size: var(--font-size-xs);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.filter-color-btn--active {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.filter-color-btn:hover:not(.filter-color-btn--active) {
+  border-color: var(--text-secondary);
+}
+
+/* Filter panel overlay — slide-over drawer from left */
+.filter-panel-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-popover);
+}
+
+.filter-panel-drawer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 260px;
+  max-width: 80vw;
+  background: var(--bg-overlay-96);
+  backdrop-filter: blur(4px);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}

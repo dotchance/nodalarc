@@ -21,6 +21,7 @@ interface KeyboardActions {
   onToggleReferenceFrame?: () => void;
   onToggleCli?: () => void;
   onTogglePanel?: () => void;
+  onToggleFilter?: () => void;
 }
 
 export function useKeyboard(actions: KeyboardActions): void {
@@ -90,6 +91,10 @@ export function useKeyboard(actions: KeyboardActions): void {
           break;
         case "]":
           actions.onTogglePanel?.();
+          break;
+        case "f":
+        case "F":
+          actions.onToggleFilter?.();
           break;
         case "/":
           e.preventDefault();

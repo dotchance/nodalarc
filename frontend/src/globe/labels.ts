@@ -1,37 +1,31 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-// SDF satellite labels via troika-three-text.
+// Satellite labels — DOM-based positioning for reliable rendering.
 //
-// GPU-rendered text — zero DOM elements, zero layout thrashing.
-// Font bundled at /fonts/Inter.woff2 for fully offline operation.
-//
-// Two-tier visibility:
-// 1. Distance-based: labels fade in/out based on camera distance
-//    (global = dots only, regional = IDs, close = full labels)
-// 2. Logical override: nodes in active traces, selections, or
-//    1-hop neighbors get forced-on labels at any distance
-//    (isHighlighted attribute in the visibility check)
+// Uses the same approach as ground station labels (groundStations.ts):
+// HTML div elements positioned in screen space via camera projection.
+// At 220 satellites, the DOM cost is negligible. At 1000+ sats,
+// replace with troika-three-text SDF rendering.
 
-// @ts-ignore — troika-three-text has no type declarations
-import { Text } from "troika-three-text";
 import * as THREE from "three";
 import { getSatellites } from "./satellites";
-import { getNodeLocalPosition } from "./positionLookup";
-import { tokens } from "../styles/tokens";
+import { getNodeLocalPosition, earthFrameRef } from "./positionLookup";
+import { EARTH_RADIUS } from "../config";
 
-const FONT_URL = "/fonts/Inter.woff2";
-const LABEL_FONT_SIZE = 1.5;
 const FADE_IN_DIST = 150;
-const FADE_OUT_DIST = 300;
+const FADE_OUT_DIST = 350;
 
 interface LabelEntry {
-  text: InstanceType<typeof Text>;
-  highlighted: boolean;
+  div: HTMLDivElement;
 }
 
 const labels = new Map<string, LabelEntry>();
-let labelsParent: THREE.Object3D | null = null;
-const _labelPos = new THREE.Vector3();
+let labelContainer: HTMLDivElement | null = null;
+const _labelLocalPos = new THREE.Vector3();
+const _labelWorldPos = new THREE.Vector3();
+const _labelNdc = new THREE.Vector3();
+const _dirToLabel = new THREE.Vector3();
+const _dirToCenter = new THREE.Vector3();
 
 const highlightedNodes = new Set<string>();
 
@@ -40,82 +34,114 @@ export function setHighlightedNodes(nodeIds: Set<string>): void {
   for (const id of nodeIds) highlightedNodes.add(id);
 }
 
-export function updateLabels(earthFrame: THREE.Object3D): void {
-  labelsParent = earthFrame;
+export function setLabelContainer(container: HTMLDivElement): void {
+  labelContainer = container;
+}
+
+export function updateLabels(_earthFrame: THREE.Object3D): void {
+  if (!labelContainer) return;
   const sats = getSatellites();
 
   for (const [id] of sats) {
     if (labels.has(id)) continue;
 
-    const text = new Text();
-    text.text = id.replace("sat-", "");
-    text.font = FONT_URL;
-    text.fontSize = LABEL_FONT_SIZE;
-    text.color = tokens.textPrimary;
-    text.anchorX = "center";
-    text.anchorY = "bottom";
-    text.outlineWidth = 0.05;
-    text.outlineColor = "#000000";
-    text.depthOffset = -1;
-    text.renderOrder = 10;
-    text.visible = false;
-    text.sync();
-
-    earthFrame.add(text);
-    labels.set(id, { text, highlighted: false });
+    const div = document.createElement("div");
+    div.className = "sat-label";
+    div.textContent = id.replace("sat-", "");
+    div.style.cssText = `
+      position: absolute;
+      color: var(--text-primary);
+      font-size: var(--font-size-xxs);
+      pointer-events: none;
+      white-space: nowrap;
+      text-shadow: 0 0 4px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
+      display: none;
+    `;
+    labelContainer.appendChild(div);
+    labels.set(id, { div });
   }
 
   for (const [id, entry] of labels) {
     if (!sats.has(id)) {
-      earthFrame.remove(entry.text);
-      entry.text.dispose();
+      entry.div.remove();
       labels.delete(id);
     }
   }
 }
 
 export function animateLabels(camera: THREE.Camera): void {
-  if (!labelsParent) return;
+  if (!labelContainer || !earthFrameRef) return;
 
-  const camWorldPos = camera.position;
+  const width = labelContainer.clientWidth;
+  const height = labelContainer.clientHeight;
+  const cameraPos = camera.position;
+  const distToCenter = cameraPos.length();
+  const sinAngle = EARTH_RADIUS / distToCenter;
+  const occlusionThreshold = Math.sqrt(1 - sinAngle * sinAngle);
 
   for (const [id, entry] of labels) {
-    if (!getNodeLocalPosition(id, _labelPos)) {
-      entry.text.visible = false;
+    if (!getNodeLocalPosition(id, _labelLocalPos)) {
+      entry.div.style.display = "none";
       continue;
     }
 
-    entry.text.position.copy(_labelPos);
-    entry.text.position.y += tokens.satRadius * 3;
+    // Convert local to world
+    _labelWorldPos.copy(_labelLocalPos);
+    earthFrameRef.localToWorld(_labelWorldPos);
 
-    entry.highlighted = highlightedNodes.has(id);
+    const dist = _labelWorldPos.distanceTo(cameraPos);
+    const isHighlighted = highlightedNodes.has(id);
 
-    if (entry.highlighted) {
-      entry.text.visible = true;
-      entry.text.fontSize = LABEL_FONT_SIZE * 1.2;
-    } else {
-      labelsParent!.localToWorld(_labelPos);
-      const dist = _labelPos.distanceTo(camWorldPos);
-
-      if (dist < FADE_IN_DIST) {
-        entry.text.visible = true;
-        entry.text.fontSize = LABEL_FONT_SIZE;
-      } else if (dist < FADE_OUT_DIST) {
-        entry.text.visible = true;
-        entry.text.fontSize = LABEL_FONT_SIZE * 0.6;
-      } else {
-        entry.text.visible = false;
-      }
+    if (!isHighlighted && dist > FADE_OUT_DIST) {
+      entry.div.style.display = "none";
+      continue;
     }
 
-    entry.text.lookAt(camWorldPos);
+    // Project to NDC
+    _labelNdc.copy(_labelWorldPos).project(camera);
+
+    // Behind camera
+    if (_labelNdc.z > 1) {
+      entry.div.style.display = "none";
+      continue;
+    }
+
+    // Earth occlusion
+    _dirToLabel.copy(_labelWorldPos).sub(cameraPos).normalize();
+    _dirToCenter.copy(cameraPos).multiplyScalar(-1).normalize();
+    const dot = _dirToLabel.dot(_dirToCenter);
+    if (dot > occlusionThreshold && _labelWorldPos.length() < distToCenter) {
+      entry.div.style.display = "none";
+      continue;
+    }
+
+    const x = (_labelNdc.x * 0.5 + 0.5) * width;
+    const y = (-_labelNdc.y * 0.5 + 0.5) * height;
+
+    entry.div.style.display = "block";
+    entry.div.style.left = `${x + 6}px`;
+    entry.div.style.top = `${y - 14}px`;
+
+    if (isHighlighted) {
+      entry.div.style.opacity = "1";
+      entry.div.style.fontSize = "var(--font-size-xs)";
+      entry.div.style.color = "var(--accent-teal)";
+    } else if (dist < FADE_IN_DIST) {
+      entry.div.style.opacity = "1";
+      entry.div.style.fontSize = "var(--font-size-xxs)";
+      entry.div.style.color = "var(--text-primary)";
+    } else {
+      const t = (dist - FADE_IN_DIST) / (FADE_OUT_DIST - FADE_IN_DIST);
+      entry.div.style.opacity = String(1 - t * 0.7);
+      entry.div.style.fontSize = "var(--font-size-xxs)";
+      entry.div.style.color = "var(--text-secondary)";
+    }
   }
 }
 
 export function clearLabels(): void {
   for (const entry of labels.values()) {
-    labelsParent?.remove(entry.text);
-    entry.text.dispose();
+    entry.div.remove();
   }
   labels.clear();
 }

@@ -191,14 +191,8 @@ def _update_latency_entry(
     """
     try:
         pm = pid_map or {}
-        if entry.link_type == node_agent_pb2.GROUND:
-            gs_pid = _require_pid(entry.gs_id, pm)
-            sat_pid = _require_pid(entry.sat_id, pm)
-            namespace_ops.update_delay(gs_pid, "term0", entry.latency_ms)
-            namespace_ops.update_delay(sat_pid, "gnd0", entry.latency_ms)
-        else:
-            pid = _require_pid(entry.node_id, pm)
-            namespace_ops.update_delay(pid, entry.interface_name, entry.latency_ms)
+        pid = _require_pid(entry.node_id, pm)
+        namespace_ops.update_delay(pid, entry.interface_name, entry.latency_ms)
         return None
     except Exception as exc:
         msg = f"Latency update failed {entry.node_id}/{entry.interface_name}: {exc}"
@@ -233,7 +227,8 @@ def handle_batch_link_down(
                     host_ifname = ground_bridge._sat_gnd_host_name(iface.node_id)
                     sat_pid = pm.get(iface.node_id, 0)
                 else:
-                    host_ifname = ground_bridge._gs_bridge_port_name(iface.node_id)
+                    gs_idx = int(iface.interface_name.replace("term", "") or "0")
+                    host_ifname = ground_bridge._gs_bridge_port_name(iface.node_id, gs_idx)
                     sat_pid = None
                 fut = _BATCH_POOL.submit(
                     vxlan.detach_cross_node_ground,
@@ -409,13 +404,14 @@ def handle_batch_link_up(
         if iface.link_type == node_agent_pb2.GROUND:
             # GROUND: attach via existing host-side infrastructure
             try:
-                # Determine local host-side interface name
+                # Determine local host-side interface name from interface_name
                 is_sat = iface.node_id == iface.sat_id
                 if is_sat:
                     host_ifname = ground_bridge._sat_gnd_host_name(iface.node_id)
                     sat_pid = pm.get(iface.node_id, 0)
                 else:
-                    host_ifname = ground_bridge._gs_bridge_port_name(iface.node_id)
+                    gs_idx = int(iface.interface_name.replace("term", "") or "0")
+                    host_ifname = ground_bridge._gs_bridge_port_name(iface.node_id, gs_idx)
                     sat_pid = None
                 vxlan.attach_cross_node_ground(
                     local_host_ifname=host_ifname,

@@ -12,36 +12,16 @@
  */
 
 import * as THREE from "three";
+import {
+  gmstRadians as _gmstRadians,
+  J2000_UNIX_SECONDS as _J2000,
+  EARTH_ROTATION_RATE as _EARTH_ROT,
+} from "../sim/orbitalMath";
 
-/** Unix seconds for the J2000 epoch (2000-01-01 12:00:00 UTC). */
-export const J2000_UNIX_SECONDS = 946728000.0;
+export const J2000_UNIX_SECONDS = _J2000;
+export const EARTH_ROTATION_RATE_RAD_S = _EARTH_ROT;
+export const gmstRadians = _gmstRadians;
 
-/** Earth's sidereal angular velocity in radians per second.
- *  Matches services/ome/propagator.py:EARTH_ROTATION_RATE. */
-export const EARTH_ROTATION_RATE_RAD_S = 7.2921159e-5;
-
-/** Greenwich Mean Sidereal Time in radians for a given UTC timestamp.
- *
- *  Direct port of backend propagator.gmst(). Uses the simplified Vallado
- *  expression (GMST-1982 relative to the true equator/equinox of date).
- *  Accurate to arcseconds over decades — more than sufficient for visual
- *  rendering.
- *
- *  @param unixSeconds UTC timestamp in Unix seconds (float, fractional OK)
- *  @returns GMST angle in radians, normalized to [0, 2π)
- */
-export function gmstRadians(unixSeconds: number): number {
-  const daysSinceJ2000 = (unixSeconds - J2000_UNIX_SECONDS) / 86400.0;
-  const degrees = 280.46061837 + 360.98564736629 * daysSinceJ2000;
-  // JS % of float can be negative for negative dividends; Python's always
-  // has the sign of the divisor (positive). Normalize to [0, 360).
-  let wrapped = degrees % 360.0;
-  if (wrapped < 0) wrapped += 360.0;
-  return (wrapped * Math.PI) / 180.0;
-}
-
-/** Helper: parse an ISO-8601 sim-time string to Unix seconds.
- *  Returns NaN on parse failure (caller must handle). */
 export function simTimeIsoToUnixSeconds(simTimeIso: string): number {
   return new Date(simTimeIso).getTime() / 1000;
 }

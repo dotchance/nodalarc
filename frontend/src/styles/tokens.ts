@@ -265,6 +265,7 @@ export function injectCssTokens(): void {
   s.setProperty('--radius-lg', tokens.radiusLg);
   s.setProperty('--radius-xl', tokens.radiusXl);
   s.setProperty('--radius-pill', tokens.radiusPill);
+  s.setProperty('--radius-circle', tokens.radiusCircle);
 
   // Shadows
   s.setProperty('--shadow-popover', tokens.shadowPopover);

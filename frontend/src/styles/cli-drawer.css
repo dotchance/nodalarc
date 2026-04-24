@@ -60,7 +60,7 @@
   color: var(--bg-main);
   border: none;
   border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-lg, 14px);
+  padding: var(--space-2) 14px;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
   cursor: pointer;

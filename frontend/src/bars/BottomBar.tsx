@@ -73,6 +73,9 @@ export function BottomBar({ snapshot, connected, historicalMode }: BottomBarProp
         }}
       />
       <span style={{ color: wsColor }} title={WS_URL}>{wsLabel}</span>
+      <span style={{ color: "var(--text-dim)", fontSize: 9, fontFamily: "var(--font-family)" }}>
+        {typeof __BUILD_HASH__ !== "undefined" ? __BUILD_HASH__ : "dev"}
+      </span>
     </div>
   );
 }

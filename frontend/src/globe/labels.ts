@@ -10,7 +10,6 @@
 import * as THREE from "three";
 import { getSatellites } from "./satellites";
 import { getNodeLocalPosition, earthFrameRef } from "./positionLookup";
-import { EARTH_RADIUS } from "../config";
 
 const FADE_IN_DIST = 200;
 const FADE_OUT_DIST = 500;
@@ -39,8 +38,6 @@ let labelContainer: HTMLDivElement | null = null;
 const _labelLocalPos = new THREE.Vector3();
 const _labelWorldPos = new THREE.Vector3();
 const _labelNdc = new THREE.Vector3();
-const _dirToLabel = new THREE.Vector3();
-const _dirToCenter = new THREE.Vector3();
 
 const highlightedNodes = new Set<string>();
 

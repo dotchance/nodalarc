@@ -7,6 +7,7 @@ import { Shell } from "./layout/Shell";
 import { GlobeView } from "./globe/GlobeView";
 import { TopologyView } from "./topology/TopologyView";
 import { InfoPanel } from "./panels/InfoPanel";
+import { FilterPanel } from "./panels/FilterPanel";
 import { CliDrawer } from "./panels/CliDrawer";
 import { NodePopover } from "./panels/NodePopover";
 import { Toolbar } from "./toolbar/Toolbar";
@@ -129,6 +130,30 @@ function AppInner() {
 
   const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
+  const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
+  const [filterOpen, setFilterOpen] = useState(false);
+
+  const handleTogglePlane = useCallback((plane: number) => {
+    setVisiblePlanes((prev) => {
+      if (prev === null) {
+        const allPlanes = new Set<number>();
+        if (snapshot) {
+          for (const n of snapshot.nodes) {
+            if (n.node_type === "satellite" && n.plane != null) allPlanes.add(n.plane);
+          }
+        }
+        allPlanes.delete(plane);
+        return allPlanes;
+      }
+      const next = new Set(prev);
+      if (next.has(plane)) next.delete(plane);
+      else next.add(plane);
+      return next;
+    });
+  }, [snapshot]);
+
+  const handleShowAllPlanes = useCallback(() => setVisiblePlanes(null), []);
+  const handleHideAllPlanes = useCallback(() => setVisiblePlanes(new Set()), []);
 
   const [panelOpen, setPanelOpen] = useState(true);
   const panelManualRef = useRef(false);
@@ -207,6 +232,7 @@ function AppInner() {
       onTopView: handleTopView,
       onToggleCli: () => setCliDrawerOpen((v) => !v),
       onTogglePanel: handlePanelToggle,
+      onToggleFilter: () => setFilterOpen((v) => !v),
     }),
     [clearSelection, handleCloseCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame],
   );
@@ -379,6 +405,27 @@ function AppInner() {
           snapshot={snapshot}
           selection={selection}
         />
+      )}
+      {filterOpen && (
+        <div className="filter-panel-overlay" onClick={() => setFilterOpen(false)}>
+          <div className="filter-panel-drawer" onClick={(e) => e.stopPropagation()}>
+            <FilterPanel
+              snapshot={augmentedSnapshot}
+              showIslLinks={showIslLinks}
+              showGroundLinks={showGroundLinks}
+              showSatPaths={showSatPaths}
+              colorMode={colorMode}
+              onToggleIslLinks={() => setShowIslLinks((v) => !v)}
+              onToggleGroundLinks={() => setShowGroundLinks((v) => !v)}
+              onToggleSatPaths={() => setShowSatPaths((v) => !v)}
+              onSetColorMode={setColorMode}
+              visiblePlanes={visiblePlanes}
+              onTogglePlane={handleTogglePlane}
+              onShowAllPlanes={handleShowAllPlanes}
+              onHideAllPlanes={handleHideAllPlanes}
+            />
+          </div>
+        </div>
       )}
     </>
   );

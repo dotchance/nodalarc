@@ -10,8 +10,8 @@ import * as THREE from "three";
 import { tokens } from "../styles/tokens";
 
 const EARTH_RADIUS_SCENE = tokens.earthRadius;
-const BOUNDARY_COLOR = 0x445566;
-const BOUNDARY_OPACITY = 0.35;
+const BOUNDARY_COLOR = 0x88aacc;
+const BOUNDARY_OPACITY = 0.55;
 
 let boundaryGroup: THREE.Group | null = null;
 let loaded = false;

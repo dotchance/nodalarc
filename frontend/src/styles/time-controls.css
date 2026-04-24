@@ -1,8 +1,8 @@
 .time-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 16px;
+  gap: var(--space-4);
+  padding: 0 var(--space-8);
   background: var(--bg-bar);
   border-top: 1px solid var(--border);
   height: 40px;
@@ -14,7 +14,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
 }
 
@@ -41,7 +41,7 @@
   width: 100%;
   height: 100%;
   pointer-events: none;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .time-scrubber-track {
@@ -51,7 +51,7 @@
   right: 0;
   height: 4px;
   background: var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .time-scrubber-fill {
@@ -60,7 +60,7 @@
   left: 0;
   height: 4px;
   background: var(--accent-blue);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .time-scrubber-thumb {
@@ -70,11 +70,11 @@
   height: 14px;
   background: var(--accent-blue);
   border: 2px solid var(--bg-bar);
-  border-radius: 50%;
+  border-radius: var(--radius-circle);
   transform: translateX(-50%);
 }
 
 .speed-select {
   width: 60px;
-  font-size: 11px;
+  font-size: var(--font-size-xs);
 }

@@ -230,27 +230,49 @@
 
 .wizard-select--sm {
   padding: 4px 8px;
-  font-size: 11px;
-  min-width: 80px;
+  font-size: 12px;
+  min-width: 90px;
+  flex-shrink: 0;
 }
 
-.wizard-timer-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 16px;
+.wizard-timer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.wizard-timer-field {
+.wizard-timer-row {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  border-radius: 4px;
+}
+
+.wizard-timer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
 }
 
 .wizard-timer-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #eee);
+}
+
+.wizard-timer-desc {
   font-size: 11px;
   color: var(--text-dim, #aaa);
-  white-space: nowrap;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.wizard-timer-range {
+  font-size: 10px;
+  color: var(--text-muted, #777);
+  margin-top: 2px;
+  font-style: italic;
 }
 
 .wizard-nav {

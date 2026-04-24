@@ -138,34 +138,56 @@ export function ExtensionsPanel({
           <h3 className="wizard-section-title">
             {protocol === "isis" ? "IS-IS" : "OSPF"} Timers
           </h3>
-          <div className="wizard-timer-grid">
+          <div className="wizard-timer-list">
             {protocol === "isis" ? (
               <>
-                <TimerField label="Hello Interval (s)" value={routingTimers.isis_hello_interval}
-                  onChange={(v) => onUpdateTimers({ isis_hello_interval: v })} options={[1, 3, 10]} />
+                <TimerField label="Hello Interval" unit="s" value={routingTimers.isis_hello_interval}
+                  onChange={(v) => onUpdateTimers({ isis_hello_interval: v })} options={[1, 3, 10]}
+                  desc="Time between IS-IS hello packets. Lower = faster adjacency detection."
+                  range="LEO: 1s. Terrestrial: 3-10s." />
                 <TimerField label="Hello Multiplier" value={routingTimers.isis_hello_multiplier}
-                  onChange={(v) => onUpdateTimers({ isis_hello_multiplier: v })} options={[3, 5, 10]} />
-                <TimerField label="SPF Init Delay (ms)" value={routingTimers.spf_init_delay}
-                  onChange={(v) => onUpdateTimers({ spf_init_delay: v })} options={[50, 200, 1000]} />
-                <TimerField label="SPF Short Delay (ms)" value={routingTimers.spf_short_delay}
-                  onChange={(v) => onUpdateTimers({ spf_short_delay: v })} options={[200, 1000, 5000]} />
-                <TimerField label="SPF Long Delay (ms)" value={routingTimers.spf_long_delay}
-                  onChange={(v) => onUpdateTimers({ spf_long_delay: v })} options={[1000, 5000, 10000]} />
-                <TimerField label="SPF Holddown (ms)" value={routingTimers.spf_holddown}
-                  onChange={(v) => onUpdateTimers({ spf_holddown: v })} options={[2000, 10000, 30000]} />
+                  onChange={(v) => onUpdateTimers({ isis_hello_multiplier: v })} options={[3, 5, 10]}
+                  desc="Missed hellos before declaring neighbor down. Dead time = interval × multiplier."
+                  range="Typical: 3 (3s dead time at 1s hello)." />
+                <TimerField label="SPF Init Delay" unit="ms" value={routingTimers.spf_init_delay}
+                  onChange={(v) => onUpdateTimers({ spf_init_delay: v })} options={[50, 200, 1000]}
+                  desc="Delay before first SPF computation after a topology change."
+                  range="Aggressive: 50ms. Conservative: 1000ms." />
+                <TimerField label="SPF Short Delay" unit="ms" value={routingTimers.spf_short_delay}
+                  onChange={(v) => onUpdateTimers({ spf_short_delay: v })} options={[200, 1000, 5000]}
+                  desc="SPF delay for subsequent events within the learning window."
+                  range="LEO: 200ms. Stable networks: 1000-5000ms." />
+                <TimerField label="SPF Long Delay" unit="ms" value={routingTimers.spf_long_delay}
+                  onChange={(v) => onUpdateTimers({ spf_long_delay: v })} options={[1000, 5000, 10000]}
+                  desc="Maximum SPF delay during sustained topology churn."
+                  range="LEO: 1000ms. Must not exceed handover interval." />
+                <TimerField label="SPF Holddown" unit="ms" value={routingTimers.spf_holddown}
+                  onChange={(v) => onUpdateTimers({ spf_holddown: v })} options={[2000, 10000, 30000]}
+                  desc="Time without events before returning to init delay. Resets the backoff."
+                  range="LEO: 2000ms. Terrestrial: 10000-30000ms." />
               </>
             ) : (
               <>
-                <TimerField label="Hello Interval (s)" value={routingTimers.ospf_hello_interval}
-                  onChange={(v) => onUpdateTimers({ ospf_hello_interval: v })} options={[1, 3, 10]} />
-                <TimerField label="Dead Interval (s)" value={routingTimers.ospf_dead_interval}
-                  onChange={(v) => onUpdateTimers({ ospf_dead_interval: v })} options={[3, 12, 40]} />
-                <TimerField label="SPF Delay (ms)" value={routingTimers.ospf_spf_delay}
-                  onChange={(v) => onUpdateTimers({ ospf_spf_delay: v })} options={[50, 200, 1000]} />
-                <TimerField label="SPF Initial Hold (ms)" value={routingTimers.ospf_spf_initial_hold}
-                  onChange={(v) => onUpdateTimers({ ospf_spf_initial_hold: v })} options={[200, 1000, 5000]} />
-                <TimerField label="SPF Max Hold (ms)" value={routingTimers.ospf_spf_max_hold}
-                  onChange={(v) => onUpdateTimers({ ospf_spf_max_hold: v })} options={[1000, 5000, 10000]} />
+                <TimerField label="Hello Interval" unit="s" value={routingTimers.ospf_hello_interval}
+                  onChange={(v) => onUpdateTimers({ ospf_hello_interval: v })} options={[1, 3, 10]}
+                  desc="Time between OSPF hello packets on each interface."
+                  range="LEO: 1s. Terrestrial: 10s (default)." />
+                <TimerField label="Dead Interval" unit="s" value={routingTimers.ospf_dead_interval}
+                  onChange={(v) => onUpdateTimers({ ospf_dead_interval: v })} options={[3, 12, 40]}
+                  desc="Time without hellos before declaring neighbor dead."
+                  range="Typically 3-4× hello interval." />
+                <TimerField label="SPF Delay" unit="ms" value={routingTimers.ospf_spf_delay}
+                  onChange={(v) => onUpdateTimers({ ospf_spf_delay: v })} options={[50, 200, 1000]}
+                  desc="Initial delay before SPF computation after a topology change."
+                  range="Aggressive: 50ms. Conservative: 1000ms." />
+                <TimerField label="SPF Initial Hold" unit="ms" value={routingTimers.ospf_spf_initial_hold}
+                  onChange={(v) => onUpdateTimers({ ospf_spf_initial_hold: v })} options={[200, 1000, 5000]}
+                  desc="Minimum time between consecutive SPF runs (doubles on each run)."
+                  range="LEO: 200ms. Stable networks: 1000-5000ms." />
+                <TimerField label="SPF Max Hold" unit="ms" value={routingTimers.ospf_spf_max_hold}
+                  onChange={(v) => onUpdateTimers({ ospf_spf_max_hold: v })} options={[1000, 5000, 10000]}
+                  desc="Maximum delay between SPF runs during sustained churn."
+                  range="LEO: 1000ms. Must not exceed handover interval." />
               </>
             )}
           </div>
@@ -180,16 +202,22 @@ export function ExtensionsPanel({
             <input type="checkbox" checked={routingTimers.bfd}
               onChange={() => onUpdateTimers({ bfd: !routingTimers.bfd })} />
             <span className="wizard-ext-label">Enable BFD</span>
-            <span className="wizard-ext-desc">Sub-second failure detection for all adjacencies.</span>
+            <span className="wizard-ext-desc">Sub-second link failure detection independent of routing protocol hellos.</span>
           </label>
           {routingTimers.bfd && (
-            <div className="wizard-timer-grid" style={{ marginTop: 8 }}>
+            <div className="wizard-timer-list" style={{ marginTop: 8 }}>
               <TimerField label="Detect Multiplier" value={routingTimers.bfd_detect_multiplier}
-                onChange={(v) => onUpdateTimers({ bfd_detect_multiplier: v })} options={[3, 5, 10]} />
-              <TimerField label="RX Interval (ms)" value={routingTimers.bfd_rx_interval}
-                onChange={(v) => onUpdateTimers({ bfd_rx_interval: v })} options={[100, 300, 1000]} />
-              <TimerField label="TX Interval (ms)" value={routingTimers.bfd_tx_interval}
-                onChange={(v) => onUpdateTimers({ bfd_tx_interval: v })} options={[100, 300, 1000]} />
+                onChange={(v) => onUpdateTimers({ bfd_detect_multiplier: v })} options={[3, 5, 10]}
+                desc="Missed BFD packets before declaring failure. Detection time = multiplier × interval."
+                range="Typical: 3 (900ms detection at 300ms interval)." />
+              <TimerField label="RX Interval" unit="ms" value={routingTimers.bfd_rx_interval}
+                onChange={(v) => onUpdateTimers({ bfd_rx_interval: v })} options={[100, 300, 1000]}
+                desc="Minimum interval for receiving BFD control packets."
+                range="Aggressive: 100ms. Typical: 300ms." />
+              <TimerField label="TX Interval" unit="ms" value={routingTimers.bfd_tx_interval}
+                onChange={(v) => onUpdateTimers({ bfd_tx_interval: v })} options={[100, 300, 1000]}
+                desc="Minimum interval for transmitting BFD control packets."
+                range="Aggressive: 100ms. Typical: 300ms." />
             </div>
           )}
         </div>
@@ -200,19 +228,24 @@ export function ExtensionsPanel({
 
 // --- Timer field component ---
 
-function TimerField({ label, value, onChange, options }: {
-  label: string; value: number; onChange: (v: number) => void; options: number[];
+function TimerField({ label, unit, value, onChange, options, desc, range }: {
+  label: string; unit?: string; value: number; onChange: (v: number) => void;
+  options: number[]; desc?: string; range?: string;
 }) {
   return (
-    <div className="wizard-timer-field">
-      <label className="wizard-timer-label">{label}</label>
-      <select className="wizard-select wizard-select--sm" value={value}
-        onChange={(e) => onChange(Number(e.target.value))}>
-        {options.map((opt) => (
-          <option key={opt} value={opt}>{opt}</option>
-        ))}
-        {!options.includes(value) && <option value={value}>{value}</option>}
-      </select>
+    <div className="wizard-timer-row">
+      <div className="wizard-timer-header">
+        <span className="wizard-timer-label">{label}</span>
+        <select className="wizard-select wizard-select--sm" value={value}
+          onChange={(e) => onChange(Number(e.target.value))}>
+          {options.map((opt) => (
+            <option key={opt} value={opt}>{opt}{unit ? ` ${unit}` : ""}</option>
+          ))}
+          {!options.includes(value) && <option value={value}>{value}{unit ? ` ${unit}` : ""}</option>}
+        </select>
+      </div>
+      {desc && <div className="wizard-timer-desc">{desc}</div>}
+      {range && <div className="wizard-timer-range">{range}</div>}
     </div>
   );
 }

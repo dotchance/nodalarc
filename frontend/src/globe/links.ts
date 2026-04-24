@@ -22,8 +22,7 @@ import {
   FAIL_HOLD_MS,
   FAIL_FADE_MS,
 } from "../config";
-import { getSatellites } from "./satellites";
-import { getGroundStations } from "./groundStations";
+import { getNodeLocalPosition } from "./positionLookup";
 import type { LinkState } from "../types";
 
 const _mid = new THREE.Vector3();
@@ -186,17 +185,17 @@ export function updateLinks(
   }
 }
 
+const _linkPosA = new THREE.Vector3();
+const _linkPosB = new THREE.Vector3();
+
 export function animateLinks(showIslLinks: boolean = true, showGroundLinks: boolean = true): void {
   const now = performance.now();
-  const sats = getSatellites();
-  const gss = getGroundStations();
 
   for (const [key, entry] of links) {
-    // Get endpoint positions
-    const posA = sats.get(entry.nodeA)?.mesh.position ?? gss.get(entry.nodeA)?.sprite.position;
-    const posB = sats.get(entry.nodeB)?.mesh.position ?? gss.get(entry.nodeB)?.sprite.position;
+    const hasA = getNodeLocalPosition(entry.nodeA, _linkPosA);
+    const hasB = getNodeLocalPosition(entry.nodeB, _linkPosB);
 
-    if (!posA || !posB) {
+    if (!hasA || !hasB) {
       entry.line.visible = false;
       continue;
     }
@@ -215,10 +214,10 @@ export function animateLinks(showIslLinks: boolean = true, showGroundLinks: bool
 
     // ISL links get a gentle bow; ground links are straight (direct radio beam)
     if (entry.isGround) {
-      entry.geometry.setPositions([posA.x, posA.y, posA.z, posB.x, posB.y, posB.z]);
+      entry.geometry.setPositions([_linkPosA.x, _linkPosA.y, _linkPosA.z, _linkPosB.x, _linkPosB.y, _linkPosB.z]);
       entry.line.computeLineDistances();
     } else {
-      entry.geometry.setPositions(bowedPositions(posA, posB));
+      entry.geometry.setPositions(bowedPositions(_linkPosA, _linkPosB));
     }
 
     // Fail-flash animation — boost opacity so it's visible on all link types

@@ -92,8 +92,8 @@ export function useKeyboard(actions: KeyboardActions): void {
         case "]":
           actions.onTogglePanel?.();
           break;
-        case "f":
-        case "F":
+        case "q":
+        case "Q":
           actions.onToggleFilter?.();
           break;
         case "/":

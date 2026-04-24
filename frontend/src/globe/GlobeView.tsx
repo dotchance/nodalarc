@@ -25,7 +25,7 @@ import { updateOrbitalTrails, flushTrails, notifyEpochChange } from "./orbitalTr
 import { updateOrbitPins, clearOrbitPins, reseedAllPins } from "./orbitPins";
 import { updateAllOrbits, clearAllOrbits } from "./allOrbits";
 import { setupGpuPicker } from "./gpuPicker";
-import { updateLabels, animateLabels, clearLabels } from "./labels";
+import { updateLabels, animateLabels, clearLabels, setLabelContainer } from "./labels";
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
 import { loadBoundaries, setBoundariesVisible } from "./boundaries";
@@ -113,6 +113,7 @@ export function GlobeView({
     const container = containerRef.current;
     const labelContainer = labelContainerRef.current;
     if (!container || !labelContainer) return;
+    setLabelContainer(labelContainer);
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0d0d1a);

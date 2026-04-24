@@ -90,9 +90,6 @@ export function animateLabels(camera: THREE.Camera): void {
   const width = labelContainer.clientWidth;
   const height = labelContainer.clientHeight;
   const cameraPos = camera.position;
-  const distToCenter = cameraPos.length();
-  const sinAngle = EARTH_RADIUS / distToCenter;
-  const occlusionThreshold = Math.sqrt(1 - sinAngle * sinAngle);
 
   earthFrameRef.updateWorldMatrix(true, false);
 
@@ -120,19 +117,6 @@ export function animateLabels(camera: THREE.Camera): void {
     if (_labelNdc.z > 1) {
       entry.div.style.display = "none";
       continue;
-    }
-
-    // Earth occlusion — only cull labels on the far side of the earth.
-    // When zoomed in close, skip occlusion to avoid hiding labels in
-    // the direct field of view.
-    if (distToCenter > EARTH_RADIUS * 2) {
-      _dirToLabel.copy(_labelWorldPos).sub(cameraPos).normalize();
-      _dirToCenter.copy(cameraPos).multiplyScalar(-1).normalize();
-      const dot = _dirToLabel.dot(_dirToCenter);
-      if (dot > occlusionThreshold && _labelWorldPos.length() < distToCenter) {
-        entry.div.style.display = "none";
-        continue;
-      }
     }
 
     const x = (_labelNdc.x * 0.5 + 0.5) * width;

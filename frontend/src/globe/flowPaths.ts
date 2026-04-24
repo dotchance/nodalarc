@@ -7,8 +7,7 @@ import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { LINK_FLOW_COLOR, LINK_FLOW_SECONDARY_COLOR, LINK_FLOW_WIDTH } from "../config";
-import { getSatellites } from "./satellites";
-import { getGroundStations } from "./groundStations";
+import { getNodeLocalPosition } from "./positionLookup";
 import type { TracedPath } from "../types";
 
 interface FlowPathEntry {
@@ -114,46 +113,33 @@ export function updateFlowPaths(paths: TracedPath[], earthFrame: THREE.Object3D)
   }
 }
 
+const _flowHopPos = new THREE.Vector3();
+
+function collectHopPositions(hops: string[]): number[] | null {
+  const positions: number[] = [];
+  for (const hop of hops) {
+    if (!getNodeLocalPosition(hop, _flowHopPos)) return null;
+    positions.push(_flowHopPos.x, _flowHopPos.y, _flowHopPos.z);
+  }
+  return positions.length >= 6 ? positions : null;
+}
+
 export function animateFlowPaths(): void {
-  const sats = getSatellites();
-  const gss = getGroundStations();
-
   for (const entry of flowPaths.values()) {
-    const positions: number[] = [];
-    let valid = true;
+    const positions = collectHopPositions(entry.hops);
 
-    for (const hop of entry.hops) {
-      const pos = sats.get(hop)?.mesh.position ?? gss.get(hop)?.sprite.position;
-      if (!pos) {
-        valid = false;
-        break;
-      }
-      positions.push(pos.x, pos.y, pos.z);
-    }
-
-    if (valid && positions.length >= 6) {
+    if (positions) {
       entry.geometry.setPositions(positions);
       entry.line.computeLineDistances();
       entry.line.visible = true;
-      // Animate dash offset
       entry.material.dashOffset -= 0.01;
     } else {
       entry.line.visible = false;
     }
 
-    // Animate reverse path
     if (entry.reverseLine && entry.reverseHops && entry.reverseHops.length > 0) {
-      const revPositions: number[] = [];
-      let revValid = true;
-      for (const hop of entry.reverseHops) {
-        const pos = sats.get(hop)?.mesh.position ?? gss.get(hop)?.sprite.position;
-        if (!pos) {
-          revValid = false;
-          break;
-        }
-        revPositions.push(pos.x, pos.y, pos.z);
-      }
-      if (revValid && revPositions.length >= 6) {
+      const revPositions = collectHopPositions(entry.reverseHops);
+      if (revPositions) {
         entry.reverseGeometry!.setPositions(revPositions);
         entry.reverseLine.computeLineDistances();
         entry.reverseLine.visible = true;

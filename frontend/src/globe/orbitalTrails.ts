@@ -11,6 +11,7 @@
 
 import * as THREE from "three";
 import { getSatellites } from "./satellites";
+import { getNodeWorldPosition } from "./positionLookup";
 import {
   createTrailBuffer,
   pushSample,
@@ -117,7 +118,7 @@ export function updateOrbitalTrails(scene: THREE.Scene): void {
 
   const sats = getSatellites();
 
-  for (const [id, sat] of sats) {
+  for (const [id] of sats) {
     let trail = trails.get(id);
     if (!trail) {
       trail = createTrail(scene);
@@ -127,12 +128,7 @@ export function updateOrbitalTrails(scene: THREE.Scene): void {
     trail.frame++;
     if (trail.frame % SAMPLE_EVERY !== 0) continue;
 
-    // Record the mesh's actual rendered position (post-lerp) in WORLD
-    // space. Trail geometry is in scene root, so world coords are what
-    // the trail line's local frame expects. In earth-fixed view (group
-    // rotation 0) world equals local ECEF; in earth-inertial view the
-    // rotation is automatically applied via getWorldPosition.
-    sat.mesh.getWorldPosition(_trailWorldPos);
+    if (!getNodeWorldPosition(id, _trailWorldPos)) continue;
     pushSample(trail.buffer, _trailWorldPos.x, _trailWorldPos.y, _trailWorldPos.z);
 
     // Extract draw-order points capped by arc length

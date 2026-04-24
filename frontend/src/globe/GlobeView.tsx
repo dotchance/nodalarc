@@ -13,10 +13,11 @@ import {
   EARTH_RADIUS,
 } from "../config";
 import { createEarth, createAtmosphere, createStarfield, createLights, updateSunPosition, updateSunWorldDirection, setGlobeMode } from "./earth";
-import { updateSatellites, animateSatellites, recolorAllSatellites, getSatellites, setEphemeris } from "./satellites";
+import { updateSatellites, animateSatellites, recolorAllSatellites, setEphemeris } from "./satellites";
+import { getNodeWorldPosition, setEarthFrame } from "./positionLookup";
 import { resetSimClock, interpolatedSimTimeMs, setPlaybackPaused, onSnapshot } from "../sim/simClock";
 import { gmstRadians, EARTH_ROTATION_RATE_RAD_S } from "./astronomy";
-import { updateGroundStations, updateGSLabels, getGroundStations } from "./groundStations";
+import { updateGroundStations, updateGSLabels } from "./groundStations";
 import { updateLinks, animateLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
 import { updateOrbitalTrails, flushTrails, notifyEpochChange } from "./orbitalTrails";
@@ -144,6 +145,7 @@ export function GlobeView({
     earthFrame.name = "earthFrame";
     scene.add(earthFrame);
     earthFrameRef.current = earthFrame;
+    setEarthFrame(earthFrame);
     const starFrame = new THREE.Group();
     starFrame.name = "starFrame";
     scene.add(starFrame);
@@ -208,14 +210,7 @@ export function GlobeView({
           link.click();
         },
         flyToNode: (nodeId: string) => {
-          const sat = getSatellites().get(nodeId);
-          const gs = getGroundStations().get(nodeId);
-          // World position required: camera direction math operates in
-          // world space. Sats/GS live in earthFrame; local coords would
-          // misdirect the camera under any non-identity group rotation.
-          const target = sat?.mesh.getWorldPosition(_tmpWorldA)
-            ?? gs?.sprite.getWorldPosition(_tmpWorldA);
-          if (target) {
+          if (getNodeWorldPosition(nodeId, _tmpWorldA)) {
             controls.target.set(0, 0, 0);
             const dist = camera.position.length();
             _tmpWorldA.normalize();
@@ -224,28 +219,21 @@ export function GlobeView({
           }
         },
         getNodeScreenPosition: (nodeId: string) => {
-          const sat = getSatellites().get(nodeId);
-          const gs = getGroundStations().get(nodeId);
-          const worldPos = sat
-            ? sat.mesh.getWorldPosition(_tmpWorldA)
-            : gs
-              ? gs.sprite.getWorldPosition(_tmpWorldA)
-              : null;
-          if (!worldPos) return null;
+          if (!getNodeWorldPosition(nodeId, _tmpWorldA)) return null;
 
-          _tmpNdc.copy(worldPos).project(camera);
+          _tmpNdc.copy(_tmpWorldA).project(camera);
 
           // Behind camera or behind Earth
           if (_tmpNdc.z > 1) return { x: 0, y: 0, visible: false };
 
           // Earth occlusion check (same as updateGSLabels)
           const cameraPos = camera.position;
-          _tmpDirA.copy(worldPos).sub(cameraPos).normalize();
+          _tmpDirA.copy(_tmpWorldA).sub(cameraPos).normalize();
           _tmpDirB.copy(cameraPos).multiplyScalar(-1).normalize();
           const dot = _tmpDirA.dot(_tmpDirB);
           const distToCenter = cameraPos.length();
           const sinAngle = EARTH_RADIUS / distToCenter;
-          if (dot > Math.sqrt(1 - sinAngle * sinAngle) && worldPos.length() < distToCenter) {
+          if (dot > Math.sqrt(1 - sinAngle * sinAngle) && _tmpWorldA.length() < distToCenter) {
             return { x: 0, y: 0, visible: false };
           }
 
@@ -316,14 +304,7 @@ export function GlobeView({
       // Follow selected node — rotate camera toward it, keep orbit pivot at origin.
       // World position required: camera rotation math operates in world space.
       if (followTargetRef.current) {
-        const sat = getSatellites().get(followTargetRef.current);
-        const gs = getGroundStations().get(followTargetRef.current);
-        const targetPos = sat
-          ? sat.mesh.getWorldPosition(_tmpWorldA)
-          : gs
-            ? gs.sprite.getWorldPosition(_tmpWorldA)
-            : null;
-        if (targetPos) {
+        if (getNodeWorldPosition(followTargetRef.current, _tmpWorldA)) {
           const dist = camera.position.length();
           _tmpWorldA.normalize();
           _tmpWorldB.copy(camera.position).normalize();

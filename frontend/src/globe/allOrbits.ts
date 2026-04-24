@@ -10,6 +10,7 @@ import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getSatellites } from "./satellites";
+import { getNodeLocalPosition, getNodeWorldPosition } from "./positionLookup";
 import { computeOrbitPositions } from "./orbitPins";
 import { getPlaneColor } from "../config";
 import { velocityToScene } from "./geo";
@@ -17,6 +18,7 @@ import { worldVelocity } from "./astronomy";
 
 // Reusable temporaries for seed sampling — avoid per-sat allocation.
 const _allOrbitsWorldPos = new THREE.Vector3();
+const _allOrbitsLocalPos = new THREE.Vector3();
 const _allOrbitsVelEcef = new THREE.Vector3();
 const _allOrbitsVelWorld = new THREE.Vector3();
 
@@ -69,16 +71,13 @@ export function updateAllOrbits(
     if (ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
     if (ns.plane == null) continue;
 
-    // Seed from world pos + WORLD velocity so the ring is correct in
-    // the active view frame. In earth-fixed view both reduce to the
-    // ECEF-frame values (frameAngularVelocityRadS = 0). In earth-inertial
-    // view worldVelocity adds the ω × r term and rotates by gmst.
-    sat.mesh.getWorldPosition(_allOrbitsWorldPos);
+    if (!getNodeWorldPosition(id, _allOrbitsWorldPos)) continue;
+    if (!getNodeLocalPosition(id, _allOrbitsLocalPos)) continue;
     _allOrbitsVelEcef.copy(
       velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s),
     );
     worldVelocity(
-      sat.mesh.position,
+      _allOrbitsLocalPos,
       _allOrbitsVelEcef,
       viewFrameRotationRad,
       frameAngularVelocityRadS,

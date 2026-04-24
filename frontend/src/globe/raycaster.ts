@@ -96,7 +96,7 @@ function hitTestLinks(
   let bestHit: { key: string; nodeA: string; nodeB: string; tooltipText: string } | null = null;
 
   for (const [key, entry] of getLinks()) {
-    if (!entry.line.visible) continue;
+    if (entry.state !== "active" && entry.failTime === null) continue;
     if (!getNodeWorldPosition(entry.nodeA, _v3a)) continue;
     if (!getNodeWorldPosition(entry.nodeB, _v3b)) continue;
 

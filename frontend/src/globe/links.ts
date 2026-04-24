@@ -1,22 +1,14 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-// Link rendering — batched Line2 for minimal draw calls.
+// Link rendering — per-link Line2 with shared materials.
 //
-// Before: 448 Line2 = 448 draw calls
-// After:  2 Line2 (ISL batch + ground batch) + N fail-flash Line2
-//         (N = links currently in animation, typically 0-5)
+// LineGeometry renders a CONNECTED polyline — you cannot batch
+// multiple disconnected link curves into a single LineGeometry
+// without spurious connecting segments between them. Each link
+// gets its own Line2 object but shares a material instance to
+// minimize material state changes.
 //
-// Steady-state links are batched into 2 Line2 objects with shared
-// materials. Fail-flash and up-pulse animations use individual Line2
-// objects with their own materials for per-link color control. At any
-// moment, only a handful of links are animating (during handovers),
-// so the per-link overhead is negligible.
-//
-// The plan's A6 (custom RawShaderMaterial with GPU quad extrusion) was
-// based on faulty CPU cost analysis — LineGeometry.setPositions()
-// interleaving costs ~84µs/frame at 440 links, not a bottleneck.
-// If profiling at >2000 links shows interleaving as the bottleneck,
-// the custom shader becomes the right solution. Not before.
+// Fail-flash links get a separate material for color animation.
 
 import * as THREE from "three";
 import { Line2 } from "three/addons/lines/Line2.js";
@@ -58,76 +50,66 @@ function bowedPositions(a: THREE.Vector3, b: THREE.Vector3): number[] {
   return positions;
 }
 
-// --- Link metadata ---
-
-interface LinkMeta {
+interface LinkEntry {
+  line: Line2;
+  geometry: LineGeometry;
+  material: LineMaterial;
   state: string;
   nodeA: string;
   nodeB: string;
   isGround: boolean;
   failTime: number | null;
   upTime: number | null;
-  failLine: Line2 | null;
-  failGeometry: LineGeometry | null;
-  failMaterial: LineMaterial | null;
+  baseColor: THREE.Color;
+  baseOpacity: number;
 }
 
-const linkMetas = new Map<string, LinkMeta>();
-
-// --- Batched Line2 for steady-state links ---
-
-let islLine: Line2 | null = null;
-let islGeometry: LineGeometry | null = null;
-let islMaterial: LineMaterial | null = null;
-
-let groundLine: Line2 | null = null;
-let groundGeometry: LineGeometry | null = null;
-let groundMaterial: LineMaterial | null = null;
-
+const links = new Map<string, LinkEntry>();
 let earthFrameRef: THREE.Object3D | null = null;
+
+let islMaterial: LineMaterial | null = null;
+let groundMaterial: LineMaterial | null = null;
 let resolution = new THREE.Vector2(window.innerWidth, window.innerHeight);
 
 window.addEventListener("resize", () => {
   resolution.set(window.innerWidth, window.innerHeight);
   if (islMaterial) islMaterial.resolution.copy(resolution);
   if (groundMaterial) groundMaterial.resolution.copy(resolution);
+  for (const entry of links.values()) {
+    entry.material.resolution.copy(resolution);
+  }
 });
 
-function ensureBatchedLines(earthFrame: THREE.Object3D): void {
-  if (islLine) return;
-  earthFrameRef = earthFrame;
+function getIslMaterial(): LineMaterial {
+  if (!islMaterial) {
+    islMaterial = new LineMaterial({
+      color: LINK_ISL_COLOR,
+      linewidth: LINK_ISL_WIDTH,
+      resolution,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+    });
+  }
+  return islMaterial;
+}
 
-  islGeometry = new LineGeometry();
-  islGeometry.setPositions([0, 0, 0, 0, 0, 1]);
-  islMaterial = new LineMaterial({
-    color: LINK_ISL_COLOR,
-    linewidth: LINK_ISL_WIDTH,
-    resolution,
-    transparent: true,
-    opacity: 0.55,
-    depthWrite: false,
-  });
-  islLine = new Line2(islGeometry, islMaterial);
-  islLine.frustumCulled = false;
-  earthFrame.add(islLine);
-
-  groundGeometry = new LineGeometry();
-  groundGeometry.setPositions([0, 0, 0, 0, 0, 1]);
-  groundMaterial = new LineMaterial({
-    color: LINK_GROUND_COLOR,
-    linewidth: LINK_GROUND_WIDTH,
-    resolution,
-    transparent: true,
-    opacity: 0.6,
-    dashed: true,
-    dashScale: 1,
-    dashSize: 16,
-    gapSize: 8,
-    depthWrite: false,
-  });
-  groundLine = new Line2(groundGeometry, groundMaterial);
-  groundLine.frustumCulled = false;
-  earthFrame.add(groundLine);
+function getGroundMaterial(): LineMaterial {
+  if (!groundMaterial) {
+    groundMaterial = new LineMaterial({
+      color: LINK_GROUND_COLOR,
+      linewidth: LINK_GROUND_WIDTH,
+      resolution,
+      transparent: true,
+      opacity: 0.6,
+      dashed: true,
+      dashScale: 1,
+      dashSize: 16,
+      gapSize: 8,
+      depthWrite: false,
+    });
+  }
+  return groundMaterial;
 }
 
 function linkKey(a: string, b: string): string {
@@ -138,43 +120,12 @@ function isGroundLink(nodeA: string, nodeB: string): boolean {
   return nodeA.startsWith("gs-") || nodeB.startsWith("gs-");
 }
 
-function createFailLine(meta: LinkMeta): void {
-  if (!earthFrameRef) return;
-  const geo = new LineGeometry();
-  geo.setPositions([0, 0, 0, 0, 0, 1]);
-  const mat = new LineMaterial({
-    color: LINK_FAIL_COLOR,
-    linewidth: meta.isGround ? LINK_GROUND_WIDTH : LINK_ISL_WIDTH,
-    resolution,
-    transparent: true,
-    opacity: 0.7,
-    depthWrite: false,
-  });
-  const line = new Line2(geo, mat);
-  line.frustumCulled = false;
-  earthFrameRef.add(line);
-  meta.failLine = line;
-  meta.failGeometry = geo;
-  meta.failMaterial = mat;
-}
-
-function destroyFailLine(meta: LinkMeta): void {
-  if (meta.failLine && earthFrameRef) {
-    earthFrameRef.remove(meta.failLine);
-    meta.failGeometry?.dispose();
-    meta.failMaterial?.dispose();
-  }
-  meta.failLine = null;
-  meta.failGeometry = null;
-  meta.failMaterial = null;
-}
-
 export function updateLinks(
   linkStates: LinkState[],
   earthFrame: THREE.Object3D,
   _showAllLinks: boolean,
 ): void {
-  ensureBatchedLines(earthFrame);
+  earthFrameRef = earthFrame;
   const now = performance.now();
   const active = new Set<string>();
 
@@ -183,34 +134,48 @@ export function updateLinks(
     active.add(key);
     const ground = isGroundLink(ls.node_a, ls.node_b);
 
-    const existing = linkMetas.get(key);
+    const existing = links.get(key);
     if (existing) {
       if (existing.state !== "active" && ls.state === "active") {
         existing.upTime = now;
         existing.failTime = null;
-        destroyFailLine(existing);
+        existing.line.visible = true;
       }
       existing.state = ls.state;
     } else {
-      linkMetas.set(key, {
+      const geometry = new LineGeometry();
+      geometry.setPositions([0, 0, 0, 0, 0, 1]);
+
+      const mat = ground ? getGroundMaterial() : getIslMaterial();
+
+      const line = new Line2(geometry, mat);
+      line.frustumCulled = false;
+      earthFrame.add(line);
+
+      const baseColor = new THREE.Color(ground ? LINK_GROUND_COLOR : LINK_ISL_COLOR);
+      const baseOpacity = ground ? 0.6 : 0.55;
+
+      links.set(key, {
+        line,
+        geometry,
+        material: mat,
         state: ls.state,
         nodeA: ls.node_a,
         nodeB: ls.node_b,
         isGround: ground,
         failTime: null,
         upTime: now,
-        failLine: null,
-        failGeometry: null,
-        failMaterial: null,
+        baseColor,
+        baseOpacity,
       });
     }
   }
 
-  for (const [, meta] of linkMetas) {
-    if (!active.has(linkKey(meta.nodeA, meta.nodeB)) && meta.state === "active") {
-      meta.state = "inactive";
-      meta.failTime = now;
-      meta.upTime = null;
+  for (const [key, entry] of links) {
+    if (!active.has(key) && entry.state === "active") {
+      entry.state = "inactive";
+      entry.failTime = now;
+      entry.upTime = null;
     }
   }
 }
@@ -219,86 +184,86 @@ const _linkPosA = new THREE.Vector3();
 const _linkPosB = new THREE.Vector3();
 
 export function animateLinks(showIslLinks: boolean = true, showGroundLinks: boolean = true): void {
-  if (!islGeometry || !groundGeometry) return;
-
   const now = performance.now();
-  const islPositions: number[] = [];
-  const groundPositions: number[] = [];
 
-  for (const [key, meta] of linkMetas) {
-    // Manage fail-flash lifecycle
-    if (meta.failTime !== null) {
-      const elapsed = now - meta.failTime;
-      if (elapsed >= FAIL_HOLD_MS + FAIL_FADE_MS) {
-        destroyFailLine(meta);
-        linkMetas.delete(key);
+  for (const [key, entry] of links) {
+    const hasA = getNodeLocalPosition(entry.nodeA, _linkPosA);
+    const hasB = getNodeLocalPosition(entry.nodeB, _linkPosB);
+
+    if (!hasA || !hasB) {
+      entry.line.visible = false;
+      continue;
+    }
+
+    if (entry.failTime === null) {
+      if (entry.isGround && !showGroundLinks) {
+        entry.line.visible = false;
         continue;
       }
-
-      if (!meta.failLine) createFailLine(meta);
-      if (meta.failMaterial) {
-        if (elapsed < FAIL_HOLD_MS) {
-          meta.failMaterial.color.setHex(LINK_FAIL_COLOR);
-          meta.failMaterial.opacity = 0.7;
-        } else {
-          const t = (elapsed - FAIL_HOLD_MS) / FAIL_FADE_MS;
-          const failColor = new THREE.Color(LINK_FAIL_COLOR);
-          const darkColor = new THREE.Color(LINK_INACTIVE_COLOR);
-          meta.failMaterial.color.copy(failColor).lerp(darkColor, t);
-          meta.failMaterial.opacity = 0.7 * (1 - t);
-        }
+      if (!entry.isGround && !showIslLinks) {
+        entry.line.visible = false;
+        continue;
       }
     }
 
-    const hasA = getNodeLocalPosition(meta.nodeA, _linkPosA);
-    const hasB = getNodeLocalPosition(meta.nodeB, _linkPosB);
-    if (!hasA || !hasB) continue;
+    if (entry.isGround) {
+      entry.geometry.setPositions([
+        _linkPosA.x, _linkPosA.y, _linkPosA.z,
+        _linkPosB.x, _linkPosB.y, _linkPosB.z,
+      ]);
+      entry.line.computeLineDistances();
+    } else {
+      entry.geometry.setPositions(bowedPositions(_linkPosA, _linkPosB));
+    }
 
-    // Update fail-flash line geometry
-    if (meta.failGeometry) {
-      if (meta.isGround) {
-        meta.failGeometry.setPositions([
-          _linkPosA.x, _linkPosA.y, _linkPosA.z,
-          _linkPosB.x, _linkPosB.y, _linkPosB.z,
-        ]);
+    if (entry.failTime !== null) {
+      const elapsed = now - entry.failTime;
+      if (elapsed < FAIL_HOLD_MS) {
+        if (entry.material === islMaterial || entry.material === groundMaterial) {
+          const failMat = new LineMaterial({
+            color: LINK_FAIL_COLOR,
+            linewidth: entry.isGround ? LINK_GROUND_WIDTH : LINK_ISL_WIDTH,
+            resolution,
+            transparent: true,
+            opacity: 0.7,
+            depthWrite: false,
+          });
+          entry.line.material = failMat;
+          entry.material = failMat;
+        }
+        entry.material.color.setHex(LINK_FAIL_COLOR);
+        entry.material.opacity = 0.7;
+        entry.line.visible = true;
+      } else if (elapsed < FAIL_HOLD_MS + FAIL_FADE_MS) {
+        const t = (elapsed - FAIL_HOLD_MS) / FAIL_FADE_MS;
+        const failColor = new THREE.Color(LINK_FAIL_COLOR);
+        const darkColor = new THREE.Color(LINK_INACTIVE_COLOR);
+        entry.material.color.copy(failColor).lerp(darkColor, t);
+        entry.material.opacity = 0.7 * (1 - t);
+        entry.line.visible = true;
       } else {
-        meta.failGeometry.setPositions(bowedPositions(_linkPosA, _linkPosB));
-      }
-    }
-
-    // Active links go into their respective batches
-    if (meta.state === "active") {
-      if (meta.isGround) {
-        if (showGroundLinks) {
-          groundPositions.push(
-            _linkPosA.x, _linkPosA.y, _linkPosA.z,
-            _linkPosB.x, _linkPosB.y, _linkPosB.z,
-          );
+        entry.line.visible = false;
+        if (earthFrameRef) earthFrameRef.remove(entry.line);
+        entry.geometry.dispose();
+        if (entry.material !== islMaterial && entry.material !== groundMaterial) {
+          entry.material.dispose();
         }
-      } else {
-        if (showIslLinks) {
-          islPositions.push(...bowedPositions(_linkPosA, _linkPosB));
-        }
+        links.delete(key);
+        continue;
       }
+    } else if (entry.upTime !== null) {
+      const elapsed = now - entry.upTime;
+      const UP_DURATION = 750;
+      if (elapsed >= UP_DURATION) {
+        entry.upTime = null;
+      }
+      entry.line.visible = true;
+    } else {
+      entry.line.visible = true;
     }
-  }
-
-  if (islPositions.length >= 6) {
-    islGeometry.setPositions(islPositions);
-    islLine!.visible = true;
-  } else {
-    islLine!.visible = false;
-  }
-
-  if (groundPositions.length >= 6) {
-    groundGeometry.setPositions(groundPositions);
-    groundLine!.computeLineDistances();
-    groundLine!.visible = true;
-  } else {
-    groundLine!.visible = false;
   }
 }
 
-export function getLinks(): Map<string, LinkMeta> {
-  return linkMetas;
+export function getLinks(): Map<string, LinkEntry> {
+  return links;
 }

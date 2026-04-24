@@ -3,6 +3,7 @@
 /** Nodal Arc Visualization Frontend — main application component. */
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { Shell } from "./layout/Shell";
 import { GlobeView } from "./globe/GlobeView";
 import { TopologyView } from "./topology/TopologyView";
 import { InfoPanel } from "./panels/InfoPanel";
@@ -45,7 +46,6 @@ function AppInner() {
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
 
-  // On initial mount, check for ?selected=<node_id> deep-link from NodalPath console
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const preselected = params.get("selected");
@@ -65,7 +65,6 @@ function AppInner() {
   const hasActiveSession = sessionStatus === "ready" || sessionStatus === "switching" || sessionStatus === "wiring";
   const activeSessionName = snapshot?.constellation_name ?? null;
 
-  // If VS-API already has an active session (e.g. after page reload), close wizard
   useEffect(() => {
     if (hasActiveSession && !hasEverDeployed) {
       setHasEverDeployed(true);
@@ -74,7 +73,6 @@ function AppInner() {
   }, [hasActiveSession, hasEverDeployed]);
 
   const handleDeploy = useCallback((sessionId: string) => {
-    // If a session is already running, just close the catalog
     if (hasActiveSession) {
       setShowCatalog(false);
       return;
@@ -91,7 +89,6 @@ function AppInner() {
   const [showSatPaths, setShowSatPaths] = useState(false);
   const [globeMode, setGlobeMode] = useState<GlobeMode>("blue-marble");
   const [referenceFrame, setReferenceFrame] = useState<ReferenceFrame>(() => {
-    // Bootstrap from localStorage; default to earth-inertial (physically correct).
     const saved = localStorage.getItem(REFERENCE_FRAME_STORAGE_KEY);
     return saved === "earth-fixed" ? "earth-fixed" : "earth-inertial";
   });
@@ -105,7 +102,6 @@ function AppInner() {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
 
-  // Track window width for split view gate
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", onResize);
@@ -113,13 +109,11 @@ function AppInner() {
   }, []);
   const canSplit = windowWidth >= 1920;
 
-  // Track whether sim_time has advanced since nodes appeared — detect "frozen" globe
   const firstSimTimeRef = useRef<string | null>(null);
   const [simTimeAdvanced, setSimTimeAdvanced] = useState(false);
 
   useEffect(() => {
     if (switching || !snapshot || snapshot.nodes.length === 0) {
-      // Reset when constellation clears or session switch starts
       firstSimTimeRef.current = null;
       setSimTimeAdvanced(false);
       return;
@@ -136,30 +130,20 @@ function AppInner() {
   const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
 
-  // Panel collapse/expand state + resizable width
   const [panelOpen, setPanelOpen] = useState(true);
   const panelManualRef = useRef(false);
-  const defaultPanelWidth = 420;
   const [panelWidth, setPanelWidth] = useState<number>(() => {
     const saved = localStorage.getItem("nodal_panel_width");
-    return saved ? Math.max(280, Math.min(800, parseInt(saved, 10))) : defaultPanelWidth;
+    return saved ? Math.max(280, Math.min(800, parseInt(saved, 10))) : 420;
   });
-  const panelDraggingRef = useRef(false);
 
-  // Auto-open panel on selection, auto-close on deselect (unless manually toggled)
   useEffect(() => {
-    if (selection && !panelManualRef.current) {
-      setPanelOpen(true);
-    } else if (!selection && !panelManualRef.current) {
-      setPanelOpen(false);
-    }
+    if (selection && !panelManualRef.current) setPanelOpen(true);
+    else if (!selection && !panelManualRef.current) setPanelOpen(false);
   }, [selection]);
 
-  // Reset manual override when a new selection is made
   useEffect(() => {
-    if (selection) {
-      panelManualRef.current = false;
-    }
+    if (selection) panelManualRef.current = false;
   }, [selection]);
 
   const handlePanelToggle = useCallback(() => {
@@ -167,25 +151,6 @@ function AppInner() {
     panelManualRef.current = true;
   }, []);
 
-  const handlePanelResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    panelDraggingRef.current = true;
-    const onMove = (ev: MouseEvent) => {
-      if (!panelDraggingRef.current) return;
-      const newWidth = Math.max(280, Math.min(800, window.innerWidth - ev.clientX));
-      setPanelWidth(newWidth);
-    };
-    const onUp = () => {
-      panelDraggingRef.current = false;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      setPanelWidth((w) => { localStorage.setItem("nodal_panel_width", String(w)); return w; });
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  }, []);
-
-  // Ref for GlobeView imperative actions (top view, follow, screenshot, flyTo, screen position)
   const globeActionsRef = useRef<{
     flyToTopView: () => void;
     setFollowTarget: (nodeId: string | null) => void;
@@ -211,22 +176,12 @@ function AppInner() {
     });
   }, [selection]);
 
-  const handleTopView = useCallback(() => {
-    globeActionsRef.current?.flyToTopView();
-  }, []);
-
-  const handleScreenshot = useCallback(() => {
-    globeActionsRef.current?.captureScreenshot();
-  }, []);
-
-  const handleFlyToNode = useCallback((nodeId: string) => {
-    globeActionsRef.current?.flyToNode(nodeId);
-  }, []);
+  const handleTopView = useCallback(() => { globeActionsRef.current?.flyToTopView(); }, []);
+  const handleScreenshot = useCallback(() => { globeActionsRef.current?.captureScreenshot(); }, []);
+  const handleFlyToNode = useCallback((nodeId: string) => { globeActionsRef.current?.flyToNode(nodeId); }, []);
 
   const handleCloseCatalog = useCallback(() => {
-    if (showCatalog && hasEverDeployed) {
-      setShowCatalog(false);
-    }
+    if (showCatalog && hasEverDeployed) setShowCatalog(false);
   }, [showCatalog, hasEverDeployed]);
 
   const keyboardActions = useMemo(
@@ -243,11 +198,7 @@ function AppInner() {
         if (historicalMode) {
           setHistoricalPlaying((prev) => !prev);
         } else {
-          if (playback.paused) {
-            playback.resume();
-          } else {
-            playback.pause();
-          }
+          playback.paused ? playback.resume() : playback.pause();
         }
       },
       onToggleGlobeMode: () => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble"),
@@ -262,7 +213,6 @@ function AppInner() {
 
   useKeyboard(keyboardActions);
 
-  // When switching back to globe with an active selection, fly to that node
   const prevViewModeRef = useRef(viewMode);
   useEffect(() => {
     const prev = prevViewModeRef.current;
@@ -272,209 +222,215 @@ function AppInner() {
     }
   }, [viewMode, selection]);
 
-  // Merge user-requested trace into the snapshot's traced_paths so both
-  // the globe (flowPaths.ts) and topology (topoLinks.ts) render it.
-  // Server-side __continuous_trace__ takes priority over client-side __user_trace__.
   const augmentedSnapshot = useMemo(() => {
     if (!snapshot) return snapshot;
     const hasContinuous = snapshot.traced_paths.some(p => p.flow_id === "__continuous_trace__");
-    if (hasContinuous) {
-      // Server continuous trace present — don't add user trace
-      return snapshot;
-    }
+    if (hasContinuous) return snapshot;
     if (!userTrace) return snapshot;
     const serverPaths = snapshot.traced_paths.filter(p => p.flow_id !== "__user_trace__");
     return { ...snapshot, traced_paths: [...serverPaths, userTrace] };
   }, [snapshot, userTrace]);
 
-  const layoutClass = `app-layout${panelOpen ? " app-layout--panel-open" : ""}${historicalMode ? " app-layout--historical" : ""}`;
+  // --- Build zone content ---
 
-  return (
-    <div className={layoutClass} style={{ "--panel-width": `${panelWidth}px` } as React.CSSProperties}>
-      <TopBar
-        snapshot={snapshot}
-        connected={connected}
-        historicalMode={historicalMode}
-        onToggleHistorical={toggleHistorical}
-        activeSessionName={activeSessionName}
-        switching={switching}
-        onOpenCatalog={() => setShowCatalog(true)}
-        playbackPaused={playback.paused}
-        playbackSpeed={playback.speed}
-        playbackLoading={playback.loading}
-        onPlaybackPause={playback.pause}
-        onPlaybackResume={playback.resume}
-        onPlaybackSetSpeed={playback.setSpeed}
-        onSeekToNow={playback.seekToNow}
-      />
+  const topBarContent = (
+    <TopBar
+      snapshot={snapshot}
+      connected={connected}
+      historicalMode={historicalMode}
+      onToggleHistorical={toggleHistorical}
+      activeSessionName={activeSessionName}
+      switching={switching}
+      onOpenCatalog={() => setShowCatalog(true)}
+      playbackPaused={playback.paused}
+      playbackSpeed={playback.speed}
+      playbackLoading={playback.loading}
+      onPlaybackPause={playback.pause}
+      onPlaybackResume={playback.resume}
+      onPlaybackSetSpeed={playback.setSpeed}
+      onSeekToNow={playback.seekToNow}
+    />
+  );
 
-      {showCatalog && (
-        <SessionWizard
-          onDeployStarted={() => { setShowCatalog(false); setHasEverDeployed(true); }}
-          onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
-          deploying={switching}
-          fallbackSessions={sessions}
-          onFallbackDeploy={handleDeploy}
-        />
+  const centerContent = (
+    <>
+      {kicked && (
+        <div className="connection-startup-error">
+          <div className="startup-error-box">
+            <h2>Session taken over</h2>
+            <p>Another browser connected and took control of this session.</p>
+            <button onClick={() => window.location.reload()}>Reconnect</button>
+          </div>
+        </div>
       )}
-
-      <div className={`area-viewport ${viewMode === "split" ? "area-viewport--split" : ""}`}>
-        {kicked && (
-          <div className="connection-startup-error">
-            <div className="startup-error-box">
-              <h2>Session taken over</h2>
-              <p>Another browser connected and took control of this session.</p>
-              <button onClick={() => window.location.reload()}>Reconnect</button>
-            </div>
+      {!kicked && !connected && !hasEverConnected && (
+        <div className="connection-startup-error">
+          <div className="startup-error-box">
+            <h2>Cannot connect to VS-API</h2>
+            <p>Endpoint: {snapshot ? "" : WS_URL}</p>
+            <button onClick={() => window.location.reload()}>Retry</button>
           </div>
-        )}
-        {!kicked && !connected && !hasEverConnected && (
-          <div className="connection-startup-error">
-            <div className="startup-error-box">
-              <h2>Cannot connect to VS-API</h2>
-              <p>Endpoint: {snapshot ? "" : WS_URL}</p>
-              <button onClick={() => window.location.reload()}>Retry</button>
-            </div>
-          </div>
-        )}
-        {!kicked && !connected && hasEverConnected && (
-          <div className="connection-banner">
-            Connection lost. Reconnecting...
-          </div>
-        )}
-        {switching && (
-          <div className="session-switching-overlay">
-            <div className="switching-box">
-              <p>Switching session...</p>
-              <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
-                {snapshot?.session_status_detail ?? ""}
-              </p>
-            </div>
-          </div>
-        )}
-        {!switching && sessionStatus === "wiring" && (
-          <div className="session-switching-overlay">
-            <div className="switching-box">
-              <p>Data plane wiring in progress</p>
-              <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
-                {snapshot?.session_status_detail ?? "Waiting for Node Agent..."}
-              </p>
-            </div>
-          </div>
-        )}
-        {connected && !switching && sessionStatus !== "wiring" && (!snapshot || snapshot.nodes.length === 0) && (
-          <div className="connection-banner">
-            Initializing constellation...
-          </div>
-        )}
-        {connected && !switching && snapshot && snapshot.nodes.length > 0 && !simTimeAdvanced && (
-          <div className="connection-banner">
-            Waiting for orbital propagation — satellites will begin moving shortly
-          </div>
-        )}
-        {snapshot?.stale && (
-          <div className="connection-banner" style={{ background: "rgba(200, 60, 60, 0.85)" }}>
-            STALE DATA — waiting for upstream update
-          </div>
-        )}
-        <div
-          className={viewMode === "split" ? "split-pane" : "full-pane"}
-          style={{ display: viewMode === "topology" ? "none" : undefined }}
-        >
-          <GlobeView
-            snapshot={augmentedSnapshot}
-            ephemeris={ephemeris}
-            playbackState={playbackState}
-            selection={selection}
-            onSelect={select}
-            colorMode={colorMode}
-            globeMode={globeMode}
-            showGroundLinks={showGroundLinks}
-            showIslLinks={showIslLinks}
-            showSatPaths={showSatPaths}
-            referenceFrame={referenceFrame}
-            playbackPaused={playback.paused}
-            actionsRef={globeActionsRef}
-          />
         </div>
-        <div
-          className={viewMode === "split" ? "split-pane" : "full-pane"}
-          style={{ display: viewMode === "globe" ? "none" : undefined }}
-        >
-          <TopologyView
-            snapshot={augmentedSnapshot}
-            selection={selection}
-            onSelect={select}
-            onFlyTo={handleFlyToNode}
-            colorMode={colorMode}
-            showIslLinks={showIslLinks}
-            showGroundLinks={showGroundLinks}
-          />
+      )}
+      {!kicked && !connected && hasEverConnected && (
+        <div className="connection-banner">Connection lost. Reconnecting...</div>
+      )}
+      {switching && (
+        <div className="session-switching-overlay">
+          <div className="switching-box">
+            <p>Switching session...</p>
+            <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
+              {snapshot?.session_status_detail ?? ""}
+            </p>
+          </div>
         </div>
-        <Toolbar
-          viewMode={viewMode}
+      )}
+      {!switching && sessionStatus === "wiring" && (
+        <div className="session-switching-overlay">
+          <div className="switching-box">
+            <p>Data plane wiring in progress</p>
+            <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
+              {snapshot?.session_status_detail ?? "Waiting for Node Agent..."}
+            </p>
+          </div>
+        </div>
+      )}
+      {connected && !switching && sessionStatus !== "wiring" && (!snapshot || snapshot.nodes.length === 0) && (
+        <div className="connection-banner">Initializing constellation...</div>
+      )}
+      {connected && !switching && snapshot && snapshot.nodes.length > 0 && !simTimeAdvanced && (
+        <div className="connection-banner">
+          Waiting for orbital propagation — satellites will begin moving shortly
+        </div>
+      )}
+      {snapshot?.stale && (
+        <div className="connection-banner" style={{ background: "rgba(200, 60, 60, 0.85)" }}>
+          STALE DATA — waiting for upstream update
+        </div>
+      )}
+      <div
+        className={viewMode === "split" ? "split-pane" : "full-pane"}
+        style={{ display: viewMode === "topology" ? "none" : undefined }}
+      >
+        <GlobeView
+          snapshot={augmentedSnapshot}
+          ephemeris={ephemeris}
+          playbackState={playbackState}
+          selection={selection}
+          onSelect={select}
           colorMode={colorMode}
+          globeMode={globeMode}
           showGroundLinks={showGroundLinks}
           showIslLinks={showIslLinks}
           showSatPaths={showSatPaths}
-          followNode={followNode}
-          canSplit={canSplit}
           referenceFrame={referenceFrame}
-          onViewMode={setViewMode}
-          onColorMode={setColorMode}
-          onToggleGroundLinks={() => setShowGroundLinks((v) => !v)}
-          onToggleIslLinks={() => setShowIslLinks((v) => !v)}
-          onToggleSatPaths={() => setShowSatPaths((v) => !v)}
-          globeMode={globeMode}
-          onToggleGlobeMode={() => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble")}
-          onToggleReferenceFrame={toggleReferenceFrame}
-          onTopView={handleTopView}
-          onFollowNode={handleFollowNode}
-          onScreenshot={handleScreenshot}
+          playbackPaused={playback.paused}
+          actionsRef={globeActionsRef}
         />
-        {selection?.type !== "link" && selection != null && !cliDrawerOpen && (
-          <NodePopover
-            snapshot={snapshot}
-            selection={selection}
-            onClose={clearSelection}
-            onOpenCli={() => setCliDrawerOpen(true)}
-            globeActionsRef={globeActionsRef}
-          />
-        )}
-        {cliDrawerOpen && (
-          <CliDrawer
-            open={cliDrawerOpen}
-            onClose={() => setCliDrawerOpen(false)}
-            snapshot={snapshot}
-            selection={selection}
-          />
-        )}
-        <button
-          className="panel-toggle-tab"
-          onClick={handlePanelToggle}
-          title={panelOpen ? "Collapse panel" : "Expand panel"}
-        >
-          {panelOpen ? "\u203A" : "\u2039"}
-        </button>
       </div>
-
-      <div className="area-panel">
-        <div className="panel-resize-handle" onMouseDown={handlePanelResizeStart} />
-        <InfoPanel snapshot={augmentedSnapshot} selection={selection} onSelect={select} onFlyTo={handleFlyToNode} onTraceResult={setUserTrace} />
+      <div
+        className={viewMode === "split" ? "split-pane" : "full-pane"}
+        style={{ display: viewMode === "globe" ? "none" : undefined }}
+      >
+        <TopologyView
+          snapshot={augmentedSnapshot}
+          selection={selection}
+          onSelect={select}
+          onFlyTo={handleFlyToNode}
+          colorMode={colorMode}
+          showIslLinks={showIslLinks}
+          showGroundLinks={showGroundLinks}
+        />
       </div>
-
-      {historicalMode && (
-        <TimeControls
-          onSeek={fetchHistorical}
-          startTime={snapshot?.sim_time ?? new Date().toISOString()}
-          endTime={new Date().toISOString()}
-          events={snapshot?.recent_events}
-          externalPlaying={historicalPlaying}
-          onPlayingChange={setHistoricalPlaying}
+      <Toolbar
+        viewMode={viewMode}
+        colorMode={colorMode}
+        showGroundLinks={showGroundLinks}
+        showIslLinks={showIslLinks}
+        showSatPaths={showSatPaths}
+        followNode={followNode}
+        canSplit={canSplit}
+        referenceFrame={referenceFrame}
+        onViewMode={setViewMode}
+        onColorMode={setColorMode}
+        onToggleGroundLinks={() => setShowGroundLinks((v) => !v)}
+        onToggleIslLinks={() => setShowIslLinks((v) => !v)}
+        onToggleSatPaths={() => setShowSatPaths((v) => !v)}
+        globeMode={globeMode}
+        onToggleGlobeMode={() => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble")}
+        onToggleReferenceFrame={toggleReferenceFrame}
+        onTopView={handleTopView}
+        onFollowNode={handleFollowNode}
+        onScreenshot={handleScreenshot}
+      />
+      {selection?.type !== "link" && selection != null && !cliDrawerOpen && (
+        <NodePopover
+          snapshot={snapshot}
+          selection={selection}
+          onClose={clearSelection}
+          onOpenCli={() => setCliDrawerOpen(true)}
+          globeActionsRef={globeActionsRef}
         />
       )}
+      {cliDrawerOpen && (
+        <CliDrawer
+          open={cliDrawerOpen}
+          onClose={() => setCliDrawerOpen(false)}
+          snapshot={snapshot}
+          selection={selection}
+        />
+      )}
+    </>
+  );
 
-      <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} />
-    </div>
+  const rightPanelContent = (
+    <InfoPanel
+      snapshot={augmentedSnapshot}
+      selection={selection}
+      onSelect={select}
+      onFlyTo={handleFlyToNode}
+      onTraceResult={setUserTrace}
+    />
+  );
+
+  const bottomBarContent = (
+    <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} />
+  );
+
+  const overlayContent = showCatalog ? (
+    <SessionWizard
+      onDeployStarted={() => { setShowCatalog(false); setHasEverDeployed(true); }}
+      onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
+      deploying={switching}
+      fallbackSessions={sessions}
+      onFallbackDeploy={handleDeploy}
+    />
+  ) : undefined;
+
+  const historicalControlsContent = historicalMode ? (
+    <TimeControls
+      onSeek={fetchHistorical}
+      startTime={snapshot?.sim_time ?? new Date().toISOString()}
+      endTime={new Date().toISOString()}
+      events={snapshot?.recent_events}
+      externalPlaying={historicalPlaying}
+      onPlayingChange={setHistoricalPlaying}
+    />
+  ) : undefined;
+
+  return (
+    <Shell
+      topBar={topBarContent}
+      center={centerContent}
+      rightPanel={rightPanelContent}
+      bottomBar={bottomBarContent}
+      overlay={overlayContent}
+      historicalControls={historicalControlsContent}
+      historicalMode={historicalMode}
+      panelOpen={panelOpen}
+      onPanelToggle={handlePanelToggle}
+      panelWidth={panelWidth}
+      onPanelWidthChange={setPanelWidth}
+    />
   );
 }

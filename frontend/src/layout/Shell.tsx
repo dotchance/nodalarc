@@ -1,0 +1,97 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+// Layout shell — four-zone architecture for the VF.
+//
+// Defines the structural container where UI elements live:
+// - TopBar zone (fixed height)
+// - Left panel zone (collapsible, filter/overlay controls)
+// - Center zone (Globe or Topology view)
+// - Right panel zone (appears on selection, detail + CLI)
+// - BottomBar zone (fixed height)
+//
+// Responsive behavior:
+// - Desktop (≥1280px): side panels inline
+// - Tablet (768-1279px): globe full-width, panels as overlays
+//
+// Content is injected via children props — the Shell owns layout,
+// not content.
+
+import { useCallback, useRef, type ReactNode } from "react";
+
+interface ShellProps {
+  topBar: ReactNode;
+  center: ReactNode;
+  rightPanel: ReactNode | null;
+  bottomBar: ReactNode;
+  overlay?: ReactNode;
+  historicalControls?: ReactNode;
+  historicalMode?: boolean;
+  panelOpen: boolean;
+  onPanelToggle: () => void;
+  panelWidth: number;
+  onPanelWidthChange: (width: number) => void;
+}
+
+export function Shell({
+  topBar,
+  center,
+  rightPanel,
+  bottomBar,
+  overlay,
+  historicalControls,
+  historicalMode,
+  panelOpen,
+  onPanelToggle,
+  panelWidth,
+  onPanelWidthChange,
+}: ShellProps) {
+  const panelDraggingRef = useRef(false);
+
+  const handlePanelResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    panelDraggingRef.current = true;
+    const onMove = (ev: MouseEvent) => {
+      if (!panelDraggingRef.current) return;
+      const newWidth = Math.max(280, Math.min(800, window.innerWidth - ev.clientX));
+      onPanelWidthChange(newWidth);
+    };
+    const onUp = () => {
+      panelDraggingRef.current = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      localStorage.setItem("nodal_panel_width", String(panelWidth));
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [onPanelWidthChange, panelWidth]);
+
+  const layoutClass = `app-layout${panelOpen ? " app-layout--panel-open" : ""}${historicalMode ? " app-layout--historical" : ""}`;
+
+  return (
+    <div className={layoutClass} style={{ "--panel-width": `${panelWidth}px` } as React.CSSProperties}>
+      {topBar}
+
+      {overlay}
+
+      <div className="area-viewport">
+        {center}
+        <button
+          className="panel-toggle-tab"
+          onClick={onPanelToggle}
+          title={panelOpen ? "Collapse panel" : "Expand panel"}
+        >
+          {panelOpen ? "›" : "‹"}
+        </button>
+      </div>
+
+      <div className="area-panel">
+        <div className="panel-resize-handle" onMouseDown={handlePanelResizeStart} />
+        {rightPanel}
+      </div>
+
+      {historicalMode && historicalControls}
+
+      {bottomBar}
+    </div>
+  );
+}

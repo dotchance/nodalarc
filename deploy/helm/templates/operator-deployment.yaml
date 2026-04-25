@@ -51,8 +51,8 @@ spec:
               value: {{ .Values.images.frr | default "nodalarc/frr:latest" | quote }}
           resources:
             limits:
-              memory: 256Mi
-              cpu: 250m
+              memory: 512Mi
+              cpu: "2"
           volumeMounts:
             - name: platform-config
               mountPath: /etc/nodalarc/platform.yaml

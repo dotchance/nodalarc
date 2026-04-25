@@ -39,6 +39,6 @@ routing:
   spf_holddown: 2000
   spf_time_to_learn: 500
 time:
-  step_seconds: 2
+  step_seconds: 1
 placement:
   policy: planePerNode

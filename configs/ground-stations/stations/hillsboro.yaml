@@ -1,0 +1,15 @@
+# Hillsboro, US — Starlink Gateway
+# PDX11. Call sign E250202
+ground_station:
+  name: hillsboro
+  lat_deg: 45.567700
+  lon_deg: -122.916600
+  alt_m: 60
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka+E
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20251118-00367
+    confidence: filing

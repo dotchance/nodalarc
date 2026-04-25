@@ -1,15 +1,15 @@
-# Merrillan, US — Starlink Gateway
+# Nemaha, US — Starlink Gateway
 #
 ground_station:
-  name: merrillan
-  lat_deg: 44.406333
-  lon_deg: -90.814278
-  alt_m: 300
+  name: nemaha
+  lat_deg: 40.333667
+  lon_deg: -95.815278
+  alt_m: 330
   min_elevation_deg: 25
   antennas: 8
   antenna_diameter_m: 1.52
   band: Ka
   verified:
     source: FCC IBFS
-    filing: SES-LIC-20190906-01171
+    filing: SES-LIC-20200417-00422
     confidence: filing

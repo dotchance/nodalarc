@@ -1,9 +1,9 @@
-# Boca Chica, Texas — Starlink Gateway
-# FCC filing 2020-04-06. Adjacent to SpaceX Starbase.
+# Boca Chica, US — Starlink Gateway
+# Adjacent to SpaceX Starbase
 ground_station:
   name: boca-chica
-  lat_deg: 25.9907
-  lon_deg: -97.1828
+  lat_deg: 25.990694
+  lon_deg: -97.182750
   alt_m: 3
   min_elevation_deg: 25
   antennas: 8
@@ -11,6 +11,5 @@ ground_station:
   band: Ka
   verified:
     source: FCC IBFS
-    filing: E200041
+    filing: SES-LIC-20200406-00375
     confidence: filing
-    url: "https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E200041"

@@ -1,0 +1,15 @@
+# Chapel Hill, US — Starlink Gateway
+#
+ground_station:
+  name: chapel-hill
+  lat_deg: 35.895778
+  lon_deg: -79.226722
+  alt_m: 150
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20230627-01293
+    confidence: filing

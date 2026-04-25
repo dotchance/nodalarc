@@ -1,15 +1,15 @@
-# Merrillan, US — Starlink Gateway
+# Butte, US — Starlink Gateway
 #
 ground_station:
-  name: merrillan
-  lat_deg: 44.406333
-  lon_deg: -90.814278
-  alt_m: 300
+  name: butte
+  lat_deg: 45.924056
+  lon_deg: -112.513194
+  alt_m: 1700
   min_elevation_deg: 25
   antennas: 8
   antenna_diameter_m: 1.52
   band: Ka
   verified:
     source: FCC IBFS
-    filing: SES-LIC-20190906-01171
+    filing: SES-LIC-20200616-00648
     confidence: filing

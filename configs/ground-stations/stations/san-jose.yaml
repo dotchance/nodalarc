@@ -1,0 +1,15 @@
+# San Jose, US — Starlink Gateway
+# Shark Tank. Call sign E250030
+ground_station:
+  name: san-jose
+  lat_deg: 37.232750
+  lon_deg: -121.782722
+  alt_m: 15
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka+E
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20250429-00758
+    confidence: filing

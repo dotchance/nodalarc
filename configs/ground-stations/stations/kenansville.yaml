@@ -1,0 +1,15 @@
+# Kenansville, US — Starlink Gateway
+#
+ground_station:
+  name: kenansville
+  lat_deg: 27.875417
+  lon_deg: -81.030444
+  alt_m: 20
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20230622-01287
+    confidence: filing

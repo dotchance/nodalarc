@@ -1,0 +1,15 @@
+# Marshall, US — Starlink Gateway
+# Call sign E220076
+ground_station:
+  name: marshall
+  lat_deg: 32.532250
+  lon_deg: -94.430306
+  alt_m: 120
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-MOD-20230309-00272
+    confidence: filing

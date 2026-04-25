@@ -1,0 +1,15 @@
+# Romulus, US — Starlink Gateway
+# Call sign E220089
+ground_station:
+  name: romulus
+  lat_deg: 42.788111
+  lon_deg: -76.863306
+  alt_m: 230
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20220514-00559
+    confidence: filing

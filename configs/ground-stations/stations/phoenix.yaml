@@ -1,0 +1,15 @@
+# Phoenix, US — Starlink Gateway
+# Call sign E240011. 32-antenna mega gateway
+ground_station:
+  name: phoenix
+  lat_deg: 33.684058
+  lon_deg: -112.098258
+  alt_m: 330
+  min_elevation_deg: 25
+  antennas: 32
+  antenna_diameter_m: 1.85
+  band: Ka+E
+  verified:
+    source: FCC IBFS
+    filing: SES-STA-20240119-00101
+    confidence: filing

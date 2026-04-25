@@ -1,16 +1,15 @@
-# Redmond, Washington — Starlink Gateway
-# FCC filing 2019-08-26. SpaceX satellite development facility.
+# Redmond, US — Starlink Gateway
+# SpaceX satellite dev facility. Call sign E190676
 ground_station:
   name: redmond
-  lat_deg: 47.6942
-  lon_deg: -122.0321
-  alt_m: 10
+  lat_deg: 47.694194
+  lon_deg: -122.032139
+  alt_m: 130
   min_elevation_deg: 25
   antennas: 8
   antenna_diameter_m: 1.52
   band: Ka
   verified:
     source: FCC IBFS
-    filing: E190023
+    filing: SES-MOD-20230626-01258
     confidence: filing
-    url: "https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E190023"

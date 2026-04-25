@@ -1,0 +1,15 @@
+# Apra Heights, GU — Starlink Gateway
+# Guam
+ground_station:
+  name: apra-heights
+  lat_deg: 13.408917
+  lon_deg: 144.679194
+  alt_m: 50
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.47
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-STA-20220127-00102
+    confidence: filing

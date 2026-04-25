@@ -1,0 +1,15 @@
+# Elbert, US — Starlink Gateway
+#
+ground_station:
+  name: elbert
+  lat_deg: 39.292528
+  lon_deg: -104.504750
+  alt_m: 2100
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.47
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20210729-01285
+    confidence: filing

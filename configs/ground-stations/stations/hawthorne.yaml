@@ -1,9 +1,9 @@
-# Hawthorne, California — Starlink Gateway
-# FCC filing 2020-02-06. SpaceX HQ area.
+# Hawthorne, US — Starlink Gateway
+# SpaceX HQ area. Call sign E200455
 ground_station:
   name: hawthorne
-  lat_deg: 33.9175
-  lon_deg: -118.3281
+  lat_deg: 33.917500
+  lon_deg: -118.328111
   alt_m: 20
   min_elevation_deg: 25
   antennas: 8
@@ -11,6 +11,5 @@ ground_station:
   band: Ka
   verified:
     source: FCC IBFS
-    filing: E200041
+    filing: SES-LIC-20200210-00150
     confidence: filing
-    url: "https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E200041"

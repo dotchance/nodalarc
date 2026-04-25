@@ -1,0 +1,15 @@
+# Dallas, US — Starlink Gateway
+# First Rodeo. Call sign E250021
+ground_station:
+  name: dallas
+  lat_deg: 32.719528
+  lon_deg: -96.761861
+  alt_m: 140
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka+E
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20250418-00495
+    confidence: filing

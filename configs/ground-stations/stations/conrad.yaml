@@ -1,9 +1,9 @@
-# Conrad, Montana — Starlink Gateway
-# One of the earliest operational gateways. Open prairie terrain.
+# Conrad, US — Starlink Gateway
+# One of earliest operational gateways
 ground_station:
   name: conrad
-  lat_deg: 48.2033
-  lon_deg: -111.9453
+  lat_deg: 48.203306
+  lon_deg: -111.945278
   alt_m: 1100
   min_elevation_deg: 25
   antennas: 8
@@ -11,6 +11,5 @@ ground_station:
   band: Ka
   verified:
     source: FCC IBFS
-    filing: E190023
+    filing: SES-LIC-20190816-01062
     confidence: filing
-    url: "https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E190023"

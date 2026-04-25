@@ -1,0 +1,15 @@
+# Savanna Ok, US — Starlink Gateway
+# Call sign E220077
+ground_station:
+  name: savanna-ok
+  lat_deg: 34.789306
+  lon_deg: -95.876500
+  alt_m: 180
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-MOD-20230525-01105
+    confidence: filing

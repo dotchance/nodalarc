@@ -1,0 +1,15 @@
+# Bandon, US — Starlink Gateway
+#
+ground_station:
+  name: bandon
+  lat_deg: 43.247556
+  lon_deg: -124.382778
+  alt_m: 30
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20230627-01292
+    confidence: filing

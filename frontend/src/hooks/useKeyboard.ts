@@ -23,6 +23,7 @@ interface KeyboardActions {
   onTogglePanel?: () => void;
   onToggleFilter?: () => void;
   onToggleLabels?: () => void;
+  onToggleGsLabels?: () => void;
 }
 
 export function useKeyboard(actions: KeyboardActions): void {
@@ -98,7 +99,7 @@ export function useKeyboard(actions: KeyboardActions): void {
           actions.onToggleFilter?.();
           break;
         case "'":
-          actions.onToggleLabels?.();
+          actions.onToggleGsLabels?.();
           break;
         case "/":
           e.preventDefault();

@@ -1,36 +1,76 @@
-name,lat_deg,lon_deg,alt_m,antennas,antenna_diameter_m,band,filing,source,confidence,url,country,notes
-conrad,48.2033,-111.9453,1100,8,1.52,Ka,E190023,FCC IBFS,filing,https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E190023,US,One of earliest operational gateways
-loring,46.9149,-67.9195,230,8,1.52,Ka,E190023,FCC IBFS,filing,,US,Former Loring AFB area
-redmond,47.6942,-122.0321,10,8,1.52,Ka,E190023,FCC IBFS,filing,,US,SpaceX satellite dev facility
-greenville,41.4336,-80.3332,340,8,1.52,Ka,E190023,FCC IBFS,filing,,US,
-merrillan,44.4063,-90.8143,300,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
-kalama,46.0390,-122.8082,5,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
-hawthorne,33.9175,-118.3281,20,8,1.52,Ka,E200041,FCC IBFS,filing,,US,SpaceX HQ area
-beekmantown,44.7900,-73.4800,60,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
-boca-chica,25.9907,-97.1828,3,8,1.52,Ka,E200041,FCC IBFS,filing,,US,Adjacent to SpaceX Starbase
-litchfield,41.5450,-73.3540,300,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
-colburn,48.3453,-116.4393,650,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
-robertsdale,30.5670,-87.6460,40,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
-brewster,48.10,-119.78,260,8,1.52,Ka,E190021,FCC IBFS,filing,,US,
-north-bend,43.41,-124.22,5,8,1.52,Ka,E200041,FCC IBFS,filing,,US,Charleston OR area
-accra,5.56,-0.19,60,,,,none,,geocoded,,GH,City-center approximation
-auckland,-36.85,174.76,10,,,,none,,geocoded,,NZ,City-center approximation
-bogota,4.71,-74.07,2640,,,,none,,geocoded,,CO,City-center approximation
-bordeaux,44.84,-0.58,20,,,,none,,geocoded,,FR,City-center approximation
-buenos-aires,-34.60,-58.38,25,,,,none,,geocoded,,AR,City-center approximation
-buford,34.12,-84.00,350,,,,none,,geocoded,,US,City-center approximation
-cape-town,-33.93,18.42,10,,,,none,,geocoded,,ZA,City-center approximation
-cayey,18.11,-66.16,450,,,,none,,geocoded,,PR,City-center approximation
-ceuta,35.89,-5.31,10,,,,none,,geocoded,,ES,City-center approximation
-gravelines,50.99,2.13,5,,,,none,,geocoded,,FR,City-center approximation
-guadalajara,20.67,-103.35,1560,,,,none,,geocoded,,MX,City-center approximation
-jakarta,-6.21,106.85,10,,,,none,,geocoded,,ID,City-center approximation
-lagos,6.52,3.38,10,,,,none,,geocoded,,NG,City-center approximation
-manaus,-3.12,-60.02,90,,,,none,,geocoded,,BR,City-center approximation
-manila,14.60,120.98,15,,,,none,,geocoded,,PH,City-center approximation
-nairobi,-1.29,36.82,1660,,,,none,,geocoded,,KE,City-center approximation
-perth,-31.95,115.86,25,,,,none,,geocoded,,AU,City-center approximation
-punaluu,19.87,-155.50,5,,,,none,,geocoded,,US-HI,City-center approximation
-tulum,20.21,-87.43,10,,,,none,,geocoded,,MX,City-center approximation
-villenave-d-ornon,44.78,-0.55,20,,,,none,,geocoded,,FR,Confirmed Starlink site south of Bordeaux
-waimanalo,21.34,-157.72,10,,,,none,,geocoded,,US-HI,Oahu
+name,lat_deg,lon_deg,alt_m,antennas,antenna_diameter_m,band,filing,source,confidence,country,notes
+conrad,48.203306,-111.945278,1100,8,1.52,Ka,SES-LIC-20190816-01062,FCC IBFS,filing,US,One of earliest operational gateways
+loring,46.914917,-67.919528,230,8,1.52,Ka,SES-LIC-20190816-01063,FCC IBFS,filing,US,Former Loring AFB area
+redmond,47.694194,-122.032139,130,8,1.52,Ka,SES-MOD-20230626-01258,FCC IBFS,filing,US,SpaceX satellite dev facility. Call sign E190676
+greenville,41.433556,-80.333222,370,8,1.52,Ka,SES-LIC-20190906-01170,FCC IBFS,filing,US,
+merrillan,44.406333,-90.814278,300,8,1.52,Ka,SES-LIC-20190906-01171,FCC IBFS,filing,US,
+kalama,46.038972,-122.808222,10,8,1.52,Ka,SES-LIC-20200210-00148,FCC IBFS,filing,US,
+hawthorne,33.917500,-118.328111,20,8,1.52,Ka,SES-LIC-20200210-00150,FCC IBFS,filing,US,SpaceX HQ area. Call sign E200455
+arbuckle,39.057000,-122.060000,20,8,1.52,Ka,SES-LIC-20200327-00325,FCC IBFS,filing,US,
+beekmantown,44.789972,-73.480000,120,8,1.52,Ka,SES-LIC-20200327-00326,FCC IBFS,filing,US,
+charleston,43.248417,-124.381194,10,8,1.52,Ka,SES-LIC-20200402-00365,FCC IBFS,filing,US,Charleston OR
+coalville,40.943056,-111.285000,1700,8,1.52,Ka,SES-LIC-20200402-00366,FCC IBFS,filing,US,
+panaca,37.783639,-114.692694,1500,8,1.52,Ka,SES-LIC-20200402-00367,FCC IBFS,filing,US,
+boca-chica,25.990694,-97.182750,3,8,1.52,Ka,SES-LIC-20200406-00375,FCC IBFS,filing,US,Adjacent to SpaceX Starbase
+mcgregor,31.404917,-97.438139,250,8,1.52,Ka,SES-LIC-20200406-00374,FCC IBFS,filing,US,
+litchfield,41.545028,-73.354028,350,8,1.52,Ka,SES-LIC-20200410-00399,FCC IBFS,filing,US,
+warren,38.635167,-91.116028,250,8,1.52,Ka,SES-LIC-20200410-00400,FCC IBFS,filing,US,
+nemaha,40.333667,-95.815278,330,8,1.52,Ka,SES-LIC-20200417-00422,FCC IBFS,filing,US,
+manistique,45.908611,-86.483583,200,8,1.52,Ka,SES-LIC-20200422-00443,FCC IBFS,filing,US,
+slope-county,46.408389,-103.114583,800,8,1.52,Ka,SES-LIC-20200422-00442,FCC IBFS,filing,US,
+adelanto,34.604028,-117.454361,900,8,1.52,Ka,SES-LIC-20200428-00458,FCC IBFS,filing,US,
+cass-county,47.151694,-97.408889,280,8,1.52,Ka,SES-LIC-20200430-00472,FCC IBFS,filing,US,
+prudhoe-bay,70.246556,-148.569000,10,8,1.52,Ka,SES-LIC-20200430-00471,FCC IBFS,filing,US,Arctic gateway
+sanderson,30.194000,-102.890000,900,8,1.52,Ka,SES-LIC-20200505-00498,FCC IBFS,filing,US,
+springer,34.268500,-97.213167,300,8,1.52,Ka,SES-LIC-20200528-00576,FCC IBFS,filing,US,
+hitterdal,46.978917,-96.258028,360,8,1.52,Ka,SES-LIC-20200616-00649,FCC IBFS,filing,US,
+tionesta,41.644000,-121.329972,1300,8,1.52,Ka,SES-LIC-20200616-00645,FCC IBFS,filing,US,
+butte,45.924056,-112.513194,1700,8,1.52,Ka,SES-LIC-20200616-00648,FCC IBFS,filing,US,
+colburn,48.345250,-116.439333,600,8,1.52,Ka,SES-LIC-20200616-00647,FCC IBFS,filing,US,
+baxley,31.682167,-82.268972,60,1,1.47,Ka,SES-MOD-20230505-00925,FCC IBFS,filing,US,Call sign E202112
+robertsdale,30.567000,-87.646000,50,8,1.52,Ka,SES-LIC-20200616-00650,FCC IBFS,filing,US,
+roll,32.815500,-113.798056,200,8,1.52,Ka,SES-LIC-INTR2020-01643,FCC IBFS,filing,US,
+prosser,46.127278,-119.684306,200,1,1.47,Ka,SES-MOD-20230405-00522,FCC IBFS,filing,US,Call sign E202123
+elbert,39.292528,-104.504750,2100,1,1.47,Ka,SES-LIC-20210729-01285,FCC IBFS,filing,US,
+columbus,40.061000,-82.760778,330,1,1.47,Ka,SES-LIC-20211202-01874,FCC IBFS,filing,US,Call sign E210432
+arlington-or,45.625528,-120.174778,180,33,1.85,Ka,SES-LIC-20220514-00498,FCC IBFS,filing,US,Call sign E220062. 33 antennas - mega gateway
+romulus,42.788111,-76.863306,230,1,1.85,Ka,SES-LIC-20220514-00559,FCC IBFS,filing,US,Call sign E220089
+bellingham,48.774000,-122.448583,30,1,1.85,Ka,SES-LIC-20221130-01287,FCC IBFS,filing,US,Call sign E220189
+savanna-ok,34.789306,-95.876500,180,1,1.85,Ka,SES-MOD-20230525-01105,FCC IBFS,filing,US,Call sign E220077
+marshall,32.532250,-94.430306,120,1,1.85,Ka,SES-MOD-20230309-00272,FCC IBFS,filing,US,Call sign E220076
+blountsville,34.098444,-86.578528,300,1,1.85,Ka,SES-MOD-20230301-00235,FCC IBFS,filing,US,Call sign E220079
+apra-heights,13.408917,144.679194,50,1,1.47,Ka,SES-STA-20220127-00102,FCC IBFS,filing,GU,Guam
+chapel-hill,35.895778,-79.226722,150,1,1.85,Ka,SES-LIC-20230627-01293,FCC IBFS,filing,US,
+kenansville,27.875417,-81.030444,20,1,1.85,Ka,SES-LIC-20230622-01287,FCC IBFS,filing,US,
+new-braunfels,29.783472,-98.051167,200,1,1.85,Ka,SES-LIC-20230622-01288,FCC IBFS,filing,US,
+cal-nev-ari,35.298750,-114.874500,550,1,1.85,Ka,SES-LIC-20230627-01268,FCC IBFS,filing,US,
+des-moines-nm,36.697500,-103.792000,1900,1,1.85,Ka,SES-LIC-20230514-01017,FCC IBFS,filing,US,
+bandon,43.247556,-124.382778,30,1,1.85,Ka,SES-LIC-20230627-01292,FCC IBFS,filing,US,
+inman,38.228194,-97.921667,470,1,1.85,Ka,SES-LIC-20230627-01291,FCC IBFS,filing,US,
+tulelake,41.643972,-121.329250,1230,1,1.85,Ka,SES-LIC-20230622-01281,FCC IBFS,filing,US,
+dubuque,42.444611,-90.678500,300,1,1.85,Ka,SES-LIC-20230627-01284,FCC IBFS,filing,US,
+guam-katu-gato,13.616361,144.858722,50,1,1.47,Ka,SES-LIC-20240531-01113,FCC IBFS,filing,GU,Guam
+phoenix,33.684058,-112.098258,330,32,1.85,Ka+E,SES-STA-20240119-00101,FCC IBFS,filing,US,Call sign E240011. 32-antenna mega gateway
+cook,41.928778,-87.857444,200,1,1.85,Ka+E,SES-LIC-20240128-00167,FCC IBFS,filing,US,Franklin Park IL. Call sign E240048. Withdrawn
+vandenberg,34.719250,-120.532503,100,1,1.47,Ka,SES-LIC-20250723-00504,FCC IBFS,filing,US,
+cape-canaveral,28.543417,-80.666639,5,1,1.47,Ka,SES-LIC-20250224-00259,FCC IBFS,filing,US,Full Send
+downtown-la,34.060667,-118.188278,120,1,1.85,Ka+E,SES-LIC-20250603-00865,FCC IBFS,filing,US,Call sign E250037
+north-kansas-city,39.137194,-94.577778,230,1,1.85,Ka+E,SES-LIC-20250606-00887,FCC IBFS,filing,US,Call sign E250039
+toa-baja,18.428722,-66.191500,10,1,1.85,Ka+E,SES-LIC-20250429-00760,FCC IBFS,filing,US-PR,Puerto Rico. Call sign E250032
+atlanta,33.772222,-84.365278,310,1,1.85,Ka+E,SES-LIC-20250418-00496,FCC IBFS,filing,US,Ponce City Market. Call sign E250022
+san-jose,37.232750,-121.782722,15,1,1.85,Ka+E,SES-LIC-20250429-00758,FCC IBFS,filing,US,Shark Tank. Call sign E250030
+flushing,40.772000,-73.834778,10,1,1.85,Ka+E,SES-LIC-20250529-00801,FCC IBFS,filing,US,Queens NY. Call sign E250033
+dallas,32.719528,-96.761861,140,1,1.85,Ka+E,SES-LIC-20250418-00495,FCC IBFS,filing,US,First Rodeo. Call sign E250021
+anchorage,61.185750,-149.876389,40,1,1.85,Ka+E,SES-LIC-20250418-00494,FCC IBFS,filing,US,Call sign E250020
+hillsboro,45.567700,-122.916600,60,1,1.85,Ka+E,SES-LIC-20251118-00367,FCC IBFS,filing,US,PDX11. Call sign E250202
+goonhilly,50.05,-5.18,80,,,,none,none,geocoded,UK,Existing station - needs Ofcom filing data
+usingen,50.33,8.53,290,,,,none,none,geocoded,DE,Existing station - needs BNetzA filing data
+dublin,53.35,-6.26,20,,,,none,none,geocoded,IE,Existing station - needs ComReg filing data
+amsterdam,52.37,4.90,0,,,,none,none,geocoded,NL,Existing station - needs Agentschap Telecom filing
+frankfurt,50.11,8.68,110,,,,none,none,geocoded,DE,Existing station - needs BNetzA filing data
+tokyo,35.68,139.69,40,,,,none,none,geocoded,JP,Existing station - needs MIC filing data
+sydney,-33.87,151.21,50,,,,none,none,geocoded,AU,Existing station - needs ACMA filing data
+warkworth,-36.43,174.66,60,,,,none,none,geocoded,NZ,Existing station - needs RSM filing data
+sao-paulo,-23.55,-46.63,760,,,,none,none,geocoded,BR,Existing station - needs ANATEL filing data
+singapore,1.35,103.82,15,,,,none,none,geocoded,SG,Existing station - needs IMDA filing data
+mumbai,19.08,72.88,10,,,,none,none,geocoded,IN,Existing station - needs DoT filing data

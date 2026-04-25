@@ -28,6 +28,9 @@ spec:
               hostPort: 3000
               name: http
           resources:
+            requests:
+              memory: 128Mi
+              cpu: 250m
             limits:
               memory: {{ .Values.vf.memoryLimit | default "128Mi" }}
               cpu: {{ .Values.vf.cpuLimit | default "100m" }}

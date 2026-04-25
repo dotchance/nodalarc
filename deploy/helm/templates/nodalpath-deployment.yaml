@@ -51,6 +51,9 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
+            requests:
+              memory: 128Mi
+              cpu: 250m
             limits:
               memory: {{ .Values.nodalpath.memoryLimit | default "512Mi" }}
               cpu: {{ .Values.nodalpath.cpuLimit | default "500m" }}

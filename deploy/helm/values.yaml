@@ -14,51 +14,51 @@ images:
 imagePullPolicy: Never  # Single-node: images loaded directly into containerd
 
 ome:
-  cpuRequest: "1"
-  cpuLimit: "4"
-  memoryRequest: 2Gi
-  memoryLimit: 8Gi
+  cpuRequest: "4"
+  cpuLimit: "16"
+  memoryRequest: 4Gi
+  memoryLimit: 16Gi
 
 # VF: containerized React SPA served by nginx
 vf:
-  memoryLimit: 256Mi
-  cpuLimit: 500m
+  memoryLimit: 1Gi
+  cpuLimit: "4"
   vsApiHost: ""  # Set to host IP (e.g., 192.168.10.202) for external access
 
 nodalpath:
   mode: console
   transport: grpc
-  memoryLimit: 512Mi
-  cpuLimit: "2"
+  memoryLimit: 2Gi
+  cpuLimit: "8"
 
 # Scheduler consumes OME events and dispatches topology changes to Node Agents.
 scheduler:
-  memoryLimit: 1Gi
-  cpuLimit: "4"
+  memoryLimit: 4Gi
+  cpuLimit: "16"
 
 # Node Agent DaemonSet runs on each K3s node.
 # Executes privileged netlink operations on behalf of the Scheduler.
 nodeAgent:
   grpcPort: 50100
-  memoryLimit: 1Gi
-  cpuLimit: "2"
+  memoryLimit: 4Gi
+  cpuLimit: "8"
 
 # VS-API: FastAPI server for visualization state
 vsApi:
-  memoryLimit: 512Mi
-  cpuLimit: "2"
+  memoryLimit: 2Gi
+  cpuLimit: "8"
 
 # NATS JetStream messaging server
 nats:
   image: "nats:2.11-alpine"
   replicas: 1
-  memoryLimit: 512Mi
-  memoryRequest: 256Mi
-  cpuLimit: "2"
-  cpuRequest: 500m
+  memoryLimit: 2Gi
+  memoryRequest: 1Gi
+  cpuLimit: "8"
+  cpuRequest: "2"
   # Storage — local-path for single-node, switch to Longhorn/Rook for multi-node
   storageClass: "local-path"
-  storageSize: "2Gi"
+  storageSize: "4Gi"
 
 # Node where session pods are created (auto-detected if empty, or set to your node name).
 sessionNodeName: ""

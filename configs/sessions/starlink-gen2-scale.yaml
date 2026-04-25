@@ -18,7 +18,7 @@
 session:
   name: starlink-gen2-scale
 constellation: configs/constellations/starlink-gen2-1584.yaml
-ground_stations: configs/ground-stations/sets/starlink-gen2-verified.yaml
+ground_stations: configs/ground-stations/sets/starlink-gen2-global-scale.yaml
 routing:
   protocol: isis
   extensions:
@@ -39,6 +39,6 @@ routing:
   spf_holddown: 2000
   spf_time_to_learn: 500
 time:
-  step_seconds: 1
+  step_seconds: 2
 placement:
   policy: planePerNode

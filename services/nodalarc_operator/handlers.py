@@ -363,6 +363,68 @@ async def on_resume(spec, name, namespace, meta, status, **_):
             },
         )
         log.info(f"Operator resume: {ready}/{total} pods running, phase=Ready")
+    elif phase in ("Creating", "Pending"):
+        # Operator restarted during pod creation or template building.
+        # Check how many session pods are already running — if all are
+        # up, continue from where we left off (FRR signaling → wiring).
+        loop = asyncio.get_running_loop()
+        total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
+        pod_count = status.get("podCount", total)
+        if ready >= pod_count and pod_count > 0:
+            log.info(
+                f"Operator resume: all {ready}/{pod_count} pods running in {phase} phase, "
+                f"continuing to FRR signaling and wiring"
+            )
+            _update_status(
+                name,
+                namespace,
+                {
+                    "phase": "Creating",
+                    "readyPods": ready,
+                    "podCount": pod_count,
+                    "message": f"Resuming: signaling FRR config in {pod_count} pods",
+                },
+            )
+            await loop.run_in_executor(
+                None, signal_frr_config_ready, namespace, lambda msg: log.info(f"Resume: {msg}")
+            )
+            await loop.run_in_executor(None, write_pod_ips_configmap, namespace)
+            owner_ref = {
+                "apiVersion": "nodalarc.io/v1alpha1",
+                "kind": "ConstellationSpec",
+                "name": name,
+                "uid": meta["uid"],
+                "blockOwnerDeletion": True,
+            }
+            await loop.run_in_executor(
+                None, write_wiring_manifest, dict(spec), namespace, owner_ref
+            )
+            _update_status(
+                name,
+                namespace,
+                {
+                    "phase": "Wiring",
+                    "readyPods": ready,
+                    "podCount": pod_count,
+                    "message": f"All {pod_count} pods running. Node Agent wiring data plane.",
+                },
+            )
+            log.info(f"Operator resume: advanced Creating → Wiring ({pod_count} pods)")
+        else:
+            log.info(
+                f"Operator resume: {ready}/{pod_count} pods in {phase} phase, "
+                f"waiting for all pods to reach Running"
+            )
+            _update_status(
+                name,
+                namespace,
+                {
+                    "phase": "Creating",
+                    "readyPods": ready,
+                    "podCount": pod_count,
+                    "message": f"Pods: {ready} running, {pod_count - ready} starting",
+                },
+            )
     elif phase == "Error":
         log.info(f"Operator resume: session in Error state: {status.get('message', '')}")
     elif not phase:

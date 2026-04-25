@@ -98,6 +98,9 @@ export function useKeyboard(actions: KeyboardActions): void {
         case "Q":
           actions.onToggleFilter?.();
           break;
+        case ";":
+          actions.onToggleLabels?.();
+          break;
         case "'":
           actions.onToggleGsLabels?.();
           break;

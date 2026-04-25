@@ -13,10 +13,13 @@ images:
 
 imagePullPolicy: Never  # Single-node: images loaded directly into containerd
 
+# Resource strategy: requests are minimum guaranteed, limits are burst ceiling.
+# Requests must fit on the node; limits can exceed node capacity (burstable QoS).
+
 ome:
-  cpuRequest: "4"
+  cpuRequest: 500m
   cpuLimit: "16"
-  memoryRequest: 4Gi
+  memoryRequest: 512Mi
   memoryLimit: 16Gi
 
 # VF: containerized React SPA served by nginx
@@ -53,9 +56,9 @@ nats:
   image: "nats:2.11-alpine"
   replicas: 1
   memoryLimit: 2Gi
-  memoryRequest: 1Gi
+  memoryRequest: 256Mi
   cpuLimit: "8"
-  cpuRequest: "2"
+  cpuRequest: 250m
   # Storage — local-path for single-node, switch to Longhorn/Rook for multi-node
   storageClass: "local-path"
   storageSize: "4Gi"

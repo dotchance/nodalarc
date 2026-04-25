@@ -32,6 +32,9 @@ spec:
             - "--platform-config"
             - "/etc/nodalarc/platform.yaml"
           resources:
+            requests:
+              memory: 128Mi
+              cpu: 250m
             limits:
               memory: {{ .Values.scheduler.memoryLimit | default "512Mi" }}
               cpu: {{ .Values.scheduler.cpuLimit | default "500m" }}

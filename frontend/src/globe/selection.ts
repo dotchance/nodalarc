@@ -5,6 +5,7 @@
 import * as THREE from "three";
 import { SELECTION_COLOR, SAT_RADIUS } from "../config";
 import { setSelectedGlow } from "./satellites";
+import { setSelectedGroundStation } from "./groundStations";
 import { getNodeWorldPosition } from "./positionLookup";
 import type { Selection } from "../types";
 
@@ -30,6 +31,9 @@ export function updateSelection(
 ): void {
   if (currentSelection?.type === "satellite") {
     setSelectedGlow(null);
+  }
+  if (currentSelection?.type === "ground_station") {
+    setSelectedGroundStation(null);
   }
 
   if (!selection || selection.type === "link") {
@@ -59,6 +63,9 @@ export function updateSelection(
   } else if (selection.type === "ground_station") {
     hasTarget = getNodeWorldPosition(selection.id, _selWorldPos);
     scale = SAT_RADIUS * 4;
+    if (hasTarget) {
+      setSelectedGroundStation(selection.id);
+    }
   }
 
   if (hasTarget) {

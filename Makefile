@@ -234,7 +234,7 @@ build-measurement: ## Build MI (Measurement) image
 	docker build -f services/measurement/Dockerfile -t $(IMG_MI) -t $(REGISTRY_PREFIX)nodalarc/measurement:latest .
 
 build-vf: build-frontends ## Build VF (visualization) image
-	docker build -t $(IMG_VF) -t $(REGISTRY_PREFIX)nodalarc/vf:latest frontend/
+	docker build --build-arg BUILD_HASH=$(GIT_SHA) -t $(IMG_VF) -t $(REGISTRY_PREFIX)nodalarc/vf:latest frontend/
 
 # ---------------------------------------------------------------------------
 # load

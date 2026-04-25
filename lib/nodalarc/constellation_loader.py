@@ -253,6 +253,8 @@ _DEFAULT_SCHEDULING_POLICY = "highest-elevation"
 
 def _build_gs_file_from_stations(
     stations: list[GroundStationConfig],
+    *,
+    default_terminals: list[GroundTerminalDef] | None = None,
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None,
     default_min_elevation_deg: float | None = None,
     default_scheduling_policy: str | None = None,
@@ -264,7 +266,7 @@ def _build_gs_file_from_stations(
     defaults; per-station values override set-level defaults.
     """
     return GroundStationFile(
-        default_terminals=_DEFAULT_GS_TERMINALS,
+        default_terminals=default_terminals or _DEFAULT_GS_TERMINALS,
         default_min_elevation_deg=default_min_elevation_deg or _DEFAULT_MIN_ELEVATION_DEG,
         default_scheduling_policy=default_scheduling_policy or _DEFAULT_SCHEDULING_POLICY,
         default_terrestrial_prefixes=default_terrestrial_prefixes,
@@ -286,9 +288,10 @@ def load_ground_stations_from_set(
         stations.append(station)
     return _build_gs_file_from_stations(
         stations,
-        gs_set.default_terrestrial_prefixes,
-        gs_set.default_min_elevation_deg,
-        gs_set.default_scheduling_policy,
+        default_terminals=gs_set.default_terminals,
+        default_terrestrial_prefixes=gs_set.default_terrestrial_prefixes,
+        default_min_elevation_deg=gs_set.default_min_elevation_deg,
+        default_scheduling_policy=gs_set.default_scheduling_policy,
     )
 
 
@@ -304,7 +307,10 @@ def load_ground_stations_from_list(
     for name in station_names:
         station = load_ground_station_individual(name)
         stations.append(station)
-    return _build_gs_file_from_stations(stations, default_terrestrial_prefixes)
+    return _build_gs_file_from_stations(
+        stations,
+        default_terrestrial_prefixes=default_terrestrial_prefixes,
+    )
 
 
 def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStationFile:
@@ -333,15 +339,14 @@ def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStation
             stations = [load_ground_station_individual(n) for n in gs_set.stations]
             return _build_gs_file_from_stations(
                 stations,
-                gs_set.default_terrestrial_prefixes,
-                gs_set.default_min_elevation_deg,
-                gs_set.default_scheduling_policy,
+                default_terminals=gs_set.default_terminals,
+                default_terrestrial_prefixes=gs_set.default_terrestrial_prefixes,
+                default_min_elevation_deg=gs_set.default_min_elevation_deg,
+                default_scheduling_policy=gs_set.default_scheduling_policy,
             )
         if "set" in data:
             gs_file = load_ground_stations(data["set"])
             if "default_terminals" in data:
-                from nodalarc.models.ground_station import GroundTerminalDef
-
                 gs_file.default_terminals = [
                     GroundTerminalDef.model_validate(t) for t in data["default_terminals"]
                 ]

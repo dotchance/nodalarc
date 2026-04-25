@@ -1,0 +1,7 @@
+# Lagos, Nigeria — Starlink Gateway
+ground_station:
+  name: lagos
+  lat_deg: 6.52
+  lon_deg: 3.38
+  alt_m: 10
+  min_elevation_deg: 25

@@ -1,0 +1,8 @@
+# Kalama, Washington — Starlink Gateway
+# FCC filing 2020-02-06. 8 x 5ft Ka-band antennas.
+ground_station:
+  name: kalama
+  lat_deg: 46.0390
+  lon_deg: -122.8082
+  alt_m: 5
+  min_elevation_deg: 25

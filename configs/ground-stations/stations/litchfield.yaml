@@ -1,0 +1,8 @@
+# Litchfield, Connecticut — Starlink Gateway
+# FCC filing 2020-04-09. 8 x 5ft Ka-band antennas.
+ground_station:
+  name: litchfield
+  lat_deg: 41.5450
+  lon_deg: -73.3540
+  alt_m: 300
+  min_elevation_deg: 25

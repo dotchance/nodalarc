@@ -1,0 +1,45 @@
+# Starlink Gen2 Scale Test — Shell 1 Full Geometry
+#
+# 1,584 satellites (72 planes × 22 sats) at 550 km, 53° inclination.
+# 60 gateway ground stations worldwide with realistic terminal counts.
+#
+# This session tests the full VF rendering pipeline at 1500+ satellites:
+#   - InstancedMesh rendering performance
+#   - Web Worker SGP4 propagation throughput
+#   - Per-link Line2 at 3000+ ISL links
+#   - DOM label rendering at 1500+ satellites
+#   - IS-IS convergence at constellation scale
+#   - MBB handovers across 60 gateways globally
+#
+# Cluster requirement: 4 nodes × 20 cores × 32GB RAM
+# Pod count: ~1,644 (1,584 sats + 60 GS)
+# Placement: planePerNode distributes across all 4 nodes
+
+session:
+  name: starlink-gen2-scale
+constellation: configs/constellations/starlink-gen2-1584.yaml
+ground_stations:
+  set: configs/ground-stations/sets/starlink-gen2-global.yaml
+routing:
+  protocol: isis
+  extensions:
+    - traffic-engineering
+  area_assignment:
+    strategy: per-plane
+  mbb_dispatch: true
+  mbb_overlap_ticks: 3
+  bfd: true
+  bfd_detect_multiplier: 3
+  bfd_rx_interval: 300
+  bfd_tx_interval: 300
+  isis_hello_interval: 1
+  isis_hello_multiplier: 3
+  spf_init_delay: 50
+  spf_short_delay: 200
+  spf_long_delay: 1000
+  spf_holddown: 2000
+  spf_time_to_learn: 500
+time:
+  step_seconds: 1
+placement:
+  policy: planePerNode

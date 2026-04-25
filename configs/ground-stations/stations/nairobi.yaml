@@ -1,0 +1,7 @@
+# Nairobi, Kenya — Starlink Gateway
+ground_station:
+  name: nairobi
+  lat_deg: -1.29
+  lon_deg: 36.82
+  alt_m: 1660
+  min_elevation_deg: 25

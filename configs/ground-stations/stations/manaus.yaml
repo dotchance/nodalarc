@@ -1,0 +1,7 @@
+# Manaus, Brazil — Starlink Gateway
+ground_station:
+  name: manaus
+  lat_deg: -3.12
+  lon_deg: -60.02
+  alt_m: 90
+  min_elevation_deg: 25

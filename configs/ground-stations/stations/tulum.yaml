@@ -1,0 +1,7 @@
+# Tulum, Mexico — Starlink Gateway
+ground_station:
+  name: tulum
+  lat_deg: 20.21
+  lon_deg: -87.43
+  alt_m: 10
+  min_elevation_deg: 25

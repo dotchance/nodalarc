@@ -1,0 +1,8 @@
+# Brewster, Washington — Starlink Gateway
+# FCC earth station filing E190021
+ground_station:
+  name: brewster
+  lat_deg: 48.10
+  lon_deg: -119.78
+  alt_m: 260
+  min_elevation_deg: 25

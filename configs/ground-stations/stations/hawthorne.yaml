@@ -1,16 +1,8 @@
+# Hawthorne, California — Starlink Gateway
+# FCC filing 2020-02-06. SpaceX HQ area.
 ground_station:
   name: hawthorne
-  lat_deg: 33.92
-  lon_deg: -118.33
+  lat_deg: 33.9175
+  lon_deg: -118.3281
   alt_m: 20
   min_elevation_deg: 25
-  terminals:
-    - type: optical
-      count: 2
-      bandwidth_mbps: 1000
-      tracking_capacity: 1
-  terrestrial_prefixes:
-    - prefix: "172.16.1.0/24"
-      metric: 10
-    - prefix: "0.0.0.0/0"
-      metric: 100

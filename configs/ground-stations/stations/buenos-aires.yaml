@@ -1,0 +1,7 @@
+# Buenos Aires, Argentina — Starlink Gateway
+ground_station:
+  name: buenos-aires
+  lat_deg: -34.60
+  lon_deg: -58.38
+  alt_m: 25
+  min_elevation_deg: 25

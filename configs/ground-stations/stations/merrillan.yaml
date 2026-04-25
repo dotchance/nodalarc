@@ -1,0 +1,8 @@
+# Merrillan, Wisconsin — Starlink Gateway
+# FCC earth station filing E200041. 8 x 5ft Ka-band antennas.
+ground_station:
+  name: merrillan
+  lat_deg: 44.4063
+  lon_deg: -90.8143
+  alt_m: 300
+  min_elevation_deg: 25

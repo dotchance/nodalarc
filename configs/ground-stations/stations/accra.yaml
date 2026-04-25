@@ -1,0 +1,7 @@
+# Accra, Ghana — Starlink Gateway
+ground_station:
+  name: accra
+  lat_deg: 5.56
+  lon_deg: -0.19
+  alt_m: 60
+  min_elevation_deg: 25

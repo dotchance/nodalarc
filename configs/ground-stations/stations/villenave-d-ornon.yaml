@@ -1,0 +1,8 @@
+# Villenave-d'Ornon, France — Starlink Gateway
+# Suburb south of Bordeaux
+ground_station:
+  name: villenave-d-ornon
+  lat_deg: 44.78
+  lon_deg: -0.56
+  alt_m: 25
+  min_elevation_deg: 25

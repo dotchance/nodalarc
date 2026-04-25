@@ -1,0 +1,69 @@
+ground_station_set:
+  name: starlink-gen2-balanced
+  description: >-
+    40 Starlink gateways with global coverage for scale testing.
+    15 US stations (geographic spread, not every site), 25 international.
+    All are confirmed operational Starlink gateway locations.
+  default_min_elevation_deg: 25
+  default_terminals:
+    - type: rf
+      count: 8
+      bandwidth_mbps: 10000
+      tracking_capacity: 8
+  stations:
+    # === US (15 — geographic spread) ===
+    - conrad           # Montana (northwest)
+    - redmond          # Washington (pacific NW)
+    - hawthorne        # California (southwest)
+    - boca-chica       # Texas (gulf coast)
+    - ashburn          # Virginia (east coast)
+    - loring           # Maine (northeast)
+    - merrillan        # Wisconsin (midwest)
+    - greenville       # Pennsylvania (mid-atlantic)
+    - robertsdale      # Alabama (southeast)
+    - denver           # Colorado (mountain west)
+    - north-bend       # Oregon (pacific coast)
+    - beekmantown      # New York (northeast)
+    - phoenix          # Arizona (desert southwest)
+    - cape-canaveral   # Florida (southeast coast)
+    - toa-baja         # Puerto Rico (caribbean)
+    # === Canada (3) ===
+    - marathon         # Ontario
+    - saguenay         # Quebec
+    - st-johns         # Newfoundland
+    # === Europe (8) ===
+    - goonhilly        # UK (Cornwall)
+    - chalfont-grove   # UK (Buckinghamshire)
+    - gravelines       # France (north)
+    - frankfurt        # Germany
+    - foggia           # Italy
+    - warsaw           # Poland
+    - ibi              # Spain
+    - muallim          # Turkey
+    # === Asia (5) ===
+    - tokyo            # Japan
+    - hitachinaka      # Japan
+    - mumbai           # India
+    - singapore        # Singapore
+    - angeles          # Philippines
+    # === Oceania (4) ===
+    - sydney           # Australia
+    - warkworth        # New Zealand
+    - cromwell         # New Zealand (south island)
+    - suva             # Fiji
+    # === Africa (3) ===
+    - hartebeesthoek   # South Africa
+    - lekki            # Nigeria
+    - nairobi          # Kenya
+    # === South America (3) ===
+    - sao-paulo        # Brazil
+    - falda-del-carmen # Argentina
+    - santiago         # Chile
+    # === Middle East (1) ===
+    - murayjat         # Oman
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10
+    default_route: true
+    default_route_metric: 100

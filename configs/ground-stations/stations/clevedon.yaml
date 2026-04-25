@@ -1,0 +1,11 @@
+# Clevedon, New Zealand — confirmed Starlink gateway
+ground_station:
+  name: clevedon
+  lat_deg: -37.23
+  lon_deg: 175.0
+  alt_m: 20
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

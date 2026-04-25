@@ -1,0 +1,11 @@
+# Hitachinaka, Japan — confirmed Starlink gateway
+ground_station:
+  name: hitachinaka
+  lat_deg: 36.4
+  lon_deg: 140.53
+  alt_m: 30
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

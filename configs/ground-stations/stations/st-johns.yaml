@@ -1,0 +1,11 @@
+# St Johns, Newfoundland — confirmed Starlink gateway
+ground_station:
+  name: st-johns
+  lat_deg: 47.57
+  lon_deg: -52.71
+  alt_m: 80
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

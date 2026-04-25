@@ -127,7 +127,7 @@ export function animateLabels(camera: THREE.Camera): void {
     // satellites near the visual limb aren't hidden — they render as
     // dots above the surface in the z-buffer even when geometrically
     // the line-of-sight grazes the earth.
-    const occR = EARTH_RADIUS * 0.92;
+    const occR = EARTH_RADIUS * 0.97;
     const c = cameraPos.x * cameraPos.x + cameraPos.y * cameraPos.y + cameraPos.z * cameraPos.z - occR * occR;
     const discrim = bHalf * bHalf - c;
     if (discrim > 0) {
@@ -139,12 +139,22 @@ export function animateLabels(camera: THREE.Camera): void {
       }
     }
 
-    const x = (_labelNdc.x * 0.5 + 0.5) * width;
-    const y = (-_labelNdc.y * 0.5 + 0.5) * height;
+    const sx = (_labelNdc.x * 0.5 + 0.5) * width;
+    const sy = (-_labelNdc.y * 0.5 + 0.5) * height;
+
+    // Offset label away from screen center so limb labels
+    // point outward instead of overlapping the earth surface.
+    const cx = width / 2;
+    const cy = height / 2;
+    const dx = sx - cx;
+    const dy = sy - cy;
+    const screenDist = Math.sqrt(dx * dx + dy * dy);
+    const nx = screenDist > 1 ? dx / screenDist : 1;
+    const ny = screenDist > 1 ? dy / screenDist : 0;
 
     entry.div.style.display = "block";
-    entry.div.style.left = `${x + 6}px`;
-    entry.div.style.top = `${y - 14}px`;
+    entry.div.style.left = `${sx + nx * 10}px`;
+    entry.div.style.top = `${sy + ny * 10 - 6}px`;
 
     if (isHighlighted) {
       entry.div.style.opacity = "1";

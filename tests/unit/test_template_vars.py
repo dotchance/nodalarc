@@ -320,9 +320,9 @@ class TestGroundStationVars:
             gs_name="hawthorne",
         )
         prefixes = result["terrestrial_prefixes"]
-        assert len(prefixes) == 1  # Unique /24 only — default route is separate
-        assert prefixes[0]["prefix"] == "172.16.1.0/24"
-        assert prefixes[0]["host_address"] == "172.16.1.1/24"
+        assert len(prefixes) == 2  # IPv4 + IPv6 prefixes
+        assert prefixes[0]["prefix"] == "172.16.0.0/24"
+        assert prefixes[0]["host_address"] == "172.16.0.1/24"
         assert prefixes[0]["metric"] == 10
         # Default route is now a separate flag, not in prefix list
         assert result["terr0_default_route"] is True

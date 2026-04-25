@@ -109,13 +109,24 @@ class GroundTerminalDef(BaseModel):
     bandwidth_mbps: float
     tracking_capacity: int
     frequency_band: str | None = None  # For future environmental modeling
+    band: str | None = None  # Shorthand band identifier (Ka, Ku, E, V)
 
     @field_validator("count")
     @classmethod
     def _count_range(cls, v: int) -> int:
-        if not 1 <= v <= 8:
-            raise ValueError(f"terminal count must be 1-8, got {v}")
+        if not 1 <= v <= 32:
+            raise ValueError(f"terminal count must be 1-32, got {v}")
         return v
+
+
+class VerificationInfo(BaseModel):
+    """Metadata about the data source for a ground station's coordinates."""
+
+    source: str = "none"  # "FCC IBFS", "ITU", "none"
+    filing: str | None = None  # Filing number (e.g., "E190023")
+    confidence: str = "geocoded"  # "filing" = from regulatory filing, "geocoded" = approximation
+    url: str | None = None  # Direct link to the filing
+    notes: str | None = None
 
 
 class GroundStationConfig(GroundSegment):
@@ -129,6 +140,14 @@ class GroundStationConfig(GroundSegment):
     scheduling_policy: str | None = None  # Override default
     terminals: list[GroundTerminalDef] | None = None  # Override default
     terrestrial_prefixes: list[TerrestrialPrefix] | None = None  # Override template
+
+    # Physical antenna metadata (informational, not used in simulation)
+    antennas: int | None = None  # Number of physical antennas at site
+    antenna_diameter_m: float | None = None
+    band: str | None = None  # Primary frequency band (Ka, Ku, E, V)
+
+    # Data provenance
+    verified: VerificationInfo | None = None
 
     @field_validator("lat_deg")
     @classmethod

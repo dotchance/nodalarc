@@ -1,0 +1,7 @@
+# Jakarta, Indonesia — Starlink Gateway
+ground_station:
+  name: jakarta
+  lat_deg: -6.21
+  lon_deg: 106.85
+  alt_m: 10
+  min_elevation_deg: 25

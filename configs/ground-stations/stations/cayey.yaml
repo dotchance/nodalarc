@@ -1,0 +1,7 @@
+# Cayey, Puerto Rico — Starlink Gateway
+ground_station:
+  name: cayey
+  lat_deg: 18.11
+  lon_deg: -66.16
+  alt_m: 450
+  min_elevation_deg: 25

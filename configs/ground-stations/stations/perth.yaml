@@ -1,0 +1,7 @@
+# Perth, Australia — Starlink Gateway
+ground_station:
+  name: perth
+  lat_deg: -31.95
+  lon_deg: 115.86
+  alt_m: 30
+  min_elevation_deg: 25

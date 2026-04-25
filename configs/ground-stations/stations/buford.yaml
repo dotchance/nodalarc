@@ -1,0 +1,7 @@
+# Buford, Georgia — Starlink Gateway
+ground_station:
+  name: buford
+  lat_deg: 34.12
+  lon_deg: -84.00
+  alt_m: 340
+  min_elevation_deg: 25

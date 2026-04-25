@@ -1,0 +1,7 @@
+# Bogota, Colombia — Starlink Gateway
+ground_station:
+  name: bogota
+  lat_deg: 4.71
+  lon_deg: -74.07
+  alt_m: 2640
+  min_elevation_deg: 25

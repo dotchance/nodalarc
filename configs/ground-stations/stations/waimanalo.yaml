@@ -1,0 +1,7 @@
+# Waimanalo, Hawaii — Starlink Gateway
+ground_station:
+  name: waimanalo
+  lat_deg: 21.34
+  lon_deg: -157.72
+  alt_m: 10
+  min_elevation_deg: 25

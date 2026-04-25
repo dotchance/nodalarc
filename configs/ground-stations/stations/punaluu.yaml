@@ -1,0 +1,7 @@
+# Punaluu, Hawaii — Starlink Gateway
+ground_station:
+  name: punaluu
+  lat_deg: 19.87
+  lon_deg: -155.50
+  alt_m: 5
+  min_elevation_deg: 25

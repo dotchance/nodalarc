@@ -8,3 +8,7 @@ ground_station:
   lon_deg: -0.56
   alt_m: 25
   min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "City-center approximation. Needs coordinates from regulatory filing."

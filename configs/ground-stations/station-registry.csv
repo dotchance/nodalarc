@@ -1,0 +1,36 @@
+name,lat_deg,lon_deg,alt_m,antennas,antenna_diameter_m,band,filing,source,confidence,url,country,notes
+conrad,48.2033,-111.9453,1100,8,1.52,Ka,E190023,FCC IBFS,filing,https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E190023,US,One of earliest operational gateways
+loring,46.9149,-67.9195,230,8,1.52,Ka,E190023,FCC IBFS,filing,,US,Former Loring AFB area
+redmond,47.6942,-122.0321,10,8,1.52,Ka,E190023,FCC IBFS,filing,,US,SpaceX satellite dev facility
+greenville,41.4336,-80.3332,340,8,1.52,Ka,E190023,FCC IBFS,filing,,US,
+merrillan,44.4063,-90.8143,300,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
+kalama,46.0390,-122.8082,5,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
+hawthorne,33.9175,-118.3281,20,8,1.52,Ka,E200041,FCC IBFS,filing,,US,SpaceX HQ area
+beekmantown,44.7900,-73.4800,60,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
+boca-chica,25.9907,-97.1828,3,8,1.52,Ka,E200041,FCC IBFS,filing,,US,Adjacent to SpaceX Starbase
+litchfield,41.5450,-73.3540,300,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
+colburn,48.3453,-116.4393,650,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
+robertsdale,30.5670,-87.6460,40,8,1.52,Ka,E200041,FCC IBFS,filing,,US,
+brewster,48.10,-119.78,260,8,1.52,Ka,E190021,FCC IBFS,filing,,US,
+north-bend,43.41,-124.22,5,8,1.52,Ka,E200041,FCC IBFS,filing,,US,Charleston OR area
+accra,5.56,-0.19,60,,,,none,,geocoded,,GH,City-center approximation
+auckland,-36.85,174.76,10,,,,none,,geocoded,,NZ,City-center approximation
+bogota,4.71,-74.07,2640,,,,none,,geocoded,,CO,City-center approximation
+bordeaux,44.84,-0.58,20,,,,none,,geocoded,,FR,City-center approximation
+buenos-aires,-34.60,-58.38,25,,,,none,,geocoded,,AR,City-center approximation
+buford,34.12,-84.00,350,,,,none,,geocoded,,US,City-center approximation
+cape-town,-33.93,18.42,10,,,,none,,geocoded,,ZA,City-center approximation
+cayey,18.11,-66.16,450,,,,none,,geocoded,,PR,City-center approximation
+ceuta,35.89,-5.31,10,,,,none,,geocoded,,ES,City-center approximation
+gravelines,50.99,2.13,5,,,,none,,geocoded,,FR,City-center approximation
+guadalajara,20.67,-103.35,1560,,,,none,,geocoded,,MX,City-center approximation
+jakarta,-6.21,106.85,10,,,,none,,geocoded,,ID,City-center approximation
+lagos,6.52,3.38,10,,,,none,,geocoded,,NG,City-center approximation
+manaus,-3.12,-60.02,90,,,,none,,geocoded,,BR,City-center approximation
+manila,14.60,120.98,15,,,,none,,geocoded,,PH,City-center approximation
+nairobi,-1.29,36.82,1660,,,,none,,geocoded,,KE,City-center approximation
+perth,-31.95,115.86,25,,,,none,,geocoded,,AU,City-center approximation
+punaluu,19.87,-155.50,5,,,,none,,geocoded,,US-HI,City-center approximation
+tulum,20.21,-87.43,10,,,,none,,geocoded,,MX,City-center approximation
+villenave-d-ornon,44.78,-0.55,20,,,,none,,geocoded,,FR,Confirmed Starlink site south of Bordeaux
+waimanalo,21.34,-157.72,10,,,,none,,geocoded,,US-HI,Oahu

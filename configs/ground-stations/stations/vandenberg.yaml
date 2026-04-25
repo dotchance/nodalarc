@@ -1,0 +1,15 @@
+# Vandenberg, US — Starlink Gateway
+#
+ground_station:
+  name: vandenberg
+  lat_deg: 34.719250
+  lon_deg: -120.532503
+  alt_m: 100
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.47
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20250723-00504
+    confidence: filing

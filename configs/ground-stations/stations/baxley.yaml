@@ -1,0 +1,15 @@
+# Baxley, US — Starlink Gateway
+# Call sign E202112
+ground_station:
+  name: baxley
+  lat_deg: 31.682167
+  lon_deg: -82.268972
+  alt_m: 60
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.47
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-MOD-20230505-00925
+    confidence: filing

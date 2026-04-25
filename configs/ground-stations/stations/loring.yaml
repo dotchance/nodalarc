@@ -1,9 +1,9 @@
-# Loring, Maine — Starlink Gateway
-# FCC filing 2019-08-15. Former Loring AFB area.
+# Loring, US — Starlink Gateway
+# Former Loring AFB area
 ground_station:
   name: loring
-  lat_deg: 46.9149
-  lon_deg: -67.9195
+  lat_deg: 46.914917
+  lon_deg: -67.919528
   alt_m: 230
   min_elevation_deg: 25
   antennas: 8
@@ -11,6 +11,5 @@ ground_station:
   band: Ka
   verified:
     source: FCC IBFS
-    filing: E190023
+    filing: SES-LIC-20190816-01063
     confidence: filing
-    url: "https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E190023"

@@ -1,16 +1,15 @@
-# Greenville, Pennsylvania — Starlink Gateway
-# FCC filing 2019-09-05. 8 x 5ft Ka-band antennas.
+# Greenville, US — Starlink Gateway
+#
 ground_station:
   name: greenville
-  lat_deg: 41.4336
-  lon_deg: -80.3332
-  alt_m: 340
+  lat_deg: 41.433556
+  lon_deg: -80.333222
+  alt_m: 370
   min_elevation_deg: 25
   antennas: 8
   antenna_diameter_m: 1.52
   band: Ka
   verified:
     source: FCC IBFS
-    filing: E190023
+    filing: SES-LIC-20190906-01170
     confidence: filing
-    url: "https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E190023"

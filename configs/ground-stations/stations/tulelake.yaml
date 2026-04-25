@@ -1,0 +1,15 @@
+# Tulelake, US — Starlink Gateway
+#
+ground_station:
+  name: tulelake
+  lat_deg: 41.643972
+  lon_deg: -121.329250
+  alt_m: 1230
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20230622-01281
+    confidence: filing

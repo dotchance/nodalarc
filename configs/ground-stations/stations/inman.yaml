@@ -1,0 +1,15 @@
+# Inman, US — Starlink Gateway
+#
+ground_station:
+  name: inman
+  lat_deg: 38.228194
+  lon_deg: -97.921667
+  alt_m: 470
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20230627-01291
+    confidence: filing

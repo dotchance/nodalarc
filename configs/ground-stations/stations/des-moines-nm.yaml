@@ -1,0 +1,15 @@
+# Des Moines Nm, US — Starlink Gateway
+#
+ground_station:
+  name: des-moines-nm
+  lat_deg: 36.697500
+  lon_deg: -103.792000
+  alt_m: 1900
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20230514-01017
+    confidence: filing

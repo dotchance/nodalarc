@@ -1,9 +1,9 @@
-# Kalama, US — Starlink Gateway
-#
+# Charleston, US — Starlink Gateway
+# Charleston OR
 ground_station:
-  name: kalama
-  lat_deg: 46.038972
-  lon_deg: -122.808222
+  name: charleston
+  lat_deg: 43.248417
+  lon_deg: -124.381194
   alt_m: 10
   min_elevation_deg: 25
   antennas: 8
@@ -11,5 +11,5 @@ ground_station:
   band: Ka
   verified:
     source: FCC IBFS
-    filing: SES-LIC-20200210-00148
+    filing: SES-LIC-20200402-00365
     confidence: filing

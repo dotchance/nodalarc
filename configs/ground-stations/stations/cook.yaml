@@ -1,0 +1,15 @@
+# Cook, US — Starlink Gateway
+# Franklin Park IL. Call sign E240048. Withdrawn
+ground_station:
+  name: cook
+  lat_deg: 41.928778
+  lon_deg: -87.857444
+  alt_m: 200
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka+E
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20240128-00167
+    confidence: filing

@@ -1,0 +1,15 @@
+# Cal Nev Ari, US — Starlink Gateway
+#
+ground_station:
+  name: cal-nev-ari
+  lat_deg: 35.298750
+  lon_deg: -114.874500
+  alt_m: 550
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20230627-01268
+    confidence: filing

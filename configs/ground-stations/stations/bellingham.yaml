@@ -1,0 +1,15 @@
+# Bellingham, US — Starlink Gateway
+# Call sign E220189
+ground_station:
+  name: bellingham
+  lat_deg: 48.774000
+  lon_deg: -122.448583
+  alt_m: 30
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20221130-01287
+    confidence: filing

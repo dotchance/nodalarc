@@ -1,15 +1,15 @@
-# Merrillan, US — Starlink Gateway
+# Coalville, US — Starlink Gateway
 #
 ground_station:
-  name: merrillan
-  lat_deg: 44.406333
-  lon_deg: -90.814278
-  alt_m: 300
+  name: coalville
+  lat_deg: 40.943056
+  lon_deg: -111.285000
+  alt_m: 1700
   min_elevation_deg: 25
   antennas: 8
   antenna_diameter_m: 1.52
   band: Ka
   verified:
     source: FCC IBFS
-    filing: SES-LIC-20190906-01171
+    filing: SES-LIC-20200402-00366
     confidence: filing

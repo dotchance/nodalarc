@@ -1,0 +1,15 @@
+# Toa Baja, US-PR — Starlink Gateway
+# Puerto Rico. Call sign E250032
+ground_station:
+  name: toa-baja
+  lat_deg: 18.428722
+  lon_deg: -66.191500
+  alt_m: 10
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka+E
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20250429-00760
+    confidence: filing

@@ -1,0 +1,15 @@
+# Guam Katu Gato, GU — Starlink Gateway
+# Guam
+ground_station:
+  name: guam-katu-gato
+  lat_deg: 13.616361
+  lon_deg: 144.858722
+  alt_m: 50
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.47
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20240531-01113
+    confidence: filing

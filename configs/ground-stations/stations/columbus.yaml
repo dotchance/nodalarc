@@ -1,0 +1,15 @@
+# Columbus, US — Starlink Gateway
+# Call sign E210432
+ground_station:
+  name: columbus
+  lat_deg: 40.061000
+  lon_deg: -82.760778
+  alt_m: 330
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.47
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20211202-01874
+    confidence: filing

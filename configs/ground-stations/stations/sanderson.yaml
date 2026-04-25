@@ -1,15 +1,15 @@
-# Merrillan, US — Starlink Gateway
+# Sanderson, US — Starlink Gateway
 #
 ground_station:
-  name: merrillan
-  lat_deg: 44.406333
-  lon_deg: -90.814278
-  alt_m: 300
+  name: sanderson
+  lat_deg: 30.194000
+  lon_deg: -102.890000
+  alt_m: 900
   min_elevation_deg: 25
   antennas: 8
   antenna_diameter_m: 1.52
   band: Ka
   verified:
     source: FCC IBFS
-    filing: SES-LIC-20190906-01171
+    filing: SES-LIC-20200505-00498
     confidence: filing

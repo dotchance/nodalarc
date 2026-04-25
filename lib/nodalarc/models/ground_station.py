@@ -215,6 +215,7 @@ class GroundStationSetConfig(BaseModel):
     name: str
     description: str | None = None
     stations: list[str]
+    default_terminals: list[GroundTerminalDef] | None = None
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None
     default_min_elevation_deg: float | None = None
     default_scheduling_policy: str | None = None

@@ -18,14 +18,7 @@
 session:
   name: starlink-gen2-scale
 constellation: configs/constellations/starlink-gen2-1584.yaml
-ground_stations:
-  set: configs/ground-stations/sets/starlink-gen2-verified.yaml
-  default_terminals:
-    - type: rf
-      count: 8
-      bandwidth_mbps: 10000
-      tracking_capacity: 8
-      band: Ka
+ground_stations: configs/ground-stations/sets/starlink-gen2-verified.yaml
 routing:
   protocol: isis
   extensions:

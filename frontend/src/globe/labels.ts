@@ -24,6 +24,11 @@ export function setLabelsEnabled(enabled: boolean): void {
       entry.div.style.display = "none";
     }
   }
+  // Also toggle GS label visibility
+  const gsLabels = document.querySelectorAll<HTMLDivElement>(".gs-label");
+  for (const label of gsLabels) {
+    if (!enabled) label.style.display = "none";
+  }
 }
 
 export function getLabelsEnabled(): boolean {
@@ -40,7 +45,7 @@ const _labelLocalPos = new THREE.Vector3();
 const _labelWorldPos = new THREE.Vector3();
 const _labelNdc = new THREE.Vector3();
 
-const OCC_RADIUS_FACTOR = 0.97;
+const OCC_RADIUS_FACTOR = 0.985;
 
 export function isOccludedByEarth(
   satWorldX: number, satWorldY: number, satWorldZ: number,

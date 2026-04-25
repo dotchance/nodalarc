@@ -97,7 +97,7 @@ export function useKeyboard(actions: KeyboardActions): void {
         case "Q":
           actions.onToggleFilter?.();
           break;
-        case ";":
+        case "'":
           actions.onToggleLabels?.();
           break;
         case "/":

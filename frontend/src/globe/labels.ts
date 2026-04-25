@@ -39,7 +39,32 @@ let labelContainer: HTMLDivElement | null = null;
 const _labelLocalPos = new THREE.Vector3();
 const _labelWorldPos = new THREE.Vector3();
 const _labelNdc = new THREE.Vector3();
-const _dirToLabel = new THREE.Vector3();
+
+const OCC_RADIUS_FACTOR = 0.97;
+
+export function isOccludedByEarth(
+  satWorldX: number, satWorldY: number, satWorldZ: number,
+  camX: number, camY: number, camZ: number,
+  earthRadius: number,
+): boolean {
+  const occR = earthRadius * OCC_RADIUS_FACTOR;
+  const dx = satWorldX - camX;
+  const dy = satWorldY - camY;
+  const dz = satWorldZ - camZ;
+  const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (len < 0.001) return false;
+  const dirX = dx / len;
+  const dirY = dy / len;
+  const dirZ = dz / len;
+
+  const bHalf = camX * dirX + camY * dirY + camZ * dirZ;
+  const c = camX * camX + camY * camY + camZ * camZ - occR * occR;
+  const discrim = bHalf * bHalf - c;
+  if (discrim <= 0) return false;
+
+  const tNear = -bHalf - Math.sqrt(discrim);
+  return tNear > 0 && tNear < len;
+}
 
 const highlightedNodes = new Set<string>();
 
@@ -118,25 +143,13 @@ export function animateLabels(camera: THREE.Camera): void {
       continue;
     }
 
-    // Earth occlusion: ray-sphere intersection.
-    // Ray from camera toward satellite. If it hits the earth sphere
-    // before reaching the satellite, the satellite is behind the earth.
-    _dirToLabel.copy(_labelWorldPos).sub(cameraPos).normalize();
-    const bHalf = cameraPos.x * _dirToLabel.x + cameraPos.y * _dirToLabel.y + cameraPos.z * _dirToLabel.z;
-    // Use slightly smaller occlusion sphere (95% earth radius) so
-    // satellites near the visual limb aren't hidden — they render as
-    // dots above the surface in the z-buffer even when geometrically
-    // the line-of-sight grazes the earth.
-    const occR = EARTH_RADIUS * 0.97;
-    const c = cameraPos.x * cameraPos.x + cameraPos.y * cameraPos.y + cameraPos.z * cameraPos.z - occR * occR;
-    const discrim = bHalf * bHalf - c;
-    if (discrim > 0) {
-      const tNear = -bHalf - Math.sqrt(discrim);
-      const satDist = _labelWorldPos.distanceTo(cameraPos);
-      if (tNear > 0 && tNear < satDist) {
-        entry.div.style.display = "none";
-        continue;
-      }
+    if (isOccludedByEarth(
+      _labelWorldPos.x, _labelWorldPos.y, _labelWorldPos.z,
+      cameraPos.x, cameraPos.y, cameraPos.z,
+      EARTH_RADIUS,
+    )) {
+      entry.div.style.display = "none";
+      continue;
     }
 
     const sx = (_labelNdc.x * 0.5 + 0.5) * width;

@@ -337,6 +337,15 @@ def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStation
                 gs_set.default_min_elevation_deg,
                 gs_set.default_scheduling_policy,
             )
+        if "set" in data:
+            gs_file = load_ground_stations(data["set"])
+            if "default_terminals" in data:
+                from nodalarc.models.ground_station import GroundTerminalDef
+
+                gs_file.default_terminals = [
+                    GroundTerminalDef.model_validate(t) for t in data["default_terminals"]
+                ]
+            return gs_file
 
     # Legacy monolithic format
     return GroundStationFile.model_validate(data)

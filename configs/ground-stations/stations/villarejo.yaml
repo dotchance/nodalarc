@@ -1,0 +1,11 @@
+# Villarejo de Salvanes, Spain — confirmed Starlink gateway
+ground_station:
+  name: villarejo
+  lat_deg: 40.17
+  lon_deg: -3.27
+  alt_m: 700
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

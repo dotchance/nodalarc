@@ -1,0 +1,11 @@
+# Lekki, Nigeria — confirmed Starlink gateway
+ground_station:
+  name: lekki
+  lat_deg: 6.43
+  lon_deg: 3.54
+  alt_m: 5
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

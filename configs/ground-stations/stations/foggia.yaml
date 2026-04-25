@@ -1,0 +1,11 @@
+# Foggia, Italy — confirmed Starlink gateway
+ground_station:
+  name: foggia
+  lat_deg: 41.46
+  lon_deg: 15.55
+  alt_m: 75
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

@@ -1,0 +1,11 @@
+# Sambro Creek, Nova Scotia — confirmed Starlink gateway
+ground_station:
+  name: sambro-creek
+  lat_deg: 44.47
+  lon_deg: -63.6
+  alt_m: 10
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

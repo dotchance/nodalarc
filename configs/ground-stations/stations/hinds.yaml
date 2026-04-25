@@ -1,0 +1,11 @@
+# Hinds, New Zealand — confirmed Starlink gateway
+ground_station:
+  name: hinds
+  lat_deg: -43.88
+  lon_deg: 171.72
+  alt_m: 100
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

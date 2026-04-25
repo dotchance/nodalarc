@@ -1,0 +1,11 @@
+# Otaru, Japan — confirmed Starlink gateway
+ground_station:
+  name: otaru
+  lat_deg: 43.19
+  lon_deg: 141.0
+  alt_m: 10
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

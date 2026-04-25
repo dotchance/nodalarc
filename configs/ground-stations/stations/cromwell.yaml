@@ -1,0 +1,11 @@
+# Cromwell, New Zealand — confirmed Starlink gateway
+ground_station:
+  name: cromwell
+  lat_deg: -45.05
+  lon_deg: 169.2
+  alt_m: 200
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

@@ -1,0 +1,11 @@
+# Marathon, Ontario — confirmed Starlink gateway
+ground_station:
+  name: marathon
+  lat_deg: 48.75
+  lon_deg: -86.37
+  alt_m: 300
+  min_elevation_deg: 25
+  verified:
+    source: none
+    confidence: geocoded
+    notes: "Confirmed operational Starlink gateway. Coordinates are city-level, not from regulatory filing."

@@ -6,3 +6,11 @@ ground_station:
   lon_deg: -73.3540
   alt_m: 300
   min_elevation_deg: 25
+  antennas: 8
+  antenna_diameter_m: 1.52
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: E200041
+    confidence: filing
+    url: "https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E200041"

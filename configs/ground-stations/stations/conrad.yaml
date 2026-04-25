@@ -1,9 +1,16 @@
 # Conrad, Montana — Starlink Gateway
-# FCC earth station filing E190023. 8 x 5ft Ka-band antennas.
-# One of the earliest operational gateways.
+# One of the earliest operational gateways. Open prairie terrain.
 ground_station:
   name: conrad
   lat_deg: 48.2033
   lon_deg: -111.9453
   alt_m: 1100
   min_elevation_deg: 25
+  antennas: 8
+  antenna_diameter_m: 1.52
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: E190023
+    confidence: filing
+    url: "https://licensing.fcc.gov/cgi-bin/ws.exe/prod/ib/forms/reports/swr031b.hts?q_set=V_SITE_ANTENNA_FREQ.file_num/C/EQ/E190023"

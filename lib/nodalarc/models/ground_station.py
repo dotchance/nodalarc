@@ -141,7 +141,10 @@ class GroundStationConfig(GroundSegment):
     terminals: list[GroundTerminalDef] | None = None  # Override default
     terrestrial_prefixes: list[TerrestrialPrefix] | None = None  # Override template
 
-    # Physical antenna metadata (informational, not used in simulation)
+    # Physical antenna metadata (informational, not used in simulation).
+    # NMTS migration target: these flat fields will be replaced by
+    # ANTENNA_PATTERN + BAND_PROFILE models when ARCH-005 lands.
+    # For now they document what physical hardware exists at the site.
     antennas: int | None = None  # Number of physical antennas at site
     antenna_diameter_m: float | None = None
     band: str | None = None  # Primary frequency band (Ka, Ku, E, V)

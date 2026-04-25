@@ -7,6 +7,7 @@
 import * as THREE from "three";
 import { GS_COLOR, GS_SIZE, EARTH_RADIUS, KM_PER_UNIT } from "../config";
 import { geoToWorld } from "./geo";
+import { getLabelsEnabled, isOccludedByEarth } from "./labels";
 import type { NodeState } from "../types";
 
 export interface GroundStationEntry {
@@ -225,36 +226,44 @@ export function updateGroundStations(
 // Reusable temporaries for label projection math — avoid per-frame alloc.
 const _gsWorldPos = new THREE.Vector3();
 const _gsNdc = new THREE.Vector3();
-const _gsDirA = new THREE.Vector3();
-const _gsDirB = new THREE.Vector3();
+
+const GS_FADE_IN_DIST = 200;
+const GS_FADE_OUT_DIST = 500;
 
 export function updateGSLabels(camera: THREE.Camera, container: HTMLDivElement): void {
+  if (!getLabelsEnabled()) {
+    for (const entry of groundStations.values()) {
+      entry.label.style.display = "none";
+    }
+    return;
+  }
+
   const width = container.clientWidth;
   const height = container.clientHeight;
   const cameraPos = camera.position;
-  const distToCenter = cameraPos.length();
-  const sinAngle = EARTH_RADIUS / distToCenter;
-  const occlusionThreshold = Math.sqrt(1 - sinAngle * sinAngle);
 
   for (const entry of groundStations.values()) {
-    // World-space position (traverses earthFrame transform). Required:
-    // Vector3.project(camera) treats its input as world coords, and the
-    // occlusion dot-product compares against world camera.position.
     entry.sprite.getWorldPosition(_gsWorldPos);
+
+    const dist = _gsWorldPos.distanceTo(cameraPos);
+
+    if (dist > GS_FADE_OUT_DIST) {
+      entry.label.style.display = "none";
+      continue;
+    }
 
     _gsNdc.copy(_gsWorldPos).project(camera);
 
-    // Behind camera
     if (_gsNdc.z > 1) {
       entry.label.style.display = "none";
       continue;
     }
 
-    // Earth-occlusion test (world-space)
-    _gsDirA.copy(_gsWorldPos).sub(cameraPos).normalize();
-    _gsDirB.copy(cameraPos).multiplyScalar(-1).normalize();
-    const dot = _gsDirA.dot(_gsDirB);
-    if (dot > occlusionThreshold && _gsWorldPos.length() < distToCenter) {
+    if (isOccludedByEarth(
+      _gsWorldPos.x, _gsWorldPos.y, _gsWorldPos.z,
+      cameraPos.x, cameraPos.y, cameraPos.z,
+      EARTH_RADIUS,
+    )) {
       entry.label.style.display = "none";
       continue;
     }
@@ -265,5 +274,12 @@ export function updateGSLabels(camera: THREE.Camera, container: HTMLDivElement):
     entry.label.style.display = "block";
     entry.label.style.left = `${x + 8}px`;
     entry.label.style.top = `${y - 6}px`;
+
+    if (dist < GS_FADE_IN_DIST) {
+      entry.label.style.opacity = "1";
+    } else {
+      const t = (dist - GS_FADE_IN_DIST) / (GS_FADE_OUT_DIST - GS_FADE_IN_DIST);
+      entry.label.style.opacity = String(1 - t * 0.7);
+    }
   }
 }

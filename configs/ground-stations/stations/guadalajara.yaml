@@ -1,3 +1,5 @@
+# WARNING: UNVERIFIED COORDINATES — city-center approximation, NOT from filing.
+# Replace with survey-grade coordinates from FCC/ITU filing when available.
 # Guadalajara, Mexico — Starlink Gateway
 ground_station:
   name: guadalajara

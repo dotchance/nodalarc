@@ -1,0 +1,15 @@
+# Dubuque, US — Starlink Gateway
+#
+ground_station:
+  name: dubuque
+  lat_deg: 42.444611
+  lon_deg: -90.678500
+  alt_m: 300
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20230627-01284
+    confidence: filing

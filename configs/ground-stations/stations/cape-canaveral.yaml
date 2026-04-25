@@ -1,0 +1,15 @@
+# Cape Canaveral, US — Starlink Gateway
+# Full Send
+ground_station:
+  name: cape-canaveral
+  lat_deg: 28.543417
+  lon_deg: -80.666639
+  alt_m: 5
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.47
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20250224-00259
+    confidence: filing

@@ -1,0 +1,15 @@
+# Slope County, US — Starlink Gateway
+#
+ground_station:
+  name: slope-county
+  lat_deg: 46.408389
+  lon_deg: -103.114583
+  alt_m: 800
+  min_elevation_deg: 25
+  antennas: 8
+  antenna_diameter_m: 1.52
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20200422-00442
+    confidence: filing

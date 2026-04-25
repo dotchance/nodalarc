@@ -1,15 +1,15 @@
-# Merrillan, US — Starlink Gateway
+# Adelanto, US — Starlink Gateway
 #
 ground_station:
-  name: merrillan
-  lat_deg: 44.406333
-  lon_deg: -90.814278
-  alt_m: 300
+  name: adelanto
+  lat_deg: 34.604028
+  lon_deg: -117.454361
+  alt_m: 900
   min_elevation_deg: 25
   antennas: 8
   antenna_diameter_m: 1.52
   band: Ka
   verified:
     source: FCC IBFS
-    filing: SES-LIC-20190906-01171
+    filing: SES-LIC-20200428-00458
     confidence: filing

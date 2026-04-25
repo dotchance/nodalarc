@@ -1,0 +1,15 @@
+# North Kansas City, US — Starlink Gateway
+# Call sign E250039
+ground_station:
+  name: north-kansas-city
+  lat_deg: 39.137194
+  lon_deg: -94.577778
+  alt_m: 230
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka+E
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20250606-00887
+    confidence: filing

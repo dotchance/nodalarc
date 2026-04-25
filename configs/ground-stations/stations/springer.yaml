@@ -1,9 +1,9 @@
-# Merrillan, US — Starlink Gateway
+# Springer, US — Starlink Gateway
 #
 ground_station:
-  name: merrillan
-  lat_deg: 44.406333
-  lon_deg: -90.814278
+  name: springer
+  lat_deg: 34.268500
+  lon_deg: -97.213167
   alt_m: 300
   min_elevation_deg: 25
   antennas: 8
@@ -11,5 +11,5 @@ ground_station:
   band: Ka
   verified:
     source: FCC IBFS
-    filing: SES-LIC-20190906-01171
+    filing: SES-LIC-20200528-00576
     confidence: filing

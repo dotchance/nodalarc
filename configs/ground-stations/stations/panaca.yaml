@@ -1,15 +1,15 @@
-# Merrillan, US — Starlink Gateway
+# Panaca, US — Starlink Gateway
 #
 ground_station:
-  name: merrillan
-  lat_deg: 44.406333
-  lon_deg: -90.814278
-  alt_m: 300
+  name: panaca
+  lat_deg: 37.783639
+  lon_deg: -114.692694
+  alt_m: 1500
   min_elevation_deg: 25
   antennas: 8
   antenna_diameter_m: 1.52
   band: Ka
   verified:
     source: FCC IBFS
-    filing: SES-LIC-20190906-01171
+    filing: SES-LIC-20200402-00367
     confidence: filing

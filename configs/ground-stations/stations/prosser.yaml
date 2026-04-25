@@ -1,0 +1,15 @@
+# Prosser, US — Starlink Gateway
+# Call sign E202123
+ground_station:
+  name: prosser
+  lat_deg: 46.127278
+  lon_deg: -119.684306
+  alt_m: 200
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.47
+  band: Ka
+  verified:
+    source: FCC IBFS
+    filing: SES-MOD-20230405-00522
+    confidence: filing

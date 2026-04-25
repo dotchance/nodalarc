@@ -1,0 +1,15 @@
+# Downtown La, US — Starlink Gateway
+# Call sign E250037
+ground_station:
+  name: downtown-la
+  lat_deg: 34.060667
+  lon_deg: -118.188278
+  alt_m: 120
+  min_elevation_deg: 25
+  antennas: 1
+  antenna_diameter_m: 1.85
+  band: Ka+E
+  verified:
+    source: FCC IBFS
+    filing: SES-LIC-20250603-00865
+    confidence: filing

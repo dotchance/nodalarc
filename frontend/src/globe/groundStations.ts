@@ -11,6 +11,25 @@ import { isOccludedByEarth } from "./labels";
 import type { NodeState } from "../types";
 
 let gsLabelsEnabled = true;
+let selectedGsId: string | null = null;
+
+export function setSelectedGroundStation(nodeId: string | null): void {
+  if (selectedGsId) {
+    const prev = groundStations.get(selectedGsId);
+    if (prev) {
+      prev.cone.visible = false;
+      prev.coneOutline.visible = false;
+    }
+  }
+  selectedGsId = nodeId;
+  if (nodeId) {
+    const gs = groundStations.get(nodeId);
+    if (gs) {
+      gs.cone.visible = true;
+      gs.coneOutline.visible = true;
+    }
+  }
+}
 
 export function setGsLabelsEnabled(enabled: boolean): void {
   gsLabelsEnabled = enabled;
@@ -195,10 +214,12 @@ export function updateGroundStations(
       sprite.userData["nodeType"] = "ground_station";
       earthFrame.add(sprite);
 
-      // Elevation cone — per-station radius from actual min_elevation_deg
+      // Elevation cone — hidden by default, shown on selection
       const minElev = node.min_elevation_deg ?? 25;
       const coneRadius = computeConeRadius(minElev, orbitalAltKm);
       const { cone, outline: coneOutline } = createElevationCone(pos, coneRadius);
+      cone.visible = false;
+      coneOutline.visible = false;
       earthFrame.add(cone);
       earthFrame.add(coneOutline);
 

@@ -47,6 +47,9 @@ spec:
                   key: api_key
                   optional: true
           resources:
+            requests:
+              memory: 128Mi
+              cpu: 250m
             limits:
               memory: {{ .Values.vsApi.memoryLimit | default "512Mi" }}
               cpu: {{ .Values.vsApi.cpuLimit | default "500m" }}

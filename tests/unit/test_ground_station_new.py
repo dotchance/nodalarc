@@ -64,8 +64,8 @@ class TestIndividualStationRoundTrip:
 class TestIndividualStationDetails:
     def test_hawthorne_coordinates(self):
         s = load_ground_station_individual("hawthorne")
-        assert s.lat_deg == 33.92
-        assert s.lon_deg == -118.33
+        assert s.lat_deg == 33.9175
+        assert s.lon_deg == -118.3281
 
     def test_mcmurdo_polar_config(self):
         s = load_ground_station_individual("mcmurdo")
@@ -175,8 +175,8 @@ class TestSetResolution:
 
         # Spot-check coordinates
         hawthorne = next(s for s in gs_file.stations if s.name == "hawthorne")
-        assert hawthorne.lat_deg == 33.92
-        assert hawthorne.lon_deg == -118.33
+        assert hawthorne.lat_deg == 33.9175
+        assert hawthorne.lon_deg == -118.3281
 
     def test_mcmurdo_explicit_prefixes_preserved(self):
         """Stations with explicit prefixes keep them even when set has a template."""

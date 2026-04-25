@@ -1,0 +1,8 @@
+# Robertsdale, Alabama — Starlink Gateway
+# FCC filing 2020-06-16. 8 x 5ft Ka-band antennas.
+ground_station:
+  name: robertsdale
+  lat_deg: 30.5670
+  lon_deg: -87.6460
+  alt_m: 40
+  min_elevation_deg: 25

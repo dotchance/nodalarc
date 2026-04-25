@@ -1,0 +1,7 @@
+# Cape Town, South Africa — Starlink Gateway
+ground_station:
+  name: cape-town
+  lat_deg: -33.93
+  lon_deg: 18.42
+  alt_m: 10
+  min_elevation_deg: 25

@@ -1,0 +1,7 @@
+# Guadalajara, Mexico — Starlink Gateway
+ground_station:
+  name: guadalajara
+  lat_deg: 20.67
+  lon_deg: -103.35
+  alt_m: 1560
+  min_elevation_deg: 25

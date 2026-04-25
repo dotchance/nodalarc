@@ -1,0 +1,8 @@
+# Colburn, Idaho — Starlink Gateway
+# FCC filing 2020-06-12. 8 x 5ft Ka-band antennas.
+ground_station:
+  name: colburn
+  lat_deg: 48.3453
+  lon_deg: -116.4393
+  alt_m: 650
+  min_elevation_deg: 25

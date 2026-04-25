@@ -1,0 +1,7 @@
+# North Bend, Oregon — Starlink Gateway
+ground_station:
+  name: north-bend
+  lat_deg: 43.41
+  lon_deg: -124.22
+  alt_m: 5
+  min_elevation_deg: 25

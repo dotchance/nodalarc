@@ -1,0 +1,7 @@
+# Manila, Philippines — Starlink Gateway
+ground_station:
+  name: manila
+  lat_deg: 14.60
+  lon_deg: 120.98
+  alt_m: 10
+  min_elevation_deg: 25

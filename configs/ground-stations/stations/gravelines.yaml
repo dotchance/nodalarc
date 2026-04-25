@@ -1,0 +1,7 @@
+# Gravelines, France — Starlink Gateway
+ground_station:
+  name: gravelines
+  lat_deg: 50.99
+  lon_deg: 2.13
+  alt_m: 5
+  min_elevation_deg: 25

@@ -1,0 +1,8 @@
+# Beekmantown, New York — Starlink Gateway
+# FCC filing 2020-03-24. 8 x 5ft Ka-band antennas.
+ground_station:
+  name: beekmantown
+  lat_deg: 44.7900
+  lon_deg: -73.4800
+  alt_m: 60
+  min_elevation_deg: 25

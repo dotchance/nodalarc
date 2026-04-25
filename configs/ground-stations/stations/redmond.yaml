@@ -1,0 +1,8 @@
+# Redmond, Washington — Starlink Gateway
+# FCC filing 2019-08-26. SpaceX satellite development facility.
+ground_station:
+  name: redmond
+  lat_deg: 47.6942
+  lon_deg: -122.0321
+  alt_m: 10
+  min_elevation_deg: 25

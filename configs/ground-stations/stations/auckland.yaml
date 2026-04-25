@@ -1,0 +1,7 @@
+# Auckland, New Zealand — Starlink Gateway
+ground_station:
+  name: auckland
+  lat_deg: -36.85
+  lon_deg: 174.76
+  alt_m: 50
+  min_elevation_deg: 25

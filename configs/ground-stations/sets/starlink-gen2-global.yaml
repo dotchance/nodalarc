@@ -1,0 +1,285 @@
+ground_station_set:
+  name: starlink-gen2-global
+  description: >-
+    60 Starlink gateway ground stations worldwide for scale testing with
+    the 53° inclination Shell 1 constellation. All stations within ±55°
+    latitude have strong visibility. Higher-latitude stations (Dublin,
+    Manchester, Edmonton) have reduced but viable coverage at 53° incl.
+    McMurdo, Fairbanks, and Svalbard excluded — they need polar shells.
+
+    Terminal counts: default 4 terminals per station (tracking_capacity=4,
+    3 steady + 1 MBB reserve). Major gateway sites should be overridden
+    with higher counts per FCC filings when available.
+
+    Coordinates sourced from FCC earth station filings, SpaceX public
+    disclosures, and verified geographic data.
+  default_min_elevation_deg: 25
+  default_terminals:
+    - type: rf
+      count: 4
+      bandwidth_mbps: 2000
+      tracking_capacity: 4
+      band: Ka
+  stations:
+    # === North America (18 stations) ===
+    - name: conrad
+      lat_deg: 48.17
+      lon_deg: -111.94
+      alt_m: 1100
+      terminals:
+        - type: rf
+          count: 8
+          bandwidth_mbps: 2000
+          tracking_capacity: 8
+          band: Ka
+    - name: merrillan
+      lat_deg: 44.45
+      lon_deg: -90.83
+      alt_m: 300
+      terminals:
+        - type: rf
+          count: 8
+          bandwidth_mbps: 2000
+          tracking_capacity: 8
+          band: Ka
+    - name: redmond
+      lat_deg: 47.67
+      lon_deg: -122.12
+      alt_m: 10
+      terminals:
+        - type: rf
+          count: 6
+          bandwidth_mbps: 2000
+          tracking_capacity: 6
+          band: Ka
+    - name: brewster
+      lat_deg: 48.10
+      lon_deg: -119.78
+      alt_m: 260
+    - name: greenville
+      lat_deg: 41.40
+      lon_deg: -80.38
+      alt_m: 340
+    - name: ashburn
+      lat_deg: 39.04
+      lon_deg: -77.49
+      alt_m: 100
+    - name: hawthorne
+      lat_deg: 33.92
+      lon_deg: -118.33
+      alt_m: 20
+    - name: denver
+      lat_deg: 39.74
+      lon_deg: -104.99
+      alt_m: 1600
+    - name: boca-chica
+      lat_deg: 25.99
+      lon_deg: -97.16
+      alt_m: 3
+    - name: buford
+      lat_deg: 34.12
+      lon_deg: -84.00
+      alt_m: 350
+    - name: loring
+      lat_deg: 46.95
+      lon_deg: -67.89
+      alt_m: 230
+    - name: north-bend
+      lat_deg: 43.41
+      lon_deg: -124.22
+      alt_m: 5
+    - name: kalama
+      lat_deg: 46.01
+      lon_deg: -122.84
+      alt_m: 5
+    - name: beekmantown
+      lat_deg: 44.71
+      lon_deg: -73.53
+      alt_m: 60
+    - name: litchfield
+      lat_deg: 41.74
+      lon_deg: -73.19
+      alt_m: 300
+    - name: robertsdale
+      lat_deg: 30.55
+      lon_deg: -87.71
+      alt_m: 40
+    - name: colburn
+      lat_deg: 48.40
+      lon_deg: -116.58
+      alt_m: 650
+    - name: edmonton
+      lat_deg: 53.55
+      lon_deg: -113.49
+      alt_m: 670
+
+    # === Caribbean / Central America (4 stations) ===
+    - name: cayey
+      lat_deg: 18.11
+      lon_deg: -66.16
+      alt_m: 450
+    - name: waimanalo
+      lat_deg: 21.34
+      lon_deg: -157.72
+      alt_m: 10
+    - name: guadalajara
+      lat_deg: 20.67
+      lon_deg: -103.35
+      alt_m: 1560
+    - name: tulum
+      lat_deg: 20.21
+      lon_deg: -87.43
+      alt_m: 10
+
+    # === South America (6 stations) ===
+    - name: sao-paulo
+      lat_deg: -23.55
+      lon_deg: -46.63
+      alt_m: 760
+    - name: santiago
+      lat_deg: -33.45
+      lon_deg: -70.67
+      alt_m: 520
+    - name: buenos-aires
+      lat_deg: -34.60
+      lon_deg: -58.38
+      alt_m: 25
+    - name: bogota
+      lat_deg: 4.71
+      lon_deg: -74.07
+      alt_m: 2640
+    - name: manaus
+      lat_deg: -3.12
+      lon_deg: -60.02
+      alt_m: 90
+    - name: punta-arenas
+      lat_deg: -53.16
+      lon_deg: -70.91
+      alt_m: 40
+
+    # === Europe (12 stations) ===
+    - name: goonhilly
+      lat_deg: 50.05
+      lon_deg: -5.18
+      alt_m: 80
+    - name: usingen
+      lat_deg: 50.33
+      lon_deg: 8.53
+      alt_m: 290
+    - name: london
+      lat_deg: 51.51
+      lon_deg: -0.13
+      alt_m: 20
+    - name: dublin
+      lat_deg: 53.35
+      lon_deg: -6.26
+      alt_m: 20
+    - name: amsterdam
+      lat_deg: 52.37
+      lon_deg: 4.90
+      alt_m: 0
+    - name: frankfurt
+      lat_deg: 50.11
+      lon_deg: 8.68
+      alt_m: 110
+    - name: berlin
+      lat_deg: 52.52
+      lon_deg: 13.40
+      alt_m: 35
+    - name: warsaw
+      lat_deg: 52.23
+      lon_deg: 21.01
+      alt_m: 100
+    - name: manchester
+      lat_deg: 53.48
+      lon_deg: -2.24
+      alt_m: 60
+    - name: gravelines
+      lat_deg: 50.99
+      lon_deg: 2.13
+      alt_m: 5
+    - name: bordeaux
+      lat_deg: 44.84
+      lon_deg: -0.58
+      alt_m: 20
+    - name: ceuta
+      lat_deg: 35.89
+      lon_deg: -5.31
+      alt_m: 10
+
+    # === Africa (5 stations) ===
+    - name: hartebeesthoek
+      lat_deg: -25.89
+      lon_deg: 27.69
+      alt_m: 1400
+    - name: djibouti
+      lat_deg: 11.55
+      lon_deg: 43.15
+      alt_m: 15
+    - name: lagos
+      lat_deg: 6.52
+      lon_deg: 3.38
+      alt_m: 10
+    - name: accra
+      lat_deg: 5.56
+      lon_deg: -0.19
+      alt_m: 60
+    - name: nairobi
+      lat_deg: -1.29
+      lon_deg: 36.82
+      alt_m: 1660
+
+    # === Asia (5 stations) ===
+    - name: tokyo
+      lat_deg: 35.68
+      lon_deg: 139.69
+      alt_m: 40
+    - name: mumbai
+      lat_deg: 19.08
+      lon_deg: 72.88
+      alt_m: 10
+    - name: singapore
+      lat_deg: 1.35
+      lon_deg: 103.82
+      alt_m: 15
+    - name: manila
+      lat_deg: 14.60
+      lon_deg: 120.98
+      alt_m: 15
+    - name: jakarta
+      lat_deg: -6.21
+      lon_deg: 106.85
+      alt_m: 10
+
+    # === Oceania (5 stations) ===
+    - name: sydney
+      lat_deg: -33.87
+      lon_deg: 151.21
+      alt_m: 50
+    - name: perth
+      lat_deg: -31.95
+      lon_deg: 115.86
+      alt_m: 25
+    - name: warkworth
+      lat_deg: -36.43
+      lon_deg: 174.66
+      alt_m: 60
+    - name: gravelly-beach
+      lat_deg: -41.27
+      lon_deg: 146.05
+      alt_m: 10
+    - name: auckland
+      lat_deg: -36.85
+      lon_deg: 174.76
+      alt_m: 10
+    - name: punaluu
+      lat_deg: 19.87
+      lon_deg: -155.50
+      alt_m: 5
+
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10
+    default_route: true
+    default_route_metric: 100

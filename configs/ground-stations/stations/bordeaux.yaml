@@ -1,0 +1,8 @@
+# Bordeaux, France — Starlink Gateway
+# City center coordinates (exact gateway site unconfirmed)
+ground_station:
+  name: bordeaux
+  lat_deg: 44.84
+  lon_deg: -0.58
+  alt_m: 20
+  min_elevation_deg: 25

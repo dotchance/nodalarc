@@ -1,0 +1,8 @@
+# Ceuta, Spain — Starlink Gateway
+# Spanish autonomous city on the north coast of Africa
+ground_station:
+  name: ceuta
+  lat_deg: 35.89
+  lon_deg: -5.31
+  alt_m: 10
+  min_elevation_deg: 25

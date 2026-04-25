@@ -1029,7 +1029,10 @@ def _create_session_pod(
             ),
             read_only_root_filesystem=True,
         ),
-        resources=kubernetes.client.V1ResourceRequirements(limits={"memory": "60Mi", "cpu": "50m"}),
+        resources=kubernetes.client.V1ResourceRequirements(
+            requests={"memory": "32Mi", "cpu": "10m"},
+            limits={"memory": "128Mi", "cpu": "200m"},
+        ),
         volume_mounts=[
             kubernetes.client.V1VolumeMount(
                 name="frr-config",
@@ -1104,7 +1107,8 @@ def _create_session_pod(
                 )
             ),
             resources=kubernetes.client.V1ResourceRequirements(
-                limits={"memory": "60Mi", "cpu": "50m"}
+                requests={"memory": "32Mi", "cpu": "10m"},
+                limits={"memory": "128Mi", "cpu": "200m"},
             ),
         )
         if sidecar_env:

@@ -24,6 +24,7 @@ import { usePlayback } from "./hooks/usePlayback";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
+import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
 import type { ViewMode, ColorMode, GlobeMode, ReferenceFrame, TracedPath } from "./types";
 
 const REFERENCE_FRAME_STORAGE_KEY = "nodalarc.referenceFrame";
@@ -237,6 +238,7 @@ function AppInner() {
       onTogglePanel: handlePanelToggle,
       onToggleFilter: () => setFilterOpen((v) => !v),
       onToggleLabels: () => setLabelsEnabled(!getLabelsEnabled()),
+      onToggleGsLabels: () => setGsLabelsEnabled(!getGsLabelsEnabled()),
     }),
     [clearSelection, handleCloseCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame],
   );

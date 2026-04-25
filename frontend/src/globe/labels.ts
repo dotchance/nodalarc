@@ -24,11 +24,6 @@ export function setLabelsEnabled(enabled: boolean): void {
       entry.div.style.display = "none";
     }
   }
-  // Also toggle GS label visibility
-  const gsLabels = document.querySelectorAll<HTMLDivElement>(".gs-label");
-  for (const label of gsLabels) {
-    if (!enabled) label.style.display = "none";
-  }
 }
 
 export function getLabelsEnabled(): boolean {

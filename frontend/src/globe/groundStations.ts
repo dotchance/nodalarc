@@ -7,8 +7,23 @@
 import * as THREE from "three";
 import { GS_COLOR, GS_SIZE, EARTH_RADIUS, KM_PER_UNIT } from "../config";
 import { geoToWorld } from "./geo";
-import { getLabelsEnabled, isOccludedByEarth } from "./labels";
+import { isOccludedByEarth } from "./labels";
 import type { NodeState } from "../types";
+
+let gsLabelsEnabled = true;
+
+export function setGsLabelsEnabled(enabled: boolean): void {
+  gsLabelsEnabled = enabled;
+  if (!enabled) {
+    for (const entry of groundStations.values()) {
+      entry.label.style.display = "none";
+    }
+  }
+}
+
+export function getGsLabelsEnabled(): boolean {
+  return gsLabelsEnabled;
+}
 
 export interface GroundStationEntry {
   sprite: THREE.Sprite;
@@ -231,7 +246,7 @@ const GS_FADE_IN_DIST = 200;
 const GS_FADE_OUT_DIST = 500;
 
 export function updateGSLabels(camera: THREE.Camera, container: HTMLDivElement): void {
-  if (!getLabelsEnabled()) {
+  if (!gsLabelsEnabled) {
     for (const entry of groundStations.values()) {
       entry.label.style.display = "none";
     }

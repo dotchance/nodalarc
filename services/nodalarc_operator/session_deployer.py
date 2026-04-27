@@ -898,6 +898,20 @@ def teardown_session(namespace: str) -> None:
     """Clean up session ConfigMaps (pods are garbage-collected via ownerReferences)."""
     v1 = _get_v1()
 
+    # Read session_id BEFORE deleting ConfigMaps — needed for JetStream purge.
+    # Once the ConfigMap is deleted, we can't derive the session_id.
+    session_id = "current-session"
+    try:
+        cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
+        if cm.data and "session.yaml" in cm.data:
+            from nodalarc.nats_channels import sanitize_session_id
+
+            raw = yaml.safe_load(cm.data["session.yaml"])
+            session_id = sanitize_session_id(raw.get("session", {}).get("name", "current-session"))
+    except Exception:
+        pass
+    log.info("Teardown session_id: %s", session_id)
+
     # Delete session-level ConfigMaps
     for cm_name in [
         "nodalarc-session",
@@ -938,14 +952,15 @@ def teardown_session(namespace: str) -> None:
     # checkpoint contamination on session name reuse. Without this, a new
     # session with the same name (e.g., "current-session") would read the
     # stale SchedulingCheckpoint from the previous instance.
-    _purge_session_jetstream_subjects(namespace)
+    _purge_session_jetstream_subjects(namespace, session_id)
 
 
-def _purge_session_jetstream_subjects(namespace: str) -> None:
+def _purge_session_jetstream_subjects(namespace: str, session_id: str = "current-session") -> None:
     """Purge retained JetStream messages for the torn-down session.
 
     Best-effort — failure doesn't block teardown. Uses session-scoped
-    subject filter so concurrent sessions are not affected.
+    subject filter so concurrent sessions are not affected. The session_id
+    must be passed by the caller BEFORE ConfigMaps are deleted.
     """
     try:
         import asyncio
@@ -955,21 +970,7 @@ def _purge_session_jetstream_subjects(namespace: str) -> None:
             NATS_CONNECT_OPTIONS,
             STREAM_SESSION_EVENTS,
             nats_url,
-            sanitize_session_id,
         )
-
-        # Derive session_id from the session ConfigMap (if it still exists)
-        session_id = "current-session"
-        try:
-            v1 = _get_v1()
-            cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
-            if cm.data and "session.yaml" in cm.data:
-                raw = yaml.safe_load(cm.data["session.yaml"])
-                session_id = sanitize_session_id(
-                    raw.get("session", {}).get("name", "current-session")
-                )
-        except Exception:
-            pass
 
         async def _purge():
             nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)

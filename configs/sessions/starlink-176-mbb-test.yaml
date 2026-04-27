@@ -1,48 +1,7 @@
 session:
   name: starlink-176-mbb-test
 constellation: configs/constellations/starlink-176.yaml
-ground_stations:
-  default_terminals:
-    - type: optical
-      count: 2
-      bandwidth_mbps: 1000
-      tracking_capacity: 2
-  default_min_elevation_deg: 25
-  default_scheduling_policy: highest-elevation
-  default_terrestrial_prefixes:
-    ipv4_template: "172.16.{gs_index}.0/24"
-    ipv6_template: "fd10::{gs_index}:0/112"
-    metric: 10
-    default_route: true
-    default_route_metric: 100
-  stations:
-    # --- Near inclination (45-55°) — highest handover rate ---
-    - name: london
-      lat_deg: 51.51
-      lon_deg: -0.13
-      alt_m: 11
-    - name: warsaw
-      lat_deg: 52.23
-      lon_deg: 21.01
-      alt_m: 100
-    - name: seattle
-      lat_deg: 47.61
-      lon_deg: -122.33
-      alt_m: 56
-    # --- Mid-latitude (30-40°) — moderate handover rate ---
-    - name: hawthorne
-      lat_deg: 33.92
-      lon_deg: -118.33
-      alt_m: 20
-    - name: ashburn
-      lat_deg: 39.04
-      lon_deg: -77.49
-      alt_m: 100
-    # --- Southern hemisphere mirror ---
-    - name: buenosaires
-      lat_deg: -34.60
-      lon_deg: -58.38
-      alt_m: 25
+ground_stations: configs/ground-stations/sets/mbb-test.yaml
 routing:
   protocol: isis
   extensions:

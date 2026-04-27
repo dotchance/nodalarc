@@ -5,11 +5,6 @@ ground_station_set:
     15 US stations (geographic spread, not every site), 25 international.
     All are confirmed operational Starlink gateway locations.
   default_min_elevation_deg: 25
-  default_terminals:
-    - type: rf
-      count: 8
-      bandwidth_mbps: 10000
-      tracking_capacity: 8
   stations:
     # === US (15 — geographic spread) ===
     - conrad           # Montana (northwest)

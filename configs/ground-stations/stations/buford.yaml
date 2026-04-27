@@ -7,6 +7,11 @@ ground_station:
   lon_deg: -84.00
   alt_m: 340
   min_elevation_deg: 25
+  terminals:
+    - type: rf
+      count: 1
+      bandwidth_mbps: 1000
+      tracking_capacity: 1
   verified:
     source: none
     confidence: geocoded

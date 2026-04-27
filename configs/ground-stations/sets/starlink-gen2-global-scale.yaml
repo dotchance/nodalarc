@@ -6,11 +6,6 @@ ground_station_set:
     20 international stations at known Starlink gateway locations
     (geocoded coordinates, pending national regulator filing data).
   default_min_elevation_deg: 25
-  default_terminals:
-    - type: rf
-      count: 8
-      bandwidth_mbps: 10000
-      tracking_capacity: 8
   stations:
     # === FCC-verified US stations (66) ===
     - adelanto

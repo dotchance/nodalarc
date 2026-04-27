@@ -6,6 +6,11 @@ ground_station:
   lon_deg: -117.454361
   alt_m: 900
   min_elevation_deg: 25
+  terminals:
+    - type: rf
+      count: 8
+      bandwidth_mbps: 10000
+      tracking_capacity: 8
   antennas: 8
   antenna_diameter_m: 1.52
   band: Ka

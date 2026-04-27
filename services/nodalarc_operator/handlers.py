@@ -11,7 +11,10 @@ import kopf
 import kubernetes
 
 from nodalarc_operator.session_deployer import (
+    check_all_pods_running,
+    check_old_pods_terminated,
     check_pods_ready,
+    check_wiring_complete,
     deploy_session,
     restart_platform_pods,
     set_nodalpath_mode,
@@ -88,11 +91,10 @@ async def on_create(spec, name, namespace, meta, **_):
     loop = asyncio.get_running_loop()
     old_pods_clear = False
     for _ in range(60):
-        total, _ = await loop.run_in_executor(None, check_pods_ready, namespace)
-        if total == 0:
+        if await loop.run_in_executor(None, check_old_pods_terminated, namespace):
             old_pods_clear = True
             break
-        log.info(f"Waiting for {total} old session pods to terminate...")
+        log.info("Waiting for old session pods to terminate...")
         await asyncio.sleep(2)
     if not old_pods_clear:
         log.error("Old session pods did not terminate within 120s — aborting deploy")
@@ -230,22 +232,18 @@ async def on_create(spec, name, namespace, meta, **_):
         log.info(f"Session deployed: {pod_count} pods running, waiting for wiring")
 
         # Wait for Node Agent to write wiring-complete status
-        kubernetes.config.load_incluster_config()
-        v1 = kubernetes.client.CoreV1Api()
         for _i in range(300):  # 5 minutes max (large constellations can take several minutes)
             try:
-                cm = await loop.run_in_executor(
-                    None,
-                    v1.read_namespaced_config_map,
-                    "nodalarc-wiring-status",
-                    namespace,
+                complete, wired_count, progress_msg = await loop.run_in_executor(
+                    None, check_wiring_complete, namespace, pod_count
                 )
-                data = cm.data or {}
-                progress_msg = data.pop("_progress", None)
-                wired_count = len(data)
-                display_msg = (
-                    progress_msg or f"Data plane wiring: {wired_count}/{pod_count} nodes wired"
-                )
+                if wired_count == 0 and progress_msg is None:
+                    # ConfigMap not yet written (404) — Node Agent hasn't started
+                    display_msg = "Waiting for Node Agent to begin wiring"
+                else:
+                    display_msg = (
+                        progress_msg or f"Data plane wiring: {wired_count}/{pod_count} nodes wired"
+                    )
                 _update_status(
                     name,
                     namespace,
@@ -257,7 +255,7 @@ async def on_create(spec, name, namespace, meta, **_):
                         "message": display_msg,
                     },
                 )
-                if wired_count >= pod_count:
+                if complete:
                     _update_status(
                         name,
                         namespace,
@@ -272,19 +270,7 @@ async def on_create(spec, name, namespace, meta, **_):
                     log.info(f"Session ready: {wired_count}/{pod_count} nodes wired")
                     return
             except kubernetes.client.rest.ApiException as e:
-                if e.status == 404:
-                    _update_status(
-                        name,
-                        namespace,
-                        {
-                            "phase": "Wiring",
-                            "readyPods": pod_count,
-                            "podCount": pod_count,
-                            "message": "Waiting for Node Agent to begin wiring",
-                        },
-                    )
-                else:
-                    log.warning(f"Wiring status check error: {e}")
+                log.warning(f"Wiring status check error: {e}")
             await asyncio.sleep(1)
 
         # Timeout — stay in Wiring phase
@@ -312,17 +298,11 @@ async def on_resume(spec, name, namespace, meta, status, **_):
         # Check if wiring completed while we were away
         loop = asyncio.get_running_loop()
         total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-        kubernetes.config.load_incluster_config()
-        v1 = kubernetes.client.CoreV1Api()
         try:
-            cm = await loop.run_in_executor(
-                None,
-                v1.read_namespaced_config_map,
-                "nodalarc-wiring-status",
-                namespace,
+            complete, wired_count, _ = await loop.run_in_executor(
+                None, check_wiring_complete, namespace, total
             )
-            wired_count = len(cm.data) if cm.data else 0
-            if wired_count >= total:
+            if complete:
                 _update_status(
                     name,
                     namespace,
@@ -337,8 +317,7 @@ async def on_resume(spec, name, namespace, meta, status, **_):
                 log.info(f"Operator resume: advanced Wiring → Ready ({wired_count} wired)")
                 return
         except kubernetes.client.rest.ApiException as e:
-            if e.status != 404:
-                log.warning("Wiring status check error on resume: %s", e)
+            log.warning("Wiring status check error on resume: %s", e)
         _update_status(
             name,
             namespace,
@@ -369,9 +348,17 @@ async def on_resume(spec, name, namespace, meta, status, **_):
         # Check how many session pods are already running — if all are
         # up, continue from where we left off (FRR signaling → wiring).
         loop = asyncio.get_running_loop()
-        total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-        pod_count = status.get("podCount", total)
-        if ready >= pod_count and pod_count > 0:
+        pod_count_from_status = status.get("podCount", 0)
+        if pod_count_from_status > 0:
+            all_ready, total, ready = await loop.run_in_executor(
+                None, check_all_pods_running, namespace, pod_count_from_status
+            )
+            pod_count = pod_count_from_status
+        else:
+            total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
+            pod_count = total
+            all_ready = ready >= pod_count
+        if all_ready and pod_count > 0:
             log.info(
                 f"Operator resume: all {ready}/{pod_count} pods running in {phase} phase, "
                 f"continuing to FRR signaling and wiring"
@@ -440,15 +427,14 @@ async def wiring_check(name, namespace, status, **_):
         return
 
     loop = asyncio.get_running_loop()
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
+    if total == 0:
+        return
     try:
-        cm = await loop.run_in_executor(
-            None, v1.read_namespaced_config_map, "nodalarc-wiring-status", namespace
+        complete, wired_count, _ = await loop.run_in_executor(
+            None, check_wiring_complete, namespace, total
         )
-        wired_count = len(cm.data) if cm.data else 0
-        total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-        if wired_count >= total and total > 0:
+        if complete:
             _update_status(
                 name,
                 namespace,
@@ -462,5 +448,4 @@ async def wiring_check(name, namespace, status, **_):
             )
             log.info(f"Timer: advanced Wiring → Ready ({wired_count} wired)")
     except kubernetes.client.rest.ApiException as e:
-        if e.status != 404:
-            log.warning("Wiring status check error in timer: %s", e)
+        log.warning("Wiring status check error in timer: %s", e)

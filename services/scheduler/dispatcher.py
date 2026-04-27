@@ -243,6 +243,31 @@ class Dispatcher:
         # Load substrate latency for cross-node compensation
         self._load_substrate_latency()
 
+        # Start scenario handler — must be AFTER loop and nc are ready.
+        # The scenario handler runs its own NATS connection for receiving
+        # commands, but dispatches to Node Agents on THIS loop via
+        # asyncio.run_coroutine_threadsafe().
+        from scheduler.scenario_handler import run_scenario_handler
+
+        scenario_thread = threading.Thread(
+            target=run_scenario_handler,
+            args=(
+                None,  # to_pub (legacy)
+                self._interface_map,
+                self._bandwidth_map,
+                self._override_set,
+                self._override_lock,
+                self._actual_links,
+                self._loc,
+                self._pool,
+                asyncio.get_running_loop(),
+                nc,
+                self._gs_capacities,
+            ),
+            daemon=True,
+        )
+        scenario_thread.start()
+
         # Start dispatch worker BEFORE subscriptions — ready to receive work
         worker_task = asyncio.create_task(self._dispatch_worker(nc))
 

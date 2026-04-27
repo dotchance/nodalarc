@@ -403,6 +403,13 @@ def deploy_session(
             lines = raw.splitlines()
             cleaned_lines = [line for line in lines if line.strip() != ""]
             configs["frr.conf"] = "\n".join(cleaned_lines) + "\n"
+        # Config version hash — NOS-agnostic readiness contract.
+        # The entrypoint writes this to a sentinel file after loading config.
+        # The readiness probe diffs the sentinel against the ConfigMap mount
+        # to verify the running NOS has loaded the intended config version.
+        if "frr.conf" in configs:
+            config_hash = hashlib.sha256(configs["frr.conf"].encode()).hexdigest()[:16]
+            configs["_config_version"] = config_hash
         return node_id, configs
 
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -932,9 +939,9 @@ def compute_platform_hash(spec: dict) -> str:
 def check_pods_ready_condition(namespace: str) -> tuple[int, int]:
     """Count session pods with K8s Ready condition = True.
 
-    Ready means the readiness probe (vtysh -c "show version") passed,
-    which means FRR loaded its config from the ConfigMap mount and is
-    serving. This replaces the old exec-based config-ready sentinel.
+    Ready means the readiness probe passed: config version sentinel matches
+    the ConfigMap mount (NOS loaded the intended config) AND the NOS is
+    responsive (e.g., vtysh -c "show version" for FRR).
 
     Returns (total, ready_count).
     """
@@ -1188,11 +1195,17 @@ def _create_session_pod(
         ),
         readiness_probe=kubernetes.client.V1Probe(
             _exec=kubernetes.client.V1ExecAction(
-                command=["vtysh", "-c", "show version"],
+                command=[
+                    "sh",
+                    "-c",
+                    "test -f /etc/frr/.config_version && "
+                    "diff -q /etc/frr-config/_config_version /etc/frr/.config_version > /dev/null 2>&1 && "
+                    "vtysh -c 'show version' > /dev/null 2>&1",
+                ],
             ),
             initial_delay_seconds=5,
-            period_seconds=10,
-            failure_threshold=3,
+            period_seconds=5,
+            failure_threshold=6,
             timeout_seconds=5,
         ),
         volume_mounts=[

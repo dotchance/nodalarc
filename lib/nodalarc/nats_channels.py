@@ -16,6 +16,7 @@ STREAM_OME_EVENTS = "NODALARC_OME"
 STREAM_LINK_EVENTS = "NODALARC_LINKS"
 STREAM_MI_EVENTS = "NODALARC_MI"
 STREAM_SESSION_EVENTS = "NODALARC_SESSION"
+STREAM_OPS_EVENTS = "NODALARC_OPS"
 
 # ---------------------------------------------------------------------------
 # Subject definitions — hierarchical, dot-separated
@@ -48,6 +49,9 @@ SUBJECT_ADAPTER_EVENT = "nodalarc.mi.adapter"
 
 # NodalPath publications (JetStream — retained)
 SUBJECT_ALMANAC_EVENT = "nodalarc.nodalpath.almanac"
+
+# Ops events (JetStream — memory storage, 4h retention)
+SUBJECT_OPS_EVENT = "nodalarc.ops.>"
 
 # Request/reply subjects (NATS core, not JetStream)
 SUBJECT_SCENARIO_INJECT = "nodalarc.scheduler.scenario"
@@ -194,4 +198,22 @@ def mi_stream_config() -> dict:
         "max_msgs_per_subject": -1,
         "max_age": _TWO_PERIODS_S,
         "max_bytes": 64 * 1024 * 1024,
+    }
+
+
+def ops_stream_config() -> dict:
+    """StreamConfig for NODALARC_OPS stream.
+
+    Memory storage, 4-hour retention. Operational events are transient
+    telemetry — not replayed after restart. 128MB cap prevents unbounded
+    growth during long sessions with high event rates.
+    """
+    return {
+        "name": STREAM_OPS_EVENTS,
+        "subjects": ["nodalarc.ops.>"],
+        "retention": "limits",
+        "storage": "memory",
+        "max_msgs_per_subject": -1,
+        "max_age": 14400,  # 4 hours
+        "max_bytes": 128 * 1024 * 1024,
     }

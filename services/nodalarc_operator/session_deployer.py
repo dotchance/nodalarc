@@ -782,6 +782,76 @@ def check_pods_ready(namespace: str) -> tuple[int, int]:
     return total, ready
 
 
+def check_old_pods_terminated(namespace: str) -> bool:
+    """Return True if zero session pods exist in the namespace.
+
+    Pure query — no side effects. Used before deploying a new session
+    to ensure the previous session's pods have fully terminated.
+    """
+    total, _ = check_pods_ready(namespace)
+    return total == 0
+
+
+def check_all_pods_running(namespace: str, expected_count: int) -> tuple[bool, int, int]:
+    """Check whether all expected session pods are Running.
+
+    Returns (all_ready, total, ready) where all_ready is True
+    if ready >= expected_count.
+
+    Pure query — no side effects.
+    """
+    total, ready = check_pods_ready(namespace)
+    return ready >= expected_count, total, ready
+
+
+def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, int, str | None]:
+    """Check whether Node Agent wiring is complete.
+
+    Reads the nodalarc-wiring-status ConfigMap and counts wired nodes
+    (excludes the _progress key used for display messages).
+
+    Returns (complete, wired_count, progress_msg) where:
+      - complete: True if wired_count >= expected_count
+      - wired_count: number of wired node entries
+      - progress_msg: the _progress value from the ConfigMap, or None
+
+    Returns (False, 0, None) if the ConfigMap does not exist (404).
+    Raises on other API errors.
+
+    Pure query — no side effects.
+    """
+    kubernetes.config.load_incluster_config()
+    v1 = kubernetes.client.CoreV1Api()
+    try:
+        cm = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
+        data = dict(cm.data) if cm.data else {}
+        progress_msg = data.pop("_progress", None)
+        wired_count = len(data)
+        return wired_count >= expected_count, wired_count, progress_msg
+    except kubernetes.client.rest.ApiException as e:
+        if e.status == 404:
+            return False, 0, None
+        raise
+
+
+def compute_platform_hash(spec: dict) -> str:
+    """Hash platform-impacting fields of a ConstellationSpec for change detection.
+
+    Hashes only fields that affect the platform pods or data plane:
+    constellation, ground_stations, routing, time. Changes to display-only
+    fields (name, labels, etc.) do not produce a different hash.
+
+    Returns a hex digest string (SHA-256).
+    """
+    platform_fields = {}
+    for key in ("constellation", "ground_stations", "routing", "time"):
+        if key in spec:
+            platform_fields[key] = spec[key]
+    # Canonical YAML serialization for deterministic hashing
+    canonical = yaml.dump(platform_fields, default_flow_style=False, sort_keys=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def signal_frr_config_ready(
     namespace: str,
     progress_fn: Any | None = None,

@@ -32,7 +32,6 @@ from nodalarc_operator.session_deployer import (
     check_wiring_complete,
     compute_expected_pod_count,
     compute_platform_hash,
-    deploy_session,
     ensure_session_configmaps,
     ensure_session_pods,
     restart_platform_pods,
@@ -81,18 +80,18 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
     }
 
 
-def _compute_expected_node_ids(spec: dict) -> set[str]:
-    """Compute the set of expected pod names from the CRD spec.
+from functools import lru_cache
 
-    Returns lowercase pod names (node_ids) that should exist for this spec.
-    Returns empty set on any error.
+
+@lru_cache(maxsize=4)
+def _compute_expected_node_ids_cached(spec_hash: str, session_yaml: str) -> frozenset[str]:
+    """Compute expected pod names from session YAML. Memoized by spec hash.
+
+    Cached to avoid re-expanding the constellation on every 10-second
+    reconciler tick during scale-down (waiting for K8s to terminate pods).
     """
-    import yaml as _yaml
-
-    session_yaml = spec.get("sessionYaml", "")
-    if not session_yaml:
-        return set()
     try:
+        import yaml as _yaml
         from nodalarc.constellation_loader import (
             expand_constellation,
             load_constellation,
@@ -112,10 +111,18 @@ def _compute_expected_node_ids(spec: dict) -> set[str]:
             expected.add(addressing.sat_id(sat.plane, sat.slot).lower())
         for station in gs_file.stations:
             expected.add(addressing.gs_id(station.name).lower())
-        return expected
+        return frozenset(expected)
     except Exception as exc:
         log.warning("Cannot compute expected node_ids: %s", exc)
-        return set()
+        return frozenset()
+
+
+def _compute_expected_node_ids(spec: dict) -> frozenset[str]:
+    """Compute expected node_ids with memoization keyed on spec hash."""
+    session_yaml = spec.get("sessionYaml", "")
+    if not session_yaml:
+        return frozenset()
+    return _compute_expected_node_ids_cached(compute_platform_hash(spec), session_yaml)
 
 
 def _delete_obsolete_pods(expected_ids: set[str], namespace: str) -> int:
@@ -412,16 +419,15 @@ async def _reconcile_session(spec, name, namespace, meta, status):
 
 @kopf.on.create("constellationspecs", group="nodalarc.io")
 async def on_create(spec, name, namespace, meta, **_):
-    """Handle ConstellationSpec CR creation — deploy a session.
+    """Handle ConstellationSpec CR creation.
 
-    Retains blocking waits for old-pod termination and initial pod
-    deployment (fresh creation needs synchronous sequencing). After
-    pods reach Running, delegates to _reconcile_session for FRR
-    signaling, wiring, and Ready advancement.
+    Non-blocking: validates the CRD, sets initial status, and calls the
+    reconciler once. The kopf timer re-enters every 10 seconds to drive
+    progress through ConfigMap creation, pod creation, readiness, wiring,
+    and Ready. No blocking waits — the Operator stays responsive.
     """
     log.info(f"ConstellationSpec '{name}' created in {namespace}")
 
-    # Singleton constraint: only 'current-session' is allowed
     if name != "current-session":
         _update_status(
             name,
@@ -443,92 +449,9 @@ async def on_create(spec, name, namespace, meta, **_):
         },
     )
 
-    owner_ref = _build_owner_ref(name, meta)
-    loop = asyncio.get_running_loop()
-
-    # Old-pod termination is handled by the reconciler's Condition 1.
-    # The timer re-enters every 10 seconds to check progress. No blocking
-    # wait here — the Operator stays responsive to other CRDs and events.
-
-    # Deploy session (blocking — run in executor to not block kopf)
-    def _deploy_progress(msg: str) -> None:
-        _update_status(name, namespace, {"phase": "Pending", "message": msg})
-
-    try:
-        result = await loop.run_in_executor(
-            None, deploy_session, dict(spec), name, namespace, owner_ref, _deploy_progress
-        )
-    except Exception as exc:
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Error",
-                "message": str(exc)[:500],
-            },
-        )
-        raise kopf.PermanentError(f"Deploy failed: {exc}") from exc
-
-    _update_status(name, namespace, result)
-
-    # Set NodalPath mode based on session protocol before restarting
-    protocol = _extract_protocol(dict(spec))
-    _update_status(name, namespace, {"phase": "Creating", "message": "Configuring NodalPath mode"})
-    await loop.run_in_executor(None, set_nodalpath_mode, namespace, protocol)
-
-    # Restart platform pods to pick up new session ConfigMaps
-    _update_status(
-        name,
-        namespace,
-        {"phase": "Creating", "message": "Restarting platform services (OME, Scheduler, VS-API)"},
-    )
-    platform_hash = compute_platform_hash(dict(spec))
-    await loop.run_in_executor(None, restart_platform_pods, namespace, platform_hash)
-    log.info("Restarted platform pods for new session")
-
-    # Wait for pods to reach Running (blocking — fresh creation needs this)
-    pod_count = result.get("podCount", 0)
-    if pod_count > 0:
-        all_pods_ready = False
-        for _i in range(600):  # 10 minutes max
-            total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-            pending = pod_count - ready
-            _update_status(
-                name,
-                namespace,
-                {
-                    "phase": "Creating",
-                    "readyPods": ready,
-                    "podCount": pod_count,
-                    "message": f"Pods: {ready} running, {pending} starting",
-                },
-            )
-            if ready >= pod_count:
-                all_pods_ready = True
-                break
-            await asyncio.sleep(1)
-        if not all_pods_ready:
-            log.error(
-                f"Session pods did not reach Running within 600s "
-                f"({ready}/{pod_count} ready) — aborting"
-            )
-            _update_status(
-                name,
-                namespace,
-                {
-                    "phase": "Error",
-                    "message": f"Timeout: {ready}/{pod_count} pods Running after 600s",
-                },
-            )
-            raise kopf.PermanentError(f"Session pods did not reach Running: {ready}/{pod_count}")
-
-    # Pods are running — delegate to reconciler for FRR signaling → wiring → Ready
-    current_status = {
-        "phase": "Creating",
-        "podCount": pod_count,
-        "readyPods": pod_count,
-    }
-    await _reconcile_session(spec, name, namespace, meta, current_status)
+    # The reconciler handles everything. First invocation kicks off
+    # the state machine; the timer drives subsequent ticks.
+    await _reconcile_session(spec, name, namespace, meta, {"phase": "Pending"})
 
 
 @kopf.on.update("constellationspecs", group="nodalarc.io")

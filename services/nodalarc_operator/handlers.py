@@ -81,6 +81,62 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
     }
 
 
+def _delete_obsolete_pods(spec: dict, namespace: str) -> int:
+    """Delete session pods that don't belong to the current spec.
+
+    Computes the set of expected node_ids from the spec, lists actual
+    session pods, and deletes any whose node_id is not in the expected set.
+    Returns the number of pods deleted.
+    """
+    import yaml as _yaml
+
+    from nodalarc_operator.session_deployer import _get_v1
+
+    # Compute expected node_ids from spec
+    session_yaml = spec.get("sessionYaml", "")
+    if not session_yaml:
+        return 0
+    try:
+        from nodalarc.constellation_loader import (
+            load_constellation,
+            load_ground_stations,
+        )
+        from nodalarc.models.addressing import AddressingScheme
+        from nodalarc.models.session import SessionConfig
+
+        raw = _yaml.safe_load(session_yaml)
+        session = SessionConfig.model_validate(raw)
+        constellation = load_constellation(session.constellation)
+        from nodalarc.constellation_loader import expand_constellation as _expand
+
+        satellites = _expand(constellation)
+        gs_file = load_ground_stations(session.ground_stations)
+        addressing = AddressingScheme(session.addressing)
+        expected_ids = set()
+        for sat in satellites:
+            expected_ids.add(addressing.sat_id(sat.plane, sat.slot).lower())
+        for station in gs_file.stations:
+            expected_ids.add(addressing.gs_id(station.name).lower())
+    except Exception as exc:
+        log.warning("Cannot compute expected node_ids for scale-down: %s", exc)
+        return 0
+
+    # List actual session pods and delete obsolete ones
+    v1 = _get_v1()
+    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+    deleted = 0
+    for pod in pods.items:
+        pod_name = pod.metadata.name
+        if pod_name not in expected_ids:
+            try:
+                v1.delete_namespaced_pod(pod_name, namespace)
+                deleted += 1
+                log.info("Deleted obsolete pod %s", pod_name)
+            except Exception as exc:
+                log.warning("Failed to delete obsolete pod %s: %s", pod_name, exc)
+    return deleted
+
+
 def _extract_protocol(spec: dict) -> str:
     """Extract routing protocol from CRD spec's sessionYaml.
 
@@ -158,8 +214,25 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 )
                 return
 
-    # --- Condition 2: Session deployed (pods created and running) ---
+    # --- Condition 2: Session deployed (correct number of pods) ---
     total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
+
+    if total > expected_count:
+        # Scale-down: delete obsolete pods that don't belong to the current spec.
+        # Compute which node_ids SHOULD exist, delete any that shouldn't.
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "message": f"Scaling down: {total} pods exist, {expected_count} expected",
+                "podCount": expected_count,
+            },
+        )
+        await loop.run_in_executor(None, _delete_obsolete_pods, dict(spec), namespace)
+        log.info("Reconcile: deleted obsolete pods (%d → %d)", total, expected_count)
+        return  # Timer re-enters to verify
+
     if total < expected_count:
         # Pods missing — run the full ensure pipeline to converge
         _update_status(

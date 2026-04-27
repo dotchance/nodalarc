@@ -168,7 +168,9 @@ _ALL_FRR_DAEMONS = [
 ]
 
 
-def _publish_validation_ops_events(results: list, namespace: str) -> None:
+def _publish_validation_ops_events(
+    results: list, namespace: str, session_id: str = "default"
+) -> None:
     """Publish validation results as OpsEvents. Best-effort — failure doesn't block deploy."""
     try:
         import asyncio
@@ -176,7 +178,7 @@ def _publish_validation_ops_events(results: list, namespace: str) -> None:
 
         import nats
         from nodalarc.models.events import OpsEvent
-        from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url
+        from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url, ops_event_subject
 
         async def _publish():
             nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
@@ -192,7 +194,7 @@ def _publish_validation_ops_events(results: list, namespace: str) -> None:
                         details={"remediation": r.remediation} if r.remediation else None,
                     )
                     await nc.publish(
-                        f"nodalarc.ops.validator.{r.code.lower()}",
+                        ops_event_subject(session_id, "validator", r.code),
                         event.model_dump_json().encode(),
                     )
             finally:
@@ -334,7 +336,9 @@ def ensure_session_configmaps(
     for w in val_warnings:
         log.warning("Session validation %s: %s", w.code, w.message)
     if validation_results:
-        _publish_validation_ops_events(validation_results, namespace)
+        _publish_validation_ops_events(
+            validation_results, namespace, session_id=session.session.name
+        )
     if val_errors:
         import kopf
 
@@ -929,6 +933,46 @@ def teardown_session(namespace: str) -> None:
         for f in glob.glob(pattern):
             Path(f).unlink(missing_ok=True)
     log.info("Cleaned up ephemeral config files")
+
+    # Purge session-scoped JetStream subjects to prevent cross-session
+    # checkpoint contamination on session name reuse. Without this, a new
+    # session with the same name (e.g., "current-session") would read the
+    # stale SchedulingCheckpoint from the previous instance.
+    _purge_session_jetstream_subjects(namespace)
+
+
+def _purge_session_jetstream_subjects(namespace: str) -> None:
+    """Purge retained JetStream messages for the torn-down session.
+
+    Best-effort — failure doesn't block teardown. The NODALARC_SESSION
+    stream has MaxMsgsPerSubject=1, so each subject has at most one
+    retained message. Purging removes it so the next session with the
+    same name starts clean.
+    """
+    try:
+        import asyncio
+
+        import nats
+        from nodalarc.nats_channels import (
+            NATS_CONNECT_OPTIONS,
+            STREAM_SESSION_EVENTS,
+            nats_url,
+        )
+
+        async def _purge():
+            nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+            try:
+                js = nc.jetstream()
+                # Purge all subjects in the session stream.
+                # This removes retained ephemeris, playback state, and checkpoint.
+                await js.purge_stream(STREAM_SESSION_EVENTS)
+                log.info("Purged NODALARC_SESSION stream (retained messages cleared)")
+            finally:
+                await nc.close()
+
+        asyncio.run(_purge())
+    except Exception as exc:
+        log.warning("Failed to purge JetStream session subjects: %s", exc)
 
 
 def check_pods_ready(namespace: str) -> tuple[int, int]:

@@ -145,6 +145,41 @@ _ALL_FRR_DAEMONS = [
 ]
 
 
+def _publish_validation_ops_events(results: list, namespace: str) -> None:
+    """Publish validation results as OpsEvents. Best-effort — failure doesn't block deploy."""
+    try:
+        import asyncio
+        import socket
+
+        import nats
+        from nodalarc.models.events import OpsEvent
+        from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url
+
+        async def _publish():
+            nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+            try:
+                for r in results:
+                    event = OpsEvent(
+                        timestamp=datetime.now(UTC),
+                        source="validator",
+                        hostname=socket.gethostname(),
+                        level=r.level if r.level == "error" else "warning",
+                        code=r.code,
+                        message=r.message,
+                        details={"remediation": r.remediation} if r.remediation else None,
+                    )
+                    await nc.publish(
+                        f"nodalarc.ops.validator.{r.code.lower()}",
+                        event.model_dump_json().encode(),
+                    )
+            finally:
+                await nc.close()
+
+        asyncio.run(_publish())
+    except Exception as exc:
+        log.warning("Failed to publish validation OpsEvents: %s", exc)
+
+
 def deploy_session(
     spec: dict,
     name: str,
@@ -269,6 +304,8 @@ def deploy_session(
     val_warnings = [r for r in validation_results if r.level == "warning"]
     for w in val_warnings:
         log.warning("Session validation %s: %s", w.code, w.message)
+    if validation_results:
+        _publish_validation_ops_events(validation_results, namespace)
     if val_errors:
         import kopf
 
@@ -304,18 +341,21 @@ def deploy_session(
             config_overrides=config_overrides,
         )
 
-    # --- Step 5: Render FRR configs ---
+    # --- Step 5: Render FRR configs (parallelized) ---
     _progress(f"Rendering FRR configurations for {len(node_vars)} nodes")
     template_dir = str(Path("configs/templates/frr").resolve())
     # nosec B701 — these are FRR router config templates, not HTML; autoescape would break config syntax
     env = Environment(loader=FileSystemLoader(template_dir), keep_trailing_newline=True)
 
     rendered_configs: dict[str, dict[str, str]] = {}
-    for node_id, vars in node_vars.items():
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _render_one_node(node_id: str, tpl_vars: dict) -> tuple[str, dict[str, str]]:
         configs: dict[str, str] = {}
         for tpl_file in resolved.template_files:
             tpl = env.get_template(tpl_file.src)
-            rendered = tpl.render(**vars)
+            rendered = tpl.render(**tpl_vars)
             dest_name = Path(tpl_file.dst).name
             configs[dest_name] = rendered
         # Generate daemons file
@@ -341,8 +381,13 @@ def deploy_session(
             lines = raw.splitlines()
             cleaned_lines = [line for line in lines if line.strip() != ""]
             configs["frr.conf"] = "\n".join(cleaned_lines) + "\n"
+        return node_id, configs
 
-        rendered_configs[node_id] = configs
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_render_one_node, nid, vars): nid for nid, vars in node_vars.items()}
+        for fut in as_completed(futures):
+            nid, configs = fut.result()
+            rendered_configs[nid] = configs
 
     # --- Step 6: Create per-node FRR config ConfigMaps ---
     _progress(f"Creating {len(rendered_configs)} FRR config ConfigMaps")
@@ -1141,6 +1186,15 @@ def _create_session_pod(
         resources=kubernetes.client.V1ResourceRequirements(
             requests={"memory": "32Mi", "cpu": "10m"},
             limits={"memory": "128Mi", "cpu": "200m"},
+        ),
+        readiness_probe=kubernetes.client.V1Probe(
+            _exec=kubernetes.client.V1ExecAction(
+                command=["vtysh", "-c", "show version"],
+            ),
+            initial_delay_seconds=5,
+            period_seconds=10,
+            failure_threshold=3,
+            timeout_seconds=5,
         ),
         volume_mounts=[
             kubernetes.client.V1VolumeMount(

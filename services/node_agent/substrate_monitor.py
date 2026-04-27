@@ -44,17 +44,23 @@ _peers_lock = threading.Lock()
 _nc = None  # NATS connection
 _hostname: str = ""
 _event_loop = None  # asyncio event loop for scheduling from threads
+# Session ID for NATS subject scoping. Set by init().
+# The Node Agent doesn't load session config directly — the session_id
+# is passed from __main__.py which reads it from the wiring manifest
+# or the session ConfigMap. Falls back to "default" if unavailable.
+_session_id: str = "default"
 
 
-def init(nc, hostname: str, event_loop) -> None:
+def init(nc, hostname: str, event_loop, session_id: str = "default") -> None:
     """Initialize module-level references for cross-thread communication.
 
     Called once from the async server context before handlers start.
     """
-    global _nc, _hostname, _event_loop
+    global _nc, _hostname, _event_loop, _session_id
     _nc = nc
     _hostname = hostname
     _event_loop = event_loop
+    _session_id = session_id
 
 
 def add_peer(remote_ip: str) -> None:
@@ -143,7 +149,7 @@ async def measure_and_publish(nc, hostname: str, remote_ip: str) -> None:
     Runs ping in executor (non-blocking asyncio). Publishes result to NATS.
     Called when the first VXLAN tunnel to a new peer is created.
     """
-    from nodalarc.nats_channels import SUBJECT_SUBSTRATE_LATENCY
+    from nodalarc.nats_channels import substrate_latency_subject
 
     median = await asyncio.get_running_loop().run_in_executor(None, measure_one, remote_ip)
     if median is not None:
@@ -152,7 +158,7 @@ async def measure_and_publish(nc, hostname: str, remote_ip: str) -> None:
             "peers": {remote_ip: round(median, 3)},
             "timestamp": datetime.now(UTC).isoformat(),
         }
-        await nc.publish(SUBJECT_SUBSTRATE_LATENCY, json.dumps(payload).encode())
+        await nc.publish(substrate_latency_subject(_session_id), json.dumps(payload).encode())
         log.info("Published substrate latency: %s → %s = %.3fms", hostname, remote_ip, median)
 
 
@@ -162,9 +168,10 @@ async def monitor_loop(nc, hostname: str, interval_s: float = 60.0) -> None:
     Runs forever. Sleeps for interval_s, then measures all active peers
     and publishes results. Catches all exceptions to prevent task death.
     """
-    from nodalarc.nats_channels import SUBJECT_SUBSTRATE_LATENCY
+    from nodalarc.nats_channels import substrate_latency_subject
 
-    log.info("Substrate monitor started (interval=%.0fs)", interval_s)
+    _subj = substrate_latency_subject(_session_id)
+    log.info("Substrate monitor started (interval=%.0fs, session_id=%s)", interval_s, _session_id)
     while True:
         try:
             await asyncio.sleep(interval_s)
@@ -182,7 +189,7 @@ async def monitor_loop(nc, hostname: str, interval_s: float = 60.0) -> None:
                     "peers": measurements,
                     "timestamp": datetime.now(UTC).isoformat(),
                 }
-                await nc.publish(SUBJECT_SUBSTRATE_LATENCY, json.dumps(payload).encode())
+                await nc.publish(_subj, json.dumps(payload).encode())
         except asyncio.CancelledError:
             break
         except Exception as exc:

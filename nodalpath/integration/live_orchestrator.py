@@ -19,11 +19,11 @@ from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
-    SUBJECT_LINK_DOWN,
-    SUBJECT_LINK_STATE_SNAPSHOT,
-    SUBJECT_LINK_UP,
-    SUBJECT_VISIBILITY_EVENT,
+    link_down_subject,
+    link_state_snapshot_subject,
+    link_up_subject,
     nats_url,
+    ome_visibility_subject,
 )
 
 from nodalpath.engine.almanac_builder import compute_almanac_entry
@@ -62,6 +62,7 @@ class LiveOrchestrator:
         inspection_on_link_event: bool = True,
         inspection_heartbeat_interval_s: int = 0,
         static_edges: list | None = None,
+        session_id: str = "default",
     ) -> None:
         self._builder = SnapshotBuilder(
             node_registry, interface_map, bandwidth_map, static_edges=static_edges
@@ -83,6 +84,11 @@ class LiveOrchestrator:
         self._inspection_on_push = inspection_on_push
         self._inspection_on_link_event = inspection_on_link_event
         self._inspection_heartbeat_interval_s = inspection_heartbeat_interval_s
+        self._session_id = session_id
+        self._subj_visibility = ome_visibility_subject(session_id)
+        self._subj_link_down = link_down_subject(session_id)
+        self._subj_link_up = link_up_subject(session_id)
+        self._subj_link_snapshot = link_state_snapshot_subject(session_id)
 
     @property
     def link_state_store(self) -> LinkStateStore | None:
@@ -125,7 +131,7 @@ class LiveOrchestrator:
         try:
             subs.append(
                 await js.subscribe(
-                    SUBJECT_VISIBILITY_EVENT,
+                    self._subj_visibility,
                     stream="NODALARC_OME",
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
@@ -134,7 +140,7 @@ class LiveOrchestrator:
             )
             subs.append(
                 await js.subscribe(
-                    SUBJECT_LINK_DOWN,
+                    self._subj_link_down,
                     stream="NODALARC_LINKS",
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
@@ -143,7 +149,7 @@ class LiveOrchestrator:
             )
             subs.append(
                 await js.subscribe(
-                    SUBJECT_LINK_UP,
+                    self._subj_link_up,
                     stream="NODALARC_LINKS",
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
@@ -191,7 +197,7 @@ class LiveOrchestrator:
         """
         try:
             sub = await js.subscribe(
-                SUBJECT_LINK_STATE_SNAPSHOT,
+                self._subj_link_snapshot,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
             )

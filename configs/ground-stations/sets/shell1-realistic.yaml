@@ -1,0 +1,22 @@
+ground_station_set:
+  name: shell1-realistic
+  description: >-
+    8 gateway stations at actual Starlink FCC-filed locations for
+    realistic Shell 1 testing. 3 North America, 2 Europe, 3 Southern
+    hemisphere. Terminal capabilities defined in individual station
+    model files.
+  stations:
+    - conrad
+    - greenville
+    - boca-chica
+    - goonhilly
+    - usingen
+    - warkworth
+    - gravelly-beach
+    - sao-paulo
+  default_terrestrial_prefixes:
+    ipv4_template: "172.16.{gs_index}.0/24"
+    ipv6_template: "fd10::{gs_index}:0/112"
+    metric: 10
+    default_route: true
+    default_route_metric: 100

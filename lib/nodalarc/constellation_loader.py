@@ -8,8 +8,11 @@ YAML loading happens here (component responsibility, not shared lib).
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 import yaml
 from pydantic import TypeAdapter
@@ -219,15 +222,30 @@ def load_constellation(source: str | Path | dict) -> ConstellationConfig:
 
 
 def load_ground_station_individual(name: str) -> GroundStationConfig:
-    """Load an individual ground station YAML file by name."""
+    """Load an individual ground station YAML file by name.
+
+    Validates that the station model is self-contained — it must define
+    its own terminals. Station models are the single source of truth for
+    hardware capabilities. Set files and session files must not override
+    terminal definitions.
+    """
     stations_dir = _resolve_gs_stations_dir()
     path = stations_dir / f"{name}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Ground station file not found: {path}")
     data = yaml.safe_load(path.read_text())
     if isinstance(data, dict) and "ground_station" in data:
-        return GroundStationConfig.model_validate(data["ground_station"])
-    return GroundStationConfig.model_validate(data)
+        station = GroundStationConfig.model_validate(data["ground_station"])
+    else:
+        station = GroundStationConfig.model_validate(data)
+    if not station.terminals:
+        log.warning(
+            "Ground station '%s' has no terminals defined — using set/code defaults. "
+            "Add a terminals: block to %s to make the model self-contained.",
+            name,
+            path,
+        )
+    return station
 
 
 def load_ground_station_set(name: str) -> GroundStationSetConfig:

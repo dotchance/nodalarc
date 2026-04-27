@@ -6,6 +6,11 @@ ground_station:
   lon_deg: -112.098258
   alt_m: 330
   min_elevation_deg: 25
+  terminals:
+    - type: rf
+      count: 32
+      bandwidth_mbps: 10000
+      tracking_capacity: 32
   antennas: 32
   antenna_diameter_m: 1.85
   band: Ka+E

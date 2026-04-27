@@ -1,26 +1,7 @@
 session:
   name: starlink-176-nodalpath
-constellation:
-  mode: parametric
-  name: starlink-176
-  satellite_type: starlink-v2
-  orbit:
-    altitude_km: 550
-    inclination_deg: 53
-    pattern: walker-delta
-  planes:
-    count: 16
-    raan_spacing_deg: 22.5
-    sats_per_plane: 11
-    phase_offset_deg: 2.045
-ground_stations:
-  - hawthorne
-  - ashburn
-  - frankfurt
-  - singapore
-  - sao-paulo
-  - sydney
-  - mcmurdo
+constellation: configs/constellations/starlink-176.yaml
+ground_stations: configs/ground-stations/sets/global.yaml
 routing:
   protocol: nodalpath
   extensions: []

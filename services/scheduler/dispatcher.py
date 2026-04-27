@@ -243,6 +243,31 @@ class Dispatcher:
         # Load substrate latency for cross-node compensation
         self._load_substrate_latency()
 
+        # Start scenario handler — must be AFTER loop and nc are ready.
+        # The scenario handler runs its own NATS connection for receiving
+        # commands, but dispatches to Node Agents on THIS loop via
+        # asyncio.run_coroutine_threadsafe().
+        from scheduler.scenario_handler import run_scenario_handler
+
+        scenario_thread = threading.Thread(
+            target=run_scenario_handler,
+            args=(
+                None,  # to_pub (legacy)
+                self._interface_map,
+                self._bandwidth_map,
+                self._override_set,
+                self._override_lock,
+                self._actual_links,
+                self._loc,
+                self._pool,
+                asyncio.get_running_loop(),
+                nc,
+                self._gs_capacities,
+            ),
+            daemon=True,
+        )
+        scenario_thread.start()
+
         # Start dispatch worker BEFORE subscriptions — ready to receive work
         worker_task = asyncio.create_task(self._dispatch_worker(nc))
 
@@ -637,9 +662,14 @@ class Dispatcher:
         self._last_snapshot_seq = snapshot.snapshot_seq
         desired: dict[tuple[str, str], ActiveLinkInfo] = {}
 
+        with self._override_lock:
+            current_overrides = set(self._override_set)
+
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 pair = (link.node_a, link.node_b)
+                if pair in current_overrides:
+                    continue
                 latency = link.latency_ms
                 if latency is None:
                     sim_unix = snapshot.sim_time.timestamp() if snapshot.sim_time else 0.0
@@ -845,13 +875,9 @@ class Dispatcher:
         key = f"{k3s_a}-{k3s_b}"
         return self._substrate_latency.get(key, 0.0)
 
-    def _link_locality(self, node_a: str, node_b: str) -> int:
-        """Determine locality for a link pair."""
-        k3s_a = self._loc.k3s_node(node_a)
-        k3s_b = self._loc.k3s_node(node_b)
-        if k3s_a and k3s_b and k3s_a != k3s_b:
-            return node_agent_pb2.CROSS_NODE
-        return node_agent_pb2.LOCAL
+    def _link_locality(self, node_a: str, node_b: str) -> int | None:
+        """Determine locality for a link pair. None if either pod unscheduled."""
+        return self._loc.link_locality(node_a, node_b)
 
     async def _reconcile_links(
         self,
@@ -1096,6 +1122,9 @@ class Dispatcher:
 
             node_a, node_b = pair
             locality = self._link_locality(node_a, node_b)
+            if locality is None:
+                log.warning("Skipping DOWN %s-%s: pod(s) not yet scheduled", node_a, node_b)
+                continue
             is_gs = info.link_type == "ground" if info else False
 
             if is_gs:
@@ -1250,6 +1279,9 @@ class Dispatcher:
 
             node_a, node_b = pair
             locality = self._link_locality(node_a, node_b)
+            if locality is None:
+                log.warning("Skipping UP %s-%s: pod(s) not yet scheduled", node_a, node_b)
+                continue
             is_gs = info.link_type == "ground" if info else False
 
             substrate_ms = self._get_substrate_ms(node_a, node_b)
@@ -1295,9 +1327,19 @@ class Dispatcher:
                     )
                     pair_agents.setdefault(pair, set()).add(agent)
                 else:
+                    skip_pair = False
                     for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
                         peer_k3s = self._loc.k3s_node(peer_nid)
                         remote_ip = self._loc.node_ip(peer_k3s)
+                        if not remote_ip:
+                            log.error(
+                                "CROSS_NODE GS LinkUp %s<->%s: no IP for node %s — skipping",
+                                gs_id,
+                                sat_id,
+                                peer_k3s,
+                            )
+                            skip_pair = True
+                            break
                         iface = gs_iface if nid == gs_id else sat_iface
                         peer_iface = sat_iface if nid == gs_id else gs_iface
                         agent_addr = self._loc.agent_addr(nid)
@@ -1318,6 +1360,8 @@ class Dispatcher:
                             )
                         )
                         pair_agents.setdefault(pair, set()).add(agent_addr)
+                    if skip_pair:
+                        continue
             else:
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
@@ -1325,6 +1369,7 @@ class Dispatcher:
 
                     vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b)
 
+                skip_pair = False
                 for nid, ifname, peer_nid, peer_ifname in [
                     (node_a, info.interface_a, node_b, info.interface_b),
                     (node_b, info.interface_b, node_a, info.interface_a),
@@ -1334,6 +1379,15 @@ class Dispatcher:
                     if locality == node_agent_pb2.CROSS_NODE:
                         peer_k3s = self._loc.k3s_node(peer_nid)
                         remote_ip = self._loc.node_ip(peer_k3s)
+                        if not remote_ip:
+                            log.error(
+                                "CROSS_NODE ISL LinkUp %s<->%s: no IP for node %s — skipping",
+                                node_a,
+                                node_b,
+                                peer_k3s,
+                            )
+                            skip_pair = True
+                            break
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceUp(
                             node_id=nid,
@@ -1349,6 +1403,8 @@ class Dispatcher:
                         )
                     )
                     pair_agents.setdefault(pair, set()).add(agent)
+                if skip_pair:
+                    continue
 
         successful_agents: set[str] = set()
         agent_addrs = list(agent_ifaces.keys())

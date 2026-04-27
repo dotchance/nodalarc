@@ -57,6 +57,18 @@ class PodLocationMap:
         """Get the InternalIP for a K3s node. Empty string if unknown."""
         return self._node_ips.get(k3s_node, "")
 
+    def link_locality(self, node_a: str, node_b: str) -> int | None:
+        """Determine link locality. Returns None if either pod is unscheduled."""
+        from nodalarc.proto import node_agent_pb2
+
+        k3s_a = self._node_of.get(node_a, "")
+        k3s_b = self._node_of.get(node_b, "")
+        if not k3s_a or not k3s_b:
+            return None
+        if k3s_a != k3s_b:
+            return node_agent_pb2.CROSS_NODE
+        return node_agent_pb2.LOCAL
+
     def all_agent_addrs(self) -> list[str]:
         """All unique Node Agent gRPC addresses."""
         return list(set(self._agent_addrs.values()))
@@ -193,4 +205,4 @@ def _k3s_node_ip(v1, node_name: str) -> str:
                 return addr.address
     except Exception as exc:
         log.warning("Failed to get IP for node %s: %s", node_name, exc)
-    return "127.0.0.1"
+    return ""

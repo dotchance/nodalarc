@@ -336,8 +336,9 @@ async def on_resume(spec, name, namespace, meta, status, **_):
                 )
                 log.info(f"Operator resume: advanced Wiring → Ready ({wired_count} wired)")
                 return
-        except kubernetes.client.rest.ApiException:
-            pass
+        except kubernetes.client.rest.ApiException as e:
+            if e.status != 404:
+                log.warning("Wiring status check error on resume: %s", e)
         _update_status(
             name,
             namespace,
@@ -460,5 +461,6 @@ async def wiring_check(name, namespace, status, **_):
                 },
             )
             log.info(f"Timer: advanced Wiring → Ready ({wired_count} wired)")
-    except kubernetes.client.rest.ApiException:
-        pass  # Wiring status not yet written
+    except kubernetes.client.rest.ApiException as e:
+        if e.status != 404:
+            log.warning("Wiring status check error in timer: %s", e)

@@ -255,8 +255,11 @@ class Dispatcher:
                 deliver_policy=_DP.LAST_PER_SUBJECT,
             )
             try:
+                import gzip as _ckpt_gzip
+
                 ckpt_msg = await asyncio.wait_for(ckpt_sub.next_msg(), timeout=2.0)
-                ckpt = SchedulingCheckpoint.model_validate_json(ckpt_msg.data)
+                decompressed = _ckpt_gzip.decompress(ckpt_msg.data)
+                ckpt = SchedulingCheckpoint.model_validate_json(decompressed)
                 self._current_sim_time = ckpt.sim_time
                 log.info(
                     "Recovered SchedulingCheckpoint: sim_time=%s step=%d epoch_id=%d "

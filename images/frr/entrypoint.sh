@@ -1,24 +1,29 @@
 #!/bin/bash
 set -e
 
-# Wait for the Operator to deliver FRR configs.
-# The Operator execs into the pod to:
-#   1. cp /etc/frr-config/* /etc/frr/
-#   2. touch /etc/frr/.config-ready
-READY_FILE="/etc/frr/.config-ready"
-TIMEOUT=900
+# Wait for ConfigMap volume mount to be populated by kubelet.
+# The Operator creates a per-node ConfigMap (frr-config-<node-id>) mounted
+# at /etc/frr-config/. kubelet populates the volume when the pod is
+# scheduled — no exec or sentinel file needed.
+CONFIG_SRC="/etc/frr-config/frr.conf"
+TIMEOUT=120
 WAITED=0
 
-echo "Waiting for config (sentinel: $READY_FILE)..."
-while [ ! -f "$READY_FILE" ]; do
+echo "Waiting for ConfigMap mount ($CONFIG_SRC)..."
+while [ ! -f "$CONFIG_SRC" ]; do
     sleep 1
     WAITED=$((WAITED + 1))
     if [ "$WAITED" -ge "$TIMEOUT" ]; then
-        echo "ERROR: Config not delivered within ${TIMEOUT}s, exiting"
+        echo "ERROR: ConfigMap not mounted within ${TIMEOUT}s, exiting"
         exit 1
     fi
 done
-echo "Config ready after ${WAITED}s"
+echo "ConfigMap mounted after ${WAITED}s"
+
+# Copy ConfigMap contents to writable /etc/frr/ (tmpfs emptyDir).
+# ConfigMap mounts are read-only; FRR needs to write to /etc/frr/.
+cp /etc/frr-config/* /etc/frr/
+echo "Copied config from /etc/frr-config/ to /etc/frr/"
 
 # Create vtysh.conf if it doesn't exist — suppresses the
 # "Can't open configuration file /etc/frr/vtysh.conf" warning

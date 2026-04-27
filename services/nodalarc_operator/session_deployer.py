@@ -748,13 +748,18 @@ def set_nodalpath_mode(namespace: str, protocol: str) -> None:
     log.warning("NodalPath container --mode arg not found in deployment spec")
 
 
-def restart_platform_pods(namespace: str) -> None:
-    """Restart OME, Scheduler, VS-API, and NodalPath pods to pick up new session ConfigMaps.
+def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
+    """Trigger rolling restart of platform pods via annotation change.
 
-    Deletes pods — the Deployments recreate them automatically.
+    Patches each Deployment's pod template with a config-hash annotation,
+    which triggers a rolling update. This is the standard K8s pattern —
+    no pod deletion race conditions, respects PodDisruptionBudgets, and
+    the Deployment controller handles sequencing.
     """
     kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    apps_v1 = kubernetes.client.AppsV1Api()
+
+    annotation_value = config_hash or datetime.now(UTC).isoformat()
 
     for label in [
         "app=nodalarc-ome",
@@ -762,13 +767,24 @@ def restart_platform_pods(namespace: str) -> None:
         "app=nodalarc-vs-api",
         "app=nodalarc-nodalpath",
     ]:
-        pods = v1.list_namespaced_pod(namespace, label_selector=label)
-        for pod in pods.items:
+        deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)
+        for deploy in deployments.items:
+            body = {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {
+                                "nodalarc.io/config-hash": annotation_value,
+                            }
+                        }
+                    }
+                }
+            }
             try:
-                v1.delete_namespaced_pod(pod.metadata.name, namespace)
-                log.info(f"Restarted {pod.metadata.name}")
-            except kubernetes.client.rest.ApiException:
-                pass
+                apps_v1.patch_namespaced_deployment(deploy.metadata.name, namespace, body)
+                log.info(f"Rolling restart triggered for {deploy.metadata.name}")
+            except kubernetes.client.rest.ApiException as exc:
+                log.warning(f"Failed to patch deployment {deploy.metadata.name}: {exc}")
 
 
 def teardown_session(namespace: str) -> None:
@@ -897,58 +913,27 @@ def compute_platform_hash(spec: dict) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def signal_frr_config_ready(
-    namespace: str,
-    progress_fn: Any | None = None,
-) -> int:
-    """Copy FRR configs and touch config-ready sentinel in all session pods.
+def check_pods_ready_condition(namespace: str) -> tuple[int, int]:
+    """Count session pods with K8s Ready condition = True.
 
-    Single atomic exec per pod: cp + touch in one shell command.
-    Sentinel is only created if config copy succeeds (&&).
-    Parallelized with ThreadPoolExecutor(16).
+    Ready means the readiness probe (vtysh -c "show version") passed,
+    which means FRR loaded its config from the ConfigMap mount and is
+    serving. This replaces the old exec-based config-ready sentinel.
 
-    Returns the number of pods signaled.
+    Returns (total, ready_count).
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    from kubernetes.stream import stream
-
     kubernetes.config.load_incluster_config()
     v1 = kubernetes.client.CoreV1Api()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     total = len(pods.items)
-
-    def _signal_one(pod_name: str) -> bool:
-        stream(
-            v1.connect_get_namespaced_pod_exec,
-            pod_name,
-            namespace,
-            container="frr",
-            command=["sh", "-c", "cp /etc/frr-config/* /etc/frr/ && touch /etc/frr/.config-ready"],
-            stderr=True,
-            stdout=True,
-            stdin=False,
-            tty=False,
-        )
-        return True
-
-    signaled = 0
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        futures = {
-            pool.submit(_signal_one, pod.metadata.name): pod.metadata.name for pod in pods.items
-        }
-        for fut in as_completed(futures):
-            pod_name = futures[fut]
-            try:
-                fut.result()
-                signaled += 1
-                if progress_fn and (signaled % 10 == 0 or signaled == total):
-                    progress_fn(f"Signaling FRR config ready: {signaled}/{total}")
-            except Exception as exc:
-                log.warning(f"Failed to signal config-ready in {pod_name}: {exc}")
-
-    log.info(f"Signaled FRR config-ready in {signaled}/{total} pods")
-    return signaled
+    ready = 0
+    for pod in pods.items:
+        if pod.status and pod.status.conditions:
+            for cond in pod.status.conditions:
+                if cond.type == "Ready" and cond.status == "True":
+                    ready += 1
+                    break
+    return total, ready
 
 
 def write_pod_ips_configmap(namespace: str) -> None:

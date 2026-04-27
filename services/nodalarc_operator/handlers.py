@@ -24,12 +24,12 @@ from nodalarc_operator.session_deployer import (
     check_all_pods_running,
     check_old_pods_terminated,
     check_pods_ready,
+    check_pods_ready_condition,
     check_wiring_complete,
     compute_platform_hash,
     deploy_session,
     restart_platform_pods,
     set_nodalpath_mode,
-    signal_frr_config_ready,
     teardown_session,
     write_pod_ips_configmap,
     write_wiring_manifest,
@@ -85,44 +85,6 @@ def _has_wiring_manifest(namespace: str) -> bool:
         if e.status == 404:
             return False
         raise
-
-
-def _has_frr_config_ready(namespace: str) -> bool:
-    """Check whether FRR config-ready sentinel exists in session pods.
-
-    Samples up to 3 pods — if all sampled pods have the sentinel,
-    we consider FRR signaling complete. This avoids exec-ing into
-    every pod on every reconcile tick.
-    """
-    from kubernetes.stream import stream
-
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
-    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
-    if not pods.items:
-        return False
-
-    # Sample up to 3 pods
-    sample = pods.items[:3]
-    for pod in sample:
-        if not pod.status or pod.status.phase != "Running":
-            return False
-        try:
-            result = stream(
-                v1.connect_get_namespaced_pod_exec,
-                pod.metadata.name,
-                namespace,
-                container="frr",
-                command=["test", "-f", "/etc/frr/.config-ready"],
-                stderr=True,
-                stdout=True,
-                stdin=False,
-                tty=False,
-            )
-            # stream returns empty string on success, non-zero exit raises
-        except Exception:
-            return False
-    return True
 
 
 async def _reconcile_session(spec, name, namespace, meta, status):
@@ -194,24 +156,30 @@ async def _reconcile_session(spec, name, namespace, meta, status):
 
     # All pods running — proceed through remaining conditions
 
-    # --- Condition 3: FRR config signaled ---
-    frr_signaled = await loop.run_in_executor(None, _has_frr_config_ready, namespace)
-    if not frr_signaled:
+    # --- Condition 3: Routing containers ready (NOS-agnostic) ---
+    # Check K8s Ready condition — set by readiness probe (vtysh -c "show version").
+    # The Operator doesn't exec into containers. The container owns readiness.
+    # Between Running and Ready, FRR is loading its config from the ConfigMap
+    # mount. This window is typically 2-5 seconds per pod.
+    total_pods, ready_pods = await loop.run_in_executor(None, check_pods_ready_condition, namespace)
+    not_ready_count = total_pods - ready_pods
+    if not_ready_count > 0:
         _update_status(
             name,
             namespace,
             {
                 "phase": "Creating",
-                "readyPods": ready,
+                "readyPods": ready_pods,
                 "podCount": pod_count,
-                "message": f"Signaling FRR config ready in {pod_count} pods",
+                "message": f"Waiting for routing containers: {not_ready_count} pods not Ready",
             },
         )
-        await loop.run_in_executor(
-            None, signal_frr_config_ready, namespace, lambda msg: log.info(f"Reconcile: {msg}")
+        log.info(
+            "Reconcile: %d/%d pods Ready, waiting for all",
+            ready_pods,
+            total_pods,
         )
-        log.info(f"Reconcile: FRR config signaled in {pod_count} pods")
-        # Fall through — FRR signaling is fast, continue to wiring
+        return
 
     # --- Condition 4: Wiring manifest written + wiring complete ---
     manifest_exists = await loop.run_in_executor(None, _has_wiring_manifest, namespace)
@@ -374,7 +342,8 @@ async def on_create(spec, name, namespace, meta, **_):
         namespace,
         {"phase": "Creating", "message": "Restarting platform services (OME, Scheduler, VS-API)"},
     )
-    await loop.run_in_executor(None, restart_platform_pods, namespace)
+    platform_hash = compute_platform_hash(dict(spec))
+    await loop.run_in_executor(None, restart_platform_pods, namespace, platform_hash)
     log.info("Restarted platform pods for new session")
 
     # Wait for pods to reach Running (blocking — fresh creation needs this)
@@ -456,7 +425,7 @@ async def on_update(spec, name, namespace, meta, status, **_):
                 "platformHash": new_hash,
             },
         )
-        await loop.run_in_executor(None, restart_platform_pods, namespace)
+        await loop.run_in_executor(None, restart_platform_pods, namespace, new_hash)
     elif not old_hash:
         _update_status(name, namespace, {"platformHash": new_hash})
 

@@ -76,8 +76,9 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
 
 def _has_wiring_manifest(namespace: str) -> bool:
     """Check whether the topology wiring manifest ConfigMap exists."""
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    from nodalarc_operator.session_deployer import _get_v1
+
+    v1 = _get_v1()
     try:
         v1.read_namespaced_config_map("nodalarc-topology-wiring", namespace)
         return True

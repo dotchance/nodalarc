@@ -33,13 +33,36 @@ from nodalarc.template_vars import build_template_vars
 log = logging.getLogger(__name__)
 
 
+# Module-level K8s API clients — initialized once on first use, reused for
+# all calls. Eliminates per-function load_incluster_config() + client
+# instantiation that leaks TCP sockets from urllib3 connection pools.
+_v1: kubernetes.client.CoreV1Api | None = None
+_apps_v1: kubernetes.client.AppsV1Api | None = None
+
+
+def _get_v1() -> kubernetes.client.CoreV1Api:
+    global _v1
+    if _v1 is None:
+        kubernetes.config.load_incluster_config()
+        _v1 = kubernetes.client.CoreV1Api()
+    return _v1
+
+
+def _get_apps_v1() -> kubernetes.client.AppsV1Api:
+    global _apps_v1
+    if _apps_v1 is None:
+        kubernetes.config.load_incluster_config()
+        _apps_v1 = kubernetes.client.AppsV1Api()
+    return _apps_v1
+
+
 def discover_available_nodes() -> list[str]:
     """Discover K3s nodes available for session pods.
 
     Returns node names that have the nodalarc.io/node-agent=true label
     and do not have the nodalarc.io/not-ready taint.
     """
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
     nodes = v1.list_node(label_selector="nodalarc.io/node-agent=true")
     available = []
     for node in nodes.items:
@@ -205,8 +228,7 @@ def deploy_session(
         if progress_fn:
             progress_fn(msg)
 
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
 
     session_id = f"{name}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
@@ -541,8 +563,7 @@ def write_wiring_manifest(
     """
     import json as _json
 
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
 
     # Delete stale wiring-status before writing new manifest.
     # Without this, the Node Agent sees old wiring-status as "current" and
@@ -717,8 +738,7 @@ def set_nodalpath_mode(namespace: str, protocol: str) -> None:
     --mode console for all others. Called before restarting the NodalPath pod.
     """
     mode = "live" if protocol == "nodalpath" else "console"
-    kubernetes.config.load_incluster_config()
-    apps_v1 = kubernetes.client.AppsV1Api()
+    apps_v1 = _get_apps_v1()
     try:
         deployments = apps_v1.list_namespaced_deployment(
             namespace, label_selector="app=nodalarc-nodalpath"
@@ -756,8 +776,7 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     no pod deletion race conditions, respects PodDisruptionBudgets, and
     the Deployment controller handles sequencing.
     """
-    kubernetes.config.load_incluster_config()
-    apps_v1 = kubernetes.client.AppsV1Api()
+    apps_v1 = _get_apps_v1()
 
     annotation_value = config_hash or datetime.now(UTC).isoformat()
 
@@ -789,8 +808,7 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
 
 def teardown_session(namespace: str) -> None:
     """Clean up session ConfigMaps (pods are garbage-collected via ownerReferences)."""
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
 
     # Delete session-level ConfigMaps
     for cm_name in [
@@ -835,8 +853,7 @@ def check_pods_ready(namespace: str) -> tuple[int, int]:
     Matches pods with nodalarc.io/node-id label (present on both
     Operator-created and na_deploy-created session pods).
     """
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     total = len(pods.items)
     ready = sum(1 for p in pods.items if p.status and p.status.phase == "Running")
@@ -881,8 +898,7 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
 
     Pure query — no side effects.
     """
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
     try:
         cm = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
         data = dict(cm.data) if cm.data else {}
@@ -922,8 +938,7 @@ def check_pods_ready_condition(namespace: str) -> tuple[int, int]:
 
     Returns (total, ready_count).
     """
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     total = len(pods.items)
     ready = 0
@@ -942,8 +957,7 @@ def write_pod_ips_configmap(namespace: str) -> None:
     Stores the IP map as a single 'pod-ips.json' key so it can be
     volume-mounted directly as a JSON file by the NodalPath Deployment.
     """
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     ip_map = {}
     for pod in pods.items:

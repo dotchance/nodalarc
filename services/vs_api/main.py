@@ -781,10 +781,15 @@ async def _nats_subscriber() -> None:
                 cb=_on_almanac,
             )
         )
-        # NODALARC_OPS — operational events from all components
+        # NODALARC_OPS — session-scoped operational events
+        from nodalarc.nats_channels import ops_subscribe_subject
+
+        _ops_sub = (
+            ops_subscribe_subject(_nats_session_id) if _nats_session_id else SUBJECT_OPS_EVENT
+        )
         subs.append(
             await js.subscribe(
-                SUBJECT_OPS_EVENT,
+                _ops_sub,
                 stream=STREAM_OPS_EVENTS,
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,

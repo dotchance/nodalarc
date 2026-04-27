@@ -184,7 +184,22 @@ SUBJECT_ADAPTER_EVENT = adapter_event_subject(_DEFAULT_SESSION_ID)
 SUBJECT_ALMANAC_EVENT = almanac_event_subject(_DEFAULT_SESSION_ID)
 
 # Ops events (JetStream — memory storage, 4h retention)
-SUBJECT_OPS_EVENT = "nodalarc.ops.>"
+# Ops events — session-scoped to prevent cross-session telemetry leaks
+SUBJECT_OPS_EVENT = f"nodalarc.ops.{_DEFAULT_SESSION_ID}.>"
+
+
+def ops_event_subject(session_id: str, source: str, code: str = "") -> str:
+    """Build a session-scoped ops event subject."""
+    sid = sanitize_session_id(session_id)
+    if code:
+        return f"nodalarc.ops.{sid}.{source}.{code.lower()}"
+    return f"nodalarc.ops.{sid}.{source}"
+
+
+def ops_subscribe_subject(session_id: str) -> str:
+    """Wildcard subject for subscribing to all ops events for a session."""
+    return f"nodalarc.ops.{sanitize_session_id(session_id)}.>"
+
 
 # Request/reply subjects (NATS core, not JetStream)
 SUBJECT_SCENARIO_INJECT = "nodalarc.scheduler.scenario"

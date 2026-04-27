@@ -4,16 +4,13 @@
 
 True desired-state reconciler: _reconcile_session() computes expected state
 from the CRD spec (not cached status.podCount) and converges the cluster
-toward it. It calls ensure_session_configmaps() + ensure_session_pods() when
-pods are missing, making it capable of recovery from any state — not just
-monitoring after on_create does the real work.
+toward it. Handles creation, updates, scale-up, scale-down, and crash
+recovery through the same state machine.
 
-on_create retains blocking waits for old-pod termination and initial pod
-deployment because fresh creation needs synchronous sequencing. After pods
-are created, it delegates to _reconcile_session for the remaining lifecycle.
-
-on_resume and on_update go directly through the reconciler, which can create
-pods if they're missing (crash recovery, spec changes).
+All handlers (on_create, on_resume, on_update) are non-blocking — they
+validate, set initial status, and call the reconciler once. The kopf timer
+re-enters every 10 seconds to drive progress through the 5-condition state
+machine (old pods cleared → pods created → routing ready → wired → Ready).
 """
 
 from __future__ import annotations

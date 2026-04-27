@@ -637,9 +637,14 @@ class Dispatcher:
         self._last_snapshot_seq = snapshot.snapshot_seq
         desired: dict[tuple[str, str], ActiveLinkInfo] = {}
 
+        with self._override_lock:
+            current_overrides = set(self._override_set)
+
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 pair = (link.node_a, link.node_b)
+                if pair in current_overrides:
+                    continue
                 latency = link.latency_ms
                 if latency is None:
                     sim_unix = snapshot.sim_time.timestamp() if snapshot.sim_time else 0.0
@@ -845,13 +850,9 @@ class Dispatcher:
         key = f"{k3s_a}-{k3s_b}"
         return self._substrate_latency.get(key, 0.0)
 
-    def _link_locality(self, node_a: str, node_b: str) -> int:
-        """Determine locality for a link pair."""
-        k3s_a = self._loc.k3s_node(node_a)
-        k3s_b = self._loc.k3s_node(node_b)
-        if k3s_a and k3s_b and k3s_a != k3s_b:
-            return node_agent_pb2.CROSS_NODE
-        return node_agent_pb2.LOCAL
+    def _link_locality(self, node_a: str, node_b: str) -> int | None:
+        """Determine locality for a link pair. None if either pod unscheduled."""
+        return self._loc.link_locality(node_a, node_b)
 
     async def _reconcile_links(
         self,
@@ -1096,6 +1097,9 @@ class Dispatcher:
 
             node_a, node_b = pair
             locality = self._link_locality(node_a, node_b)
+            if locality is None:
+                log.warning("Skipping DOWN %s-%s: pod(s) not yet scheduled", node_a, node_b)
+                continue
             is_gs = info.link_type == "ground" if info else False
 
             if is_gs:
@@ -1250,6 +1254,9 @@ class Dispatcher:
 
             node_a, node_b = pair
             locality = self._link_locality(node_a, node_b)
+            if locality is None:
+                log.warning("Skipping UP %s-%s: pod(s) not yet scheduled", node_a, node_b)
+                continue
             is_gs = info.link_type == "ground" if info else False
 
             substrate_ms = self._get_substrate_ms(node_a, node_b)

@@ -154,6 +154,22 @@ async def main() -> None:
                 manifest = json.loads(manifest_json)
                 nodes = manifest.get("nodes", {})
 
+                # Extract session_id for NATS subject scoping
+                manifest_session_id = manifest.get("session_id", "")
+                if manifest_session_id:
+                    from nodalarc.nats_channels import sanitize_session_id
+
+                    try:
+                        substrate_monitor._session_id = sanitize_session_id(manifest_session_id)
+                        log.info(
+                            "Node Agent session_id=%s (from wiring manifest)",
+                            substrate_monitor._session_id,
+                        )
+                    except ValueError:
+                        log.warning(
+                            "Invalid session_id in wiring manifest: %s", manifest_session_id
+                        )
+
                 if not nodes:
                     time.sleep(5)
                     continue

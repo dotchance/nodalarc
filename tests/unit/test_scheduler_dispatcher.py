@@ -236,7 +236,7 @@ class TestDispatcherLiveDispatch:
         assert stub.async_batch_link_up.called
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
         assert len(pub.messages) > 0
-        assert pub.messages[0][0] == "nodalarc.links.up"
+        assert pub.messages[0][0] == "nodalarc.links.default.up"
 
     def test_link_down_publishes_after_node_agent_ack(self):
         d, pool = _make_dispatcher()
@@ -250,7 +250,7 @@ class TestDispatcherLiveDispatch:
         assert stub.async_batch_link_down.called
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
         assert len(pub.messages) > 0
-        assert pub.messages[0][0] == "nodalarc.links.down"
+        assert pub.messages[0][0] == "nodalarc.links.default.down"
 
     def test_link_up_not_published_if_node_agent_exception(self):
         d, pool = _make_dispatcher()

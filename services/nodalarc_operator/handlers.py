@@ -1,6 +1,16 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Kopf handlers for ConstellationSpec CRD lifecycle."""
+"""Kopf handlers for ConstellationSpec CRD lifecycle.
+
+Reconciler pattern: _reconcile_session() is the single convergence function
+called by on_create, on_resume, and the wiring_check timer. It checks 5
+conditions in order and performs at most one convergence action per invocation.
+The kopf timer re-invokes it periodically to drive progress.
+
+on_create retains blocking waits for old-pod termination and initial pod
+deployment because fresh creation needs synchronous sequencing. After pods
+are created, it delegates to _reconcile_session for the remaining lifecycle.
+"""
 
 from __future__ import annotations
 
@@ -52,9 +62,238 @@ def _update_status(name: str, namespace: str, status: dict) -> None:
     )
 
 
+def _build_owner_ref(name: str, meta: dict) -> dict:
+    """Build ownerReference dict for garbage collection."""
+    return {
+        "apiVersion": "nodalarc.io/v1alpha1",
+        "kind": "ConstellationSpec",
+        "name": name,
+        "uid": meta["uid"],
+        "blockOwnerDeletion": True,
+    }
+
+
+def _has_wiring_manifest(namespace: str) -> bool:
+    """Check whether the topology wiring manifest ConfigMap exists."""
+    kubernetes.config.load_incluster_config()
+    v1 = kubernetes.client.CoreV1Api()
+    try:
+        v1.read_namespaced_config_map("nodalarc-topology-wiring", namespace)
+        return True
+    except kubernetes.client.rest.ApiException as e:
+        if e.status == 404:
+            return False
+        raise
+
+
+def _has_frr_config_ready(namespace: str) -> bool:
+    """Check whether FRR config-ready sentinel exists in session pods.
+
+    Samples up to 3 pods — if all sampled pods have the sentinel,
+    we consider FRR signaling complete. This avoids exec-ing into
+    every pod on every reconcile tick.
+    """
+    from kubernetes.stream import stream
+
+    kubernetes.config.load_incluster_config()
+    v1 = kubernetes.client.CoreV1Api()
+    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+    if not pods.items:
+        return False
+
+    # Sample up to 3 pods
+    sample = pods.items[:3]
+    for pod in sample:
+        if not pod.status or pod.status.phase != "Running":
+            return False
+        try:
+            result = stream(
+                v1.connect_get_namespaced_pod_exec,
+                pod.metadata.name,
+                namespace,
+                container="frr",
+                command=["test", "-f", "/etc/frr/.config-ready"],
+                stderr=True,
+                stdout=True,
+                stdin=False,
+                tty=False,
+            )
+            # stream returns empty string on success, non-zero exit raises
+        except Exception:
+            return False
+    return True
+
+
+async def _reconcile_session(spec, name, namespace, meta, status):
+    """Converge cluster state toward desired session state.
+
+    Called by on_create (after initial deploy), on_resume, and the
+    wiring_check timer. Idempotent — safe to call at any point in
+    the lifecycle.
+
+    Checks 5 conditions in order. For each condition that isn't met,
+    performs the convergence action and returns (one step per invocation).
+    The kopf timer re-enters periodically to drive progress.
+    """
+    loop = asyncio.get_running_loop()
+    phase = status.get("phase", "")
+    owner_ref = _build_owner_ref(name, meta)
+
+    # --- Condition 1: Old pods terminated ---
+    # Only relevant on fresh creation (phase Pending with no pods yet).
+    # If phase is already Creating/Wiring/Ready, pods belong to this session.
+    if phase in ("", "Pending"):
+        total, _ = await loop.run_in_executor(None, check_pods_ready, namespace)
+        if total > 0 and status.get("podCount", 0) == 0:
+            # Pods exist but this session hasn't deployed yet — old session remnants
+            cleared = await loop.run_in_executor(None, check_old_pods_terminated, namespace)
+            if not cleared:
+                log.info("Reconcile: waiting for old session pods to terminate")
+                _update_status(
+                    name,
+                    namespace,
+                    {
+                        "phase": "Pending",
+                        "message": "Waiting for old session pods to terminate",
+                    },
+                )
+                return
+
+    # --- Condition 2: Session deployed (pods created and running) ---
+    pod_count = status.get("podCount", 0)
+    if pod_count == 0:
+        # No pods deployed yet — check if any session pods exist from a
+        # previous operator run that didn't update status
+        total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
+        if total > 0:
+            # Pods exist but status.podCount is 0 — adopt them
+            pod_count = total
+            log.info(f"Reconcile: adopting {total} existing session pods")
+        else:
+            # No pods at all — cannot deploy from reconciler (on_create handles this)
+            log.info("Reconcile: no pods exist, waiting for initial deployment")
+            return
+
+    all_ready, total, ready = await loop.run_in_executor(
+        None, check_all_pods_running, namespace, pod_count
+    )
+    if not all_ready:
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "readyPods": ready,
+                "podCount": pod_count,
+                "message": f"Pods: {ready} running, {pod_count - ready} starting",
+            },
+        )
+        log.info(f"Reconcile: {ready}/{pod_count} pods running, waiting for all")
+        return
+
+    # All pods running — proceed through remaining conditions
+
+    # --- Condition 3: FRR config signaled ---
+    frr_signaled = await loop.run_in_executor(None, _has_frr_config_ready, namespace)
+    if not frr_signaled:
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "readyPods": ready,
+                "podCount": pod_count,
+                "message": f"Signaling FRR config ready in {pod_count} pods",
+            },
+        )
+        await loop.run_in_executor(
+            None, signal_frr_config_ready, namespace, lambda msg: log.info(f"Reconcile: {msg}")
+        )
+        log.info(f"Reconcile: FRR config signaled in {pod_count} pods")
+        # Fall through — FRR signaling is fast, continue to wiring
+
+    # --- Condition 4: Wiring manifest written + wiring complete ---
+    manifest_exists = await loop.run_in_executor(None, _has_wiring_manifest, namespace)
+    if not manifest_exists:
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "readyPods": ready,
+                "podCount": pod_count,
+                "message": "Writing pod IP addresses and wiring manifest",
+            },
+        )
+        await loop.run_in_executor(None, write_pod_ips_configmap, namespace)
+        await loop.run_in_executor(None, write_wiring_manifest, dict(spec), namespace, owner_ref)
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Wiring",
+                "readyPods": ready,
+                "podCount": pod_count,
+                "message": f"All {pod_count} pods running. Node Agent wiring data plane.",
+            },
+        )
+        log.info("Reconcile: wiring manifest written, advanced to Wiring")
+        return
+
+    # Manifest exists — check wiring completion
+    try:
+        complete, wired_count, progress_msg = await loop.run_in_executor(
+            None, check_wiring_complete, namespace, pod_count
+        )
+    except kubernetes.client.rest.ApiException as e:
+        log.warning("Reconcile: wiring status check error: %s", e)
+        return
+
+    if not complete:
+        if wired_count == 0 and progress_msg is None:
+            display_msg = "Waiting for Node Agent to begin wiring"
+        else:
+            display_msg = (
+                progress_msg or f"Data plane wiring: {wired_count}/{pod_count} nodes wired"
+            )
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Wiring",
+                "readyPods": ready,
+                "podCount": pod_count,
+                "wiredPods": wired_count,
+                "message": display_msg,
+            },
+        )
+        log.info(f"Reconcile: wiring in progress ({wired_count}/{pod_count})")
+        return
+
+    # --- Condition 5: Ready ---
+    _update_status(
+        name,
+        namespace,
+        {
+            "phase": "Ready",
+            "readyPods": ready,
+            "podCount": pod_count,
+            "wiredPods": wired_count,
+            "message": f"Session ready: {pod_count} pods, {wired_count} wired.",
+        },
+    )
+    log.info(f"Reconcile: session ready ({wired_count}/{pod_count} wired)")
+
+
 @kopf.on.create("constellationspecs", group="nodalarc.io")
 async def on_create(spec, name, namespace, meta, **_):
-    """Handle ConstellationSpec CR creation — deploy a session."""
+    """Handle ConstellationSpec CR creation — deploy a session.
+
+    Retains blocking waits for old-pod termination and initial pod
+    deployment (fresh creation needs synchronous sequencing). After
+    pods reach Running, delegates to _reconcile_session for FRR
+    signaling, wiring, and Ready advancement.
+    """
     log.info(f"ConstellationSpec '{name}' created in {namespace}")
 
     # Singleton constraint: only 'current-session' is allowed
@@ -78,14 +317,7 @@ async def on_create(spec, name, namespace, meta, **_):
         },
     )
 
-    # Build ownerReference for garbage collection
-    owner_ref = {
-        "apiVersion": "nodalarc.io/v1alpha1",
-        "kind": "ConstellationSpec",
-        "name": name,
-        "uid": meta["uid"],
-        "blockOwnerDeletion": True,
-    }
+    owner_ref = _build_owner_ref(name, meta)
 
     # Wait for any old session pods to finish terminating
     loop = asyncio.get_running_loop()
@@ -143,9 +375,9 @@ async def on_create(spec, name, namespace, meta, **_):
     await loop.run_in_executor(None, restart_platform_pods, namespace)
     log.info("Restarted platform pods for new session")
 
-    # Wait for pods to reach Running
-    if result.get("phase") == "Creating":
-        pod_count = result.get("podCount", 0)
+    # Wait for pods to reach Running (blocking — fresh creation needs this)
+    pod_count = result.get("podCount", 0)
+    if pod_count > 0:
         all_pods_ready = False
         for _i in range(600):  # 10 minutes max
             total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
@@ -179,102 +411,13 @@ async def on_create(spec, name, namespace, meta, **_):
             )
             raise kopf.PermanentError(f"Session pods did not reach Running: {ready}/{pod_count}")
 
-        # Signal FRR config-ready in each pod
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Creating",
-                "readyPods": pod_count,
-                "podCount": pod_count,
-                "message": f"Signaling FRR config ready in {pod_count} pods",
-            },
-        )
-        await loop.run_in_executor(None, signal_frr_config_ready, namespace, _deploy_progress)
-
-        # Write pod-IPs ConfigMap (needs running pods)
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Creating",
-                "readyPods": pod_count,
-                "podCount": pod_count,
-                "message": "Writing pod IP addresses",
-            },
-        )
-        await loop.run_in_executor(None, write_pod_ips_configmap, namespace)
-
-        # Write topology wiring manifest for Node Agent (7b)
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Creating",
-                "readyPods": pod_count,
-                "podCount": pod_count,
-                "message": "Writing topology wiring manifest",
-            },
-        )
-        await loop.run_in_executor(None, write_wiring_manifest, dict(spec), namespace, owner_ref)
-
-        # Set Wiring phase — Node Agent will read manifest and wire data plane
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Wiring",
-                "readyPods": pod_count,
-                "podCount": pod_count,
-                "message": f"All {pod_count} pods running. Node Agent wiring data plane.",
-            },
-        )
-        log.info(f"Session deployed: {pod_count} pods running, waiting for wiring")
-
-        # Wait for Node Agent to write wiring-complete status
-        for _i in range(300):  # 5 minutes max (large constellations can take several minutes)
-            try:
-                complete, wired_count, progress_msg = await loop.run_in_executor(
-                    None, check_wiring_complete, namespace, pod_count
-                )
-                if wired_count == 0 and progress_msg is None:
-                    # ConfigMap not yet written (404) — Node Agent hasn't started
-                    display_msg = "Waiting for Node Agent to begin wiring"
-                else:
-                    display_msg = (
-                        progress_msg or f"Data plane wiring: {wired_count}/{pod_count} nodes wired"
-                    )
-                _update_status(
-                    name,
-                    namespace,
-                    {
-                        "phase": "Wiring",
-                        "readyPods": pod_count,
-                        "podCount": pod_count,
-                        "wiredPods": wired_count,
-                        "message": display_msg,
-                    },
-                )
-                if complete:
-                    _update_status(
-                        name,
-                        namespace,
-                        {
-                            "phase": "Ready",
-                            "readyPods": pod_count,
-                            "podCount": pod_count,
-                            "wiredPods": wired_count,
-                            "message": f"Session ready: {pod_count} pods, {wired_count} wired.",
-                        },
-                    )
-                    log.info(f"Session ready: {wired_count}/{pod_count} nodes wired")
-                    return
-            except kubernetes.client.rest.ApiException as e:
-                log.warning(f"Wiring status check error: {e}")
-            await asyncio.sleep(1)
-
-        # Timeout — stay in Wiring phase
-        log.warning("Wiring not complete after 120s, staying in Wiring phase")
+    # Pods are running — delegate to reconciler for FRR signaling → wiring → Ready
+    current_status = {
+        "phase": "Creating",
+        "podCount": pod_count,
+        "readyPods": pod_count,
+    }
+    await _reconcile_session(spec, name, namespace, meta, current_status)
 
 
 @kopf.on.delete("constellationspecs", group="nodalarc.io")
@@ -294,158 +437,23 @@ async def on_resume(spec, name, namespace, meta, status, **_):
     phase = status.get("phase", "")
     log.info(f"Resuming ConstellationSpec '{name}', current phase: {phase}")
 
-    if phase == "Wiring":
-        # Check if wiring completed while we were away
-        loop = asyncio.get_running_loop()
-        total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-        try:
-            complete, wired_count, _ = await loop.run_in_executor(
-                None, check_wiring_complete, namespace, total
-            )
-            if complete:
-                _update_status(
-                    name,
-                    namespace,
-                    {
-                        "phase": "Ready",
-                        "readyPods": ready,
-                        "podCount": total,
-                        "wiredPods": wired_count,
-                        "message": f"Session ready: {total} pods, {wired_count} wired.",
-                    },
-                )
-                log.info(f"Operator resume: advanced Wiring → Ready ({wired_count} wired)")
-                return
-        except kubernetes.client.rest.ApiException as e:
-            log.warning("Wiring status check error on resume: %s", e)
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Wiring",
-                "readyPods": ready,
-                "podCount": total,
-                "message": f"{ready}/{total} pods running, wiring in progress",
-            },
-        )
-        log.info(f"Operator resume: {ready}/{total} pods, still Wiring")
-    elif phase == "Ready":
-        loop = asyncio.get_running_loop()
-        total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Ready",
-                "readyPods": ready,
-                "podCount": total,
-                "message": f"{ready}/{total} pods running",
-            },
-        )
-        log.info(f"Operator resume: {ready}/{total} pods running, phase=Ready")
-    elif phase in ("Creating", "Pending"):
-        # Operator restarted during pod creation or template building.
-        # Check how many session pods are already running — if all are
-        # up, continue from where we left off (FRR signaling → wiring).
-        loop = asyncio.get_running_loop()
-        pod_count_from_status = status.get("podCount", 0)
-        if pod_count_from_status > 0:
-            all_ready, total, ready = await loop.run_in_executor(
-                None, check_all_pods_running, namespace, pod_count_from_status
-            )
-            pod_count = pod_count_from_status
-        else:
-            total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-            pod_count = total
-            all_ready = ready >= pod_count
-        if all_ready and pod_count > 0:
-            log.info(
-                f"Operator resume: all {ready}/{pod_count} pods running in {phase} phase, "
-                f"continuing to FRR signaling and wiring"
-            )
-            _update_status(
-                name,
-                namespace,
-                {
-                    "phase": "Creating",
-                    "readyPods": ready,
-                    "podCount": pod_count,
-                    "message": f"Resuming: signaling FRR config in {pod_count} pods",
-                },
-            )
-            await loop.run_in_executor(
-                None, signal_frr_config_ready, namespace, lambda msg: log.info(f"Resume: {msg}")
-            )
-            await loop.run_in_executor(None, write_pod_ips_configmap, namespace)
-            owner_ref = {
-                "apiVersion": "nodalarc.io/v1alpha1",
-                "kind": "ConstellationSpec",
-                "name": name,
-                "uid": meta["uid"],
-                "blockOwnerDeletion": True,
-            }
-            await loop.run_in_executor(
-                None, write_wiring_manifest, dict(spec), namespace, owner_ref
-            )
-            _update_status(
-                name,
-                namespace,
-                {
-                    "phase": "Wiring",
-                    "readyPods": ready,
-                    "podCount": pod_count,
-                    "message": f"All {pod_count} pods running. Node Agent wiring data plane.",
-                },
-            )
-            log.info(f"Operator resume: advanced Creating → Wiring ({pod_count} pods)")
-        else:
-            log.info(
-                f"Operator resume: {ready}/{pod_count} pods in {phase} phase, "
-                f"waiting for all pods to reach Running"
-            )
-            _update_status(
-                name,
-                namespace,
-                {
-                    "phase": "Creating",
-                    "readyPods": ready,
-                    "podCount": pod_count,
-                    "message": f"Pods: {ready} running, {pod_count - ready} starting",
-                },
-            )
-    elif phase == "Error":
+    if phase == "Error":
         log.info(f"Operator resume: session in Error state: {status.get('message', '')}")
-    elif not phase:
-        log.info("Operator resume: no phase set, session may need re-deployment")
+        return
+
+    await _reconcile_session(spec, name, namespace, meta, status)
 
 
 @kopf.timer("constellationspecs", group="nodalarc.io", interval=10.0, idle=10)
-async def wiring_check(name, namespace, status, **_):
-    """Periodically check if wiring completed and advance Wiring → Ready."""
+async def wiring_check(spec, name, namespace, meta, status, **_):
+    """Periodically advance session state via the reconciler.
+
+    Active during Creating and Wiring phases. Drives progress for:
+    - Creating: pods still starting after operator resume
+    - Wiring: Node Agent wiring data plane → Ready
+    """
     phase = status.get("phase", "")
-    if phase != "Wiring":
+    if phase not in ("Creating", "Wiring"):
         return
 
-    loop = asyncio.get_running_loop()
-    total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-    if total == 0:
-        return
-    try:
-        complete, wired_count, _ = await loop.run_in_executor(
-            None, check_wiring_complete, namespace, total
-        )
-        if complete:
-            _update_status(
-                name,
-                namespace,
-                {
-                    "phase": "Ready",
-                    "readyPods": ready,
-                    "podCount": total,
-                    "wiredPods": wired_count,
-                    "message": f"Session ready: {total} pods, {wired_count} wired.",
-                },
-            )
-            log.info(f"Timer: advanced Wiring → Ready ({wired_count} wired)")
-    except kubernetes.client.rest.ApiException as e:
-        log.warning("Wiring status check error in timer: %s", e)
+    await _reconcile_session(spec, name, namespace, meta, status)

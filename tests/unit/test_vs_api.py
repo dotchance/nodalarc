@@ -4,6 +4,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
+import vs_api.main as _vsapi
 from nodalarc.db.queries import (
     insert_convergence_result,
     insert_link_up,
@@ -25,7 +26,6 @@ from vs_api.main import (
     _gs_elevation_map,
     _link_key,
     _propagate_positions_from_ephemeris,
-    _state,
     _state_lock,
     _update_convergence,
     _update_latency,
@@ -36,17 +36,17 @@ from vs_api.main import (
 
 def _reset_state():
     with _state_lock:
-        _state["nodes"].clear()
-        _state["links"].clear()
-        _state["recent_events"].clear()
-        _state["active_flows"].clear()
-        _state["network_health"] = {
-            "status": "converged",
-            "converging_since_ms": None,
-            "unreachable_flows": 0,
-            "last_convergence_ms": None,
-        }
-        _state["sim_time"] = datetime.now(UTC).isoformat()
+        _vsapi._nodes.clear()
+        _vsapi._links.clear()
+        _vsapi._recent_events.clear()
+        _vsapi._network_health = NetworkHealth(
+            status="converged",
+            converging_since_ms=None,
+            unreachable_flows=0,
+            last_convergence_ms=None,
+        )
+        _vsapi._mi_active = False
+        _vsapi._sim_time = datetime.now(UTC).isoformat()
 
 
 class TestEphemerisPositionPropagation:
@@ -353,7 +353,7 @@ class TestRecentEvents:
                 "test",
             )
         with _state_lock:
-            assert len(_state["recent_events"]) == 50
+            assert len(_vsapi._recent_events) == 50
 
 
 class TestNetworkHealth:

@@ -7,3 +7,8 @@ ground_station:
   lon_deg: 174.66
   alt_m: 60
   min_elevation_deg: 25
+  terminals:
+    - type: rf
+      count: 1
+      bandwidth_mbps: 1000
+      tracking_capacity: 1

@@ -54,6 +54,7 @@ from nodalarc.models.vs_api import (
 )
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
+    STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
     SUBJECT_ALMANAC_EVENT,
     SUBJECT_CLOCK_TICK,
@@ -61,6 +62,7 @@ from nodalarc.nats_channels import (
     SUBJECT_LINK_DOWN,
     SUBJECT_LINK_STATE_SNAPSHOT,
     SUBJECT_LINK_UP,
+    SUBJECT_OPS_EVENT,
     SUBJECT_PLAYBACK_STATE,
     SUBJECT_SESSION_EPHEMERIS,
     nats_url,
@@ -233,6 +235,11 @@ _continuous_tracer: ContinuousTracer | None = None
 
 _almanac: AlmanacState = AlmanacState()
 _almanac_lock = threading.Lock()
+
+# OPS event buffer — recent operational events from all components
+from collections import deque
+
+_ops_events: deque = deque(maxlen=500)
 
 
 def _propagate_positions_from_ephemeris(sim_time_iso: str) -> None:
@@ -547,7 +554,11 @@ def _build_snapshot() -> dict:
             playback_speed=_playback_speed,
             stale=_is_stale(),
         )
-        return json.loads(snapshot.model_dump_json())
+        result = json.loads(snapshot.model_dump_json())
+        # Append latest OPS events to WebSocket frame (not part of Pydantic model
+        # to avoid coupling the event schema to the snapshot schema).
+        result["ops_events"] = list(_ops_events)[-50:]
+        return result
 
 
 # --- NATS subscriber ---
@@ -670,6 +681,12 @@ async def _nats_subscriber() -> None:
         msg_count += 1
         _update_almanac_state(json.loads(msg.data))
 
+    async def _on_ops_event(msg):
+        nonlocal msg_count
+        msg_count += 1
+        with contextlib.suppress(Exception):
+            _ops_events.append(json.loads(msg.data))
+
     subs = []
     try:
         # NODALARC_SESSION — SessionEphemeris and PlaybackState (MaxMsgsPerSubject=1)
@@ -749,6 +766,16 @@ async def _nats_subscriber() -> None:
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
                 cb=_on_almanac,
+            )
+        )
+        # NODALARC_OPS — operational events from all components
+        subs.append(
+            await js.subscribe(
+                SUBJECT_OPS_EVENT,
+                stream=STREAM_OPS_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_ops_event,
             )
         )
     except Exception as exc:
@@ -996,6 +1023,21 @@ def get_auth_token() -> dict:
     return {"token": _API_KEY}
 
 
+@app.get("/api/v1/ops/events", dependencies=[Depends(_require_api_key)])
+def get_ops_events(
+    source: str = Query("", description="Filter by event source (e.g. 'operator', 'scheduler')"),
+    level: str = Query("", description="Filter by level (e.g. 'error', 'warning')"),
+    limit: int = Query(100, ge=1, le=500, description="Max events to return"),
+) -> list[dict]:
+    """Return recent operational events from the NODALARC_OPS stream."""
+    events = list(_ops_events)
+    if source:
+        events = [e for e in events if e.get("source") == source]
+    if level:
+        events = [e for e in events if e.get("level") == level]
+    return events[-limit:]
+
+
 def _clear_state() -> None:
     """Reset in-memory state during session switch."""
     global \
@@ -1029,6 +1071,7 @@ def _clear_state() -> None:
         _session_status = None
     with _almanac_lock:
         _almanac = AlmanacState()
+    _ops_events.clear()
 
 
 def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:

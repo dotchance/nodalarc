@@ -668,8 +668,11 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
                 )
                 try:
+                    import gzip as _ckpt_gzip
+
                     msg = await sub.next_msg(timeout=2.0)
-                    return SchedulingCheckpoint.model_validate_json(msg.data)
+                    decompressed = _ckpt_gzip.decompress(msg.data)
+                    return SchedulingCheckpoint.model_validate_json(decompressed)
                 except Exception:
                     return None
                 finally:
@@ -900,7 +903,11 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 last_snapshot_sim_s = sim_s
                 force_first_snapshot = False
 
-                # Publish SchedulingCheckpoint alongside each LinkStateSnapshot
+                # Publish SchedulingCheckpoint alongside each LinkStateSnapshot.
+                # gzip-compressed to stay within NATS message size limits for
+                # large constellations with many GS associations.
+                import gzip as _ckpt_gzip
+
                 ckpt = _build_scheduling_checkpoint(
                     sim_time=sim_time,
                     epoch_id=_epoch_id,
@@ -908,7 +915,10 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                     associations=current_associations,
                     teardowns=mbb_pending_teardowns,
                 )
-                _enqueue(SUBJECT_SCHEDULING_CHECKPOINT, ckpt.model_dump_json().encode())
+                _enqueue(
+                    SUBJECT_SCHEDULING_CHECKPOINT,
+                    _ckpt_gzip.compress(ckpt.model_dump_json().encode()),
+                )
 
             # Write JSONL if --output-dir provided
             if out_path is not None:

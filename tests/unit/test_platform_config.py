@@ -15,6 +15,7 @@ from pydantic import ValidationError
 def _valid_config_dict() -> dict:
     return {
         "kubernetes_namespace": "nodalarc",
+        "default_service_host": "127.0.0.1",
         "vs_api_http_port": 8080,
         "vf_static_file_server_port": 8081,
         "nodalpath_console_http_port": 3100,

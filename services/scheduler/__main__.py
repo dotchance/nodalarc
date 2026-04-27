@@ -26,7 +26,6 @@ from nodalarc.models.session import SessionConfig
 from scheduler.agent_pool import AgentPool
 from scheduler.dispatcher import Dispatcher
 from scheduler.pod_locator import PodLocationMap
-from scheduler.scenario_handler import run_scenario_handler
 
 log = logging.getLogger(__name__)
 
@@ -270,23 +269,6 @@ def main() -> None:
         sat_ground_terminal_capacities=sat_ground_terminal_capacities,
         mbb_dispatch=mbb_dispatch,
     )
-
-    # Scenario handler — NATS request/reply.
-    scenario_thread = threading.Thread(
-        target=run_scenario_handler,
-        args=(
-            None,  # to_pub — no longer needed, Scheduler publishes on NATS
-            interface_map,
-            bandwidth_map,
-            override_set,
-            override_lock,
-            dispatcher._active_links,
-            loc,
-            pool,
-        ),
-        daemon=True,
-    )
-    scenario_thread.start()
 
     try:
         asyncio.run(dispatcher.run())

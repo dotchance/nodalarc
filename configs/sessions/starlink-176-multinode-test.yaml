@@ -1,0 +1,14 @@
+session:
+  name: starlink-176-multinode-test
+constellation: configs/constellations/starlink-176.yaml
+ground_stations: configs/ground-stations/sets/multinode-test.yaml
+routing:
+  protocol: isis
+  extensions:
+    - traffic-engineering
+  area_assignment:
+    strategy: per-plane
+placement:
+  policy: planePerNode
+time:
+  step_seconds: 1

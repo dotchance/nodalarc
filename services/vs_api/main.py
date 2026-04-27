@@ -29,7 +29,7 @@ import asyncssh
 import httpx
 import nats
 import yaml
-from fastapi import Depends, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from nodalarc.constants import LOG_FORMAT
@@ -44,6 +44,7 @@ from nodalarc.db.schema import create_tables
 from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
+    AlmanacState,
     LinkState,
     NetworkHealth,
     NodeState,
@@ -190,19 +191,18 @@ def _rate_limit_session_switch(request: Request) -> None:
 
 
 # Module-level state (populated before app starts)
-_state = {
-    "nodes": {},  # node_id -> NodeState dict
-    "links": {},  # "nodeA:nodeB" -> LinkState dict
-    "recent_events": [],  # list of RecentEvent dicts (last 50)
-    "active_flows": [],  # list of ActiveFlow dicts
-    "network_health": {
-        "status": "no measurement",
-        "converging_since_ms": None,
-        "unreachable_flows": 0,
-        "last_convergence_ms": None,
-    },
-    "sim_time": datetime.now(UTC).isoformat(),
-}
+_nodes: dict[str, NodeState] = {}
+_links: dict[str, LinkState] = {}
+_recent_events: list[RecentEvent] = []
+_network_health: NetworkHealth = NetworkHealth(
+    status="no measurement",
+    converging_since_ms=None,
+    unreachable_flows=0,
+    last_convergence_ms=None,
+)
+_mi_active: bool = False
+_sim_time: str = datetime.now(UTC).isoformat()
+_session_status: str | None = None
 _state_lock = threading.Lock()
 _db_path: str = ""
 _session_file: str = ""  # Path to the active session YAML
@@ -231,16 +231,7 @@ _cached_ephemeris_obj: object | None = None  # SessionEphemeris Pydantic object 
 # Continuous tracer state
 _continuous_tracer: ContinuousTracer | None = None
 
-_almanac_state: dict = {
-    "last_topology_state_id": None,
-    "last_push_sim_time": None,
-    "last_push_wall_time": None,
-    "nodes_succeeded": 0,
-    "nodes_failed": 0,
-    "deviation_count": 0,
-    "recomputation_count": 0,
-    "nodalpath_active": False,
-}
+_almanac: AlmanacState = AlmanacState()
 _almanac_lock = threading.Lock()
 
 
@@ -251,6 +242,7 @@ def _propagate_positions_from_ephemeris(sim_time_iso: str) -> None:
     shared Keplerian propagator. Ground station positions are static.
     This is the sole source of position data — no OME Snapshot fallback.
     """
+    global _sim_time
 
     from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian
     from nodalarc.orbital import elements_from_params
@@ -265,7 +257,7 @@ def _propagate_positions_from_ephemeris(sim_time_iso: str) -> None:
         return
 
     with _state_lock:
-        _state["sim_time"] = sim_time_iso
+        _sim_time = sim_time_iso
 
         for node_id, node in _cached_ephemeris_obj.nodes.items():
             if isinstance(node, EphemerisNodeKeplerian):
@@ -277,44 +269,43 @@ def _propagate_positions_from_ephemeris(sim_time_iso: str) -> None:
                     elements, _cached_ephemeris_obj.epoch_unix, dt
                 )
 
-                existing = _state["nodes"].get(node_id, {})
-                existing.update(
-                    {
-                        "node_id": node_id,
-                        "node_type": "satellite",
-                        "lat_deg": geo.lat_deg,
-                        "lon_deg": geo.lon_deg,
-                        "alt_km": geo.alt_km,
-                        "vel_x_km_s": vel_ecef.x,
-                        "vel_y_km_s": vel_ecef.y,
-                        "vel_z_km_s": vel_ecef.z,
-                        "plane": node.plane,
-                        "slot": node.slot,
-                    }
+                # Preserve existing routing_area, neighbor_count, prefix from prior state
+                existing = _nodes.get(node_id)
+                _nodes[node_id] = NodeState(
+                    node_id=node_id,
+                    node_type="satellite",
+                    lat_deg=geo.lat_deg,
+                    lon_deg=geo.lon_deg,
+                    alt_km=geo.alt_km,
+                    vel_x_km_s=vel_ecef.x,
+                    vel_y_km_s=vel_ecef.y,
+                    vel_z_km_s=vel_ecef.z,
+                    plane=node.plane,
+                    slot=node.slot,
+                    routing_area=existing.routing_area if existing else None,
+                    neighbor_count=existing.neighbor_count if existing else 0,
+                    prefix=existing.prefix if existing else None,
+                    beam_falloff_exponent=_beam_falloff_exponent,
                 )
-                if existing.get("node_type") == "satellite":
-                    existing["beam_falloff_exponent"] = _beam_falloff_exponent
-                _state["nodes"][node_id] = existing
 
             elif isinstance(node, EphemerisNodeFixed):
-                existing = _state["nodes"].get(node_id, {})
-                existing.update(
-                    {
-                        "node_id": node_id,
-                        "node_type": "ground_station",
-                        "lat_deg": node.lat_deg,
-                        "lon_deg": node.lon_deg,
-                        "alt_km": node.alt_km,
-                        "vel_x_km_s": 0.0,
-                        "vel_y_km_s": 0.0,
-                        "vel_z_km_s": 0.0,
-                        "plane": None,
-                        "slot": None,
-                    }
+                existing = _nodes.get(node_id)
+                _nodes[node_id] = NodeState(
+                    node_id=node_id,
+                    node_type="ground_station",
+                    lat_deg=node.lat_deg,
+                    lon_deg=node.lon_deg,
+                    alt_km=node.alt_km,
+                    vel_x_km_s=0.0,
+                    vel_y_km_s=0.0,
+                    vel_z_km_s=0.0,
+                    plane=None,
+                    slot=None,
+                    routing_area=existing.routing_area if existing else None,
+                    neighbor_count=existing.neighbor_count if existing else 0,
+                    prefix=existing.prefix if existing else None,
+                    min_elevation_deg=_gs_elevation_map.get(node_id),
                 )
-                if node_id in _gs_elevation_map:
-                    existing["min_elevation_deg"] = _gs_elevation_map[node_id]
-                _state["nodes"][node_id] = existing
 
 
 def _compute_convergence_state() -> None:
@@ -329,88 +320,97 @@ def _compute_convergence_state() -> None:
     - "converging" → link count delta > 10% between consecutive snapshots
     - "converged" → link count stable (delta < 10%)
     """
+    global _network_health
+
     # MI takes precedence when active
-    if _state["network_health"].get("_mi_active"):
+    if _mi_active:
         return
 
     active = _curr_snapshot_active_count
 
     if active == 0:
-        _state["network_health"]["status"] = "no measurement"
+        _network_health = _network_health.model_copy(update={"status": "no measurement"})
         return
 
     # Dwell period after session Ready — routing protocols starting
     now = _time.monotonic()
     if _session_ready_time > 0 and (now - _session_ready_time) < _CONVERGENCE_DWELL_S:
-        _state["network_health"]["status"] = "stabilizing"
+        _network_health = _network_health.model_copy(update={"status": "stabilizing"})
         return
 
     # Compare consecutive snapshots — declarative, not event-based
     total = max(active, _prev_snapshot_active_count, 1)
     delta = abs(active - _prev_snapshot_active_count)
     if delta / total > _BULK_CHANGE_THRESHOLD:
-        _state["network_health"]["status"] = "converging"
+        _network_health = _network_health.model_copy(update={"status": "converging"})
     else:
-        _state["network_health"]["status"] = "converged"
+        _network_health = _network_health.model_copy(update={"status": "converged"})
 
 
 def _update_link_up(event_data: dict) -> None:
     """Update link state on LinkUp."""
-    node_a = event_data.get("node_a", "")
-    node_b = event_data.get("node_b", "")
+    node_a = event_data.get("node_a") or ""
+    node_b = event_data.get("node_b") or ""
     key = _link_key(node_a, node_b)
     with _state_lock:
-        is_new = key not in _state["links"]
-        _state["links"][key] = {
-            "node_a": node_a,
-            "node_b": node_b,
-            "state": "active",
-            "link_type": _derive_link_type(node_a, node_b, event_data.get("link_type", "isl")),
-            "link_reason": event_data.get("reason", ""),
-            "latency_ms": event_data.get("latency_ms", 0.0),
-            "bandwidth_mbps": event_data.get("bandwidth_mbps", 0.0),
-            "range_km": event_data.get("range_km", 0.0),
-            "traffic_load_pct": None,
-            "interface_a": event_data.get("interface_a", ""),
-            "interface_b": event_data.get("interface_b", ""),
-        }
-    if is_new and _continuous_tracer is not None:
+        _links[key] = LinkState(
+            node_a=node_a,
+            node_b=node_b,
+            state="active",
+            link_type=_derive_link_type(node_a, node_b, event_data.get("link_type") or "isl"),
+            link_reason=event_data.get("reason") or "",
+            latency_ms=event_data.get("latency_ms") or 0.0,
+            bandwidth_mbps=event_data.get("bandwidth_mbps") or 0.0,
+            range_km=event_data.get("range_km") or 0.0,
+            traffic_load_pct=None,
+            interface_a=event_data.get("interface_a") or "",
+            interface_b=event_data.get("interface_b") or "",
+        )
+    if _continuous_tracer is not None:
         _continuous_tracer.notify_topology_change(node_a, node_b)
 
 
 def _update_link_down(event_data: dict) -> None:
     """Remove link state on LinkDown."""
-    node_a = event_data.get("node_a", "")
-    node_b = event_data.get("node_b", "")
+    node_a = event_data.get("node_a") or ""
+    node_b = event_data.get("node_b") or ""
     key = _link_key(node_a, node_b)
     with _state_lock:
-        _state["links"].pop(key, None)
+        _links.pop(key, None)
     if _continuous_tracer is not None:
         _continuous_tracer.notify_topology_change(node_a, node_b)
 
 
 def _update_latency(event_data: dict) -> None:
     """Update link latency."""
-    key = _link_key(event_data.get("node_a", ""), event_data.get("node_b", ""))
+    key = _link_key(event_data.get("node_a") or "", event_data.get("node_b") or "")
     with _state_lock:
-        if key in _state["links"]:
-            _state["links"][key]["latency_ms"] = event_data.get("latency_ms", 0.0)
-            _state["links"][key]["range_km"] = event_data.get("range_km", 0.0)
+        existing = _links.get(key)
+        if existing is not None:
+            _links[key] = existing.model_copy(
+                update={
+                    "latency_ms": event_data.get("latency_ms") or 0.0,
+                    "range_km": event_data.get("range_km") or 0.0,
+                }
+            )
 
 
 def _add_recent_event(event_data: dict, event_type: str) -> None:
     """Add to recent events list (cap at 50)."""
+    sim_time_raw = event_data.get("sim_time") or datetime.now(UTC).isoformat()
+    sim_time_dt = (
+        datetime.fromisoformat(sim_time_raw) if isinstance(sim_time_raw, str) else sim_time_raw
+    )
+    event = RecentEvent(
+        sim_time=sim_time_dt,
+        node_id=event_data.get("node_id") or event_data.get("node_a") or "",
+        event_type=event_type,
+        summary=event_data.get("detail") or event_data.get("reason") or event_type,
+    )
     with _state_lock:
-        _state["recent_events"].append(
-            {
-                "sim_time": event_data.get("sim_time", datetime.now(UTC).isoformat()),
-                "node_id": event_data.get("node_id", event_data.get("node_a", "")),
-                "event_type": event_type,
-                "summary": event_data.get("detail", event_data.get("reason", event_type)),
-            }
-        )
-        if len(_state["recent_events"]) > 50:
-            _state["recent_events"] = _state["recent_events"][-50:]
+        _recent_events.append(event)
+        if len(_recent_events) > 50:
+            del _recent_events[:-50]
 
 
 def _update_convergence(event_data: dict) -> None:
@@ -420,14 +420,19 @@ def _update_convergence(event_data: dict) -> None:
     the link-state heuristic. The _mi_active flag prevents the heuristic
     from overriding MI-sourced state.
     """
+    global _mi_active, _network_health
     with _state_lock:
-        _state["network_health"]["_mi_active"] = True
+        _mi_active = True
         if event_data.get("converged"):
-            _state["network_health"]["status"] = "converged"
-            _state["network_health"]["converging_since_ms"] = None
-            _state["network_health"]["last_convergence_ms"] = event_data.get("duration_ms")
+            _network_health = _network_health.model_copy(
+                update={
+                    "status": "converged",
+                    "converging_since_ms": None,
+                    "last_convergence_ms": event_data.get("duration_ms"),
+                }
+            )
         else:
-            _state["network_health"]["status"] = "converging"
+            _network_health = _network_health.model_copy(update={"status": "converging"})
 
 
 def _link_key(node_a: str, node_b: str) -> str:
@@ -453,19 +458,26 @@ def _derive_link_type(node_a: str, node_b: str, link_type: str = "isl") -> str:
 
 def _update_almanac_state(event_data: dict) -> None:
     """Update almanac state from AlmanacEvent."""
-    event_type = event_data.get("event_type", "")
+    global _almanac
+    event_type = event_data.get("event_type") or ""
     with _almanac_lock:
-        _almanac_state["nodalpath_active"] = True
+        _almanac = _almanac.model_copy(update={"nodalpath_active": True})
         if event_type == "table_pushed":
-            _almanac_state["last_topology_state_id"] = event_data.get("topology_state_id")
-            _almanac_state["last_push_sim_time"] = event_data.get("sim_time")
-            _almanac_state["last_push_wall_time"] = event_data.get("wall_time")
-            _almanac_state["nodes_succeeded"] = event_data.get("nodes_succeeded", 0)
-            _almanac_state["nodes_failed"] = event_data.get("nodes_failed", 0)
+            _almanac = _almanac.model_copy(
+                update={
+                    "last_topology_state_id": event_data.get("topology_state_id"),
+                    "last_push_sim_time": event_data.get("sim_time"),
+                    "last_push_wall_time": event_data.get("wall_time"),
+                    "nodes_succeeded": event_data.get("nodes_succeeded") or 0,
+                    "nodes_failed": event_data.get("nodes_failed") or 0,
+                }
+            )
         elif event_type == "deviation_detected":
-            _almanac_state["deviation_count"] = _almanac_state.get("deviation_count", 0) + 1
+            _almanac = _almanac.model_copy(update={"deviation_count": _almanac.deviation_count + 1})
         elif event_type == "recomputation_triggered":
-            _almanac_state["recomputation_count"] = _almanac_state.get("recomputation_count", 0) + 1
+            _almanac = _almanac.model_copy(
+                update={"recomputation_count": _almanac.recomputation_count + 1}
+            )
 
 
 def _is_stale() -> bool:
@@ -484,41 +496,32 @@ def _build_snapshot() -> dict:
     """Build a StateSnapshot dict from current state."""
     with _state_lock:
         now = datetime.now(UTC)
-        links = [LinkState(**l) for l in _state["links"].values()]
+        links = list(_links.values())
 
         # Compute isl_count / gnd_count from active links
         _isl_counts: dict[str, int] = {}
         _gnd_counts: dict[str, int] = {}
-        for ldata in _state["links"].values():
-            a, b = ldata["node_a"], ldata["node_b"]
-            is_gnd = ldata.get("link_type", "isl") == "ground"
+        for ldata in _links.values():
+            a, b = ldata.node_a, ldata.node_b
+            is_gnd = ldata.link_type == "ground"
             for nid in (a, b):
                 if is_gnd:
                     _gnd_counts[nid] = _gnd_counts.get(nid, 0) + 1
                 else:
                     _isl_counts[nid] = _isl_counts.get(nid, 0) + 1
         nodes = []
-        for n in _state["nodes"].values():
-            patched = {
-                **n,
-                "isl_count": _isl_counts.get(n["node_id"], 0),
-                "gnd_count": _gnd_counts.get(n["node_id"], 0),
-            }
-            nodes.append(NodeState(**patched))
-        recent = [
-            RecentEvent(
-                sim_time=datetime.fromisoformat(e["sim_time"])
-                if isinstance(e["sim_time"], str)
-                else e["sim_time"],
-                node_id=e["node_id"],
-                event_type=e["event_type"],
-                summary=e["summary"],
-            )
-            for e in _state["recent_events"]
-        ]
+        for n in _nodes.values():
+            isl_c = _isl_counts.get(n.node_id, 0)
+            gnd_c = _gnd_counts.get(n.node_id, 0)
+            if isl_c != n.isl_count or gnd_c != n.gnd_count:
+                nodes.append(n.model_copy(update={"isl_count": isl_c, "gnd_count": gnd_c}))
+            else:
+                nodes.append(n)
+        recent = list(_recent_events)
+
         # Compute convergence heuristic (no MI required)
         _compute_convergence_state()
-        health = NetworkHealth(**_state["network_health"])
+        health = _network_health
 
         _traced: list[TracedPath] = []
         if _continuous_tracer is not None and _continuous_tracer.active:
@@ -527,9 +530,7 @@ def _build_snapshot() -> dict:
                 _traced.append(tp)
 
         snapshot = StateSnapshot(
-            sim_time=datetime.fromisoformat(_state["sim_time"])
-            if isinstance(_state["sim_time"], str)
-            else _state["sim_time"],
+            sim_time=datetime.fromisoformat(_sim_time) if isinstance(_sim_time, str) else _sim_time,
             wall_time=now,
             schema_version=1,
             nodes=nodes,
@@ -612,25 +613,26 @@ async def _nats_subscriber() -> None:
         _propagate_positions_from_ephemeris(eph.sim_time.isoformat())
 
     async def _on_playback_state(msg):
+        global _session_status
         nonlocal msg_count
         msg_count += 1
         data = json.loads(msg.data)
         with _state_lock:
-            _state["session_status"] = data.get("state", "unknown")
+            _session_status = data.get("state") or "unknown"
 
     async def _on_clock_tick(msg):
-        global _last_clock_tick_wall_time
+        global _last_clock_tick_wall_time, _playback_speed
         nonlocal msg_count
         msg_count += 1
         data = json.loads(msg.data)
-        sim_time_str = data.get("sim_time", "")
+        sim_time_str = data.get("sim_time") or ""
         if sim_time_str:
             try:
                 _propagate_positions_from_ephemeris(sim_time_str)
             except Exception as exc:
                 log.error("Position propagation failed: %s", exc, exc_info=True)
         with _state_lock:
-            _state["playback_speed"] = data.get("compression_ratio", 1.0)
+            _playback_speed = data.get("compression_ratio") or 1.0
         _last_clock_tick_wall_time = _time.monotonic()
 
     async def _on_link_state_snapshot(msg):
@@ -801,10 +803,10 @@ async def _nats_subscriber() -> None:
 
 
 def _apply_link_state_snapshot(data: dict) -> None:
-    """Apply LinkStateSnapshot as replace-not-merge on _state["links"].
+    """Apply LinkStateSnapshot as replace-not-merge on _links.
 
     This is the VS-API's equivalent of the Scheduler's
-    _apply_link_state_snapshot(). It replaces _state["links"] entirely
+    _apply_link_state_snapshot(). It replaces _links entirely
     with the snapshot contents. No transition replay needed.
     """
     try:
@@ -814,36 +816,36 @@ def _apply_link_state_snapshot(data: dict) -> None:
         return
 
     with _state_lock:
-        _state["links"].clear()
+        _links.clear()
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 key = _link_key(link.node_a, link.node_b)
                 lat_ms = link.latency_ms or 0.0
-                _state["links"][key] = {
-                    "node_a": link.node_a,
-                    "node_b": link.node_b,
-                    "state": "active",
-                    "link_type": _derive_link_type(link.node_a, link.node_b, link.link_type),
-                    "link_reason": "",
-                    "latency_ms": lat_ms,
-                    "bandwidth_mbps": link.bandwidth_mbps or 0.0,
-                    "range_km": lat_ms * 299792.458 / 1000.0,
-                    "traffic_load_pct": None,
-                    "interface_a": link.interface_a,
-                    "interface_b": link.interface_b,
-                }
+                _links[key] = LinkState(
+                    node_a=link.node_a,
+                    node_b=link.node_b,
+                    state="active",
+                    link_type=_derive_link_type(link.node_a, link.node_b, link.link_type),
+                    link_reason="",
+                    latency_ms=lat_ms,
+                    bandwidth_mbps=link.bandwidth_mbps or 0.0,
+                    range_km=lat_ms * 299792.458 / 1000.0,
+                    traffic_load_pct=None,
+                    interface_a=link.interface_a,
+                    interface_b=link.interface_b,
+                )
 
     # Track snapshot link counts for convergence heuristic
     global _prev_snapshot_active_count, _curr_snapshot_active_count
     _prev_snapshot_active_count = _curr_snapshot_active_count
-    _curr_snapshot_active_count = len(_state["links"])
+    _curr_snapshot_active_count = len(_links)
 
-    isl = sum(1 for v in _state["links"].values() if v.get("link_type", "isl") != "ground")
-    gs = sum(1 for v in _state["links"].values() if v.get("link_type", "isl") == "ground")
+    isl = sum(1 for v in _links.values() if v.link_type != "ground")
+    gs = sum(1 for v in _links.values() if v.link_type == "ground")
     log.info(
         "LinkStateSnapshot applied: seq=%d, %d links (%d ISL, %d GS)",
         snapshot.snapshot_seq,
-        len(_state["links"]),
+        len(_links),
         isl,
         gs,
     )
@@ -996,7 +998,12 @@ def _clear_state() -> None:
         _continuous_tracer, \
         _session_ready_time, \
         _prev_snapshot_active_count, \
-        _curr_snapshot_active_count
+        _curr_snapshot_active_count, \
+        _network_health, \
+        _mi_active, \
+        _sim_time, \
+        _session_status, \
+        _almanac
     _session_ready_time = 0.0
     _prev_snapshot_active_count = 0
     _curr_snapshot_active_count = 0
@@ -1004,17 +1011,20 @@ def _clear_state() -> None:
         # Best-effort stop — we're in a sync context during session switch
         _continuous_tracer = None
     with _state_lock:
-        _state["nodes"].clear()
-        _state["links"].clear()
-        _state["recent_events"].clear()
-        _state["active_flows"].clear()
-        _state["network_health"] = {
-            "status": "no measurement",
-            "converging_since_ms": None,
-            "unreachable_flows": 0,
-            "last_convergence_ms": None,
-        }
-        _state["sim_time"] = datetime.now(UTC).isoformat()
+        _nodes.clear()
+        _links.clear()
+        _recent_events.clear()
+        _network_health = NetworkHealth(
+            status="no measurement",
+            converging_since_ms=None,
+            unreachable_flows=0,
+            last_convergence_ms=None,
+        )
+        _mi_active = False
+        _sim_time = datetime.now(UTC).isoformat()
+        _session_status = None
+    with _almanac_lock:
+        _almanac = AlmanacState()
 
 
 def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
@@ -1100,6 +1110,8 @@ def _restore_state_from_db(db_path: str) -> bool:
     Returns True if state was restored, False otherwise. This is called during
     session recovery so VS-API doesn't start with empty nodes/links after a restart.
     """
+    global _network_health, _sim_time
+
     if not db_path or not Path(db_path).exists():
         return False
 
@@ -1119,25 +1131,46 @@ def _restore_state_from_db(db_path: str) -> bool:
         with _state_lock:
             # Restore nodes
             for node in snapshot.get("nodes", []):
-                node_id = node.get("node_id", "")
+                node_id = node.get("node_id") or ""
                 if node_id:
-                    _state["nodes"][node_id] = node
+                    _nodes[node_id] = NodeState(**node)
 
             # Restore links
             for link in snapshot.get("links", []):
-                key = _link_key(link.get("node_a", ""), link.get("node_b", ""))
-                _state["links"][key] = link
+                key = _link_key(link.get("node_a") or "", link.get("node_b") or "")
+                _links[key] = LinkState(**link)
 
             # Restore recent events
-            _state["recent_events"] = snapshot.get("recent_events", [])
+            _recent_events.clear()
+            for e in snapshot.get("recent_events", []):
+                sim_time_raw = e.get("sim_time") or datetime.now(UTC).isoformat()
+                sim_time_dt = (
+                    datetime.fromisoformat(sim_time_raw)
+                    if isinstance(sim_time_raw, str)
+                    else sim_time_raw
+                )
+                _recent_events.append(
+                    RecentEvent(
+                        sim_time=sim_time_dt,
+                        node_id=e.get("node_id") or "",
+                        event_type=e.get("event_type") or "",
+                        summary=e.get("summary") or "",
+                    )
+                )
 
             # Restore network health
             if "network_health" in snapshot:
-                _state["network_health"] = snapshot["network_health"]
+                nh = snapshot["network_health"]
+                _network_health = NetworkHealth(
+                    status=nh.get("status") or "no measurement",
+                    converging_since_ms=nh.get("converging_since_ms"),
+                    unreachable_flows=nh.get("unreachable_flows") or 0,
+                    last_convergence_ms=nh.get("last_convergence_ms"),
+                )
 
             # Restore sim time
             if "sim_time" in snapshot:
-                _state["sim_time"] = snapshot["sim_time"]
+                _sim_time = snapshot["sim_time"]
 
         node_count = len(snapshot.get("nodes", []))
         link_count = len(snapshot.get("links", []))
@@ -1228,7 +1261,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
 
     # Resolve node_id to pod IP (async — runs K8s API call in thread executor
     # so it doesn't block active SSH sessions on the event loop)
-    namespace = os.environ.get("NAMESPACE", "nodalarc")
+    namespace = get_platform_config().kubernetes_namespace
     pod_ip = await resolve_pod_ip(node_id, namespace)
     if not pod_ip:
         await websocket.close(code=4404, reason="Node not found")
@@ -1303,7 +1336,7 @@ async def get_node_config(node_id: str) -> Response:
     """
     from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_ip
 
-    namespace = os.environ.get("NAMESPACE", "nodalarc")
+    namespace = get_platform_config().kubernetes_namespace
     pod_ip = await resolve_pod_ip(node_id, namespace)
     if not pod_ip:
         return JSONResponse(status_code=404, content={"error": "Node not found"})
@@ -1337,8 +1370,16 @@ def get_state() -> dict:
     return _build_snapshot()
 
 
-_NODALPATH_CONSOLE_URL = "http://127.0.0.1:3100/api/status"
 _NODALPATH_TIMEOUT = 1.0
+
+
+def _nodalpath_base_url() -> str:
+    from nodalarc.platform_config import get_platform_config
+
+    cfg = get_platform_config()
+    host = cfg.service_host("nodalpath")
+    port = cfg.nodalpath_console_http_port
+    return f"http://{host}:{port}"
 
 
 async def _fetch_nodalpath_status() -> dict | None:
@@ -1349,7 +1390,7 @@ async def _fetch_nodalpath_status() -> dict | None:
     """
     try:
         async with httpx.AsyncClient(timeout=_NODALPATH_TIMEOUT) as client:
-            r = await client.get(_NODALPATH_CONSOLE_URL)
+            r = await client.get(f"{_nodalpath_base_url()}/api/status")
             r.raise_for_status()
             return r.json()
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
@@ -1396,7 +1437,7 @@ async def _fetch_nodalpath_path(params: dict) -> dict:
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(
-                "http://127.0.0.1:3100/api/v1/path",
+                f"{_nodalpath_base_url()}/api/v1/path",
                 params=params,
             )
             if r.status_code == 200:
@@ -1760,6 +1801,13 @@ def trace_path(body: dict) -> dict:
     if not src or not dst:
         return {"hops": [], "error": "src_node and dst_node required"}
 
+    if not _routing_stack or not _routing_stack.startswith("nodalpath"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Trace not available for routing stack '{_routing_stack}'. "
+            "Trace requires a NodalPath session (MPLS forwarding tables).",
+        )
+
     # Get current snapshot for node/link info
     try:
         snap = _build_snapshot()
@@ -1783,11 +1831,8 @@ def trace_path(body: dict) -> dict:
 
     # Fall back to NodalPath CSPF
     try:
-        from nodalarc.platform_config import get_platform_config
-
-        np_port = get_platform_config().nodalpath_console_http_port
         np_resp = httpx.get(
-            f"http://127.0.0.1:{np_port}/api/v1/path",
+            f"{_nodalpath_base_url()}/api/v1/path",
             params={"src": src, "dst": dst},
             timeout=5.0,
         )
@@ -1817,7 +1862,7 @@ def trace_path(body: dict) -> dict:
 def _get_sim_time_str() -> str:
     """Return current sim_time as string for the continuous tracer."""
     with _state_lock:
-        return _state["sim_time"]
+        return _sim_time
 
 
 def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]) -> None:
@@ -1850,9 +1895,9 @@ async def start_continuous_trace(body: dict) -> dict:
         return JSONResponse(status_code=400, content={"error": "src_node and dst_node required"})
 
     with _state_lock:
-        if src not in _state["nodes"]:
+        if src not in _nodes:
             return JSONResponse(status_code=400, content={"error": f"Unknown node: {src}"})
-        if dst not in _state["nodes"]:
+        if dst not in _nodes:
             return JSONResponse(status_code=400, content={"error": f"Unknown node: {dst}"})
 
     # Stop existing tracer

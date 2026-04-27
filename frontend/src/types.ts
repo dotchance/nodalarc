@@ -77,6 +77,17 @@ export interface RecentEvent {
   summary: string;
 }
 
+export interface AlmanacState {
+  last_topology_state_id: string | null;
+  last_push_sim_time: string | null;
+  last_push_wall_time: number | null;
+  nodes_succeeded: number;
+  nodes_failed: number;
+  deviation_count: number;
+  recomputation_count: number;
+  nodalpath_active: boolean;
+}
+
 export interface StateSnapshot {
   sim_time: string;
   wall_time: string;

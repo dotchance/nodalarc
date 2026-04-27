@@ -16,6 +16,11 @@ Actions:
 
 The override set is shared (via threading.Lock) with the Dispatcher, which
 checks it before processing OME visibility events.
+
+Dispatch to Node Agents runs on the Dispatcher's main asyncio loop via
+asyncio.run_coroutine_threadsafe(). This avoids the deadlock from calling
+sync wrappers (run_until_complete) on a running loop, and ensures the
+agent_pool's shared NATS connection is used from the correct thread.
 """
 
 from __future__ import annotations
@@ -43,7 +48,7 @@ log = logging.getLogger(__name__)
 
 
 def run_scenario_handler(
-    to_pub,  # legacy parameter, ignored — LinkDown published on NATS
+    to_pub,  # legacy parameter, ignored
     interface_map: dict[tuple[str, str], tuple[str, str]],
     bandwidth_map: dict[tuple[str, str], float],
     override_set: set[tuple[str, str]],
@@ -51,10 +56,20 @@ def run_scenario_handler(
     active_links: dict,
     pod_locator: PodLocationMap,
     agent_pool: AgentPool,
+    main_loop: asyncio.AbstractEventLoop,
+    nc_main: nats.NATS,
+    gs_capacities: dict[str, int] | None = None,
 ) -> None:
     """Handle scenario injection requests via NATS request/reply.
 
-    Runs in a daemon thread. Blocks on NATS subscription.
+    Runs in a daemon thread with its own asyncio event loop for the NATS
+    subscription. Dispatch to Node Agents is forwarded to the Dispatcher's
+    main loop via asyncio.run_coroutine_threadsafe().
+
+    Parameters:
+        main_loop: The Dispatcher's asyncio event loop (for dispatch).
+        nc_main: The Dispatcher's NATS connection (for LinkDown publish).
+        gs_capacities: GS node IDs -> terminal capacity (for GS detection).
     """
     asyncio.run(
         _run_scenario_async(
@@ -65,6 +80,9 @@ def run_scenario_handler(
             active_links,
             pod_locator,
             agent_pool,
+            main_loop,
+            nc_main,
+            gs_capacities or {},
         )
     )
 
@@ -77,6 +95,9 @@ async def _run_scenario_async(
     active_links: dict,
     pod_locator: PodLocationMap,
     agent_pool: AgentPool,
+    main_loop: asyncio.AbstractEventLoop,
+    nc_main: nats.NATS,
+    gs_capacities: dict[str, int],
 ) -> None:
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     log.info("Scenario handler NATS connected, subject=%s", SUBJECT_SCENARIO_INJECT)
@@ -90,10 +111,28 @@ async def _run_scenario_async(
             if action == "inject_link_down":
                 pair = (cmd["node_a"], cmd["node_b"])
                 pair = (min(pair), max(pair))
-                with override_lock:
-                    override_set.add(pair)
-                _dispatch_link_down(pair, interface_map, active_links, pod_locator, agent_pool)
+
+                # Dispatch on the main loop (async, thread-safe)
+                errors = await _dispatch_on_main_loop(
+                    _inject_link_down_on_main_loop,
+                    pair,
+                    interface_map,
+                    active_links,
+                    pod_locator,
+                    agent_pool,
+                    override_set,
+                    override_lock,
+                    gs_capacities,
+                    main_loop,
+                )
+                if errors:
+                    log.warning("Scenario inject_link_down %s errors: %s", pair, errors)
+
+                # Publish LinkDown event on the scenario handler's own NATS connection
                 ifaces = interface_map.get(pair, ("", ""))
+                info = active_links.get(pair)
+                if info:
+                    ifaces = (info.interface_a, info.interface_b)
                 event = LinkDown(
                     sim_time=now,
                     wall_time=now,
@@ -123,8 +162,25 @@ async def _run_scenario_async(
                             downed_pairs.append(pair)
 
                 for pair in downed_pairs:
-                    _dispatch_link_down(pair, interface_map, active_links, pod_locator, agent_pool)
+                    errors = await _dispatch_on_main_loop(
+                        _inject_link_down_on_main_loop,
+                        pair,
+                        interface_map,
+                        active_links,
+                        pod_locator,
+                        agent_pool,
+                        override_set,
+                        override_lock,
+                        gs_capacities,
+                        main_loop,
+                    )
+                    if errors:
+                        log.warning("Satellite loss dispatch %s errors: %s", pair, errors)
+
+                    info = active_links.get(pair)
                     ifaces = interface_map.get(pair, ("", ""))
+                    if info:
+                        ifaces = (info.interface_a, info.interface_b)
                     event = LinkDown(
                         sim_time=now,
                         wall_time=now,
@@ -167,64 +223,183 @@ async def _run_scenario_async(
         await nc.close()
 
 
-def _dispatch_link_down(
+async def _dispatch_on_main_loop(coro_fn, *args) -> str | None:
+    """Submit a coroutine to the main loop and await its result from this thread's loop.
+
+    Returns None on success, or an error string on failure.
+    """
+    # Extract main_loop from the last positional arg
+    main_loop = args[-1]
+    coro_args = args[:-1]
+
+    future = asyncio.run_coroutine_threadsafe(coro_fn(*coro_args), main_loop)
+    try:
+        result = await asyncio.wait_for(asyncio.wrap_future(future), timeout=30)
+        return result
+    except TimeoutError:
+        return "Dispatcher unresponsive — timed out after 30s"
+    except Exception as exc:
+        return f"Dispatch error: {exc}"
+
+
+async def _inject_link_down_on_main_loop(
     pair: tuple[str, str],
     interface_map: dict[tuple[str, str], tuple[str, str]],
     active_links: dict,
     pod_locator: PodLocationMap,
     agent_pool: AgentPool,
-) -> None:
-    """Dispatch BatchLinkDown for a single link pair via the Node Agent."""
-    info = active_links.pop(pair, None)
-    if info is None:
-        return
+    override_set: set[tuple[str, str]],
+    override_lock: threading.Lock,
+    gs_capacities: dict[str, int],
+) -> str | None:
+    """Dispatch BatchLinkDown for a single pair on the main event loop.
 
-    ifaces = interface_map.get(pair, ("", ""))
+    Called via run_coroutine_threadsafe from the scenario handler thread.
+    Returns None on success, or an error string on failure.
+    """
+    # Add to override set (thread-safe)
+    with override_lock:
+        override_set.add(pair)
+
+    info = active_links.get(pair)
+    if info is None:
+        return None  # Not active — override set, no dispatch needed
+
+    errors = await _dispatch_down_single(
+        pair, info, interface_map, active_links, pod_locator, agent_pool, gs_capacities
+    )
+    if not errors:
+        active_links.pop(pair, None)
+    return errors
+
+
+async def _dispatch_down_single(
+    pair: tuple[str, str],
+    info,  # ActiveLinkInfo
+    interface_map: dict[tuple[str, str], tuple[str, str]],
+    active_links: dict,
+    pod_locator: PodLocationMap,
+    agent_pool: AgentPool,
+    gs_capacities: dict[str, int],
+) -> str | None:
+    """Build and send BatchLinkDown for one pair. Returns None on success, error string on failure.
+
+    Mirrors dispatcher.py _send_batch_down logic for correct multi-node dispatch:
+    per-interface locality, vni, remote_node_ip fields.
+    """
+    node_a, node_b = pair
+    locality = pod_locator.link_locality(node_a, node_b)
+    if locality is None:
+        return f"Pod(s) not yet scheduled for {node_a}-{node_b}"
+
     is_gs = info.link_type == "ground" if hasattr(info, "link_type") else False
     now_iso = datetime.now(UTC).isoformat()
 
-    if is_gs:
-        gs_id, sat_id = pair[0], pair[1]
-        gs_iface = info.interface_a
-        sat_iface = info.interface_b
-        agent_addr = pod_locator.agent_addr(sat_id)
-        interfaces = [
-            node_agent_pb2.InterfaceDown(
-                node_id=gs_id,
-                interface_name=gs_iface,
-                peer_node_id=sat_id,
-                peer_interface_name=sat_iface,
-                link_type=node_agent_pb2.GROUND,
-                gs_id=gs_id,
-                sat_id=sat_id,
-            )
-        ]
-    else:
-        node_a, node_b = pair
-        agent_addr = pod_locator.agent_addr(node_a)
-        interfaces = [
-            node_agent_pb2.InterfaceDown(
-                node_id=node_a,
-                interface_name=ifaces[0],
-                link_type=node_agent_pb2.ISL,
-            ),
-            node_agent_pb2.InterfaceDown(
-                node_id=node_b,
-                interface_name=ifaces[1],
-                link_type=node_agent_pb2.ISL,
-            ),
-        ]
+    # agent_addr -> list[InterfaceDown]
+    agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
 
-    try:
-        stub = agent_pool.get_stub(agent_addr)
+    if is_gs:
+        gs_id = node_a if node_a in gs_capacities else node_b
+        sat_id = node_b if node_a in gs_capacities else node_a
+        gs_iface = info.interface_a if node_a in gs_capacities else info.interface_b
+        sat_iface = info.interface_b if node_a in gs_capacities else info.interface_a
+
+        vni = 0
+        if locality == node_agent_pb2.CROSS_NODE:
+            from nodalarc.vxlan import compute_vni
+
+            vni = compute_vni(gs_id, sat_id, gs_iface, sat_iface)
+
+        if locality == node_agent_pb2.LOCAL:
+            agent = pod_locator.agent_addr(sat_id)
+            agent_ifaces.setdefault(agent, []).append(
+                node_agent_pb2.InterfaceDown(
+                    node_id=gs_id,
+                    interface_name=gs_iface,
+                    peer_node_id=sat_id,
+                    peer_interface_name=sat_iface,
+                    link_type=node_agent_pb2.GROUND,
+                    gs_id=gs_id,
+                    sat_id=sat_id,
+                    locality=locality,
+                    remote_node_ip="",
+                    vni=vni,
+                )
+            )
+        else:
+            # CROSS_NODE: send to both agents
+            for nid, agent_addr in [
+                (sat_id, pod_locator.agent_addr(sat_id)),
+                (gs_id, pod_locator.agent_addr(gs_id)),
+            ]:
+                iface = gs_iface if nid == gs_id else sat_iface
+                peer_nid = sat_id if nid == gs_id else gs_id
+                peer_iface = sat_iface if nid == gs_id else gs_iface
+                agent_ifaces.setdefault(agent_addr, []).append(
+                    node_agent_pb2.InterfaceDown(
+                        node_id=nid,
+                        interface_name=iface,
+                        peer_node_id=peer_nid,
+                        peer_interface_name=peer_iface,
+                        link_type=node_agent_pb2.GROUND,
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                        locality=locality,
+                        remote_node_ip="",
+                        vni=vni,
+                    )
+                )
+    else:
+        # ISL
+        vni = 0
+        if locality == node_agent_pb2.CROSS_NODE:
+            from nodalarc.vxlan import compute_vni
+
+            vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b)
+
+        for nid, ifname, peer_nid, peer_ifname in [
+            (node_a, info.interface_a, node_b, info.interface_b),
+            (node_b, info.interface_b, node_a, info.interface_a),
+        ]:
+            agent = pod_locator.agent_addr(nid)
+            agent_ifaces.setdefault(agent, []).append(
+                node_agent_pb2.InterfaceDown(
+                    node_id=nid,
+                    interface_name=ifname,
+                    link_type=node_agent_pb2.ISL,
+                    locality=locality,
+                    vni=vni,
+                    peer_node_id=peer_nid,
+                    peer_interface_name=peer_ifname,
+                )
+            )
+
+    # Dispatch to all agents concurrently
+    tasks = []
+    agent_addrs = list(agent_ifaces.keys())
+    for addr in agent_addrs:
+        stub = agent_pool.get_stub(addr)
         req = node_agent_pb2.BatchLinkDownRequest(
             batch_id=f"scenario-down-{now_iso}",
             target_sim_time=now_iso,
-            locality=node_agent_pb2.LOCAL,
-            interfaces=interfaces,
+            interfaces=agent_ifaces[addr],
         )
-        resp = stub.batch_link_down(req)
-        if not resp.success:
-            log.warning("Scenario BatchLinkDown failed for %s: %s", pair, resp.error_message)
-    except Exception as exc:
-        log.warning("Scenario dispatch failed for %s: %s", pair, exc)
+        tasks.append(stub.async_batch_link_down(req))
+
+    if not tasks:
+        return "No agents to dispatch to"
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Check ALL agents succeeded
+    errors = []
+    for i, result in enumerate(results):
+        addr = agent_addrs[i]
+        if isinstance(result, Exception):
+            errors.append(f"agent {addr}: {result}")
+        elif not result.success:
+            errors.append(f"agent {addr}: {result.error_message}")
+
+    if errors:
+        return "; ".join(errors)
+    return None

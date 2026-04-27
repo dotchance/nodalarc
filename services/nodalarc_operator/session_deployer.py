@@ -8,6 +8,7 @@ Called by kopf handlers in handlers.py.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -49,6 +50,23 @@ def discover_available_nodes() -> list[str]:
     return sorted(available)
 
 
+def _deterministic_node(nid: str, available_nodes: list[str]) -> str:
+    """Rendezvous (HRW) hash — minimal migration on node-set changes.
+
+    For each candidate node, compute weight = SHA256(nid:node).
+    Assign to the highest-weight node. Adding the Nth node migrates
+    only ~1/N pods. Removing a node migrates only its pods.
+    """
+    best_node = available_nodes[0]
+    best_weight = -1
+    for node in available_nodes:
+        w = int(hashlib.sha256(f"{nid}:{node}".encode()).hexdigest()[:8], 16)
+        if w > best_weight:
+            best_weight = w
+            best_node = node
+    return best_node
+
+
 def compute_pod_placement(
     placement: PlacementConfig,
     node_vars: dict[str, dict],
@@ -68,29 +86,25 @@ def compute_pod_placement(
         raise ValueError("No available K3s nodes for pod placement")
 
     if placement.policy == "allOnOne":
-        # All pods on the first available node (backward compatible)
         target = available_nodes[0]
         return {nid: target for nid in node_vars}
 
     if placement.policy == "planePerNode":
-        # One plane per node, round-robin across available nodes.
-        # Ground stations go on the first node (control plane).
         result: dict[str, str] = {}
         for nid, vars in node_vars.items():
             if vars.get("node_type") == "ground_station":
-                result[nid] = available_nodes[0]
+                result[nid] = _deterministic_node(nid, available_nodes)
             else:
                 plane = vars.get("plane", 0)
                 result[nid] = available_nodes[plane % len(available_nodes)]
         return result
 
     if placement.policy == "planeGroupPerNode":
-        # Group adjacent planes, assign groups round-robin.
         ppg = placement.planes_per_group or max(1, len(available_nodes))
         result = {}
         for nid, vars in node_vars.items():
             if vars.get("node_type") == "ground_station":
-                result[nid] = available_nodes[0]
+                result[nid] = _deterministic_node(nid, available_nodes)
             else:
                 plane = vars.get("plane", 0)
                 group = plane // ppg
@@ -167,12 +181,11 @@ def deploy_session(
     _progress("Discovering available K8s nodes")
     available_nodes = discover_available_nodes()
     if not available_nodes:
-        fallback = os.environ.get("SESSION_NODE_NAME", "nodal")
-        available_nodes = [fallback]
-        log.warning(
-            "No nodes with nodalarc.io/node-agent=true label — "
-            "falling back to SESSION_NODE_NAME=%s",
-            fallback,
+        import kopf
+
+        raise kopf.PermanentError(
+            "No K8s nodes with label nodalarc.io/node-agent=true found. "
+            "Label at least one node: kubectl label node <name> nodalarc.io/node-agent=true"
         )
 
     # --- Step 1: Parse session YAML from the CRD spec ---

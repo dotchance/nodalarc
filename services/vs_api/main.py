@@ -702,12 +702,16 @@ async def _nats_subscriber() -> None:
             )
         )
         # NODALARC_LINKS — link state
+        # LAST_PER_SUBJECT delivers the retained LinkStateSnapshot
+        # (MaxMsgsPerSubject=1 on NODALARC_LINKS) on subscribe, so
+        # VS-API recovers current link state after restart without
+        # waiting for the next OME publish cycle.
         subs.append(
             await js.subscribe(
                 SUBJECT_LINK_STATE_SNAPSHOT,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
-                deliver_policy=DeliverPolicy.NEW,
+                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
                 cb=_on_link_state_snapshot,
             )
         )

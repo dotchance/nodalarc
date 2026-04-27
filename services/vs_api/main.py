@@ -29,7 +29,7 @@ import asyncssh
 import httpx
 import nats
 import yaml
-from fastapi import Depends, FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from nodalarc.constants import LOG_FORMAT
@@ -1767,6 +1767,13 @@ def trace_path(body: dict) -> dict:
     dst = body.get("dst_node", "")
     if not src or not dst:
         return {"hops": [], "error": "src_node and dst_node required"}
+
+    if not _routing_stack or not _routing_stack.startswith("nodalpath"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Trace not available for routing stack '{_routing_stack}'. "
+            "Trace requires a NodalPath session (MPLS forwarding tables).",
+        )
 
     # Get current snapshot for node/link info
     try:

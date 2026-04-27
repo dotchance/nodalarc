@@ -84,7 +84,7 @@ class PlatformConfig(BaseModel):
     # Service host resolution — for inter-service HTTP calls (not NATS).
     # Keys: service names (vs-api, nodalpath, etc.). Values: hostnames.
     # Falls back to default_service_host if service not in dict.
-    default_service_host: str = "127.0.0.1"
+    default_service_host: str
     service_hosts: dict[str, str] = {}
 
     def service_host(self, service: str) -> str:

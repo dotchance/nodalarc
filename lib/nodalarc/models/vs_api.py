@@ -107,6 +107,21 @@ class RecentEvent(BaseModel):
     summary: str
 
 
+class AlmanacState(BaseModel):
+    """NodalPath almanac push tracking state."""
+
+    model_config = ConfigDict(frozen=True)
+
+    last_topology_state_id: str | None = None
+    last_push_sim_time: str | None = None
+    last_push_wall_time: float | None = None
+    nodes_succeeded: int = 0
+    nodes_failed: int = 0
+    deviation_count: int = 0
+    recomputation_count: int = 0
+    nodalpath_active: bool = False
+
+
 class StateSnapshot(BaseModel):
     """Complete constellation state sent via WebSocket at ~1Hz.
 

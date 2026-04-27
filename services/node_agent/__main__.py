@@ -28,7 +28,12 @@ import socket
 from pathlib import Path
 
 import nats
-from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url, wiring_progress_subject
+from nodalarc.nats_channels import (
+    NATS_CONNECT_OPTIONS,
+    nats_url,
+    node_agent_subject,
+    wiring_progress_subject,
+)
 
 from node_agent.reconcile import (
     clean_nodalarc_kernel_state,
@@ -61,13 +66,11 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
-    # Init platform config (required for NATS URL)
-    try:
-        from nodalarc.platform_config import init_platform_config
+    # Init platform config — required for NATS URL and namespace resolution.
+    # If this fails, the Node Agent cannot function. Let it crash.
+    from nodalarc.platform_config import init_platform_config
 
-        init_platform_config(Path(args.platform_config))
-    except Exception:
-        pass
+    init_platform_config(Path(args.platform_config))
 
     # -----------------------------------------------------------------------
     # Connect to NATS FIRST — the Node Agent is a NATS-native actor.
@@ -119,12 +122,9 @@ async def main() -> None:
             loop.call_soon_threadsafe(first_wiring_done.set)
             return
 
-        try:
-            from nodalarc.platform_config import get_platform_config
+        from nodalarc.platform_config import get_platform_config
 
-            ns = get_platform_config().kubernetes_namespace
-        except RuntimeError:
-            ns = "nodalarc"
+        ns = get_platform_config().kubernetes_namespace
         v1 = kubernetes.client.CoreV1Api()
         last_resource_version = ""
 
@@ -216,7 +216,7 @@ async def main() -> None:
     # -----------------------------------------------------------------------
     # NATS request/reply server — subscribes AFTER wiring (pid_map gate)
     # -----------------------------------------------------------------------
-    agent_subject = f"nodalarc.agent.{hostname}"
+    agent_subject = node_agent_subject(hostname)
 
     async def _handle_request(msg):
         try:

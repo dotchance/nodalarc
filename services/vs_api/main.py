@@ -1261,7 +1261,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
 
     # Resolve node_id to pod IP (async — runs K8s API call in thread executor
     # so it doesn't block active SSH sessions on the event loop)
-    namespace = os.environ.get("NAMESPACE", "nodalarc")
+    namespace = get_platform_config().kubernetes_namespace
     pod_ip = await resolve_pod_ip(node_id, namespace)
     if not pod_ip:
         await websocket.close(code=4404, reason="Node not found")
@@ -1336,7 +1336,7 @@ async def get_node_config(node_id: str) -> Response:
     """
     from vs_api.terminal import TerminalSession, _load_ssh_key, resolve_pod_ip
 
-    namespace = os.environ.get("NAMESPACE", "nodalarc")
+    namespace = get_platform_config().kubernetes_namespace
     pod_ip = await resolve_pod_ip(node_id, namespace)
     if not pod_ip:
         return JSONResponse(status_code=404, content={"error": "Node not found"})

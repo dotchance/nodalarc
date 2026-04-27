@@ -944,10 +944,8 @@ def teardown_session(namespace: str) -> None:
 def _purge_session_jetstream_subjects(namespace: str) -> None:
     """Purge retained JetStream messages for the torn-down session.
 
-    Best-effort — failure doesn't block teardown. The NODALARC_SESSION
-    stream has MaxMsgsPerSubject=1, so each subject has at most one
-    retained message. Purging removes it so the next session with the
-    same name starts clean.
+    Best-effort — failure doesn't block teardown. Uses session-scoped
+    subject filter so concurrent sessions are not affected.
     """
     try:
         import asyncio
@@ -957,16 +955,32 @@ def _purge_session_jetstream_subjects(namespace: str) -> None:
             NATS_CONNECT_OPTIONS,
             STREAM_SESSION_EVENTS,
             nats_url,
+            sanitize_session_id,
         )
+
+        # Derive session_id from the session ConfigMap (if it still exists)
+        session_id = "current-session"
+        try:
+            v1 = _get_v1()
+            cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
+            if cm.data and "session.yaml" in cm.data:
+                raw = yaml.safe_load(cm.data["session.yaml"])
+                session_id = sanitize_session_id(
+                    raw.get("session", {}).get("name", "current-session")
+                )
+        except Exception:
+            pass
 
         async def _purge():
             nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
             try:
                 js = nc.jetstream()
-                # Purge all subjects in the session stream.
-                # This removes retained ephemeris, playback state, and checkpoint.
-                await js.purge_stream(STREAM_SESSION_EVENTS)
-                log.info("Purged NODALARC_SESSION stream (retained messages cleared)")
+                # Purge ONLY this session's subjects — not the entire stream.
+                # Without the subject filter, concurrent sessions would lose
+                # their checkpoints, ephemeris, and playback state.
+                subject_filter = f"nodalarc.session.{session_id}.>"
+                await js.purge_stream(STREAM_SESSION_EVENTS, subject=subject_filter)
+                log.info("Purged session subjects: %s", subject_filter)
             finally:
                 await nc.close()
 

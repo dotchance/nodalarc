@@ -14,10 +14,10 @@ import pytest
 
 # Access module-level globals for test manipulation
 import vs_api.main as _vsapi
+from nodalarc.models.vs_api import NetworkHealth
 from vs_api.main import (
     _apply_link_state_snapshot,
     _compute_convergence_state,
-    _state,
     _state_lock,
 )
 
@@ -57,13 +57,14 @@ def _reset_convergence_state():
     _vsapi._curr_snapshot_active_count = 0
     _vsapi._session_ready_time = 0.0
     with _state_lock:
-        _state["links"].clear()
-        _state["network_health"] = {
-            "status": "no measurement",
-            "converging_since_ms": None,
-            "unreachable_flows": 0,
-            "last_convergence_ms": None,
-        }
+        _vsapi._links.clear()
+        _vsapi._network_health = NetworkHealth(
+            status="no measurement",
+            converging_since_ms=None,
+            unreachable_flows=0,
+            last_convergence_ms=None,
+        )
+        _vsapi._mi_active = False
     yield
     # Cleanup
     _vsapi._prev_snapshot_active_count = 0
@@ -87,7 +88,7 @@ class TestConvergenceHeuristic:
         _vsapi._session_ready_time = _time.monotonic() - 30.0
 
         _compute_convergence_state()
-        assert _state["network_health"]["status"] == "converged"
+        assert _vsapi._network_health.status == "converged"
 
     def test_minor_change_stays_converged(self):
         """100 links → 102 links (delta 2%) → still converged."""
@@ -103,7 +104,7 @@ class TestConvergenceHeuristic:
         _vsapi._session_ready_time = _time.monotonic() - 30.0
 
         _compute_convergence_state()
-        assert _state["network_health"]["status"] == "converged"
+        assert _vsapi._network_health.status == "converged"
 
     def test_bulk_change_converging(self):
         """100 links → 115 links (delta 15%) → converging."""
@@ -118,7 +119,7 @@ class TestConvergenceHeuristic:
         _vsapi._session_ready_time = _time.monotonic() - 30.0
 
         _compute_convergence_state()
-        assert _state["network_health"]["status"] == "converging"
+        assert _vsapi._network_health.status == "converging"
 
     def test_restart_robustness(self):
         """VS-API restart: prev=0, first snapshot arrives → should NOT flip to converging.
@@ -140,17 +141,17 @@ class TestConvergenceHeuristic:
         # With prev=0 and curr=100, delta is 100% which would be "converging"
         # This is actually correct behavior — after a restart, the VS-API
         # should show converging until it sees a stable snapshot pair
-        assert _state["network_health"]["status"] in ("converging", "converged")
+        assert _vsapi._network_health.status in ("converging", "converged")
 
         # Second snapshot — same count, delta=0 → converged
         _apply_link_state_snapshot(_make_snapshot(links, seq=2))
         _compute_convergence_state()
-        assert _state["network_health"]["status"] == "converged"
+        assert _vsapi._network_health.status == "converged"
 
     def test_no_links_no_measurement(self):
         """Zero active links → no measurement."""
         _compute_convergence_state()
-        assert _state["network_health"]["status"] == "no measurement"
+        assert _vsapi._network_health.status == "no measurement"
 
     def test_dwell_period_stabilizing(self):
         """During dwell period after session Ready → stabilizing."""
@@ -163,7 +164,7 @@ class TestConvergenceHeuristic:
         _vsapi._session_ready_time = _time.monotonic()
 
         _compute_convergence_state()
-        assert _state["network_health"]["status"] == "stabilizing"
+        assert _vsapi._network_health.status == "stabilizing"
 
     def test_mi_takes_precedence(self):
         """When MI is active, heuristic does not override."""
@@ -174,9 +175,9 @@ class TestConvergenceHeuristic:
         _vsapi._session_ready_time = _time.monotonic() - 30.0
 
         # MI sets convergence state
-        _state["network_health"]["_mi_active"] = True
-        _state["network_health"]["status"] = "degraded"
+        _vsapi._mi_active = True
+        _vsapi._network_health = _vsapi._network_health.model_copy(update={"status": "degraded"})
 
         _compute_convergence_state()
         # Heuristic should NOT override MI
-        assert _state["network_health"]["status"] == "degraded"
+        assert _vsapi._network_health.status == "degraded"

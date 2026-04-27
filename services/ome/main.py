@@ -431,17 +431,48 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     """
     import queue
 
-    from nodalarc.models.events import ClockTick, PlaybackState
+    from nodalarc.models.events import ClockTick, PlaybackState, SchedulingCheckpoint, TeardownEntry
     from nodalarc.nats_channels import (
         SUBJECT_CLOCK_TICK,
         SUBJECT_LINK_STATE_SNAPSHOT,
         SUBJECT_PLAYBACK_STATE,
+        SUBJECT_SCHEDULING_CHECKPOINT,
         SUBJECT_SESSION_EPHEMERIS,
         SUBJECT_VISIBILITY_EVENT,
     )
     from nodalarc.platform_config import get_platform_config
 
     from ome.event_stream import build_link_state_snapshot, build_session_ephemeris
+
+    def _build_scheduling_checkpoint(
+        sim_time: datetime,
+        epoch_id: int,
+        step: int,
+        associations: dict[tuple[str, str], tuple[int, int]],
+        teardowns: dict[tuple[str, str], tuple[int, tuple[str, str]]],
+    ) -> SchedulingCheckpoint:
+        """Convert OME internal association/teardown state to SchedulingCheckpoint."""
+        # associations: (gs_id, sat_id) → (gs_ti, sat_ti) → flatten to gs_id → sat_id
+        assoc_flat: dict[str, str] = {}
+        for (gs_id, sat_id), _ in associations.items():
+            assoc_flat[gs_id] = sat_id
+
+        # teardowns: (gs_id, sat_id) → (remaining_ticks, (succ_gs, succ_sat))
+        td_flat: dict[str, TeardownEntry] = {}
+        for (gs_id, sat_id), (ticks, _successor) in teardowns.items():
+            td_flat[f"{gs_id}:{sat_id}"] = TeardownEntry(
+                remaining_ticks=ticks,
+                gs_id=gs_id,
+                sat_id=sat_id,
+            )
+
+        return SchedulingCheckpoint(
+            sim_time=sim_time,
+            epoch_id=epoch_id,
+            step=step,
+            associations=assoc_flat,
+            pending_teardowns=td_flat,
+        )
 
     _start_health_server()
 
@@ -605,15 +636,100 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
         period,
     )
 
+    # --- Checkpoint recovery (warm restart) ---
+    # Try to read the retained SchedulingCheckpoint from JetStream.
+    # If found, recover sim_time from it. In all cases, start PAUSED
+    # so consumers get a deterministic initial state (no wall-clock teleport).
+    recovered_checkpoint = None
+    try:
+        import asyncio as _aio
+
+        async def _read_checkpoint():
+            import nats as _nats
+            from nodalarc.nats_channels import (
+                NATS_CONNECT_OPTIONS as _OPTS,
+            )
+            from nodalarc.nats_channels import (
+                STREAM_SESSION_EVENTS as _STREAM,
+            )
+            from nodalarc.nats_channels import (
+                nats_url as _nats_url,
+            )
+
+            _nc = await _nats.connect(_nats_url(), **_OPTS)
+            try:
+                _js = _nc.jetstream()
+                from nats.js.api import DeliverPolicy
+
+                sub = await _js.subscribe(
+                    SUBJECT_SCHEDULING_CHECKPOINT,
+                    stream=_STREAM,
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                )
+                try:
+                    msg = await sub.next_msg(timeout=2.0)
+                    return SchedulingCheckpoint.model_validate_json(msg.data)
+                except Exception:
+                    return None
+                finally:
+                    await sub.unsubscribe()
+            finally:
+                await _nc.close()
+
+        recovered_checkpoint = _aio.run(_read_checkpoint())
+    except Exception as exc:
+        logging.warning("Checkpoint recovery failed (non-fatal): %s", exc)
+
+    if recovered_checkpoint:
+        epoch_unix = recovered_checkpoint.sim_time.timestamp()
+        step = recovered_checkpoint.step
+        logging.info(
+            "Recovered from checkpoint at T+%s (step=%d, epoch_id=%d)",
+            recovered_checkpoint.sim_time.isoformat(),
+            step,
+            recovered_checkpoint.epoch_id,
+        )
+    else:
+        logging.info("No checkpoint found — starting from epoch")
+
+    # Recompute link state at recovered (or initial) sim_time before publishing.
+    # Run enough steps from epoch to reach the recovered step so ISL/GS state
+    # is accurate. For a fresh start (step=0), this is a no-op.
+    if step > 0:
+        for replay_step in range(step + 1):
+            replay_events, _, current_associations, mbb_pending_teardowns = compute_step(
+                step_ctx,
+                epoch_unix - (step * step_seconds),  # original epoch
+                replay_step,
+                step_seconds,
+                0.0,
+                isl_state,
+                gs_state,
+                current_associations,
+                mbb_pending_teardowns,
+            )
+            for te in replay_events:
+                if te.event_type == "VisibilityEvent":
+                    vis = te.data
+                    pair = (vis.node_a, vis.node_b)
+                    if vis.link_type == "ground":
+                        running_gs_state[pair] = (vis.visible, vis.scheduled, vis.scheduling_state)
+                    else:
+                        running_isl_state[pair] = (vis.visible, vis.scheduled)
+        logging.info("Replayed %d steps to rebuild link state", step + 1)
+
+    # Start PAUSED — deterministic initial state for all consumers
+    _paused = True
+
     # --- Session start sequence (epoch_id=0) ---
-    # Indistinguishable from seek to epoch 0 per PRD v0.71.
-    # Order: SessionEphemeris → LinkStateSnapshot → PlaybackState(playing)
-    # → then tick loop begins with first ClockTick(epoch_id=0).
+    # Order: SessionEphemeris → LinkStateSnapshot → PlaybackState(paused)
+    # → then tick loop waits for unpause before first ClockTick.
     eph = build_session_ephemeris(step_ctx, epoch_unix, _epoch_id)
     _enqueue(SUBJECT_SESSION_EPHEMERIS, eph.model_dump_json().encode())
     logging.info("Published SessionEphemeris epoch_id=%d (%d nodes)", _epoch_id, len(eph.nodes))
 
-    # Force initial LinkStateSnapshot with epoch_id (empty — no links at step 0)
+    # Force initial LinkStateSnapshot with epoch_id
     snapshot_seq += 1
     initial_snap = build_link_state_snapshot(
         isl_state=running_isl_state,
@@ -629,9 +745,9 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
     last_snapshot_sim_s = 0.0
     force_first_snapshot = False
 
-    ps = PlaybackState(epoch_id=_epoch_id, state="playing")
+    ps = PlaybackState(epoch_id=_epoch_id, state="paused")
     _enqueue(SUBJECT_PLAYBACK_STATE, ps.model_dump_json().encode())
-    logging.info("Published PlaybackState(playing, epoch_id=%d)", _epoch_id)
+    logging.info("Published PlaybackState(paused, epoch_id=%d) — awaiting resume", _epoch_id)
 
     try:
         while not shutdown_event.is_set():
@@ -783,6 +899,16 @@ def _run_pacing(session_path, output_dir, event_queue, shutdown_event) -> None:
                 _enqueue(SUBJECT_LINK_STATE_SNAPSHOT, snap.model_dump_json().encode())
                 last_snapshot_sim_s = sim_s
                 force_first_snapshot = False
+
+                # Publish SchedulingCheckpoint alongside each LinkStateSnapshot
+                ckpt = _build_scheduling_checkpoint(
+                    sim_time=sim_time,
+                    epoch_id=_epoch_id,
+                    step=step,
+                    associations=current_associations,
+                    teardowns=mbb_pending_teardowns,
+                )
+                _enqueue(SUBJECT_SCHEDULING_CHECKPOINT, ckpt.model_dump_json().encode())
 
             # Write JSONL if --output-dir provided
             if out_path is not None:

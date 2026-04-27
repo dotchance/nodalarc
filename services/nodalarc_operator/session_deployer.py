@@ -894,22 +894,36 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
                 log.warning(f"Failed to patch deployment {deploy.metadata.name}: {exc}")
 
 
-def teardown_session(namespace: str) -> None:
-    """Clean up session ConfigMaps (pods are garbage-collected via ownerReferences)."""
+def teardown_session(namespace: str, session_id: str | None = None) -> None:
+    """Clean up session ConfigMaps (pods are garbage-collected via ownerReferences).
+
+    Args:
+        namespace: K8s namespace.
+        session_id: Session identifier for JetStream purge. If not provided,
+            derived from the nodalarc-session ConfigMap (which must still exist).
+            Callers that know the session_id should pass it explicitly.
+    """
     v1 = _get_v1()
 
-    # Read session_id BEFORE deleting ConfigMaps — needed for JetStream purge.
-    # Once the ConfigMap is deleted, we can't derive the session_id.
-    session_id = "current-session"
-    try:
-        cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
-        if cm.data and "session.yaml" in cm.data:
-            from nodalarc.nats_channels import sanitize_session_id
+    # Derive session_id from ConfigMap if not provided by caller.
+    if session_id is None:
+        session_id = "current-session"
+        try:
+            cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
+            if cm.data and "session.yaml" in cm.data:
+                from nodalarc.nats_channels import sanitize_session_id
 
-            raw = yaml.safe_load(cm.data["session.yaml"])
-            session_id = sanitize_session_id(raw.get("session", {}).get("name", "current-session"))
-    except Exception:
-        pass
+                raw = yaml.safe_load(cm.data["session.yaml"])
+                session_id = sanitize_session_id(
+                    raw.get("session", {}).get("name", "current-session")
+                )
+        except Exception as exc:
+            log.warning(
+                "Could not read session_id from ConfigMap — purge will target '%s'. "
+                "If this is wrong, stale JetStream messages may persist: %s",
+                session_id,
+                exc,
+            )
     log.info("Teardown session_id: %s", session_id)
 
     # Delete session-level ConfigMaps

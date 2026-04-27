@@ -31,7 +31,6 @@ from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
-    STREAM_SESSION_EVENTS,
     SUBJECT_CLOCK_TICK,
     SUBJECT_LATENCY_UPDATE,
     SUBJECT_LINK_DOWN,
@@ -239,6 +238,41 @@ class Dispatcher:
         self._pool.set_nc(nc)
 
         log.info("Scheduler NATS connected")
+
+        # --- Read retained SchedulingCheckpoint for recovery context ---
+        try:
+            from nats.js.api import DeliverPolicy as _DP
+            from nodalarc.models.events import SchedulingCheckpoint
+            from nodalarc.nats_channels import (
+                STREAM_SESSION_EVENTS,
+                SUBJECT_SCHEDULING_CHECKPOINT,
+            )
+
+            ckpt_sub = await js.subscribe(
+                SUBJECT_SCHEDULING_CHECKPOINT,
+                stream=STREAM_SESSION_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=_DP.LAST_PER_SUBJECT,
+            )
+            try:
+                ckpt_msg = await asyncio.wait_for(ckpt_sub.next_msg(), timeout=2.0)
+                ckpt = SchedulingCheckpoint.model_validate_json(ckpt_msg.data)
+                self._current_sim_time = ckpt.sim_time
+                log.info(
+                    "Recovered SchedulingCheckpoint: sim_time=%s step=%d epoch_id=%d "
+                    "associations=%d teardowns=%d",
+                    ckpt.sim_time.isoformat(),
+                    ckpt.step,
+                    ckpt.epoch_id,
+                    len(ckpt.associations),
+                    len(ckpt.pending_teardowns),
+                )
+            except (TimeoutError, Exception) as exc:
+                log.info("No SchedulingCheckpoint retained (fresh session): %s", type(exc).__name__)
+            finally:
+                await ckpt_sub.unsubscribe()
+        except Exception as exc:
+            log.warning("SchedulingCheckpoint recovery failed (non-fatal): %s", exc)
 
         # Load substrate latency for cross-node compensation
         self._load_substrate_latency()

@@ -212,6 +212,37 @@ class ValidationResult(BaseModel):
     remediation: str | None = None
 
 
+class TeardownEntry(BaseModel):
+    """Single pending MBB teardown in a SchedulingCheckpoint."""
+
+    model_config = ConfigDict(frozen=True)
+
+    remaining_ticks: int
+    gs_id: str
+    sat_id: str
+
+
+class SchedulingCheckpoint(BaseModel):
+    """OME ground-scheduling state checkpoint.
+
+    Published to NODALARC_SESSION stream (MaxMsgsPerSubject=1) alongside
+    LinkStateSnapshot at the same interval. Provides the Scheduler and
+    other consumers with the OME's current ground-station association
+    state for recovery after restart.
+
+    associations: gs_id → sat_id (current GS-to-satellite assignments)
+    pending_teardowns: pair_key → TeardownEntry (MBB teardowns in progress)
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    sim_time: datetime
+    epoch_id: int
+    step: int
+    associations: dict[str, str]  # gs_id → sat_id
+    pending_teardowns: dict[str, TeardownEntry]  # pair_key → entry
+
+
 class OpsEvent(BaseModel):
     """Operational event for the NODALARC_OPS JetStream stream.
 

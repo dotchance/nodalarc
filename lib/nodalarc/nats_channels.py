@@ -41,6 +41,7 @@ SUBJECT_SUBSTRATE_LATENCY = "nodalarc.links.substrate"
 # Session-level state (JetStream — MaxMsgsPerSubject=1 on NODALARC_SESSION)
 SUBJECT_SESSION_EPHEMERIS = "nodalarc.session.ephemeris"
 SUBJECT_PLAYBACK_STATE = "nodalarc.session.playback_state"
+SUBJECT_SCHEDULING_CHECKPOINT = "nodalarc.session.scheduling_checkpoint"
 
 # MI publications (JetStream — retained)
 SUBJECT_CONVERGENCE_RESULT = "nodalarc.mi.convergence"

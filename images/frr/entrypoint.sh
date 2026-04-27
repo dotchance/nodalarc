@@ -23,6 +23,13 @@ echo "ConfigMap mounted after ${WAITED}s"
 # Copy ConfigMap contents to writable /etc/frr/ (tmpfs emptyDir).
 # ConfigMap mounts are read-only; FRR needs to write to /etc/frr/.
 cp /etc/frr-config/* /etc/frr/
+# Write config version sentinel for readiness probe.
+# _config_version is a file in the ConfigMap containing a hash of frr.conf.
+# The readiness probe diffs /etc/frr/.config_version against the ConfigMap
+# mount to verify this container has loaded the intended config version.
+if [ -f /etc/frr-config/_config_version ]; then
+    cp /etc/frr-config/_config_version /etc/frr/.config_version
+fi
 echo "Copied config from /etc/frr-config/ to /etc/frr/"
 
 # Background config watcher — detects ConfigMap updates and reloads FRR.
@@ -45,6 +52,10 @@ _watch_config() {
             # Graceful reload — FRR re-reads config without restarting daemons.
             # vtysh sources the new config file, applying changes incrementally.
             vtysh -f /etc/frr/frr.conf 2>/dev/null || true
+            # Update config version sentinel after successful reload
+            if [ -f /etc/frr-config/_config_version ]; then
+                cp /etc/frr-config/_config_version /etc/frr/.config_version
+            fi
             last_hash="$current_hash"
             echo "FRR config reloaded"
         fi

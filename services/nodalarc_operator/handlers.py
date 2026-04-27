@@ -2,14 +2,18 @@
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 """Kopf handlers for ConstellationSpec CRD lifecycle.
 
-Reconciler pattern: _reconcile_session() is the single convergence function
-called by on_create, on_resume, and the wiring_check timer. It checks 5
-conditions in order and performs at most one convergence action per invocation.
-The kopf timer re-invokes it periodically to drive progress.
+True desired-state reconciler: _reconcile_session() computes expected state
+from the CRD spec (not cached status.podCount) and converges the cluster
+toward it. It calls ensure_session_configmaps() + ensure_session_pods() when
+pods are missing, making it capable of recovery from any state — not just
+monitoring after on_create does the real work.
 
 on_create retains blocking waits for old-pod termination and initial pod
 deployment because fresh creation needs synchronous sequencing. After pods
 are created, it delegates to _reconcile_session for the remaining lifecycle.
+
+on_resume and on_update go directly through the reconciler, which can create
+pods if they're missing (crash recovery, spec changes).
 """
 
 from __future__ import annotations
@@ -26,8 +30,11 @@ from nodalarc_operator.session_deployer import (
     check_pods_ready,
     check_pods_ready_condition,
     check_wiring_complete,
+    compute_expected_pod_count,
     compute_platform_hash,
     deploy_session,
+    ensure_session_configmaps,
+    ensure_session_pods,
     restart_platform_pods,
     set_nodalpath_mode,
     teardown_session,
@@ -74,6 +81,23 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
     }
 
 
+def _extract_protocol(spec: dict) -> str:
+    """Extract routing protocol from CRD spec's sessionYaml.
+
+    Falls back to 'isis' if sessionYaml is missing or unparseable.
+    """
+    import yaml
+
+    session_yaml = spec.get("sessionYaml", "")
+    if not session_yaml:
+        return "isis"
+    try:
+        raw = yaml.safe_load(session_yaml)
+        return raw.get("routing", {}).get("protocol", "isis") or "isis"
+    except Exception:
+        return "isis"
+
+
 def _has_wiring_manifest(namespace: str) -> bool:
     """Check whether the topology wiring manifest ConfigMap exists."""
     from nodalarc_operator.session_deployer import _get_v1
@@ -91,8 +115,12 @@ def _has_wiring_manifest(namespace: str) -> bool:
 async def _reconcile_session(spec, name, namespace, meta, status):
     """Converge cluster state toward desired session state.
 
-    Called by on_create (after initial deploy), on_resume, and the
-    wiring_check timer. Idempotent — safe to call at any point in
+    True desired-state reconciler: computes expected pod count from the CRD
+    spec (not from cached status.podCount). Can create missing pods when
+    the cluster has diverged from the spec.
+
+    Called by on_create (after initial deploy), on_resume, on_update, and
+    the wiring_check timer. Idempotent — safe to call at any point in
     the lifecycle.
 
     Checks 5 conditions in order. For each condition that isn't met,
@@ -103,13 +131,20 @@ async def _reconcile_session(spec, name, namespace, meta, status):
     phase = status.get("phase", "")
     owner_ref = _build_owner_ref(name, meta)
 
+    # Compute desired state from spec — this is what makes it a REAL reconciler.
+    # No K8s calls, no template rendering — just parse YAML and count nodes.
+    expected_count = await loop.run_in_executor(None, compute_expected_pod_count, dict(spec))
+    if expected_count == 0:
+        log.warning("Reconcile: computed expected_count=0 from spec, cannot reconcile")
+        return
+
     # --- Condition 1: Old pods terminated ---
     # Only relevant on fresh creation (phase Pending with no pods yet).
     # If phase is already Creating/Wiring/Ready, pods belong to this session.
     if phase in ("", "Pending"):
         total, _ = await loop.run_in_executor(None, check_pods_ready, namespace)
-        if total > 0 and status.get("podCount", 0) == 0:
-            # Pods exist but this session hasn't deployed yet — old session remnants
+        if total > 0 and total != expected_count:
+            # Pods exist but count doesn't match expected — stale session remnants
             cleared = await loop.run_in_executor(None, check_old_pods_terminated, namespace)
             if not cleared:
                 log.info("Reconcile: waiting for old session pods to terminate")
@@ -124,22 +159,60 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 return
 
     # --- Condition 2: Session deployed (pods created and running) ---
-    pod_count = status.get("podCount", 0)
-    if pod_count == 0:
-        # No pods deployed yet — check if any session pods exist from a
-        # previous operator run that didn't update status
-        total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
-        if total > 0:
-            # Pods exist but status.podCount is 0 — adopt them
-            pod_count = total
-            log.info(f"Reconcile: adopting {total} existing session pods")
-        else:
-            # No pods at all — cannot deploy from reconciler (on_create handles this)
-            log.info("Reconcile: no pods exist, waiting for initial deployment")
+    total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
+    if total < expected_count:
+        # Pods missing — run the full ensure pipeline to converge
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "message": f"Deploying: {total}/{expected_count} pods exist",
+                "podCount": expected_count,
+            },
+        )
+
+        def _progress(msg):
+            _update_status(name, namespace, {"phase": "Creating", "message": msg})
+
+        try:
+            context = await loop.run_in_executor(
+                None, ensure_session_configmaps, dict(spec), name, namespace, owner_ref, _progress
+            )
+            await loop.run_in_executor(
+                None, ensure_session_pods, context, namespace, owner_ref, _progress
+            )
+        except Exception as exc:
+            log.error("Reconcile: ensure pipeline failed: %s", exc)
+            _update_status(
+                name,
+                namespace,
+                {
+                    "phase": "Error",
+                    "message": f"Reconcile deploy failed: {str(exc)[:500]}",
+                },
+            )
             return
 
+        # Set NodalPath mode + restart platform pods
+        protocol = _extract_protocol(dict(spec))
+        await loop.run_in_executor(None, set_nodalpath_mode, namespace, protocol)
+        platform_hash = compute_platform_hash(dict(spec))
+        await loop.run_in_executor(None, restart_platform_pods, namespace, platform_hash)
+
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "podCount": expected_count,
+                "message": f"Pods created, waiting for Running ({expected_count} expected)",
+            },
+        )
+        return  # Timer will re-enter to check Running status
+
     all_ready, total, ready = await loop.run_in_executor(
-        None, check_all_pods_running, namespace, pod_count
+        None, check_all_pods_running, namespace, expected_count
     )
     if not all_ready:
         _update_status(
@@ -148,11 +221,11 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             {
                 "phase": "Creating",
                 "readyPods": ready,
-                "podCount": pod_count,
-                "message": f"Pods: {ready} running, {pod_count - ready} starting",
+                "podCount": expected_count,
+                "message": f"Pods: {ready} running, {expected_count - ready} starting",
             },
         )
-        log.info(f"Reconcile: {ready}/{pod_count} pods running, waiting for all")
+        log.info(f"Reconcile: {ready}/{expected_count} pods running, waiting for all")
         return
 
     # All pods running — proceed through remaining conditions
@@ -171,7 +244,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             {
                 "phase": "Creating",
                 "readyPods": ready_pods,
-                "podCount": pod_count,
+                "podCount": expected_count,
                 "message": f"Waiting for routing containers: {not_ready_count} pods not Ready",
             },
         )
@@ -191,7 +264,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             {
                 "phase": "Creating",
                 "readyPods": ready,
-                "podCount": pod_count,
+                "podCount": expected_count,
                 "message": "Writing pod IP addresses and wiring manifest",
             },
         )
@@ -203,8 +276,8 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             {
                 "phase": "Wiring",
                 "readyPods": ready,
-                "podCount": pod_count,
-                "message": f"All {pod_count} pods running. Node Agent wiring data plane.",
+                "podCount": expected_count,
+                "message": f"All {expected_count} pods running. Node Agent wiring data plane.",
             },
         )
         log.info("Reconcile: wiring manifest written, advanced to Wiring")
@@ -213,7 +286,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
     # Manifest exists — check wiring completion
     try:
         complete, wired_count, progress_msg = await loop.run_in_executor(
-            None, check_wiring_complete, namespace, pod_count
+            None, check_wiring_complete, namespace, expected_count
         )
     except kubernetes.client.rest.ApiException as e:
         log.warning("Reconcile: wiring status check error: %s", e)
@@ -224,7 +297,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             display_msg = "Waiting for Node Agent to begin wiring"
         else:
             display_msg = (
-                progress_msg or f"Data plane wiring: {wired_count}/{pod_count} nodes wired"
+                progress_msg or f"Data plane wiring: {wired_count}/{expected_count} nodes wired"
             )
         _update_status(
             name,
@@ -232,12 +305,12 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             {
                 "phase": "Wiring",
                 "readyPods": ready,
-                "podCount": pod_count,
+                "podCount": expected_count,
                 "wiredPods": wired_count,
                 "message": display_msg,
             },
         )
-        log.info(f"Reconcile: wiring in progress ({wired_count}/{pod_count})")
+        log.info(f"Reconcile: wiring in progress ({wired_count}/{expected_count})")
         return
 
     # --- Condition 5: Ready ---
@@ -247,12 +320,12 @@ async def _reconcile_session(spec, name, namespace, meta, status):
         {
             "phase": "Ready",
             "readyPods": ready,
-            "podCount": pod_count,
+            "podCount": expected_count,
             "wiredPods": wired_count,
-            "message": f"Session ready: {pod_count} pods, {wired_count} wired.",
+            "message": f"Session ready: {expected_count} pods, {wired_count} wired.",
         },
     )
-    log.info(f"Reconcile: session ready ({wired_count}/{pod_count} wired)")
+    log.info(f"Reconcile: session ready ({wired_count}/{expected_count} wired)")
 
 
 @kopf.on.create("constellationspecs", group="nodalarc.io")
@@ -333,7 +406,7 @@ async def on_create(spec, name, namespace, meta, **_):
     _update_status(name, namespace, result)
 
     # Set NodalPath mode based on session protocol before restarting
-    protocol = spec.get("routing", {}).get("protocol", "isis")
+    protocol = _extract_protocol(dict(spec))
     _update_status(name, namespace, {"phase": "Creating", "message": "Configuring NodalPath mode"})
     await loop.run_in_executor(None, set_nodalpath_mode, namespace, protocol)
 

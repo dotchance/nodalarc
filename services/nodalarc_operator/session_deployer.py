@@ -253,6 +253,28 @@ def deploy_session(
     config_overrides = dict(resolved.template_variables)
     config_overrides.update(session.routing.config_overrides)
 
+    # --- Step 3b: Validate session readiness ---
+    _progress("Validating session readiness")
+    from nodalarc.session_validator import validate_session_readiness
+
+    validation_results = validate_session_readiness(
+        session,
+        constellation,
+        satellites,
+        gs_file,
+        resolved,
+        available_node_count=len(available_nodes),
+    )
+    val_errors = [r for r in validation_results if r.level == "error"]
+    val_warnings = [r for r in validation_results if r.level == "warning"]
+    for w in val_warnings:
+        log.warning("Session validation %s: %s", w.code, w.message)
+    if val_errors:
+        import kopf
+
+        error_msg = "; ".join(f"[{r.code}] {r.message}" for r in val_errors)
+        raise kopf.PermanentError(f"Session validation failed: {error_msg}")
+
     # --- Step 4: Build template vars per node ---
     total_nodes = len(satellites) + len(gs_file.stations)
     _progress(f"Building template variables for {total_nodes} nodes")

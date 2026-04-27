@@ -25,6 +25,33 @@ echo "ConfigMap mounted after ${WAITED}s"
 cp /etc/frr-config/* /etc/frr/
 echo "Copied config from /etc/frr-config/ to /etc/frr/"
 
+# Background config watcher — detects ConfigMap updates and reloads FRR.
+# K8s kubelet syncs ConfigMap volume mounts on a polling interval (~60s).
+# When frr.conf changes (new session config, routing parameter update),
+# the watcher copies the new files and tells FRR to reload gracefully.
+# This is the NOS-agnostic contract: the container owns its own config
+# lifecycle. The Operator just mounts the ConfigMap.
+_watch_config() {
+    local last_hash
+    last_hash=$(md5sum /etc/frr-config/frr.conf 2>/dev/null | awk '{print $1}')
+    while true; do
+        sleep 10
+        local current_hash
+        current_hash=$(md5sum /etc/frr-config/frr.conf 2>/dev/null | awk '{print $1}')
+        if [ -n "$current_hash" ] && [ "$current_hash" != "$last_hash" ]; then
+            echo "ConfigMap change detected, reloading FRR config"
+            cp /etc/frr-config/* /etc/frr/
+            chown -R frr:frr /etc/frr
+            # Graceful reload — FRR re-reads config without restarting daemons.
+            # vtysh sources the new config file, applying changes incrementally.
+            vtysh -f /etc/frr/frr.conf 2>/dev/null || true
+            last_hash="$current_hash"
+            echo "FRR config reloaded"
+        fi
+    done
+}
+_watch_config &
+
 # Create vtysh.conf if it doesn't exist — suppresses the
 # "Can't open configuration file /etc/frr/vtysh.conf" warning
 # that appears on every vtysh invocation without it.

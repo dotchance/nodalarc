@@ -203,14 +203,21 @@ def _publish_validation_ops_events(results: list, namespace: str) -> None:
         log.warning("Failed to publish validation OpsEvents: %s", exc)
 
 
-def deploy_session(
+def ensure_session_configmaps(
     spec: dict,
     name: str,
     namespace: str,
     owner_ref: dict,
     progress_fn: Any | None = None,
 ) -> dict:
-    """Deploy a full session from a ConstellationSpec CR spec.
+    """Create/update all ConfigMaps and SSH keys for a session.
+
+    Runs steps 1-10 of the deploy pipeline: parse session, load constellation,
+    resolve stack, validate, render FRR configs, create ConfigMaps, generate
+    SSH keypair, compute pod placement.
+
+    Idempotent — ConfigMaps use create-or-update, SSH key uses create-or-replace.
+    Safe to call repeatedly; only writes what's missing or changed.
 
     Args:
         spec: The CR's .spec dict.
@@ -220,7 +227,9 @@ def deploy_session(
         progress_fn: Optional callback(message: str) for status updates.
 
     Returns:
-        Status dict with phase, podCount, readyPods, sessionId, message.
+        Context dict with keys: session_id, session, constellation,
+        satellites, gs_file, resolved_stack, node_vars, pod_placement,
+        available_nodes. Passed to ensure_session_pods().
     """
 
     def _progress(msg: str) -> None:
@@ -233,8 +242,6 @@ def deploy_session(
     session_id = f"{name}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
     # Discover available K8s nodes for pod placement.
-    # Substrate latency measurement is handled by Node Agent substrate_monitor
-    # (peer-only, continuous, published to NATS).
     _progress("Discovering available K8s nodes")
     available_nodes = discover_available_nodes()
     if not available_nodes:
@@ -249,7 +256,7 @@ def deploy_session(
     _progress("Parsing session configuration")
     session_yaml = spec.get("sessionYaml")
     if not session_yaml:
-        return {"phase": "Error", "message": "spec.sessionYaml is required"}
+        raise ValueError("spec.sessionYaml is required")
     session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
 
     # --- Step 2: Load constellation and ground stations ---
@@ -296,7 +303,7 @@ def deploy_session(
         f"Expanded {len(satellites)} satellites across {num_planes} planes, {len(gs_file.stations)} ground stations"
     )
     if not satellites:
-        return {"phase": "Error", "message": "No satellites in constellation"}
+        raise ValueError("No satellites in constellation")
 
     addressing = AddressingScheme(session.addressing)
     neighbors = assign_isl_neighbors(constellation, addressing)
@@ -439,15 +446,10 @@ def deploy_session(
 
     # --- Step 7b: Generate SSH keypair for terminal access ---
     _progress("Generating SSH keypair for terminal access")
-    # Per-session ED25519 keypair for secure interactive vtysh terminal.
-    # Public key mounted into session pods (SSH authorized_keys).
-    # Private key stored in Secret for VS-API SSH proxy.
-    # Owner reference ensures cleanup on session teardown.
     _create_terminal_ssh_keys(v1, namespace, owner_ref)
 
     # --- Step 8: Compute pod placement ---
     _progress(f"Computing pod placement ({session.placement.policy} policy)")
-    # available_nodes already discovered in Step 0 (substrate latency)
     pod_placement = compute_pod_placement(session.placement, node_vars, available_nodes)
     node_counts: dict[str, int] = {}
     for target in pod_placement.values():
@@ -460,7 +462,54 @@ def deploy_session(
         ", ".join(f"{n}={c}" for n, c in sorted(node_counts.items())),
     )
 
-    # --- Step 9: Create session pods (parallel, batches of 8) ---
+    return {
+        "session_id": session_id,
+        "session": session,
+        "constellation": constellation,
+        "satellites": satellites,
+        "gs_file": gs_file,
+        "resolved_stack": resolved,
+        "node_vars": node_vars,
+        "pod_placement": pod_placement,
+        "available_nodes": available_nodes,
+    }
+
+
+def ensure_session_pods(
+    context: dict,
+    namespace: str,
+    owner_ref: dict,
+    progress_fn: Any | None = None,
+) -> int:
+    """Create ONLY missing session pods from a prepared context.
+
+    Takes the context dict from ensure_session_configmaps(). Checks which
+    pods already exist and creates only the missing ones. Returns the total
+    expected pod count (not just created count).
+
+    Idempotent — K8s returns 409 for existing pods, handled as success.
+
+    Args:
+        context: Dict from ensure_session_configmaps().
+        namespace: K8s namespace.
+        owner_ref: ownerReferences entry for garbage collection.
+        progress_fn: Optional callback(message: str) for status updates.
+
+    Returns:
+        Total expected pod count.
+    """
+
+    def _progress(msg: str) -> None:
+        log.info(msg)
+        if progress_fn:
+            progress_fn(msg)
+
+    v1 = _get_v1()
+    node_vars = context["node_vars"]
+    pod_placement = context["pod_placement"]
+    session = context["session"]
+    resolved = context["resolved_stack"]
+
     total_pods = len(node_vars)
     _progress(f"Creating {total_pods} session pods")
     sidecar_config = _build_sidecar_config(resolved)
@@ -510,25 +559,25 @@ def deploy_session(
 
     with ThreadPoolExecutor(max_workers=16) as pool:
         futures = {}
-        for spec in pod_specs:
+        for ps in pod_specs:
             fut = pool.submit(
                 _create_session_pod,
                 v1=v1,
-                pod_name=spec["pod_name"],
+                pod_name=ps["pod_name"],
                 namespace=namespace,
-                node_id=spec["node_id"],
-                node_type=spec["node_type"],
-                plane=spec["plane"],
-                slot=spec["slot"],
-                gs_name=spec["gs_name"],
-                config_cm_name=spec["config_cm_name"],
+                node_id=ps["node_id"],
+                node_type=ps["node_type"],
+                plane=ps["plane"],
+                slot=ps["slot"],
+                gs_name=ps["gs_name"],
+                config_cm_name=ps["config_cm_name"],
                 sidecar_config=sidecar_config,
-                sidecar_env=spec["sidecar_env"],
-                probe_enabled=spec["probe_enabled"],
-                target_node=spec["target_node"],
+                sidecar_env=ps["sidecar_env"],
+                probe_enabled=ps["probe_enabled"],
+                target_node=ps["target_node"],
                 owner_ref=owner_ref,
             )
-            futures[fut] = spec["node_id"]
+            futures[fut] = ps["node_id"]
 
         for fut in as_completed(futures):
             node_id = futures[fut]
@@ -544,15 +593,43 @@ def deploy_session(
 
     if errors:
         log.warning(f"Pod creation: {len(errors)} failures out of {total_pods}")
-    log.info(f"Created {created_pods} session pods")
+    log.info(f"Created {created_pods} session pods (total expected: {total_pods})")
+
+    return total_pods
+
+
+def deploy_session(
+    spec: dict,
+    name: str,
+    namespace: str,
+    owner_ref: dict,
+    progress_fn: Any | None = None,
+) -> dict:
+    """Deploy a full session from a ConstellationSpec CR spec.
+
+    Convenience wrapper that calls ensure_session_configmaps() followed by
+    ensure_session_pods(). Preserves backward compatibility for on_create.
+
+    Args:
+        spec: The CR's .spec dict.
+        name: CR metadata.name (used for session_id).
+        namespace: K8s namespace.
+        owner_ref: ownerReferences entry for garbage collection.
+        progress_fn: Optional callback(message: str) for status updates.
+
+    Returns:
+        Status dict with phase, podCount, readyPods, sessionId, message.
+    """
+    context = ensure_session_configmaps(spec, name, namespace, owner_ref, progress_fn)
+    total_pods = ensure_session_pods(context, namespace, owner_ref, progress_fn)
 
     return {
         "phase": "Creating",
-        "sessionId": session_id,
-        "podCount": created_pods,
+        "sessionId": context["session_id"],
+        "podCount": total_pods,
         "readyPods": 0,
         "wiredPods": 0,
-        "message": f"Created {created_pods} pods, waiting for Running",
+        "message": f"Created {total_pods} pods, waiting for Running",
     }
 
 
@@ -934,6 +1011,29 @@ def compute_platform_hash(spec: dict) -> str:
     # Canonical YAML serialization for deterministic hashing
     canonical = yaml.dump(platform_fields, default_flow_style=False, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def compute_expected_pod_count(spec: dict) -> int:
+    """Compute how many session pods SHOULD exist from the CRD spec.
+
+    Pure computation — parses sessionYaml, expands constellation, counts
+    satellites + ground stations. No K8s API calls, no template rendering,
+    no ConfigMap creation. Fast enough for every reconciler invocation.
+
+    Returns 0 if sessionYaml is missing or unparseable (caller handles this).
+    """
+    session_yaml = spec.get("sessionYaml")
+    if not session_yaml:
+        return 0
+    try:
+        session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
+        constellation = load_constellation(session.constellation)
+        gs_file = load_ground_stations(session.ground_stations)
+        satellites = expand_constellation(constellation)
+        return len(satellites) + len(gs_file.stations)
+    except Exception as exc:
+        log.warning("compute_expected_pod_count failed: %s", exc)
+        return 0
 
 
 def check_pods_ready_condition(namespace: str) -> tuple[int, int]:

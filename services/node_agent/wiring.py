@@ -100,7 +100,7 @@ def _phase0_cleanup(
 
 def execute_wiring(
     manifest: dict,
-    namespace: str = "nodalarc",
+    namespace: str,
     progress_fn: Callable[[str], None] | None = None,
 ) -> dict[str, str]:
     """Execute all data plane wiring operations from a topology manifest.
@@ -464,7 +464,7 @@ def execute_wiring(
     return wired
 
 
-def write_wiring_status(wired: dict[str, str], namespace: str = "nodalarc") -> None:
+def write_wiring_status(wired: dict[str, str], namespace: str) -> None:
     """Write per-node wiring status to nodalarc-wiring-status ConfigMap.
 
     Uses JSON Merge Patch (application/merge-patch+json) so multiple

@@ -1337,8 +1337,16 @@ def get_state() -> dict:
     return _build_snapshot()
 
 
-_NODALPATH_CONSOLE_URL = "http://127.0.0.1:3100/api/status"
 _NODALPATH_TIMEOUT = 1.0
+
+
+def _nodalpath_base_url() -> str:
+    from nodalarc.platform_config import get_platform_config
+
+    cfg = get_platform_config()
+    host = cfg.service_host("nodalpath")
+    port = cfg.nodalpath_console_http_port
+    return f"http://{host}:{port}"
 
 
 async def _fetch_nodalpath_status() -> dict | None:
@@ -1349,7 +1357,7 @@ async def _fetch_nodalpath_status() -> dict | None:
     """
     try:
         async with httpx.AsyncClient(timeout=_NODALPATH_TIMEOUT) as client:
-            r = await client.get(_NODALPATH_CONSOLE_URL)
+            r = await client.get(f"{_nodalpath_base_url()}/api/status")
             r.raise_for_status()
             return r.json()
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
@@ -1396,7 +1404,7 @@ async def _fetch_nodalpath_path(params: dict) -> dict:
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(
-                "http://127.0.0.1:3100/api/v1/path",
+                f"{_nodalpath_base_url()}/api/v1/path",
                 params=params,
             )
             if r.status_code == 200:
@@ -1783,11 +1791,8 @@ def trace_path(body: dict) -> dict:
 
     # Fall back to NodalPath CSPF
     try:
-        from nodalarc.platform_config import get_platform_config
-
-        np_port = get_platform_config().nodalpath_console_http_port
         np_resp = httpx.get(
-            f"http://127.0.0.1:{np_port}/api/v1/path",
+            f"{_nodalpath_base_url()}/api/v1/path",
             params={"src": src, "dst": dst},
             timeout=5.0,
         )

@@ -28,7 +28,12 @@ import socket
 from pathlib import Path
 
 import nats
-from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url, wiring_progress_subject
+from nodalarc.nats_channels import (
+    NATS_CONNECT_OPTIONS,
+    nats_url,
+    node_agent_subject,
+    wiring_progress_subject,
+)
 
 from node_agent.reconcile import (
     clean_nodalarc_kernel_state,
@@ -216,7 +221,7 @@ async def main() -> None:
     # -----------------------------------------------------------------------
     # NATS request/reply server — subscribes AFTER wiring (pid_map gate)
     # -----------------------------------------------------------------------
-    agent_subject = f"nodalarc.agent.{hostname}"
+    agent_subject = node_agent_subject(hostname)
 
     async def _handle_request(msg):
         try:

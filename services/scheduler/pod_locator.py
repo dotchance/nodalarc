@@ -205,4 +205,4 @@ def _k3s_node_ip(v1, node_name: str) -> str:
                 return addr.address
     except Exception as exc:
         log.warning("Failed to get IP for node %s: %s", node_name, exc)
-    return "127.0.0.1"
+    return ""

@@ -1302,9 +1302,19 @@ class Dispatcher:
                     )
                     pair_agents.setdefault(pair, set()).add(agent)
                 else:
+                    skip_pair = False
                     for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
                         peer_k3s = self._loc.k3s_node(peer_nid)
                         remote_ip = self._loc.node_ip(peer_k3s)
+                        if not remote_ip:
+                            log.error(
+                                "CROSS_NODE GS LinkUp %s<->%s: no IP for node %s — skipping",
+                                gs_id,
+                                sat_id,
+                                peer_k3s,
+                            )
+                            skip_pair = True
+                            break
                         iface = gs_iface if nid == gs_id else sat_iface
                         peer_iface = sat_iface if nid == gs_id else gs_iface
                         agent_addr = self._loc.agent_addr(nid)
@@ -1325,6 +1335,8 @@ class Dispatcher:
                             )
                         )
                         pair_agents.setdefault(pair, set()).add(agent_addr)
+                    if skip_pair:
+                        continue
             else:
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
@@ -1332,6 +1344,7 @@ class Dispatcher:
 
                     vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b)
 
+                skip_pair = False
                 for nid, ifname, peer_nid, peer_ifname in [
                     (node_a, info.interface_a, node_b, info.interface_b),
                     (node_b, info.interface_b, node_a, info.interface_a),
@@ -1341,6 +1354,15 @@ class Dispatcher:
                     if locality == node_agent_pb2.CROSS_NODE:
                         peer_k3s = self._loc.k3s_node(peer_nid)
                         remote_ip = self._loc.node_ip(peer_k3s)
+                        if not remote_ip:
+                            log.error(
+                                "CROSS_NODE ISL LinkUp %s<->%s: no IP for node %s — skipping",
+                                node_a,
+                                node_b,
+                                peer_k3s,
+                            )
+                            skip_pair = True
+                            break
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceUp(
                             node_id=nid,
@@ -1356,6 +1378,8 @@ class Dispatcher:
                         )
                     )
                     pair_agents.setdefault(pair, set()).add(agent)
+                if skip_pair:
+                    continue
 
         successful_agents: set[str] = set()
         agent_addrs = list(agent_ifaces.keys())

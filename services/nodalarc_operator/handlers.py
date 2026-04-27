@@ -25,6 +25,7 @@ from nodalarc_operator.session_deployer import (
     check_old_pods_terminated,
     check_pods_ready,
     check_wiring_complete,
+    compute_platform_hash,
     deploy_session,
     restart_platform_pods,
     set_nodalpath_mode,
@@ -314,6 +315,7 @@ async def on_create(spec, name, namespace, meta, **_):
         {
             "phase": "Pending",
             "observedGeneration": meta.get("generation", 0),
+            "platformHash": compute_platform_hash(dict(spec)),
         },
     )
 
@@ -420,13 +422,53 @@ async def on_create(spec, name, namespace, meta, **_):
     await _reconcile_session(spec, name, namespace, meta, current_status)
 
 
+@kopf.on.update("constellationspecs", group="nodalarc.io")
+async def on_update(spec, name, namespace, meta, status, **_):
+    """Handle CRD spec changes — session switch or config update.
+
+    Uses semantic hashing to determine what changed:
+    - Platform-impacting fields (constellation, routing, time, GS):
+      restart platform pods via forced rolling update, then reconcile.
+    - Non-impacting fields (metadata, placement): reconcile without
+      restarting platform pods.
+    """
+    phase = status.get("phase", "")
+    if phase == "Error":
+        log.info("on_update: session in Error state, skipping")
+        return
+
+    loop = asyncio.get_running_loop()
+    new_hash = compute_platform_hash(dict(spec))
+    old_hash = status.get("platformHash", "")
+
+    if old_hash and new_hash != old_hash:
+        log.info(
+            "Platform-impacting spec change detected (hash %s → %s), restarting platform services",
+            old_hash[:8],
+            new_hash[:8],
+        )
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Creating",
+                "message": "Session config changed — restarting platform services",
+                "platformHash": new_hash,
+            },
+        )
+        await loop.run_in_executor(None, restart_platform_pods, namespace)
+    elif not old_hash:
+        _update_status(name, namespace, {"platformHash": new_hash})
+
+    await _reconcile_session(spec, name, namespace, meta, status)
+
+
 @kopf.on.delete("constellationspecs", group="nodalarc.io")
 async def on_delete(name, namespace, **_):
     """Handle ConstellationSpec CR deletion — tear down session."""
     log.info(f"ConstellationSpec '{name}' deleted, tearing down session")
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, teardown_session, namespace)
-    # Reset NodalPath to console mode after session teardown
     await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
     log.info("Session teardown complete")
 

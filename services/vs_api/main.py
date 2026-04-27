@@ -56,16 +56,16 @@ from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
-    SUBJECT_ALMANAC_EVENT,
-    SUBJECT_CLOCK_TICK,
-    SUBJECT_LATENCY_UPDATE,
-    SUBJECT_LINK_DOWN,
-    SUBJECT_LINK_STATE_SNAPSHOT,
-    SUBJECT_LINK_UP,
     SUBJECT_OPS_EVENT,
-    SUBJECT_PLAYBACK_STATE,
-    SUBJECT_SESSION_EPHEMERIS,
+    almanac_event_subject,
+    latency_update_subject,
+    link_down_subject,
+    link_state_snapshot_subject,
+    link_up_subject,
     nats_url,
+    ome_clock_subject,
+    playback_state_subject,
+    session_ephemeris_subject,
 )
 from nodalarc.platform_config import get_platform_config
 
@@ -213,6 +213,7 @@ _constellation_name: str | None = None
 _session_manager: SessionManager | None = None
 _gs_elevation_map: dict[str, float] = {}  # node_id -> min_elevation_deg
 _beam_falloff_exponent: float = 2.0
+_nats_session_id: str = "default"  # Set by main() from session config
 _playback_paused: bool = False
 _playback_speed: float = 1.0
 
@@ -572,11 +573,11 @@ async def _nats_subscriber() -> None:
     """NATS JetStream subscriber.
 
     Subscribes to:
-    - nodalarc.ome.snapshot → position updates
-    - nodalarc.links.state → LinkStateSnapshot (replace-not-merge)
-    - nodalarc.links.up/down → individual link events
-    - nodalarc.links.latency → latency updates
-    - nodalarc.nodalpath.almanac → NodalPath almanac events
+    - nodalarc.ome.{session_id}.snapshot → position updates
+    - nodalarc.links.{session_id}.state → LinkStateSnapshot (replace-not-merge)
+    - nodalarc.links.{session_id}.up/down → individual link events
+    - nodalarc.links.{session_id}.latency → latency updates
+    - nodalarc.nodalpath.{session_id}.almanac → NodalPath almanac events
 
     Stale detection: tracks wall-clock time of last snapshot and link event.
     If no messages for 15s, data is stale.
@@ -584,11 +585,23 @@ async def _nats_subscriber() -> None:
     global _nats_connection, _last_clock_tick_wall_time, _last_link_event_wall_time
     global _cached_ephemeris, _cached_ephemeris_obj
 
+    sid = _nats_session_id  # captured at call time from module global
+
+    # Build session-scoped subjects
+    _subj_ephemeris = session_ephemeris_subject(sid)
+    _subj_playback = playback_state_subject(sid)
+    _subj_clock = ome_clock_subject(sid)
+    _subj_link_snapshot = link_state_snapshot_subject(sid)
+    _subj_link_up = link_up_subject(sid)
+    _subj_link_down = link_down_subject(sid)
+    _subj_latency = latency_update_subject(sid)
+    _subj_almanac = almanac_event_subject(sid)
+
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     _nats_connection = nc
     js = nc.jetstream()
 
-    log.info("VS-API NATS connected to %s", nats_url())
+    log.info("VS-API NATS connected to %s (session_id=%s)", nats_url(), sid)
 
     # If main() detected a CR in Wiring/Creating phase, start polling from
     # this event loop (main() runs before uvicorn and has no event loop).
@@ -692,7 +705,7 @@ async def _nats_subscriber() -> None:
         # NODALARC_SESSION — SessionEphemeris and PlaybackState (MaxMsgsPerSubject=1)
         subs.append(
             await js.subscribe(
-                SUBJECT_SESSION_EPHEMERIS,
+                _subj_ephemeris,
                 stream=STREAM_SESSION_EVENTS,
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -701,7 +714,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_PLAYBACK_STATE,
+                _subj_playback,
                 stream=STREAM_SESSION_EVENTS,
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -711,7 +724,7 @@ async def _nats_subscriber() -> None:
         # NODALARC_OME — ClockTick for sim_time advancement and position propagation
         subs.append(
             await js.subscribe(
-                SUBJECT_CLOCK_TICK,
+                _subj_clock,
                 stream="NODALARC_OME",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -725,7 +738,7 @@ async def _nats_subscriber() -> None:
         # waiting for the next OME publish cycle.
         subs.append(
             await js.subscribe(
-                SUBJECT_LINK_STATE_SNAPSHOT,
+                _subj_link_snapshot,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -734,7 +747,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_LINK_UP,
+                _subj_link_up,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -743,7 +756,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_LINK_DOWN,
+                _subj_link_down,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -752,7 +765,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_LATENCY_UPDATE,
+                _subj_latency,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -761,7 +774,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_ALMANAC_EVENT,
+                _subj_almanac,
                 stream="NODALARC_OME",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -2579,6 +2592,12 @@ def main() -> None:
             session_data = yaml.safe_load(session_path.read_text())
         if session_data:
             session = SessionConfig.model_validate(session_data)
+            # Set session_id for NATS subject scoping
+            global _nats_session_id
+            from nodalarc.nats_channels import sanitize_session_id
+
+            _nats_session_id = sanitize_session_id(session.session.name)
+            log.info("VS-API session_id=%s", _nats_session_id)
             if session.routing.stack is not None:
                 _routing_stack = Path(session.routing.stack).name
             else:

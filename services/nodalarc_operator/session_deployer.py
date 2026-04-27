@@ -595,10 +595,7 @@ def write_wiring_manifest(
             "remove_default_route": True,
         }
 
-        # All satellites are potential GS peers
-        ground_bridges[gs_id] = {
-            "satellites": [addressing.sat_id(s.plane, s.slot) for s in satellites],
-        }
+        ground_bridges[gs_id] = {}
 
     # Count unique ISL links
     isl_pairs: set[tuple[str, str]] = set()
@@ -614,16 +611,23 @@ def write_wiring_manifest(
         "isl_link_count": len(isl_pairs),
     }
 
+    import base64 as _base64
+    import gzip as _gzip
+
+    raw_json = _json.dumps(manifest).encode()
+    compressed = _base64.b64encode(_gzip.compress(raw_json)).decode()
+
     _create_or_update_configmap(
         v1,
         "nodalarc-topology-wiring",
         namespace,
-        {"manifest.json": _json.dumps(manifest)},
+        {"manifest.json.gz.b64": compressed},
         owner_ref,
     )
     log.info(
         f"Wrote topology wiring manifest: {len(nodes)} nodes, "
-        f"{len(isl_pairs)} ISL links, {len(ground_bridges)} ground bridges"
+        f"{len(isl_pairs)} ISL links "
+        f"({len(raw_json)} bytes raw, {len(compressed)} bytes compressed)"
     )
     return len(isl_pairs)
 

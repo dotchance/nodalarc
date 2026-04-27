@@ -143,7 +143,14 @@ async def main() -> None:
                 # cleanly deferred until wiring completes and PIDs refresh.
                 shared_pid_map.clear()
 
-                manifest_json = cm.data.get("manifest.json", "{}")
+                compressed = cm.data.get("manifest.json.gz.b64")
+                if compressed:
+                    import base64
+                    import gzip
+
+                    manifest_json = gzip.decompress(base64.b64decode(compressed)).decode()
+                else:
+                    manifest_json = cm.data.get("manifest.json", "{}")
                 manifest = json.loads(manifest_json)
                 nodes = manifest.get("nodes", {})
 

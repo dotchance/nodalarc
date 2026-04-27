@@ -196,3 +196,36 @@ class PlaybackState(BaseModel):
 
     epoch_id: int
     state: Literal["seeking", "playing", "paused"]
+
+
+class ValidationResult(BaseModel):
+    """Result from session pre-deployment validation.
+
+    level="error" blocks deployment; level="warning" is logged but allowed.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    level: str  # "error" or "warning"
+    code: str  # e.g., "E001", "W003"
+    message: str
+    remediation: str | None = None
+
+
+class OpsEvent(BaseModel):
+    """Operational event for the NODALARC_OPS JetStream stream.
+
+    Published by any component that needs to surface operational
+    telemetry (validation failures, deployment progress, runtime
+    anomalies) to a centralized event bus.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    timestamp: datetime
+    source: str  # "operator", "scheduler", "ome", "node_agent", "validator"
+    hostname: str
+    level: str  # "critical", "error", "warning", "info", "debug"
+    code: str
+    message: str
+    details: dict | None = None

@@ -81,23 +81,20 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
     }
 
 
-def _delete_obsolete_pods(spec: dict, namespace: str) -> int:
-    """Delete session pods that don't belong to the current spec.
+def _compute_expected_node_ids(spec: dict) -> set[str]:
+    """Compute the set of expected pod names from the CRD spec.
 
-    Computes the set of expected node_ids from the spec, lists actual
-    session pods, and deletes any whose node_id is not in the expected set.
-    Returns the number of pods deleted.
+    Returns lowercase pod names (node_ids) that should exist for this spec.
+    Returns empty set on any error.
     """
     import yaml as _yaml
 
-    from nodalarc_operator.session_deployer import _get_v1
-
-    # Compute expected node_ids from spec
     session_yaml = spec.get("sessionYaml", "")
     if not session_yaml:
-        return 0
+        return set()
     try:
         from nodalarc.constellation_loader import (
+            expand_constellation,
             load_constellation,
             load_ground_stations,
         )
@@ -107,21 +104,28 @@ def _delete_obsolete_pods(spec: dict, namespace: str) -> int:
         raw = _yaml.safe_load(session_yaml)
         session = SessionConfig.model_validate(raw)
         constellation = load_constellation(session.constellation)
-        from nodalarc.constellation_loader import expand_constellation as _expand
-
-        satellites = _expand(constellation)
+        satellites = expand_constellation(constellation)
         gs_file = load_ground_stations(session.ground_stations)
         addressing = AddressingScheme(session.addressing)
-        expected_ids = set()
+        expected = set()
         for sat in satellites:
-            expected_ids.add(addressing.sat_id(sat.plane, sat.slot).lower())
+            expected.add(addressing.sat_id(sat.plane, sat.slot).lower())
         for station in gs_file.stations:
-            expected_ids.add(addressing.gs_id(station.name).lower())
+            expected.add(addressing.gs_id(station.name).lower())
+        return expected
     except Exception as exc:
-        log.warning("Cannot compute expected node_ids for scale-down: %s", exc)
-        return 0
+        log.warning("Cannot compute expected node_ids: %s", exc)
+        return set()
 
-    # List actual session pods and delete obsolete ones
+
+def _delete_obsolete_pods(expected_ids: set[str], namespace: str) -> int:
+    """Delete session pods whose names are not in expected_ids.
+
+    Takes pre-computed expected_ids (from _compute_expected_node_ids)
+    to avoid re-expanding the constellation on every reconciler tick.
+    """
+    from nodalarc_operator.session_deployer import _get_v1
+
     v1 = _get_v1()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     deleted = 0
@@ -218,19 +222,24 @@ async def _reconcile_session(spec, name, namespace, meta, status):
     total, ready = await loop.run_in_executor(None, check_pods_ready, namespace)
 
     if total > expected_count:
-        # Scale-down: delete obsolete pods that don't belong to the current spec.
-        # Compute which node_ids SHOULD exist, delete any that shouldn't.
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Creating",
-                "message": f"Scaling down: {total} pods exist, {expected_count} expected",
-                "podCount": expected_count,
-            },
-        )
-        await loop.run_in_executor(None, _delete_obsolete_pods, dict(spec), namespace)
-        log.info("Reconcile: deleted obsolete pods (%d → %d)", total, expected_count)
+        # Scale-down: compute expected_ids once, delete pods not in the set.
+        expected_ids = await loop.run_in_executor(None, _compute_expected_node_ids, dict(spec))
+        if expected_ids:
+            _update_status(
+                name,
+                namespace,
+                {
+                    "phase": "Creating",
+                    "message": f"Scaling down: {total} pods exist, {expected_count} expected",
+                    "podCount": expected_count,
+                },
+            )
+            deleted = await loop.run_in_executor(
+                None, _delete_obsolete_pods, expected_ids, namespace
+            )
+            log.info(
+                "Reconcile: deleted %d obsolete pods (%d → %d)", deleted, total, expected_count
+            )
         return  # Timer re-enters to verify
 
     if total < expected_count:
@@ -435,27 +444,11 @@ async def on_create(spec, name, namespace, meta, **_):
     )
 
     owner_ref = _build_owner_ref(name, meta)
-
-    # Wait for any old session pods to finish terminating
     loop = asyncio.get_running_loop()
-    old_pods_clear = False
-    for _ in range(60):
-        if await loop.run_in_executor(None, check_old_pods_terminated, namespace):
-            old_pods_clear = True
-            break
-        log.info("Waiting for old session pods to terminate...")
-        await asyncio.sleep(2)
-    if not old_pods_clear:
-        log.error("Old session pods did not terminate within 120s — aborting deploy")
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Error",
-                "message": "Timeout waiting for old session pods to terminate",
-            },
-        )
-        raise kopf.PermanentError("Old session pods did not terminate within 120s")
+
+    # Old-pod termination is handled by the reconciler's Condition 1.
+    # The timer re-enters every 10 seconds to check progress. No blocking
+    # wait here — the Operator stays responsive to other CRDs and events.
 
     # Deploy session (blocking — run in executor to not block kopf)
     def _deploy_progress(msg: str) -> None:

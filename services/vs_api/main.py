@@ -1024,7 +1024,7 @@ def get_auth_token() -> dict:
 
 
 @app.get("/api/v1/ops/events", dependencies=[Depends(_require_api_key)])
-def get_ops_events(
+async def get_ops_events(
     source: str = Query("", description="Filter by event source (e.g. 'operator', 'scheduler')"),
     level: str = Query("", description="Filter by level (e.g. 'error', 'warning')"),
     limit: int = Query(100, ge=1, le=500, description="Max events to return"),

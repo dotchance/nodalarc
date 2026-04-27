@@ -145,21 +145,24 @@ def _delete_obsolete_pods(expected_ids: set[str], namespace: str) -> int:
     return deleted
 
 
-def _extract_protocol(spec: dict) -> str:
-    """Extract routing protocol from CRD spec's sessionYaml.
-
-    Falls back to 'isis' if sessionYaml is missing or unparseable.
-    """
+def _parse_session_yaml(spec: dict) -> dict | None:
+    """Parse the sessionYaml from the CRD spec once. Returns parsed dict or None."""
     import yaml
 
     session_yaml = spec.get("sessionYaml", "")
     if not session_yaml:
-        return "isis"
+        return None
     try:
-        raw = yaml.safe_load(session_yaml)
-        return raw.get("routing", {}).get("protocol", "isis") or "isis"
+        return yaml.safe_load(session_yaml)
     except Exception:
+        return None
+
+
+def _extract_protocol(parsed: dict | None) -> str:
+    """Extract routing protocol from parsed session YAML."""
+    if parsed is None:
         return "isis"
+    return parsed.get("routing", {}).get("protocol", "isis") or "isis"
 
 
 def _has_wiring_manifest(namespace: str) -> bool:
@@ -194,10 +197,12 @@ async def _reconcile_session(spec, name, namespace, meta, status):
     loop = asyncio.get_running_loop()
     phase = status.get("phase", "")
     owner_ref = _build_owner_ref(name, meta)
+    spec_dict = dict(spec)
+    parsed_yaml = _parse_session_yaml(spec_dict)
 
     # Compute desired state from spec — this is what makes it a REAL reconciler.
     # No K8s calls, no template rendering — just parse YAML and count nodes.
-    expected_count = await loop.run_in_executor(None, compute_expected_pod_count, dict(spec))
+    expected_count = await loop.run_in_executor(None, compute_expected_pod_count, spec_dict)
     if expected_count == 0:
         log.warning("Reconcile: computed expected_count=0 from spec, cannot reconcile")
         return
@@ -227,7 +232,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
 
     if total > expected_count:
         # Scale-down: compute expected_ids once, delete pods not in the set.
-        expected_ids = await loop.run_in_executor(None, _compute_expected_node_ids, dict(spec))
+        expected_ids = await loop.run_in_executor(None, _compute_expected_node_ids, spec_dict)
         if expected_ids:
             _update_status(
                 name,
@@ -263,7 +268,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
 
         try:
             context = await loop.run_in_executor(
-                None, ensure_session_configmaps, dict(spec), name, namespace, owner_ref, _progress
+                None, ensure_session_configmaps, spec_dict, name, namespace, owner_ref, _progress
             )
             await loop.run_in_executor(
                 None, ensure_session_pods, context, namespace, owner_ref, _progress
@@ -281,9 +286,9 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             return
 
         # Set NodalPath mode + restart platform pods
-        protocol = _extract_protocol(dict(spec))
+        protocol = _extract_protocol(parsed_yaml)
         await loop.run_in_executor(None, set_nodalpath_mode, namespace, protocol)
-        platform_hash = compute_platform_hash(dict(spec))
+        platform_hash = compute_platform_hash(spec_dict)
         await loop.run_in_executor(None, restart_platform_pods, namespace, platform_hash)
 
         _update_status(
@@ -355,7 +360,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             },
         )
         await loop.run_in_executor(None, write_pod_ips_configmap, namespace)
-        await loop.run_in_executor(None, write_wiring_manifest, dict(spec), namespace, owner_ref)
+        await loop.run_in_executor(None, write_wiring_manifest, spec_dict, namespace, owner_ref)
         _update_status(
             name,
             namespace,

@@ -56,7 +56,16 @@ from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
+    almanac_event_subject,
+    latency_update_subject,
+    link_down_subject,
+    link_state_snapshot_subject,
+    link_up_subject,
     nats_url,
+    ome_clock_subject,
+    ops_subscribe_subject,
+    playback_state_subject,
+    session_ephemeris_subject,
 )
 from nodalarc.platform_config import get_platform_config
 
@@ -574,7 +583,7 @@ async def _nats_subscriber() -> None:
     If no messages for 15s, data is stale.
     """
     global _nats_connection, _last_clock_tick_wall_time, _last_link_event_wall_time
-    global _cached_ephemeris, _cached_ephemeris_obj
+    global _cached_ephemeris, _cached_ephemeris_obj, _nats_session_id
 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     _nats_connection = nc
@@ -679,15 +688,36 @@ async def _nats_subscriber() -> None:
         with contextlib.suppress(Exception):
             _ops_events.append(json.loads(msg.data))
 
-    # The VS-API is a dashboard — it subscribes to all sessions using
-    # the NATS single-token wildcard (*) for the session_id segment.
-    # nodalarc.ome.*.clock matches nodalarc.ome.starlink-576-isis-te.clock
-    # and any other session_id. No session_id resolution needed.
+    # Wait for session config to become available, then subscribe with
+    # session-scoped subjects. The VS-API starts before the session
+    # ConfigMap exists. The NATS subscriber polls until the config
+    # file appears, then creates subscriptions with the correct session_id.
+    session_config_path = Path(_session_file) if _session_file else None
+    while session_config_path and not session_config_path.is_file():
+        log.info("NATS subscriber: waiting for session config at %s", session_config_path)
+        await asyncio.sleep(5)
+
+    # Session config now available — read session_id
+    if session_config_path and session_config_path.is_file():
+        try:
+            from nodalarc.nats_channels import sanitize_session_id
+
+            raw = yaml.safe_load(session_config_path.read_text())
+            if raw:
+                session = SessionConfig.model_validate(raw)
+                _nats_session_id = sanitize_session_id(session.session.name)
+                log.info("NATS subscriber: session_id=%s", _nats_session_id)
+        except Exception as exc:
+            log.warning("Failed to read session_id from config: %s", exc)
+
+    sid = _nats_session_id
+    log.info("VS-API NATS subscribing with session_id=%s", sid)
+
     subs = []
     try:
         subs.append(
             await js.subscribe(
-                "nodalarc.session.*.ephemeris",
+                session_ephemeris_subject(sid),
                 stream=STREAM_SESSION_EVENTS,
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -696,7 +726,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                "nodalarc.session.*.playback_state",
+                playback_state_subject(sid),
                 stream=STREAM_SESSION_EVENTS,
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -705,7 +735,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                "nodalarc.ome.*.clock",
+                ome_clock_subject(sid),
                 stream="NODALARC_OME",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -714,7 +744,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                "nodalarc.links.*.state",
+                link_state_snapshot_subject(sid),
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -723,7 +753,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                "nodalarc.links.*.up",
+                link_up_subject(sid),
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -732,7 +762,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                "nodalarc.links.*.down",
+                link_down_subject(sid),
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -741,7 +771,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                "nodalarc.links.*.latency",
+                latency_update_subject(sid),
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -750,7 +780,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                "nodalarc.ome.*.almanac",
+                almanac_event_subject(sid),
                 stream="NODALARC_OME",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -759,7 +789,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                "nodalarc.ops.>",
+                ops_subscribe_subject(sid),
                 stream=STREAM_OPS_EVENTS,
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,

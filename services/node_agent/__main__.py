@@ -138,7 +138,6 @@ async def main() -> None:
                 if rv == last_resource_version:
                     time.sleep(5)
                     continue
-                last_resource_version = rv
 
                 # New manifest detected — immediately clear stale pid_map.
                 # Any BatchLinkUp arriving from this point forward will be
@@ -173,6 +172,7 @@ async def main() -> None:
                         )
 
                 if not nodes:
+                    last_resource_version = rv
                     time.sleep(5)
                     continue
 
@@ -184,6 +184,7 @@ async def main() -> None:
                     )
                     _refresh_pids(shared_pid_map)
                     loop.call_soon_threadsafe(first_wiring_done.set)
+                    last_resource_version = rv
                     time.sleep(5)
                     continue
 
@@ -210,6 +211,11 @@ async def main() -> None:
                 _refresh_pids(shared_pid_map)
                 write_wiring_status(wired, namespace=ns)
                 loop.call_soon_threadsafe(first_wiring_done.set)
+
+                # Advance the resource version cursor AFTER successful
+                # processing. If any step above fails, the next iteration
+                # re-processes the same manifest (idempotent — Case B no-ops).
+                last_resource_version = rv
 
             except Exception as exc:
                 if hasattr(exc, "status") and exc.status == 404:

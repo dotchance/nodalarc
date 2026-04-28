@@ -9,6 +9,7 @@ import { TopologyView } from "./topology/TopologyView";
 import { InfoPanel } from "./panels/InfoPanel";
 import { FilterPanel } from "./panels/FilterPanel";
 import { CliDrawer } from "./panels/CliDrawer";
+import { LogPanel } from "./panels/LogPanel";
 import { NodePopover } from "./panels/NodePopover";
 import { Toasts } from "./panels/Toasts";
 import { Dashboard } from "./panels/Dashboard";
@@ -133,6 +134,7 @@ function AppInner() {
   }, [snapshot, switching, simTimeAdvanced]);
 
   const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
+  const [logPanelOpen, setLogPanelOpen] = useState(false);
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -417,6 +419,12 @@ function AppInner() {
           selection={selection}
         />
       )}
+      {logPanelOpen && (
+        <LogPanel
+          events={snapshot?.ops_events ?? []}
+          onClose={() => setLogPanelOpen(false)}
+        />
+      )}
       {filterOpen && (
         <div className="filter-panel-overlay" onClick={() => setFilterOpen(false)}>
           <div className="filter-panel-drawer" onClick={(e) => e.stopPropagation()}>
@@ -452,7 +460,7 @@ function AppInner() {
   );
 
   const bottomBarContent = (
-    <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} />
+    <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} logPanelOpen={logPanelOpen} onToggleLogPanel={() => setLogPanelOpen((v) => !v)} />
   );
 
   const toastsContent = <Toasts events={snapshot?.recent_events} />;

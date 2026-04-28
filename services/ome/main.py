@@ -773,8 +773,9 @@ def _run_pacing(
                 logging.info("Recovery replay: %d/%d steps", replay_step, step + 1)
         logging.info("Replayed %d steps to rebuild link state", step + 1)
 
-    # Start PAUSED — deterministic initial state for all consumers
-    _paused = True
+    # Recovery → PAUSED (deterministic, operator must unpause).
+    # Fresh deployment → PLAYING (normal UX, session starts immediately).
+    _paused = recovered_checkpoint is not None
 
     # --- Session start sequence (epoch_id=0) ---
     # Order: SessionEphemeris → LinkStateSnapshot → PlaybackState(paused)
@@ -799,9 +800,18 @@ def _run_pacing(
     last_snapshot_sim_s = 0.0
     force_first_snapshot = False
 
-    ps = PlaybackState(epoch_id=_epoch_id, state="paused")
+    initial_playback_state = "paused" if _paused else "playing"
+    ps = PlaybackState(epoch_id=_epoch_id, state=initial_playback_state)
     _enqueue(subj_playback, ps.model_dump_json().encode())
-    logging.info("Published PlaybackState(paused, epoch_id=%d) — awaiting resume", _epoch_id)
+    if _paused:
+        logging.info(
+            "Published PlaybackState(paused, epoch_id=%d) — recovered from checkpoint, awaiting resume",
+            _epoch_id,
+        )
+    else:
+        logging.info(
+            "Published PlaybackState(playing, epoch_id=%d) — fresh session, auto-play", _epoch_id
+        )
 
     try:
         while not shutdown_event.is_set():

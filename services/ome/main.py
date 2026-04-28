@@ -1054,6 +1054,12 @@ def main() -> None:
 
     from nodalarc.nats_channels import sanitize_session_id
 
+    # Health server must start BEFORE the session config wait.
+    # K8s liveness probe hits :8081 immediately — if the health server
+    # doesn't start until after config loads, the probe fails and K8s
+    # kills the pod before it ever gets the config.
+    _start_health_server()
+
     # Parse session config ONCE — both the publisher and pacing threads
     # need the session_id. The config bundle is passed to _run_pacing
     # to avoid re-parsing the same file.

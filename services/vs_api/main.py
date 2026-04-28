@@ -56,16 +56,7 @@ from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
-    SUBJECT_OPS_EVENT,
-    almanac_event_subject,
-    latency_update_subject,
-    link_down_subject,
-    link_state_snapshot_subject,
-    link_up_subject,
     nats_url,
-    ome_clock_subject,
-    playback_state_subject,
-    session_ephemeris_subject,
 )
 from nodalarc.platform_config import get_platform_config
 
@@ -585,12 +576,6 @@ async def _nats_subscriber() -> None:
     global _nats_connection, _last_clock_tick_wall_time, _last_link_event_wall_time
     global _cached_ephemeris, _cached_ephemeris_obj
 
-    # Session-scoped subjects are built dynamically when the session_id
-    # becomes available. The VS-API starts before any session exists
-    # (it serves the wizard UI). Session subscriptions are created when
-    # _nats_session_id changes from "default" to a real session name.
-    _current_subscribed_sid: str = ""
-
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     _nats_connection = nc
     js = nc.jetstream()
@@ -694,120 +679,95 @@ async def _nats_subscriber() -> None:
         with contextlib.suppress(Exception):
             _ops_events.append(json.loads(msg.data))
 
-    session_subs: list = []
-
-    async def _subscribe_session(sid: str) -> list:
-        """Create session-scoped NATS subscriptions for the given session_id.
-
-        Returns the list of subscription objects for later unsubscribe.
-        """
-        nonlocal _current_subscribed_sid
-        new_subs = []
-        try:
-            new_subs.append(
-                await js.subscribe(
-                    session_ephemeris_subject(sid),
-                    stream=STREAM_SESSION_EVENTS,
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                    cb=_on_session_ephemeris,
-                )
+    # The VS-API is a dashboard — it subscribes to all sessions using
+    # the NATS single-token wildcard (*) for the session_id segment.
+    # nodalarc.ome.*.clock matches nodalarc.ome.starlink-576-isis-te.clock
+    # and any other session_id. No session_id resolution needed.
+    subs = []
+    try:
+        subs.append(
+            await js.subscribe(
+                "nodalarc.session.*.ephemeris",
+                stream=STREAM_SESSION_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                cb=_on_session_ephemeris,
             )
-            new_subs.append(
-                await js.subscribe(
-                    playback_state_subject(sid),
-                    stream=STREAM_SESSION_EVENTS,
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                    cb=_on_playback_state,
-                )
-            )
-            new_subs.append(
-                await js.subscribe(
-                    ome_clock_subject(sid),
-                    stream="NODALARC_OME",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_clock_tick,
-                )
-            )
-            new_subs.append(
-                await js.subscribe(
-                    link_state_snapshot_subject(sid),
-                    stream="NODALARC_LINKS",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                    cb=_on_link_state_snapshot,
-                )
-            )
-            new_subs.append(
-                await js.subscribe(
-                    link_up_subject(sid),
-                    stream="NODALARC_LINKS",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_link_up,
-                )
-            )
-            new_subs.append(
-                await js.subscribe(
-                    link_down_subject(sid),
-                    stream="NODALARC_LINKS",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_link_down,
-                )
-            )
-            new_subs.append(
-                await js.subscribe(
-                    latency_update_subject(sid),
-                    stream="NODALARC_LINKS",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_latency_update,
-                )
-            )
-            new_subs.append(
-                await js.subscribe(
-                    almanac_event_subject(sid),
-                    stream="NODALARC_OME",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_almanac,
-                )
-            )
-            from nodalarc.nats_channels import ops_subscribe_subject
-
-            new_subs.append(
-                await js.subscribe(
-                    ops_subscribe_subject(sid),
-                    stream=STREAM_OPS_EVENTS,
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_ops_event,
-                )
-            )
-            _current_subscribed_sid = sid
-            log.info(
-                "Session NATS subscriptions active for session_id=%s (%d subs)", sid, len(new_subs)
-            )
-        except Exception as exc:
-            log.warning("Session subscription setup failed for %s: %s", sid, exc)
-        return new_subs
-
-    # Platform-level ops subscription (always active, cross-session)
-    with contextlib.suppress(Exception):
-        await js.subscribe(
-            SUBJECT_OPS_EVENT,
-            stream=STREAM_OPS_EVENTS,
-            ordered_consumer=True,
-            deliver_policy=DeliverPolicy.NEW,
-            cb=_on_ops_event,
         )
-
-    # If session_id is already known at startup, subscribe immediately
-    if _nats_session_id and _nats_session_id != "default":
-        session_subs = await _subscribe_session(_nats_session_id)
+        subs.append(
+            await js.subscribe(
+                "nodalarc.session.*.playback_state",
+                stream=STREAM_SESSION_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                cb=_on_playback_state,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                "nodalarc.ome.*.clock",
+                stream="NODALARC_OME",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_clock_tick,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                "nodalarc.links.*.state",
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                cb=_on_link_state_snapshot,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                "nodalarc.links.*.up",
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_link_up,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                "nodalarc.links.*.down",
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_link_down,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                "nodalarc.links.*.latency",
+                stream="NODALARC_LINKS",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_latency_update,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                "nodalarc.ome.*.almanac",
+                stream="NODALARC_OME",
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_almanac,
+            )
+        )
+        subs.append(
+            await js.subscribe(
+                "nodalarc.ops.>",
+                stream=STREAM_OPS_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_ops_event,
+            )
+        )
+    except Exception as exc:
+        log.warning("NATS subscription setup failed: %s — streams may not exist yet", exc)
 
     # Core NATS subscription for wiring progress (not JetStream — transient, no retention).
     # Wildcard subscription receives progress from all Node Agents: nodalarc.agent.progress.*
@@ -832,44 +792,16 @@ async def _nats_subscriber() -> None:
     except Exception as exc:
         log.warning("Wiring progress subscription failed: %s", exc)
 
-    log.info("VS-API NATS subscriber started (session_id=%s)", _current_subscribed_sid or "pending")
+    log.info("VS-API NATS subscriber started — wildcard subscriptions active")
 
     # Periodic status log + wait for shutdown
     try:
         last_status_time = _time.monotonic()
         while True:
-            await asyncio.sleep(5)
-
-            # Detect session_id changes — re-subscribe when a new session
-            # becomes active. The VS-API starts before any session exists
-            # (serves the wizard). Actively try to load the session config
-            # on each tick — it appears when the Operator creates the
-            # ConfigMap during deployment.
-            if _nats_session_id == "default":
-                _load_session_id_from_config()
-            current_sid = _nats_session_id
-            if current_sid and current_sid != "default" and current_sid != _current_subscribed_sid:
-                log.info(
-                    "Session change detected: %s → %s — re-subscribing",
-                    _current_subscribed_sid or "(none)",
-                    current_sid,
-                )
-                # Unsubscribe old session subscriptions
-                for sub in session_subs:
-                    with contextlib.suppress(Exception):
-                        await sub.unsubscribe()
-                session_subs.clear()
-                # Subscribe to new session
-                session_subs = await _subscribe_session(current_sid)
-
+            await asyncio.sleep(10)
             now_mono = _time.monotonic()
             if now_mono - last_status_time >= 30:
-                log.info(
-                    "NATS subscriber status: %d msgs, stale=%s, session=%s",
-                    msg_count,
-                    _is_stale(),
-                    _current_subscribed_sid or "(none)",
-                )
+                log.info("NATS subscriber status: %d msgs, stale=%s", msg_count, _is_stale())
                 last_status_time = now_mono
 
     except asyncio.CancelledError:
@@ -878,7 +810,7 @@ async def _nats_subscriber() -> None:
         log.error("NATS subscriber crashed: %s", exc, exc_info=True)
     finally:
         log.info("NATS subscriber exiting (total messages: %d)", msg_count)
-        for sub in session_subs:
+        for sub in subs:
             with contextlib.suppress(Exception):
                 await sub.unsubscribe()
         await nc.close()
@@ -2503,28 +2435,6 @@ async def _run_switch(session_path: str) -> None:
             log.error("_run_switch safety net caught: %s", exc)
 
 
-def _load_session_id_from_config() -> None:
-    """Load session config and set _nats_session_id.
-
-    Called when the CR reaches Ready (after Operator creates session ConfigMap).
-    The NATS subscriber watches _nats_session_id and re-subscribes when it
-    changes from "default" to the real session name.
-    """
-    global _nats_session_id
-    try:
-        session_path = Path(_session_file) if _session_file else None
-        if session_path and session_path.is_file():
-            from nodalarc.nats_channels import sanitize_session_id
-
-            data = yaml.safe_load(session_path.read_text())
-            if data:
-                session = SessionConfig.model_validate(data)
-                _nats_session_id = sanitize_session_id(session.session.name)
-                log.info("Session config loaded — _nats_session_id=%s", _nats_session_id)
-    except Exception as exc:
-        log.warning("Failed to load session_id from config: %s", exc)
-
-
 async def _poll_cr_until_ready() -> None:
     """Poll ConstellationSpec CR until Ready, updating session status_detail.
 
@@ -2558,10 +2468,6 @@ async def _poll_cr_until_ready() -> None:
             phase = cr.get("status", {}).get("phase", "")
             message = cr.get("status", {}).get("message", "")
             # Try to load session_id on each tick — the ConfigMap appears
-            # during the Creating phase. Once loaded, the NATS subscriber
-            # detects the change and creates session-scoped subscriptions.
-            if _nats_session_id == "default":
-                _load_session_id_from_config()
             if _session_manager and phase != "Wiring":
                 # During Wiring, Node Agent NATS progress owns _status_detail.
                 # Only update from CR for non-Wiring phases.
@@ -2572,9 +2478,6 @@ async def _poll_cr_until_ready() -> None:
                 if _session_manager:
                     _session_manager._status = "ready"
                     _session_manager.status_detail = ""
-                # Load session config to set _nats_session_id — enables
-                # the NATS subscriber to create session-scoped subscriptions.
-                _load_session_id_from_config()
                 log.info("CR reached Ready — session is now operational")
                 return
             if phase == "Error":

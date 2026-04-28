@@ -170,11 +170,11 @@ async def monitor_loop(nc, hostname: str, interval_s: float = 60.0) -> None:
     """
     from nodalarc.nats_channels import substrate_latency_subject
 
-    _subj = substrate_latency_subject(_session_id)
     log.info("Substrate monitor started (interval=%.0fs, session_id=%s)", interval_s, _session_id)
     while True:
         try:
             await asyncio.sleep(interval_s)
+            _subj = substrate_latency_subject(_session_id)
             peers = get_active_peers()
             if not peers:
                 continue

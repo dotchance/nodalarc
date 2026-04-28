@@ -41,12 +41,13 @@ from nodalarc.models.routing_stack import RoutingStackConfig
 from nodalarc.models.session import SessionConfig
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
-    SUBJECT_ADAPTER_EVENT,
-    SUBJECT_CONVERGENCE_RESULT,
     SUBJECT_MI_CONVERGENCE_GATE,
     SUBJECT_MI_TRACE,
-    SUBJECT_PROBE_RESULT,
+    adapter_event_subject,
+    convergence_result_subject,
     nats_url,
+    probe_result_subject,
+    sanitize_session_id,
 )
 from nodalarc.platform_config import get_platform_config
 
@@ -117,10 +118,16 @@ class MIService:
         if namespace is None:
             namespace = get_platform_config().kubernetes_namespace
         self._session = session
+        self._session_id = sanitize_session_id(session.session.name)
         self._gs_file = gs_file
         self._stack_config = stack_config
         self._db_path = db_path
         self._namespace = namespace
+
+        # Session-scoped NATS subjects
+        self._subj_adapter = adapter_event_subject(self._session_id)
+        self._subj_probe = probe_result_subject(self._session_id)
+        self._subj_convergence = convergence_result_subject(self._session_id)
 
         # Database
         self._db_conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -211,7 +218,7 @@ class MIService:
                             insert_adapter_event(self._db_conn, event)
                         except Exception as exc:
                             log.warning(f"DB insert failed: {exc}")
-                    self._publish_sync(SUBJECT_ADAPTER_EVENT, event.model_dump_json().encode())
+                    self._publish_sync(self._subj_adapter, event.model_dump_json().encode())
 
             if self._flow_manager:
                 try:
@@ -237,7 +244,7 @@ class MIService:
                             except Exception as exc:
                                 log.warning(f"DB probe insert failed: {exc}")
                         self._publish_sync(
-                            SUBJECT_PROBE_RESULT,
+                            self._subj_probe,
                             probe_result.model_dump_json().encode(),
                         )
                 except Exception as exc:
@@ -259,7 +266,7 @@ class MIService:
                     log.warning(f"DB convergence insert failed: {exc}")
 
             # Publish result event
-            await self._nc.publish(SUBJECT_CONVERGENCE_RESULT, response)
+            await self._nc.publish(self._subj_convergence, response)
 
             # Reply to requester
             await msg.respond(response)

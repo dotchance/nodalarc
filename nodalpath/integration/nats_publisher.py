@@ -11,7 +11,7 @@ import logging
 from datetime import UTC, datetime
 
 import nats
-from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, SUBJECT_ALMANAC_EVENT, nats_url
+from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, almanac_event_subject, nats_url
 
 from nodalpath.models.almanac_event import AlmanacEvent
 
@@ -22,11 +22,12 @@ class AlmanacPublisher:
     """NATS publisher for AlmanacEvent records.
 
     Call connect() before publish(). Call close() on shutdown.
-    Publishes to SUBJECT_ALMANAC_EVENT (nodalarc.nodalpath.almanac).
+    Publishes to session-scoped almanac subject.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, session_id: str = "default") -> None:
         self._nc: nats.NATS | None = None
+        self._subj_almanac = almanac_event_subject(session_id)
 
     async def connect(self) -> None:
         """Connect to NATS. Must be called before publish()."""
@@ -39,7 +40,7 @@ class AlmanacPublisher:
             return
         try:
             payload = event.model_dump_json().encode()
-            await self._nc.publish(SUBJECT_ALMANAC_EVENT, payload)
+            await self._nc.publish(self._subj_almanac, payload)
         except Exception as exc:
             log.warning("Failed to publish AlmanacEvent: %s", exc)
 

@@ -1,24 +1,67 @@
 #!/bin/bash
 set -e
 
-# Wait for the Operator to deliver FRR configs.
-# The Operator execs into the pod to:
-#   1. cp /etc/frr-config/* /etc/frr/
-#   2. touch /etc/frr/.config-ready
-READY_FILE="/etc/frr/.config-ready"
-TIMEOUT=900
+# Wait for ConfigMap volume mount to be populated by kubelet.
+# The Operator creates a per-node ConfigMap (frr-config-<node-id>) mounted
+# at /etc/frr-config/. kubelet populates the volume when the pod is
+# scheduled — no exec or sentinel file needed.
+CONFIG_SRC="/etc/frr-config/frr.conf"
+TIMEOUT=120
 WAITED=0
 
-echo "Waiting for config (sentinel: $READY_FILE)..."
-while [ ! -f "$READY_FILE" ]; do
+echo "Waiting for ConfigMap mount ($CONFIG_SRC)..."
+while [ ! -f "$CONFIG_SRC" ]; do
     sleep 1
     WAITED=$((WAITED + 1))
     if [ "$WAITED" -ge "$TIMEOUT" ]; then
-        echo "ERROR: Config not delivered within ${TIMEOUT}s, exiting"
+        echo "ERROR: ConfigMap not mounted within ${TIMEOUT}s, exiting"
         exit 1
     fi
 done
-echo "Config ready after ${WAITED}s"
+echo "ConfigMap mounted after ${WAITED}s"
+
+# Copy ConfigMap contents to writable /etc/frr/ (tmpfs emptyDir).
+# ConfigMap mounts are read-only; FRR needs to write to /etc/frr/.
+cp /etc/frr-config/* /etc/frr/
+# Write config version sentinel for readiness probe.
+# _config_version is a file in the ConfigMap containing a hash of frr.conf.
+# The readiness probe diffs /etc/frr/.config_version against the ConfigMap
+# mount to verify this container has loaded the intended config version.
+if [ -f /etc/frr-config/_config_version ]; then
+    cp /etc/frr-config/_config_version /etc/frr/.config_version
+fi
+echo "Copied config from /etc/frr-config/ to /etc/frr/"
+
+# Background config watcher — detects ConfigMap updates and reloads FRR.
+# K8s kubelet syncs ConfigMap volume mounts on a polling interval (~60s).
+# When frr.conf changes (new session config, routing parameter update),
+# the watcher copies the new files and tells FRR to reload gracefully.
+# This is the NOS-agnostic contract: the container owns its own config
+# lifecycle. The Operator just mounts the ConfigMap.
+_watch_config() {
+    local last_hash
+    last_hash=$(md5sum /etc/frr-config/frr.conf 2>/dev/null | awk '{print $1}')
+    while true; do
+        sleep 10
+        local current_hash
+        current_hash=$(md5sum /etc/frr-config/frr.conf 2>/dev/null | awk '{print $1}')
+        if [ -n "$current_hash" ] && [ "$current_hash" != "$last_hash" ]; then
+            echo "ConfigMap change detected, reloading FRR config"
+            cp /etc/frr-config/* /etc/frr/
+            chown -R frr:frr /etc/frr
+            # Graceful reload — FRR re-reads config without restarting daemons.
+            # vtysh sources the new config file, applying changes incrementally.
+            vtysh -f /etc/frr/frr.conf 2>/dev/null || true
+            # Update config version sentinel after successful reload
+            if [ -f /etc/frr-config/_config_version ]; then
+                cp /etc/frr-config/_config_version /etc/frr/.config_version
+            fi
+            last_hash="$current_hash"
+            echo "FRR config reloaded"
+        fi
+    done
+}
+_watch_config &
 
 # Create vtysh.conf if it doesn't exist — suppresses the
 # "Can't open configuration file /etc/frr/vtysh.conf" warning

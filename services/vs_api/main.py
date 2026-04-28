@@ -842,8 +842,11 @@ async def _nats_subscriber() -> None:
 
             # Detect session_id changes — re-subscribe when a new session
             # becomes active. The VS-API starts before any session exists
-            # (serves the wizard). When the Operator deploys a session,
-            # main() or _poll_cr_until_ready sets _nats_session_id.
+            # (serves the wizard). Actively try to load the session config
+            # on each tick — it appears when the Operator creates the
+            # ConfigMap during deployment.
+            if _nats_session_id == "default":
+                _load_session_id_from_config()
             current_sid = _nats_session_id
             if current_sid and current_sid != "default" and current_sid != _current_subscribed_sid:
                 log.info(

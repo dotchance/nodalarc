@@ -35,8 +35,8 @@ import nats
 from nodalarc.models.link_events import LinkDown
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
-    SUBJECT_LINK_DOWN,
     SUBJECT_SCENARIO_INJECT,
+    link_down_subject,
     nats_url,
 )
 from nodalarc.proto import node_agent_pb2
@@ -59,6 +59,7 @@ def run_scenario_handler(
     main_loop: asyncio.AbstractEventLoop,
     nc_main: nats.NATS,
     gs_capacities: dict[str, int] | None = None,
+    session_id: str = "default",
 ) -> None:
     """Handle scenario injection requests via NATS request/reply.
 
@@ -70,6 +71,7 @@ def run_scenario_handler(
         main_loop: The Dispatcher's asyncio event loop (for dispatch).
         nc_main: The Dispatcher's NATS connection (for LinkDown publish).
         gs_capacities: GS node IDs -> terminal capacity (for GS detection).
+        session_id: Session ID for NATS subject scoping.
     """
     asyncio.run(
         _run_scenario_async(
@@ -83,6 +85,7 @@ def run_scenario_handler(
             main_loop,
             nc_main,
             gs_capacities or {},
+            session_id,
         )
     )
 
@@ -98,9 +101,15 @@ async def _run_scenario_async(
     main_loop: asyncio.AbstractEventLoop,
     nc_main: nats.NATS,
     gs_capacities: dict[str, int],
+    session_id: str = "default",
 ) -> None:
+    _subj_link_down = link_down_subject(session_id)
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
-    log.info("Scenario handler NATS connected, subject=%s", SUBJECT_SCENARIO_INJECT)
+    log.info(
+        "Scenario handler NATS connected, subject=%s (session_id=%s)",
+        SUBJECT_SCENARIO_INJECT,
+        session_id,
+    )
 
     async def _handle_request(msg):
         try:
@@ -142,7 +151,7 @@ async def _run_scenario_async(
                     interface_b=ifaces[1],
                     reason="scenario_inject_down",
                 )
-                await nc.publish(SUBJECT_LINK_DOWN, event.model_dump_json().encode())
+                await nc.publish(_subj_link_down, event.model_dump_json().encode())
                 await msg.respond(b'{"status":"ok"}')
 
             elif action == "inject_link_up":
@@ -190,7 +199,7 @@ async def _run_scenario_async(
                         interface_b=ifaces[1],
                         reason="satellite_loss",
                     )
-                    await nc.publish(SUBJECT_LINK_DOWN, event.model_dump_json().encode())
+                    await nc.publish(_subj_link_down, event.model_dump_json().encode())
 
                 log.info("Satellite loss injected for %s (%d links)", node, len(downed_pairs))
                 await msg.respond(b'{"status":"ok"}')

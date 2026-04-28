@@ -54,16 +54,18 @@ from nodalarc.models.vs_api import (
 )
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
+    STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
-    SUBJECT_ALMANAC_EVENT,
-    SUBJECT_CLOCK_TICK,
-    SUBJECT_LATENCY_UPDATE,
-    SUBJECT_LINK_DOWN,
-    SUBJECT_LINK_STATE_SNAPSHOT,
-    SUBJECT_LINK_UP,
-    SUBJECT_PLAYBACK_STATE,
-    SUBJECT_SESSION_EPHEMERIS,
+    SUBJECT_OPS_EVENT,
+    almanac_event_subject,
+    latency_update_subject,
+    link_down_subject,
+    link_state_snapshot_subject,
+    link_up_subject,
     nats_url,
+    ome_clock_subject,
+    playback_state_subject,
+    session_ephemeris_subject,
 )
 from nodalarc.platform_config import get_platform_config
 
@@ -211,6 +213,7 @@ _constellation_name: str | None = None
 _session_manager: SessionManager | None = None
 _gs_elevation_map: dict[str, float] = {}  # node_id -> min_elevation_deg
 _beam_falloff_exponent: float = 2.0
+_nats_session_id: str = "default"  # Set by main() from session config
 _playback_paused: bool = False
 _playback_speed: float = 1.0
 
@@ -233,6 +236,11 @@ _continuous_tracer: ContinuousTracer | None = None
 
 _almanac: AlmanacState = AlmanacState()
 _almanac_lock = threading.Lock()
+
+# OPS event buffer — recent operational events from all components
+from collections import deque
+
+_ops_events: deque = deque(maxlen=500)
 
 
 def _propagate_positions_from_ephemeris(sim_time_iso: str) -> None:
@@ -547,7 +555,11 @@ def _build_snapshot() -> dict:
             playback_speed=_playback_speed,
             stale=_is_stale(),
         )
-        return json.loads(snapshot.model_dump_json())
+        result = json.loads(snapshot.model_dump_json())
+        # Append latest OPS events to WebSocket frame (not part of Pydantic model
+        # to avoid coupling the event schema to the snapshot schema).
+        result["ops_events"] = list(_ops_events)[-50:]
+        return result
 
 
 # --- NATS subscriber ---
@@ -561,11 +573,11 @@ async def _nats_subscriber() -> None:
     """NATS JetStream subscriber.
 
     Subscribes to:
-    - nodalarc.ome.snapshot → position updates
-    - nodalarc.links.state → LinkStateSnapshot (replace-not-merge)
-    - nodalarc.links.up/down → individual link events
-    - nodalarc.links.latency → latency updates
-    - nodalarc.nodalpath.almanac → NodalPath almanac events
+    - nodalarc.ome.{session_id}.snapshot → position updates
+    - nodalarc.links.{session_id}.state → LinkStateSnapshot (replace-not-merge)
+    - nodalarc.links.{session_id}.up/down → individual link events
+    - nodalarc.links.{session_id}.latency → latency updates
+    - nodalarc.nodalpath.{session_id}.almanac → NodalPath almanac events
 
     Stale detection: tracks wall-clock time of last snapshot and link event.
     If no messages for 15s, data is stale.
@@ -573,11 +585,23 @@ async def _nats_subscriber() -> None:
     global _nats_connection, _last_clock_tick_wall_time, _last_link_event_wall_time
     global _cached_ephemeris, _cached_ephemeris_obj
 
+    sid = _nats_session_id  # captured at call time from module global
+
+    # Build session-scoped subjects
+    _subj_ephemeris = session_ephemeris_subject(sid)
+    _subj_playback = playback_state_subject(sid)
+    _subj_clock = ome_clock_subject(sid)
+    _subj_link_snapshot = link_state_snapshot_subject(sid)
+    _subj_link_up = link_up_subject(sid)
+    _subj_link_down = link_down_subject(sid)
+    _subj_latency = latency_update_subject(sid)
+    _subj_almanac = almanac_event_subject(sid)
+
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     _nats_connection = nc
     js = nc.jetstream()
 
-    log.info("VS-API NATS connected to %s", nats_url())
+    log.info("VS-API NATS connected to %s (session_id=%s)", nats_url(), sid)
 
     # If main() detected a CR in Wiring/Creating phase, start polling from
     # this event loop (main() runs before uvicorn and has no event loop).
@@ -670,12 +694,18 @@ async def _nats_subscriber() -> None:
         msg_count += 1
         _update_almanac_state(json.loads(msg.data))
 
+    async def _on_ops_event(msg):
+        nonlocal msg_count
+        msg_count += 1
+        with contextlib.suppress(Exception):
+            _ops_events.append(json.loads(msg.data))
+
     subs = []
     try:
         # NODALARC_SESSION — SessionEphemeris and PlaybackState (MaxMsgsPerSubject=1)
         subs.append(
             await js.subscribe(
-                SUBJECT_SESSION_EPHEMERIS,
+                _subj_ephemeris,
                 stream=STREAM_SESSION_EVENTS,
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -684,7 +714,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_PLAYBACK_STATE,
+                _subj_playback,
                 stream=STREAM_SESSION_EVENTS,
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -694,7 +724,7 @@ async def _nats_subscriber() -> None:
         # NODALARC_OME — ClockTick for sim_time advancement and position propagation
         subs.append(
             await js.subscribe(
-                SUBJECT_CLOCK_TICK,
+                _subj_clock,
                 stream="NODALARC_OME",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -702,18 +732,22 @@ async def _nats_subscriber() -> None:
             )
         )
         # NODALARC_LINKS — link state
+        # LAST_PER_SUBJECT delivers the retained LinkStateSnapshot
+        # (MaxMsgsPerSubject=1 on NODALARC_LINKS) on subscribe, so
+        # VS-API recovers current link state after restart without
+        # waiting for the next OME publish cycle.
         subs.append(
             await js.subscribe(
-                SUBJECT_LINK_STATE_SNAPSHOT,
+                _subj_link_snapshot,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
-                deliver_policy=DeliverPolicy.NEW,
+                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
                 cb=_on_link_state_snapshot,
             )
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_LINK_UP,
+                _subj_link_up,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -722,7 +756,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_LINK_DOWN,
+                _subj_link_down,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -731,7 +765,7 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_LATENCY_UPDATE,
+                _subj_latency,
                 stream="NODALARC_LINKS",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
@@ -740,11 +774,26 @@ async def _nats_subscriber() -> None:
         )
         subs.append(
             await js.subscribe(
-                SUBJECT_ALMANAC_EVENT,
+                _subj_almanac,
                 stream="NODALARC_OME",
                 ordered_consumer=True,
                 deliver_policy=DeliverPolicy.NEW,
                 cb=_on_almanac,
+            )
+        )
+        # NODALARC_OPS — session-scoped operational events
+        from nodalarc.nats_channels import ops_subscribe_subject
+
+        _ops_sub = (
+            ops_subscribe_subject(_nats_session_id) if _nats_session_id else SUBJECT_OPS_EVENT
+        )
+        subs.append(
+            await js.subscribe(
+                _ops_sub,
+                stream=STREAM_OPS_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_ops_event,
             )
         )
     except Exception as exc:
@@ -992,6 +1041,21 @@ def get_auth_token() -> dict:
     return {"token": _API_KEY}
 
 
+@app.get("/api/v1/ops/events", dependencies=[Depends(_require_api_key)])
+async def get_ops_events(
+    source: str = Query("", description="Filter by event source (e.g. 'operator', 'scheduler')"),
+    level: str = Query("", description="Filter by level (e.g. 'error', 'warning')"),
+    limit: int = Query(100, ge=1, le=500, description="Max events to return"),
+) -> list[dict]:
+    """Return recent operational events from the NODALARC_OPS stream."""
+    events = list(_ops_events)
+    if source:
+        events = [e for e in events if e.get("source") == source]
+    if level:
+        events = [e for e in events if e.get("level") == level]
+    return events[-limit:]
+
+
 def _clear_state() -> None:
     """Reset in-memory state during session switch."""
     global \
@@ -1025,6 +1089,7 @@ def _clear_state() -> None:
         _session_status = None
     with _almanac_lock:
         _almanac = AlmanacState()
+    _ops_events.clear()
 
 
 def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
@@ -2532,6 +2597,12 @@ def main() -> None:
             session_data = yaml.safe_load(session_path.read_text())
         if session_data:
             session = SessionConfig.model_validate(session_data)
+            # Set session_id for NATS subject scoping
+            global _nats_session_id
+            from nodalarc.nats_channels import sanitize_session_id
+
+            _nats_session_id = sanitize_session_id(session.session.name)
+            log.info("VS-API session_id=%s", _nats_session_id)
             if session.routing.stack is not None:
                 _routing_stack = Path(session.routing.stack).name
             else:

@@ -190,7 +190,10 @@ class TerminalSession:
             self._conn.run(command),
             timeout=timeout,
         )
-        return result.stdout or ""
+        if result.stdout is None:
+            log.error("SSH exec returned None stdout for command: %s", command)
+            raise ValueError(f"SSH exec returned None stdout for: {command}")
+        return result.stdout
 
     async def close(self) -> None:
         """Clean up SSH connection."""

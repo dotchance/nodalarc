@@ -52,7 +52,7 @@ REQUIRED_K3S_IMAGES := nodalarc/frr:latest
 # ---------------------------------------------------------------------------
 
 .PHONY: help all deps build load install session test test-integration \
-        teardown clean clean-deps clean-images nuke status \
+        teardown restart clean clean-deps clean-images nuke status \
         build-frontends build-images ensure-base-images build-base-images \
         build-base build-frr build-probe build-fwd \
         build-ome build-scheduler build-node-agent build-vs-api \
@@ -287,8 +287,34 @@ install: ## Helm install/upgrade the platform chart
 		echo "[install] Removing existing installation..."; \
 		helm uninstall nodalarc -n $(NAMESPACE) 2>/dev/null || true; \
 		kubectl delete namespace $(NAMESPACE) --timeout=30s 2>/dev/null || true; \
-		echo "[install] Waiting for namespace cleanup..."; \
-		while kubectl get namespace $(NAMESPACE) 2>/dev/null | grep -q $(NAMESPACE); do sleep 2; done; \
+	fi
+	@if kubectl get namespace $(NAMESPACE) 2>/dev/null | grep -q $(NAMESPACE); then \
+		echo "[install] Waiting for namespace to terminate (timeout 120s)..."; \
+		WAIT=0; \
+		while kubectl get namespace $(NAMESPACE) 2>/dev/null | grep -q $(NAMESPACE); do \
+			sleep 2; \
+			WAIT=$$((WAIT + 2)); \
+			printf "\r[install]   Namespace still terminating... (%ds)" $$WAIT; \
+			if [ $$WAIT -ge 120 ]; then \
+				echo "[install] ERROR: Namespace deletion stuck after $${WAIT}s."; \
+				FINALIZERS=$$(kubectl get ns $(NAMESPACE) -o jsonpath='{.spec.finalizers}' 2>/dev/null); \
+				if [ -n "$$FINALIZERS" ]; then \
+					echo "[install]   Stuck finalizers: $$FINALIZERS"; \
+					echo "[install]   Removing finalizers and force-deleting..."; \
+					kubectl get ns $(NAMESPACE) -o json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))" | kubectl replace --raw "/api/v1/namespaces/$(NAMESPACE)/finalize" -f - >/dev/null 2>&1 || true; \
+					sleep 5; \
+					if kubectl get namespace $(NAMESPACE) 2>/dev/null | grep -q $(NAMESPACE); then \
+						echo "[install] ERROR: Namespace still exists after finalizer removal. Manual intervention required."; \
+						exit 1; \
+					fi; \
+					echo "[install]   Namespace deleted after finalizer removal."; \
+				else \
+					echo "[install] ERROR: Namespace stuck with no finalizers. Manual intervention required."; \
+					exit 1; \
+				fi; \
+			fi; \
+		done; \
+		echo ""; \
 	fi
 	@NODAL_NODE=$$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo ""); \
 		if [ -n "$$NODAL_NODE" ]; then \
@@ -298,10 +324,10 @@ install: ## Helm install/upgrade the platform chart
 		else \
 			helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace $(HELM_EXTRA_ARGS); \
 		fi
-	@echo "[install] Waiting for all platform Deployments to be Available..."
+	@echo "[install] Waiting for all platform Deployments to be Available (timeout 180s)..."
 	@kubectl wait --for=condition=Available deployment --all \
 		-n $(NAMESPACE) --timeout=180s
-	@echo "[install] Waiting for Node Agent DaemonSet rollout..."
+	@echo "[install] Waiting for Node Agent DaemonSet rollout (timeout 180s)..."
 	@kubectl rollout status daemonset/nodalarc-node-agent \
 		-n $(NAMESPACE) --timeout=180s
 	@DESIRED=$$(kubectl get ds nodalarc-node-agent -n $(NAMESPACE) \
@@ -324,11 +350,20 @@ install: ## Helm install/upgrade the platform chart
 
 session: ## Start a session (DEFAULT_SESSION=path/to/session.yaml)
 	@echo "[session] Starting: $(DEFAULT_SESSION)"
-	@echo "[session] Waiting for platform..."
-	@bash -c 'for i in $$(seq 1 30); do \
-		kubectl get crd constellationspecs.nodalarc.io &>/dev/null && break; \
-		sleep 2; \
-	done'
+	@echo "[session] Waiting for CRD (timeout 60s)..."
+	@bash -c '\
+		WAIT=0; \
+		while ! kubectl get crd constellationspecs.nodalarc.io &>/dev/null; do \
+			sleep 2; \
+			WAIT=$$((WAIT + 2)); \
+			printf "\r[session]   Waiting for Operator to register CRD... (%ds)" $$WAIT; \
+			if [ $$WAIT -ge 60 ]; then \
+				echo ""; \
+				echo "[session] ERROR: CRD not registered after 60s. Is the Operator running?"; \
+				exit 1; \
+			fi; \
+		done; \
+		if [ $$WAIT -gt 0 ]; then echo ""; fi'
 	@bash -c '\
 		SESSION_YAML=$$(cat $(DEFAULT_SESSION)); \
 		printf "apiVersion: nodalarc.io/v1alpha1\nkind: ConstellationSpec\nmetadata:\n  name: current-session\n  namespace: $(NAMESPACE)\nspec:\n  sessionYaml: |\n" > /tmp/_nodalarc_crd.yaml; \
@@ -342,32 +377,48 @@ session: ## Start a session (DEFAULT_SESSION=path/to/session.yaml)
 			PHASE=$$(kubectl get constellationspec current-session \
 				-n $(NAMESPACE) -o jsonpath="{.status.phase}" 2>/dev/null || echo "Unknown"); \
 			if [ "$$PHASE" = "Ready" ]; then \
-				PODS=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | wc -l); \
-				RUNNING=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -c Running || true); \
-				NOT_RUNNING=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -v Running | grep -v Completed || true); \
+				echo ""; \
+				PODS=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/node-id --no-headers 2>/dev/null | wc -l); \
+				RUNNING=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/node-id --no-headers 2>/dev/null | grep -c Running || true); \
+				NOT_RUNNING=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/node-id --no-headers 2>/dev/null | grep -v Running | grep -v Completed || true); \
 				if [ -n "$$NOT_RUNNING" ]; then \
-					echo "[session] WARNING: Phase is Ready but some pods are not running:"; \
+					echo "[session] WARNING: Phase is Ready but some session pods are not running:"; \
 					echo "$$NOT_RUNNING"; \
-					echo "[session] $$RUNNING/$$PODS pods running. Check pod status."; \
+					echo "[session] $$RUNNING/$$PODS session pods running. Check pod status."; \
 					exit 1; \
 				fi; \
-				echo "[session] Session ready. $$RUNNING/$$PODS pods running."; \
+				echo "[session] Session ready. $$RUNNING/$$PODS session pods running."; \
 				exit 0; \
 			fi; \
 			if [ "$$PHASE" = "Error" ]; then \
+				echo ""; \
 				MSG=$$(kubectl get constellationspec current-session \
 					-n $(NAMESPACE) -o jsonpath="{.status.message}" 2>/dev/null); \
 				echo "[session] ERROR: $$MSG"; \
 				exit 1; \
 			fi; \
-			if [ $$((ELAPSED % 15)) -eq 0 ] && [ $$ELAPSED -gt 0 ]; then \
-				PODS=$$(kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -c Running || true); \
-				echo "  Phase: $$PHASE, Running: $$PODS ($${ELAPSED}s)"; \
-			fi; \
 			sleep 5; \
 			ELAPSED=$$((ELAPSED + 5)); \
+			PODS=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/node-id --no-headers 2>/dev/null | grep -c Running || true); \
+			printf "\r[session]   Phase: $$PHASE, $$PODS session pods running (%ds/300s)" $$ELAPSED; \
 		done; \
+		echo ""; \
 		echo "[session] ERROR: Timed out after 300s"; exit 1'
+
+restart: ## Rolling restart all platform pods (forces image re-pull)
+	@echo "[restart] Rolling restart of all platform deployments and daemonsets..."
+	@for dep in ome nodalarc-scheduler nodalarc-vs-api nodalarc-operator nodalarc-vf nodalpath; do \
+		kubectl rollout restart deployment/$$dep -n $(NAMESPACE) 2>/dev/null && \
+			echo "  Restarted deployment/$$dep" || true; \
+	done
+	@kubectl rollout restart daemonset/nodalarc-node-agent -n $(NAMESPACE) 2>/dev/null && \
+		echo "  Restarted daemonset/nodalarc-node-agent" || true
+	@echo "[restart] Waiting for rollout..."
+	@for dep in ome nodalarc-scheduler nodalarc-vs-api nodalarc-operator nodalarc-vf nodalpath; do \
+		kubectl rollout status deployment/$$dep -n $(NAMESPACE) --timeout=60s 2>/dev/null || true; \
+	done
+	@kubectl rollout status daemonset/nodalarc-node-agent -n $(NAMESPACE) --timeout=60s 2>/dev/null || true
+	@echo "[restart] Done."
 
 # ---------------------------------------------------------------------------
 # deploy-* — build, load, restart a single service
@@ -429,128 +480,7 @@ deploy-measurement: build-measurement ## Build + load + restart MI
 # ---------------------------------------------------------------------------
 
 status: ## Show cluster status (pods, phase, links)
-	@bash -c '\
-		echo "=== NodalArc Status ==="; \
-		echo ""; \
-		\
-		if ! kubectl cluster-info >/dev/null 2>&1; then \
-			echo "Cluster: CANNOT REACH"; \
-			echo "  Check that Kubernetes is running and KUBECONFIG is readable."; \
-			echo "  For K3s: sudo chmod 644 /etc/rancher/k3s/k3s.yaml"; \
-			exit 0; \
-		fi; \
-		\
-		echo "Cluster:"; \
-		NODE_COUNT=$$(kubectl get nodes --no-headers 2>/dev/null | wc -l); \
-		NODE_READY=$$(kubectl get nodes --no-headers 2>/dev/null | grep -c " Ready" || echo 0); \
-		if [ "$$NODE_COUNT" -eq 1 ]; then \
-			echo "  Single node ($$NODE_READY/$$NODE_COUNT ready)"; \
-		else \
-			echo "  Multi-node ($$NODE_READY/$$NODE_COUNT nodes ready)"; \
-		fi; \
-		kubectl get nodes --no-headers 2>/dev/null | awk "{printf \"    %s: %s  (%s, %s)\n\", \$$1, \$$2, \$$4, \$$5}"; \
-		echo ""; \
-		\
-		if ! kubectl get namespace $(NAMESPACE) >/dev/null 2>&1; then \
-			echo "Platform: NOT INSTALLED"; \
-			echo "  Run: make all"; \
-			exit 0; \
-		fi; \
-		\
-		echo "Platform:"; \
-		PLATFORM=$$(kubectl get pods -n $(NAMESPACE) --no-headers -o wide 2>/dev/null | grep -E "nodalarc-|nodalpath-|ome-" || true); \
-		if [ -z "$$PLATFORM" ]; then \
-			echo "  NOT RUNNING"; \
-			echo "  Run: sudo make install"; \
-		else \
-			TOTAL=$$(echo "$$PLATFORM" | wc -l); \
-			RUNNING=$$(echo "$$PLATFORM" | grep -c Running || true); \
-			if [ "$$RUNNING" -eq "$$TOTAL" ]; then \
-				echo "  Running ($$RUNNING/$$TOTAL platform pods)"; \
-			else \
-				echo "  DEGRADED ($$RUNNING/$$TOTAL platform pods running)"; \
-			fi; \
-			echo "$$PLATFORM" | awk "{printf \"    %-45s %-10s %s\n\", \$$1, \$$3, \$$7}"; \
-		fi; \
-		echo ""; \
-		\
-		echo "Services:"; \
-		VF_NODE=$$(kubectl get pod -n $(NAMESPACE) -l app=nodalarc-vf -o jsonpath="{.items[0].spec.nodeName}" 2>/dev/null); \
-		VF_IP=""; \
-		if [ -n "$$VF_NODE" ]; then \
-			VF_IP=$$(kubectl get node "$$VF_NODE" -o jsonpath="{.status.addresses[?(@.type==\"ExternalIP\")].address}" 2>/dev/null); \
-			if [ -z "$$VF_IP" ]; then \
-				VF_IP=$$(kubectl get node "$$VF_NODE" -o jsonpath="{.status.addresses[?(@.type==\"InternalIP\")].address}" 2>/dev/null); \
-			fi; \
-		fi; \
-		API_NODE=$$(kubectl get pod -n $(NAMESPACE) -l app=nodalarc-vs-api -o jsonpath="{.items[0].spec.nodeName}" 2>/dev/null); \
-		API_IP=""; \
-		if [ -n "$$API_NODE" ]; then \
-			API_IP=$$(kubectl get node "$$API_NODE" -o jsonpath="{.status.addresses[?(@.type==\"ExternalIP\")].address}" 2>/dev/null); \
-			if [ -z "$$API_IP" ]; then \
-				API_IP=$$(kubectl get node "$$API_NODE" -o jsonpath="{.status.addresses[?(@.type==\"InternalIP\")].address}" 2>/dev/null); \
-			fi; \
-		fi; \
-		if [ -n "$$VF_IP" ]; then \
-			echo "  Visualization:  http://$$VF_IP:3000  (on $$VF_NODE)"; \
-		else \
-			echo "  Visualization:  NOT AVAILABLE"; \
-		fi; \
-		if [ -n "$$API_IP" ]; then \
-			echo "  VS-API:         http://$$API_IP:8080  (on $$API_NODE)"; \
-		else \
-			echo "  VS-API:         NOT AVAILABLE"; \
-		fi; \
-		echo ""; \
-		\
-		echo "Session:"; \
-		SESSION=$$(kubectl get constellationspec current-session -n $(NAMESPACE) -o json 2>/dev/null); \
-		if [ -z "$$SESSION" ] || [ "$$SESSION" = "" ]; then \
-			echo "  No session deployed"; \
-			echo "  Run: sudo make session"; \
-		else \
-			SESSION_NAME=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"sessionId\",\"unknown\"))" 2>/dev/null); \
-			PHASE=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"phase\",\"Unknown\"))" 2>/dev/null); \
-			WIRED=$$(echo "$$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"status\",{}).get(\"wiredPods\",0))" 2>/dev/null); \
-			SATS=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/role=satellite --no-headers 2>/dev/null | grep -c Running || echo 0); \
-			GS=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/role=ground-station --no-headers 2>/dev/null | grep -c Running || echo 0); \
-			echo "  Name: $$SESSION_NAME"; \
-			echo "  Phase: $$PHASE"; \
-			echo "  Satellites: $$SATS running"; \
-			echo "  Ground stations: $$GS running"; \
-			echo "  Wired: $$WIRED nodes"; \
-			NOT_RUNNING=$$(kubectl get pods -n $(NAMESPACE) -l nodalarc.io/node-id --no-headers 2>/dev/null | grep -v Running | grep -v Completed || true); \
-			if [ -n "$$NOT_RUNNING" ]; then \
-				echo "  WARNING: Some session pods not running:"; \
-				echo "$$NOT_RUNNING" | awk "{printf \"    %s: %s\n\", \$$1, \$$3}"; \
-			fi; \
-		fi; \
-		echo ""; \
-		\
-		echo "Pod Distribution:"; \
-		kubectl get pods -n $(NAMESPACE) -l nodalarc.io/node-id -o wide --no-headers 2>/dev/null | \
-			awk "{nodes[\$$7]++} END {for (n in nodes) printf \"  %s: %d session pods\n\", n, nodes[n]}" 2>/dev/null || echo "  No session pods"; \
-		echo ""; \
-		\
-		echo "Links:"; \
-		if [ -z "$$API_IP" ]; then \
-			echo "  VS-API not running"; \
-		else \
-			TOKEN=$$(curl -s http://$$API_IP:8080/api/v1/auth/token 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get(\"token\",\"\"))" 2>/dev/null || true); \
-			if [ -n "$$TOKEN" ]; then \
-				curl -s -H "Authorization: Bearer $$TOKEN" http://$$API_IP:8080/api/v1/state 2>/dev/null | \
-					python3 -c "import json,sys; s=json.load(sys.stdin); \
-						intra=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"intra_plane_isl\"); \
-						cross=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"cross_plane_isl\"); \
-						gnd=sum(1 for l in s[\"links\"] if l.get(\"link_type\")==\"ground\"); \
-						print(f\"  Intra-plane ISL: {intra}\"); \
-						print(f\"  Cross-plane ISL: {cross}\"); \
-						print(f\"  Ground links: {gnd}\"); \
-						print(f\"  Total active: {len(s[\"links\"])}\")" 2>/dev/null || echo "  Unable to query VS-API at http://$$API_IP:8080"; \
-			else \
-				echo "  VS-API not reachable at http://$$API_IP:8080"; \
-			fi; \
-		fi'
+	@NAMESPACE=$(NAMESPACE) REGISTRY_HOST=$(REGISTRY_HOST) DEFAULT_SESSION=$(DEFAULT_SESSION) bash tools/na-status.sh
 
 test: ## Run unit tests (868+, no sudo needed)
 	uv run pytest --ignore=tests/integration --tb=short -q

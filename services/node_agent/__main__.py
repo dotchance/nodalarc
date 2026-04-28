@@ -112,6 +112,8 @@ async def main() -> None:
     def _wiring_watcher() -> None:
         import time
 
+        from node_agent import substrate_monitor as _substrate_monitor
+
         try:
             import kubernetes.client
             import kubernetes.config
@@ -160,10 +162,10 @@ async def main() -> None:
                     from nodalarc.nats_channels import sanitize_session_id
 
                     try:
-                        substrate_monitor._session_id = sanitize_session_id(manifest_session_id)
+                        _substrate_monitor._session_id = sanitize_session_id(manifest_session_id)
                         log.info(
                             "Node Agent session_id=%s (from wiring manifest)",
-                            substrate_monitor._session_id,
+                            _substrate_monitor._session_id,
                         )
                     except ValueError:
                         log.warning(

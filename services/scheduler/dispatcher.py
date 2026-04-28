@@ -176,8 +176,13 @@ class Dispatcher:
         # Used by the safety check to identify teardown-expired removals.
         self._teardown_pairs: set[tuple[str, str]] = set()
 
-        # Epoch synchronization state machine (PRD v0.71)
-        self._suspended = True  # Start SUSPENDED — wait for epoch_id=0 deps
+        # Epoch synchronization — only active during Tier 2 seek.
+        # The Scheduler starts UNSUSPENDED. It receives snapshots and
+        # dispatches immediately. SUSPENDED is entered ONLY when the OME
+        # publishes PlaybackState(state="seeking"), signaling a sim_time
+        # discontinuity that requires fresh ephemeris + snapshot before
+        # dispatch can resume safely.
+        self._suspended = False
         self._expected_epoch_id = 0
         self._playback_playing_received = False
         self._epoch_deps_met = {"ephemeris": False, "snapshot": False}
@@ -344,6 +349,12 @@ class Dispatcher:
         # They NEVER await Node Agent I/O. They return in microseconds.
         from nats.js.api import DeliverPolicy
 
+        # CONCURRENCY NOTE: pending_vis is mutated by _on_visibility and
+        # _on_clock_tick, which both yield control at await queue.put().
+        # Safe today because asyncio runs callbacks cooperatively on one
+        # thread — no preemption between await points. If this ever moves
+        # to a multi-threaded event loop, pending_vis must be protected
+        # by an asyncio.Lock.
         pending_vis: list[VisibilityEvent] = []
         last_sim_time: datetime | None = None
 
@@ -352,16 +363,10 @@ class Dispatcher:
             data = json.loads(msg.data)
             vis = VisibilityEvent.model_validate(data)
 
-            # While SUSPENDED: discard the event entirely. The buffered
-            # LinkStateSnapshot at resume is the authoritative full state
-            # for that epoch. Events arriving during suspension are either:
-            #   - already incorporated into the buffered snapshot (older
-            #     sim_time), or
-            #   - from the new epoch but pre-resume (not safe to apply
-            #     until ephemeris and snapshot for the new epoch are loaded)
-            # In either case, dropping them is correct — the next live
-            # snapshot or live event after resume will reconcile any drift.
             if self._suspended:
+                log.debug(
+                    "Seek suspended — dropping VisibilityEvent for %s/%s", vis.node_a, vis.node_b
+                )
                 return
 
             snap_sim = vis.sim_time
@@ -436,20 +441,22 @@ class Dispatcher:
         async def _on_clock_tick(msg):
             nonlocal last_sim_time
             data = json.loads(msg.data)
-            tick_epoch_id = data.get("epoch_id", 0)
+            tick_epoch_id = data.get("epoch_id")
+            if tick_epoch_id is None:
+                log.error("ClockTick missing epoch_id: %s", data)
+                raise ValueError("ClockTick missing epoch_id")
 
-            # Drop ClockTick while SUSPENDED or wrong epoch
             if self._suspended:
                 if tick_epoch_id == self._expected_epoch_id:
-                    # This is the resume trigger — check all conditions
                     await self._try_resume_on_clock_tick(data)
                 return
 
-            tick_sim_str = data.get("sim_time", "")
-            tick_sim_time: datetime | None = None
-            if tick_sim_str:
-                tick_sim_time = datetime.fromisoformat(tick_sim_str)
-                self._current_sim_time = tick_sim_time
+            tick_sim_str = data.get("sim_time")
+            if not tick_sim_str:
+                log.error("ClockTick missing sim_time: %s", data)
+                raise ValueError("ClockTick missing sim_time")
+            tick_sim_time = datetime.fromisoformat(tick_sim_str)
+            self._current_sim_time = tick_sim_time
 
             # Flush ONLY events from sim_times strictly OLDER than this tick.
             # Events at the same sim_time as this tick may still be in flight
@@ -1700,11 +1707,19 @@ class Dispatcher:
         if not self._suspended:
             return
 
+        missing = []
         if not self._playback_playing_received:
-            return
+            missing.append("PlaybackState(playing)")
         if not self._epoch_deps_met["ephemeris"]:
-            return
+            missing.append("SessionEphemeris")
         if not self._epoch_deps_met["snapshot"]:
+            missing.append("LinkStateSnapshot")
+        if missing:
+            log.warning(
+                "Seek resume blocked — epoch_id=%d waiting for: %s",
+                self._expected_epoch_id,
+                ", ".join(missing),
+            )
             return
 
         # All conditions met — RESUME
@@ -1728,9 +1743,11 @@ class Dispatcher:
             self._buffered_snapshot = None
 
         # Process the triggering ClockTick normally
-        tick_sim_str = tick_data.get("sim_time", "")
-        if tick_sim_str:
-            self._current_sim_time = datetime.fromisoformat(tick_sim_str)
+        tick_sim_str = tick_data.get("sim_time")
+        if not tick_sim_str:
+            log.error("ClockTick missing sim_time on seek resume: %s", tick_data)
+            raise ValueError("ClockTick missing sim_time")
+        self._current_sim_time = datetime.fromisoformat(tick_sim_str)
 
         log.info(
             "RESUMED: epoch_id=%d sim_time=%s",
@@ -1739,10 +1756,11 @@ class Dispatcher:
         )
 
     async def _epoch_watchdog(self, epoch_id: int) -> None:
-        """30-second watchdog for epoch synchronization.
+        """30-second watchdog for seek epoch synchronization.
 
-        If the epoch doesn't resume within 30 seconds, log STALE/ERROR.
-        Do NOT crash. Wait for operator intervention (new seek clears stale).
+        If the seek doesn't resume within 30 seconds, the OME failed to
+        publish the required epoch dependencies. Kill the process so K8s
+        restarts it — a stuck Scheduler is worse than a restarted one.
         """
         try:
             await asyncio.sleep(30)
@@ -1750,12 +1768,13 @@ class Dispatcher:
                 self._stale = True
                 deps = self._epoch_deps_met
                 log.error(
-                    "STALE/ERROR: seek epoch_id=%d timed out after 30s. "
+                    "FATAL: seek epoch_id=%d timed out after 30s — killing process. "
                     "deps: ephemeris=%s snapshot=%s playing=%s",
                     epoch_id,
                     deps["ephemeris"],
                     deps["snapshot"],
                     self._playback_playing_received,
                 )
+                self._running = False
         except asyncio.CancelledError:
             pass  # Normal — watchdog cancelled on successful resume

@@ -25,7 +25,6 @@ from nodalarc_operator.session_deployer import (
     check_all_pods_running,
     check_old_pods_terminated,
     check_pods_ready,
-    check_pods_ready_condition,
     check_wiring_complete,
     compute_expected_pod_count,
     compute_platform_hash,
@@ -319,32 +318,17 @@ async def _reconcile_session(spec, name, namespace, meta, status):
         log.info(f"Reconcile: {ready}/{expected_count} pods running, waiting for all")
         return
 
-    # All pods running — proceed through remaining conditions
-
-    # --- Condition 3: Routing containers ready (NOS-agnostic) ---
-    # Check K8s Ready condition — set by readiness probe (vtysh -c "show version").
-    # The Operator doesn't exec into containers. The container owns readiness.
-    # Between Running and Ready, FRR is loading its config from the ConfigMap
-    # mount. This window is typically 2-5 seconds per pod.
-    total_pods, ready_pods = await loop.run_in_executor(None, check_pods_ready_condition, namespace)
-    not_ready_count = total_pods - ready_pods
-    if not_ready_count > 0:
-        _update_status(
-            name,
-            namespace,
-            {
-                "phase": "Creating",
-                "readyPods": ready_pods,
-                "podCount": expected_count,
-                "message": f"Waiting for routing containers: {not_ready_count} pods not Ready",
-            },
-        )
-        log.info(
-            "Reconcile: %d/%d pods Ready, waiting for all",
-            ready_pods,
-            total_pods,
-        )
-        return
+    # All pods running — proceed through remaining conditions.
+    #
+    # NOTE: Condition 3 (readiness probe check) is deliberately SKIPPED
+    # as a deployment gate. The readiness probe (vtysh + config version
+    # diff) is for K8s health monitoring, NOT for gating the wiring phase.
+    # At 591 pods, FRR startup takes 30-60s under CPU contention, causing
+    # readiness probe timeouts. The wiring phase doesn't need FRR to be
+    # responsive — it creates kernel interfaces. FRR loads its config
+    # independently and forms adjacencies when the carrier arrives on
+    # wired interfaces. Gating on Ready here blocked deployment for the
+    # entire session. See plan: "wiring gates on Running, not Ready."
 
     # --- Condition 4: Wiring manifest written + wiring complete ---
     manifest_exists = await loop.run_in_executor(None, _has_wiring_manifest, namespace)

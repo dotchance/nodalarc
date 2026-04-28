@@ -490,7 +490,9 @@ def _run_pacing(
             pending_teardowns=td_flat,
         )
 
-    _start_health_server()
+    # Health server is started by main() before _run_pacing is called.
+    # Infrastructure (health checks, NATS connections, signal handlers)
+    # belongs in the process entry point, not the business logic.
 
     # Use preloaded config if provided (avoids re-parsing the same file).
     # Fall back to loading from disk if not provided (batch mode).

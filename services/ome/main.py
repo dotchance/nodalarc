@@ -400,6 +400,16 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
     await nc.subscribe(SUBJECT_PLAYBACK_CONTROL, cb=_handle_playback)
     logging.info("OME playback control active on %s", SUBJECT_PLAYBACK_CONTROL)
 
+    # Per-message retry: exponential backoff 0.5s, 1s, 2s, 4s, 8s = 15.5s total.
+    # Rationale: pacing thread produces at 1Hz (step_seconds=1). The queue
+    # (maxsize=1000) absorbs ~16 minutes of events, so a 15s retry window
+    # doesn't cause backpressure. If NATS can't accept a single publish in
+    # 5 attempts over 15s, the connection is dead — not a transient hiccup.
+    # These numbers are initial estimates and will need tuning against the
+    # operational system under load.
+    _MAX_RETRIES = 5
+    _BACKOFF_BASE_S = 0.5
+
     try:
         while not shutdown_event.is_set():
             try:
@@ -413,11 +423,38 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
                 break
 
             subject, payload = item
-            await js.publish(subject, payload)
+            published = False
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    await js.publish(subject, payload)
+                    published = True
+                    break
+                except Exception as exc:
+                    backoff = _BACKOFF_BASE_S * (2**attempt)
+                    logging.warning(
+                        "JetStream publish failed (attempt %d/%d) subject=%s: %s — retrying in %.1fs",
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        subject,
+                        exc,
+                        backoff,
+                    )
+                    await asyncio.sleep(backoff)
+
+            if not published:
+                logging.error(
+                    "FATAL: JetStream publish failed after %d consecutive attempts "
+                    "subject=%s — NATS connection is dead, shutting down",
+                    _MAX_RETRIES,
+                    subject,
+                )
+                shutdown_event.set()
+                break
     except asyncio.CancelledError:
         pass
     except Exception as exc:
-        logging.error("NATS publisher error: %s", exc, exc_info=True)
+        logging.error("NATS publisher fatal error: %s", exc, exc_info=True)
+        shutdown_event.set()
     finally:
         await nc.drain()
         await nc.close()

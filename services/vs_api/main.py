@@ -625,12 +625,13 @@ async def _nats_subscriber() -> None:
         _propagate_positions_from_ephemeris(eph.sim_time.isoformat())
 
     async def _on_playback_state(msg):
-        global _session_status
+        global _playback_paused
         nonlocal msg_count
         msg_count += 1
         data = json.loads(msg.data)
         with _state_lock:
-            _session_status = data.get("state") or "unknown"
+            state = data.get("state") or "unknown"
+            _playback_paused = state == "paused"
 
     async def _on_clock_tick(msg):
         global _last_clock_tick_wall_time, _playback_speed
@@ -829,7 +830,7 @@ async def _nats_subscriber() -> None:
     except Exception as exc:
         log.warning("Wiring progress subscription failed: %s", exc)
 
-    log.info("VS-API NATS subscriber started — wildcard subscriptions active")
+    log.info("VS-API NATS subscriber started — session_id=%s, %d subscriptions", sid, len(subs))
 
     # Periodic status log + wait for shutdown
     try:

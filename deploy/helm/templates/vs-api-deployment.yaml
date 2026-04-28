@@ -7,6 +7,8 @@ metadata:
     app: nodalarc-vs-api
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: nodalarc-vs-api

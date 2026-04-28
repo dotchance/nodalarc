@@ -649,6 +649,7 @@ def write_wiring_manifest(
 
     Returns the number of ISL links in the manifest.
     """
+    import ipaddress as _ipaddress
     import json as _json
 
     v1 = _get_v1()
@@ -742,8 +743,6 @@ def write_wiring_manifest(
         gs_id = addressing.gs_id(station.name)
 
         # Terrestrial prefix addresses — use host addresses, skip default routes
-        import ipaddress as _ipaddress
-
         addrs = []
         raw_prefixes: list[str] = []
         if station.terrestrial_prefixes:

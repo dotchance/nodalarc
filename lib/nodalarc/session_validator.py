@@ -141,7 +141,8 @@ def _check_e004(
     if gs_sid_offset is None:
         return results  # No SR variables to check
 
-    # Satellite SID scheme: plane * 100 + slot + 1
+    # SID scheme from stack_resolver.py:validate_constellation_constraints
+    # Satellite SID = plane * 100 + slot + 1
     max_plane = max((s.plane for s in satellites), default=0)
     max_slot = max((s.slot for s in satellites), default=0)
     max_sat_sid = max_plane * 100 + max_slot + 1

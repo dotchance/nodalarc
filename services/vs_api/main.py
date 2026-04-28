@@ -213,7 +213,7 @@ _constellation_name: str | None = None
 _session_manager: SessionManager | None = None
 _gs_elevation_map: dict[str, float] = {}  # node_id -> min_elevation_deg
 _beam_falloff_exponent: float = 2.0
-_nats_session_id: str = "default"  # Set by main() from session config
+_nats_session_id: str = ""  # Set by main() from session config — empty until set
 _playback_paused: bool = False
 _playback_speed: float = 1.0
 
@@ -357,22 +357,41 @@ def _compute_convergence_state() -> None:
 
 def _update_link_up(event_data: dict) -> None:
     """Update link state on LinkUp."""
-    node_a = event_data.get("node_a") or ""
-    node_b = event_data.get("node_b") or ""
+    node_a = event_data.get("node_a")
+    node_b = event_data.get("node_b")
+    if not node_a or not node_b:
+        log.error(
+            "Malformed LinkUp event — missing node_a=%r or node_b=%r: %s",
+            node_a,
+            node_b,
+            event_data,
+        )
+        raise ValueError(f"LinkUp event missing required fields: node_a={node_a}, node_b={node_b}")
+    for field in (
+        "interface_a",
+        "interface_b",
+        "latency_ms",
+        "bandwidth_mbps",
+        "range_km",
+        "reason",
+    ):
+        if field not in event_data:
+            log.error("Malformed LinkUp event — missing %s: %s", field, event_data)
+            raise ValueError(f"LinkUp event missing required field: {field}")
     key = _link_key(node_a, node_b)
     with _state_lock:
         _links[key] = LinkState(
             node_a=node_a,
             node_b=node_b,
             state="active",
-            link_type=_derive_link_type(node_a, node_b, event_data.get("link_type") or "isl"),
-            link_reason=event_data.get("reason") or "",
-            latency_ms=event_data.get("latency_ms") or 0.0,
-            bandwidth_mbps=event_data.get("bandwidth_mbps") or 0.0,
-            range_km=event_data.get("range_km") or 0.0,
+            link_type=_derive_link_type(node_a, node_b, event_data.get("link_type", "isl")),
+            link_reason=event_data["reason"],
+            latency_ms=event_data["latency_ms"],
+            bandwidth_mbps=event_data["bandwidth_mbps"],
+            range_km=event_data["range_km"],
             traffic_load_pct=None,
-            interface_a=event_data.get("interface_a") or "",
-            interface_b=event_data.get("interface_b") or "",
+            interface_a=event_data["interface_a"],
+            interface_b=event_data["interface_b"],
         )
     if _continuous_tracer is not None:
         _continuous_tracer.notify_topology_change(node_a, node_b)
@@ -380,8 +399,18 @@ def _update_link_up(event_data: dict) -> None:
 
 def _update_link_down(event_data: dict) -> None:
     """Remove link state on LinkDown."""
-    node_a = event_data.get("node_a") or ""
-    node_b = event_data.get("node_b") or ""
+    node_a = event_data.get("node_a")
+    node_b = event_data.get("node_b")
+    if not node_a or not node_b:
+        log.error(
+            "Malformed LinkDown event — missing node_a=%r or node_b=%r: %s",
+            node_a,
+            node_b,
+            event_data,
+        )
+        raise ValueError(
+            f"LinkDown event missing required fields: node_a={node_a}, node_b={node_b}"
+        )
     key = _link_key(node_a, node_b)
     with _state_lock:
         _links.pop(key, None)
@@ -391,29 +420,56 @@ def _update_link_down(event_data: dict) -> None:
 
 def _update_latency(event_data: dict) -> None:
     """Update link latency."""
-    key = _link_key(event_data.get("node_a") or "", event_data.get("node_b") or "")
+    node_a = event_data.get("node_a")
+    node_b = event_data.get("node_b")
+    if not node_a or not node_b:
+        log.error(
+            "Malformed LatencyUpdate — missing node_a=%r or node_b=%r: %s",
+            node_a,
+            node_b,
+            event_data,
+        )
+        raise ValueError(f"LatencyUpdate missing required fields: node_a={node_a}, node_b={node_b}")
+    key = _link_key(node_a, node_b)
     with _state_lock:
         existing = _links.get(key)
         if existing is not None:
+            latency_ms = event_data.get("latency_ms")
+            range_km = event_data.get("range_km")
+            if latency_ms is None or range_km is None:
+                log.error(
+                    "Malformed LatencyUpdate — missing latency_ms=%r or range_km=%r: %s",
+                    latency_ms,
+                    range_km,
+                    event_data,
+                )
+                raise ValueError("LatencyUpdate missing latency_ms or range_km")
             _links[key] = existing.model_copy(
                 update={
-                    "latency_ms": event_data.get("latency_ms") or 0.0,
-                    "range_km": event_data.get("range_km") or 0.0,
+                    "latency_ms": latency_ms,
+                    "range_km": range_km,
                 }
             )
 
 
 def _add_recent_event(event_data: dict, event_type: str) -> None:
     """Add to recent events list (cap at 50)."""
-    sim_time_raw = event_data.get("sim_time") or datetime.now(UTC).isoformat()
+    sim_time_raw = event_data.get("sim_time")
+    if sim_time_raw is None:
+        log.error("Malformed event — missing sim_time: %s", event_data)
+        raise ValueError(f"Event missing sim_time: {event_type}")
     sim_time_dt = (
         datetime.fromisoformat(sim_time_raw) if isinstance(sim_time_raw, str) else sim_time_raw
     )
+    node_id = event_data.get("node_id") or event_data.get("node_a")
+    if not node_id:
+        log.error("Malformed event — missing node_id and node_a: %s", event_data)
+        raise ValueError(f"Event missing node_id: {event_type}")
     event = RecentEvent(
         sim_time=sim_time_dt,
-        node_id=event_data.get("node_id") or event_data.get("node_a") or "",
+        node_id=node_id,
         event_type=event_type,
-        summary=event_data.get("detail") or event_data.get("reason") or event_type,
+        summary=event_data.get("reason", ""),
     )
     with _state_lock:
         _recent_events.append(event)
@@ -467,7 +523,10 @@ def _derive_link_type(node_a: str, node_b: str, link_type: str = "isl") -> str:
 def _update_almanac_state(event_data: dict) -> None:
     """Update almanac state from AlmanacEvent."""
     global _almanac
-    event_type = event_data.get("event_type") or ""
+    event_type = event_data.get("event_type")
+    if not event_type:
+        log.error("Malformed AlmanacEvent — missing event_type: %s", event_data)
+        raise ValueError("AlmanacEvent missing event_type")
     with _almanac_lock:
         _almanac = _almanac.model_copy(update={"nodalpath_active": True})
         if event_type == "table_pushed":
@@ -476,8 +535,8 @@ def _update_almanac_state(event_data: dict) -> None:
                     "last_topology_state_id": event_data.get("topology_state_id"),
                     "last_push_sim_time": event_data.get("sim_time"),
                     "last_push_wall_time": event_data.get("wall_time"),
-                    "nodes_succeeded": event_data.get("nodes_succeeded") or 0,
-                    "nodes_failed": event_data.get("nodes_failed") or 0,
+                    "nodes_succeeded": event_data.get("nodes_succeeded"),
+                    "nodes_failed": event_data.get("nodes_failed"),
                 }
             )
         elif event_type == "deviation_detected":
@@ -630,7 +689,10 @@ async def _nats_subscriber() -> None:
         msg_count += 1
         data = json.loads(msg.data)
         with _state_lock:
-            state = data.get("state") or "unknown"
+            state = data.get("state")
+            if not state:
+                log.error("Malformed PlaybackState — missing state: %s", data)
+                raise ValueError("PlaybackState missing state")
             _playback_paused = state == "paused"
 
     async def _on_clock_tick(msg):
@@ -638,7 +700,10 @@ async def _nats_subscriber() -> None:
         nonlocal msg_count
         msg_count += 1
         data = json.loads(msg.data)
-        sim_time_str = data.get("sim_time") or ""
+        sim_time_str = data.get("sim_time")
+        if not sim_time_str:
+            log.error("Malformed ClockTick — missing sim_time: %s", data)
+            raise ValueError("ClockTick missing sim_time")
         if sim_time_str:
             try:
                 _propagate_positions_from_ephemeris(sim_time_str)
@@ -709,17 +774,17 @@ async def _nats_subscriber() -> None:
                 _nats_session_id = sanitize_session_id(session.session.name)
                 log.info("NATS subscriber: session_id=%s", _nats_session_id)
         except Exception as exc:
-            log.warning("Failed to read session_id from config: %s", exc)
+            log.error("FATAL: Failed to read session_id from config: %s", exc)
+            raise
 
     sid = _nats_session_id
+    if not sid:
+        log.error("FATAL: VS-API has no session_id — cannot subscribe to NATS subjects")
+        raise ValueError("session_id is required for VS-API NATS subscriptions")
     log.info("VS-API NATS subscribing with session_id=%s", sid)
 
-    # Session config appeared — start CR polling to track session phase.
-    # This updates _session_manager.status which the VF checks to decide
-    # wizard vs globe (session_status == "ready" triggers globe view).
-    if sid != "default":
-        log.info("NATS subscriber: launching _poll_cr_until_ready for session tracking")
-        asyncio.ensure_future(_poll_cr_until_ready())
+    log.info("NATS subscriber: launching _poll_cr_until_ready for session tracking")
+    asyncio.ensure_future(_poll_cr_until_ready())
 
     subs = []
     try:
@@ -864,15 +929,15 @@ def _apply_link_state_snapshot(data: dict) -> None:
     try:
         snapshot = LinkStateSnapshot.model_validate(data)
     except Exception as exc:
-        log.warning("Failed to parse LinkStateSnapshot: %s", exc)
-        return
+        log.error("FATAL: Failed to parse LinkStateSnapshot: %s", exc)
+        raise
 
     with _state_lock:
         _links.clear()
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 key = _link_key(link.node_a, link.node_b)
-                lat_ms = link.latency_ms or 0.0
+                lat_ms = link.latency_ms
                 _links[key] = LinkState(
                     node_a=link.node_a,
                     node_b=link.node_b,
@@ -880,7 +945,7 @@ def _apply_link_state_snapshot(data: dict) -> None:
                     link_type=_derive_link_type(link.node_a, link.node_b, link.link_type),
                     link_reason="",
                     latency_ms=lat_ms,
-                    bandwidth_mbps=link.bandwidth_mbps or 0.0,
+                    bandwidth_mbps=link.bandwidth_mbps,
                     range_km=lat_ms * 299792.458 / 1000.0,
                     traffic_load_pct=None,
                     interface_a=link.interface_a,
@@ -1199,19 +1264,29 @@ def _restore_state_from_db(db_path: str) -> bool:
         with _state_lock:
             # Restore nodes
             for node in snapshot.get("nodes", []):
-                node_id = node.get("node_id") or ""
-                if node_id:
-                    _nodes[node_id] = NodeState(**node)
+                node_id = node.get("node_id")
+                if not node_id:
+                    log.error("Corrupt DB snapshot — node missing node_id: %s", node)
+                    raise ValueError("DB snapshot node missing node_id")
+                _nodes[node_id] = NodeState(**node)
 
             # Restore links
             for link in snapshot.get("links", []):
-                key = _link_key(link.get("node_a") or "", link.get("node_b") or "")
+                na = link.get("node_a")
+                nb = link.get("node_b")
+                if not na or not nb:
+                    log.error("Corrupt DB snapshot — link missing node_a/node_b: %s", link)
+                    raise ValueError("DB snapshot link missing node_a or node_b")
+                key = _link_key(na, nb)
                 _links[key] = LinkState(**link)
 
             # Restore recent events
             _recent_events.clear()
             for e in snapshot.get("recent_events", []):
-                sim_time_raw = e.get("sim_time") or datetime.now(UTC).isoformat()
+                sim_time_raw = e.get("sim_time")
+                if sim_time_raw is None:
+                    log.error("Corrupt DB snapshot — event missing sim_time: %s", e)
+                    raise ValueError("DB snapshot event missing sim_time")
                 sim_time_dt = (
                     datetime.fromisoformat(sim_time_raw)
                     if isinstance(sim_time_raw, str)
@@ -1220,9 +1295,9 @@ def _restore_state_from_db(db_path: str) -> bool:
                 _recent_events.append(
                     RecentEvent(
                         sim_time=sim_time_dt,
-                        node_id=e.get("node_id") or "",
-                        event_type=e.get("event_type") or "",
-                        summary=e.get("summary") or "",
+                        node_id=e["node_id"],
+                        event_type=e["event_type"],
+                        summary=e["summary"],
                     )
                 )
 
@@ -1230,9 +1305,9 @@ def _restore_state_from_db(db_path: str) -> bool:
             if "network_health" in snapshot:
                 nh = snapshot["network_health"]
                 _network_health = NetworkHealth(
-                    status=nh.get("status") or "no measurement",
+                    status=nh["status"],
                     converging_since_ms=nh.get("converging_since_ms"),
-                    unreachable_flows=nh.get("unreachable_flows") or 0,
+                    unreachable_flows=nh["unreachable_flows"],
                     last_convergence_ms=nh.get("last_convergence_ms"),
                 )
 
@@ -1484,8 +1559,8 @@ async def get_almanac_status() -> dict:
         "recomputation_count": raw.get("recomputation_count", 0),
         "last_topology_state_id": raw.get("last_topology_state_id"),
         "last_sim_time": raw.get("last_sim_time"),
-        "recent_pushes": (raw.get("push_history") or [])[:5],
-        "recent_deviations": (raw.get("deviation_history") or [])[:5],
+        "recent_pushes": raw["push_history"][:5],
+        "recent_deviations": raw["deviation_history"][:5],
     }
 
 
@@ -1682,11 +1757,11 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
         else:
             # Fallback: compute SIDs from plane/slot
             sats = [n for n in nodes if n.get("node_type") == "satellite"]
-            max_slot = max((n.get("slot", 0) or 0) for n in sats) if sats else 0
+            max_slot = max(n["slot"] for n in sats) if sats else 0
             spp = max_slot + 1
             for n in sats:
-                plane = n.get("plane", 0) or 0
-                slot = n.get("slot", 0) or 0
+                plane = n["plane"]
+                slot = n["slot"]
                 sid = np_cfg.satellite_sid_range_start + (plane * spp + slot) + 1
                 sid_to_node[sid] = n["node_id"]
             gs_names = sorted(n["node_id"] for n in nodes if n.get("node_type") == "ground_station")

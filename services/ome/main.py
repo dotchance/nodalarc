@@ -285,7 +285,7 @@ class _LookAheadThread:
         return self._ready.is_set()
 
 
-async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str = "") -> None:
+async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> None:
     """NATS publisher — runs in its own async event loop in its own thread.
 
     Consumes (subject, payload) tuples from the queue and publishes to NATS.
@@ -312,15 +312,15 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str = ""
         playback_state_subject,
     )
 
-    _subj_playback = (
-        playback_state_subject(session_id) if session_id else playback_state_subject("default")
-    )
+    if not session_id:
+        logging.error("FATAL: OME NATS publisher started with no session_id")
+        raise ValueError("session_id is required for OME NATS publisher")
+
+    _subj_playback = playback_state_subject(session_id)
 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     js = nc.jetstream()
-    logging.info(
-        "OME NATS publisher connected to %s (session_id=%s)", nats_url(), session_id or "default"
-    )
+    logging.info("OME NATS publisher connected to %s (session_id=%s)", nats_url(), session_id)
 
     async def _publish_playback_state(state: str) -> None:
         """Publish PlaybackState to NODALARC_SESSION stream."""
@@ -413,10 +413,7 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str = ""
                 break
 
             subject, payload = item
-            if subject.startswith("nodalarc.session."):
-                await js.publish(subject, payload)
-            else:
-                await nc.publish(subject, payload)
+            await js.publish(subject, payload)
     except asyncio.CancelledError:
         pass
     except Exception as exc:

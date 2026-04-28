@@ -254,6 +254,7 @@ class OpsEvent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     timestamp: datetime
+    session_id: str
     source: str  # "operator", "scheduler", "ome", "node_agent", "validator"
     hostname: str
     level: str  # "critical", "error", "warning", "info", "debug"

@@ -770,12 +770,13 @@ def _run_pacing(
 
         recovery_event = OpsEvent(
             timestamp=datetime.now(UTC),
+            session_id=session_id,
             source="ome",
             hostname=_socket.gethostname(),
             level="info",
             code="RECOVERY_REPLAY",
             message=f"Replaying {step + 1} steps from checkpoint (step={step})",
-            details={"total_steps": step + 1, "session_id": session_id},
+            details={"total_steps": step + 1},
         )
         _enqueue(
             ops_event_subject(session_id, "ome", "RECOVERY_REPLAY"),

@@ -103,7 +103,12 @@ def _make_dispatcher(interface_map=None, stub_success=True):
         agent_pool=pool,
         override_set=set(),
         override_lock=threading.Lock(),
+        session_id="test-session",
+        gs_terminal_capacities={"gs-ashburn": 1},
+        sat_ground_terminal_capacities={"sat-P00S00": 1},
     )
+    d._js = AsyncMock()
+    d._nc = MagicMock()
     return d, pool
 
 

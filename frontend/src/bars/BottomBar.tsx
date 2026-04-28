@@ -9,9 +9,11 @@ interface BottomBarProps {
   snapshot: StateSnapshot | null;
   connected: boolean;
   historicalMode?: boolean;
+  logPanelOpen?: boolean;
+  onToggleLogPanel?: () => void;
 }
 
-export function BottomBar({ snapshot, connected, historicalMode }: BottomBarProps) {
+export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, onToggleLogPanel }: BottomBarProps) {
   const activeLinks = snapshot?.links.filter((l) => l.state === "active").length ?? 0;
   const totalLinks = snapshot?.links.length ?? 0;
   const nodeCount = snapshot?.nodes.length ?? 0;
@@ -73,6 +75,24 @@ export function BottomBar({ snapshot, connected, historicalMode }: BottomBarProp
         }}
       />
       <span style={{ color: wsColor }} title={WS_URL}>{wsLabel}</span>
+      {onToggleLogPanel && (
+        <button
+          onClick={onToggleLogPanel}
+          title="System Logs"
+          style={{
+            background: logPanelOpen ? "rgba(68,136,255,0.15)" : "transparent",
+            border: `1px solid ${logPanelOpen ? "var(--accent-blue)" : "var(--border)"}`,
+            borderRadius: 3,
+            color: logPanelOpen ? "var(--accent-blue)" : "var(--text-secondary)",
+            padding: "1px 8px",
+            cursor: "pointer",
+            fontSize: 10,
+            fontFamily: "var(--font-family)",
+          }}
+        >
+          Logs
+        </button>
+      )}
       <span style={{ color: "var(--accent-blue)", fontSize: 11, fontFamily: "var(--font-family)" }}>
         build: {typeof __BUILD_HASH__ !== "undefined" ? __BUILD_HASH__ : "dev"}
       </span>

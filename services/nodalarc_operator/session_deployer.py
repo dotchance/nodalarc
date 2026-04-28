@@ -193,6 +193,7 @@ def _publish_validation_ops_events(results: list, namespace: str, session_id: st
                 for r in results:
                     event = OpsEvent(
                         timestamp=datetime.now(UTC),
+                        session_id=session_id,
                         source="validator",
                         hostname=socket.gethostname(),
                         level=r.level if r.level == "error" else "warning",

@@ -77,6 +77,17 @@ export interface RecentEvent {
   summary: string;
 }
 
+export interface OpsEvent {
+  timestamp: string;
+  session_id: string;
+  source: string;
+  hostname: string;
+  level: string;
+  code: string;
+  message: string;
+  details?: Record<string, unknown> | null;
+}
+
 export interface AlmanacState {
   last_topology_state_id: string | null;
   last_push_sim_time: string | null;
@@ -105,6 +116,7 @@ export interface StateSnapshot {
   playback_paused: boolean;
   playback_speed: number;
   stale: boolean;
+  ops_events?: OpsEvent[];
 }
 
 // Distributed ephemeris model (PRD v0.71)

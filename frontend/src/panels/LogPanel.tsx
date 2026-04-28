@@ -1,0 +1,526 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+/** Floating system log panel — OpsEvents from NATS via VS-API WebSocket. */
+
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import type { OpsEvent } from "../types";
+
+interface LogPanelProps {
+  events: OpsEvent[];
+  onClose: () => void;
+}
+
+type SortField = "timestamp" | "source" | "level" | "code" | "message";
+type SortDir = "asc" | "desc";
+
+const LEVELS = ["critical", "error", "warning", "info", "debug"] as const;
+const LEVEL_COLORS: Record<string, string> = {
+  critical: "var(--accent-red)",
+  error: "var(--accent-red)",
+  warning: "#ffaa33",
+  info: "var(--accent-blue)",
+  debug: "var(--text-secondary)",
+};
+
+const MIN_WIDTH = 500;
+const MIN_HEIGHT = 200;
+const DEFAULT_WIDTH = 800;
+const DEFAULT_HEIGHT = 350;
+
+export function LogPanel({ events, onClose }: LogPanelProps) {
+  const [paused, setPaused] = useState(false);
+  const [pausedEvents, setPausedEvents] = useState<OpsEvent[]>([]);
+  const [sortField, setSortField] = useState<SortField>("timestamp");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [levelFilter, setLevelFilter] = useState<Set<string>>(new Set(LEVELS));
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [searchPattern, setSearchPattern] = useState("");
+  const [searchValid, setSearchValid] = useState(true);
+  const [fontSize, setFontSize] = useState(11);
+
+  const [pos, setPos] = useState({ x: 100, y: window.innerHeight - DEFAULT_HEIGHT - 60 });
+  const [size, setSize] = useState({ w: DEFAULT_WIDTH, h: DEFAULT_HEIGHT });
+  const panelRef = useRef<HTMLDivElement>(null);
+  const tableBodyRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ startX: number; startY: number; startPosX: number; startPosY: number } | null>(null);
+  const resizeRef = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null);
+  const autoScrollRef = useRef(true);
+
+  // Accumulate events when paused
+  useEffect(() => {
+    if (!paused) {
+      setPausedEvents([]);
+    }
+  }, [paused]);
+
+  const displayEvents = paused ? pausedEvents : events;
+
+  // Snapshot events when pausing
+  useEffect(() => {
+    if (paused && pausedEvents.length === 0 && events.length > 0) {
+      setPausedEvents([...events]);
+    }
+  }, [paused, pausedEvents.length, events]);
+
+  // Compile regex
+  const searchRegex = useMemo(() => {
+    if (!searchPattern) return null;
+    try {
+      const re = new RegExp(searchPattern, "i");
+      setSearchValid(true);
+      return re;
+    } catch {
+      setSearchValid(false);
+      return null;
+    }
+  }, [searchPattern]);
+
+  // Filter
+  const filtered = useMemo(() => {
+    let result = displayEvents.filter((e) => {
+      if (!levelFilter.has(e.level)) return false;
+      if (sourceFilter !== "all" && e.source !== sourceFilter) return false;
+      return true;
+    });
+    if (searchRegex) {
+      result = result.filter(
+        (e) => searchRegex.test(e.message) || searchRegex.test(e.code) || searchRegex.test(e.source),
+      );
+    }
+    return result;
+  }, [displayEvents, levelFilter, sourceFilter, searchRegex]);
+
+  // Sort
+  const sorted = useMemo(() => {
+    const copy = [...filtered];
+    copy.sort((a, b) => {
+      const av = a[sortField] ?? "";
+      const bv = b[sortField] ?? "";
+      const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return copy;
+  }, [filtered, sortField, sortDir]);
+
+  // Auto-scroll to bottom on new events
+  useEffect(() => {
+    if (autoScrollRef.current && tableBodyRef.current) {
+      tableBodyRef.current.scrollTop = tableBodyRef.current.scrollHeight;
+    }
+  }, [sorted]);
+
+  const handleScroll = useCallback(() => {
+    if (!tableBodyRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = tableBodyRef.current;
+    autoScrollRef.current = scrollHeight - scrollTop - clientHeight < 30;
+  }, []);
+
+  // Sort toggle
+  const handleSort = useCallback(
+    (field: SortField) => {
+      if (sortField === field) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      } else {
+        setSortField(field);
+        setSortDir("desc");
+      }
+    },
+    [sortField],
+  );
+
+  // Level toggle
+  const toggleLevel = useCallback((level: string) => {
+    setLevelFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(level)) next.delete(level);
+      else next.add(level);
+      return next;
+    });
+  }, []);
+
+  // Unique sources for dropdown
+  const sources = useMemo(() => {
+    const s = new Set(events.map((e) => e.source));
+    return Array.from(s).sort();
+  }, [events]);
+
+  // Drag handling
+  const handleDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      dragRef.current = { startX: e.clientX, startY: e.clientY, startPosX: pos.x, startPosY: pos.y };
+      const onMove = (ev: MouseEvent) => {
+        if (!dragRef.current) return;
+        setPos({
+          x: dragRef.current.startPosX + (ev.clientX - dragRef.current.startX),
+          y: dragRef.current.startPosY + (ev.clientY - dragRef.current.startY),
+        });
+      };
+      const onUp = () => {
+        dragRef.current = null;
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [pos],
+  );
+
+  // Resize handling (bottom-right corner)
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resizeRef.current = { startX: e.clientX, startY: e.clientY, startW: size.w, startH: size.h };
+      const onMove = (ev: MouseEvent) => {
+        if (!resizeRef.current) return;
+        setSize({
+          w: Math.max(MIN_WIDTH, resizeRef.current.startW + (ev.clientX - resizeRef.current.startX)),
+          h: Math.max(MIN_HEIGHT, resizeRef.current.startH + (ev.clientY - resizeRef.current.startY)),
+        });
+      };
+      const onUp = () => {
+        resizeRef.current = null;
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [size],
+  );
+
+  // Highlight matching text
+  const highlightText = useCallback(
+    (text: string) => {
+      if (!searchRegex) return text;
+      const parts = text.split(searchRegex);
+      const matches = text.match(searchRegex);
+      if (!matches || parts.length <= 1) return text;
+      return parts.reduce<(string | React.ReactElement)[]>((acc, part, i) => {
+        acc.push(part as unknown as React.ReactElement);
+        if (i < matches.length) {
+          acc.push(
+            <span key={i} style={{ background: "rgba(255,200,0,0.3)", color: "#ffe066" }}>
+              {matches[i]}
+            </span>,
+          );
+        }
+        return acc;
+      }, []);
+    },
+    [searchRegex],
+  );
+
+  const formatTime = (ts: string) => {
+    try {
+      return new Date(ts).toISOString().slice(11, 23);
+    } catch {
+      return ts;
+    }
+  };
+
+  const sortIndicator = (field: SortField) => {
+    if (sortField !== field) return null;
+    return sortDir === "asc" ? " ▲" : " ▼";
+  };
+
+  return (
+    <div
+      ref={panelRef}
+      className="log-panel"
+      style={{
+        position: "fixed",
+        left: pos.x,
+        top: pos.y,
+        width: size.w,
+        height: size.h,
+        zIndex: 9999,
+        display: "flex",
+        flexDirection: "column",
+        background: "rgba(13,13,26,0.96)",
+        backdropFilter: "blur(12px)",
+        border: "1px solid var(--border)",
+        borderRadius: 6,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+        fontFamily: "var(--font-family)",
+        fontSize,
+        color: "var(--text-primary)",
+        overflow: "hidden",
+      }}
+    >
+      {/* Title bar — draggable */}
+      <div
+        onMouseDown={handleDragStart}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "6px 10px",
+          background: "var(--bg-bar)",
+          borderBottom: "1px solid var(--border)",
+          cursor: "move",
+          userSelect: "none",
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontWeight: 600, fontSize: 12 }}>System Logs</span>
+        <span style={{ color: "var(--text-secondary)", fontSize: 10 }}>
+          {filtered.length}/{displayEvents.length} events
+        </span>
+        <div style={{ flex: 1 }} />
+        <button
+          onClick={() => setPaused((p) => !p)}
+          title={paused ? "Resume" : "Pause"}
+          style={{
+            background: paused ? "rgba(255,170,51,0.2)" : "transparent",
+            border: "1px solid var(--border)",
+            borderRadius: 3,
+            color: paused ? "#ffaa33" : "var(--text-secondary)",
+            padding: "2px 8px",
+            cursor: "pointer",
+            fontSize: 10,
+          }}
+        >
+          {paused ? "▶ Resume" : "⏸ Pause"}
+        </button>
+        <span style={{ display: "flex", alignItems: "center", gap: 0 }}>
+          <button
+            onClick={() => setFontSize((s) => Math.max(9, s - 1))}
+            title="Decrease font size"
+            style={{
+              background: "none",
+              border: "1px solid var(--border)",
+              borderRadius: "3px 0 0 3px",
+              color: "var(--text-secondary)",
+              fontSize: 10,
+              cursor: "pointer",
+              padding: "2px 6px",
+            }}
+          >A-</button>
+          <button
+            onClick={() => setFontSize((s) => Math.min(18, s + 1))}
+            title="Increase font size"
+            style={{
+              background: "none",
+              border: "1px solid var(--border)",
+              borderLeft: "none",
+              borderRadius: "0 3px 3px 0",
+              color: "var(--text-secondary)",
+              fontSize: 12,
+              cursor: "pointer",
+              padding: "2px 6px",
+            }}
+          >A+</button>
+        </span>
+        <button
+          onClick={onClose}
+          title="Close"
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            fontSize: 14,
+            padding: "0 4px",
+            lineHeight: 1,
+          }}
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Filter bar */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 10px",
+          borderBottom: "1px solid var(--border)",
+          flexShrink: 0,
+          flexWrap: "wrap",
+        }}
+      >
+        {LEVELS.map((lvl) => (
+          <button
+            key={lvl}
+            onClick={() => toggleLevel(lvl)}
+            style={{
+              background: levelFilter.has(lvl) ? `${LEVEL_COLORS[lvl]}22` : "transparent",
+              border: `1px solid ${levelFilter.has(lvl) ? LEVEL_COLORS[lvl] : "var(--border)"}`,
+              borderRadius: 3,
+              color: levelFilter.has(lvl) ? LEVEL_COLORS[lvl] : "var(--text-dim)",
+              padding: "1px 6px",
+              cursor: "pointer",
+              fontSize: 10,
+              textTransform: "uppercase",
+            }}
+          >
+            {lvl}
+          </button>
+        ))}
+        <span style={{ color: "var(--border)" }}>|</span>
+        <select
+          value={sourceFilter}
+          onChange={(e) => setSourceFilter(e.target.value)}
+          style={{
+            background: "var(--bg-panel)",
+            border: "1px solid var(--border)",
+            borderRadius: 3,
+            color: "var(--text-primary)",
+            fontSize: 10,
+            padding: "2px 4px",
+          }}
+        >
+          <option value="all">All sources</option>
+          {sources.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <span style={{ color: "var(--border)" }}>|</span>
+        <input
+          type="text"
+          placeholder="Search (regex)..."
+          value={searchPattern}
+          onChange={(e) => setSearchPattern(e.target.value)}
+          style={{
+            background: "var(--bg-panel)",
+            border: `1px solid ${searchValid ? "var(--border)" : "var(--accent-red)"}`,
+            borderRadius: 3,
+            color: "var(--text-primary)",
+            fontSize: 10,
+            padding: "2px 6px",
+            width: 160,
+            outline: "none",
+          }}
+        />
+        {!searchValid && (
+          <span style={{ color: "var(--accent-red)", fontSize: 10 }}>invalid regex</span>
+        )}
+      </div>
+
+      {/* Table header */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "90px 80px 65px 100px 1fr",
+          gap: 0,
+          padding: "4px 10px",
+          borderBottom: "1px solid var(--border)",
+          background: "var(--bg-panel)",
+          flexShrink: 0,
+          userSelect: "none",
+        }}
+      >
+        {(["timestamp", "source", "level", "code", "message"] as SortField[]).map((field) => (
+          <div
+            key={field}
+            onClick={() => handleSort(field)}
+            style={{
+              cursor: "pointer",
+              color: sortField === field ? "var(--accent-blue)" : "var(--text-secondary)",
+              fontSize: 10,
+              fontWeight: 600,
+              textTransform: "uppercase",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+            }}
+          >
+            {field}
+            {sortIndicator(field)}
+          </div>
+        ))}
+      </div>
+
+      {/* Table body — scrollable */}
+      <div
+        ref={tableBodyRef}
+        onScroll={handleScroll}
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          overflowX: "hidden",
+          minHeight: 0,
+        }}
+      >
+        {sorted.length === 0 ? (
+          <div
+            style={{
+              padding: 20,
+              textAlign: "center",
+              color: "var(--text-dim)",
+            }}
+          >
+            {events.length === 0 ? "No events received" : "No events match filters"}
+          </div>
+        ) : (
+          sorted.map((e, i) => (
+            <div
+              key={`${e.timestamp}-${e.code}-${i}`}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "90px 80px 65px 100px 1fr",
+                gap: 0,
+                padding: "2px 10px",
+                borderBottom: "1px solid rgba(255,255,255,0.03)",
+                fontSize,
+                lineHeight: `${fontSize + 7}px`,
+                cursor: e.details ? "help" : undefined,
+              }}
+              title={e.details ? JSON.stringify(e.details) : undefined}
+            >
+              <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                {formatTime(e.timestamp)}
+              </span>
+              <span style={{ color: "var(--text-secondary)" }}>{highlightText(e.source)}</span>
+              <span
+                style={{
+                  color: LEVEL_COLORS[e.level] ?? "var(--text-primary)",
+                  fontWeight: e.level === "error" || e.level === "critical" ? 600 : 400,
+                }}
+              >
+                {e.level}
+              </span>
+              <span style={{ color: "var(--text-secondary)" }}>{highlightText(e.code)}</span>
+              <span
+                style={{
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {highlightText(e.message)}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Resize handle — bottom-right corner */}
+      <div
+        onMouseDown={handleResizeStart}
+        style={{
+          position: "absolute",
+          right: 0,
+          bottom: 0,
+          width: 16,
+          height: 16,
+          cursor: "nwse-resize",
+        }}
+      >
+        <svg
+          viewBox="0 0 16 16"
+          width="16"
+          height="16"
+          style={{ position: "absolute", right: 2, bottom: 2, opacity: 0.3 }}
+        >
+          <path d="M14 14L14 8M14 14L8 14" stroke="currentColor" fill="none" strokeWidth="1.5" />
+        </svg>
+      </div>
+    </div>
+  );
+}

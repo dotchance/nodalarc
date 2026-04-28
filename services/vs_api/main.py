@@ -533,7 +533,9 @@ async def get_ops_events(
     limit: int = Query(100, ge=1, le=500, description="Max events to return"),
 ) -> list[dict]:
     """Return recent operational events from the NODALARC_OPS stream."""
-    events = list(_ops_events)
+    ctx = _active_context
+    session_events = list(ctx.session_ops_events) if ctx else []
+    events = list(_system_ops_events) + session_events
     if source:
         events = [e for e in events if e.get("source") == source]
     if level:
@@ -542,126 +544,73 @@ async def get_ops_events(
 
 
 def _clear_state() -> None:
-    """Reset in-memory state during session switch."""
-    global \
-        _continuous_tracer, \
-        _session_ready_time, \
-        _prev_snapshot_active_count, \
-        _curr_snapshot_active_count, \
-        _network_health, \
-        _mi_active, \
-        _sim_time, \
-        _session_status, \
-        _almanac
-    _session_ready_time = 0.0
-    _prev_snapshot_active_count = 0
-    _curr_snapshot_active_count = 0
-    if _continuous_tracer is not None:
-        # Best-effort stop — we're in a sync context during session switch
-        _continuous_tracer = None
-    with _state_lock:
-        _nodes.clear()
-        _links.clear()
-        _recent_events.clear()
-        _network_health = NetworkHealth(
-            status="no measurement",
-            converging_since_ms=None,
-            unreachable_flows=0,
-            last_convergence_ms=None,
-        )
-        _mi_active = False
-        _sim_time = datetime.now(UTC).isoformat()
-        _session_status = None
-    with _almanac_lock:
-        _almanac = AlmanacState()
-    _ops_events.clear()
+    """Stop the active SessionContext during session switch.
 
-
-def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
-    """Load per-station min_elevation_deg from ground station config."""
-    from nodalarc.constellation_loader import load_ground_stations
-
-    if isinstance(session.ground_stations, list | dict):
-        gs_file = load_ground_stations(session.ground_stations)
-    else:
-        gs_path = Path(session.ground_stations)
-        if not gs_path.exists():
-            return {}
-        gs_file = load_ground_stations(gs_path)
-    gs_id_tpl = session.addressing.gs_id_template
-    result: dict[str, float] = {}
-    for station in gs_file.stations:
-        node_id = gs_id_tpl.format(name=station.name)
-        elev = (
-            station.min_elevation_deg
-            if station.min_elevation_deg is not None
-            else gs_file.default_min_elevation_deg
-        )
-        result[node_id] = elev
-    return result
-
-
-def _load_beam_falloff_exponent(session: SessionConfig) -> float:
-    """Load beam_falloff_exponent from the constellation's satellite type."""
-    from nodalarc.constellation_loader import load_constellation, load_satellite_type
-
-    if isinstance(session.constellation, dict):
-        config = load_constellation(session.constellation)
-    else:
-        constellation_path = Path(session.constellation)
-        if not constellation_path.exists():
-            return 2.0
-        config = load_constellation(constellation_path)
-    sat_type_name = getattr(config, "satellite_type", None)
-    if not sat_type_name:
-        return 2.0
-    sat_type = load_satellite_type(sat_type_name)
-    if not sat_type.ground_terminals:
-        return 2.0
-    return sat_type.ground_terminals[0].beam_falloff_exponent
+    Called from the sync session switch executor. The context's stop()
+    is async, so we schedule it and wait. The old context is unreachable
+    after _active_context is set to None.
+    """
+    global _active_context
+    old = _active_context
+    _active_context = None
+    if old is not None:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(old.stop(), loop)
+            future.result(timeout=10)
+        else:
+            asyncio.run(old.stop())
 
 
 def _update_session_globals(session_path: str, new_db_path: str) -> None:
-    """Reload routing_stack, constellation_name, db_path, and session_file from new session."""
-    global \
-        _routing_stack, \
-        _constellation_name, \
-        _db_path, \
-        _session_file, \
-        _gs_elevation_map, \
-        _beam_falloff_exponent
-    _session_file = session_path
+    """Create and start a new SessionContext for the switched session.
+
+    Called from the sync session switch executor after _clear_state().
+    Creates the context, sets its DB path, starts it on the shared NATS
+    connection, and waits for it to be ready (first snapshot received).
+    """
+    global _active_context
+
+    from nodalarc.nats_channels import sanitize_session_id
+
     session_data = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(session_data)
-    if session.routing.stack is not None:
-        _routing_stack = Path(session.routing.stack).name
-    else:
-        ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
-        _routing_stack = f"{session.routing.protocol}-{ext_str}"
-    if isinstance(session.constellation, dict):
-        _constellation_name = session.constellation.get("name", "custom")
-    else:
-        _constellation_name = Path(session.constellation).stem
-    _db_path = new_db_path
-    _gs_elevation_map = _load_gs_elevation_map(session)
-    _beam_falloff_exponent = _load_beam_falloff_exponent(session)
+    session_id = sanitize_session_id(session.session.name)
 
-    # Ensure tables exist in new DB
+    ctx = SessionContext(session_id, session_path)
+    ctx.db_path = new_db_path
+
     import sqlite3 as _sqlite3
 
     conn = _sqlite3.connect(new_db_path)
     create_tables(conn)
     conn.close()
 
+    if _nats_connection is None:
+        log.error("FATAL: No NATS connection for session switch")
+        raise RuntimeError("No NATS connection available")
+
+    loop = asyncio.get_event_loop()
+    if loop.is_running():
+        future = asyncio.run_coroutine_threadsafe(
+            ctx.start(_nats_connection, mode="switch"), loop
+        )
+        future.result(timeout=10)
+    else:
+        asyncio.run(ctx.start(_nats_connection, mode="switch"))
+
+    _active_context = ctx
+    log.info("Session switched: session_id=%s db=%s", session_id, new_db_path)
+
 
 def _restore_state_from_db(db_path: str) -> bool:
-    """Load the most recent snapshot from SQLite and pre-populate in-memory state.
+    """Load the most recent snapshot from SQLite into the active context.
 
-    Returns True if state was restored, False otherwise. This is called during
-    session recovery so VS-API doesn't start with empty nodes/links after a restart.
+    Returns True if state was restored, False otherwise.
     """
-    global _network_health, _sim_time
-
+    ctx = _active_context
+    if ctx is None:
+        return False
     if not db_path or not Path(db_path).exists():
         return False
 
@@ -678,16 +627,14 @@ def _restore_state_from_db(db_path: str) -> bool:
 
         snapshot = json.loads(row[0])
 
-        with _state_lock:
-            # Restore nodes
+        with ctx.state_lock:
             for node in snapshot.get("nodes", []):
                 node_id = node.get("node_id")
                 if not node_id:
                     log.error("Corrupt DB snapshot — node missing node_id: %s", node)
                     raise ValueError("DB snapshot node missing node_id")
-                _nodes[node_id] = NodeState(**node)
+                ctx.nodes[node_id] = NodeState(**node)
 
-            # Restore links
             for link in snapshot.get("links", []):
                 na = link.get("node_a")
                 nb = link.get("node_b")
@@ -695,10 +642,9 @@ def _restore_state_from_db(db_path: str) -> bool:
                     log.error("Corrupt DB snapshot — link missing node_a/node_b: %s", link)
                     raise ValueError("DB snapshot link missing node_a or node_b")
                 key = _link_key(na, nb)
-                _links[key] = LinkState(**link)
+                ctx.links[key] = LinkState(**link)
 
-            # Restore recent events
-            _recent_events.clear()
+            ctx.recent_events.clear()
             for e in snapshot.get("recent_events", []):
                 sim_time_raw = e.get("sim_time")
                 if sim_time_raw is None:
@@ -709,7 +655,7 @@ def _restore_state_from_db(db_path: str) -> bool:
                     if isinstance(sim_time_raw, str)
                     else sim_time_raw
                 )
-                _recent_events.append(
+                ctx.recent_events.append(
                     RecentEvent(
                         sim_time=sim_time_dt,
                         node_id=e["node_id"],
@@ -718,19 +664,17 @@ def _restore_state_from_db(db_path: str) -> bool:
                     )
                 )
 
-            # Restore network health
             if "network_health" in snapshot:
                 nh = snapshot["network_health"]
-                _network_health = NetworkHealth(
+                ctx.network_health = NetworkHealth(
                     status=nh["status"],
                     converging_since_ms=nh.get("converging_since_ms"),
                     unreachable_flows=nh["unreachable_flows"],
                     last_convergence_ms=nh.get("last_convergence_ms"),
                 )
 
-            # Restore sim time
             if "sim_time" in snapshot:
-                _sim_time = snapshot["sim_time"]
+                ctx.sim_time = snapshot["sim_time"]
 
         node_count = len(snapshot.get("nodes", []))
         link_count = len(snapshot.get("links", []))
@@ -780,11 +724,15 @@ async def ws_state(websocket: WebSocket) -> None:
 
     try:
         # Send SessionEphemeris as first message if available (PRD v0.71)
-        if _cached_ephemeris:
-            await websocket.send_json(_cached_ephemeris)
+        ctx = _active_context
+        if ctx and ctx.cached_ephemeris:
+            await websocket.send_json(ctx.cached_ephemeris)
 
         while True:
             snapshot = _build_snapshot()
+            if snapshot is None:
+                await asyncio.sleep(1.0)
+                continue
             await websocket.send_json(snapshot)
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
@@ -1421,12 +1369,18 @@ def trace_path(body: dict) -> dict:
 
 def _get_sim_time_str() -> str:
     """Return current sim_time as string for the continuous tracer."""
-    with _state_lock:
-        return _sim_time
+    ctx = _active_context
+    if ctx is None:
+        return datetime.now(UTC).isoformat()
+    with ctx.state_lock:
+        return ctx.sim_time
 
 
 def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]) -> None:
     """Callback when the traced path changes — add a RecentEvent."""
+    ctx = _active_context
+    if ctx is None:
+        return
     sim_time = _get_sim_time_str()
     old_str = " -> ".join(old_hops[:4])
     new_str = " -> ".join(new_hops[:4])
@@ -1434,11 +1388,11 @@ def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]
         old_str += f" ({len(old_hops)} hops)"
     if len(new_hops) > 4:
         new_str += f" ({len(new_hops)} hops)"
-    _add_recent_event(
+    ctx._add_recent_event(
         {
             "sim_time": sim_time,
             "node_id": src,
-            "detail": f"Path {src} -> {dst}: {old_str} => {new_str}",
+            "reason": f"Path {src} -> {dst}: {old_str} => {new_str}",
         },
         "PATH_CHANGE",
     )
@@ -1447,23 +1401,24 @@ def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]
 @app.post("/api/v1/trace/start", dependencies=[Depends(_require_api_key)])
 async def start_continuous_trace(body: dict) -> dict:
     """Start continuous path tracing between two nodes."""
-    global _continuous_tracer
+    ctx = _active_context
+    if ctx is None:
+        return JSONResponse(status_code=409, content={"error": "No active session"})
 
     src = body.get("src_node", "")
     dst = body.get("dst_node", "")
     if not src or not dst:
         return JSONResponse(status_code=400, content={"error": "src_node and dst_node required"})
 
-    with _state_lock:
-        if src not in _nodes:
+    with ctx.state_lock:
+        if src not in ctx.nodes:
             return JSONResponse(status_code=400, content={"error": f"Unknown node: {src}"})
-        if dst not in _nodes:
+        if dst not in ctx.nodes:
             return JSONResponse(status_code=400, content={"error": f"Unknown node: {dst}"})
 
-    # Stop existing tracer
-    if _continuous_tracer is not None:
-        await _continuous_tracer.stop()
-        _continuous_tracer = None
+    if ctx.continuous_tracer is not None:
+        await ctx.continuous_tracer.stop()
+        ctx.continuous_tracer = None
 
     # Load trace context
     try:
@@ -2066,25 +2021,13 @@ def main() -> None:
     if args.port is None:
         args.port = get_platform_config().vs_api_http_port
 
-    global \
-        _db_path, \
-        _session_file, \
-        _routing_stack, \
-        _constellation_name, \
-        _session_manager, \
-        _gs_elevation_map, \
-        _beam_falloff_exponent, \
-        _pending_cr_poll
+    global _session_manager, _initial_session_file, _pending_cr_poll
 
-    # Initialize SessionManager
     _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
 
     if args.session and args.db:
-        _db_path = args.db
-        _session_file = args.session
+        _initial_session_file = args.session
 
-        # Load session metadata for snapshot enrichment
-        # Handle missing/empty ConfigMap mount (Operator creates session later)
         session_path = Path(args.session)
         if not session_path.is_file():
             log.info(f"Session config not found at {args.session} — starting in idle mode")
@@ -2093,25 +2036,6 @@ def main() -> None:
             session_data = yaml.safe_load(session_path.read_text())
         if session_data:
             session = SessionConfig.model_validate(session_data)
-            # Set session_id for NATS subject scoping
-            global _nats_session_id
-            from nodalarc.nats_channels import sanitize_session_id
-
-            _nats_session_id = sanitize_session_id(session.session.name)
-            log.info("VS-API session_id=%s", _nats_session_id)
-            if session.routing.stack is not None:
-                _routing_stack = Path(session.routing.stack).name
-            else:
-                ext_str = (
-                    "-".join(session.routing.extensions) if session.routing.extensions else "plain"
-                )
-                _routing_stack = f"{session.routing.protocol}-{ext_str}"
-            if isinstance(session.constellation, dict):
-                _constellation_name = session.constellation.get("name", "custom")
-            else:
-                _constellation_name = Path(session.constellation).stem
-            _gs_elevation_map = _load_gs_elevation_map(session)
-            _beam_falloff_exponent = _load_beam_falloff_exponent(session)
             # Mark session active
             _active_path = args.session
             try:
@@ -2161,7 +2085,6 @@ def main() -> None:
                 _pending_cr_poll = True
             else:
                 _session_manager._status = "ready"
-                _session_ready_time = _time.monotonic()
         else:
             log.info("No session loaded — VS-API starting in idle mode")
             # Check if Operator has an active session (CR with phase Ready/Wiring)

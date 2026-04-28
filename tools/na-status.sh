@@ -8,7 +8,10 @@ NAMESPACE="${NAMESPACE:-nodalarc}"
 DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/demo-36-ospf.yaml}"
 REGISTRY_HOST="${REGISTRY_HOST:-}"
 
-REQUIRED_IMAGES="nodalarc/base nodalarc/frr nodalarc/probe nodalarc/nodalpath-fwd nodalarc/ome nodalarc/scheduler nodalarc/node-agent nodalarc/vs-api nodalarc/operator nodalarc/vf nodalarc/nodalpath"
+# Images that must exist locally for build
+BUILD_IMAGES="nodalarc/base nodalarc/frr nodalarc/probe nodalarc/nodalpath-fwd nodalarc/ome nodalarc/scheduler nodalarc/node-agent nodalarc/vs-api nodalarc/operator nodalarc/vf nodalarc/nodalpath"
+# Images that K8s pods actually pull — subset that must be in the registry
+DEPLOY_IMAGES="nodalarc/frr nodalarc/ome nodalarc/scheduler nodalarc/node-agent nodalarc/vs-api nodalarc/operator nodalarc/vf nodalarc/nodalpath"
 
 echo "=== NodalArc Status ==="
 echo ""
@@ -16,7 +19,7 @@ echo ""
 # --- Cluster ---
 echo "Cluster:"
 if ! kubectl cluster-info >/dev/null 2>&1; then
-    echo "  NOT REACHABLE (check KUBECONFIG=$KUBECONFIG)"
+    echo "  NOT REACHABLE (check KUBECONFIG=${KUBECONFIG:-not set})"
     exit 0
 fi
 NODE_COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
@@ -33,10 +36,10 @@ echo ""
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo "Platform: NOT INSTALLED"
 
-    BUILT_IMAGES=$(docker images --format '{{.Repository}}' 2>/dev/null | sort -u)
+    BUILT_IMAGES=$(docker images --format '{{.Repository}}' 2>/dev/null | sed "s|^${REGISTRY_HOST}/||" | sort -u)
     MISSING_BUILD=""
-    for img in $REQUIRED_IMAGES; do
-        if ! echo "$BUILT_IMAGES" | grep -q "$img"; then
+    for img in $BUILD_IMAGES; do
+        if ! echo "$BUILT_IMAGES" | grep -q "^${img}$"; then
             MISSING_BUILD="$MISSING_BUILD $img"
         fi
     done
@@ -46,8 +49,8 @@ if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
         echo "  Run: make build"
     elif [ -n "$REGISTRY_HOST" ]; then
         MISSING_REG=""
-        for img in $REQUIRED_IMAGES; do
-            if ! docker manifest inspect "$REGISTRY_HOST/$img:latest" >/dev/null 2>&1; then
+        for img in $DEPLOY_IMAGES; do
+            if ! curl -sf --max-time 2 "http://$REGISTRY_HOST/v2/$img/tags/list" >/dev/null 2>&1; then
                 MISSING_REG="$MISSING_REG $img"
             fi
         done
@@ -83,7 +86,7 @@ else
         CRASH=$(echo "$PLATFORM" | grep -c "CrashLoopBackOff\|Error" || true)
 
         if [ "$IMG_PULL" -gt 0 ]; then
-            if [ -n "$REGISTRY_HOST" ] && docker manifest inspect "$REGISTRY_HOST/nodalarc/ome:latest" >/dev/null 2>&1; then
+            if [ -n "$REGISTRY_HOST" ] && curl -sf --max-time 2 "http://$REGISTRY_HOST/v2/nodalarc/ome/tags/list" >/dev/null 2>&1; then
                 echo "  $IMG_PULL pod(s) stuck in ImagePullBackOff (images are in registry)."
                 echo "  Run: make restart"
             elif docker images --format '{{.Repository}}' 2>/dev/null | grep -q 'nodalarc/ome'; then

@@ -33,6 +33,14 @@ from nodalarc.template_vars import build_template_vars
 log = logging.getLogger(__name__)
 
 
+def _require_env(name: str) -> str:
+    val = os.environ.get(name)
+    if not val:
+        log.error("FATAL: Required environment variable %s is not set", name)
+        raise RuntimeError(f"Required environment variable {name} is not set")
+    return val
+
+
 # Module-level K8s API clients — initialized once on first use, reused for
 # all calls. Eliminates per-function load_incluster_config() + client
 # instantiation that leaks TCP sockets from urllib3 connection pools.
@@ -1366,8 +1374,8 @@ def _create_session_pod(
     #   read_only_root_filesystem: writable paths via tmpfs only
     frr_container = kubernetes.client.V1Container(
         name="frr",
-        image=os.environ.get("FRR_IMAGE", "nodalarc/frr:latest"),
-        image_pull_policy="IfNotPresent",
+        image=_require_env("FRR_IMAGE"),
+        image_pull_policy=_require_env("IMAGE_PULL_POLICY"),
         security_context=kubernetes.client.V1SecurityContext(
             capabilities=kubernetes.client.V1Capabilities(
                 add=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]

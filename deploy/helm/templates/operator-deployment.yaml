@@ -48,7 +48,9 @@ spec:
             - name: SESSION_NODE_NAME
               value: {{ .Values.sessionNodeName | quote }}
             - name: FRR_IMAGE
-              value: {{ .Values.images.frr | default "nodalarc/frr:latest" | quote }}
+              value: {{ required "images.frr is required" .Values.images.frr | quote }}
+            - name: IMAGE_PULL_POLICY
+              value: {{ .Values.imagePullPolicy | quote }}
           resources:
             requests:
               memory: 256Mi

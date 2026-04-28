@@ -713,6 +713,13 @@ async def _nats_subscriber() -> None:
     sid = _nats_session_id
     log.info("VS-API NATS subscribing with session_id=%s", sid)
 
+    # Session config appeared — start CR polling to track session phase.
+    # This updates _session_manager.status which the VF checks to decide
+    # wizard vs globe (session_status == "ready" triggers globe view).
+    if sid != "default":
+        log.info("NATS subscriber: launching _poll_cr_until_ready for session tracking")
+        asyncio.ensure_future(_poll_cr_until_ready())
+
     subs = []
     try:
         subs.append(

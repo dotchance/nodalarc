@@ -260,13 +260,13 @@ load: ## Import images into K3s (single-node) or push to registry (multi-node)
 else
 # Multi-node: push to container registry (images already tagged with REGISTRY_PREFIX by build)
 load:
-	@echo "[load] Pushing images to registry $(REGISTRY_PREFIX)..."
-	@for img in $(REGISTRY_PREFIX)nodalarc/frr:latest $(REGISTRY_PREFIX)nodalarc/node-agent:latest \
-		$(REGISTRY_PREFIX)nodalarc/ome:latest $(REGISTRY_PREFIX)nodalarc/scheduler:latest \
-		$(REGISTRY_PREFIX)nodalarc/vs-api:latest $(REGISTRY_PREFIX)nodalarc/operator:latest \
-		$(REGISTRY_PREFIX)nodalarc/vf:latest $(REGISTRY_PREFIX)nodalarc/nodalpath:latest; do \
-		echo "  $$img"; \
-		docker push $$img 2>&1 | tail -1; \
+	@echo "[load] Pushing images to registry $(REGISTRY_PREFIX) (tag=$(TAG))..."
+	@for name in nodalarc/frr nodalarc/node-agent nodalarc/ome nodalarc/scheduler \
+		nodalarc/vs-api nodalarc/operator nodalarc/vf nodalarc/nodalpath; do \
+		for tag in latest $(TAG); do \
+			echo "  $(REGISTRY_PREFIX)$$name:$$tag"; \
+			docker push $(REGISTRY_PREFIX)$$name:$$tag 2>&1 | tail -1; \
+		done; \
 	done
 	@echo "[load] Done."
 endif
@@ -324,25 +324,33 @@ install: ## Helm install/upgrade the platform chart
 		else \
 			helm install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace $(HELM_EXTRA_ARGS); \
 		fi
-	@echo "[install] Waiting for all platform Deployments to be Available (timeout 180s)..."
-	@kubectl wait --for=condition=Available deployment --all \
-		-n $(NAMESPACE) --timeout=180s
-	@echo "[install] Waiting for Node Agent DaemonSet rollout (timeout 180s)..."
-	@kubectl rollout status daemonset/nodalarc-node-agent \
-		-n $(NAMESPACE) --timeout=180s
-	@DESIRED=$$(kubectl get ds nodalarc-node-agent -n $(NAMESPACE) \
-		-o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null); \
-	if [ "$$DESIRED" = "0" ] || [ -z "$$DESIRED" ]; then \
-		echo "ERROR: Node Agent DaemonSet has 0 desired pods."; \
-		echo "       No nodes carry the 'nodalarc.io/node-agent=true' label."; \
-		echo "       Fix:  kubectl label nodes --all nodalarc.io/node-agent=true"; \
-		exit 1; \
-	fi
-	@READY=$$(kubectl get pods -n $(NAMESPACE) -l app=nodalarc-node-agent \
-		--field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l); \
-	TOTAL=$$(kubectl get pods -n $(NAMESPACE) -l app=nodalarc-node-agent \
-		--no-headers 2>/dev/null | wc -l); \
-	echo "[install] Platform ready: $$READY/$$TOTAL Node Agent pods running, all platform Deployments Available."
+	@echo "[install] Waiting for platform pods (timeout 180s)..."
+	@bash -c '\
+		WAIT=0; \
+		while [ $$WAIT -lt 180 ]; do \
+			TOTAL=$$(kubectl get deployments -n $(NAMESPACE) --no-headers 2>/dev/null | wc -l); \
+			AVAIL=$$(kubectl get deployments -n $(NAMESPACE) --no-headers 2>/dev/null | awk "{if (\$$4+0 >= 1) c++} END {print c+0}"); \
+			DS_DESIRED=$$(kubectl get ds nodalarc-node-agent -n $(NAMESPACE) -o jsonpath="{.status.desiredNumberScheduled}" 2>/dev/null || echo 0); \
+			DS_READY=$$(kubectl get ds nodalarc-node-agent -n $(NAMESPACE) -o jsonpath="{.status.numberReady}" 2>/dev/null || echo 0); \
+			if [ "$$AVAIL" -eq "$$TOTAL" ] && [ "$$DS_READY" -eq "$$DS_DESIRED" ] && [ "$$DS_DESIRED" -gt 0 ]; then \
+				echo ""; \
+				echo "[install] Platform ready: $$TOTAL deployments available, $$DS_READY/$$DS_DESIRED Node Agent pods running."; \
+				exit 0; \
+			fi; \
+			sleep 2; \
+			WAIT=$$((WAIT + 2)); \
+			printf "\r[install]   Deployments: $$AVAIL/$$TOTAL available, Node Agents: $$DS_READY/$$DS_DESIRED ready (%ds/180s)" $$WAIT; \
+		done; \
+		echo ""; \
+		if [ "$${DS_DESIRED:-0}" = "0" ]; then \
+			echo "[install] ERROR: Node Agent DaemonSet has 0 desired pods."; \
+			echo "  No nodes carry the nodalarc.io/node-agent=true label."; \
+			echo "  Fix: kubectl label nodes --all nodalarc.io/node-agent=true"; \
+		else \
+			echo "[install] ERROR: Platform pods not ready after 180s."; \
+			kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -v Running | grep -v Completed; \
+		fi; \
+		exit 1'
 
 # ---------------------------------------------------------------------------
 # deploy
@@ -480,7 +488,7 @@ deploy-measurement: build-measurement ## Build + load + restart MI
 # ---------------------------------------------------------------------------
 
 status: ## Show cluster status (pods, phase, links)
-	@NAMESPACE=$(NAMESPACE) REGISTRY_HOST=$(REGISTRY_HOST) DEFAULT_SESSION=$(DEFAULT_SESSION) bash tools/na-status.sh
+	@KUBECONFIG=$(KUBECONFIG) NAMESPACE=$(NAMESPACE) REGISTRY_HOST=$(REGISTRY_HOST) DEFAULT_SESSION=$(DEFAULT_SESSION) bash tools/na-status.sh
 
 test: ## Run unit tests (868+, no sudo needed)
 	uv run pytest --ignore=tests/integration --tb=short -q

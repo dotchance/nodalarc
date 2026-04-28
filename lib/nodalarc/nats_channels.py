@@ -4,9 +4,42 @@
 
 All NATS subject strings and stream names live here. No component
 invents its own subjects or stream names.
+
+Session-scoped subjects: services use the function builders (e.g.
+``ome_visibility_subject(session_id)``) to publish/subscribe to
+session-specific subjects. The ``SUBJECT_*`` constants use
+``_DEFAULT_SESSION_ID`` ("default") for test compatibility and
+migration — they are NOT for production services.
 """
 
 from __future__ import annotations
+
+import re
+
+# ---------------------------------------------------------------------------
+# Session ID
+# ---------------------------------------------------------------------------
+
+_DEFAULT_SESSION_ID = "default"
+
+# NATS uses dots as segment separators and ``*``/``>`` as wildcards.
+# A session_id containing any of these would break subject routing.
+_SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$")
+
+
+def sanitize_session_id(raw: str) -> str:
+    """Sanitize a session name for use as a NATS subject segment.
+
+    Replaces dots and wildcards with hyphens, strips leading/trailing
+    whitespace. Raises ValueError if the result is empty or still invalid.
+    """
+    cleaned = raw.strip().replace(".", "-").replace("*", "-").replace(">", "-")
+    if not cleaned:
+        raise ValueError(f"session_id is empty after sanitization (raw={raw!r})")
+    if not _SESSION_ID_RE.match(cleaned):
+        raise ValueError(f"session_id {cleaned!r} invalid — must match {_SESSION_ID_RE.pattern}")
+    return cleaned
+
 
 # ---------------------------------------------------------------------------
 # Stream names
@@ -16,38 +49,157 @@ STREAM_OME_EVENTS = "NODALARC_OME"
 STREAM_LINK_EVENTS = "NODALARC_LINKS"
 STREAM_MI_EVENTS = "NODALARC_MI"
 STREAM_SESSION_EVENTS = "NODALARC_SESSION"
+STREAM_OPS_EVENTS = "NODALARC_OPS"
 
 # ---------------------------------------------------------------------------
-# Subject definitions — hierarchical, dot-separated
+# Session-scoped subject builders — primary API for services
+# ---------------------------------------------------------------------------
+
+
+def ome_visibility_subject(session_id: str) -> str:
+    """OME visibility event subject for a specific session."""
+    return f"nodalarc.ome.{session_id}.visibility"
+
+
+def ome_snapshot_subject(session_id: str) -> str:
+    """DEPRECATED — OME snapshot subject for a specific session."""
+    return f"nodalarc.ome.{session_id}.snapshot"
+
+
+def ome_clock_subject(session_id: str) -> str:
+    """OME clock tick subject for a specific session."""
+    return f"nodalarc.ome.{session_id}.clock"
+
+
+def ome_heartbeat_subject(session_id: str) -> str:
+    """OME heartbeat subject for a specific session."""
+    return f"nodalarc.ome.{session_id}.heartbeat"
+
+
+def ome_all_subject(session_id: str | None = None) -> str:
+    """OME wildcard subject — all events for one session, or all sessions.
+
+    With session_id: ``nodalarc.ome.{session_id}.>`` (one session)
+    Without: ``nodalarc.ome.>`` (all sessions — for cross-session consumers)
+    """
+    if session_id:
+        return f"nodalarc.ome.{session_id}.>"
+    return "nodalarc.ome.>"
+
+
+def link_state_snapshot_subject(session_id: str) -> str:
+    """Link state snapshot subject for a specific session."""
+    return f"nodalarc.links.{session_id}.state"
+
+
+def link_up_subject(session_id: str) -> str:
+    """Link up event subject for a specific session."""
+    return f"nodalarc.links.{session_id}.up"
+
+
+def link_down_subject(session_id: str) -> str:
+    """Link down event subject for a specific session."""
+    return f"nodalarc.links.{session_id}.down"
+
+
+def latency_update_subject(session_id: str) -> str:
+    """Latency update subject for a specific session."""
+    return f"nodalarc.links.{session_id}.latency"
+
+
+def substrate_latency_subject(session_id: str) -> str:
+    """Substrate latency subject for a specific session."""
+    return f"nodalarc.links.{session_id}.substrate"
+
+
+def session_ephemeris_subject(session_id: str) -> str:
+    """Session ephemeris subject for a specific session."""
+    return f"nodalarc.session.{session_id}.ephemeris"
+
+
+def playback_state_subject(session_id: str) -> str:
+    """Playback state subject for a specific session."""
+    return f"nodalarc.session.{session_id}.playback_state"
+
+
+def scheduling_checkpoint_subject(session_id: str) -> str:
+    """Scheduling checkpoint subject for a specific session."""
+    return f"nodalarc.session.{session_id}.scheduling_checkpoint"
+
+
+def convergence_result_subject(session_id: str) -> str:
+    """MI convergence result subject for a specific session."""
+    return f"nodalarc.mi.{session_id}.convergence"
+
+
+def probe_result_subject(session_id: str) -> str:
+    """MI probe result subject for a specific session."""
+    return f"nodalarc.mi.{session_id}.probe"
+
+
+def adapter_event_subject(session_id: str) -> str:
+    """MI adapter event subject for a specific session."""
+    return f"nodalarc.mi.{session_id}.adapter"
+
+
+def almanac_event_subject(session_id: str) -> str:
+    """NodalPath almanac event subject for a specific session."""
+    return f"nodalarc.nodalpath.{session_id}.almanac"
+
+
+# ---------------------------------------------------------------------------
+# Legacy SUBJECT_* constants — use _DEFAULT_SESSION_ID for backward compat
+#
+# These exist for test compatibility and code that doesn't yet have access
+# to the session_id. Services MUST use the function builders above.
 # ---------------------------------------------------------------------------
 
 # OME publications (JetStream — retained)
 SUBJECT_OME_ALL = "nodalarc.ome.>"
-SUBJECT_VISIBILITY_EVENT = "nodalarc.ome.visibility"
+SUBJECT_VISIBILITY_EVENT = ome_visibility_subject(_DEFAULT_SESSION_ID)
 # DEPRECATED (PRD v0.71): No component publishes or subscribes to Snapshot.
 # Position data distributed via SessionEphemeris on NODALARC_SESSION stream.
-SUBJECT_SNAPSHOT = "nodalarc.ome.snapshot"
-SUBJECT_CLOCK_TICK = "nodalarc.ome.clock"
-SUBJECT_HEARTBEAT = "nodalarc.ome.heartbeat"
+SUBJECT_SNAPSHOT = ome_snapshot_subject(_DEFAULT_SESSION_ID)
+SUBJECT_CLOCK_TICK = ome_clock_subject(_DEFAULT_SESSION_ID)
+SUBJECT_HEARTBEAT = ome_heartbeat_subject(_DEFAULT_SESSION_ID)
 
 # Link state (JetStream — retained, replace-not-merge)
-SUBJECT_LINK_STATE_SNAPSHOT = "nodalarc.links.state"
-SUBJECT_LINK_UP = "nodalarc.links.up"
-SUBJECT_LINK_DOWN = "nodalarc.links.down"
-SUBJECT_LATENCY_UPDATE = "nodalarc.links.latency"
-SUBJECT_SUBSTRATE_LATENCY = "nodalarc.links.substrate"
+SUBJECT_LINK_STATE_SNAPSHOT = link_state_snapshot_subject(_DEFAULT_SESSION_ID)
+SUBJECT_LINK_UP = link_up_subject(_DEFAULT_SESSION_ID)
+SUBJECT_LINK_DOWN = link_down_subject(_DEFAULT_SESSION_ID)
+SUBJECT_LATENCY_UPDATE = latency_update_subject(_DEFAULT_SESSION_ID)
+SUBJECT_SUBSTRATE_LATENCY = substrate_latency_subject(_DEFAULT_SESSION_ID)
 
 # Session-level state (JetStream — MaxMsgsPerSubject=1 on NODALARC_SESSION)
-SUBJECT_SESSION_EPHEMERIS = "nodalarc.session.ephemeris"
-SUBJECT_PLAYBACK_STATE = "nodalarc.session.playback_state"
+SUBJECT_SESSION_EPHEMERIS = session_ephemeris_subject(_DEFAULT_SESSION_ID)
+SUBJECT_PLAYBACK_STATE = playback_state_subject(_DEFAULT_SESSION_ID)
+SUBJECT_SCHEDULING_CHECKPOINT = scheduling_checkpoint_subject(_DEFAULT_SESSION_ID)
 
 # MI publications (JetStream — retained)
-SUBJECT_CONVERGENCE_RESULT = "nodalarc.mi.convergence"
-SUBJECT_PROBE_RESULT = "nodalarc.mi.probe"
-SUBJECT_ADAPTER_EVENT = "nodalarc.mi.adapter"
+SUBJECT_CONVERGENCE_RESULT = convergence_result_subject(_DEFAULT_SESSION_ID)
+SUBJECT_PROBE_RESULT = probe_result_subject(_DEFAULT_SESSION_ID)
+SUBJECT_ADAPTER_EVENT = adapter_event_subject(_DEFAULT_SESSION_ID)
 
 # NodalPath publications (JetStream — retained)
-SUBJECT_ALMANAC_EVENT = "nodalarc.nodalpath.almanac"
+SUBJECT_ALMANAC_EVENT = almanac_event_subject(_DEFAULT_SESSION_ID)
+
+# Ops events (JetStream — memory storage, 4h retention)
+# Ops events — session-scoped to prevent cross-session telemetry leaks
+SUBJECT_OPS_EVENT = f"nodalarc.ops.{_DEFAULT_SESSION_ID}.>"
+
+
+def ops_event_subject(session_id: str, source: str, code: str = "") -> str:
+    """Build a session-scoped ops event subject."""
+    sid = sanitize_session_id(session_id)
+    if code:
+        return f"nodalarc.ops.{sid}.{source}.{code.lower()}"
+    return f"nodalarc.ops.{sid}.{source}"
+
+
+def ops_subscribe_subject(session_id: str) -> str:
+    """Wildcard subject for subscribing to all ops events for a session."""
+    return f"nodalarc.ops.{sanitize_session_id(session_id)}.>"
+
 
 # Request/reply subjects (NATS core, not JetStream)
 SUBJECT_SCENARIO_INJECT = "nodalarc.scheduler.scenario"
@@ -194,4 +346,22 @@ def mi_stream_config() -> dict:
         "max_msgs_per_subject": -1,
         "max_age": _TWO_PERIODS_S,
         "max_bytes": 64 * 1024 * 1024,
+    }
+
+
+def ops_stream_config() -> dict:
+    """StreamConfig for NODALARC_OPS stream.
+
+    Memory storage, 4-hour retention. Operational events are transient
+    telemetry — not replayed after restart. 128MB cap prevents unbounded
+    growth during long sessions with high event rates.
+    """
+    return {
+        "name": STREAM_OPS_EVENTS,
+        "subjects": ["nodalarc.ops.>"],
+        "retention": "limits",
+        "storage": "memory",
+        "max_msgs_per_subject": -1,
+        "max_age": 14400,  # 4 hours
+        "max_bytes": 128 * 1024 * 1024,
     }

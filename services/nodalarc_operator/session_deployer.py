@@ -33,13 +33,36 @@ from nodalarc.template_vars import build_template_vars
 log = logging.getLogger(__name__)
 
 
+# Module-level K8s API clients — initialized once on first use, reused for
+# all calls. Eliminates per-function load_incluster_config() + client
+# instantiation that leaks TCP sockets from urllib3 connection pools.
+_v1: kubernetes.client.CoreV1Api | None = None
+_apps_v1: kubernetes.client.AppsV1Api | None = None
+
+
+def _get_v1() -> kubernetes.client.CoreV1Api:
+    global _v1
+    if _v1 is None:
+        kubernetes.config.load_incluster_config()
+        _v1 = kubernetes.client.CoreV1Api()
+    return _v1
+
+
+def _get_apps_v1() -> kubernetes.client.AppsV1Api:
+    global _apps_v1
+    if _apps_v1 is None:
+        kubernetes.config.load_incluster_config()
+        _apps_v1 = kubernetes.client.AppsV1Api()
+    return _apps_v1
+
+
 def discover_available_nodes() -> list[str]:
     """Discover K3s nodes available for session pods.
 
     Returns node names that have the nodalarc.io/node-agent=true label
     and do not have the nodalarc.io/not-ready taint.
     """
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
     nodes = v1.list_node(label_selector="nodalarc.io/node-agent=true")
     available = []
     for node in nodes.items:
@@ -145,14 +168,58 @@ _ALL_FRR_DAEMONS = [
 ]
 
 
-def deploy_session(
+def _publish_validation_ops_events(
+    results: list, namespace: str, session_id: str = "default"
+) -> None:
+    """Publish validation results as OpsEvents. Best-effort — failure doesn't block deploy."""
+    try:
+        import asyncio
+        import socket
+
+        import nats
+        from nodalarc.models.events import OpsEvent
+        from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url, ops_event_subject
+
+        async def _publish():
+            nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+            try:
+                for r in results:
+                    event = OpsEvent(
+                        timestamp=datetime.now(UTC),
+                        source="validator",
+                        hostname=socket.gethostname(),
+                        level=r.level if r.level == "error" else "warning",
+                        code=r.code,
+                        message=r.message,
+                        details={"remediation": r.remediation} if r.remediation else None,
+                    )
+                    await nc.publish(
+                        ops_event_subject(session_id, "validator", r.code),
+                        event.model_dump_json().encode(),
+                    )
+            finally:
+                await nc.close()
+
+        asyncio.run(_publish())
+    except Exception as exc:
+        log.warning("Failed to publish validation OpsEvents: %s", exc)
+
+
+def ensure_session_configmaps(
     spec: dict,
     name: str,
     namespace: str,
     owner_ref: dict,
     progress_fn: Any | None = None,
 ) -> dict:
-    """Deploy a full session from a ConstellationSpec CR spec.
+    """Create/update all ConfigMaps and SSH keys for a session.
+
+    Runs steps 1-10 of the deploy pipeline: parse session, load constellation,
+    resolve stack, validate, render FRR configs, create ConfigMaps, generate
+    SSH keypair, compute pod placement.
+
+    Idempotent — ConfigMaps use create-or-update, SSH key uses create-or-replace.
+    Safe to call repeatedly; only writes what's missing or changed.
 
     Args:
         spec: The CR's .spec dict.
@@ -162,7 +229,9 @@ def deploy_session(
         progress_fn: Optional callback(message: str) for status updates.
 
     Returns:
-        Status dict with phase, podCount, readyPods, sessionId, message.
+        Context dict with keys: session_id, session, constellation,
+        satellites, gs_file, resolved_stack, node_vars, pod_placement,
+        available_nodes. Passed to ensure_session_pods().
     """
 
     def _progress(msg: str) -> None:
@@ -170,14 +239,11 @@ def deploy_session(
         if progress_fn:
             progress_fn(msg)
 
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
 
     session_id = f"{name}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
     # Discover available K8s nodes for pod placement.
-    # Substrate latency measurement is handled by Node Agent substrate_monitor
-    # (peer-only, continuous, published to NATS).
     _progress("Discovering available K8s nodes")
     available_nodes = discover_available_nodes()
     if not available_nodes:
@@ -192,7 +258,7 @@ def deploy_session(
     _progress("Parsing session configuration")
     session_yaml = spec.get("sessionYaml")
     if not session_yaml:
-        return {"phase": "Error", "message": "spec.sessionYaml is required"}
+        raise ValueError("spec.sessionYaml is required")
     session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
 
     # --- Step 2: Load constellation and ground stations ---
@@ -239,7 +305,7 @@ def deploy_session(
         f"Expanded {len(satellites)} satellites across {num_planes} planes, {len(gs_file.stations)} ground stations"
     )
     if not satellites:
-        return {"phase": "Error", "message": "No satellites in constellation"}
+        raise ValueError("No satellites in constellation")
 
     addressing = AddressingScheme(session.addressing)
     neighbors = assign_isl_neighbors(constellation, addressing)
@@ -252,6 +318,32 @@ def deploy_session(
     )
     config_overrides = dict(resolved.template_variables)
     config_overrides.update(session.routing.config_overrides)
+
+    # --- Step 3b: Validate session readiness ---
+    _progress("Validating session readiness")
+    from nodalarc.session_validator import validate_session_readiness
+
+    validation_results = validate_session_readiness(
+        session,
+        constellation,
+        satellites,
+        gs_file,
+        resolved,
+        available_node_count=len(available_nodes),
+    )
+    val_errors = [r for r in validation_results if r.level == "error"]
+    val_warnings = [r for r in validation_results if r.level == "warning"]
+    for w in val_warnings:
+        log.warning("Session validation %s: %s", w.code, w.message)
+    if validation_results:
+        _publish_validation_ops_events(
+            validation_results, namespace, session_id=session.session.name
+        )
+    if val_errors:
+        import kopf
+
+        error_msg = "; ".join(f"[{r.code}] {r.message}" for r in val_errors)
+        raise kopf.PermanentError(f"Session validation failed: {error_msg}")
 
     # --- Step 4: Build template vars per node ---
     total_nodes = len(satellites) + len(gs_file.stations)
@@ -282,18 +374,21 @@ def deploy_session(
             config_overrides=config_overrides,
         )
 
-    # --- Step 5: Render FRR configs ---
+    # --- Step 5: Render FRR configs (parallelized) ---
     _progress(f"Rendering FRR configurations for {len(node_vars)} nodes")
     template_dir = str(Path("configs/templates/frr").resolve())
     # nosec B701 — these are FRR router config templates, not HTML; autoescape would break config syntax
     env = Environment(loader=FileSystemLoader(template_dir), keep_trailing_newline=True)
 
     rendered_configs: dict[str, dict[str, str]] = {}
-    for node_id, vars in node_vars.items():
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _render_one_node(node_id: str, tpl_vars: dict) -> tuple[str, dict[str, str]]:
         configs: dict[str, str] = {}
         for tpl_file in resolved.template_files:
             tpl = env.get_template(tpl_file.src)
-            rendered = tpl.render(**vars)
+            rendered = tpl.render(**tpl_vars)
             dest_name = Path(tpl_file.dst).name
             configs[dest_name] = rendered
         # Generate daemons file
@@ -319,8 +414,20 @@ def deploy_session(
             lines = raw.splitlines()
             cleaned_lines = [line for line in lines if line.strip() != ""]
             configs["frr.conf"] = "\n".join(cleaned_lines) + "\n"
+        # Config version hash — NOS-agnostic readiness contract.
+        # The entrypoint writes this to a sentinel file after loading config.
+        # The readiness probe diffs the sentinel against the ConfigMap mount
+        # to verify the running NOS has loaded the intended config version.
+        if "frr.conf" in configs:
+            config_hash = hashlib.sha256(configs["frr.conf"].encode()).hexdigest()[:16]
+            configs["_config_version"] = config_hash
+        return node_id, configs
 
-        rendered_configs[node_id] = configs
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_render_one_node, nid, vars): nid for nid, vars in node_vars.items()}
+        for fut in as_completed(futures):
+            nid, configs = fut.result()
+            rendered_configs[nid] = configs
 
     # --- Step 6: Create per-node FRR config ConfigMaps ---
     _progress(f"Creating {len(rendered_configs)} FRR config ConfigMaps")
@@ -343,15 +450,10 @@ def deploy_session(
 
     # --- Step 7b: Generate SSH keypair for terminal access ---
     _progress("Generating SSH keypair for terminal access")
-    # Per-session ED25519 keypair for secure interactive vtysh terminal.
-    # Public key mounted into session pods (SSH authorized_keys).
-    # Private key stored in Secret for VS-API SSH proxy.
-    # Owner reference ensures cleanup on session teardown.
     _create_terminal_ssh_keys(v1, namespace, owner_ref)
 
     # --- Step 8: Compute pod placement ---
     _progress(f"Computing pod placement ({session.placement.policy} policy)")
-    # available_nodes already discovered in Step 0 (substrate latency)
     pod_placement = compute_pod_placement(session.placement, node_vars, available_nodes)
     node_counts: dict[str, int] = {}
     for target in pod_placement.values():
@@ -364,7 +466,54 @@ def deploy_session(
         ", ".join(f"{n}={c}" for n, c in sorted(node_counts.items())),
     )
 
-    # --- Step 9: Create session pods (parallel, batches of 8) ---
+    return {
+        "session_id": session_id,
+        "session": session,
+        "constellation": constellation,
+        "satellites": satellites,
+        "gs_file": gs_file,
+        "resolved_stack": resolved,
+        "node_vars": node_vars,
+        "pod_placement": pod_placement,
+        "available_nodes": available_nodes,
+    }
+
+
+def ensure_session_pods(
+    context: dict,
+    namespace: str,
+    owner_ref: dict,
+    progress_fn: Any | None = None,
+) -> int:
+    """Create ONLY missing session pods from a prepared context.
+
+    Takes the context dict from ensure_session_configmaps(). Checks which
+    pods already exist and creates only the missing ones. Returns the total
+    expected pod count (not just created count).
+
+    Idempotent — K8s returns 409 for existing pods, handled as success.
+
+    Args:
+        context: Dict from ensure_session_configmaps().
+        namespace: K8s namespace.
+        owner_ref: ownerReferences entry for garbage collection.
+        progress_fn: Optional callback(message: str) for status updates.
+
+    Returns:
+        Total expected pod count.
+    """
+
+    def _progress(msg: str) -> None:
+        log.info(msg)
+        if progress_fn:
+            progress_fn(msg)
+
+    v1 = _get_v1()
+    node_vars = context["node_vars"]
+    pod_placement = context["pod_placement"]
+    session = context["session"]
+    resolved = context["resolved_stack"]
+
     total_pods = len(node_vars)
     _progress(f"Creating {total_pods} session pods")
     sidecar_config = _build_sidecar_config(resolved)
@@ -414,25 +563,25 @@ def deploy_session(
 
     with ThreadPoolExecutor(max_workers=16) as pool:
         futures = {}
-        for spec in pod_specs:
+        for ps in pod_specs:
             fut = pool.submit(
                 _create_session_pod,
                 v1=v1,
-                pod_name=spec["pod_name"],
+                pod_name=ps["pod_name"],
                 namespace=namespace,
-                node_id=spec["node_id"],
-                node_type=spec["node_type"],
-                plane=spec["plane"],
-                slot=spec["slot"],
-                gs_name=spec["gs_name"],
-                config_cm_name=spec["config_cm_name"],
+                node_id=ps["node_id"],
+                node_type=ps["node_type"],
+                plane=ps["plane"],
+                slot=ps["slot"],
+                gs_name=ps["gs_name"],
+                config_cm_name=ps["config_cm_name"],
                 sidecar_config=sidecar_config,
-                sidecar_env=spec["sidecar_env"],
-                probe_enabled=spec["probe_enabled"],
-                target_node=spec["target_node"],
+                sidecar_env=ps["sidecar_env"],
+                probe_enabled=ps["probe_enabled"],
+                target_node=ps["target_node"],
                 owner_ref=owner_ref,
             )
-            futures[fut] = spec["node_id"]
+            futures[fut] = ps["node_id"]
 
         for fut in as_completed(futures):
             node_id = futures[fut]
@@ -448,15 +597,43 @@ def deploy_session(
 
     if errors:
         log.warning(f"Pod creation: {len(errors)} failures out of {total_pods}")
-    log.info(f"Created {created_pods} session pods")
+    log.info(f"Created {created_pods} session pods (total expected: {total_pods})")
+
+    return total_pods
+
+
+def deploy_session(
+    spec: dict,
+    name: str,
+    namespace: str,
+    owner_ref: dict,
+    progress_fn: Any | None = None,
+) -> dict:
+    """Deploy a full session from a ConstellationSpec CR spec.
+
+    Convenience wrapper that calls ensure_session_configmaps() followed by
+    ensure_session_pods(). Preserves backward compatibility for on_create.
+
+    Args:
+        spec: The CR's .spec dict.
+        name: CR metadata.name (used for session_id).
+        namespace: K8s namespace.
+        owner_ref: ownerReferences entry for garbage collection.
+        progress_fn: Optional callback(message: str) for status updates.
+
+    Returns:
+        Status dict with phase, podCount, readyPods, sessionId, message.
+    """
+    context = ensure_session_configmaps(spec, name, namespace, owner_ref, progress_fn)
+    total_pods = ensure_session_pods(context, namespace, owner_ref, progress_fn)
 
     return {
         "phase": "Creating",
-        "sessionId": session_id,
-        "podCount": created_pods,
+        "sessionId": context["session_id"],
+        "podCount": total_pods,
         "readyPods": 0,
         "wiredPods": 0,
-        "message": f"Created {created_pods} pods, waiting for Running",
+        "message": f"Created {total_pods} pods, waiting for Running",
     }
 
 
@@ -472,10 +649,10 @@ def write_wiring_manifest(
 
     Returns the number of ISL links in the manifest.
     """
+    import ipaddress as _ipaddress
     import json as _json
 
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
 
     # Delete stale wiring-status before writing new manifest.
     # Without this, the Node Agent sees old wiring-status as "current" and
@@ -566,8 +743,6 @@ def write_wiring_manifest(
         gs_id = addressing.gs_id(station.name)
 
         # Terrestrial prefix addresses — use host addresses, skip default routes
-        import ipaddress as _ipaddress
-
         addrs = []
         raw_prefixes: list[str] = []
         if station.terrestrial_prefixes:
@@ -650,8 +825,7 @@ def set_nodalpath_mode(namespace: str, protocol: str) -> None:
     --mode console for all others. Called before restarting the NodalPath pod.
     """
     mode = "live" if protocol == "nodalpath" else "console"
-    kubernetes.config.load_incluster_config()
-    apps_v1 = kubernetes.client.AppsV1Api()
+    apps_v1 = _get_apps_v1()
     try:
         deployments = apps_v1.list_namespaced_deployment(
             namespace, label_selector="app=nodalarc-nodalpath"
@@ -681,13 +855,17 @@ def set_nodalpath_mode(namespace: str, protocol: str) -> None:
     log.warning("NodalPath container --mode arg not found in deployment spec")
 
 
-def restart_platform_pods(namespace: str) -> None:
-    """Restart OME, Scheduler, VS-API, and NodalPath pods to pick up new session ConfigMaps.
+def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
+    """Trigger rolling restart of platform pods via annotation change.
 
-    Deletes pods — the Deployments recreate them automatically.
+    Patches each Deployment's pod template with a config-hash annotation,
+    which triggers a rolling update. This is the standard K8s pattern —
+    no pod deletion race conditions, respects PodDisruptionBudgets, and
+    the Deployment controller handles sequencing.
     """
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    apps_v1 = _get_apps_v1()
+
+    annotation_value = config_hash or datetime.now(UTC).isoformat()
 
     for label in [
         "app=nodalarc-ome",
@@ -695,19 +873,57 @@ def restart_platform_pods(namespace: str) -> None:
         "app=nodalarc-vs-api",
         "app=nodalarc-nodalpath",
     ]:
-        pods = v1.list_namespaced_pod(namespace, label_selector=label)
-        for pod in pods.items:
+        deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)
+        for deploy in deployments.items:
+            body = {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {
+                                "nodalarc.io/config-hash": annotation_value,
+                            }
+                        }
+                    }
+                }
+            }
             try:
-                v1.delete_namespaced_pod(pod.metadata.name, namespace)
-                log.info(f"Restarted {pod.metadata.name}")
-            except kubernetes.client.rest.ApiException:
-                pass
+                apps_v1.patch_namespaced_deployment(deploy.metadata.name, namespace, body)
+                log.info(f"Rolling restart triggered for {deploy.metadata.name}")
+            except kubernetes.client.rest.ApiException as exc:
+                log.warning(f"Failed to patch deployment {deploy.metadata.name}: {exc}")
 
 
-def teardown_session(namespace: str) -> None:
-    """Clean up session ConfigMaps (pods are garbage-collected via ownerReferences)."""
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+def teardown_session(namespace: str, session_id: str | None = None) -> None:
+    """Clean up session ConfigMaps (pods are garbage-collected via ownerReferences).
+
+    Args:
+        namespace: K8s namespace.
+        session_id: Session identifier for JetStream purge. If not provided,
+            derived from the nodalarc-session ConfigMap (which must still exist).
+            Callers that know the session_id should pass it explicitly.
+    """
+    v1 = _get_v1()
+
+    # Derive session_id from ConfigMap if not provided by caller.
+    if session_id is None:
+        session_id = "current-session"
+        try:
+            cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
+            if cm.data and "session.yaml" in cm.data:
+                from nodalarc.nats_channels import sanitize_session_id
+
+                raw = yaml.safe_load(cm.data["session.yaml"])
+                session_id = sanitize_session_id(
+                    raw.get("session", {}).get("name", "current-session")
+                )
+        except Exception as exc:
+            log.warning(
+                "Could not read session_id from ConfigMap — purge will target '%s'. "
+                "If this is wrong, stale JetStream messages may persist: %s",
+                session_id,
+                exc,
+            )
+    log.info("Teardown session_id: %s", session_id)
 
     # Delete session-level ConfigMaps
     for cm_name in [
@@ -745,6 +961,47 @@ def teardown_session(namespace: str) -> None:
             Path(f).unlink(missing_ok=True)
     log.info("Cleaned up ephemeral config files")
 
+    # Purge session-scoped JetStream subjects to prevent cross-session
+    # checkpoint contamination on session name reuse. Without this, a new
+    # session with the same name (e.g., "current-session") would read the
+    # stale SchedulingCheckpoint from the previous instance.
+    _purge_session_jetstream_subjects(namespace, session_id)
+
+
+def _purge_session_jetstream_subjects(namespace: str, session_id: str = "current-session") -> None:
+    """Purge retained JetStream messages for the torn-down session.
+
+    Best-effort — failure doesn't block teardown. Uses session-scoped
+    subject filter so concurrent sessions are not affected. The session_id
+    must be passed by the caller BEFORE ConfigMaps are deleted.
+    """
+    try:
+        import asyncio
+
+        import nats
+        from nodalarc.nats_channels import (
+            NATS_CONNECT_OPTIONS,
+            STREAM_SESSION_EVENTS,
+            nats_url,
+        )
+
+        async def _purge():
+            nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+            try:
+                js = nc.jetstream()
+                # Purge ONLY this session's subjects — not the entire stream.
+                # Without the subject filter, concurrent sessions would lose
+                # their checkpoints, ephemeris, and playback state.
+                subject_filter = f"nodalarc.session.{session_id}.>"
+                await js.purge_stream(STREAM_SESSION_EVENTS, subject=subject_filter)
+                log.info("Purged session subjects: %s", subject_filter)
+            finally:
+                await nc.close()
+
+        asyncio.run(_purge())
+    except Exception as exc:
+        log.warning("Failed to purge JetStream session subjects: %s", exc)
+
 
 def check_pods_ready(namespace: str) -> tuple[int, int]:
     """Count total and ready session pods. Returns (total, ready).
@@ -752,66 +1009,125 @@ def check_pods_ready(namespace: str) -> tuple[int, int]:
     Matches pods with nodalarc.io/node-id label (present on both
     Operator-created and na_deploy-created session pods).
     """
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     total = len(pods.items)
     ready = sum(1 for p in pods.items if p.status and p.status.phase == "Running")
     return total, ready
 
 
-def signal_frr_config_ready(
-    namespace: str,
-    progress_fn: Any | None = None,
-) -> int:
-    """Copy FRR configs and touch config-ready sentinel in all session pods.
+def check_old_pods_terminated(namespace: str) -> bool:
+    """Return True if zero session pods exist in the namespace.
 
-    Single atomic exec per pod: cp + touch in one shell command.
-    Sentinel is only created if config copy succeeds (&&).
-    Parallelized with ThreadPoolExecutor(16).
-
-    Returns the number of pods signaled.
+    Pure query — no side effects. Used before deploying a new session
+    to ensure the previous session's pods have fully terminated.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    total, _ = check_pods_ready(namespace)
+    return total == 0
 
-    from kubernetes.stream import stream
 
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+def check_all_pods_running(namespace: str, expected_count: int) -> tuple[bool, int, int]:
+    """Check whether all expected session pods are Running.
+
+    Returns (all_ready, total, ready) where all_ready is True
+    if ready >= expected_count.
+
+    Pure query — no side effects.
+    """
+    total, ready = check_pods_ready(namespace)
+    return ready >= expected_count, total, ready
+
+
+def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, int, str | None]:
+    """Check whether Node Agent wiring is complete.
+
+    Reads the nodalarc-wiring-status ConfigMap and counts wired nodes
+    (excludes the _progress key used for display messages).
+
+    Returns (complete, wired_count, progress_msg) where:
+      - complete: True if wired_count >= expected_count
+      - wired_count: number of wired node entries
+      - progress_msg: the _progress value from the ConfigMap, or None
+
+    Returns (False, 0, None) if the ConfigMap does not exist (404).
+    Raises on other API errors.
+
+    Pure query — no side effects.
+    """
+    v1 = _get_v1()
+    try:
+        cm = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
+        data = dict(cm.data) if cm.data else {}
+        progress_msg = data.pop("_progress", None)
+        wired_count = len(data)
+        return wired_count >= expected_count, wired_count, progress_msg
+    except kubernetes.client.rest.ApiException as e:
+        if e.status == 404:
+            return False, 0, None
+        raise
+
+
+def compute_platform_hash(spec: dict) -> str:
+    """Hash platform-impacting fields of a ConstellationSpec for change detection.
+
+    Hashes only fields that affect the platform pods or data plane:
+    constellation, ground_stations, routing, time. Changes to display-only
+    fields (name, labels, etc.) do not produce a different hash.
+
+    Returns a hex digest string (SHA-256).
+    """
+    platform_fields = {}
+    for key in ("constellation", "ground_stations", "routing", "time"):
+        if key in spec:
+            platform_fields[key] = spec[key]
+    # Canonical YAML serialization for deterministic hashing
+    canonical = yaml.dump(platform_fields, default_flow_style=False, sort_keys=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def compute_expected_pod_count(spec: dict) -> int:
+    """Compute how many session pods SHOULD exist from the CRD spec.
+
+    Pure computation — parses sessionYaml, expands constellation, counts
+    satellites + ground stations. No K8s API calls, no template rendering,
+    no ConfigMap creation. Fast enough for every reconciler invocation.
+
+    Returns 0 if sessionYaml is missing or unparseable (caller handles this).
+    """
+    session_yaml = spec.get("sessionYaml")
+    if not session_yaml:
+        return 0
+    try:
+        session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
+        constellation = load_constellation(session.constellation)
+        gs_file = load_ground_stations(session.ground_stations)
+        satellites = expand_constellation(constellation)
+        return len(satellites) + len(gs_file.stations)
+    except Exception as exc:
+        log.warning("compute_expected_pod_count failed: %s", exc)
+        return 0
+
+
+def check_pods_ready_condition(namespace: str) -> tuple[int, int]:
+    """Count session pods with K8s Ready condition = True.
+
+    Ready means the readiness probe passed: config version sentinel matches
+    the ConfigMap mount (NOS loaded the intended config) AND the NOS is
+    responsive (e.g., vtysh -c "show version" for FRR).
+
+    Returns (total, ready_count).
+    """
+    v1 = _get_v1()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     total = len(pods.items)
-
-    def _signal_one(pod_name: str) -> bool:
-        stream(
-            v1.connect_get_namespaced_pod_exec,
-            pod_name,
-            namespace,
-            container="frr",
-            command=["sh", "-c", "cp /etc/frr-config/* /etc/frr/ && touch /etc/frr/.config-ready"],
-            stderr=True,
-            stdout=True,
-            stdin=False,
-            tty=False,
-        )
-        return True
-
-    signaled = 0
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        futures = {
-            pool.submit(_signal_one, pod.metadata.name): pod.metadata.name for pod in pods.items
-        }
-        for fut in as_completed(futures):
-            pod_name = futures[fut]
-            try:
-                fut.result()
-                signaled += 1
-                if progress_fn and (signaled % 10 == 0 or signaled == total):
-                    progress_fn(f"Signaling FRR config ready: {signaled}/{total}")
-            except Exception as exc:
-                log.warning(f"Failed to signal config-ready in {pod_name}: {exc}")
-
-    log.info(f"Signaled FRR config-ready in {signaled}/{total} pods")
-    return signaled
+    ready = 0
+    for pod in pods.items:
+        if pod.status and pod.status.conditions:
+            for cond in pod.status.conditions:
+                if cond.type == "Ready" and cond.status == "True":
+                    ready += 1
+                    break
+    return total, ready
 
 
 def write_pod_ips_configmap(namespace: str) -> None:
@@ -820,8 +1136,7 @@ def write_pod_ips_configmap(namespace: str) -> None:
     Stores the IP map as a single 'pod-ips.json' key so it can be
     volume-mounted directly as a JSON file by the NodalPath Deployment.
     """
-    kubernetes.config.load_incluster_config()
-    v1 = kubernetes.client.CoreV1Api()
+    v1 = _get_v1()
     pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
     ip_map = {}
     for pod in pods.items:
@@ -1049,6 +1364,21 @@ def _create_session_pod(
         resources=kubernetes.client.V1ResourceRequirements(
             requests={"memory": "32Mi", "cpu": "10m"},
             limits={"memory": "128Mi", "cpu": "200m"},
+        ),
+        readiness_probe=kubernetes.client.V1Probe(
+            _exec=kubernetes.client.V1ExecAction(
+                command=[
+                    "sh",
+                    "-c",
+                    "test -f /etc/frr/.config_version && "
+                    "diff -q /etc/frr-config/_config_version /etc/frr/.config_version > /dev/null 2>&1 && "
+                    "vtysh -c 'show version' > /dev/null 2>&1",
+                ],
+            ),
+            initial_delay_seconds=5,
+            period_seconds=5,
+            failure_threshold=6,
+            timeout_seconds=5,
         ),
         volume_mounts=[
             kubernetes.client.V1VolumeMount(

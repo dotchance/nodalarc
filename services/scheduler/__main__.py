@@ -252,6 +252,12 @@ def main() -> None:
         mbb_dispatch = session.routing.protocol == "nodalpath"
     log.info("MBB dispatch: %s (protocol=%s)", mbb_dispatch, session.routing.protocol)
 
+    # Session ID for NATS subject scoping
+    from nodalarc.nats_channels import sanitize_session_id
+
+    session_id = sanitize_session_id(session.session.name)
+    log.info("Scheduler session_id=%s", session_id)
+
     # Override set (shared between dispatcher and scenario handler)
     override_set: set[tuple[str, str]] = set()
     override_lock = threading.Lock()
@@ -268,6 +274,7 @@ def main() -> None:
         gs_terminal_capacities=gs_terminal_capacities,
         sat_ground_terminal_capacities=sat_ground_terminal_capacities,
         mbb_dispatch=mbb_dispatch,
+        session_id=session_id,
     )
 
     try:

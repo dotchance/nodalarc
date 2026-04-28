@@ -196,3 +196,67 @@ class PlaybackState(BaseModel):
 
     epoch_id: int
     state: Literal["seeking", "playing", "paused"]
+
+
+class ValidationResult(BaseModel):
+    """Result from session pre-deployment validation.
+
+    level="error" blocks deployment; level="warning" is logged but allowed.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    level: str  # "error" or "warning"
+    code: str  # e.g., "E001", "W003"
+    message: str
+    remediation: str | None = None
+
+
+class TeardownEntry(BaseModel):
+    """Single pending MBB teardown in a SchedulingCheckpoint."""
+
+    model_config = ConfigDict(frozen=True)
+
+    remaining_ticks: int
+    gs_id: str
+    sat_id: str
+
+
+class SchedulingCheckpoint(BaseModel):
+    """OME ground-scheduling state checkpoint.
+
+    Published to NODALARC_SESSION stream (MaxMsgsPerSubject=1) alongside
+    LinkStateSnapshot at the same interval. Provides the Scheduler and
+    other consumers with the OME's current ground-station association
+    state for recovery after restart.
+
+    associations: gs_id → sat_id (current GS-to-satellite assignments)
+    pending_teardowns: pair_key → TeardownEntry (MBB teardowns in progress)
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    sim_time: datetime
+    epoch_id: int
+    step: int
+    associations: dict[str, str]  # gs_id → sat_id
+    pending_teardowns: dict[str, TeardownEntry]  # pair_key → entry
+
+
+class OpsEvent(BaseModel):
+    """Operational event for the NODALARC_OPS JetStream stream.
+
+    Published by any component that needs to surface operational
+    telemetry (validation failures, deployment progress, runtime
+    anomalies) to a centralized event bus.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    timestamp: datetime
+    source: str  # "operator", "scheduler", "ome", "node_agent", "validator"
+    hostname: str
+    level: str  # "critical", "error", "warning", "info", "debug"
+    code: str
+    message: str
+    details: dict | None = None

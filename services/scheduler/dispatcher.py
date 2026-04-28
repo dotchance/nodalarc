@@ -31,18 +31,18 @@ from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
-    STREAM_SESSION_EVENTS,
-    SUBJECT_CLOCK_TICK,
-    SUBJECT_LATENCY_UPDATE,
-    SUBJECT_LINK_DOWN,
-    SUBJECT_LINK_STATE_SNAPSHOT,
-    SUBJECT_LINK_UP,
-    SUBJECT_OME_ALL,
-    SUBJECT_PLAYBACK_STATE,
-    SUBJECT_SESSION_EPHEMERIS,
-    SUBJECT_SUBSTRATE_LATENCY,
-    SUBJECT_VISIBILITY_EVENT,
+    latency_update_subject,
+    link_down_subject,
+    link_state_snapshot_subject,
+    link_up_subject,
     nats_url,
+    ome_all_subject,
+    ome_clock_subject,
+    ome_visibility_subject,
+    playback_state_subject,
+    scheduling_checkpoint_subject,
+    session_ephemeris_subject,
+    substrate_latency_subject,
 )
 from nodalarc.proto import node_agent_pb2
 
@@ -107,6 +107,7 @@ class Dispatcher:
         gs_terminal_capacities: dict[str, int] | None = None,
         sat_ground_terminal_capacities: dict[str, int] | None = None,
         mbb_dispatch: bool = False,
+        session_id: str = "default",
         # Legacy — kept for test compatibility, ignored at runtime
         ome_endpoint: str = "",
     ) -> None:
@@ -122,6 +123,20 @@ class Dispatcher:
         self._gs_capacities = gs_terminal_capacities or {}
         self._sat_capacities = sat_ground_terminal_capacities or {}
         self._mbb_dispatch = mbb_dispatch
+        self._session_id = session_id
+
+        # Session-scoped NATS subjects
+        self._subj_visibility = ome_visibility_subject(session_id)
+        self._subj_clock = ome_clock_subject(session_id)
+        self._subj_ome_all = ome_all_subject(session_id)
+        self._subj_ephemeris = session_ephemeris_subject(session_id)
+        self._subj_playback = playback_state_subject(session_id)
+        self._subj_checkpoint = scheduling_checkpoint_subject(session_id)
+        self._subj_link_snapshot = link_state_snapshot_subject(session_id)
+        self._subj_link_up = link_up_subject(session_id)
+        self._subj_link_down = link_down_subject(session_id)
+        self._subj_latency = latency_update_subject(session_id)
+        self._subj_substrate = substrate_latency_subject(session_id)
 
         self._position_table = PositionTable()
 
@@ -240,6 +255,43 @@ class Dispatcher:
 
         log.info("Scheduler NATS connected")
 
+        # --- Read retained SchedulingCheckpoint for recovery context ---
+        try:
+            from nats.js.api import DeliverPolicy as _DP
+            from nodalarc.models.events import SchedulingCheckpoint
+            from nodalarc.nats_channels import (
+                STREAM_SESSION_EVENTS,
+            )
+
+            ckpt_sub = await js.subscribe(
+                self._subj_checkpoint,
+                stream=STREAM_SESSION_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=_DP.LAST_PER_SUBJECT,
+            )
+            try:
+                import gzip as _ckpt_gzip
+
+                ckpt_msg = await asyncio.wait_for(ckpt_sub.next_msg(), timeout=2.0)
+                decompressed = _ckpt_gzip.decompress(ckpt_msg.data)
+                ckpt = SchedulingCheckpoint.model_validate_json(decompressed)
+                self._current_sim_time = ckpt.sim_time
+                log.info(
+                    "Recovered SchedulingCheckpoint: sim_time=%s step=%d epoch_id=%d "
+                    "associations=%d teardowns=%d",
+                    ckpt.sim_time.isoformat(),
+                    ckpt.step,
+                    ckpt.epoch_id,
+                    len(ckpt.associations),
+                    len(ckpt.pending_teardowns),
+                )
+            except (TimeoutError, Exception) as exc:
+                log.info("No SchedulingCheckpoint retained (fresh session): %s", type(exc).__name__)
+            finally:
+                await ckpt_sub.unsubscribe()
+        except Exception as exc:
+            log.warning("SchedulingCheckpoint recovery failed (non-fatal): %s", exc)
+
         # Load substrate latency for cross-node compensation
         self._load_substrate_latency()
 
@@ -263,6 +315,7 @@ class Dispatcher:
                 asyncio.get_running_loop(),
                 nc,
                 self._gs_capacities,
+                self._session_id,
             ),
             daemon=True,
         )
@@ -460,7 +513,7 @@ class Dispatcher:
             # MaxMsgsPerSubject=1 ensures late-joiner gets current truth
             subs.append(
                 await js.subscribe(
-                    SUBJECT_SESSION_EPHEMERIS,
+                    self._subj_ephemeris,
                     stream=STREAM_SESSION_EVENTS,
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -469,7 +522,7 @@ class Dispatcher:
             )
             subs.append(
                 await js.subscribe(
-                    SUBJECT_PLAYBACK_STATE,
+                    self._subj_playback,
                     stream=STREAM_SESSION_EVENTS,
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -487,14 +540,14 @@ class Dispatcher:
             # stream publish order, matching the OME's per-tick sequence:
             # VisibilityEvents first, ClockTick last.
             async def _on_ome_event(msg):
-                if msg.subject == SUBJECT_VISIBILITY_EVENT:
+                if msg.subject == self._subj_visibility:
                     await _on_visibility(msg)
-                elif msg.subject == SUBJECT_CLOCK_TICK:
+                elif msg.subject == self._subj_clock:
                     await _on_clock_tick(msg)
 
             subs.append(
                 await js.subscribe(
-                    SUBJECT_OME_ALL,
+                    self._subj_ome_all,
                     stream="NODALARC_OME",
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
@@ -508,7 +561,7 @@ class Dispatcher:
             # The buffered snapshot is the sole startup catch-up path.
             subs.append(
                 await js.subscribe(
-                    SUBJECT_LINK_STATE_SNAPSHOT,
+                    self._subj_link_snapshot,
                     stream="NODALARC_LINKS",
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
@@ -517,7 +570,7 @@ class Dispatcher:
             )
             subs.append(
                 await js.subscribe(
-                    SUBJECT_SUBSTRATE_LATENCY,
+                    self._subj_substrate,
                     stream="NODALARC_LINKS",
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
@@ -1253,7 +1306,7 @@ class Dispatcher:
                     )
                     asyncio.ensure_future(
                         nc.publish(
-                            SUBJECT_LINK_DOWN,
+                            self._subj_link_down,
                             event.model_dump_json().encode(),
                         )
                     )
@@ -1464,7 +1517,9 @@ class Dispatcher:
                     range_km=range_km or 0.0,
                     reason="vis_gained",
                 )
-                asyncio.ensure_future(nc.publish(SUBJECT_LINK_UP, event.model_dump_json().encode()))
+                asyncio.ensure_future(
+                    nc.publish(self._subj_link_up, event.model_dump_json().encode())
+                )
 
         return added
 
@@ -1542,7 +1597,7 @@ class Dispatcher:
                 range_km=range_km,
             )
             asyncio.ensure_future(
-                to_pub.publish(SUBJECT_LATENCY_UPDATE, event.model_dump_json().encode())
+                to_pub.publish(self._subj_latency, event.model_dump_json().encode())
             )
 
         # Send to agents concurrently

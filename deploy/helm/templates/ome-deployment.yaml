@@ -63,6 +63,14 @@ spec:
                 --max-age=3h12m \
                 --max-bytes=1048576 \
                 --defaults 2>/dev/null || true
+              nats stream add NODALARC_OPS \
+                --server=nats://nodalarc-nats:4222 \
+                --subjects="nodalarc.ops.>" \
+                --storage=memory --retention=limits \
+                --max-msgs-per-subject=-1 \
+                --max-age=4h \
+                --max-bytes=134217728 \
+                --defaults 2>/dev/null || true
               echo "Streams ready."
       containers:
         - name: ome

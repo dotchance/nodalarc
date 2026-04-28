@@ -28,7 +28,7 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - "--session"
-            - "/etc/nodalarc/session.yaml"
+            - "/etc/nodalarc/session-config/session.yaml"
             - "--db"
             - "/var/nodalarc/sessions/session.db"
             - "--port"
@@ -58,8 +58,7 @@ spec:
               mountPath: /etc/nodalarc/platform.yaml
               subPath: platform.yaml
             - name: session-config
-              mountPath: /etc/nodalarc/session.yaml
-              subPath: session.yaml
+              mountPath: /etc/nodalarc/session-config
             - name: constellation-config
               mountPath: /etc/nodalarc/constellation.yaml
               subPath: constellation.yaml

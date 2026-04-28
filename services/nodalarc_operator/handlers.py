@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import lru_cache
 
 import kopf
 import kubernetes
@@ -74,9 +75,6 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
         "uid": meta["uid"],
         "blockOwnerDeletion": True,
     }
-
-
-from functools import lru_cache
 
 
 @lru_cache(maxsize=4)

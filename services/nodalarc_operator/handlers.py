@@ -502,7 +502,7 @@ async def on_delete(name, namespace, **_):
     """Handle ConstellationSpec CR deletion — tear down session."""
     log.info(f"ConstellationSpec '{name}' deleted, tearing down session")
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, teardown_session, namespace)
+    await loop.run_in_executor(None, teardown_session, namespace, name)
     await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
     log.info("Session teardown complete")
 

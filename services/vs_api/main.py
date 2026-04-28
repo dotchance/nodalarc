@@ -42,7 +42,6 @@ from nodalarc.db.queries import (
 from nodalarc.db.schema import create_tables
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
-    AlmanacState,
     LinkState,
     NetworkHealth,
     NodeState,
@@ -592,9 +591,7 @@ def _update_session_globals(session_path: str, new_db_path: str) -> None:
 
     loop = asyncio.get_event_loop()
     if loop.is_running():
-        future = asyncio.run_coroutine_threadsafe(
-            ctx.start(_nats_connection, mode="switch"), loop
-        )
+        future = asyncio.run_coroutine_threadsafe(ctx.start(_nats_connection, mode="switch"), loop)
         future.result(timeout=10)
     else:
         asyncio.run(ctx.start(_nats_connection, mode="switch"))
@@ -692,10 +689,13 @@ async def _ws_broadcaster() -> None:
     while True:
         await asyncio.sleep(0.1)
         tick += 1
-        if tick % 100 == 0 and _db_path:
+        ctx = _active_context
+        if tick % 100 == 0 and ctx and ctx.db_path:
             try:
                 snapshot = _build_snapshot()
-                conn = sqlite3.connect(_db_path)
+                if snapshot is None:
+                    continue
+                conn = sqlite3.connect(ctx.db_path)
                 insert_snapshot(
                     conn,
                     sim_time=snapshot["sim_time"],
@@ -969,9 +969,10 @@ async def get_path(src: str, dst: str, sim_time: str | None = None) -> JSONRespo
 @app.get("/api/v1/state/{sim_time}", dependencies=[Depends(_require_api_key)])
 def get_historical_state(sim_time: str) -> dict:
     """Historical state at a specific sim_time (nearest snapshot from SQLite)."""
-    if not _db_path:
+    ctx = _active_context
+    if not ctx or not ctx.db_path:
         return {"error": "No database configured"}
-    conn = sqlite3.connect(_db_path)
+    conn = sqlite3.connect(ctx.db_path)
     try:
         result = query_nearest_snapshot(conn, sim_time)
         if result is None:
@@ -987,9 +988,10 @@ def get_link_events(
     end: str = Query(None),
 ) -> list[dict]:
     """Query link events from SQLite."""
-    if not _db_path:
+    ctx = _active_context
+    if not ctx or not ctx.db_path:
         return []
-    conn = sqlite3.connect(_db_path)
+    conn = sqlite3.connect(ctx.db_path)
     try:
         return query_link_events(conn, start_time=start, end_time=end)
     finally:
@@ -1002,9 +1004,10 @@ def get_convergence_events(
     end: str = Query(None),
 ) -> list[dict]:
     """Query convergence events from SQLite."""
-    if not _db_path:
+    ctx = _active_context
+    if not ctx or not ctx.db_path:
         return []
-    conn = sqlite3.connect(_db_path)
+    conn = sqlite3.connect(ctx.db_path)
     try:
         return query_convergence_events(conn)
     finally:
@@ -1018,9 +1021,10 @@ def get_flow_metrics(
     end: str = Query(None),
 ) -> list[dict]:
     """Query probe results for a flow from SQLite."""
-    if not _db_path:
+    ctx = _active_context
+    if not ctx or not ctx.db_path:
         return []
-    conn = sqlite3.connect(_db_path)
+    conn = sqlite3.connect(ctx.db_path)
     try:
         return query_probe_results(conn, flow_id=flow_id, start_time=start, end_time=end)
     finally:
@@ -1110,7 +1114,8 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
         from nodalpath.platform import get_nodalpath_config
 
         np_cfg = get_nodalpath_config()
-        session_path = _Path(_session_file) if _session_file else None
+        _ctx = _active_context
+        session_path = _Path(_ctx.session_file) if _ctx else None
         if session_path and session_path.exists():
             node_reg, _, session_prefixes, _ = load_session_context(session_path)
             # Populate prefix_by_node from session context
@@ -1309,10 +1314,12 @@ def trace_path(body: dict) -> dict:
     if not src or not dst:
         return {"hops": [], "error": "src_node and dst_node required"}
 
-    if not _routing_stack or not _routing_stack.startswith("nodalpath"):
+    _rctx = _active_context
+    _rs = _rctx.routing_stack if _rctx else None
+    if not _rs or not _rs.startswith("nodalpath"):
         raise HTTPException(
             status_code=400,
-            detail=f"Trace not available for routing stack '{_routing_stack}'. "
+            detail=f"Trace not available for routing stack '{_rs}'. "
             "Trace requires a NodalPath session (MPLS forwarding tables).",
         )
 
@@ -1468,12 +1475,14 @@ def _create_continuous_tracer() -> ContinuousTracer:
     timeline_path: str | None = None
     trace_mode = "ip"
 
+    _tctx = _active_context
+    _sf = _tctx.session_file if _tctx else ""
     log.info(
         "Creating continuous tracer: session_file=%s exists=%s",
-        _session_file,
-        Path(_session_file).exists() if _session_file else False,
+        _sf,
+        Path(_sf).exists() if _sf else False,
     )
-    if _session_file and Path(_session_file).exists():
+    if _sf and Path(_sf).exists():
         # Ensure NodalPath config is initialized (load_session_context needs SID ranges)
         try:
             from nodalpath.platform import get_nodalpath_config
@@ -1491,7 +1500,7 @@ def _create_continuous_tracer() -> ContinuousTracer:
         try:
             from nodalpath.orchestrator.session_loader import load_session_context
 
-            ctx = load_session_context(Path(_session_file))
+            ctx = load_session_context(Path(_sf))
             node_registry = ctx[0]
             interface_map = ctx[1]
             log.info(
@@ -1520,11 +1529,12 @@ def _create_continuous_tracer() -> ContinuousTracer:
                 except Exception as exc:
                     log.warning("Failed to read session-state.json: %s", exc)
 
-        # Determine trace mode from routing stack
-        if _routing_stack:
-            if "isis-sr" in _routing_stack or "static-sr" in _routing_stack:
+        _rsctx = _active_context
+        _rs2 = _rsctx.routing_stack if _rsctx else None
+        if _rs2:
+            if "isis-sr" in _rs2 or "static-sr" in _rs2:
                 trace_mode = "sr-uniform"
-            elif _routing_stack.startswith("nodalpath"):
+            elif _rs2.startswith("nodalpath"):
                 trace_mode = "cspf"
 
     return ContinuousTracer(

@@ -101,13 +101,13 @@ class Dispatcher:
         agent_pool: AgentPool,
         override_set: set[tuple[str, str]],
         override_lock: threading.Lock,
+        session_id: str,
         compression_factor: int = 1,
         latency_update_interval_s: int = 10,
         epsilon_ms: float = 100.0,
         gs_terminal_capacities: dict[str, int] | None = None,
         sat_ground_terminal_capacities: dict[str, int] | None = None,
         mbb_dispatch: bool = False,
-        session_id: str = "default",
         # Legacy — kept for test compatibility, ignored at runtime
         ome_endpoint: str = "",
     ) -> None:
@@ -120,8 +120,14 @@ class Dispatcher:
         self._compression = max(1, compression_factor)
         self._latency_interval = latency_update_interval_s
         self._epsilon_ms = epsilon_ms
-        self._gs_capacities = gs_terminal_capacities or {}
-        self._sat_capacities = sat_ground_terminal_capacities or {}
+        if gs_terminal_capacities is None:
+            log.error("FATAL: Dispatcher created with no gs_terminal_capacities")
+            raise ValueError("gs_terminal_capacities is required")
+        if sat_ground_terminal_capacities is None:
+            log.error("FATAL: Dispatcher created with no sat_ground_terminal_capacities")
+            raise ValueError("sat_ground_terminal_capacities is required")
+        self._gs_capacities = gs_terminal_capacities
+        self._sat_capacities = sat_ground_terminal_capacities
         self._mbb_dispatch = mbb_dispatch
         self._session_id = session_id
 
@@ -248,7 +254,8 @@ class Dispatcher:
             nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
 
         self._nc = nc
-        js = nc.jetstream()
+        self._js = nc.jetstream()
+        js = self._js
 
         # Share NATS connection with agent pool for Node Agent dispatch
         self._pool.set_nc(nc)
@@ -508,43 +515,55 @@ class Dispatcher:
                 )
 
         subs = []
+
+        subscriptions = [
+            (
+                self._subj_ephemeris,
+                STREAM_SESSION_EVENTS,
+                DeliverPolicy.LAST_PER_SUBJECT,
+                _on_session_ephemeris,
+            ),
+            (
+                self._subj_playback,
+                STREAM_SESSION_EVENTS,
+                DeliverPolicy.LAST_PER_SUBJECT,
+                _on_playback_state,
+            ),
+            (
+                self._subj_link_snapshot,
+                "NODALARC_LINKS",
+                DeliverPolicy.LAST_PER_SUBJECT,
+                _on_link_state_snapshot,
+            ),
+            (self._subj_substrate, "NODALARC_LINKS", DeliverPolicy.NEW, _on_substrate_latency),
+        ]
+        for subj, stream, policy, cb in subscriptions:
+            try:
+                subs.append(
+                    await js.subscribe(
+                        subj,
+                        stream=stream,
+                        ordered_consumer=True,
+                        deliver_policy=policy,
+                        cb=cb,
+                    )
+                )
+            except Exception as exc:
+                log.error("FATAL: Failed to subscribe to %s on stream %s: %s", subj, stream, exc)
+                raise
+
+        # Single wildcard consumer for stream-sequence ordering across
+        # subjects. Two separate consumers (one per subject) have
+        # independent server-side push loops that can interleave:
+        # ClockTick(T+1) may arrive before VisibilityEvent(T), splitting
+        # a handover's paired events across dispatch cycles.
+        async def _on_ome_event(msg):
+            if msg.subject == self._subj_visibility:
+                await _on_visibility(msg)
+            elif msg.subject == self._subj_clock:
+                await _on_clock_tick(msg)
+
         try:
-            # NODALARC_SESSION stream — SessionEphemeris and PlaybackState
-            # MaxMsgsPerSubject=1 ensures late-joiner gets current truth
-            subs.append(
-                await js.subscribe(
-                    self._subj_ephemeris,
-                    stream=STREAM_SESSION_EVENTS,
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                    cb=_on_session_ephemeris,
-                )
-            )
-            subs.append(
-                await js.subscribe(
-                    self._subj_playback,
-                    stream=STREAM_SESSION_EVENTS,
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                    cb=_on_playback_state,
-                )
-            )
-
-            # NODALARC_OME stream — single wildcard consumer for stream-
-            # sequence ordering across subjects.  Two separate consumers
-            # (one per subject) have independent server-side push loops
-            # that can interleave: ClockTick(T+1) may arrive before
-            # VisibilityEvent(T), splitting a handover's paired events
-            # across dispatch cycles and preventing MBB classification.
-            # A single consumer on the wildcard delivers all messages in
-            # stream publish order, matching the OME's per-tick sequence:
-            # VisibilityEvents first, ClockTick last.
-            async def _on_ome_event(msg):
-                if msg.subject == self._subj_visibility:
-                    await _on_visibility(msg)
-                elif msg.subject == self._subj_clock:
-                    await _on_clock_tick(msg)
-
             subs.append(
                 await js.subscribe(
                     self._subj_ome_all,
@@ -554,31 +573,13 @@ class Dispatcher:
                     cb=_on_ome_event,
                 )
             )
-            # NODALARC_LINKS stream — LinkStateSnapshot and SubstrateLatency
-            # LAST_PER_SUBJECT delivers the retained snapshot
-            # (MaxMsgsPerSubject=1 on NODALARC_LINKS) immediately on subscribe,
-            # then continues with new snapshots as OME publishes them.
-            # The buffered snapshot is the sole startup catch-up path.
-            subs.append(
-                await js.subscribe(
-                    self._subj_link_snapshot,
-                    stream="NODALARC_LINKS",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                    cb=_on_link_state_snapshot,
-                )
-            )
-            subs.append(
-                await js.subscribe(
-                    self._subj_substrate,
-                    stream="NODALARC_LINKS",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=_on_substrate_latency,
-                )
-            )
         except Exception as exc:
-            log.warning("NATS subscription setup failed: %s — streams may not exist yet", exc)
+            log.error(
+                "FATAL: Failed to subscribe to %s on stream NODALARC_OME: %s",
+                self._subj_ome_all,
+                exc,
+            )
+            raise
 
         log.info("Scheduler dispatcher started — %d callback subscriptions active", len(subs))
 
@@ -1304,12 +1305,13 @@ class Dispatcher:
                         interface_b=info.interface_b,
                         reason="vis_lost",
                     )
-                    asyncio.ensure_future(
-                        nc.publish(
-                            self._subj_link_down,
-                            event.model_dump_json().encode(),
+                    try:
+                        await self._js.publish(
+                            self._subj_link_down, event.model_dump_json().encode()
                         )
-                    )
+                    except Exception as exc:
+                        log.error("Failed to publish LinkDown for %s: %s", pair, exc)
+                        raise
 
         return removed
 
@@ -1503,8 +1505,17 @@ class Dispatcher:
             if agents and agents <= successful_agents:
                 added.add(pair)
                 info = desired[pair]
-                sim_unix = sim_time.timestamp() if sim_time else 0.0
-                range_km = self._position_table.compute_link_range(pair[0], pair[1], sim_unix)
+                if sim_time is None:
+                    log.error("FATAL: LinkUp dispatch has no sim_time for pair %s", pair)
+                    raise ValueError(f"sim_time is None for LinkUp dispatch of {pair}")
+                range_km = self._position_table.compute_link_range(
+                    pair[0], pair[1], sim_time.timestamp()
+                )
+                if range_km is None:
+                    log.error(
+                        "FATAL: Cannot compute range for link %s — position data missing", pair
+                    )
+                    raise ValueError(f"range_km is None for {pair}")
                 event = LinkUp(
                     sim_time=sim_time,
                     wall_time=now,
@@ -1514,12 +1525,14 @@ class Dispatcher:
                     interface_b=info.interface_b,
                     latency_ms=info.latency_ms,
                     bandwidth_mbps=info.bandwidth_mbps,
-                    range_km=range_km or 0.0,
+                    range_km=range_km,
                     reason="vis_gained",
                 )
-                asyncio.ensure_future(
-                    nc.publish(self._subj_link_up, event.model_dump_json().encode())
-                )
+                try:
+                    await self._js.publish(self._subj_link_up, event.model_dump_json().encode())
+                except Exception as exc:
+                    log.error("Failed to publish LinkUp for %s: %s", pair, exc)
+                    raise
 
         return added
 

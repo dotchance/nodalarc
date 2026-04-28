@@ -149,6 +149,7 @@ class MIService:
 
         self._running = False
         self._nc: nats.NATS | None = None
+        self._js = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def _get_active_flows(self) -> dict:
@@ -181,15 +182,17 @@ class MIService:
             log.warning(f"Failed to load initial flows: {exc}")
 
     def _publish_sync(self, subject: str, payload: bytes) -> None:
-        """Publish to NATS from a sync thread. Fire-and-forget."""
+        """Publish to NATS JetStream from a sync thread."""
         if self._nc is None or self._nc.is_closed or self._loop is None:
-            return
+            log.error("FATAL: _publish_sync called with no NATS connection")
+            raise RuntimeError("NATS connection not available for publish")
         try:
-            asyncio.run_coroutine_threadsafe(self._nc.publish(subject, payload), self._loop).result(
+            asyncio.run_coroutine_threadsafe(self._js.publish(subject, payload), self._loop).result(
                 timeout=5
             )
         except Exception as exc:
-            log.debug(f"NATS publish failed: {exc}")
+            log.error("Failed to publish to %s: %s", subject, exc)
+            raise
 
     def _collector_loop(self) -> None:
         """Periodically collect events from all adapters. Runs in background thread."""
@@ -266,7 +269,11 @@ class MIService:
                     log.warning(f"DB convergence insert failed: {exc}")
 
             # Publish result event
-            await self._nc.publish(self._subj_convergence, response)
+            try:
+                await self._js.publish(self._subj_convergence, response)
+            except Exception as exc:
+                log.error("Failed to publish convergence result: %s", exc)
+                raise
 
             # Reply to requester
             await msg.respond(response)
@@ -310,6 +317,7 @@ class MIService:
         self._loop = asyncio.get_running_loop()
 
         self._nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+        self._js = self._nc.jetstream()
         log.info("MI NATS connected to %s", nats_url())
 
         # Start adapters and flow manager

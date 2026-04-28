@@ -147,7 +147,9 @@ def _ground_link_down(
     drives carrier which drives FRR behavior.
     """
     try:
-        pm = pid_map or {}
+        if pid_map is None:
+            raise ValueError("pid_map is None — wiring not complete?")
+        pm = pid_map
         sat_pid = _require_pid(iface.sat_id, pm)
         gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
         ground_bridge.detach_from_ground_bridge(
@@ -184,7 +186,9 @@ def _ground_link_up(
     §13.22.6 — v0.72 reversal.
     """
     try:
-        pm = pid_map or {}
+        if pid_map is None:
+            raise ValueError("pid_map is None — wiring not complete?")
+        pm = pid_map
         sat_pid = _require_pid(iface.sat_id, pm)
         gs_pid = _require_pid(iface.gs_id, pm)
         gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
@@ -214,7 +218,9 @@ def _update_latency_entry(
     Uses tc "change" — does NOT touch admin state or re-add qdiscs.
     """
     try:
-        pm = pid_map or {}
+        if pid_map is None:
+            raise ValueError("pid_map is None — wiring not complete?")
+        pm = pid_map
         pid = _require_pid(entry.node_id, pm)
         namespace_ops.update_delay(pid, entry.interface_name, entry.latency_ms)
         return None
@@ -241,7 +247,9 @@ def handle_batch_link_down(
 
     # Submit all operations concurrently — each interface carries its own locality
     futures = {}
-    pm = pid_map or {}
+    if pid_map is None:
+        raise ValueError("pid_map is None — wiring not complete?")
+    pm = pid_map
     for iface in request.interfaces:
         if iface.locality == node_agent_pb2.CROSS_NODE and iface.vni:
             if iface.link_type == node_agent_pb2.GROUND:
@@ -326,7 +334,9 @@ def _isl_link_up_phase1(
     Returns error string or None.
     """
     try:
-        pid = _require_pid(iface.node_id, pid_map or {})
+        if pid_map is None:
+            raise ValueError("pid_map is None — wiring not complete?")
+        pid = _require_pid(iface.node_id, pid_map)
         if iface.locality == node_agent_pb2.LOCAL:
             ground_bridge.attach_isl(
                 iface.node_id,
@@ -370,7 +380,9 @@ def handle_batch_link_up(
     start = _time.monotonic()
     errors: list[str] = []
     upped = 0
-    pm = pid_map or {}
+    if pid_map is None:
+        raise ValueError("pid_map is None — wiring not complete?")
+    pm = pid_map
 
     # Validate PIDs. Per-interface locality:
     # LOCAL GROUND needs both gs_id and sat_id PIDs (bridge ops).

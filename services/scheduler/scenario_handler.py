@@ -59,7 +59,7 @@ def run_scenario_handler(
     main_loop: asyncio.AbstractEventLoop,
     nc_main: nats.NATS,
     gs_capacities: dict[str, int] | None = None,
-    session_id: str = "default",
+    session_id: str = "",
 ) -> None:
     """Handle scenario injection requests via NATS request/reply.
 
@@ -73,6 +73,9 @@ def run_scenario_handler(
         gs_capacities: GS node IDs -> terminal capacity (for GS detection).
         session_id: Session ID for NATS subject scoping.
     """
+    if not session_id:
+        log.error("FATAL: scenario_handler started with no session_id")
+        raise ValueError("session_id is required for scenario_handler")
     asyncio.run(
         _run_scenario_async(
             interface_map,
@@ -84,7 +87,7 @@ def run_scenario_handler(
             agent_pool,
             main_loop,
             nc_main,
-            gs_capacities or {},
+            gs_capacities,
             session_id,
         )
     )
@@ -101,10 +104,11 @@ async def _run_scenario_async(
     main_loop: asyncio.AbstractEventLoop,
     nc_main: nats.NATS,
     gs_capacities: dict[str, int],
-    session_id: str = "default",
+    session_id: str,
 ) -> None:
     _subj_link_down = link_down_subject(session_id)
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+    js = nc.jetstream()
     log.info(
         "Scenario handler NATS connected, subject=%s (session_id=%s)",
         SUBJECT_SCENARIO_INJECT,
@@ -151,7 +155,11 @@ async def _run_scenario_async(
                     interface_b=ifaces[1],
                     reason="scenario_inject_down",
                 )
-                await nc.publish(_subj_link_down, event.model_dump_json().encode())
+                try:
+                    await js.publish(_subj_link_down, event.model_dump_json().encode())
+                except Exception as exc:
+                    log.error("Failed to publish LinkDown for scenario inject %s: %s", pair, exc)
+                    raise
                 await msg.respond(b'{"status":"ok"}')
 
             elif action == "inject_link_up":
@@ -199,7 +207,11 @@ async def _run_scenario_async(
                         interface_b=ifaces[1],
                         reason="satellite_loss",
                     )
-                    await nc.publish(_subj_link_down, event.model_dump_json().encode())
+                    try:
+                        await js.publish(_subj_link_down, event.model_dump_json().encode())
+                    except Exception as exc:
+                        log.error("Failed to publish LinkDown for satellite loss %s: %s", pair, exc)
+                        raise
 
                 log.info("Satellite loss injected for %s (%d links)", node, len(downed_pairs))
                 await msg.respond(b'{"status":"ok"}')

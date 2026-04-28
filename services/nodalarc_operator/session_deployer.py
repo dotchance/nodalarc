@@ -168,9 +168,7 @@ _ALL_FRR_DAEMONS = [
 ]
 
 
-def _publish_validation_ops_events(
-    results: list, namespace: str, session_id: str = "default"
-) -> None:
+def _publish_validation_ops_events(results: list, namespace: str, session_id: str) -> None:
     """Publish validation results as OpsEvents. Best-effort — failure doesn't block deploy."""
     try:
         import asyncio
@@ -182,6 +180,7 @@ def _publish_validation_ops_events(
 
         async def _publish():
             nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+            js = nc.jetstream()
             try:
                 for r in results:
                     event = OpsEvent(
@@ -193,7 +192,7 @@ def _publish_validation_ops_events(
                         message=r.message,
                         details={"remediation": r.remediation} if r.remediation else None,
                     )
-                    await nc.publish(
+                    await js.publish(
                         ops_event_subject(session_id, "validator", r.code),
                         event.model_dump_json().encode(),
                     )
@@ -652,6 +651,8 @@ def write_wiring_manifest(
     import ipaddress as _ipaddress
     import json as _json
 
+    from nodalarc.nats_channels import sanitize_session_id
+
     v1 = _get_v1()
 
     # Delete stale wiring-status before writing new manifest.
@@ -791,8 +792,16 @@ def write_wiring_manifest(
         for na in assignments:
             isl_pairs.add((min(node_id, na.peer_node_id), max(node_id, na.peer_node_id)))
 
+    try:
+        manifest_session_id = sanitize_session_id(session.session.name)
+    except Exception as exc:
+        log.error(
+            "FATAL: Cannot derive session_id from session.name=%r: %s", session.session.name, exc
+        )
+        raise
+
     manifest = {
-        "session_id": spec.get("_session_id", "operator-session"),
+        "session_id": manifest_session_id,
         "generation": int(datetime.now(UTC).timestamp()),
         "nodes": nodes,
         "ground_bridges": ground_bridges,
@@ -906,23 +915,27 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
 
     # Derive session_id from ConfigMap if not provided by caller.
     if session_id is None:
-        session_id = "current-session"
+        from nodalarc.nats_channels import sanitize_session_id
+
         try:
             cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
             if cm.data and "session.yaml" in cm.data:
-                from nodalarc.nats_channels import sanitize_session_id
-
                 raw = yaml.safe_load(cm.data["session.yaml"])
-                session_id = sanitize_session_id(
-                    raw.get("session", {}).get("name", "current-session")
+                session_name = raw.get("session", {}).get("name", "")
+                if not session_name:
+                    log.error(
+                        "FATAL: nodalarc-session ConfigMap has no session.name — cannot purge JetStream subjects"
+                    )
+                    raise ValueError("session.name missing from nodalarc-session ConfigMap")
+                session_id = sanitize_session_id(session_name)
+            else:
+                log.error(
+                    "FATAL: nodalarc-session ConfigMap has no session.yaml data — cannot determine session_id for teardown"
                 )
-        except Exception as exc:
-            log.warning(
-                "Could not read session_id from ConfigMap — purge will target '%s'. "
-                "If this is wrong, stale JetStream messages may persist: %s",
-                session_id,
-                exc,
-            )
+                raise ValueError("nodalarc-session ConfigMap missing session.yaml")
+        except (ValueError, kubernetes.client.rest.ApiException) as exc:
+            log.error("FATAL: Cannot derive session_id for teardown: %s", exc)
+            raise
     log.info("Teardown session_id: %s", session_id)
 
     # Delete session-level ConfigMaps
@@ -968,7 +981,7 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
     _purge_session_jetstream_subjects(namespace, session_id)
 
 
-def _purge_session_jetstream_subjects(namespace: str, session_id: str = "current-session") -> None:
+def _purge_session_jetstream_subjects(namespace: str, session_id: str) -> None:
     """Purge retained JetStream messages for the torn-down session.
 
     Best-effort — failure doesn't block teardown. Uses session-scoped

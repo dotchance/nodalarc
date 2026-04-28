@@ -92,17 +92,19 @@ def run_vtysh(node_id: str, command: str) -> dict:
             "error": str(exc),
         }
 
-    output = stdout or ""
+    if stdout is None:
+        log.error("vtysh exec returned None stdout for %s cmd=%s", node_id, command)
+        raise ValueError(f"vtysh exec returned None stdout for {node_id}")
     max_bytes = cfg.vs_api_introspect_max_response_bytes
-    if len(output) > max_bytes:
-        output = output[:max_bytes] + "\n... (truncated)"
+    if len(stdout) > max_bytes:
+        stdout = stdout[:max_bytes] + "\n... (truncated)"
 
     error = stderr.strip() if stderr and exit_code != 0 else None
 
     return {
         "node_id": node_id,
         "command": command,
-        "output": output,
-        "exit_code": exit_code or 0,
+        "output": stdout,
+        "exit_code": exit_code,
         "error": error,
     }

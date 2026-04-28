@@ -582,7 +582,7 @@ class ContinuousTracer:
                 h_copy = dict(h)
                 h_copy["rtt_ms"] = cumulative_ms
                 result.append(PathHop.model_validate(h_copy))
-                cumulative_ms += h.get("latency_to_next_ms") or 0.0
+                cumulative_ms += h["latency_to_next_ms"]
             elif isinstance(h, str):
                 result.append(PathHop(node_id=h, node_type="satellite", rtt_ms=cumulative_ms))
         return result

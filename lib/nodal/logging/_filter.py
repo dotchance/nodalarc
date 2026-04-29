@@ -17,13 +17,11 @@ _hostname: str = socket.gethostname()
 
 _PREFIX_RE = re.compile(r"^([A-Z][A-Za-z_]+):")
 
-_DYNAMIC_RE = re.compile(
-    r"(?:"
-    r"\d"
-    r"|^sat-|^gs-|^node-|^pod-|^term-"
-    r")",
-    re.IGNORECASE,
-)
+# _PREFIX_RE constrains prefix words to [A-Za-z_] — no digits, no hyphens.
+# ID patterns like sat-P00S00, node-04, IPs, UUIDs all contain digits or
+# characters outside that class, so they can never pass _PREFIX_RE. The \d
+# check is defense-in-depth if _PREFIX_RE is ever loosened.
+_DYNAMIC_RE = re.compile(r"\d")
 
 _CAMEL_BOUNDARY_RE = re.compile(r"([a-z\d])([A-Z])")
 _CONSECUTIVE_CAPS_RE = re.compile(r"([A-Z]+)([A-Z][a-z])")

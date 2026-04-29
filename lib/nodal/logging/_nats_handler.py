@@ -24,7 +24,7 @@ import sys
 import time
 from typing import Any
 
-from nodal.logging._formatter import HumanFormatter, OpsEventFormatter
+from nodal.logging._formatter import OpsEventFormatter
 
 
 class NatsHandler(logging.Handler):
@@ -36,12 +36,12 @@ class NatsHandler(logging.Handler):
         self._source = service.rsplit(".", 1)[-1]
         self._deque: collections.deque[tuple[str, bytes]] = collections.deque(maxlen=500)
         self._ops_formatter = OpsEventFormatter()
-        self._human_formatter = HumanFormatter()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._event: asyncio.Event | None = None
         self._js: Any = None
         self._drain_task: asyncio.Task | None = None
         self._last_error_time: float = 0.0
+        self._dropped_since_last_report: int = 0
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -84,24 +84,31 @@ class NatsHandler(logging.Handler):
         self._drain_task = asyncio.create_task(self._drain_loop())
 
     async def _drain_loop(self) -> None:
-        while True:
-            await self._event.wait()
-            self._event.clear()
+        try:
+            while True:
+                await self._event.wait()
+                self._event.clear()
 
-            count = 0
-            while self._deque and count < 200:
-                subject, payload = self._deque.popleft()
-                try:
-                    await self._js.publish(subject, payload)
-                except Exception:
-                    self._log_error_throttled()
-                count += 1
+                count = 0
+                while self._deque and count < 200:
+                    subject, payload = self._deque.popleft()
+                    try:
+                        await self._js.publish(subject, payload)
+                    except Exception:
+                        self._dropped_since_last_report += 1
+                        self._log_error_throttled()
+                    count += 1
+        except asyncio.CancelledError:
+            return
 
     def _log_error_throttled(self) -> None:
         now = time.monotonic()
         if now - self._last_error_time > 60.0:
+            dropped = self._dropped_since_last_report
+            self._dropped_since_last_report = 0
             print(
-                "nodal.logging: NATS publish failed (suppressing for 60s)",
+                f"nodal.logging: NATS publish failed, {dropped} record(s) dropped"
+                " (suppressing for 60s)",
                 file=sys.stderr,
                 flush=True,
             )
@@ -112,6 +119,9 @@ class NatsHandler(logging.Handler):
         if not self._deque:
             return
 
+        if self._drain_task is not None and not self._drain_task.done():
+            self._drain_task.cancel()
+
         if self._js is not None and self._loop is not None:
             try:
                 if not self._loop.is_running() and not self._loop.is_closed():
@@ -119,8 +129,12 @@ class NatsHandler(logging.Handler):
                         asyncio.wait_for(self._flush_async(), timeout=timeout)
                     )
                     return
-            except Exception:
-                pass
+            except Exception as exc:
+                print(
+                    f"nodal.logging: atexit NATS flush failed: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
         self._dump_to_stderr()
 

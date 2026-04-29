@@ -2075,6 +2075,7 @@ async def _poll_cr_until_ready() -> None:
     session_manager.switch() so the frontend sees progress messages
     regardless of deploy path.
     """
+    global _active_context
     log.info("_poll_cr_until_ready: starting background CR polling task")
     import kubernetes.client
     import kubernetes.config
@@ -2104,6 +2105,37 @@ async def _poll_cr_until_ready() -> None:
                 # Only update from CR for non-Wiring phases.
                 _session_manager.status_detail = message or f"Phase: {phase}"
             if phase == "Ready":
+                # Check if the session changed (make session deployed a different constellation)
+                cr_session_yaml = cr.get("spec", {}).get("sessionYaml", "")
+                if cr_session_yaml:
+                    try:
+                        from nodalarc.nats_channels import sanitize_session_id as _sanitize
+
+                        cr_session = SessionConfig.model_validate(yaml.safe_load(cr_session_yaml))
+                        cr_session_id = _sanitize(cr_session.session.name)
+                        ctx = _active_context
+                        if ctx and ctx.session_id != cr_session_id:
+                            log.info(
+                                "CR session_id changed: %s → %s — triggering internal switch",
+                                ctx.session_id,
+                                cr_session_id,
+                            )
+                            session_config_path = Path("/etc/nodalarc/session-config/session.yaml")
+                            if session_config_path.is_file():
+                                await _run_switch(str(session_config_path))
+                                return
+                        elif not ctx:
+                            session_config_path = Path("/etc/nodalarc/session-config/session.yaml")
+                            if session_config_path.is_file():
+                                log.info("No active context but CR is Ready — bootstrapping")
+                                new_ctx = SessionContext(cr_session_id, str(session_config_path))
+                                nc = _nats_connection
+                                if nc:
+                                    await new_ctx.start(nc, mode="recovery")
+                                    _active_context = new_ctx
+                    except Exception as exc:
+                        log.warning("Failed to check CR session_id: %s", exc)
+
                 ctx = _active_context
                 if ctx:
                     ctx.session_ready_time = _time.monotonic()

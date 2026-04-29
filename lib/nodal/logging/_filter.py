@@ -82,7 +82,11 @@ class NodalFilter(logging.Filter):
         return True
 
     def _derive_code(self, record: logging.LogRecord) -> str:
-        suffix = record.name.rsplit(".", 1)[-1].upper()
+        logger_name = record.name.rsplit(".", 1)[-1]
+        if logger_name in ("root", "__main__"):
+            suffix = self._source.upper()
+        else:
+            suffix = logger_name.upper()
 
         try:
             msg = record.getMessage()

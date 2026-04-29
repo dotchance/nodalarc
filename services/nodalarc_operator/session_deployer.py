@@ -177,40 +177,17 @@ _ALL_FRR_DAEMONS = [
 
 
 def _publish_validation_ops_events(results: list, namespace: str, session_id: str) -> None:
-    """Publish validation results as OpsEvents. Best-effort — failure doesn't block deploy."""
-    try:
-        import asyncio
-        import socket
-
-        import nats
-        from nodalarc.models.events import OpsEvent
-        from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url, ops_event_subject
-
-        async def _publish():
-            nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
-            js = nc.jetstream()
-            try:
-                for r in results:
-                    event = OpsEvent(
-                        timestamp=datetime.now(UTC),
-                        session_id=session_id,
-                        source="validator",
-                        hostname=socket.gethostname(),
-                        level=r.level if r.level == "error" else "warning",
-                        code=r.code,
-                        message=r.message,
-                        details={"remediation": r.remediation} if r.remediation else None,
-                    )
-                    await js.publish(
-                        ops_event_subject(session_id, "validator", r.code),
-                        event.model_dump_json().encode(),
-                    )
-            finally:
-                await nc.close()
-
-        asyncio.run(_publish())
-    except Exception as exc:
-        log.warning("Failed to publish validation OpsEvents: %s", exc)
+    """Publish validation results as OpsEvents via the logging system."""
+    for r in results:
+        level = logging.ERROR if r.level == "error" else logging.WARNING
+        details = {"remediation": r.remediation} if r.remediation else None
+        log.log(
+            level,
+            "Validation: [%s] %s",
+            r.code,
+            r.message,
+            extra={"code": r.code, "details": details},
+        )
 
 
 def ensure_session_configmaps(

@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import NamedTuple
 
 import yaml
-from nodalarc.constants import LOG_FORMAT
+from nodal.logging import configure as _configure_logging
+from nodal.logging import connect as _connect_logging
 from nodalarc.constellation_loader import (
     expand_constellation,
     load_constellation,
@@ -320,6 +321,7 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     js = nc.jetstream()
+    await _connect_logging(nc)
     logging.info("OME NATS publisher connected to %s (session_id=%s)", nats_url(), session_id)
 
     async def _publish_playback_state(state: str) -> None:
@@ -478,7 +480,6 @@ def _run_pacing(
     import gzip as _ckpt_gzip
     import json as _json
     import queue
-    import socket as _socket
 
     from nodalarc.models.events import ClockTick, PlaybackState, SchedulingCheckpoint, TeardownEntry
     from nodalarc.nats_channels import (
@@ -764,25 +765,12 @@ def _run_pacing(
     # Run enough steps from epoch to reach the recovered step so ISL/GS state
     # is accurate. For a fresh start (step=0), this is a no-op.
     if step > 0:
-        # Publish OpsEvent so VS-API and operator know the OME is alive but replaying.
-        from nodalarc.models.events import OpsEvent
-        from nodalarc.nats_channels import ops_event_subject
-
-        recovery_event = OpsEvent(
-            timestamp=datetime.now(UTC),
-            session_id=session_id,
-            source="ome",
-            hostname=_socket.gethostname(),
-            level="info",
-            code="RECOVERY_REPLAY",
-            message=f"Replaying {step + 1} steps from checkpoint (step={step})",
-            details={"total_steps": step + 1},
+        logging.warning(
+            "RecoveryReplay: replaying %d steps from checkpoint (step=%d)",
+            step + 1,
+            step,
+            extra={"code": "RECOVERY_REPLAY", "details": {"total_steps": step + 1}},
         )
-        _enqueue(
-            ops_event_subject(session_id, "ome", "RECOVERY_REPLAY"),
-            recovery_event.model_dump_json().encode(),
-        )
-        logging.info("Recovery replay: %d steps to rebuild link state", step + 1)
 
         for replay_step in range(step + 1):
             replay_events, _, current_associations, mbb_pending_teardowns = compute_step(
@@ -1069,7 +1057,7 @@ def _run_pacing(
 
 def main() -> None:
     """CLI entry point."""
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    _configure_logging("nodal.arc.ome", nats_level=logging.WARNING)
     parser = argparse.ArgumentParser(description="Nodal Arc Orbital Mechanics Engine")
     parser.add_argument("session", help="Path to session YAML config")
     parser.add_argument(
@@ -1116,6 +1104,9 @@ def main() -> None:
         time.sleep(5)
     pre_cfg = _load_session_config(args.session)
     session_id = sanitize_session_id(pre_cfg.session.session.name)
+    from nodal.logging import set_session
+
+    set_session(session_id)
     logging.info("OME session_id=%s", session_id)
 
     event_queue: queue.Queue = queue.Queue(maxsize=1000)

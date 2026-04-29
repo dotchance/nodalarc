@@ -258,6 +258,10 @@ class Dispatcher:
         if nc is None:
             nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
 
+        from nodal.logging import connect as _connect_logging
+
+        await _connect_logging(nc)
+
         self._nc = nc
         self._js = nc.jetstream()
         js = self._js

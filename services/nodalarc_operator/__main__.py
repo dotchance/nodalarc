@@ -7,10 +7,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from nodalarc.constants import LOG_FORMAT
-from nodalarc.platform_config import init_platform_config
+from nodal.logging import configure as _configure_logging
 
-logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+_configure_logging("nodal.arc.operator", nats_level=logging.INFO)
+
+from nodalarc.platform_config import init_platform_config
 
 init_platform_config(Path("/etc/nodalarc/platform.yaml"))
 

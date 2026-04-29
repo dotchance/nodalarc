@@ -312,7 +312,7 @@ def handle_batch_link_down(
         )
     else:
         ifaces = ", ".join(f"{i.node_id}/{i.interface_name}" for i in request.interfaces)
-        log.debug("BatchLinkDown: %d downed (%.1fms) [%s]", downed, elapsed, ifaces)
+        log.info("BatchLinkDown: %d downed (%.1fms) [%s]", downed, elapsed, ifaces)
 
     return node_agent_pb2.BatchLinkDownResponse(
         success=not errors,
@@ -528,7 +528,7 @@ def handle_batch_link_up(
         )
     else:
         ifaces = ", ".join(f"{i.node_id}/{i.interface_name}" for i in request.interfaces)
-        log.debug("BatchLinkUp: %d upped (%.1fms) [%s]", upped, elapsed, ifaces)
+        log.info("BatchLinkUp: %d upped (%.1fms) [%s]", upped, elapsed, ifaces)
 
     return node_agent_pb2.BatchLinkUpResponse(
         success=not errors,

@@ -98,6 +98,9 @@ class NatsHandler(logging.Handler):
                         self._dropped_since_last_report += 1
                         self._log_error_throttled()
                     count += 1
+
+                if self._deque:
+                    self._event.set()
         except asyncio.CancelledError:
             return
 

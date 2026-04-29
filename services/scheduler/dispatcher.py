@@ -791,7 +791,7 @@ class Dispatcher:
 
         isl = sum(1 for info in desired.values() if info.link_type == "isl")
         gs = sum(1 for info in desired.values() if info.link_type == "ground")
-        log.info(
+        log.debug(
             "LinkStateSnapshot seq=%d: %d links (%d ISL, %d GS)",
             snapshot.snapshot_seq,
             len(desired),
@@ -992,10 +992,16 @@ class Dispatcher:
             await self._reconcile_mbb(to_remove, to_add, desired, sim_iso, sim_time, nc)
 
         if to_add or to_remove:
+            added_str = ", ".join(f"{a}<->{b}" for a, b in sorted(to_add)) if to_add else ""
+            removed_str = ", ".join(f"{a}<->{b}" for a, b in sorted(to_remove)) if to_remove else ""
+            parts = []
+            if to_add:
+                parts.append(f"up=[{added_str}]")
+            if to_remove:
+                parts.append(f"down=[{removed_str}]")
             log.info(
-                "Link state changed [added=%d, removed=%d, active=%d]",
-                len(to_add),
-                len(to_remove),
+                "Link state changed [%s, active=%d]",
+                ", ".join(parts),
                 len(self._actual_links),
             )
         else:
@@ -1296,7 +1302,7 @@ class Dispatcher:
                     if result.interfaces_downed > 0:
                         successful_agents.add(addr)
                 else:
-                    log.info(
+                    log.debug(
                         "BatchLinkDown: %d downed in %.1fms",
                         result.interfaces_downed,
                         result.apply_time_ms,
@@ -1504,7 +1510,7 @@ class Dispatcher:
                     if result.interfaces_upped > 0:
                         successful_agents.add(addr)
                 else:
-                    log.info(
+                    log.debug(
                         "BatchLinkUp: %d upped in %.1fms",
                         result.interfaces_upped,
                         result.apply_time_ms,

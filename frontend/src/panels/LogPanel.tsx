@@ -28,7 +28,6 @@ const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 350;
 
 const EDGE_SIZE = 6;
-
 const COLUMNS: { field: SortField; label: string; defaultWidth: number; minWidth: number }[] = [
   { field: "timestamp", label: "timestamp", defaultWidth: 90, minWidth: 60 },
   { field: "source", label: "source", defaultWidth: 80, minWidth: 50 },
@@ -60,6 +59,20 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
   const resizeRef = useRef<{ startX: number; startY: number; startW: number; startH: number; edge: string } | null>(null);
   const colResizeRef = useRef<{ startX: number; colIdx: number; startWidth: number } | null>(null);
   const autoScrollRef = useRef(true);
+  const prevFontSizeRef = useRef(fontSize);
+
+  useEffect(() => {
+    if (prevFontSizeRef.current !== fontSize) {
+      const scale = fontSize / prevFontSizeRef.current;
+      setColWidths((prev) =>
+        prev.map((w, i) => {
+          if (i === COLUMNS.length - 1) return w;
+          return Math.max(COLUMNS[i]!.minWidth, Math.round(w * scale));
+        }),
+      );
+      prevFontSizeRef.current = fontSize;
+    }
+  }, [fontSize]);
 
   useEffect(() => {
     if (!paused) {
@@ -625,19 +638,26 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
               }}
               title={e.details ? JSON.stringify(e.details) : undefined}
             >
-              <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+              <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {formatTime(e.timestamp)}
               </span>
-              <span style={{ color: "var(--text-secondary)" }}>{highlightText(e.source)}</span>
+              <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {highlightText(e.source)}
+              </span>
               <span
                 style={{
                   color: LEVEL_COLORS[e.level] ?? "var(--text-primary)",
                   fontWeight: e.level === "error" || e.level === "critical" ? 600 : 400,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
                 }}
               >
                 {e.level}
               </span>
-              <span style={{ color: "var(--text-secondary)" }}>{highlightText(e.code)}</span>
+              <span style={{ color: "var(--text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {highlightText(e.code)}
+              </span>
               <span
                 style={{
                   whiteSpace: "nowrap",

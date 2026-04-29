@@ -46,7 +46,11 @@ if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
 
     if [ -n "$MISSING_BUILD" ]; then
         echo "  Missing images:$MISSING_BUILD"
-        echo "  Run: make build"
+        if [ -n "$REGISTRY_HOST" ]; then
+            echo "  Run: make build && make load && make install"
+        else
+            echo "  Run: make build && make install"
+        fi
     elif [ -n "$REGISTRY_HOST" ]; then
         MISSING_REG=""
         for img in $DEPLOY_IMAGES; do
@@ -56,7 +60,7 @@ if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
         done
         if [ -n "$MISSING_REG" ]; then
             echo "  Images built but not in registry."
-            echo "  Run: make load"
+            echo "  Run: make load && make install"
         else
             echo "  Images built and loaded."
             echo "  Run: make install"

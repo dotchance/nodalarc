@@ -307,15 +307,18 @@ class SessionContext:
                     cb=self._on_clock_tick,
                 )
             )
-            self._subscriptions.append(
-                await js.subscribe(
-                    almanac_event_subject(sid),
-                    stream="NODALARC_MI",
-                    ordered_consumer=True,
-                    deliver_policy=DeliverPolicy.NEW,
-                    cb=self._on_almanac,
+            try:
+                self._subscriptions.append(
+                    await js.subscribe(
+                        almanac_event_subject(sid),
+                        stream="NODALARC_MI",
+                        ordered_consumer=True,
+                        deliver_policy=DeliverPolicy.NEW,
+                        cb=self._on_almanac,
+                    )
                 )
-            )
+            except Exception as exc:
+                log.info("NODALARC_MI stream not available (MI disabled): %s", exc)
             self._subscriptions.append(
                 await js.subscribe(
                     ops_subscribe_subject(sid),

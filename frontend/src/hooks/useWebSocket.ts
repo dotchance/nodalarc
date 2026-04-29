@@ -14,6 +14,8 @@ interface WebSocketState {
   connected: boolean;
   hasEverConnected: boolean;
   kicked: boolean;
+  sessionTransitioning: boolean;
+  sessionError: string | null;
 }
 
 export function useWebSocket(): WebSocketState {
@@ -24,6 +26,8 @@ export function useWebSocket(): WebSocketState {
   const [connected, setConnected] = useState(false);
   const [hasEverConnected, setHasEverConnected] = useState(false);
   const [kicked, setKicked] = useState(false);
+  const [sessionTransitioning, setSessionTransitioning] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const retriesRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -57,6 +61,28 @@ export function useWebSocket(): WebSocketState {
           setSnapshot((prev) =>
             prev ? { ...prev, session_status_detail: data.message } : prev,
           );
+          return;
+        }
+
+        // Session lifecycle — VS-API sequential switch flow
+        if (data.msg_type === "session_transitioning") {
+          setSessionTransitioning(true);
+          setSessionError(null);
+          setSnapshot(null);
+          setEphemeris(null);
+          return;
+        }
+        if (data.msg_type === "session_ready") {
+          setSessionTransitioning(false);
+          setSessionError(null);
+          if (data.snapshot) {
+            setSnapshot(data.snapshot as StateSnapshot);
+          }
+          return;
+        }
+        if (data.msg_type === "session_failed") {
+          setSessionTransitioning(false);
+          setSessionError(data.error || "Session switch failed");
           return;
         }
 
@@ -121,5 +147,7 @@ export function useWebSocket(): WebSocketState {
     connected,
     hasEverConnected,
     kicked,
+    sessionTransitioning,
+    sessionError,
   };
 }

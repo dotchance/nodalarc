@@ -130,6 +130,7 @@ class SessionContext:
         self.session_ready_time: float = 0.0
         self.prev_snapshot_active_count: int = 0
         self.curr_snapshot_active_count: int = 0
+        self.last_snapshot_seq: int = 0
         self.cached_ephemeris: dict | None = None
         self.cached_ephemeris_obj: object | None = None
         self.almanac_lock = threading.Lock()
@@ -399,6 +400,15 @@ class SessionContext:
         except Exception as exc:
             log.error("FATAL: Failed to parse LinkStateSnapshot: %s", exc)
             raise
+
+        if snapshot.snapshot_seq <= self.last_snapshot_seq:
+            log.warning(
+                "Stale snapshot seq=%d (last=%d) — discarding",
+                snapshot.snapshot_seq,
+                self.last_snapshot_seq,
+            )
+            return
+        self.last_snapshot_seq = snapshot.snapshot_seq
 
         with self.state_lock:
             self.links.clear()

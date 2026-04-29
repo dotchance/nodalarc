@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 async def main() -> None:
     from nodal.logging import configure as _configure_logging
 
-    _configure_logging("nodal.arc.node_agent", nats_level=logging.INFO)
+    _configure_logging("nodal.arc.node_agent", nats_level=logging.WARNING)
 
     parser = argparse.ArgumentParser(description="Nodal Arc Node Agent")
     parser.add_argument(

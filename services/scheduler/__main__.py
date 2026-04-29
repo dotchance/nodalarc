@@ -134,7 +134,7 @@ def _build_interface_map(
 
 
 def main() -> None:
-    _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
+    _configure_logging("nodal.arc.scheduler", nats_level=logging.WARNING)
     parser = argparse.ArgumentParser(description="Nodal Arc Scheduler")
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument(

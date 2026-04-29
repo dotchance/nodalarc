@@ -10,7 +10,7 @@ from pathlib import Path
 
 from nodal.logging import configure as _configure_logging
 
-_configure_logging("nodal.arc.operator", nats_level=logging.INFO)
+_configure_logging("nodal.arc.operator", nats_level=logging.WARNING)
 
 from nodalarc.platform_config import init_platform_config
 

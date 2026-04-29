@@ -48,7 +48,7 @@ export function App() {
 }
 
 function AppInner() {
-  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, historicalMode, setHistoricalMode, fetchHistorical } =
+  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, historicalMode, setHistoricalMode, fetchHistorical } =
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
 
@@ -135,6 +135,14 @@ function AppInner() {
 
   const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
   const [logPanelOpen, setLogPanelOpen] = useState(false);
+
+  // Close terminal and clear selection on session transition
+  useEffect(() => {
+    if (sessionTransitioning) {
+      setCliDrawerOpen(false);
+      clearSelection();
+    }
+  }, [sessionTransitioning, clearSelection]);
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -309,13 +317,21 @@ function AppInner() {
       {!kicked && !connected && hasEverConnected && (
         <div className="connection-banner">Connection lost. Reconnecting...</div>
       )}
-      {switching && (
+      {(switching || sessionTransitioning) && (
         <div className="session-switching-overlay">
           <div className="switching-box">
-            <p>Switching session...</p>
+            <p>{sessionTransitioning ? "Switching session..." : "Deploying session..."}</p>
             <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
-              {snapshot?.session_status_detail ?? ""}
+              {snapshot?.session_status_detail ?? (sessionTransitioning ? "Tearing down old session, starting new one" : "")}
             </p>
+          </div>
+        </div>
+      )}
+      {sessionError && !switching && !sessionTransitioning && (
+        <div className="session-switching-overlay">
+          <div className="switching-box" style={{ borderColor: "var(--accent-red)" }}>
+            <p style={{ color: "var(--accent-red)" }}>Session switch failed</p>
+            <p style={{ fontSize: 10, color: "var(--text-dim)" }}>{sessionError}</p>
           </div>
         </div>
       )}

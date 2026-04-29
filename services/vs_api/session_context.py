@@ -139,6 +139,8 @@ class SessionContext:
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
         self._ready = asyncio.Event()
+        self._ephemeris_received = False
+        self._snapshot_received = False
         self._stopped = False
 
     def _init_state_only(self) -> None:
@@ -156,6 +158,20 @@ class SessionContext:
 
     def is_ready(self) -> bool:
         return self._ready.is_set()
+
+    def _check_ready(self) -> None:
+        """Set ready only when BOTH ephemeris and snapshot have been received.
+
+        Prevents ghost snapshot race: if a stale snapshot from the
+        dying old OME arrives before the new OME publishes its
+        ephemeris, we don't declare ready on ghost data.
+        """
+        if self._ephemeris_received and self._snapshot_received and not self._ready.is_set():
+            self._ready.set()
+            log.info(
+                "SessionContext ready (ephemeris + snapshot): session_id=%s",
+                self.session_id,
+            )
 
     async def start(self, nc: nats.NATS, mode: Literal["switch", "recovery"]) -> None:
         """Start NATS subscriptions on the shared connection.
@@ -349,8 +365,10 @@ class SessionContext:
         eph_dict["msg_type"] = "session_ephemeris"
         self.cached_ephemeris = eph_dict
         self._propagate_positions_from_time(eph.sim_time.isoformat())
-        if not self._ready.is_set():
+        if not self._ephemeris_received:
+            self._ephemeris_received = True
             log.info("SessionContext ephemeris received: session_id=%s", self.session_id)
+            self._check_ready()
 
     async def _on_playback_state(self, msg) -> None:
         data = json.loads(msg.data)
@@ -403,13 +421,14 @@ class SessionContext:
             self.prev_snapshot_active_count = self.curr_snapshot_active_count
             self.curr_snapshot_active_count = len(self.links)
 
-        if not self._ready.is_set():
-            self._ready.set()
+        if not self._snapshot_received:
+            self._snapshot_received = True
             log.info(
-                "SessionContext ready: session_id=%s, %d links",
+                "SessionContext first snapshot: session_id=%s, %d links",
                 self.session_id,
                 len(self.links),
             )
+            self._check_ready()
 
     async def _on_link_up(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()

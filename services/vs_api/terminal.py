@@ -18,6 +18,7 @@ The SSH private key is read from the nodalarc-terminal-keys K8s Secret.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 import asyncssh
@@ -210,3 +211,50 @@ class TerminalSession:
             except Exception:
                 pass
         log.info("Terminal session closed to %s", self._pod_ip)
+
+
+class TerminalManager:
+    """Tracks active terminal sessions for lifecycle management.
+
+    The VS-API registers each WebSocket terminal session here. On
+    session switch, close_all() forcefully disconnects all terminals
+    and notifies the browser via the WebSocket close code.
+    """
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, tuple[TerminalSession, asyncio.BaseProtocol]] = {}
+        self._websockets: dict[str, asyncio.Protocol] = {}
+        self._lock = asyncio.Lock()
+
+    async def register(self, node_id: str, session: TerminalSession, websocket: object) -> None:
+        async with self._lock:
+            self._sessions[node_id] = session
+            self._websockets[node_id] = websocket
+
+    async def unregister(self, node_id: str) -> None:
+        async with self._lock:
+            self._sessions.pop(node_id, None)
+            self._websockets.pop(node_id, None)
+
+    async def close_all(self, reason: str = "Session switched") -> None:
+        """Close all active terminal sessions and their WebSockets."""
+        async with self._lock:
+            if not self._sessions:
+                return
+            log.info(
+                "Closing %d terminal sessions: %s",
+                len(self._sessions),
+                reason,
+            )
+            for node_id, session in list(self._sessions.items()):
+                try:
+                    await session.close()
+                except Exception as exc:
+                    log.warning("Failed to close terminal for %s: %s", node_id, exc)
+                ws = self._websockets.get(node_id)
+                if ws is not None:
+                    with contextlib.suppress(Exception):
+                        await ws.close(code=4410, reason=reason)
+            self._sessions.clear()
+            self._websockets.clear()
+            log.info("All terminal sessions closed")

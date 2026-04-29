@@ -416,7 +416,8 @@ def burst(flow_id: str, req: BurstRequest) -> ProbeResults:
 
 if __name__ == "__main__":
     import uvicorn
+    from nodal.logging import configure as _configure_logging
     from nodalarc.nats_channels import probe_daemon_port
 
-    logging.basicConfig(level=logging.INFO)
+    _configure_logging("nodal.arc.probe")
     uvicorn.run(app, host="0.0.0.0", port=probe_daemon_port())

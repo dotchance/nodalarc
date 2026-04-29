@@ -1,16 +1,17 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Operator entry point — runs kopf event loop."""
+"""Operator entry point — runs kopf event loop.
+
+configure() is called by __init__.py (triggered by the handlers import).
+Do NOT call it here — double-configure destroys the first NatsHandler's
+deque, losing any records buffered between the two calls.
+"""
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
-from nodalarc.constants import LOG_FORMAT
 from nodalarc.platform_config import init_platform_config
-
-logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
 
 init_platform_config(Path("/etc/nodalarc/platform.yaml"))
 

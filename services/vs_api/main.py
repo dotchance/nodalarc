@@ -394,19 +394,19 @@ async def _nats_subscriber() -> None:
             log.error("FATAL: Failed to read session_id from config: %s", exc)
             raise
 
-        # Wait for dependent config files — Operator creates these ConfigMaps
-        # after the VS-API pod starts. subPath mounts on optional ConfigMaps
-        # show as empty directories until the pod restarts. Poll until the
-        # files are real files (directory mount auto-updates, subPath does not).
         for dep_name, dep_ref in [
             ("ground_stations", session.ground_stations),
             ("constellation", session.constellation),
         ]:
             if isinstance(dep_ref, str):
                 dep = Path(dep_ref)
-                while not dep.is_file():
-                    log.info("Waiting for %s at %s", dep_name, dep)
-                    await asyncio.sleep(2)
+                if not dep.is_file():
+                    log.error(
+                        "FATAL: %s config not found at %s — Operator restart_platform_pods may have failed",
+                        dep_name,
+                        dep,
+                    )
+                    raise FileNotFoundError(f"{dep_name} config not found at {dep}")
 
         ctx = SessionContext(session_id, str(config_path))
         await ctx.start(nc, mode="recovery")

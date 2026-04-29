@@ -780,7 +780,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     session = TerminalSession(pod_ip, ssh_key)
     try:
         await session.connect()
-        await _terminal_manager.register(node_id, session, websocket)
+        _term_conn_id = await _terminal_manager.register(node_id, session, websocket)
 
         async def ws_to_ssh():
             """Forward browser input to SSH session."""
@@ -820,7 +820,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     except Exception as exc:
         log.warning("Terminal session error for %s: %s", node_id, exc)
     finally:
-        await _terminal_manager.unregister(node_id)
+        await _terminal_manager.unregister(_term_conn_id)
         await session.close()
         _audit_log.info(f"WS_TERMINAL_DISCONNECT ip={ws_ip} node={node_id}")
 

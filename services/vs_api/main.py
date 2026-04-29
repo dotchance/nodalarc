@@ -397,7 +397,6 @@ async def _nats_subscriber() -> None:
         ctx = SessionContext(session_id, str(config_path))
         await ctx.start(nc, mode="recovery")
         _active_context = ctx
-        log.info("Initial SessionContext started: session_id=%s", session_id)
         await _publish_system_ops_event(
             "info",
             "SESSION_BOOTSTRAP",

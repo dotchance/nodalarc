@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 
 import yaml
-from nodalarc.constants import LOG_FORMAT
+from nodal.logging import configure as _configure_logging
 from nodalarc.models.addressing import (
     AddressingScheme,
     assign_isl_neighbors,
@@ -134,7 +134,7 @@ def _build_interface_map(
 
 
 def main() -> None:
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    _configure_logging("nodal.arc.scheduler", nats_level=logging.WARNING)
     parser = argparse.ArgumentParser(description="Nodal Arc Scheduler")
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument(
@@ -256,6 +256,9 @@ def main() -> None:
     from nodalarc.nats_channels import sanitize_session_id
 
     session_id = sanitize_session_id(session.session.name)
+    from nodal.logging import set_session
+
+    set_session(session_id)
     log.info("Scheduler session_id=%s", session_id)
 
     # Override set (shared between dispatcher and scenario handler)

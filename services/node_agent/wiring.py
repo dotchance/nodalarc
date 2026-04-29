@@ -214,16 +214,27 @@ def execute_wiring(
     _phase0_cleanup(pid_map, nodes, progress_fn=progress_fn)
 
     # Phase 1: Set sysctls in each pod namespace (via os.setns)
+    sysctl_ok = 0
+    sysctl_skipped = []
     for node_id, node_spec in nodes.items():
         pid = pid_map.get(node_id, 0)
         if pid == 0:
-            log.warning(f"No PID for {node_id}, skipping sysctls")
+            sysctl_skipped.append(node_id)
             continue
         for key, value in node_spec.get("sysctls", {}).items():
             err = _write_sysctl_in_netns(pid, key, str(value))
             if err:
-                log.warning(f"sysctl {key}={value} failed in {node_id}: {err}")
-    log.info(f"Phase 1: sysctls set for {len(nodes)} nodes")
+                log.warning("sysctl %s=%s failed in %s: %s", key, value, node_id, err)
+        sysctl_ok += 1
+    if sysctl_skipped:
+        log.warning(
+            "Sysctls: %d applied, %d skipped (no PID yet): %s",
+            sysctl_ok,
+            len(sysctl_skipped),
+            ", ".join(sysctl_skipped),
+        )
+    else:
+        log.info("Sysctls applied to all %d nodes", sysctl_ok)
     _write_progress(f"Sysctls configured for {total_nodes} nodes. Creating ISL interfaces...")
 
     # Phase 2: Create ISL veth pairs (deduplicate A→B and B→A, parallelized)

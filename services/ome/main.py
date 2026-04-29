@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -696,14 +697,14 @@ def _run_pacing(
     last_iter_start: float = time.monotonic()
 
     logging.info(
-        "OME starting [session_id=%s, sat_count=%d, gs_count=%d, epoch=%s, step=%ds, accel=%.1fx, period=%.0fs]",
+        "OME starting [build=%s, session_id=%s, sat_count=%d, gs_count=%d, epoch=%s, step=%ds, accel=%.1fx]",
+        os.environ.get("NODAL_BUILD", "dev"),
         session_id,
         len(cfg.satellites),
         len(cfg.gs_file.stations) if cfg.gs_file else 0,
         datetime.fromtimestamp(epoch_unix, UTC).isoformat(),
         step_seconds,
         current_rate,
-        period,
     )
 
     # --- Checkpoint recovery (warm restart) ---

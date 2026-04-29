@@ -71,7 +71,13 @@ async def main() -> None:
     from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
-    log.info("Node Agent starting [node=%s]", socket.gethostname())
+    import os as _os
+
+    log.info(
+        "Node Agent starting [build=%s, node=%s]",
+        _os.environ.get("NODAL_BUILD", "dev"),
+        socket.gethostname(),
+    )
 
     # -----------------------------------------------------------------------
     # Connect to NATS FIRST — the Node Agent is a NATS-native actor.

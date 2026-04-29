@@ -85,6 +85,12 @@ class OpsEventFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        details = getattr(record, "nodal_details", None)
+
+        if record.exc_info and record.exc_info[0] is not None:
+            tb = self.formatException(record.exc_info)
+            details = {**details, "traceback": tb} if details is not None else {"traceback": tb}
+
         obj: dict = {
             "timestamp": getattr(record, "nodal_ts", ""),
             "session_id": getattr(record, "nodal_session", ""),
@@ -93,7 +99,7 @@ class OpsEventFormatter(logging.Formatter):
             "level": getattr(record, "nodal_level", record.levelname.lower()),
             "code": getattr(record, "nodal_code", ""),
             "message": record.getMessage(),
-            "details": getattr(record, "nodal_details", None),
+            "details": details,
         }
 
         tenant = getattr(record, "nodal_tenant", "")

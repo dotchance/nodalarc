@@ -301,16 +301,18 @@ def handle_batch_link_down(
     elapsed = (_time.monotonic() - start) * 1000
     error_msg = "; ".join(errors) if errors else ""
     if errors:
+        ifaces = ", ".join(f"{i.node_id}/{i.interface_name}" for i in request.interfaces)
         log.warning(
-            "BatchLinkDown %s: %d/%d downed (%.1fms): %s",
-            request.batch_id,
+            "BatchLinkDown: %d/%d downed (%.1fms) [%s]: %s",
             downed,
             len(request.interfaces),
             elapsed,
+            ifaces,
             error_msg,
         )
     else:
-        log.info("BatchLinkDown %s: %d downed (%.1fms)", request.batch_id, downed, elapsed)
+        ifaces = ", ".join(f"{i.node_id}/{i.interface_name}" for i in request.interfaces)
+        log.debug("BatchLinkDown: %d downed (%.1fms) [%s]", downed, elapsed, ifaces)
 
     return node_agent_pb2.BatchLinkDownResponse(
         success=not errors,
@@ -515,16 +517,18 @@ def handle_batch_link_up(
     elapsed = (_time.monotonic() - start) * 1000
     error_msg = "; ".join(errors) if errors else ""
     if errors:
+        ifaces = ", ".join(f"{i.node_id}/{i.interface_name}" for i in request.interfaces)
         log.warning(
-            "BatchLinkUp %s: %d/%d upped (%.1fms): %s",
-            request.batch_id,
+            "BatchLinkUp: %d/%d upped (%.1fms) [%s]: %s",
             upped,
             len(request.interfaces),
             elapsed,
+            ifaces,
             error_msg,
         )
     else:
-        log.info("BatchLinkUp %s: %d upped (%.1fms)", request.batch_id, upped, elapsed)
+        ifaces = ", ".join(f"{i.node_id}/{i.interface_name}" for i in request.interfaces)
+        log.debug("BatchLinkUp: %d upped (%.1fms) [%s]", upped, elapsed, ifaces)
 
     return node_agent_pb2.BatchLinkUpResponse(
         success=not errors,

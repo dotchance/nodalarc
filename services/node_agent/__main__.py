@@ -45,11 +45,11 @@ from node_agent.wiring import execute_wiring, write_wiring_status
 
 log = logging.getLogger(__name__)
 
-_LOG_FORMAT = "%(asctime)s %(levelname)-8s [node-agent] %(name)s — %(message)s"
-
 
 async def main() -> None:
-    logging.basicConfig(format=_LOG_FORMAT, level=logging.INFO)
+    from nodal.logging import configure as _configure_logging
+
+    _configure_logging("nodal.arc.node_agent", nats_level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="Nodal Arc Node Agent")
     parser.add_argument(
@@ -78,6 +78,9 @@ async def main() -> None:
     # substrate monitoring. One connection for the lifetime of the process.
     # -----------------------------------------------------------------------
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+    from nodal.logging import connect as _connect_logging
+
+    await _connect_logging(nc)
     hostname = socket.gethostname()
     progress_subject = wiring_progress_subject(hostname)
     loop = asyncio.get_running_loop()

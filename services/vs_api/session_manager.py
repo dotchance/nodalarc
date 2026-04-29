@@ -12,12 +12,12 @@ the newest one automatically.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import signal
 import threading
-from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -308,24 +308,14 @@ class SessionManager:
 
         return removed
 
-    def switch(
-        self,
-        session_path: str,
-        clear_state_fn: Callable[[], None],
-        update_globals_fn: Callable[[str, str], None],
-    ) -> None:
+    async def switch(self, session_path: str) -> None:
         """Tear down current session and deploy new one via ConstellationSpec CRD.
 
-        1. Delete existing ConstellationSpec CR (Operator tears down)
-        2. Apply new ConstellationSpec CR (Operator deploys)
-        3. Poll CR status until Ready
-
-        Args:
-            session_path: Path to the new session YAML file.
-            clear_state_fn: Callback to reset VS-API in-memory state.
-            update_globals_fn: Callback(session_path, new_db_path) to update VS-API globals.
+        Fully async — uses asyncio.sleep for polling, runs K8s API calls
+        in executor to avoid blocking the event loop. Does NOT call any
+        VS-API state callbacks — the caller (_run_switch) owns the
+        SessionContext lifecycle.
         """
-        import time
 
         import kubernetes.client
         import kubernetes.config
@@ -334,8 +324,8 @@ class SessionManager:
         if session_path not in self._valid_session_files():
             self._status = "error"
             self.status_detail = f"Unknown session: {Path(session_path).name}"
-            log.error(f"Rejected switch to unknown session path: {session_path}")
-            return
+            log.error("Rejected switch to unknown session path: %s", session_path)
+            raise ValueError(f"Unknown session: {session_path}")
 
         try:
             kubernetes.config.load_incluster_config()
@@ -345,58 +335,62 @@ class SessionManager:
         api = kubernetes.client.CustomObjectsApi()
         cfg = get_platform_config()
         ns = cfg.kubernetes_namespace
+        loop = asyncio.get_running_loop()
 
         try:
             self._status = "switching"
             self.status_detail = "Tearing down current session"
-            log.info(f"Session switch: deploying {session_path} via CRD")
+            log.info("Session switch: deploying %s via CRD", session_path)
 
             # === Delete existing ConstellationSpec CR ===
             try:
-                api.delete_namespaced_custom_object(
-                    group="nodalarc.io",
-                    version="v1alpha1",
-                    namespace=ns,
-                    plural="constellationspecs",
-                    name="current-session",
+                await loop.run_in_executor(
+                    None,
+                    lambda: api.delete_namespaced_custom_object(
+                        group="nodalarc.io",
+                        version="v1alpha1",
+                        namespace=ns,
+                        plural="constellationspecs",
+                        name="current-session",
+                    ),
                 )
                 log.info("Deleted existing ConstellationSpec CR")
-                # Wait for CR to be fully deleted (avoid 409 Conflict on recreate)
+
                 self.status_detail = "Waiting for old CR to finalize"
                 for _ in range(60):
                     try:
-                        api.get_namespaced_custom_object(
-                            group="nodalarc.io",
-                            version="v1alpha1",
-                            namespace=ns,
-                            plural="constellationspecs",
-                            name="current-session",
+                        await loop.run_in_executor(
+                            None,
+                            lambda: api.get_namespaced_custom_object(
+                                group="nodalarc.io",
+                                version="v1alpha1",
+                                namespace=ns,
+                                plural="constellationspecs",
+                                name="current-session",
+                            ),
                         )
-                        time.sleep(2)  # Still exists, wait
+                        await asyncio.sleep(2)
                     except kubernetes.client.rest.ApiException as get_e:
                         if get_e.status == 404:
-                            break  # Gone
+                            break
                         raise
-                # Wait for pods to terminate
+
                 self.status_detail = "Waiting for old session pods to terminate"
                 v1 = kubernetes.client.CoreV1Api()
                 for _ in range(60):
-                    pods = v1.list_namespaced_pod(ns, label_selector="nodalarc.io/node-id")
+                    pods = await loop.run_in_executor(
+                        None,
+                        lambda: v1.list_namespaced_pod(ns, label_selector="nodalarc.io/node-id"),
+                    )
                     if len(pods.items) == 0:
                         break
-                    time.sleep(2)
+                    await asyncio.sleep(2)
             except kubernetes.client.rest.ApiException as e:
                 if e.status != 404:
                     raise
 
-            # === Clear VS-API state ===
-            self.status_detail = "Clearing in-memory state"
-            clear_state_fn()
-
-            # === Build ConstellationSpec CR with session YAML content ===
-            # The CRD carries the complete session YAML so both pods can
-            # read it without shared filesystem access.
-            self.status_detail = "Building constellation spec"
+            # === Build and apply ConstellationSpec CR ===
+            self.status_detail = "Deploying constellation"
             session_yaml_content = Path(session_path).read_text()
             cr_body = {
                 "apiVersion": "nodalarc.io/v1alpha1",
@@ -406,59 +400,46 @@ class SessionManager:
                     "sessionYaml": session_yaml_content,
                 },
             }
-
-            # === Apply ConstellationSpec CR ===
-            self.status_detail = "Deploying constellation"
-            api.create_namespaced_custom_object(
-                group="nodalarc.io",
-                version="v1alpha1",
-                namespace=ns,
-                plural="constellationspecs",
-                body=cr_body,
-            )
-            log.info(f"Applied ConstellationSpec CR for {session_path}")
-
-            # === Poll CR status until Ready ===
-            self.status_detail = "Waiting for constellation to deploy"
-            cr_ready = False
-            for _ in range(300):  # 5 minutes max
-                cr = api.get_namespaced_custom_object(
+            await loop.run_in_executor(
+                None,
+                lambda: api.create_namespaced_custom_object(
                     group="nodalarc.io",
                     version="v1alpha1",
                     namespace=ns,
                     plural="constellationspecs",
-                    name="current-session",
+                    body=cr_body,
+                ),
+            )
+            log.info("Applied ConstellationSpec CR for %s", session_path)
+
+            # === Poll CR status until Ready ===
+            self.status_detail = "Waiting for constellation to deploy"
+            for _ in range(300):
+                cr = await loop.run_in_executor(
+                    None,
+                    lambda: api.get_namespaced_custom_object(
+                        group="nodalarc.io",
+                        version="v1alpha1",
+                        namespace=ns,
+                        plural="constellationspecs",
+                        name="current-session",
+                    ),
                 )
                 phase = cr.get("status", {}).get("phase", "")
                 message = cr.get("status", {}).get("message", "")
                 if phase != "Wiring":
-                    # During Wiring, Node Agent NATS progress owns status_detail
                     self.status_detail = message or f"Phase: {phase}"
                 if phase == "Ready":
-                    cr_ready = True
-                    break
+                    self._current_session_file = session_path
+                    return
                 if phase == "Error":
                     raise RuntimeError(f"Operator error: {message}")
-                time.sleep(1)
+                await asyncio.sleep(1)
 
-            if not cr_ready:
-                # CR never reached Ready within timeout — set error, don't claim ready
-                self._status = "error"
-                self.status_detail = "Deploy timed out waiting for CR Ready"
-                log.warning("Session switch timed out waiting for CR Ready")
-                return
-
-            # === Update VS-API globals ===
-            self.status_detail = "Updating VS-API configuration"
-            update_globals_fn(session_path, "")
-
-            # === Update internal state ===
-            self._current_session_file = session_path
-            self._status = "ready"
-            self.status_detail = ""
-            log.info(f"Session switch complete: {session_path}")
+            raise TimeoutError("Deploy timed out waiting for CR Ready (5 minutes)")
 
         except Exception as exc:
             self._status = "error"
             self.status_detail = str(exc)
-            log.error(f"Session switch failed: {exc}")
+            log.error("Session switch failed: %s", exc)
+            raise

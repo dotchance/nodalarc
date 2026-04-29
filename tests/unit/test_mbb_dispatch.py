@@ -57,10 +57,13 @@ def _make_dispatcher(
         agent_pool=pool,
         override_set=set(),
         override_lock=threading.Lock(),
+        session_id="test-session",
         gs_terminal_capacities=gs_caps or {},
         sat_ground_terminal_capacities=sat_caps or {},
         mbb_dispatch=mbb,
     )
+    d._js = AsyncMock()
+    d._nc = MagicMock()
     return d
 
 

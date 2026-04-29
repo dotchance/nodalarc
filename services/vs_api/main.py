@@ -19,7 +19,6 @@ import os
 import secrets
 import sqlite3
 import sys
-import threading
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,10 +40,8 @@ from nodalarc.db.queries import (
     query_probe_results,
 )
 from nodalarc.db.schema import create_tables
-from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
-    AlmanacState,
     LinkState,
     NetworkHealth,
     NodeState,
@@ -55,23 +52,15 @@ from nodalarc.models.vs_api import (
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     STREAM_OPS_EVENTS,
-    STREAM_SESSION_EVENTS,
-    almanac_event_subject,
-    latency_update_subject,
-    link_down_subject,
-    link_state_snapshot_subject,
-    link_up_subject,
     nats_url,
-    ome_clock_subject,
-    ops_subscribe_subject,
-    playback_state_subject,
-    session_ephemeris_subject,
 )
 from nodalarc.platform_config import get_platform_config
 
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
+from vs_api.session_context import SessionContext, _link_key
 from vs_api.session_manager import SessionManager
+from vs_api.terminal import TerminalManager
 
 log = logging.getLogger(__name__)
 
@@ -192,383 +181,75 @@ def _rate_limit_session_switch(request: Request) -> None:
     _check_rate(_get_rate_session_switch(), request)
 
 
-# Module-level state (populated before app starts)
-_nodes: dict[str, NodeState] = {}
-_links: dict[str, LinkState] = {}
-_recent_events: list[RecentEvent] = []
-_network_health: NetworkHealth = NetworkHealth(
-    status="no measurement",
-    converging_since_ms=None,
-    unreachable_flows=0,
-    last_convergence_ms=None,
-)
-_mi_active: bool = False
-_sim_time: str = datetime.now(UTC).isoformat()
-_session_status: str | None = None
-_state_lock = threading.Lock()
-_db_path: str = ""
-_session_file: str = ""  # Path to the active session YAML
-_routing_stack: str | None = None
-_constellation_name: str | None = None
+# --- Session state: owned by SessionContext ---
+# All per-session state lives in _active_context. Module-level session
+# globals are DELETED — any reference to the old names (_nodes, _links,
+# _almanac, etc.) raises NameError at import time, forcing migration.
+_active_context: SessionContext | None = None
+
+# --- Platform state: global, outlives any session ---
 _session_manager: SessionManager | None = None
-_gs_elevation_map: dict[str, float] = {}  # node_id -> min_elevation_deg
-_beam_falloff_exponent: float = 2.0
-_nats_session_id: str = ""  # Set by main() from session config — empty until set
-_playback_paused: bool = False
-_playback_speed: float = 1.0
+_nats_connection: nats.NATS | None = None
+_main_event_loop: asyncio.AbstractEventLoop | None = None
+_terminal_manager = TerminalManager()
+_initial_session_file: str = ""  # Set by main() before uvicorn starts
 
-# Stale tracking per streaming architecture v1.2 Section 3.5
-_STALE_THRESHOLD_S: float = 15.0
-_last_clock_tick_wall_time: float = 0.0  # monotonic time of last ClockTick
-_last_link_event_wall_time: float = 0.0  # monotonic time of last LinkUp/Down
-_session_ready_time: float = 0.0  # monotonic time when session reached Ready
-_prev_snapshot_active_count: int = 0  # link count from previous LinkStateSnapshot
-_curr_snapshot_active_count: int = 0  # link count from current LinkStateSnapshot
-_CONVERGENCE_DWELL_S: float = 15.0  # seconds after Ready before declaring converged
-_BULK_CHANGE_THRESHOLD: float = 0.10  # 10% link delta between snapshots = converging
-
-# Cached SessionEphemeris for local position propagation (PRD v0.71)
-_cached_ephemeris: dict | None = None  # JSON-serializable ephemeris for WebSocket delivery
-_cached_ephemeris_obj: object | None = None  # SessionEphemeris Pydantic object for propagation
-
-# Continuous tracer state
-_continuous_tracer: ContinuousTracer | None = None
-
-_almanac: AlmanacState = AlmanacState()
-_almanac_lock = threading.Lock()
-
-# OPS event buffer — recent operational events from all components
+# System OpsEvents — meta-session, not cleared on switch
 from collections import deque
 
-_ops_events: deque = deque(maxlen=500)
+_system_ops_events: deque = deque(maxlen=500)
 
 
-def _propagate_positions_from_ephemeris(sim_time_iso: str) -> None:
-    """Compute and update all node positions from cached SessionEphemeris.
+async def _publish_system_ops_event(
+    level: str, code: str, message: str, details: dict | None = None
+) -> None:
+    """Publish and buffer a system-scoped OpsEvent.
 
-    Called on each ClockTick. Propagates satellite positions using the
-    shared Keplerian propagator. Ground station positions are static.
-    This is the sole source of position data — no OME Snapshot fallback.
+    Goes to nodalarc.ops.system.vs-api.{code} AND is appended to the
+    local _system_ops_events deque for immediate WebSocket delivery.
     """
-    global _sim_time
+    import socket
 
-    from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian
-    from nodalarc.orbital import elements_from_params
-    from nodalarc.propagator import propagate_keplerian
+    event = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "session_id": "_system",
+        "source": "vs-api",
+        "hostname": socket.gethostname(),
+        "level": level,
+        "code": code,
+        "message": message,
+        "details": details,
+    }
+    _system_ops_events.append(event)
 
-    if _cached_ephemeris_obj is None:
-        return
-
-    try:
-        sim_time_unix = datetime.fromisoformat(sim_time_iso).timestamp()
-    except (ValueError, TypeError):
-        return
-
-    with _state_lock:
-        _sim_time = sim_time_iso
-
-        for node_id, node in _cached_ephemeris_obj.nodes.items():
-            if isinstance(node, EphemerisNodeKeplerian):
-                elements = elements_from_params(
-                    node.altitude_km, node.inclination_deg, node.raan_deg, node.true_anomaly_deg
-                )
-                dt = sim_time_unix - _cached_ephemeris_obj.epoch_unix
-                _pos_ecef, vel_ecef, geo = propagate_keplerian(
-                    elements, _cached_ephemeris_obj.epoch_unix, dt
-                )
-
-                # Preserve existing routing_area, neighbor_count, prefix from prior state
-                existing = _nodes.get(node_id)
-                _nodes[node_id] = NodeState(
-                    node_id=node_id,
-                    node_type="satellite",
-                    lat_deg=geo.lat_deg,
-                    lon_deg=geo.lon_deg,
-                    alt_km=geo.alt_km,
-                    vel_x_km_s=vel_ecef.x,
-                    vel_y_km_s=vel_ecef.y,
-                    vel_z_km_s=vel_ecef.z,
-                    plane=node.plane,
-                    slot=node.slot,
-                    routing_area=existing.routing_area if existing else None,
-                    neighbor_count=existing.neighbor_count if existing else 0,
-                    prefix=existing.prefix if existing else None,
-                    beam_falloff_exponent=_beam_falloff_exponent,
-                )
-
-            elif isinstance(node, EphemerisNodeFixed):
-                existing = _nodes.get(node_id)
-                _nodes[node_id] = NodeState(
-                    node_id=node_id,
-                    node_type="ground_station",
-                    lat_deg=node.lat_deg,
-                    lon_deg=node.lon_deg,
-                    alt_km=node.alt_km,
-                    vel_x_km_s=0.0,
-                    vel_y_km_s=0.0,
-                    vel_z_km_s=0.0,
-                    plane=None,
-                    slot=None,
-                    routing_area=existing.routing_area if existing else None,
-                    neighbor_count=existing.neighbor_count if existing else 0,
-                    prefix=existing.prefix if existing else None,
-                    min_elevation_deg=_gs_elevation_map.get(node_id),
-                )
+    nc = _nats_connection
+    if nc is not None and not nc.is_closed:
+        try:
+            js = nc.jetstream()
+            subject = f"nodalarc.ops.system.vs-api.{code.lower()}"
+            await js.publish(subject, json.dumps(event).encode())
+        except Exception as exc:
+            log.warning("Failed to publish system OpsEvent %s: %s", code, exc)
 
 
-def _compute_convergence_state() -> None:
-    """Compute convergence status from LinkStateSnapshot delta (no MI required).
+def _build_snapshot() -> dict | None:
+    """Build a StateSnapshot dict from the active SessionContext.
 
-    Stateless and declarative: compares consecutive LinkStateSnapshot link
-    counts. The OME publishes the complete truth every 5 sim-seconds.
-    No event counting, no timers, survives VS-API restarts.
-
-    - "no measurement" → no links exist
-    - "stabilizing" → session just reached Ready, dwell period
-    - "converging" → link count delta > 10% between consecutive snapshots
-    - "converged" → link count stable (delta < 10%)
+    Returns None if no active context (mid-transition or no session).
+    Takes a local reference to _active_context to prevent mixed-state
+    reads if the context is swapped mid-tick.
     """
-    global _network_health
+    ctx = _active_context
+    if ctx is None:
+        return None
 
-    # MI takes precedence when active
-    if _mi_active:
-        return
-
-    active = _curr_snapshot_active_count
-
-    if active == 0:
-        _network_health = _network_health.model_copy(update={"status": "no measurement"})
-        return
-
-    # Dwell period after session Ready — routing protocols starting
-    now = _time.monotonic()
-    if _session_ready_time > 0 and (now - _session_ready_time) < _CONVERGENCE_DWELL_S:
-        _network_health = _network_health.model_copy(update={"status": "stabilizing"})
-        return
-
-    # Compare consecutive snapshots — declarative, not event-based
-    total = max(active, _prev_snapshot_active_count, 1)
-    delta = abs(active - _prev_snapshot_active_count)
-    if delta / total > _BULK_CHANGE_THRESHOLD:
-        _network_health = _network_health.model_copy(update={"status": "converging"})
-    else:
-        _network_health = _network_health.model_copy(update={"status": "converged"})
-
-
-def _update_link_up(event_data: dict) -> None:
-    """Update link state on LinkUp."""
-    node_a = event_data.get("node_a")
-    node_b = event_data.get("node_b")
-    if not node_a or not node_b:
-        log.error(
-            "Malformed LinkUp event — missing node_a=%r or node_b=%r: %s",
-            node_a,
-            node_b,
-            event_data,
-        )
-        raise ValueError(f"LinkUp event missing required fields: node_a={node_a}, node_b={node_b}")
-    for field in (
-        "interface_a",
-        "interface_b",
-        "latency_ms",
-        "bandwidth_mbps",
-        "range_km",
-        "reason",
-    ):
-        if field not in event_data:
-            log.error("Malformed LinkUp event — missing %s: %s", field, event_data)
-            raise ValueError(f"LinkUp event missing required field: {field}")
-    key = _link_key(node_a, node_b)
-    with _state_lock:
-        _links[key] = LinkState(
-            node_a=node_a,
-            node_b=node_b,
-            state="active",
-            link_type=_derive_link_type(node_a, node_b, event_data.get("link_type", "isl")),
-            link_reason=event_data["reason"],
-            latency_ms=event_data["latency_ms"],
-            bandwidth_mbps=event_data["bandwidth_mbps"],
-            range_km=event_data["range_km"],
-            traffic_load_pct=None,
-            interface_a=event_data["interface_a"],
-            interface_b=event_data["interface_b"],
-        )
-    if _continuous_tracer is not None:
-        _continuous_tracer.notify_topology_change(node_a, node_b)
-
-
-def _update_link_down(event_data: dict) -> None:
-    """Remove link state on LinkDown."""
-    node_a = event_data.get("node_a")
-    node_b = event_data.get("node_b")
-    if not node_a or not node_b:
-        log.error(
-            "Malformed LinkDown event — missing node_a=%r or node_b=%r: %s",
-            node_a,
-            node_b,
-            event_data,
-        )
-        raise ValueError(
-            f"LinkDown event missing required fields: node_a={node_a}, node_b={node_b}"
-        )
-    key = _link_key(node_a, node_b)
-    with _state_lock:
-        _links.pop(key, None)
-    if _continuous_tracer is not None:
-        _continuous_tracer.notify_topology_change(node_a, node_b)
-
-
-def _update_latency(event_data: dict) -> None:
-    """Update link latency."""
-    node_a = event_data.get("node_a")
-    node_b = event_data.get("node_b")
-    if not node_a or not node_b:
-        log.error(
-            "Malformed LatencyUpdate — missing node_a=%r or node_b=%r: %s",
-            node_a,
-            node_b,
-            event_data,
-        )
-        raise ValueError(f"LatencyUpdate missing required fields: node_a={node_a}, node_b={node_b}")
-    key = _link_key(node_a, node_b)
-    with _state_lock:
-        existing = _links.get(key)
-        if existing is not None:
-            latency_ms = event_data.get("latency_ms")
-            range_km = event_data.get("range_km")
-            if latency_ms is None or range_km is None:
-                log.error(
-                    "Malformed LatencyUpdate — missing latency_ms=%r or range_km=%r: %s",
-                    latency_ms,
-                    range_km,
-                    event_data,
-                )
-                raise ValueError("LatencyUpdate missing latency_ms or range_km")
-            _links[key] = existing.model_copy(
-                update={
-                    "latency_ms": latency_ms,
-                    "range_km": range_km,
-                }
-            )
-
-
-def _add_recent_event(event_data: dict, event_type: str) -> None:
-    """Add to recent events list (cap at 50)."""
-    sim_time_raw = event_data.get("sim_time")
-    if sim_time_raw is None:
-        log.error("Malformed event — missing sim_time: %s", event_data)
-        raise ValueError(f"Event missing sim_time: {event_type}")
-    sim_time_dt = (
-        datetime.fromisoformat(sim_time_raw) if isinstance(sim_time_raw, str) else sim_time_raw
-    )
-    node_id = event_data.get("node_id") or event_data.get("node_a")
-    if not node_id:
-        log.error("Malformed event — missing node_id and node_a: %s", event_data)
-        raise ValueError(f"Event missing node_id: {event_type}")
-    event = RecentEvent(
-        sim_time=sim_time_dt,
-        node_id=node_id,
-        event_type=event_type,
-        summary=event_data.get("reason", ""),
-    )
-    with _state_lock:
-        _recent_events.append(event)
-        if len(_recent_events) > 50:
-            del _recent_events[:-50]
-
-
-def _update_convergence(event_data: dict) -> None:
-    """Update network health from MI convergence result.
-
-    When MI provides real convergence data, it takes precedence over
-    the link-state heuristic. The _mi_active flag prevents the heuristic
-    from overriding MI-sourced state.
-    """
-    global _mi_active, _network_health
-    with _state_lock:
-        _mi_active = True
-        if event_data.get("converged"):
-            _network_health = _network_health.model_copy(
-                update={
-                    "status": "converged",
-                    "converging_since_ms": None,
-                    "last_convergence_ms": event_data.get("duration_ms"),
-                }
-            )
-        else:
-            _network_health = _network_health.model_copy(update={"status": "converging"})
-
-
-def _link_key(node_a: str, node_b: str) -> str:
-    return f"{min(node_a, node_b)}:{max(node_a, node_b)}"
-
-
-def _derive_link_type(node_a: str, node_b: str, link_type: str = "isl") -> str:
-    """Derive detailed link type.
-
-    Returns: "ground", "intra_plane_isl", or "cross_plane_isl".
-    """
-    if link_type == "ground":
-        return "ground"
-    # Parse plane from sat-P##S## format
-    import re
-
-    ma = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_a)
-    mb = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_b)
-    if ma and mb and ma.group(1) == mb.group(1):
-        return "intra_plane_isl"
-    return "cross_plane_isl"
-
-
-def _update_almanac_state(event_data: dict) -> None:
-    """Update almanac state from AlmanacEvent."""
-    global _almanac
-    event_type = event_data.get("event_type")
-    if not event_type:
-        log.error("Malformed AlmanacEvent — missing event_type: %s", event_data)
-        raise ValueError("AlmanacEvent missing event_type")
-    with _almanac_lock:
-        _almanac = _almanac.model_copy(update={"nodalpath_active": True})
-        if event_type == "table_pushed":
-            _almanac = _almanac.model_copy(
-                update={
-                    "last_topology_state_id": event_data.get("topology_state_id"),
-                    "last_push_sim_time": event_data.get("sim_time"),
-                    "last_push_wall_time": event_data.get("wall_time"),
-                    "nodes_succeeded": event_data.get("nodes_succeeded"),
-                    "nodes_failed": event_data.get("nodes_failed"),
-                }
-            )
-        elif event_type == "deviation_detected":
-            _almanac = _almanac.model_copy(update={"deviation_count": _almanac.deviation_count + 1})
-        elif event_type == "recomputation_triggered":
-            _almanac = _almanac.model_copy(
-                update={"recomputation_count": _almanac.recomputation_count + 1}
-            )
-
-
-def _is_stale() -> bool:
-    """Check if clock or link data is stale per streaming architecture v1.2 Section 3.5."""
-    now = _time.monotonic()
-    # Don't report stale until we've received at least one message of each type
-    if _last_clock_tick_wall_time == 0.0 or _last_link_event_wall_time == 0.0:
-        return False
-    return (
-        now - _last_clock_tick_wall_time > _STALE_THRESHOLD_S
-        or now - _last_link_event_wall_time > _STALE_THRESHOLD_S
-    )
-
-
-def _build_snapshot() -> dict:
-    """Build a StateSnapshot dict from current state."""
-    with _state_lock:
+    with ctx.state_lock:
         now = datetime.now(UTC)
-        links = list(_links.values())
+        links = list(ctx.links.values())
 
-        # Compute isl_count / gnd_count from active links
         _isl_counts: dict[str, int] = {}
         _gnd_counts: dict[str, int] = {}
-        for ldata in _links.values():
+        for ldata in ctx.links.values():
             a, b = ldata.node_a, ldata.node_b
             is_gnd = ldata.link_type == "ground"
             for nid in (a, b):
@@ -577,27 +258,28 @@ def _build_snapshot() -> dict:
                 else:
                     _isl_counts[nid] = _isl_counts.get(nid, 0) + 1
         nodes = []
-        for n in _nodes.values():
+        for n in ctx.nodes.values():
             isl_c = _isl_counts.get(n.node_id, 0)
             gnd_c = _gnd_counts.get(n.node_id, 0)
             if isl_c != n.isl_count or gnd_c != n.gnd_count:
                 nodes.append(n.model_copy(update={"isl_count": isl_c, "gnd_count": gnd_c}))
             else:
                 nodes.append(n)
-        recent = list(_recent_events)
+        recent = list(ctx.recent_events)
 
-        # Compute convergence heuristic (no MI required)
-        _compute_convergence_state()
-        health = _network_health
+        ctx.compute_convergence_state()
+        health = ctx.network_health
 
         _traced: list[TracedPath] = []
-        if _continuous_tracer is not None and _continuous_tracer.active:
-            tp = _continuous_tracer.traced_path
+        if ctx.continuous_tracer is not None and ctx.continuous_tracer.active:
+            tp = ctx.continuous_tracer.traced_path
             if tp is not None:
                 _traced.append(tp)
 
         snapshot = StateSnapshot(
-            sim_time=datetime.fromisoformat(_sim_time) if isinstance(_sim_time, str) else _sim_time,
+            sim_time=datetime.fromisoformat(ctx.sim_time)
+            if isinstance(ctx.sim_time, str)
+            else ctx.sim_time,
             wall_time=now,
             schema_version=1,
             nodes=nodes,
@@ -606,283 +288,64 @@ def _build_snapshot() -> dict:
             active_flows=[],
             recent_events=recent,
             network_health=health,
-            routing_stack=_routing_stack,
-            constellation_name=_constellation_name,
+            routing_stack=ctx.routing_stack,
+            constellation_name=ctx.constellation_name,
             session_status=_session_manager.status if _session_manager else None,
             session_status_detail=_session_manager.status_detail if _session_manager else None,
-            playback_paused=_playback_paused,
-            playback_speed=_playback_speed,
-            stale=_is_stale(),
+            playback_paused=ctx.playback_paused,
+            playback_speed=ctx.playback_speed,
+            stale=ctx.is_stale(),
         )
         result = json.loads(snapshot.model_dump_json())
-        # Append latest OPS events to WebSocket frame (not part of Pydantic model
-        # to avoid coupling the event schema to the snapshot schema).
-        result["ops_events"] = list(_ops_events)[-50:]
+        # System + session OpsEvents merged for the log panel
+        all_ops = list(_system_ops_events)[-25:] + list(ctx.session_ops_events)[-25:]
+        all_ops.sort(key=lambda e: e.get("timestamp", ""))
+        result["ops_events"] = all_ops[-50:]
         return result
 
 
 # --- NATS subscriber ---
 
-_nats_connection: nats.NATS | None = None
 _pending_cr_poll: bool = False
 _ws_clients: set = set()  # Active WebSocket connections for instant broadcast
 
 
+async def _broadcast_to_all(frame: str) -> None:
+    """Push a text frame to all connected WebSocket clients."""
+    for ws in list(_ws_clients):
+        with contextlib.suppress(Exception):
+            await ws.send_text(frame)
+
+
 async def _nats_subscriber() -> None:
-    """NATS JetStream subscriber.
+    """NATS connection manager and initial SessionContext bootstrap.
 
-    Subscribes to:
-    - nodalarc.ome.{session_id}.snapshot → position updates
-    - nodalarc.links.{session_id}.state → LinkStateSnapshot (replace-not-merge)
-    - nodalarc.links.{session_id}.up/down → individual link events
-    - nodalarc.links.{session_id}.latency → latency updates
-    - nodalarc.nodalpath.{session_id}.almanac → NodalPath almanac events
+    Creates the shared NATS connection, waits for session config, then
+    creates and starts the initial SessionContext. All session-scoped
+    subscriptions are owned by the context, not this function.
 
-    Stale detection: tracks wall-clock time of last snapshot and link event.
-    If no messages for 15s, data is stale.
+    Also subscribes to wiring progress (core NATS, not session-scoped).
     """
-    global _nats_connection, _last_clock_tick_wall_time, _last_link_event_wall_time
-    global _cached_ephemeris, _cached_ephemeris_obj, _nats_session_id
+    global _nats_connection, _active_context, _main_event_loop
 
+    _main_event_loop = asyncio.get_running_loop()
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     _nats_connection = nc
-    js = nc.jetstream()
+    log.info("VS-API NATS connected to %s", nats_url())
 
-    log.info("VS-API NATS connected to %s (session_id=%s)", nats_url(), _nats_session_id)
-
-    # If main() detected a CR in Wiring/Creating phase, start polling from
-    # this event loop (main() runs before uvicorn and has no event loop).
+    # If main() detected a CR in Wiring/Creating phase, start polling
     global _pending_cr_poll
     if _pending_cr_poll:
         _pending_cr_poll = False
-        log.info("NATS subscriber: launching _poll_cr_until_ready background task")
         asyncio.ensure_future(_poll_cr_until_ready())
 
-    # --- Callback-driven subscriptions (DeliverPolicy.NEW) ---
-    # NATS delivers messages to callbacks as they arrive — concurrently,
-    # no sequential polling, no starvation of any subscription.
-    from nats.js.api import DeliverPolicy
-
-    msg_count = 0
-
-    async def _on_session_ephemeris(msg):
-        global _cached_ephemeris, _cached_ephemeris_obj
-        nonlocal msg_count
-        msg_count += 1
-        from nodalarc.models.events import SessionEphemeris
-
-        eph = SessionEphemeris.model_validate_json(msg.data)
-        _cached_ephemeris_obj = eph
-        _cached_ephemeris = json.loads(msg.data)
-        _cached_ephemeris["msg_type"] = "session_ephemeris"
-        log.info(
-            "SessionEphemeris received: epoch_id=%d, %d nodes",
-            eph.epoch_id,
-            len(eph.nodes),
-        )
-        # Initialize node registry from ephemeris (positions computed on first ClockTick)
-        _propagate_positions_from_ephemeris(eph.sim_time.isoformat())
-
-    async def _on_playback_state(msg):
-        global _playback_paused
-        nonlocal msg_count
-        msg_count += 1
-        data = json.loads(msg.data)
-        with _state_lock:
-            state = data.get("state")
-            if not state:
-                log.error("Malformed PlaybackState — missing state: %s", data)
-                raise ValueError("PlaybackState missing state")
-            _playback_paused = state == "paused"
-
-    async def _on_clock_tick(msg):
-        global _last_clock_tick_wall_time, _playback_speed
-        nonlocal msg_count
-        msg_count += 1
-        data = json.loads(msg.data)
-        sim_time_str = data.get("sim_time")
-        if not sim_time_str:
-            log.error("Malformed ClockTick — missing sim_time: %s", data)
-            raise ValueError("ClockTick missing sim_time")
-        if sim_time_str:
-            try:
-                _propagate_positions_from_ephemeris(sim_time_str)
-            except Exception as exc:
-                log.error("Position propagation failed: %s", exc, exc_info=True)
-        with _state_lock:
-            _playback_speed = data.get("compression_ratio") or 1.0
-        _last_clock_tick_wall_time = _time.monotonic()
-
-    async def _on_link_state_snapshot(msg):
-        global _last_link_event_wall_time
-        nonlocal msg_count
-        msg_count += 1
-        _apply_link_state_snapshot(json.loads(msg.data))
-        _last_link_event_wall_time = _time.monotonic()
-
-    async def _on_link_up(msg):
-        global _last_link_event_wall_time
-        nonlocal msg_count
-        msg_count += 1
-        data = json.loads(msg.data)
-        _update_link_up(data)
-        _add_recent_event(data, "link_up")
-        _last_link_event_wall_time = _time.monotonic()
-
-    async def _on_link_down(msg):
-        global _last_link_event_wall_time
-        nonlocal msg_count
-        msg_count += 1
-        data = json.loads(msg.data)
-        _update_link_down(data)
-        _add_recent_event(data, "link_down")
-        _last_link_event_wall_time = _time.monotonic()
-
-    async def _on_latency_update(msg):
-        nonlocal msg_count
-        msg_count += 1
-        _update_latency(json.loads(msg.data))
-
-    async def _on_almanac(msg):
-        nonlocal msg_count
-        msg_count += 1
-        _update_almanac_state(json.loads(msg.data))
-
-    async def _on_ops_event(msg):
-        nonlocal msg_count
-        msg_count += 1
-        with contextlib.suppress(Exception):
-            _ops_events.append(json.loads(msg.data))
-
-    # Wait for session config to become available, then subscribe with
-    # session-scoped subjects. The VS-API starts before the session
-    # ConfigMap exists. The NATS subscriber polls until the config
-    # file appears, then creates subscriptions with the correct session_id.
-    session_config_path = Path(_session_file) if _session_file else None
-    while session_config_path and not session_config_path.is_file():
-        log.info("NATS subscriber: waiting for session config at %s", session_config_path)
-        await asyncio.sleep(5)
-
-    # Session config now available — read session_id
-    if session_config_path and session_config_path.is_file():
-        try:
-            from nodalarc.nats_channels import sanitize_session_id
-
-            raw = yaml.safe_load(session_config_path.read_text())
-            if raw:
-                session = SessionConfig.model_validate(raw)
-                _nats_session_id = sanitize_session_id(session.session.name)
-                log.info("NATS subscriber: session_id=%s", _nats_session_id)
-        except Exception as exc:
-            log.error("FATAL: Failed to read session_id from config: %s", exc)
-            raise
-
-    sid = _nats_session_id
-    if not sid:
-        log.error("FATAL: VS-API has no session_id — cannot subscribe to NATS subjects")
-        raise ValueError("session_id is required for VS-API NATS subscriptions")
-    log.info("VS-API NATS subscribing with session_id=%s", sid)
-
-    log.info("NATS subscriber: launching _poll_cr_until_ready for session tracking")
-    asyncio.ensure_future(_poll_cr_until_ready())
-
-    subs = []
-    try:
-        subs.append(
-            await js.subscribe(
-                session_ephemeris_subject(sid),
-                stream=STREAM_SESSION_EVENTS,
-                ordered_consumer=True,
-                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                cb=_on_session_ephemeris,
-            )
-        )
-        subs.append(
-            await js.subscribe(
-                playback_state_subject(sid),
-                stream=STREAM_SESSION_EVENTS,
-                ordered_consumer=True,
-                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                cb=_on_playback_state,
-            )
-        )
-        subs.append(
-            await js.subscribe(
-                ome_clock_subject(sid),
-                stream="NODALARC_OME",
-                ordered_consumer=True,
-                deliver_policy=DeliverPolicy.NEW,
-                cb=_on_clock_tick,
-            )
-        )
-        subs.append(
-            await js.subscribe(
-                link_state_snapshot_subject(sid),
-                stream="NODALARC_LINKS",
-                ordered_consumer=True,
-                deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
-                cb=_on_link_state_snapshot,
-            )
-        )
-        subs.append(
-            await js.subscribe(
-                link_up_subject(sid),
-                stream="NODALARC_LINKS",
-                ordered_consumer=True,
-                deliver_policy=DeliverPolicy.NEW,
-                cb=_on_link_up,
-            )
-        )
-        subs.append(
-            await js.subscribe(
-                link_down_subject(sid),
-                stream="NODALARC_LINKS",
-                ordered_consumer=True,
-                deliver_policy=DeliverPolicy.NEW,
-                cb=_on_link_down,
-            )
-        )
-        subs.append(
-            await js.subscribe(
-                latency_update_subject(sid),
-                stream="NODALARC_LINKS",
-                ordered_consumer=True,
-                deliver_policy=DeliverPolicy.NEW,
-                cb=_on_latency_update,
-            )
-        )
-        subs.append(
-            await js.subscribe(
-                almanac_event_subject(sid),
-                stream="NODALARC_OME",
-                ordered_consumer=True,
-                deliver_policy=DeliverPolicy.NEW,
-                cb=_on_almanac,
-            )
-        )
-        subs.append(
-            await js.subscribe(
-                ops_subscribe_subject(sid),
-                stream=STREAM_OPS_EVENTS,
-                ordered_consumer=True,
-                deliver_policy=DeliverPolicy.NEW,
-                cb=_on_ops_event,
-            )
-        )
-    except Exception as exc:
-        log.warning("NATS subscription setup failed: %s — streams may not exist yet", exc)
-
-    # Core NATS subscription for wiring progress (not JetStream — transient, no retention).
-    # Wildcard subscription receives progress from all Node Agents: nodalarc.agent.progress.*
+    # Wiring progress — core NATS (not session-scoped, not JetStream)
     async def _on_wiring_progress(msg):
-        nonlocal msg_count
-        msg_count += 1
         try:
             data = json.loads(msg.data)
             progress_msg = data.get("message", "")
             if _session_manager and progress_msg:
                 _session_manager.status_detail = progress_msg
-                # Instant broadcast to all WebSockets — bypass 1-second snapshot cycle
                 frame = json.dumps({"msg_type": "wiring_progress", "message": progress_msg})
                 for ws in list(_ws_clients):
                     with contextlib.suppress(Exception):
@@ -895,77 +358,79 @@ async def _nats_subscriber() -> None:
     except Exception as exc:
         log.warning("Wiring progress subscription failed: %s", exc)
 
-    log.info("VS-API NATS subscriber started — session_id=%s, %d subscriptions", sid, len(subs))
+    # System OpsEvents — global, not session-scoped
+    async def _on_system_ops_event(msg):
+        with contextlib.suppress(Exception):
+            _system_ops_events.append(json.loads(msg.data))
 
-    # Periodic status log + wait for shutdown
     try:
-        last_status_time = _time.monotonic()
+        js = nc.jetstream()
+        from nats.js.api import DeliverPolicy
+
+        await js.subscribe(
+            "nodalarc.ops.system.>",
+            stream=STREAM_OPS_EVENTS,
+            ordered_consumer=True,
+            deliver_policy=DeliverPolicy.NEW,
+            cb=_on_system_ops_event,
+        )
+    except Exception as exc:
+        log.warning("System OpsEvent subscription failed: %s", exc)
+
+    # Wait for session config, then create initial SessionContext
+    session_config_path = _initial_session_file
+    if session_config_path:
+        config_path = Path(session_config_path)
+        while not config_path.is_file():
+            log.info("NATS subscriber: waiting for session config at %s", config_path)
+            await asyncio.sleep(5)
+
+        try:
+            from nodalarc.nats_channels import sanitize_session_id
+
+            raw = yaml.safe_load(config_path.read_text())
+            if not raw:
+                log.error("FATAL: Session config is empty: %s", config_path)
+                raise ValueError("Session config is empty")
+            session = SessionConfig.model_validate(raw)
+            session_id = sanitize_session_id(session.session.name)
+        except Exception as exc:
+            log.error("FATAL: Failed to read session_id from config: %s", exc)
+            raise
+
+        ctx = SessionContext(session_id, str(config_path))
+        await ctx.start(nc, mode="recovery")
+        _active_context = ctx
+        log.info("Initial SessionContext started: session_id=%s", session_id)
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_BOOTSTRAP",
+            f"VS-API started with session {session_id}",
+            {"session_id": session_id, "mode": "recovery"},
+        )
+
+        asyncio.ensure_future(_poll_cr_until_ready())
+
+    # Keep alive until cancelled
+    try:
         while True:
-            await asyncio.sleep(10)
-            now_mono = _time.monotonic()
-            if now_mono - last_status_time >= 30:
-                log.info("NATS subscriber status: %d msgs, stale=%s", msg_count, _is_stale())
-                last_status_time = now_mono
-
-    except asyncio.CancelledError:
-        log.info("NATS subscriber cancelled after %d messages", msg_count)
-    except Exception as exc:
-        log.error("NATS subscriber crashed: %s", exc, exc_info=True)
-    finally:
-        log.info("NATS subscriber exiting (total messages: %d)", msg_count)
-        for sub in subs:
-            with contextlib.suppress(Exception):
-                await sub.unsubscribe()
-        await nc.close()
-
-
-def _apply_link_state_snapshot(data: dict) -> None:
-    """Apply LinkStateSnapshot as replace-not-merge on _links.
-
-    This is the VS-API's equivalent of the Scheduler's
-    _apply_link_state_snapshot(). It replaces _links entirely
-    with the snapshot contents. No transition replay needed.
-    """
-    try:
-        snapshot = LinkStateSnapshot.model_validate(data)
-    except Exception as exc:
-        log.error("FATAL: Failed to parse LinkStateSnapshot: %s", exc)
-        raise
-
-    with _state_lock:
-        _links.clear()
-        for link in snapshot.links:
-            if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
-                key = _link_key(link.node_a, link.node_b)
-                lat_ms = link.latency_ms
-                _links[key] = LinkState(
-                    node_a=link.node_a,
-                    node_b=link.node_b,
-                    state="active",
-                    link_type=_derive_link_type(link.node_a, link.node_b, link.link_type),
-                    link_reason="",
-                    latency_ms=lat_ms,
-                    bandwidth_mbps=link.bandwidth_mbps,
-                    range_km=lat_ms * 299792.458 / 1000.0,
-                    traffic_load_pct=None,
-                    interface_a=link.interface_a,
-                    interface_b=link.interface_b,
+            await asyncio.sleep(30)
+            ctx = _active_context
+            if ctx:
+                log.info(
+                    "NATS status: session_id=%s ready=%s stale=%s links=%d",
+                    ctx.session_id,
+                    ctx.is_ready(),
+                    ctx.is_stale(),
+                    len(ctx.links),
                 )
-
-    # Track snapshot link counts for convergence heuristic
-    global _prev_snapshot_active_count, _curr_snapshot_active_count
-    _prev_snapshot_active_count = _curr_snapshot_active_count
-    _curr_snapshot_active_count = len(_links)
-
-    isl = sum(1 for v in _links.values() if v.link_type != "ground")
-    gs = sum(1 for v in _links.values() if v.link_type == "ground")
-    log.info(
-        "LinkStateSnapshot applied: seq=%d, %d links (%d ISL, %d GS)",
-        snapshot.snapshot_seq,
-        len(_links),
-        isl,
-        gs,
-    )
+    except asyncio.CancelledError:
+        log.info("NATS subscriber cancelled")
+    finally:
+        if _active_context:
+            await _active_context.stop()
+            _active_context = None
+        await nc.close()
 
 
 # --- FastAPI app ---
@@ -1116,7 +581,9 @@ async def get_ops_events(
     limit: int = Query(100, ge=1, le=500, description="Max events to return"),
 ) -> list[dict]:
     """Return recent operational events from the NODALARC_OPS stream."""
-    events = list(_ops_events)
+    ctx = _active_context
+    session_events = list(ctx.session_ops_events) if ctx else []
+    events = list(_system_ops_events) + session_events
     if source:
         events = [e for e in events if e.get("source") == source]
     if level:
@@ -1124,127 +591,14 @@ async def get_ops_events(
     return events[-limit:]
 
 
-def _clear_state() -> None:
-    """Reset in-memory state during session switch."""
-    global \
-        _continuous_tracer, \
-        _session_ready_time, \
-        _prev_snapshot_active_count, \
-        _curr_snapshot_active_count, \
-        _network_health, \
-        _mi_active, \
-        _sim_time, \
-        _session_status, \
-        _almanac
-    _session_ready_time = 0.0
-    _prev_snapshot_active_count = 0
-    _curr_snapshot_active_count = 0
-    if _continuous_tracer is not None:
-        # Best-effort stop — we're in a sync context during session switch
-        _continuous_tracer = None
-    with _state_lock:
-        _nodes.clear()
-        _links.clear()
-        _recent_events.clear()
-        _network_health = NetworkHealth(
-            status="no measurement",
-            converging_since_ms=None,
-            unreachable_flows=0,
-            last_convergence_ms=None,
-        )
-        _mi_active = False
-        _sim_time = datetime.now(UTC).isoformat()
-        _session_status = None
-    with _almanac_lock:
-        _almanac = AlmanacState()
-    _ops_events.clear()
-
-
-def _load_gs_elevation_map(session: SessionConfig) -> dict[str, float]:
-    """Load per-station min_elevation_deg from ground station config."""
-    from nodalarc.constellation_loader import load_ground_stations
-
-    if isinstance(session.ground_stations, list | dict):
-        gs_file = load_ground_stations(session.ground_stations)
-    else:
-        gs_path = Path(session.ground_stations)
-        if not gs_path.exists():
-            return {}
-        gs_file = load_ground_stations(gs_path)
-    gs_id_tpl = session.addressing.gs_id_template
-    result: dict[str, float] = {}
-    for station in gs_file.stations:
-        node_id = gs_id_tpl.format(name=station.name)
-        elev = (
-            station.min_elevation_deg
-            if station.min_elevation_deg is not None
-            else gs_file.default_min_elevation_deg
-        )
-        result[node_id] = elev
-    return result
-
-
-def _load_beam_falloff_exponent(session: SessionConfig) -> float:
-    """Load beam_falloff_exponent from the constellation's satellite type."""
-    from nodalarc.constellation_loader import load_constellation, load_satellite_type
-
-    if isinstance(session.constellation, dict):
-        config = load_constellation(session.constellation)
-    else:
-        constellation_path = Path(session.constellation)
-        if not constellation_path.exists():
-            return 2.0
-        config = load_constellation(constellation_path)
-    sat_type_name = getattr(config, "satellite_type", None)
-    if not sat_type_name:
-        return 2.0
-    sat_type = load_satellite_type(sat_type_name)
-    if not sat_type.ground_terminals:
-        return 2.0
-    return sat_type.ground_terminals[0].beam_falloff_exponent
-
-
-def _update_session_globals(session_path: str, new_db_path: str) -> None:
-    """Reload routing_stack, constellation_name, db_path, and session_file from new session."""
-    global \
-        _routing_stack, \
-        _constellation_name, \
-        _db_path, \
-        _session_file, \
-        _gs_elevation_map, \
-        _beam_falloff_exponent
-    _session_file = session_path
-    session_data = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(session_data)
-    if session.routing.stack is not None:
-        _routing_stack = Path(session.routing.stack).name
-    else:
-        ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
-        _routing_stack = f"{session.routing.protocol}-{ext_str}"
-    if isinstance(session.constellation, dict):
-        _constellation_name = session.constellation.get("name", "custom")
-    else:
-        _constellation_name = Path(session.constellation).stem
-    _db_path = new_db_path
-    _gs_elevation_map = _load_gs_elevation_map(session)
-    _beam_falloff_exponent = _load_beam_falloff_exponent(session)
-
-    # Ensure tables exist in new DB
-    import sqlite3 as _sqlite3
-
-    conn = _sqlite3.connect(new_db_path)
-    create_tables(conn)
-    conn.close()
-
-
 def _restore_state_from_db(db_path: str) -> bool:
-    """Load the most recent snapshot from SQLite and pre-populate in-memory state.
+    """Load the most recent snapshot from SQLite into the active context.
 
-    Returns True if state was restored, False otherwise. This is called during
-    session recovery so VS-API doesn't start with empty nodes/links after a restart.
+    Returns True if state was restored, False otherwise.
     """
-    global _network_health, _sim_time
-
+    ctx = _active_context
+    if ctx is None:
+        return False
     if not db_path or not Path(db_path).exists():
         return False
 
@@ -1261,16 +615,14 @@ def _restore_state_from_db(db_path: str) -> bool:
 
         snapshot = json.loads(row[0])
 
-        with _state_lock:
-            # Restore nodes
+        with ctx.state_lock:
             for node in snapshot.get("nodes", []):
                 node_id = node.get("node_id")
                 if not node_id:
                     log.error("Corrupt DB snapshot — node missing node_id: %s", node)
                     raise ValueError("DB snapshot node missing node_id")
-                _nodes[node_id] = NodeState(**node)
+                ctx.nodes[node_id] = NodeState(**node)
 
-            # Restore links
             for link in snapshot.get("links", []):
                 na = link.get("node_a")
                 nb = link.get("node_b")
@@ -1278,10 +630,9 @@ def _restore_state_from_db(db_path: str) -> bool:
                     log.error("Corrupt DB snapshot — link missing node_a/node_b: %s", link)
                     raise ValueError("DB snapshot link missing node_a or node_b")
                 key = _link_key(na, nb)
-                _links[key] = LinkState(**link)
+                ctx.links[key] = LinkState(**link)
 
-            # Restore recent events
-            _recent_events.clear()
+            ctx.recent_events.clear()
             for e in snapshot.get("recent_events", []):
                 sim_time_raw = e.get("sim_time")
                 if sim_time_raw is None:
@@ -1292,7 +643,7 @@ def _restore_state_from_db(db_path: str) -> bool:
                     if isinstance(sim_time_raw, str)
                     else sim_time_raw
                 )
-                _recent_events.append(
+                ctx.recent_events.append(
                     RecentEvent(
                         sim_time=sim_time_dt,
                         node_id=e["node_id"],
@@ -1301,19 +652,17 @@ def _restore_state_from_db(db_path: str) -> bool:
                     )
                 )
 
-            # Restore network health
             if "network_health" in snapshot:
                 nh = snapshot["network_health"]
-                _network_health = NetworkHealth(
+                ctx.network_health = NetworkHealth(
                     status=nh["status"],
                     converging_since_ms=nh.get("converging_since_ms"),
                     unreachable_flows=nh["unreachable_flows"],
                     last_convergence_ms=nh.get("last_convergence_ms"),
                 )
 
-            # Restore sim time
             if "sim_time" in snapshot:
-                _sim_time = snapshot["sim_time"]
+                ctx.sim_time = snapshot["sim_time"]
 
         node_count = len(snapshot.get("nodes", []))
         link_count = len(snapshot.get("links", []))
@@ -1331,10 +680,13 @@ async def _ws_broadcaster() -> None:
     while True:
         await asyncio.sleep(0.1)
         tick += 1
-        if tick % 100 == 0 and _db_path:
+        ctx = _active_context
+        if tick % 100 == 0 and ctx and ctx.db_path:
             try:
                 snapshot = _build_snapshot()
-                conn = sqlite3.connect(_db_path)
+                if snapshot is None:
+                    continue
+                conn = sqlite3.connect(ctx.db_path)
                 insert_snapshot(
                     conn,
                     sim_time=snapshot["sim_time"],
@@ -1363,11 +715,15 @@ async def ws_state(websocket: WebSocket) -> None:
 
     try:
         # Send SessionEphemeris as first message if available (PRD v0.71)
-        if _cached_ephemeris:
-            await websocket.send_json(_cached_ephemeris)
+        ctx = _active_context
+        if ctx and ctx.cached_ephemeris:
+            await websocket.send_json(ctx.cached_ephemeris)
 
         while True:
             snapshot = _build_snapshot()
+            if snapshot is None:
+                await asyncio.sleep(1.0)
+                continue
             await websocket.send_json(snapshot)
             await asyncio.sleep(1.0)
     except WebSocketDisconnect:
@@ -1424,6 +780,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     session = TerminalSession(pod_ip, ssh_key)
     try:
         await session.connect()
+        _term_conn_id = await _terminal_manager.register(node_id, session, websocket)
 
         async def ws_to_ssh():
             """Forward browser input to SSH session."""
@@ -1463,6 +820,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     except Exception as exc:
         log.warning("Terminal session error for %s: %s", node_id, exc)
     finally:
+        await _terminal_manager.unregister(_term_conn_id)
         await session.close()
         _audit_log.info(f"WS_TERMINAL_DISCONNECT ip={ws_ip} node={node_id}")
 
@@ -1604,9 +962,10 @@ async def get_path(src: str, dst: str, sim_time: str | None = None) -> JSONRespo
 @app.get("/api/v1/state/{sim_time}", dependencies=[Depends(_require_api_key)])
 def get_historical_state(sim_time: str) -> dict:
     """Historical state at a specific sim_time (nearest snapshot from SQLite)."""
-    if not _db_path:
+    ctx = _active_context
+    if not ctx or not ctx.db_path:
         return {"error": "No database configured"}
-    conn = sqlite3.connect(_db_path)
+    conn = sqlite3.connect(ctx.db_path)
     try:
         result = query_nearest_snapshot(conn, sim_time)
         if result is None:
@@ -1622,9 +981,10 @@ def get_link_events(
     end: str = Query(None),
 ) -> list[dict]:
     """Query link events from SQLite."""
-    if not _db_path:
+    ctx = _active_context
+    if not ctx or not ctx.db_path:
         return []
-    conn = sqlite3.connect(_db_path)
+    conn = sqlite3.connect(ctx.db_path)
     try:
         return query_link_events(conn, start_time=start, end_time=end)
     finally:
@@ -1637,9 +997,10 @@ def get_convergence_events(
     end: str = Query(None),
 ) -> list[dict]:
     """Query convergence events from SQLite."""
-    if not _db_path:
+    ctx = _active_context
+    if not ctx or not ctx.db_path:
         return []
-    conn = sqlite3.connect(_db_path)
+    conn = sqlite3.connect(ctx.db_path)
     try:
         return query_convergence_events(conn)
     finally:
@@ -1653,9 +1014,10 @@ def get_flow_metrics(
     end: str = Query(None),
 ) -> list[dict]:
     """Query probe results for a flow from SQLite."""
-    if not _db_path:
+    ctx = _active_context
+    if not ctx or not ctx.db_path:
         return []
-    conn = sqlite3.connect(_db_path)
+    conn = sqlite3.connect(ctx.db_path)
     try:
         return query_probe_results(conn, flow_id=flow_id, start_time=start, end_time=end)
     finally:
@@ -1745,7 +1107,8 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
         from nodalpath.platform import get_nodalpath_config
 
         np_cfg = get_nodalpath_config()
-        session_path = _Path(_session_file) if _session_file else None
+        _ctx = _active_context
+        session_path = _Path(_ctx.session_file) if _ctx else None
         if session_path and session_path.exists():
             node_reg, _, session_prefixes, _ = load_session_context(session_path)
             # Populate prefix_by_node from session context
@@ -1944,10 +1307,12 @@ def trace_path(body: dict) -> dict:
     if not src or not dst:
         return {"hops": [], "error": "src_node and dst_node required"}
 
-    if not _routing_stack or not _routing_stack.startswith("nodalpath"):
+    _rctx = _active_context
+    _rs = _rctx.routing_stack if _rctx else None
+    if not _rs or not _rs.startswith("nodalpath"):
         raise HTTPException(
             status_code=400,
-            detail=f"Trace not available for routing stack '{_routing_stack}'. "
+            detail=f"Trace not available for routing stack '{_rs}'. "
             "Trace requires a NodalPath session (MPLS forwarding tables).",
         )
 
@@ -2004,12 +1369,18 @@ def trace_path(body: dict) -> dict:
 
 def _get_sim_time_str() -> str:
     """Return current sim_time as string for the continuous tracer."""
-    with _state_lock:
-        return _sim_time
+    ctx = _active_context
+    if ctx is None:
+        return datetime.now(UTC).isoformat()
+    with ctx.state_lock:
+        return ctx.sim_time
 
 
 def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]) -> None:
     """Callback when the traced path changes — add a RecentEvent."""
+    ctx = _active_context
+    if ctx is None:
+        return
     sim_time = _get_sim_time_str()
     old_str = " -> ".join(old_hops[:4])
     new_str = " -> ".join(new_hops[:4])
@@ -2017,11 +1388,11 @@ def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]
         old_str += f" ({len(old_hops)} hops)"
     if len(new_hops) > 4:
         new_str += f" ({len(new_hops)} hops)"
-    _add_recent_event(
+    ctx._add_recent_event(
         {
             "sim_time": sim_time,
             "node_id": src,
-            "detail": f"Path {src} -> {dst}: {old_str} => {new_str}",
+            "reason": f"Path {src} -> {dst}: {old_str} => {new_str}",
         },
         "PATH_CHANGE",
     )
@@ -2030,23 +1401,24 @@ def _on_path_change(src: str, dst: str, old_hops: list[str], new_hops: list[str]
 @app.post("/api/v1/trace/start", dependencies=[Depends(_require_api_key)])
 async def start_continuous_trace(body: dict) -> dict:
     """Start continuous path tracing between two nodes."""
-    global _continuous_tracer
+    ctx = _active_context
+    if ctx is None:
+        return JSONResponse(status_code=409, content={"error": "No active session"})
 
     src = body.get("src_node", "")
     dst = body.get("dst_node", "")
     if not src or not dst:
         return JSONResponse(status_code=400, content={"error": "src_node and dst_node required"})
 
-    with _state_lock:
-        if src not in _nodes:
+    with ctx.state_lock:
+        if src not in ctx.nodes:
             return JSONResponse(status_code=400, content={"error": f"Unknown node: {src}"})
-        if dst not in _nodes:
+        if dst not in ctx.nodes:
             return JSONResponse(status_code=400, content={"error": f"Unknown node: {dst}"})
 
-    # Stop existing tracer
-    if _continuous_tracer is not None:
-        await _continuous_tracer.stop()
-        _continuous_tracer = None
+    if ctx.continuous_tracer is not None:
+        await ctx.continuous_tracer.stop()
+        ctx.continuous_tracer = None
 
     # Load trace context
     try:
@@ -2055,7 +1427,7 @@ async def start_continuous_trace(body: dict) -> dict:
         log.warning("Failed to create continuous tracer: %s", exc)
         return JSONResponse(status_code=500, content={"error": f"Tracer init failed: {exc}"})
 
-    _continuous_tracer = tracer
+    ctx.continuous_tracer = tracer
     await tracer.start(src, dst)
     return {"ok": True, "src": src, "dst": dst}
 
@@ -2063,24 +1435,25 @@ async def start_continuous_trace(body: dict) -> dict:
 @app.post("/api/v1/trace/stop", dependencies=[Depends(_require_api_key)])
 async def stop_continuous_trace() -> dict:
     """Stop continuous path tracing."""
-    global _continuous_tracer
-    if _continuous_tracer is not None:
-        await _continuous_tracer.stop()
-        _continuous_tracer = None
+    ctx = _active_context
+    if ctx is not None and ctx.continuous_tracer is not None:
+        await ctx.continuous_tracer.stop()
+        ctx.continuous_tracer = None
     return {"ok": True}
 
 
 @app.get("/api/v1/trace/status", dependencies=[Depends(_require_api_key)])
 def get_trace_status() -> dict:
     """Return current continuous trace status."""
-    if _continuous_tracer is None or not _continuous_tracer.active:
+    ctx = _active_context
+    if ctx is None or ctx.continuous_tracer is None or not ctx.continuous_tracer.active:
         return {"active": False, "src": None, "dst": None, "result": None}
 
-    result = _continuous_tracer.latest_result
+    result = ctx.continuous_tracer.latest_result
     return {
         "active": True,
-        "src": _continuous_tracer.src,
-        "dst": _continuous_tracer.dst,
+        "src": ctx.continuous_tracer.src,
+        "dst": ctx.continuous_tracer.dst,
         "result": result.model_dump(mode="json") if result else None,
     }
 
@@ -2096,12 +1469,14 @@ def _create_continuous_tracer() -> ContinuousTracer:
     timeline_path: str | None = None
     trace_mode = "ip"
 
+    _tctx = _active_context
+    _sf = _tctx.session_file if _tctx else ""
     log.info(
         "Creating continuous tracer: session_file=%s exists=%s",
-        _session_file,
-        Path(_session_file).exists() if _session_file else False,
+        _sf,
+        Path(_sf).exists() if _sf else False,
     )
-    if _session_file and Path(_session_file).exists():
+    if _sf and Path(_sf).exists():
         # Ensure NodalPath config is initialized (load_session_context needs SID ranges)
         try:
             from nodalpath.platform import get_nodalpath_config
@@ -2119,7 +1494,7 @@ def _create_continuous_tracer() -> ContinuousTracer:
         try:
             from nodalpath.orchestrator.session_loader import load_session_context
 
-            ctx = load_session_context(Path(_session_file))
+            ctx = load_session_context(Path(_sf))
             node_registry = ctx[0]
             interface_map = ctx[1]
             log.info(
@@ -2148,11 +1523,12 @@ def _create_continuous_tracer() -> ContinuousTracer:
                 except Exception as exc:
                     log.warning("Failed to read session-state.json: %s", exc)
 
-        # Determine trace mode from routing stack
-        if _routing_stack:
-            if "isis-sr" in _routing_stack or "static-sr" in _routing_stack:
+        _rsctx = _active_context
+        _rs2 = _rsctx.routing_stack if _rsctx else None
+        if _rs2:
+            if "isis-sr" in _rs2 or "static-sr" in _rs2:
                 trace_mode = "sr-uniform"
-            elif _routing_stack.startswith("nodalpath"):
+            elif _rs2.startswith("nodalpath"):
                 trace_mode = "cspf"
 
     return ContinuousTracer(
@@ -2198,11 +1574,12 @@ def playback_control(body: dict) -> Any:
     if result is None:
         return JSONResponse(status_code=503, content={"error": "NATS not connected"})
 
-    global _playback_paused, _playback_speed
-    if "paused" in result:
-        _playback_paused = result["paused"]
-    if "speed" in result:
-        _playback_speed = result["speed"]
+    ctx = _active_context
+    if ctx is not None:
+        if "paused" in result:
+            ctx.playback_paused = result["paused"]
+        if "speed" in result:
+            ctx.playback_speed = result["speed"]
     return result
 
 
@@ -2530,22 +1907,142 @@ def introspect(body: dict) -> dict:
 
 
 async def _run_switch(session_path: str) -> None:
-    """Run session switch in thread executor (blocking subprocess calls)."""
+    """Run session switch — linear async chain on the main event loop.
+
+    All pointer writes to _active_context happen here, on the main
+    event loop. No executor threads, no run_coroutine_threadsafe.
+
+    Flow:
+    a. Null _active_context (broadcast loop stops)
+    b. Push session_transitioning
+    c. Close all terminal SSH sessions
+    d. Stop old context
+    e. SessionManager deploys new CR (async, polls with asyncio.sleep)
+    f. Create new SessionContext, start subscriptions
+    g. Wait for is_ready() with timeout
+    h. Set _active_context = new context
+    i. Push ephemeris + session_ready
+    """
+    global _active_context
+
     try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            _session_manager.switch,
-            session_path,
-            _clear_state,
-            _update_session_globals,
+        old_ctx = _active_context
+        old_session = old_ctx.session_id if old_ctx else None
+
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_SWITCH_INITIATED",
+            f"Session switch initiated: {old_session} → {Path(session_path).stem}",
+            {"old_session": old_session, "new_session_path": session_path},
         )
+
+        # (a) Null context — broadcast loop stops immediately
+        _active_context = None
+
+        # (b) Notify VF
+        await _broadcast_to_all(json.dumps({"msg_type": "session_transitioning"}))
+
+        # (c) Close all terminal SSH sessions
+        await _terminal_manager.close_all("Session switched")
+
+        # (d) Stop old context
+        if old_ctx is not None:
+            await old_ctx.stop()
+
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_TEARDOWN_COMPLETE",
+            f"Old session {old_session} torn down",
+        )
+
+        # (e) Deploy new session via K8s CR (fully async)
+        await _session_manager.switch(session_path)
+
+        # (f) Create new SessionContext
+        from nodalarc.nats_channels import sanitize_session_id
+
+        session_data = yaml.safe_load(Path(session_path).read_text())
+        session = SessionConfig.model_validate(session_data)
+        session_id = sanitize_session_id(session.session.name)
+
+        if _nats_connection is None:
+            log.error("FATAL: No NATS connection for new SessionContext")
+            raise RuntimeError("No NATS connection available")
+
+        new_ctx = SessionContext(session_id, session_path)
+        await new_ctx.start(_nats_connection, mode="switch")
+
+        # (g) Wait for first live snapshot
+        try:
+            await asyncio.wait_for(new_ctx._ready.wait(), timeout=30.0)
+        except TimeoutError:
+            log.error("Session switch timeout — new context not ready after 30s")
+            await _publish_system_ops_event(
+                "error",
+                "SESSION_SWITCH_TIMEOUT",
+                "New session did not become ready within 30s",
+                {"session_path": session_path},
+            )
+            await new_ctx.stop()
+            await _broadcast_to_all(
+                json.dumps(
+                    {
+                        "msg_type": "session_failed",
+                        "error": "New session did not become ready within 30s",
+                    }
+                )
+            )
+            if _session_manager:
+                _session_manager._status = "error"
+                _session_manager.status_detail = "Session switch timeout"
+            return
+
+        # (h) Atomic pointer swap — only place _active_context is written
+        _active_context = new_ctx
+        _session_manager._status = "ready"
+        _session_manager.status_detail = ""
+
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_SWITCH_COMPLETE",
+            f"Session switch complete: now running {session_id}",
+            {"session_id": session_id, "links": len(new_ctx.links)},
+        )
+
+        # (i) Push ephemeris + session_ready to VF
+        if new_ctx.cached_ephemeris:
+            await _broadcast_to_all(json.dumps(new_ctx.cached_ephemeris))
+        snapshot = _build_snapshot()
+        await _broadcast_to_all(
+            json.dumps(
+                {
+                    "msg_type": "session_ready",
+                    "snapshot": snapshot,
+                }
+            )
+        )
+
+        log.info("Session switch complete — %s active", session_id)
+
     except Exception as exc:
-        # Safety net: reset status if switch() raised without setting it
         if _session_manager and _session_manager.status == "switching":
             _session_manager._status = "error"
             _session_manager.status_detail = f"Unhandled: {exc}"
-            log.error("_run_switch safety net caught: %s", exc)
+            log.error("_run_switch caught: %s", exc)
+        await _publish_system_ops_event(
+            "error",
+            "SESSION_SWITCH_FAILED",
+            f"Session switch failed: {exc}",
+            {"session_path": session_path, "error": str(exc)},
+        )
+        await _broadcast_to_all(
+            json.dumps(
+                {
+                    "msg_type": "session_failed",
+                    "error": str(exc),
+                }
+            )
+        )
 
 
 async def _poll_cr_until_ready() -> None:
@@ -2557,6 +2054,7 @@ async def _poll_cr_until_ready() -> None:
     session_manager.switch() so the frontend sees progress messages
     regardless of deploy path.
     """
+    global _active_context
     log.info("_poll_cr_until_ready: starting background CR polling task")
     import kubernetes.client
     import kubernetes.config
@@ -2586,8 +2084,38 @@ async def _poll_cr_until_ready() -> None:
                 # Only update from CR for non-Wiring phases.
                 _session_manager.status_detail = message or f"Phase: {phase}"
             if phase == "Ready":
-                global _session_ready_time
-                _session_ready_time = _time.monotonic()
+                # Check if the session changed (make session deployed a different constellation)
+                cr_session_yaml = cr.get("spec", {}).get("sessionYaml", "")
+                if cr_session_yaml:
+                    try:
+                        from nodalarc.nats_channels import sanitize_session_id as _sanitize
+
+                        cr_session = SessionConfig.model_validate(yaml.safe_load(cr_session_yaml))
+                        cr_session_id = _sanitize(cr_session.session.name)
+                        ctx = _active_context
+                        if ctx and ctx.session_id != cr_session_id:
+                            log.info(
+                                "CR session_id changed: %s → %s — triggering internal switch",
+                                ctx.session_id,
+                                cr_session_id,
+                            )
+                            if _initial_session_file and Path(_initial_session_file).is_file():
+                                await _run_switch(_initial_session_file)
+                                return
+                        elif not ctx:
+                            if _initial_session_file and Path(_initial_session_file).is_file():
+                                log.info("No active context but CR is Ready — bootstrapping")
+                                new_ctx = SessionContext(cr_session_id, _initial_session_file)
+                                nc = _nats_connection
+                                if nc:
+                                    await new_ctx.start(nc, mode="recovery")
+                                    _active_context = new_ctx
+                    except Exception as exc:
+                        log.warning("Failed to check CR session_id: %s", exc)
+
+                ctx = _active_context
+                if ctx:
+                    ctx.session_ready_time = _time.monotonic()
                 if _session_manager:
                     _session_manager._status = "ready"
                     _session_manager.status_detail = ""
@@ -2649,25 +2177,13 @@ def main() -> None:
     if args.port is None:
         args.port = get_platform_config().vs_api_http_port
 
-    global \
-        _db_path, \
-        _session_file, \
-        _routing_stack, \
-        _constellation_name, \
-        _session_manager, \
-        _gs_elevation_map, \
-        _beam_falloff_exponent, \
-        _pending_cr_poll
+    global _session_manager, _initial_session_file, _pending_cr_poll
 
-    # Initialize SessionManager
     _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
 
     if args.session and args.db:
-        _db_path = args.db
-        _session_file = args.session
+        _initial_session_file = args.session
 
-        # Load session metadata for snapshot enrichment
-        # Handle missing/empty ConfigMap mount (Operator creates session later)
         session_path = Path(args.session)
         if not session_path.is_file():
             log.info(f"Session config not found at {args.session} — starting in idle mode")
@@ -2676,25 +2192,6 @@ def main() -> None:
             session_data = yaml.safe_load(session_path.read_text())
         if session_data:
             session = SessionConfig.model_validate(session_data)
-            # Set session_id for NATS subject scoping
-            global _nats_session_id
-            from nodalarc.nats_channels import sanitize_session_id
-
-            _nats_session_id = sanitize_session_id(session.session.name)
-            log.info("VS-API session_id=%s", _nats_session_id)
-            if session.routing.stack is not None:
-                _routing_stack = Path(session.routing.stack).name
-            else:
-                ext_str = (
-                    "-".join(session.routing.extensions) if session.routing.extensions else "plain"
-                )
-                _routing_stack = f"{session.routing.protocol}-{ext_str}"
-            if isinstance(session.constellation, dict):
-                _constellation_name = session.constellation.get("name", "custom")
-            else:
-                _constellation_name = Path(session.constellation).stem
-            _gs_elevation_map = _load_gs_elevation_map(session)
-            _beam_falloff_exponent = _load_beam_falloff_exponent(session)
             # Mark session active
             _active_path = args.session
             try:
@@ -2744,7 +2241,6 @@ def main() -> None:
                 _pending_cr_poll = True
             else:
                 _session_manager._status = "ready"
-                _session_ready_time = _time.monotonic()
         else:
             log.info("No session loaded — VS-API starting in idle mode")
             # Check if Operator has an active session (CR with phase Ready/Wiring)
@@ -2802,10 +2298,10 @@ def main() -> None:
             new_db_path = recovered.get("db_path", "")
             session_config = recovered.get("session_config", "")
             if new_db_path and session_config and Path(session_config).exists():
-                _update_session_globals(session_config, new_db_path)
-                # Pre-populate in-memory state from last DB snapshot
-                _restore_state_from_db(new_db_path)
-                log.info(f"Recovered session: {recovered.get('session_id')} (db={new_db_path})")
+                _initial_session_file = session_config
+                log.info(
+                    f"Recovered session: {recovered.get('session_id')} (config={session_config})"
+                )
             else:
                 log.warning(
                     f"Found live session {recovered.get('session_id')} "

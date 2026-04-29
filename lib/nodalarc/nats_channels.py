@@ -188,17 +188,39 @@ SUBJECT_ALMANAC_EVENT = almanac_event_subject(_DEFAULT_SESSION_ID)
 SUBJECT_OPS_EVENT = f"nodalarc.ops.{_DEFAULT_SESSION_ID}.>"
 
 
-def ops_event_subject(session_id: str, source: str, code: str = "") -> str:
-    """Build a session-scoped ops event subject."""
-    sid = sanitize_session_id(session_id)
-    if code:
-        return f"nodalarc.ops.{sid}.{source}.{code.lower()}"
-    return f"nodalarc.ops.{sid}.{source}"
+def ops_event_subject(session_id: str, source: str, code: str = "", *, tenant_id: str = "") -> str:
+    """Build a scoped ops event subject.
+
+    Subject hierarchy:
+      - Infrastructure (no tenant, no session): nodalarc.ops._infra.{source}[.{code}]
+      - Tenant (tenant, no session): nodalarc.ops.{tenant}._tenant.{source}[.{code}]
+      - Session (no tenant): nodalarc.ops.{session}.{source}[.{code}]
+      - Session (with tenant): nodalarc.ops.{tenant}.{session}.{source}[.{code}]
+    """
+    code_lower = code.lower() if code else ""
+    if not tenant_id and not session_id:
+        base = f"nodalarc.ops._infra.{source}"
+    elif not tenant_id:
+        base = f"nodalarc.ops.{sanitize_session_id(session_id)}.{source}"
+    elif not session_id:
+        base = f"nodalarc.ops.{tenant_id}._tenant.{source}"
+    else:
+        base = f"nodalarc.ops.{tenant_id}.{sanitize_session_id(session_id)}.{source}"
+
+    if code_lower:
+        return f"{base}.{code_lower}"
+    return base
 
 
-def ops_subscribe_subject(session_id: str) -> str:
+def ops_subscribe_subject(session_id: str, *, tenant_id: str = "") -> str:
     """Wildcard subject for subscribing to all ops events for a session."""
-    return f"nodalarc.ops.{sanitize_session_id(session_id)}.>"
+    if not tenant_id and not session_id:
+        return "nodalarc.ops._infra.>"
+    if not tenant_id:
+        return f"nodalarc.ops.{sanitize_session_id(session_id)}.>"
+    if not session_id:
+        return f"nodalarc.ops.{tenant_id}._tenant.>"
+    return f"nodalarc.ops.{tenant_id}.{sanitize_session_id(session_id)}.>"
 
 
 # Request/reply subjects (NATS core, not JetStream)

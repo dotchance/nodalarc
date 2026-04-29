@@ -18,10 +18,12 @@ The SSH private key is read from the nodalarc-terminal-keys K8s Secret.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 import asyncssh
 import kubernetes.client
+from starlette.websockets import WebSocket
 
 log = logging.getLogger(__name__)
 
@@ -210,3 +212,52 @@ class TerminalSession:
             except Exception:
                 pass
         log.info("Terminal session closed to %s", self._pod_ip)
+
+
+class TerminalManager:
+    """Tracks active terminal sessions for lifecycle management.
+
+    Keyed by unique connection_id (not node_id) — multiple users or
+    tabs can open terminals to the same node without collision.
+    """
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, tuple[str, TerminalSession, WebSocket]] = {}
+        self._lock = asyncio.Lock()
+        self._next_id = 0
+
+    def _gen_id(self) -> str:
+        self._next_id += 1
+        return f"term-{self._next_id}"
+
+    async def register(self, node_id: str, session: TerminalSession, websocket: WebSocket) -> str:
+        """Register a session. Returns unique connection_id for unregister."""
+        async with self._lock:
+            conn_id = self._gen_id()
+            self._sessions[conn_id] = (node_id, session, websocket)
+            return conn_id
+
+    async def unregister(self, conn_id: str) -> None:
+        async with self._lock:
+            self._sessions.pop(conn_id, None)
+
+    async def close_all(self, reason: str = "Session switched") -> None:
+        """Close all active terminal sessions and their WebSockets."""
+        async with self._lock:
+            if not self._sessions:
+                return
+            log.info(
+                "Closing %d terminal sessions: %s",
+                len(self._sessions),
+                reason,
+            )
+            for conn_id, (node_id, session, ws) in list(self._sessions.items()):
+                try:
+                    await session.close()
+                except Exception as exc:
+                    log.warning("Failed to close terminal %s (%s): %s", conn_id, node_id, exc)
+                if ws is not None:
+                    with contextlib.suppress(Exception):
+                        await ws.close(code=4410, reason=reason)
+            self._sessions.clear()
+            log.info("All terminal sessions closed")

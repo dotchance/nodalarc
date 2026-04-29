@@ -124,15 +124,23 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
 
   useEffect(() => {
     if (autoScrollRef.current && tableBodyRef.current) {
-      tableBodyRef.current.scrollTop = tableBodyRef.current.scrollHeight;
+      if (sortField === "timestamp" && sortDir === "desc") {
+        tableBodyRef.current.scrollTop = 0;
+      } else {
+        tableBodyRef.current.scrollTop = tableBodyRef.current.scrollHeight;
+      }
     }
-  }, [sorted]);
+  }, [sorted, sortField, sortDir]);
 
   const handleScroll = useCallback(() => {
     if (!tableBodyRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = tableBodyRef.current;
-    autoScrollRef.current = scrollHeight - scrollTop - clientHeight < 30;
-  }, []);
+    if (sortField === "timestamp" && sortDir === "desc") {
+      autoScrollRef.current = scrollTop < 30;
+    } else {
+      autoScrollRef.current = scrollHeight - scrollTop - clientHeight < 30;
+    }
+  }, [sortField, sortDir]);
 
   const handleSort = useCallback(
     (field: SortField) => {

@@ -34,6 +34,41 @@ from node_agent.namespace_ops import (
 )
 from node_agent.pid_discovery import discover_local_pod_pids
 
+_IPTABLES_RULES = (
+    "*filter\n"
+    "-A OUTPUT -o cni0 -m state --state ESTABLISHED,RELATED -j ACCEPT\n"
+    "-A OUTPUT -o cni0 -j DROP\n"
+    "COMMIT\n"
+)
+
+
+def finalize_pod(pid: int, node_id: str) -> str | None:
+    """Remove default route and lock down cni0. Returns error string or None."""
+    import subprocess
+
+    try:
+
+        def _remove_default(ipr: IPRoute) -> bool:
+            for route in ipr.get_routes(family=2):
+                if route.get_attr("RTA_DST") is None and route["dst_len"] == 0:
+                    ipr.route("del", dst="0.0.0.0/0", gateway=route.get_attr("RTA_GATEWAY"))
+                    return True
+            return False
+
+        _in_namespace(pid, _remove_default)
+
+        subprocess.run(
+            ["nsenter", f"--net=/proc/{pid}/ns/net", "iptables-restore", "--noflush"],
+            input=_IPTABLES_RULES,
+            text=True,
+            check=True,
+            capture_output=True,
+        )
+        return None
+    except Exception as exc:
+        return f"{node_id}: {exc}"
+
+
 log = logging.getLogger(__name__)
 
 
@@ -402,44 +437,6 @@ def execute_wiring(
     )
 
     # Phase 7+8: Per-pod finalization — default route removal + cni0 lockdown.
-    # iptables uses a single iptables-restore call per pod (1 nsenter fork
-    # instead of 2, halves the fork count vs separate iptables calls).
-    import subprocess
-
-    from node_agent.namespace_ops import _in_namespace
-
-    _IPTABLES_RULES = (
-        "*filter\n"
-        "-A OUTPUT -o cni0 -m state --state ESTABLISHED,RELATED -j ACCEPT\n"
-        "-A OUTPUT -o cni0 -j DROP\n"
-        "COMMIT\n"
-    )
-
-    def _finalize_pod(node_id: str, pid: int) -> str | None:
-        """Remove default route and lock down cni0. Returns error or None."""
-        try:
-
-            def _remove_default(ipr: IPRoute) -> bool:
-                for route in ipr.get_routes(family=2):
-                    if route.get_attr("RTA_DST") is None and route["dst_len"] == 0:
-                        ipr.route("del", dst="0.0.0.0/0", gateway=route.get_attr("RTA_GATEWAY"))
-                        return True
-                return False
-
-            _in_namespace(pid, _remove_default)
-
-            # Phase 8: iptables cni0 lockdown — single iptables-restore call
-            subprocess.run(
-                ["nsenter", f"--net=/proc/{pid}/ns/net", "iptables-restore", "--noflush"],
-                input=_IPTABLES_RULES,
-                text=True,
-                check=True,
-                capture_output=True,
-            )
-            return None
-        except Exception as exc:
-            return f"{node_id}: {exc}"
-
     finalized = 0
     with ThreadPoolExecutor(max_workers=8) as pool:
         fin_futures = {}
@@ -447,7 +444,7 @@ def execute_wiring(
             pid = pid_map.get(node_id, 0)
             if pid == 0:
                 continue
-            fin_futures[pool.submit(_finalize_pod, node_id, pid)] = node_id
+            fin_futures[pool.submit(finalize_pod, pid, node_id)] = node_id
         total_to_finalize = len(fin_futures)
         for fut in as_completed(fin_futures):
             nid = fin_futures[fut]

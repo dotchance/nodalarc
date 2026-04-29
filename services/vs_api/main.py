@@ -31,7 +31,8 @@ import yaml
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from nodalarc.constants import LOG_FORMAT
+from nodal.logging import configure as _configure_logging
+from nodal.logging import connect as _connect_logging
 from nodalarc.db.queries import (
     insert_snapshot,
     query_convergence_events,
@@ -203,10 +204,10 @@ _system_ops_events: deque = deque(maxlen=500)
 async def _publish_system_ops_event(
     level: str, code: str, message: str, details: dict | None = None
 ) -> None:
-    """Publish and buffer a system-scoped OpsEvent.
+    """Buffer a system-scoped OpsEvent for WebSocket delivery and log it.
 
-    Goes to nodalarc.ops.system.vs-api.{code} AND is appended to the
-    local _system_ops_events deque for immediate WebSocket delivery.
+    The logging system handles NATS publishing automatically via NatsHandler.
+    This function buffers the event locally for immediate WebSocket broadcast.
     """
     import socket
 
@@ -222,14 +223,8 @@ async def _publish_system_ops_event(
     }
     _system_ops_events.append(event)
 
-    nc = _nats_connection
-    if nc is not None and not nc.is_closed:
-        try:
-            js = nc.jetstream()
-            subject = f"nodalarc.ops.system.vs-api.{code.lower()}"
-            await js.publish(subject, json.dumps(event).encode())
-        except Exception as exc:
-            log.warning("Failed to publish system OpsEvent %s: %s", code, exc)
+    log_level = getattr(logging, level.upper(), logging.INFO)
+    log.log(log_level, "%s", message, extra={"code": code, "details": details})
 
 
 def _build_snapshot() -> dict | None:
@@ -331,6 +326,7 @@ async def _nats_subscriber() -> None:
     _main_event_loop = asyncio.get_running_loop()
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     _nats_connection = nc
+    await _connect_logging(nc)
     log.info("VS-API NATS connected to %s", nats_url())
 
     # If main() detected a CR in Wiring/Creating phase, start polling
@@ -1999,6 +1995,9 @@ async def _run_switch(session_path: str) -> None:
 
         # (h) Atomic pointer swap — only place _active_context is written
         _active_context = new_ctx
+        from nodal.logging import set_session as _set_log_session
+
+        _set_log_session(session_id)
         _session_manager._status = "ready"
         _session_manager.status_detail = ""
 
@@ -2139,7 +2138,7 @@ async def _poll_cr_until_ready() -> None:
 def main() -> None:
     import uvicorn
 
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    _configure_logging("nodal.arc.vs_api", nats_level=logging.WARNING)
 
     # Use API key from environment if set; otherwise auto-generate one
     global _API_KEY

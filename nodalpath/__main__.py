@@ -7,7 +7,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from nodalarc.constants import LOG_FORMAT
+from nodal.logging import configure as _configure_logging
 
 from nodalpath.config import NodalPathConfig
 from nodalpath.orchestrator.session_loader import load_pod_ip_map, load_session_context
@@ -306,7 +306,7 @@ def _run_batch(config: NodalPathConfig) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    _configure_logging("nodal.path.engine", nats_level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="NodalPath forwarding almanac controller")
     parser.add_argument("--session", help="Path to session YAML (required for live/batch)")

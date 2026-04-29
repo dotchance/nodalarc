@@ -553,16 +553,28 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
             {idx < COLUMNS.length - 1 && (
               <div
                 onMouseDown={(e) => handleColResizeStart(e, idx)}
+                className="col-resize-handle"
                 style={{
                   position: "absolute",
-                  right: -3,
+                  right: -5,
                   top: 0,
                   bottom: 0,
-                  width: 6,
+                  width: 10,
                   cursor: "col-resize",
                   zIndex: 5,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
-              />
+              >
+                <div style={{
+                  width: 2,
+                  height: "60%",
+                  background: "var(--border)",
+                  borderRadius: 1,
+                  opacity: 0.5,
+                }} />
+              </div>
             )}
           </div>
         ))}

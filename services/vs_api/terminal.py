@@ -23,6 +23,7 @@ import logging
 
 import asyncssh
 import kubernetes.client
+from starlette.websockets import WebSocket
 
 log = logging.getLogger(__name__)
 
@@ -221,7 +222,7 @@ class TerminalManager:
     """
 
     def __init__(self) -> None:
-        self._sessions: dict[str, tuple[str, TerminalSession, object]] = {}
+        self._sessions: dict[str, tuple[str, TerminalSession, WebSocket]] = {}
         self._lock = asyncio.Lock()
         self._next_id = 0
 
@@ -229,7 +230,7 @@ class TerminalManager:
         self._next_id += 1
         return f"term-{self._next_id}"
 
-    async def register(self, node_id: str, session: TerminalSession, websocket: object) -> str:
+    async def register(self, node_id: str, session: TerminalSession, websocket: WebSocket) -> str:
         """Register a session. Returns unique connection_id for unregister."""
         async with self._lock:
             conn_id = self._gen_id()

@@ -877,9 +877,9 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     """Trigger rolling restart of platform pods via annotation change.
 
     Patches each Deployment's pod template with a config-hash annotation,
-    which triggers a rolling update. This is the standard K8s pattern —
-    no pod deletion race conditions, respects PodDisruptionBudgets, and
-    the Deployment controller handles sequencing.
+    which triggers a rolling update. The VS-API is NOT restarted — it
+    handles session re-subscription internally via SessionContext lifecycle.
+    Killing the VS-API pod destroys WebSocket connections unnecessarily.
     """
     apps_v1 = _get_apps_v1()
 
@@ -888,7 +888,6 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     for label in [
         "app=nodalarc-ome",
         "app=nodalarc-scheduler",
-        "app=nodalarc-vs-api",
         "app=nodalarc-nodalpath",
     ]:
         deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)

@@ -197,6 +197,38 @@ from collections import deque
 _system_ops_events: deque = deque(maxlen=500)
 
 
+async def _publish_system_ops_event(
+    level: str, code: str, message: str, details: dict | None = None
+) -> None:
+    """Publish and buffer a system-scoped OpsEvent.
+
+    Goes to nodalarc.ops.system.vs-api.{code} AND is appended to the
+    local _system_ops_events deque for immediate WebSocket delivery.
+    """
+    import socket
+
+    event = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "session_id": "_system",
+        "source": "vs-api",
+        "hostname": socket.gethostname(),
+        "level": level,
+        "code": code,
+        "message": message,
+        "details": details,
+    }
+    _system_ops_events.append(event)
+
+    nc = _nats_connection
+    if nc is not None and not nc.is_closed:
+        try:
+            js = nc.jetstream()
+            subject = f"nodalarc.ops.system.vs-api.{code.lower()}"
+            await js.publish(subject, json.dumps(event).encode())
+        except Exception as exc:
+            log.warning("Failed to publish system OpsEvent %s: %s", code, exc)
+
+
 def _build_snapshot() -> dict | None:
     """Build a StateSnapshot dict from the active SessionContext.
 
@@ -359,6 +391,12 @@ async def _nats_subscriber() -> None:
         await ctx.start(nc, mode="recovery")
         _active_context = ctx
         log.info("Initial SessionContext started: session_id=%s", session_id)
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_BOOTSTRAP",
+            f"VS-API started with session {session_id}",
+            {"session_id": session_id, "mode": "recovery"},
+        )
 
         asyncio.ensure_future(_poll_cr_until_ready())
 
@@ -1929,6 +1967,14 @@ async def _run_switch(session_path: str) -> None:
     global _active_context
 
     try:
+        old_session = _active_context.session_id if _active_context else None
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_SWITCH_INITIATED",
+            f"Session switch initiated: {old_session} → {Path(session_path).stem}",
+            {"old_session": old_session, "new_session_path": session_path},
+        )
+
         transitioning_frame = json.dumps({"msg_type": "session_transitioning"})
         for ws in list(_ws_clients):
             with contextlib.suppress(Exception):
@@ -1943,13 +1989,24 @@ async def _run_switch(session_path: str) -> None:
             _update_session_globals,
         )
 
-        # Wait for the new context to be ready (first snapshot received)
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_TEARDOWN_COMPLETE",
+            f"Old session {old_session} torn down, new context starting",
+        )
+
         ctx = _active_context
         if ctx is not None:
             try:
                 await asyncio.wait_for(ctx._ready.wait(), timeout=30.0)
             except TimeoutError:
                 log.error("Session switch timeout — new context not ready after 30s")
+                await _publish_system_ops_event(
+                    "error",
+                    "SESSION_SWITCH_TIMEOUT",
+                    "New session did not become ready within 30s",
+                    {"session_path": session_path},
+                )
                 await ctx.stop()
                 _active_context = None
                 failed_frame = json.dumps(
@@ -1966,7 +2023,14 @@ async def _run_switch(session_path: str) -> None:
                     _session_manager.status_detail = "Session switch timeout"
                 return
 
-        # Push session_ready with initial snapshot
+        new_session = ctx.session_id if ctx else "unknown"
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_SWITCH_COMPLETE",
+            f"Session switch complete: now running {new_session}",
+            {"session_id": new_session, "links": len(ctx.links) if ctx else 0},
+        )
+
         snapshot = _build_snapshot()
         ready_frame = json.dumps(
             {
@@ -1978,13 +2042,19 @@ async def _run_switch(session_path: str) -> None:
             with contextlib.suppress(Exception):
                 await ws.send_text(ready_frame)
 
-        log.info("Session switch complete — new session active")
+        log.info("Session switch complete — %s active", new_session)
 
     except Exception as exc:
         if _session_manager and _session_manager.status == "switching":
             _session_manager._status = "error"
             _session_manager.status_detail = f"Unhandled: {exc}"
             log.error("_run_switch safety net caught: %s", exc)
+        await _publish_system_ops_event(
+            "error",
+            "SESSION_SWITCH_FAILED",
+            f"Session switch failed: {exc}",
+            {"session_path": session_path, "error": str(exc)},
+        )
         failed_frame = json.dumps(
             {
                 "msg_type": "session_failed",

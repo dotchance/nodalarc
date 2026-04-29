@@ -387,6 +387,12 @@ async def _reconcile_session(spec, name, namespace, meta, status):
         return
 
     # --- Condition 5: Ready ---
+    if phase != "Ready":
+        log.info(
+            "Session ready [pods=%d, wired=%d]",
+            expected_count,
+            wired_count,
+        )
     _update_status(
         name,
         namespace,
@@ -398,7 +404,6 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             "message": f"Session ready: {expected_count} pods, {wired_count} wired.",
         },
     )
-    log.info(f"Reconcile: session ready ({wired_count}/{expected_count} wired)")
 
 
 @kopf.on.create("constellationspecs", group="nodalarc.io")

@@ -179,7 +179,7 @@ def _start_health_server(port: int = 8081) -> None:
     server = HTTPServer(("0.0.0.0", port), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    logging.info(f"Health server listening on :{port}")
+    logging.debug("Health server listening on :%d", port)
 
 
 # ---------------------------------------------------------------------------
@@ -322,13 +322,13 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     js = nc.jetstream()
     await _connect_logging(nc)
-    logging.info("OME NATS publisher connected to %s (session_id=%s)", nats_url(), session_id)
+    logging.debug("OME NATS publisher connected to %s (session_id=%s)", nats_url(), session_id)
 
     async def _publish_playback_state(state: str) -> None:
         """Publish PlaybackState to NODALARC_SESSION stream."""
         ps = PlaybackState(epoch_id=_epoch_id, state=state)
         await js.publish(_subj_playback, ps.model_dump_json().encode())
-        logging.info("PlaybackState: state=%s epoch_id=%d", state, _epoch_id)
+        logging.debug("PlaybackState published: state=%s epoch_id=%d", state, _epoch_id)
 
     # --- Playback control subscriber (R-OME-008B Tier 1) ---
 
@@ -400,7 +400,7 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
             await msg.respond(json.dumps({"error": str(exc)}).encode())
 
     await nc.subscribe(SUBJECT_PLAYBACK_CONTROL, cb=_handle_playback)
-    logging.info("OME playback control active on %s", SUBJECT_PLAYBACK_CONTROL)
+    logging.debug("OME playback control active on %s", SUBJECT_PLAYBACK_CONTROL)
 
     # Per-message retry: exponential backoff 0.5s, 1s, 2s, 4s, 8s = 15.5s total.
     # Rationale: pacing thread produces at 1Hz (step_seconds=1). The queue
@@ -460,7 +460,7 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
     finally:
         await nc.drain()
         await nc.close()
-        logging.info("NATS publisher stopped")
+        logging.debug("NATS publisher stopped")
 
 
 def _run_pacing(
@@ -536,7 +536,7 @@ def _run_pacing(
     else:
         session_file = Path(session_path)
         while not session_file.is_file():
-            logging.info("Waiting for session config at %s...", session_path)
+            logging.debug("Waiting for session config at %s...", session_path)
             time.sleep(5)
         cfg = _load_session_config(session_path)
     session = cfg.session
@@ -552,7 +552,7 @@ def _run_pacing(
     subj_ephemeris = session_ephemeris_subject(session_id)
     subj_playback = playback_state_subject(session_id)
     subj_checkpoint = scheduling_checkpoint_subject(session_id)
-    logging.info("OME session_id=%s — NATS subjects scoped", session_id)
+    logging.debug("OME session_id=%s — NATS subjects scoped", session_id)
 
     # Initialize Pacemaker rate from static compression (R-OME-008B Part 1).
     # Runtime set_speed commands replace this value dynamically.
@@ -696,7 +696,10 @@ def _run_pacing(
     last_iter_start: float = time.monotonic()
 
     logging.info(
-        "OME real-time stepped emission: epoch=%s, step=%ds, accel=%.1fx, period=%.0fs",
+        "OME starting [session_id=%s, sat_count=%d, gs_count=%d, epoch=%s, step=%ds, accel=%.1fx, period=%.0fs]",
+        session_id,
+        len(cfg.satellites),
+        len(cfg.gs_file.stations) if cfg.gs_file else 0,
         datetime.fromtimestamp(epoch_unix, UTC).isoformat(),
         step_seconds,
         current_rate,
@@ -793,8 +796,8 @@ def _run_pacing(
                     else:
                         running_isl_state[pair] = (vis.visible, vis.scheduled)
             if replay_step > 0 and replay_step % 1000 == 0:
-                logging.info("Recovery replay: %d/%d steps", replay_step, step + 1)
-        logging.info("Replayed %d steps to rebuild link state", step + 1)
+                logging.debug("Recovery replay: %d/%d steps", replay_step, step + 1)
+        logging.debug("Replayed %d steps to rebuild link state", step + 1)
 
     # Recovery → PAUSED (deterministic, operator must unpause).
     # Fresh deployment → PLAYING (normal UX, session starts immediately).
@@ -805,7 +808,7 @@ def _run_pacing(
     # → then tick loop waits for unpause before first ClockTick.
     eph = build_session_ephemeris(step_ctx, epoch_unix, _epoch_id)
     _enqueue(subj_ephemeris, eph.model_dump_json().encode())
-    logging.info("Published SessionEphemeris epoch_id=%d (%d nodes)", _epoch_id, len(eph.nodes))
+    logging.debug("Published SessionEphemeris epoch_id=%d (%d nodes)", _epoch_id, len(eph.nodes))
 
     # Force initial LinkStateSnapshot with epoch_id
     snapshot_seq += 1
@@ -828,13 +831,12 @@ def _run_pacing(
     _enqueue(subj_playback, ps.model_dump_json().encode())
     if _paused:
         logging.info(
-            "Published PlaybackState(paused, epoch_id=%d) — recovered from checkpoint, awaiting resume",
+            "OME recovered from checkpoint, starting paused [epoch_id=%d, step=%d]",
             _epoch_id,
+            step,
         )
     else:
-        logging.info(
-            "Published PlaybackState(playing, epoch_id=%d) — fresh session, auto-play", _epoch_id
-        )
+        logging.debug("OME fresh session, auto-play [epoch_id=%d]", _epoch_id)
 
     try:
         while not shutdown_event.is_set():
@@ -1027,7 +1029,7 @@ def _run_pacing(
                     budget_ms = (step_seconds / current_rate) * 1000
                     headroom = (1.0 - pcts[94] / budget_ms) * 100 if budget_ms > 0 else 0
                     iter_pcts = quantiles(iter_timings, n=100) if len(iter_timings) >= 10 else None
-                    logging.info(
+                    logging.debug(
                         "OME pacing: compute p50=%.1fms p95=%.1fms "
                         "iter p50=%.1fms p95=%.1fms "
                         "budget=%.1fms (%.0fx) headroom=%.0f%%",
@@ -1057,7 +1059,7 @@ def _run_pacing(
 
 def main() -> None:
     """CLI entry point."""
-    _configure_logging("nodal.arc.ome", nats_level=logging.WARNING)
+    _configure_logging("nodal.arc.ome", nats_level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Orbital Mechanics Engine")
     parser.add_argument("session", help="Path to session YAML config")
     parser.add_argument(
@@ -1100,14 +1102,14 @@ def main() -> None:
     # to avoid re-parsing the same file.
     session_file = Path(args.session)
     while not session_file.is_file():
-        logging.info("Waiting for session config at %s...", args.session)
+        logging.debug("Waiting for session config at %s...", args.session)
         time.sleep(5)
     pre_cfg = _load_session_config(args.session)
     session_id = sanitize_session_id(pre_cfg.session.session.name)
     from nodal.logging import set_session
 
     set_session(session_id)
-    logging.info("OME session_id=%s", session_id)
+    logging.debug("OME session_id=%s", session_id)
 
     event_queue: queue.Queue = queue.Queue(maxsize=1000)
     shutdown_event = threading.Event()

@@ -216,25 +216,29 @@ class TerminalSession:
 class TerminalManager:
     """Tracks active terminal sessions for lifecycle management.
 
-    The VS-API registers each WebSocket terminal session here. On
-    session switch, close_all() forcefully disconnects all terminals
-    and notifies the browser via the WebSocket close code.
+    Keyed by unique connection_id (not node_id) — multiple users or
+    tabs can open terminals to the same node without collision.
     """
 
     def __init__(self) -> None:
-        self._sessions: dict[str, tuple[TerminalSession, asyncio.BaseProtocol]] = {}
-        self._websockets: dict[str, asyncio.Protocol] = {}
+        self._sessions: dict[str, tuple[str, TerminalSession, object]] = {}
         self._lock = asyncio.Lock()
+        self._next_id = 0
 
-    async def register(self, node_id: str, session: TerminalSession, websocket: object) -> None:
-        async with self._lock:
-            self._sessions[node_id] = session
-            self._websockets[node_id] = websocket
+    def _gen_id(self) -> str:
+        self._next_id += 1
+        return f"term-{self._next_id}"
 
-    async def unregister(self, node_id: str) -> None:
+    async def register(self, node_id: str, session: TerminalSession, websocket: object) -> str:
+        """Register a session. Returns unique connection_id for unregister."""
         async with self._lock:
-            self._sessions.pop(node_id, None)
-            self._websockets.pop(node_id, None)
+            conn_id = self._gen_id()
+            self._sessions[conn_id] = (node_id, session, websocket)
+            return conn_id
+
+    async def unregister(self, conn_id: str) -> None:
+        async with self._lock:
+            self._sessions.pop(conn_id, None)
 
     async def close_all(self, reason: str = "Session switched") -> None:
         """Close all active terminal sessions and their WebSockets."""
@@ -246,15 +250,13 @@ class TerminalManager:
                 len(self._sessions),
                 reason,
             )
-            for node_id, session in list(self._sessions.items()):
+            for conn_id, (node_id, session, ws) in list(self._sessions.items()):
                 try:
                     await session.close()
                 except Exception as exc:
-                    log.warning("Failed to close terminal for %s: %s", node_id, exc)
-                ws = self._websockets.get(node_id)
+                    log.warning("Failed to close terminal %s (%s): %s", conn_id, node_id, exc)
                 if ws is not None:
                     with contextlib.suppress(Exception):
                         await ws.close(code=4410, reason=reason)
             self._sessions.clear()
-            self._websockets.clear()
             log.info("All terminal sessions closed")

@@ -304,6 +304,47 @@ class TestOpsEventFormatter:
         obj = json.loads(fmt.format(record))
         assert "tenant_id" not in obj
 
+    def test_exception_traceback_in_details(self):
+        filt = NodalFilter("nodal.arc.ome")
+        fmt = OpsEventFormatter()
+        try:
+            raise ValueError("connection refused on port 5432")
+        except ValueError:
+            record = _make_record(msg="DB connect failed")
+            record.exc_info = sys.exc_info()
+        filt.filter(record)
+        obj = json.loads(fmt.format(record))
+
+        assert obj["message"] == "DB connect failed"
+        assert obj["details"] is not None
+        assert "traceback" in obj["details"]
+        assert "ValueError: connection refused on port 5432" in obj["details"]["traceback"]
+        assert "Traceback" in obj["details"]["traceback"]
+
+    def test_exception_merged_with_caller_details(self):
+        filt = NodalFilter("nodal.arc.ome")
+        fmt = OpsEventFormatter()
+        try:
+            raise RuntimeError("timeout")
+        except RuntimeError:
+            record = _make_record(msg="failed", details={"attempt": 3})
+            record.exc_info = sys.exc_info()
+        filt.filter(record)
+        obj = json.loads(fmt.format(record))
+
+        assert obj["details"]["attempt"] == 3
+        assert "RuntimeError: timeout" in obj["details"]["traceback"]
+
+    def test_no_exception_leaves_details_unchanged(self):
+        filt = NodalFilter("nodal.arc.ome")
+        fmt = OpsEventFormatter()
+        record = _make_record(msg="ok", details={"key": "val"})
+        filt.filter(record)
+        obj = json.loads(fmt.format(record))
+
+        assert obj["details"] == {"key": "val"}
+        assert "traceback" not in obj["details"]
+
 
 class TestNatsHandler:
     """NatsHandler queues records and builds NATS subjects."""
@@ -638,3 +679,33 @@ class TestDrainLoop:
             assert handler._drain_task.done()
 
         asyncio.run(run())
+
+    def test_large_prebuffer_drains_completely(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        handler = NatsHandler("nodal.arc.ome", level=logging.WARNING)
+        filt = NodalFilter("nodal.arc.ome", session_id="test")
+        handler.addFilter(filt)
+
+        for i in range(300):
+            record = _make_record(msg=f"msg-{i}")
+            handler.handle(record)
+        assert len(handler._deque) == 300
+
+        nc = MagicMock()
+        js_mock = MagicMock()
+        js_mock.publish = AsyncMock()
+        nc.jetstream.return_value = js_mock
+
+        async def run():
+            await handler.connect(nc)
+            await asyncio.sleep(0.1)
+            handler._drain_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await handler._drain_task
+
+        asyncio.run(run())
+
+        assert js_mock.publish.call_count == 300
+        assert len(handler._deque) == 0

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -260,7 +261,8 @@ def main() -> None:
 
     set_session(session_id)
     log.info(
-        "Scheduler starting [session_id=%s, link_pairs=%d, nodes=%d, mbb=%s]",
+        "Scheduler starting [build=%s, session_id=%s, link_pairs=%d, nodes=%d, mbb=%s]",
+        os.environ.get("NODAL_BUILD", "dev"),
         session_id,
         len(interface_map),
         len(loc.node_ids),

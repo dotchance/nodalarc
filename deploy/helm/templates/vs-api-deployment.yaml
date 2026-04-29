@@ -42,6 +42,8 @@ spec:
               hostPort: 8080    # VF dev server on host needs localhost:8080
               name: http
           env:
+            - name: NODAL_BUILD
+              value: {{ .Values.buildTag | quote }}
             - name: NODAL_API_KEY
               valueFrom:
                 configMapKeyRef:

@@ -11,6 +11,7 @@ images:
   vsApi: nodalarc/vs-api:latest
   operator: nodalarc/operator:latest
 
+buildTag: "dev"
 imagePullPolicy: Never  # Single-node: images loaded directly into containerd
 
 # Resource strategy: requests are minimum guaranteed, limits are burst ceiling.

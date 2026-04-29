@@ -44,6 +44,8 @@ spec:
               hostPort: {{ .Values.nodeAgent.grpcPort | default 50100 }}
               name: grpc
           env:
+            - name: NODAL_BUILD
+              value: {{ .Values.buildTag | quote }}
             - name: NODE_NAME
               valueFrom:
                 fieldRef:

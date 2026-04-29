@@ -26,6 +26,9 @@ spec:
         - name: scheduler
           image: {{ .Values.images.scheduler | default "docker.io/nodalarc/scheduler:latest" }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - name: NODAL_BUILD
+              value: {{ .Values.buildTag | quote }}
           args:
             - "--session"
             - "/etc/nodalarc/session.yaml"

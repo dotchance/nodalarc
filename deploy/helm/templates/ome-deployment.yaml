@@ -76,6 +76,9 @@ spec:
         - name: ome
           image: {{ .Values.images.ome }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          env:
+            - name: NODAL_BUILD
+              value: {{ .Values.buildTag | quote }}
           args:
             - "--continuous"
             - "--platform-config"

@@ -2193,6 +2193,8 @@ def main() -> None:
 
     _session_manager = SessionManager(args.sessions_dir, initial_db_path=args.db)
 
+    log.info("VS-API starting [build=%s]", os.environ.get("NODAL_BUILD", "dev"))
+
     if args.session and args.db:
         _initial_session_file = args.session
 

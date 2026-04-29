@@ -189,21 +189,18 @@ def execute_wiring(
             )
         time.sleep(2)
 
+    if not pid_map:
+        log.info("No local session pods on this node — nothing to wire")
+        return {}
+
     expected_nodes = all_manifest_nodes & set(pid_map.keys())
-    missing = expected_nodes - set(pid_map.keys())
-    remote_nodes = all_manifest_nodes - expected_nodes
+    remote_nodes = all_manifest_nodes - set(pid_map.keys())
     if remote_nodes:
-        log.info(
-            "%d pods on other nodes (not wired locally): %s",
+        log.debug(
+            "%d pods on other nodes (not wired locally)",
             len(remote_nodes),
-            ", ".join(sorted(remote_nodes)[:5]) + ("..." if len(remote_nodes) > 5 else ""),
         )
-    if missing:
-        for nid in sorted(missing):
-            log.warning(
-                "PID=0 after %d attempts for %s — wiring will skip this pod", max_attempts, nid
-            )
-    log.info("PID discovery: %d/%d pods found", len(pid_map), len(expected_nodes))
+    log.info("PID discovery: %d local pods found", len(pid_map))
 
     wired: dict[str, str] = {}
     total_nodes = len([n for n in nodes if pid_map.get(n, 0) > 0])

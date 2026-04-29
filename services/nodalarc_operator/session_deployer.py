@@ -854,9 +854,9 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     """Trigger rolling restart of platform pods via annotation change.
 
     Patches each Deployment's pod template with a config-hash annotation,
-    which triggers a rolling update. The VS-API is NOT restarted — it
-    handles session re-subscription internally via SessionContext lifecycle.
-    Killing the VS-API pod destroys WebSocket connections unnecessarily.
+    which triggers a rolling update. All platform pods are restarted so
+    they pick up freshly-created session ConfigMaps (subPath mounts are
+    frozen at pod creation time — a restart is required).
     """
     apps_v1 = _get_apps_v1()
 
@@ -865,6 +865,7 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     for label in [
         "app=nodalarc-ome",
         "app=nodalarc-scheduler",
+        "app=nodalarc-vs-api",
         "app=nodalarc-nodalpath",
     ]:
         deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)

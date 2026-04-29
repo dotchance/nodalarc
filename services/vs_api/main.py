@@ -1434,7 +1434,7 @@ async def start_continuous_trace(body: dict) -> dict:
         log.warning("Failed to create continuous tracer: %s", exc)
         return JSONResponse(status_code=500, content={"error": f"Tracer init failed: {exc}"})
 
-    _continuous_tracer = tracer
+    ctx.continuous_tracer = tracer
     await tracer.start(src, dst)
     return {"ok": True, "src": src, "dst": dst}
 
@@ -1442,24 +1442,25 @@ async def start_continuous_trace(body: dict) -> dict:
 @app.post("/api/v1/trace/stop", dependencies=[Depends(_require_api_key)])
 async def stop_continuous_trace() -> dict:
     """Stop continuous path tracing."""
-    global _continuous_tracer
-    if _continuous_tracer is not None:
-        await _continuous_tracer.stop()
-        _continuous_tracer = None
+    ctx = _active_context
+    if ctx is not None and ctx.continuous_tracer is not None:
+        await ctx.continuous_tracer.stop()
+        ctx.continuous_tracer = None
     return {"ok": True}
 
 
 @app.get("/api/v1/trace/status", dependencies=[Depends(_require_api_key)])
 def get_trace_status() -> dict:
     """Return current continuous trace status."""
-    if _continuous_tracer is None or not _continuous_tracer.active:
+    ctx = _active_context
+    if ctx is None or ctx.continuous_tracer is None or not ctx.continuous_tracer.active:
         return {"active": False, "src": None, "dst": None, "result": None}
 
-    result = _continuous_tracer.latest_result
+    result = ctx.continuous_tracer.latest_result
     return {
         "active": True,
-        "src": _continuous_tracer.src,
-        "dst": _continuous_tracer.dst,
+        "src": ctx.continuous_tracer.src,
+        "dst": ctx.continuous_tracer.dst,
         "result": result.model_dump(mode="json") if result else None,
     }
 
@@ -1580,11 +1581,12 @@ def playback_control(body: dict) -> Any:
     if result is None:
         return JSONResponse(status_code=503, content={"error": "NATS not connected"})
 
-    global _playback_paused, _playback_speed
-    if "paused" in result:
-        _playback_paused = result["paused"]
-    if "speed" in result:
-        _playback_speed = result["speed"]
+    ctx = _active_context
+    if ctx is not None:
+        if "paused" in result:
+            ctx.playback_paused = result["paused"]
+        if "speed" in result:
+            ctx.playback_speed = result["speed"]
     return result
 
 
@@ -1912,8 +1914,26 @@ def introspect(body: dict) -> dict:
 
 
 async def _run_switch(session_path: str) -> None:
-    """Run session switch in thread executor (blocking subprocess calls)."""
+    """Run session switch with WebSocket notifications.
+
+    Sequential flow per vs-api-session-lifecycle plan:
+    a. Save old context reference
+    b. Set _active_context = None (broadcast loop stops immediately)
+    c. Push session_transitioning to all WebSocket clients
+    d. Stop old context (async cleanup)
+    e. Run session_manager.switch in executor (blocking K8s calls)
+       — this calls _clear_state (no-op now) and _update_session_globals
+       — _update_session_globals creates and starts the new SessionContext
+    f. Push session_ready with initial snapshot, or session_failed
+    """
+    global _active_context
+
     try:
+        transitioning_frame = json.dumps({"msg_type": "session_transitioning"})
+        for ws in list(_ws_clients):
+            with contextlib.suppress(Exception):
+                await ws.send_text(transitioning_frame)
+
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None,
@@ -1922,12 +1942,58 @@ async def _run_switch(session_path: str) -> None:
             _clear_state,
             _update_session_globals,
         )
+
+        # Wait for the new context to be ready (first snapshot received)
+        ctx = _active_context
+        if ctx is not None:
+            try:
+                await asyncio.wait_for(ctx._ready.wait(), timeout=30.0)
+            except TimeoutError:
+                log.error("Session switch timeout — new context not ready after 30s")
+                await ctx.stop()
+                _active_context = None
+                failed_frame = json.dumps(
+                    {
+                        "msg_type": "session_failed",
+                        "error": "New session did not become ready within 30s",
+                    }
+                )
+                for ws in list(_ws_clients):
+                    with contextlib.suppress(Exception):
+                        await ws.send_text(failed_frame)
+                if _session_manager:
+                    _session_manager._status = "error"
+                    _session_manager.status_detail = "Session switch timeout"
+                return
+
+        # Push session_ready with initial snapshot
+        snapshot = _build_snapshot()
+        ready_frame = json.dumps(
+            {
+                "msg_type": "session_ready",
+                "snapshot": snapshot,
+            }
+        )
+        for ws in list(_ws_clients):
+            with contextlib.suppress(Exception):
+                await ws.send_text(ready_frame)
+
+        log.info("Session switch complete — new session active")
+
     except Exception as exc:
-        # Safety net: reset status if switch() raised without setting it
         if _session_manager and _session_manager.status == "switching":
             _session_manager._status = "error"
             _session_manager.status_detail = f"Unhandled: {exc}"
             log.error("_run_switch safety net caught: %s", exc)
+        failed_frame = json.dumps(
+            {
+                "msg_type": "session_failed",
+                "error": str(exc),
+            }
+        )
+        for ws in list(_ws_clients):
+            with contextlib.suppress(Exception):
+                await ws.send_text(failed_frame)
 
 
 async def _poll_cr_until_ready() -> None:
@@ -1968,8 +2034,9 @@ async def _poll_cr_until_ready() -> None:
                 # Only update from CR for non-Wiring phases.
                 _session_manager.status_detail = message or f"Phase: {phase}"
             if phase == "Ready":
-                global _session_ready_time
-                _session_ready_time = _time.monotonic()
+                ctx = _active_context
+                if ctx:
+                    ctx.session_ready_time = _time.monotonic()
                 if _session_manager:
                     _session_manager._status = "ready"
                     _session_manager.status_detail = ""

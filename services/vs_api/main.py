@@ -293,9 +293,9 @@ def _build_snapshot() -> dict | None:
         )
         result = json.loads(snapshot.model_dump_json())
         # System + session OpsEvents merged for the log panel
-        all_ops = list(_system_ops_events)[-25:] + list(ctx.session_ops_events)[-25:]
+        all_ops = list(_system_ops_events) + list(ctx.session_ops_events)
         all_ops.sort(key=lambda e: e.get("timestamp", ""))
-        result["ops_events"] = all_ops[-50:]
+        result["ops_events"] = all_ops[-500:]
         return result
 
 
@@ -364,10 +364,10 @@ async def _nats_subscriber() -> None:
         from nats.js.api import DeliverPolicy
 
         await js.subscribe(
-            "nodalarc.ops.system.>",
+            "nodalarc.ops.>",
             stream=STREAM_OPS_EVENTS,
             ordered_consumer=True,
-            deliver_policy=DeliverPolicy.NEW,
+            deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
             cb=_on_system_ops_event,
         )
     except Exception as exc:

@@ -24,7 +24,6 @@ This class is the building block for multi-tenant support:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
 import threading
@@ -183,13 +182,19 @@ class SessionContext:
         """Stop all NATS subscriptions and clear state.
 
         Cleanup is in the subscriber task's finally block — cancelling
-        the task triggers it. This method waits for cleanup to complete.
+        the task triggers it. Timeout of 15s prevents hanging if NATS
+        is unreachable (9 subscriptions × ~2s each worst case).
         """
         self._stopped = True
         if self._subscriber_task and not self._subscriber_task.done():
             self._subscriber_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._subscriber_task
+            try:
+                await asyncio.wait_for(asyncio.shield(self._subscriber_task), timeout=15.0)
+            except (asyncio.CancelledError, TimeoutError):
+                log.warning(
+                    "SessionContext stop timed out after 15s — %d subscriptions may be orphaned",
+                    len(self._subscriptions),
+                )
         # Clear state after subscriptions are gone
         with self.state_lock:
             self.nodes.clear()
@@ -321,10 +326,11 @@ class SessionContext:
             log.error("SessionContext subscriber error: %s", exc)
             raise
         finally:
-            # Single cleanup path — guarantees all subscriptions are closed
             for sub in self._subscriptions:
                 try:
-                    await sub.unsubscribe()
+                    await asyncio.wait_for(sub.unsubscribe(), timeout=2.0)
+                except TimeoutError:
+                    log.warning("Unsubscribe timed out for session %s", sid)
                 except Exception as exc:
                     log.warning("Failed to unsubscribe: %s", exc)
             self._subscriptions.clear()

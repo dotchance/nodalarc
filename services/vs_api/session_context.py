@@ -152,6 +152,47 @@ class SessionContext:
         self._ready = asyncio.Event()
         self._stopped = False
 
+    def _init_state_only(self) -> None:
+        """Initialize just the state dicts — for tests that don't need a session config."""
+        import threading
+
+        self.session_id = "test"
+        self.session_file = ""
+        self.routing_stack = "test"
+        self.constellation_name = "test"
+        self.gs_elevation_map = {}
+        self.beam_falloff_exponent = 2.0
+        self.db_path = ""
+        self.state_lock = threading.Lock()
+        self.nodes = {}
+        self.links = {}
+        self.recent_events = []
+        self.network_health = NetworkHealth(
+            status="no measurement",
+            converging_since_ms=None,
+            unreachable_flows=0,
+            last_convergence_ms=None,
+        )
+        self.mi_active = False
+        self.sim_time = datetime.now(UTC).isoformat()
+        self.playback_paused = False
+        self.playback_speed = 1.0
+        self.last_clock_tick_wall_time = 0.0
+        self.last_link_event_wall_time = 0.0
+        self.session_ready_time = 0.0
+        self.prev_snapshot_active_count = 0
+        self.curr_snapshot_active_count = 0
+        self.cached_ephemeris = None
+        self.cached_ephemeris_obj = None
+        self.almanac_lock = threading.Lock()
+        self.almanac = AlmanacState()
+        self.continuous_tracer = None
+        self.session_ops_events = deque(maxlen=500)
+        self._subscriptions = []
+        self._subscriber_task = None
+        self._ready = asyncio.Event()
+        self._stopped = False
+
     def is_ready(self) -> bool:
         return self._ready.is_set()
 
@@ -597,6 +638,11 @@ class SessionContext:
         """Update network_health based on current link counts."""
         active = self.curr_snapshot_active_count
         if self.mi_active:
+            return
+        if active == 0:
+            self.network_health = self.network_health.model_copy(
+                update={"status": "no measurement"}
+            )
             return
         now = _time.monotonic()
         if self.session_ready_time > 0 and (now - self.session_ready_time) < CONVERGENCE_DWELL_S:

@@ -152,14 +152,24 @@ def test_shared_models_exist(shared_pairs):
     assert "StateSnapshot" in names, "StateSnapshot must be shared"
 
 
+_DYNAMIC_FIELDS = {
+    "StateSnapshot": {"ops_events"},
+}
+
+
 def test_frontend_fields_exist_in_backend(shared_pairs):
     """For every shared model: every field the frontend declares must
     exist in the backend JSON schema. If it doesn't, the backend
-    serialization will silently drop it and the UI will show blank/zero."""
+    serialization will silently drop it and the UI will show blank/zero.
+
+    Fields in _DYNAMIC_FIELDS are appended to the JSON dict after Pydantic
+    serialization (e.g., ops_events) and are excluded from this check.
+    """
     failures = []
     for name, ts_fields, py_model in shared_pairs:
         backend_fields = _schema_fields(py_model)
-        missing = ts_fields - backend_fields
+        dynamic = _DYNAMIC_FIELDS.get(name, set())
+        missing = ts_fields - backend_fields - dynamic
         if missing:
             failures.append(f"  {name}: frontend has {sorted(missing)} not in backend")
     assert not failures, "Frontend declares fields that backend will silently drop:\n" + "\n".join(

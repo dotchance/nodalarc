@@ -4,10 +4,12 @@ Tests handler logic:
 - Per-interface locality (LOCAL/CROSS_NODE)
 - Empty batches succeed
 - Bad PIDs return structured errors
+- None pid_map raises ValueError (wiring never happened)
 """
 
 from __future__ import annotations
 
+import pytest
 from nodalarc.proto import node_agent_pb2
 from node_agent.handlers import (
     handle_batch_link_down,
@@ -15,21 +17,23 @@ from node_agent.handlers import (
     handle_set_latency,
 )
 
+# All tests pass pid_map={} — an initialized but empty map.
+# This represents a node where wiring completed but no session pods
+# are scheduled. pid_map=None means wiring never happened and is
+# rejected by the handler (ValueError).
+EMPTY_PID_MAP: dict[str, int] = {}
+
 
 class TestBatchLinkDown:
     def test_cross_node_empty_batch_succeeds(self):
-        req = node_agent_pb2.BatchLinkDownRequest(
-            batch_id="test-cross-down",
-        )
-        resp = handle_batch_link_down(req)
+        req = node_agent_pb2.BatchLinkDownRequest(batch_id="test-cross-down")
+        resp = handle_batch_link_down(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is True
         assert resp.interfaces_downed == 0
 
     def test_empty_batch_succeeds(self):
-        req = node_agent_pb2.BatchLinkDownRequest(
-            batch_id="test-empty-down",
-        )
-        resp = handle_batch_link_down(req)
+        req = node_agent_pb2.BatchLinkDownRequest(batch_id="test-empty-down")
+        resp = handle_batch_link_down(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is True
         assert resp.interfaces_downed == 0
         assert resp.error_message == ""
@@ -45,7 +49,7 @@ class TestBatchLinkDown:
                 ),
             ],
         )
-        resp = handle_batch_link_down(req)
+        resp = handle_batch_link_down(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is False
         assert resp.interfaces_downed == 0
         assert resp.error_message != ""
@@ -66,25 +70,26 @@ class TestBatchLinkDown:
                 ),
             ],
         )
-        resp = handle_batch_link_down(req)
+        resp = handle_batch_link_down(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is False
         assert resp.interfaces_downed == 0
+
+    def test_none_pid_map_raises(self):
+        req = node_agent_pb2.BatchLinkDownRequest(batch_id="test-none")
+        with pytest.raises(ValueError, match="pid_map is None"):
+            handle_batch_link_down(req, pid_map=None)
 
 
 class TestBatchLinkUp:
     def test_cross_node_empty_batch_succeeds(self):
-        req = node_agent_pb2.BatchLinkUpRequest(
-            batch_id="test-cross-up",
-        )
-        resp = handle_batch_link_up(req)
+        req = node_agent_pb2.BatchLinkUpRequest(batch_id="test-cross-up")
+        resp = handle_batch_link_up(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is True
         assert resp.interfaces_upped == 0
 
     def test_empty_batch_succeeds(self):
-        req = node_agent_pb2.BatchLinkUpRequest(
-            batch_id="test-empty-up",
-        )
-        resp = handle_batch_link_up(req)
+        req = node_agent_pb2.BatchLinkUpRequest(batch_id="test-empty-up")
+        resp = handle_batch_link_up(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is True
         assert resp.interfaces_upped == 0
 
@@ -101,15 +106,20 @@ class TestBatchLinkUp:
                 ),
             ],
         )
-        resp = handle_batch_link_up(req)
+        resp = handle_batch_link_up(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is False
         assert resp.error_message != ""
+
+    def test_none_pid_map_raises(self):
+        req = node_agent_pb2.BatchLinkUpRequest(batch_id="test-none")
+        with pytest.raises(ValueError, match="pid_map is None"):
+            handle_batch_link_up(req, pid_map=None)
 
 
 class TestSetLatency:
     def test_empty_request_succeeds(self):
         req = node_agent_pb2.SetLatencyRequest()
-        resp = handle_set_latency(req)
+        resp = handle_set_latency(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is True
         assert resp.entries_updated == 0
 
@@ -124,6 +134,6 @@ class TestSetLatency:
                 ),
             ],
         )
-        resp = handle_set_latency(req)
+        resp = handle_set_latency(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is False
         assert resp.entries_updated == 0

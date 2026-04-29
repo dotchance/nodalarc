@@ -60,6 +60,7 @@ from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
 from vs_api.session_context import SessionContext, _link_key
 from vs_api.session_manager import SessionManager
+from vs_api.terminal import TerminalManager
 
 log = logging.getLogger(__name__)
 
@@ -190,6 +191,7 @@ _active_context: SessionContext | None = None
 _session_manager: SessionManager | None = None
 _nats_connection: nats.NATS | None = None
 _main_event_loop: asyncio.AbstractEventLoop | None = None
+_terminal_manager = TerminalManager()
 _initial_session_file: str = ""  # Set by main() before uvicorn starts
 
 # System OpsEvents — meta-session, not cleared on switch
@@ -589,64 +591,6 @@ async def get_ops_events(
     return events[-limit:]
 
 
-def _clear_state() -> None:
-    """Stop the active SessionContext during session switch.
-
-    Called from the sync session switch executor. Uses _main_event_loop
-    (captured by _nats_subscriber on the main asyncio thread) to schedule
-    the async stop() call.
-    """
-    global _active_context
-    old = _active_context
-    _active_context = None
-    if old is not None:
-        if _main_event_loop is None:
-            log.error("FATAL: No main event loop for async context stop")
-            raise RuntimeError("No main event loop available")
-        future = asyncio.run_coroutine_threadsafe(old.stop(), _main_event_loop)
-        future.result(timeout=10)
-
-
-def _update_session_globals(session_path: str, new_db_path: str) -> None:
-    """Create and start a new SessionContext for the switched session.
-
-    Called from the sync session switch executor after _clear_state().
-    Creates the context, sets its DB path, starts it on the shared NATS
-    connection, and waits for it to be ready (first snapshot received).
-    """
-    global _active_context
-
-    from nodalarc.nats_channels import sanitize_session_id
-
-    session_data = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(session_data)
-    session_id = sanitize_session_id(session.session.name)
-
-    ctx = SessionContext(session_id, session_path)
-    ctx.db_path = new_db_path
-
-    import sqlite3 as _sqlite3
-
-    conn = _sqlite3.connect(new_db_path)
-    create_tables(conn)
-    conn.close()
-
-    if _nats_connection is None:
-        log.error("FATAL: No NATS connection for session switch")
-        raise RuntimeError("No NATS connection available")
-    if _main_event_loop is None:
-        log.error("FATAL: No main event loop for async context start")
-        raise RuntimeError("No main event loop available")
-
-    future = asyncio.run_coroutine_threadsafe(
-        ctx.start(_nats_connection, mode="switch"), _main_event_loop
-    )
-    future.result(timeout=10)
-
-    _active_context = ctx
-    log.info("Session switched: session_id=%s db=%s", session_id, new_db_path)
-
-
 def _restore_state_from_db(db_path: str) -> bool:
     """Load the most recent snapshot from SQLite into the active context.
 
@@ -836,6 +780,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     session = TerminalSession(pod_ip, ssh_key)
     try:
         await session.connect()
+        await _terminal_manager.register(node_id, session, websocket)
 
         async def ws_to_ssh():
             """Forward browser input to SSH session."""
@@ -875,6 +820,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     except Exception as exc:
         log.warning("Terminal session error for %s: %s", node_id, exc)
     finally:
+        await _terminal_manager.unregister(node_id)
         await session.close()
         _audit_log.info(f"WS_TERMINAL_DISCONNECT ip={ws_ip} node={node_id}")
 
@@ -1961,17 +1907,21 @@ def introspect(body: dict) -> dict:
 
 
 async def _run_switch(session_path: str) -> None:
-    """Run session switch with WebSocket notifications.
+    """Run session switch — linear async chain on the main event loop.
 
-    Sequential flow per vs-api-session-lifecycle plan:
-    a. Save old context reference
-    b. Set _active_context = None (broadcast loop stops immediately)
-    c. Push session_transitioning to all WebSocket clients
-    d. Stop old context (async cleanup)
-    e. Run session_manager.switch in executor (blocking K8s calls)
-       — this calls _clear_state (no-op now) and _update_session_globals
-       — _update_session_globals creates and starts the new SessionContext
-    f. Push session_ready with initial snapshot, or session_failed
+    All pointer writes to _active_context happen here, on the main
+    event loop. No executor threads, no run_coroutine_threadsafe.
+
+    Flow:
+    a. Null _active_context (broadcast loop stops)
+    b. Push session_transitioning
+    c. Close all terminal SSH sessions
+    d. Stop old context
+    e. SessionManager deploys new CR (async, polls with asyncio.sleep)
+    f. Create new SessionContext, start subscriptions
+    g. Wait for is_ready() with timeout
+    h. Set _active_context = new context
+    i. Push ephemeris + session_ready
     """
     global _active_context
 
@@ -1986,15 +1936,16 @@ async def _run_switch(session_path: str) -> None:
             {"old_session": old_session, "new_session_path": session_path},
         )
 
-        # Step a/b: null the context BEFORE pushing transitioning.
-        # The broadcast loop checks _active_context at the top of each
-        # tick — setting it to None immediately stops snapshot frames.
+        # (a) Null context — broadcast loop stops immediately
         _active_context = None
 
-        # Step c: notify all WebSocket clients
+        # (b) Notify VF
         await _broadcast_to_all(json.dumps({"msg_type": "session_transitioning"}))
 
-        # Step d: stop old context (async cleanup)
+        # (c) Close all terminal SSH sessions
+        await _terminal_manager.close_all("Session switched")
+
+        # (d) Stop old context
         if old_ctx is not None:
             await old_ctx.stop()
 
@@ -2004,93 +1955,94 @@ async def _run_switch(session_path: str) -> None:
             f"Old session {old_session} torn down",
         )
 
-        # Step e: run session_manager.switch in executor
-        # _clear_state is now a no-op (context already stopped above)
-        # _update_session_globals creates and starts the new context
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None,
-            _session_manager.switch,
-            session_path,
-            _clear_state,
-            _update_session_globals,
-        )
+        # (e) Deploy new session via K8s CR (fully async)
+        await _session_manager.switch(session_path)
 
-        await _publish_system_ops_event(
-            "info",
-            "SESSION_TEARDOWN_COMPLETE",
-            f"Old session {old_session} torn down, new context starting",
-        )
+        # (f) Create new SessionContext
+        from nodalarc.nats_channels import sanitize_session_id
 
-        ctx = _active_context
-        if ctx is not None:
-            try:
-                await asyncio.wait_for(ctx._ready.wait(), timeout=30.0)
-            except TimeoutError:
-                log.error("Session switch timeout — new context not ready after 30s")
-                await _publish_system_ops_event(
-                    "error",
-                    "SESSION_SWITCH_TIMEOUT",
-                    "New session did not become ready within 30s",
-                    {"session_path": session_path},
-                )
-                await ctx.stop()
-                _active_context = None
-                failed_frame = json.dumps(
+        session_data = yaml.safe_load(Path(session_path).read_text())
+        session = SessionConfig.model_validate(session_data)
+        session_id = sanitize_session_id(session.session.name)
+
+        if _nats_connection is None:
+            log.error("FATAL: No NATS connection for new SessionContext")
+            raise RuntimeError("No NATS connection available")
+
+        new_ctx = SessionContext(session_id, session_path)
+        await new_ctx.start(_nats_connection, mode="switch")
+
+        # (g) Wait for first live snapshot
+        try:
+            await asyncio.wait_for(new_ctx._ready.wait(), timeout=30.0)
+        except TimeoutError:
+            log.error("Session switch timeout — new context not ready after 30s")
+            await _publish_system_ops_event(
+                "error",
+                "SESSION_SWITCH_TIMEOUT",
+                "New session did not become ready within 30s",
+                {"session_path": session_path},
+            )
+            await new_ctx.stop()
+            await _broadcast_to_all(
+                json.dumps(
                     {
                         "msg_type": "session_failed",
                         "error": "New session did not become ready within 30s",
                     }
                 )
-                await _broadcast_to_all(failed_frame)
-                if _session_manager:
-                    _session_manager._status = "error"
-                    _session_manager.status_detail = "Session switch timeout"
-                return
+            )
+            if _session_manager:
+                _session_manager._status = "error"
+                _session_manager.status_detail = "Session switch timeout"
+            return
 
-        new_session = ctx.session_id if ctx else "unknown"
+        # (h) Atomic pointer swap — only place _active_context is written
+        _active_context = new_ctx
+        _session_manager._status = "ready"
+        _session_manager.status_detail = ""
+
         await _publish_system_ops_event(
             "info",
             "SESSION_SWITCH_COMPLETE",
-            f"Session switch complete: now running {new_session}",
-            {"session_id": new_session, "links": len(ctx.links) if ctx else 0},
+            f"Session switch complete: now running {session_id}",
+            {"session_id": session_id, "links": len(new_ctx.links)},
         )
 
+        # (i) Push ephemeris + session_ready to VF
+        if new_ctx.cached_ephemeris:
+            await _broadcast_to_all(json.dumps(new_ctx.cached_ephemeris))
         snapshot = _build_snapshot()
-        # Include ephemeris so VF can render immediately without
-        # waiting for the next session_ephemeris WebSocket message
-        ctx = _active_context
-        ephemeris = ctx.cached_ephemeris if ctx else None
-        if ephemeris:
-            await _broadcast_to_all(json.dumps(ephemeris))
-        ready_frame = json.dumps(
-            {
-                "msg_type": "session_ready",
-                "snapshot": snapshot,
-            }
+        await _broadcast_to_all(
+            json.dumps(
+                {
+                    "msg_type": "session_ready",
+                    "snapshot": snapshot,
+                }
+            )
         )
-        await _broadcast_to_all(ready_frame)
 
-        log.info("Session switch complete — %s active", new_session)
+        log.info("Session switch complete — %s active", session_id)
 
     except Exception as exc:
         if _session_manager and _session_manager.status == "switching":
             _session_manager._status = "error"
             _session_manager.status_detail = f"Unhandled: {exc}"
-            log.error("_run_switch safety net caught: %s", exc)
+            log.error("_run_switch caught: %s", exc)
         await _publish_system_ops_event(
             "error",
             "SESSION_SWITCH_FAILED",
             f"Session switch failed: {exc}",
             {"session_path": session_path, "error": str(exc)},
         )
-        failed_frame = json.dumps(
-            {
-                "msg_type": "session_failed",
-                "error": str(exc),
-            }
+        await _broadcast_to_all(
+            json.dumps(
+                {
+                    "msg_type": "session_failed",
+                    "error": str(exc),
+                }
+            )
         )
-        await _broadcast_to_all(failed_frame)
 
 
 async def _poll_cr_until_ready() -> None:
@@ -2346,10 +2298,10 @@ def main() -> None:
             new_db_path = recovered.get("db_path", "")
             session_config = recovered.get("session_config", "")
             if new_db_path and session_config and Path(session_config).exists():
-                _update_session_globals(session_config, new_db_path)
-                # Pre-populate in-memory state from last DB snapshot
-                _restore_state_from_db(new_db_path)
-                log.info(f"Recovered session: {recovered.get('session_id')} (db={new_db_path})")
+                _initial_session_file = session_config
+                log.info(
+                    f"Recovered session: {recovered.get('session_id')} (config={session_config})"
+                )
             else:
                 log.warning(
                     f"Found live session {recovered.get('session_id')} "

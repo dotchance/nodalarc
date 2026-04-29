@@ -104,10 +104,14 @@ class SessionContext:
         self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(session)
         self.beam_falloff_exponent: float = self._load_beam_falloff_exponent(session)
 
-        # DB path (set externally after context creation)
-        self.db_path: str = ""
+        self._init_runtime_state()
 
-        # Session state — protected by state_lock
+    def _init_runtime_state(self) -> None:
+        """Initialize all runtime state fields. Called by __init__ and
+        _init_state_only. Single source of truth — adding a field here
+        covers both production and test paths.
+        """
+        self.db_path: str = ""
         self.state_lock = threading.Lock()
         self.nodes: dict[str, NodeState] = {}
         self.links: dict[str, LinkState] = {}
@@ -120,78 +124,36 @@ class SessionContext:
         )
         self.mi_active: bool = False
         self.sim_time: str = datetime.now(UTC).isoformat()
-
-        # Playback state
         self.playback_paused: bool = False
         self.playback_speed: float = 1.0
-
-        # Stale tracking
         self.last_clock_tick_wall_time: float = 0.0
         self.last_link_event_wall_time: float = 0.0
         self.session_ready_time: float = 0.0
         self.prev_snapshot_active_count: int = 0
         self.curr_snapshot_active_count: int = 0
-
-        # Ephemeris cache
         self.cached_ephemeris: dict | None = None
         self.cached_ephemeris_obj: object | None = None
-
-        # Almanac
         self.almanac_lock = threading.Lock()
         self.almanac: AlmanacState = AlmanacState()
-
-        # Continuous tracer (set externally)
         self.continuous_tracer = None
-
-        # Session-scoped OpsEvents (cleared on switch)
         self.session_ops_events: deque = deque(maxlen=500)
-
-        # NATS subscription lifecycle
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
         self._ready = asyncio.Event()
         self._stopped = False
 
     def _init_state_only(self) -> None:
-        """Initialize just the state dicts — for tests that don't need a session config."""
-        import threading
-
+        """Initialize for tests that don't need a session config file.
+        Sets identity fields to test defaults, then calls the shared
+        runtime state initializer.
+        """
         self.session_id = "test"
         self.session_file = ""
         self.routing_stack = "test"
         self.constellation_name = "test"
         self.gs_elevation_map = {}
         self.beam_falloff_exponent = 2.0
-        self.db_path = ""
-        self.state_lock = threading.Lock()
-        self.nodes = {}
-        self.links = {}
-        self.recent_events = []
-        self.network_health = NetworkHealth(
-            status="no measurement",
-            converging_since_ms=None,
-            unreachable_flows=0,
-            last_convergence_ms=None,
-        )
-        self.mi_active = False
-        self.sim_time = datetime.now(UTC).isoformat()
-        self.playback_paused = False
-        self.playback_speed = 1.0
-        self.last_clock_tick_wall_time = 0.0
-        self.last_link_event_wall_time = 0.0
-        self.session_ready_time = 0.0
-        self.prev_snapshot_active_count = 0
-        self.curr_snapshot_active_count = 0
-        self.cached_ephemeris = None
-        self.cached_ephemeris_obj = None
-        self.almanac_lock = threading.Lock()
-        self.almanac = AlmanacState()
-        self.continuous_tracer = None
-        self.session_ops_events = deque(maxlen=500)
-        self._subscriptions = []
-        self._subscriber_task = None
-        self._ready = asyncio.Event()
-        self._stopped = False
+        self._init_runtime_state()
 
     def is_ready(self) -> bool:
         return self._ready.is_set()

@@ -27,6 +27,16 @@ const MIN_HEIGHT = 200;
 const DEFAULT_WIDTH = 800;
 const DEFAULT_HEIGHT = 350;
 
+const EDGE_SIZE = 6;
+
+const COLUMNS: { field: SortField; label: string; defaultWidth: number; minWidth: number }[] = [
+  { field: "timestamp", label: "timestamp", defaultWidth: 90, minWidth: 60 },
+  { field: "source", label: "source", defaultWidth: 80, minWidth: 50 },
+  { field: "level", label: "level", defaultWidth: 65, minWidth: 45 },
+  { field: "code", label: "code", defaultWidth: 100, minWidth: 50 },
+  { field: "message", label: "message", defaultWidth: 0, minWidth: 100 },
+];
+
 export function LogPanel({ events, onClose }: LogPanelProps) {
   const [paused, setPaused] = useState(false);
   const [pausedEvents, setPausedEvents] = useState<OpsEvent[]>([]);
@@ -37,32 +47,44 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
   const [searchPattern, setSearchPattern] = useState("");
   const [searchValid, setSearchValid] = useState(true);
   const [fontSize, setFontSize] = useState(11);
+  const [cleared, setCleared] = useState(false);
+  const [clearedAt, setClearedAt] = useState(0);
 
   const [pos, setPos] = useState({ x: 100, y: window.innerHeight - DEFAULT_HEIGHT - 60 });
   const [size, setSize] = useState({ w: DEFAULT_WIDTH, h: DEFAULT_HEIGHT });
+  const [colWidths, setColWidths] = useState<number[]>(COLUMNS.map((c) => c.defaultWidth));
+
   const panelRef = useRef<HTMLDivElement>(null);
   const tableBodyRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; startPosX: number; startPosY: number } | null>(null);
-  const resizeRef = useRef<{ startX: number; startY: number; startW: number; startH: number } | null>(null);
+  const resizeRef = useRef<{ startX: number; startY: number; startW: number; startH: number; edge: string } | null>(null);
+  const colResizeRef = useRef<{ startX: number; colIdx: number; startWidth: number } | null>(null);
   const autoScrollRef = useRef(true);
 
-  // Accumulate events when paused
   useEffect(() => {
     if (!paused) {
       setPausedEvents([]);
     }
   }, [paused]);
 
-  const displayEvents = paused ? pausedEvents : events;
+  const displayEvents = useMemo(() => {
+    const source = paused ? pausedEvents : events;
+    if (!cleared) return source;
+    return source.filter((e) => {
+      try {
+        return new Date(e.timestamp).getTime() > clearedAt;
+      } catch {
+        return true;
+      }
+    });
+  }, [paused, pausedEvents, events, cleared, clearedAt]);
 
-  // Snapshot events when pausing
   useEffect(() => {
     if (paused && pausedEvents.length === 0 && events.length > 0) {
       setPausedEvents([...events]);
     }
   }, [paused, pausedEvents.length, events]);
 
-  // Compile regex
   const searchRegex = useMemo(() => {
     if (!searchPattern) return null;
     try {
@@ -75,7 +97,6 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
     }
   }, [searchPattern]);
 
-  // Filter
   const filtered = useMemo(() => {
     let result = displayEvents.filter((e) => {
       if (!levelFilter.has(e.level)) return false;
@@ -90,7 +111,6 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
     return result;
   }, [displayEvents, levelFilter, sourceFilter, searchRegex]);
 
-  // Sort
   const sorted = useMemo(() => {
     const copy = [...filtered];
     copy.sort((a, b) => {
@@ -102,7 +122,6 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
     return copy;
   }, [filtered, sortField, sortDir]);
 
-  // Auto-scroll to bottom on new events
   useEffect(() => {
     if (autoScrollRef.current && tableBodyRef.current) {
       tableBodyRef.current.scrollTop = tableBodyRef.current.scrollHeight;
@@ -115,7 +134,6 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
     autoScrollRef.current = scrollHeight - scrollTop - clientHeight < 30;
   }, []);
 
-  // Sort toggle
   const handleSort = useCallback(
     (field: SortField) => {
       if (sortField === field) {
@@ -128,7 +146,6 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
     [sortField],
   );
 
-  // Level toggle
   const toggleLevel = useCallback((level: string) => {
     setLevelFilter((prev) => {
       const next = new Set(prev);
@@ -138,13 +155,17 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
     });
   }, []);
 
-  // Unique sources for dropdown
   const sources = useMemo(() => {
     const s = new Set(events.map((e) => e.source));
     return Array.from(s).sort();
   }, [events]);
 
-  // Drag handling
+  const handleClear = useCallback(() => {
+    setCleared(true);
+    setClearedAt(Date.now());
+  }, []);
+
+  // Drag handling (title bar)
   const handleDragStart = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
@@ -167,18 +188,37 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
     [pos],
   );
 
-  // Resize handling (bottom-right corner)
-  const handleResizeStart = useCallback(
-    (e: React.MouseEvent) => {
+  // Edge resize handling — all four edges and corners
+  const handleEdgeResizeStart = useCallback(
+    (e: React.MouseEvent, edge: string) => {
       e.preventDefault();
       e.stopPropagation();
-      resizeRef.current = { startX: e.clientX, startY: e.clientY, startW: size.w, startH: size.h };
+      resizeRef.current = { startX: e.clientX, startY: e.clientY, startW: size.w, startH: size.h, edge };
+      const startPos = { ...pos };
       const onMove = (ev: MouseEvent) => {
         if (!resizeRef.current) return;
-        setSize({
-          w: Math.max(MIN_WIDTH, resizeRef.current.startW + (ev.clientX - resizeRef.current.startX)),
-          h: Math.max(MIN_HEIGHT, resizeRef.current.startH + (ev.clientY - resizeRef.current.startY)),
-        });
+        const dx = ev.clientX - resizeRef.current.startX;
+        const dy = ev.clientY - resizeRef.current.startY;
+        const ed = resizeRef.current.edge;
+
+        let newW = resizeRef.current.startW;
+        let newH = resizeRef.current.startH;
+        let newX = startPos.x;
+        let newY = startPos.y;
+
+        if (ed.includes("right")) newW = Math.max(MIN_WIDTH, resizeRef.current.startW + dx);
+        if (ed.includes("bottom")) newH = Math.max(MIN_HEIGHT, resizeRef.current.startH + dy);
+        if (ed.includes("left")) {
+          newW = Math.max(MIN_WIDTH, resizeRef.current.startW - dx);
+          if (newW > MIN_WIDTH) newX = startPos.x + dx;
+        }
+        if (ed.includes("top")) {
+          newH = Math.max(MIN_HEIGHT, resizeRef.current.startH - dy);
+          if (newH > MIN_HEIGHT) newY = startPos.y + dy;
+        }
+
+        setSize({ w: newW, h: newH });
+        setPos({ x: newX, y: newY });
       };
       const onUp = () => {
         resizeRef.current = null;
@@ -188,10 +228,37 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
       document.addEventListener("mousemove", onMove);
       document.addEventListener("mouseup", onUp);
     },
-    [size],
+    [size, pos],
   );
 
-  // Highlight matching text
+  // Column resize handling
+  const handleColResizeStart = useCallback(
+    (e: React.MouseEvent, colIdx: number) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const col = COLUMNS[colIdx]!;
+      colResizeRef.current = { startX: e.clientX, colIdx, startWidth: colWidths[colIdx] ?? col.defaultWidth };
+      const onMove = (ev: MouseEvent) => {
+        if (!colResizeRef.current) return;
+        const dx = ev.clientX - colResizeRef.current.startX;
+        const newWidth = Math.max(col.minWidth, colResizeRef.current.startWidth + dx);
+        setColWidths((prev) => {
+          const next = [...prev];
+          next[colResizeRef.current!.colIdx] = newWidth;
+          return next;
+        });
+      };
+      const onUp = () => {
+        colResizeRef.current = null;
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    },
+    [colWidths],
+  );
+
   const highlightText = useCallback(
     (text: string) => {
       if (!searchRegex) return text;
@@ -226,6 +293,19 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
     return sortDir === "asc" ? " ▲" : " ▼";
   };
 
+  const gridCols = colWidths.map((w, i) => (i === colWidths.length - 1 ? "1fr" : `${w}px`)).join(" ");
+
+  const edgeCursor: Record<string, string> = {
+    top: "ns-resize",
+    bottom: "ns-resize",
+    left: "ew-resize",
+    right: "ew-resize",
+    "top-left": "nwse-resize",
+    "top-right": "nesw-resize",
+    "bottom-left": "nesw-resize",
+    "bottom-right": "nwse-resize",
+  };
+
   return (
     <div
       ref={panelRef}
@@ -250,6 +330,24 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
         overflow: "hidden",
       }}
     >
+      {/* Edge resize handles */}
+      {["top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"].map((edge) => {
+        const s: React.CSSProperties = {
+          position: "absolute",
+          zIndex: 10,
+          cursor: edgeCursor[edge],
+        };
+        if (edge === "top") { s.top = 0; s.left = EDGE_SIZE; s.right = EDGE_SIZE; s.height = EDGE_SIZE; }
+        else if (edge === "bottom") { s.bottom = 0; s.left = EDGE_SIZE; s.right = EDGE_SIZE; s.height = EDGE_SIZE; }
+        else if (edge === "left") { s.left = 0; s.top = EDGE_SIZE; s.bottom = EDGE_SIZE; s.width = EDGE_SIZE; }
+        else if (edge === "right") { s.right = 0; s.top = EDGE_SIZE; s.bottom = EDGE_SIZE; s.width = EDGE_SIZE; }
+        else if (edge === "top-left") { s.top = 0; s.left = 0; s.width = EDGE_SIZE * 2; s.height = EDGE_SIZE * 2; }
+        else if (edge === "top-right") { s.top = 0; s.right = 0; s.width = EDGE_SIZE * 2; s.height = EDGE_SIZE * 2; }
+        else if (edge === "bottom-left") { s.bottom = 0; s.left = 0; s.width = EDGE_SIZE * 2; s.height = EDGE_SIZE * 2; }
+        else if (edge === "bottom-right") { s.bottom = 0; s.right = 0; s.width = EDGE_SIZE * 2; s.height = EDGE_SIZE * 2; }
+        return <div key={edge} style={s} onMouseDown={(e) => handleEdgeResizeStart(e, edge)} />;
+      })}
+
       {/* Title bar — draggable */}
       <div
         onMouseDown={handleDragStart}
@@ -270,6 +368,21 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
           {filtered.length}/{displayEvents.length} events
         </span>
         <div style={{ flex: 1 }} />
+        <button
+          onClick={handleClear}
+          title="Clear log"
+          style={{
+            background: "transparent",
+            border: "1px solid var(--border)",
+            borderRadius: 3,
+            color: "var(--text-secondary)",
+            padding: "2px 8px",
+            cursor: "pointer",
+            fontSize: 10,
+          }}
+        >
+          Clear
+        </button>
         <button
           onClick={() => setPaused((p) => !p)}
           title={paused ? "Resume" : "Pause"}
@@ -403,11 +516,11 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
         )}
       </div>
 
-      {/* Table header */}
+      {/* Table header with resizable columns */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "90px 80px 65px 100px 1fr",
+          gridTemplateColumns: gridCols,
           gap: 0,
           padding: "4px 10px",
           borderBottom: "1px solid var(--border)",
@@ -416,22 +529,41 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
           userSelect: "none",
         }}
       >
-        {(["timestamp", "source", "level", "code", "message"] as SortField[]).map((field) => (
+        {COLUMNS.map((col, idx) => (
           <div
-            key={field}
-            onClick={() => handleSort(field)}
-            style={{
-              cursor: "pointer",
-              color: sortField === field ? "var(--accent-blue)" : "var(--text-secondary)",
-              fontSize: 10,
-              fontWeight: 600,
-              textTransform: "uppercase",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-            }}
+            key={col.field}
+            style={{ position: "relative", display: "flex", alignItems: "center" }}
           >
-            {field}
-            {sortIndicator(field)}
+            <div
+              onClick={() => handleSort(col.field)}
+              style={{
+                cursor: "pointer",
+                color: sortField === col.field ? "var(--accent-blue)" : "var(--text-secondary)",
+                fontSize: 10,
+                fontWeight: 600,
+                textTransform: "uppercase",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                flex: 1,
+              }}
+            >
+              {col.label}
+              {sortIndicator(col.field)}
+            </div>
+            {idx < COLUMNS.length - 1 && (
+              <div
+                onMouseDown={(e) => handleColResizeStart(e, idx)}
+                style={{
+                  position: "absolute",
+                  right: -3,
+                  top: 0,
+                  bottom: 0,
+                  width: 6,
+                  cursor: "col-resize",
+                  zIndex: 5,
+                }}
+              />
+            )}
           </div>
         ))}
       </div>
@@ -463,7 +595,7 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
               key={`${e.timestamp}-${e.code}-${i}`}
               style={{
                 display: "grid",
-                gridTemplateColumns: "90px 80px 65px 100px 1fr",
+                gridTemplateColumns: gridCols,
                 gap: 0,
                 padding: "2px 10px",
                 borderBottom: "1px solid rgba(255,255,255,0.03)",
@@ -498,28 +630,6 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
             </div>
           ))
         )}
-      </div>
-
-      {/* Resize handle — bottom-right corner */}
-      <div
-        onMouseDown={handleResizeStart}
-        style={{
-          position: "absolute",
-          right: 0,
-          bottom: 0,
-          width: 16,
-          height: 16,
-          cursor: "nwse-resize",
-        }}
-      >
-        <svg
-          viewBox="0 0 16 16"
-          width="16"
-          height="16"
-          style={{ position: "absolute", right: 2, bottom: 2, opacity: 0.3 }}
-        >
-          <path d="M14 14L14 8M14 14L8 14" stroke="currentColor" fill="none" strokeWidth="1.5" />
-        </svg>
       </div>
     </div>
   );

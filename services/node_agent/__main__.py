@@ -226,6 +226,21 @@ async def main() -> None:
                 # re-processes the same manifest (idempotent — Case B no-ops).
                 last_resource_version = rv
 
+                # If some pods were skipped (no PID at wiring time), retry
+                # sysctls and finalization for them in the background. The
+                # veths and ISL interfaces are created at LinkUp time by the
+                # Scheduler, so we only need sysctls + default route removal
+                # + cni0 iptables for the late starters.
+                all_local = {n for n in nodes if n in shared_pid_map or n in wired}
+                missed = all_local - set(wired.keys())
+                if missed:
+                    log.warning(
+                        "Wiring partial: %d nodes skipped, retrying in background: %s",
+                        len(missed),
+                        ", ".join(sorted(missed)),
+                    )
+                    _retry_missed_nodes(missed, manifest, ns, shared_pid_map)
+
             except Exception as exc:
                 if hasattr(exc, "status") and exc.status == 404:
                     if last_resource_version:
@@ -296,6 +311,70 @@ def _refresh_pids(shared_pid_map: dict[str, int]) -> None:
         log.info("PID map refreshed: %d pods", len(shared_pid_map))
     except Exception as exc:
         log.warning("PID refresh failed: %s", exc)
+
+
+def _retry_missed_nodes(
+    missed: set[str],
+    manifest: dict,
+    namespace: str,
+    shared_pid_map: dict[str, int],
+) -> None:
+    """Retry sysctls + finalization for nodes that were skipped during wiring.
+
+    Called from the wiring watcher thread when some pods didn't have PIDs
+    at wiring time. Polls for PIDs every 5 seconds up to 60 seconds.
+    Once a PID appears, applies sysctls, removes default route, and locks
+    down cni0 — the same operations as wiring Phases 1, 7, and 8.
+
+    Does NOT create veths or ISL interfaces — those are handled by the
+    Scheduler via BatchLinkUp when the OME makes them visible.
+    """
+    import time
+
+    from node_agent.namespace_ops import _write_sysctl_in_netns
+    from node_agent.pid_discovery import discover_local_pod_pids
+    from node_agent.wiring import finalize_pod
+
+    nodes = manifest.get("nodes", {})
+    remaining = set(missed)
+
+    for _attempt in range(12):
+        if not remaining:
+            break
+        time.sleep(5)
+        fresh_pids = discover_local_pod_pids(namespace)
+        shared_pid_map.update(fresh_pids)
+
+        resolved = []
+        for node_id in list(remaining):
+            pid = fresh_pids.get(node_id, 0)
+            if pid == 0:
+                continue
+            node_spec = nodes.get(node_id, {})
+            for key, value in node_spec.get("sysctls", {}).items():
+                err = _write_sysctl_in_netns(pid, key, str(value))
+                if err:
+                    log.warning("Retry sysctl %s=%s failed for %s: %s", key, value, node_id, err)
+            err = finalize_pod(pid, node_id)
+            if err:
+                log.warning("Retry finalization failed for %s: %s", node_id, err)
+                continue
+            resolved.append(node_id)
+            remaining.discard(node_id)
+
+        if resolved:
+            log.info(
+                "Late-start nodes recovered [resolved=%s, remaining=%d]",
+                ", ".join(sorted(resolved)),
+                len(remaining),
+            )
+
+    if remaining:
+        log.error(
+            "FATAL: %d nodes never got PIDs after 60s — sysctls and finalization not applied: %s",
+            len(remaining),
+            ", ".join(sorted(remaining)),
+        )
 
 
 if __name__ == "__main__":

@@ -269,7 +269,7 @@ class Dispatcher:
         # Share NATS connection with agent pool for Node Agent dispatch
         self._pool.set_nc(nc)
 
-        log.info("Scheduler NATS connected")
+        log.debug("Scheduler NATS connected")
 
         # --- Read retained SchedulingCheckpoint for recovery context ---
         try:
@@ -405,7 +405,7 @@ class Dispatcher:
             if eph.epoch_id == self._expected_epoch_id:
                 self._position_table.load_ephemeris(eph)
                 self._epoch_deps_met["ephemeris"] = True
-                log.info(
+                log.debug(
                     "SessionEphemeris epoch_id=%d loaded: %d nodes",
                     eph.epoch_id,
                     len(eph.nodes),
@@ -437,10 +437,10 @@ class Dispatcher:
                 log.info("SUSPENDED: seeking epoch_id=%d", ps.epoch_id)
             elif ps.state == "playing" and ps.epoch_id == self._expected_epoch_id:
                 self._playback_playing_received = True
-                log.info("PlaybackState(playing, epoch_id=%d) received", ps.epoch_id)
+                log.debug("PlaybackState(playing, epoch_id=%d) received", ps.epoch_id)
                 await self._check_epoch_resume()
             elif ps.state == "paused":
-                log.info("PlaybackState(paused, epoch_id=%d)", ps.epoch_id)
+                log.debug("PlaybackState(paused, epoch_id=%d)", ps.epoch_id)
 
         async def _on_clock_tick(msg):
             nonlocal last_sim_time
@@ -494,7 +494,7 @@ class Dispatcher:
                 if snapshot.epoch_id == self._expected_epoch_id:
                     self._buffered_snapshot = snapshot
                     self._epoch_deps_met["snapshot"] = True
-                    log.info(
+                    log.debug(
                         "Buffered LinkStateSnapshot seq=%d epoch_id=%d",
                         snapshot.snapshot_seq,
                         snapshot.epoch_id,
@@ -504,7 +504,7 @@ class Dispatcher:
 
             desired = self._build_desired_from_snapshot(snapshot)
             if desired is not None:
-                log.info(
+                log.debug(
                     "Snapshot seq=%d queued: %d links desired",
                     snapshot.snapshot_seq,
                     len(desired),
@@ -519,7 +519,7 @@ class Dispatcher:
             for peer_ip, latency_ms in peers.items():
                 self._substrate_by_ip[peer_ip] = latency_ms
             if peers:
-                log.info(
+                log.debug(
                     "Substrate update from %s: %s",
                     source,
                     ", ".join(f"{ip}={ms}ms" for ip, ms in peers.items()),
@@ -592,7 +592,7 @@ class Dispatcher:
             )
             raise
 
-        log.info("Scheduler dispatcher started — %d callback subscriptions active", len(subs))
+        log.debug("Scheduler subscriptions active: %d", len(subs))
 
         # Wait for shutdown — callbacks handle all message processing
         try:
@@ -841,7 +841,7 @@ class Dispatcher:
         Can take seconds (Node Agent I/O). The decision callbacks continue
         processing NATS events while this worker is busy.
         """
-        log.info("Dispatch worker started")
+        log.debug("Dispatch worker started")
         while self._running:
             # Block until work arrives (event-driven, no polling)
             desired = await self._dispatch_queue.get()
@@ -866,10 +866,10 @@ class Dispatcher:
                 break
 
             if drained > 0:
-                log.info("Dispatch worker: drained %d stale entries from queue", drained)
+                log.debug("Dispatch worker: drained %d stale entries from queue", drained)
 
             sim_time = self._current_sim_time or datetime.now(UTC)
-            log.info(
+            log.debug(
                 "Dispatch worker: processing desired with %d links (actual has %d)",
                 len(desired),
                 len(self._actual_links),
@@ -883,7 +883,7 @@ class Dispatcher:
                 await self._update_latencies(nc)
                 self._latency_update_pending = False
 
-        log.info("Dispatch worker stopped")
+        log.debug("Dispatch worker stopped")
 
     # ------------------------------------------------------------------
     # Reconcile-based dispatch — single path to Node Agent
@@ -909,13 +909,13 @@ class Dispatcher:
             if cm.data:
                 for key, val in cm.data.items():
                     self._substrate_latency[key] = float(val)
-                log.info(
+                log.debug(
                     "Loaded substrate latency: %s",
                     ", ".join(f"{k}={v}ms" for k, v in sorted(self._substrate_latency.items())),
                 )
         except kubernetes.client.rest.ApiException as exc:
             if exc.status == 404:
-                log.info("No substrate latency ConfigMap — single-node deployment")
+                log.debug("No substrate latency ConfigMap — single-node deployment")
             else:
                 log.warning("Failed to read substrate latency ConfigMap: %s", exc)
         except Exception as exc:
@@ -991,13 +991,18 @@ class Dispatcher:
         else:
             await self._reconcile_mbb(to_remove, to_add, desired, sim_iso, sim_time, nc)
 
-        log.info(
-            "Reconcile: +%d/-%d links (%d active, mbb=%s)",
-            len(to_add),
-            len(to_remove),
-            len(self._actual_links),
-            self._mbb_dispatch,
-        )
+        if to_add or to_remove:
+            log.info(
+                "Link state changed [added=%d, removed=%d, active=%d]",
+                len(to_add),
+                len(to_remove),
+                len(self._actual_links),
+            )
+        else:
+            log.debug(
+                "Reconcile: no changes (%d active)",
+                len(self._actual_links),
+            )
 
         # Checkpoint (fire-and-forget)
         asyncio.create_task(self._write_checkpoint(sim_iso))

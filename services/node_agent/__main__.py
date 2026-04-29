@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 async def main() -> None:
     from nodal.logging import configure as _configure_logging
 
-    _configure_logging("nodal.arc.node_agent", nats_level=logging.WARNING)
+    _configure_logging("nodal.arc.node_agent", nats_level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="Nodal Arc Node Agent")
     parser.add_argument(
@@ -71,6 +71,7 @@ async def main() -> None:
     from nodalarc.platform_config import init_platform_config
 
     init_platform_config(Path(args.platform_config))
+    log.info("Node Agent starting [node=%s]", socket.gethostname())
 
     # -----------------------------------------------------------------------
     # Connect to NATS FIRST — the Node Agent is a NATS-native actor.
@@ -84,7 +85,7 @@ async def main() -> None:
     hostname = socket.gethostname()
     progress_subject = wiring_progress_subject(hostname)
     loop = asyncio.get_running_loop()
-    log.info("NATS connected to %s as %s", nats_url(), hostname)
+    log.debug("NATS connected to %s as %s", nats_url(), hostname)
 
     # Synchronous progress publisher for the wiring thread.
     # The wiring thread is synchronous Python (kernel netlink work).
@@ -235,9 +236,9 @@ async def main() -> None:
     wiring_task = loop.run_in_executor(None, _wiring_watcher)
 
     # Wait for first wiring pass to complete before accepting requests
-    log.info("Waiting for wiring to complete before accepting NATS requests...")
+    log.debug("Waiting for wiring to complete before accepting NATS requests...")
     await first_wiring_done.wait()
-    log.info("Wiring ready — pid_map has %d entries", len(shared_pid_map))
+    log.debug("Wiring ready — pid_map has %d entries", len(shared_pid_map))
 
     # -----------------------------------------------------------------------
     # NATS request/reply server — subscribes AFTER wiring (pid_map gate)
@@ -253,7 +254,7 @@ async def main() -> None:
             await msg.respond(b"")
 
     sub = await nc.subscribe(agent_subject, cb=_handle_request)
-    log.info("NodeAgent NATS listening on subject %s", agent_subject)
+    log.debug("NodeAgent NATS listening on subject %s", agent_subject)
 
     # Start substrate latency monitor
     from node_agent import substrate_monitor

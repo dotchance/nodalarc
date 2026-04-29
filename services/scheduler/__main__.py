@@ -134,7 +134,7 @@ def _build_interface_map(
 
 
 def main() -> None:
-    _configure_logging("nodal.arc.scheduler", nats_level=logging.WARNING)
+    _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Scheduler")
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument(
@@ -159,13 +159,13 @@ def main() -> None:
 
     session_file = Path(args.session)
     while not session_file.is_file():
-        log.info("Waiting for session config at %s...", args.session)
+        log.debug("Waiting for session config at %s...", args.session)
         _time.sleep(5)
     data = yaml.safe_load(session_file.read_text())
     session = SessionConfig.model_validate(data)
     addressing = AddressingScheme(session.addressing)
     interface_map, bandwidth_map = _build_interface_map(session, addressing)
-    log.info("Interface map: %d link pairs", len(interface_map))
+    log.debug("Interface map: %d link pairs", len(interface_map))
 
     # Pod location map — canonical node IDs from K8s labels
     # agent_port is legacy — PodLocationMap builds "host:port" strings but
@@ -175,7 +175,7 @@ def main() -> None:
         loc.load_from_pid_map_file(args.pid_map, agent_port=0)
     else:
         loc.load_from_k8s_api(agent_port=0)
-    log.info("Pod locations:\n%s", loc.summary())
+    log.debug("Pod locations:\n%s", loc.summary())
 
     # --- Wiring gate: wait for Node Agent to complete wiring ---
     # The Scheduler must NOT dispatch OME events until wiring is done.
@@ -189,7 +189,7 @@ def main() -> None:
     expected_nodes = set(loc.node_ids)
     expected_count = len(expected_nodes)
     ns = get_platform_config().kubernetes_namespace
-    log.info("Wiring gate: waiting for %d nodes", expected_count)
+    log.debug("Wiring gate: waiting for %d nodes", expected_count)
 
     wiring_deadline = _time.monotonic() + 120
     while _time.monotonic() < wiring_deadline:
@@ -259,7 +259,13 @@ def main() -> None:
     from nodal.logging import set_session
 
     set_session(session_id)
-    log.info("Scheduler session_id=%s", session_id)
+    log.info(
+        "Scheduler starting [session_id=%s, link_pairs=%d, nodes=%d, mbb=%s]",
+        session_id,
+        len(interface_map),
+        len(loc.node_ids),
+        mbb_dispatch,
+    )
 
     # Override set (shared between dispatcher and scenario handler)
     override_set: set[tuple[str, str]] = set()

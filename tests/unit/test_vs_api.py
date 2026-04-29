@@ -342,3 +342,134 @@ class TestSessionContextInit:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         assert ctx.is_stale() is False
+
+
+class TestSubscriberResilience:
+    """Test that the NATS subscriber loop survives missing optional streams.
+
+    The NODALARC_MI stream only exists when MI is enabled. The subscriber
+    loop must not crash when it fails to subscribe to this stream —
+    all other subscriptions (ephemeris, clock, links) must continue
+    working. This was a production bug: the MI subscription failure
+    killed the entire subscriber task and all working subscriptions,
+    causing STALE DATA in the VF.
+    """
+
+    def test_subscriber_survives_missing_mi_stream(self):
+        """Verify that a missing NODALARC_MI stream doesn't kill the
+        subscriber task. The MI subscription is wrapped in try/except
+        and logged at INFO level."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from nats.js.errors import NotFoundError
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        nc = MagicMock()
+        js_mock = MagicMock()
+
+        subscribe_calls = []
+
+        async def mock_subscribe(subject, **kwargs):
+            if "NODALARC_MI" in kwargs.get("stream", ""):
+                raise NotFoundError(code=404, err_code=10059, description="stream not found")
+            sub = AsyncMock()
+            sub.unsubscribe = AsyncMock()
+            subscribe_calls.append(subject)
+            return sub
+
+        js_mock.subscribe = mock_subscribe
+        nc.jetstream.return_value = js_mock
+
+        async def run():
+            await ctx.start(nc, mode="recovery")
+            await asyncio.sleep(0.1)
+            assert not ctx._stopped, "Subscriber should still be alive"
+            assert len(ctx._subscriptions) > 0, "Some subscriptions should have succeeded"
+            await ctx.stop()
+
+        asyncio.run(run())
+        assert len(subscribe_calls) > 5, (
+            f"Expected 6+ successful subscriptions, got {len(subscribe_calls)}"
+        )
+
+    def test_subscriber_crashes_on_required_stream_failure(self):
+        """If a required stream (NODALARC_OME, NODALARC_LINKS, etc.)
+        fails, the subscriber SHOULD crash — fail loud."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from nats.js.errors import NotFoundError
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        nc = MagicMock()
+        js_mock = MagicMock()
+
+        async def mock_subscribe(subject, **kwargs):
+            if "NODALARC_OME" in kwargs.get("stream", ""):
+                raise NotFoundError(code=404, err_code=10059, description="stream not found")
+            sub = AsyncMock()
+            sub.unsubscribe = AsyncMock()
+            return sub
+
+        js_mock.subscribe = mock_subscribe
+        nc.jetstream.return_value = js_mock
+
+        async def run():
+            await ctx.start(nc, mode="recovery")
+            await asyncio.sleep(0.5)
+            return ctx._subscriber_task.done()
+
+        task_done = asyncio.run(run())
+        assert task_done, "Subscriber should have crashed on required stream failure"
+
+    def test_snapshot_seq_rejects_stale(self):
+        """Snapshots with seq <= last are discarded to prevent jitter."""
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.last_snapshot_seq = 100
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        msg = MagicMock()
+        msg.data = b'{"snapshot_seq": 50, "sim_time": "2025-01-01T00:00:00+00:00", "links": [], "interval_s": 5.0, "epoch_id": 0}'
+
+        asyncio.run(ctx._on_link_state_snapshot(msg))
+        assert ctx.last_snapshot_seq == 100, "Stale snapshot should not update seq"
+        assert len(ctx.links) == 0
+
+    def test_snapshot_seq_accepts_newer(self):
+        """Snapshots with seq > last are applied."""
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.last_snapshot_seq = 10
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        msg = MagicMock()
+        msg.data = b'{"snapshot_seq": 11, "sim_time": "2025-01-01T00:00:00+00:00", "links": [], "interval_s": 5.0, "epoch_id": 0}'
+
+        asyncio.run(ctx._on_link_state_snapshot(msg))
+        assert ctx.last_snapshot_seq == 11
+
+    def test_ready_requires_ephemeris_and_snapshot(self):
+        """is_ready() only returns True when both ephemeris AND snapshot
+        have been received — prevents ghost snapshot race."""
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        assert not ctx.is_ready()
+
+        ctx._snapshot_received = True
+        ctx._check_ready()
+        assert not ctx.is_ready(), "Should not be ready without ephemeris"
+
+        ctx._ephemeris_received = True
+        ctx._check_ready()
+        assert ctx.is_ready(), "Should be ready with both"

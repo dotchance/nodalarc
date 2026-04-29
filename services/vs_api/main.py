@@ -189,6 +189,7 @@ _active_context: SessionContext | None = None
 # --- Platform state: global, outlives any session ---
 _session_manager: SessionManager | None = None
 _nats_connection: nats.NATS | None = None
+_main_event_loop: asyncio.AbstractEventLoop | None = None
 _initial_session_file: str = ""  # Set by main() before uvicorn starts
 
 # System OpsEvents — meta-session, not cleared on switch
@@ -307,6 +308,13 @@ _pending_cr_poll: bool = False
 _ws_clients: set = set()  # Active WebSocket connections for instant broadcast
 
 
+async def _broadcast_to_all(frame: str) -> None:
+    """Push a text frame to all connected WebSocket clients."""
+    for ws in list(_ws_clients):
+        with contextlib.suppress(Exception):
+            await ws.send_text(frame)
+
+
 async def _nats_subscriber() -> None:
     """NATS connection manager and initial SessionContext bootstrap.
 
@@ -316,8 +324,9 @@ async def _nats_subscriber() -> None:
 
     Also subscribes to wiring progress (core NATS, not session-scoped).
     """
-    global _nats_connection, _active_context
+    global _nats_connection, _active_context, _main_event_loop
 
+    _main_event_loop = asyncio.get_running_loop()
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
     _nats_connection = nc
     log.info("VS-API NATS connected to %s", nats_url())
@@ -583,20 +592,19 @@ async def get_ops_events(
 def _clear_state() -> None:
     """Stop the active SessionContext during session switch.
 
-    Called from the sync session switch executor. The context's stop()
-    is async, so we schedule it and wait. The old context is unreachable
-    after _active_context is set to None.
+    Called from the sync session switch executor. Uses _main_event_loop
+    (captured by _nats_subscriber on the main asyncio thread) to schedule
+    the async stop() call.
     """
     global _active_context
     old = _active_context
     _active_context = None
     if old is not None:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            future = asyncio.run_coroutine_threadsafe(old.stop(), loop)
-            future.result(timeout=10)
-        else:
-            asyncio.run(old.stop())
+        if _main_event_loop is None:
+            log.error("FATAL: No main event loop for async context stop")
+            raise RuntimeError("No main event loop available")
+        future = asyncio.run_coroutine_threadsafe(old.stop(), _main_event_loop)
+        future.result(timeout=10)
 
 
 def _update_session_globals(session_path: str, new_db_path: str) -> None:
@@ -626,13 +634,14 @@ def _update_session_globals(session_path: str, new_db_path: str) -> None:
     if _nats_connection is None:
         log.error("FATAL: No NATS connection for session switch")
         raise RuntimeError("No NATS connection available")
+    if _main_event_loop is None:
+        log.error("FATAL: No main event loop for async context start")
+        raise RuntimeError("No main event loop available")
 
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        future = asyncio.run_coroutine_threadsafe(ctx.start(_nats_connection, mode="switch"), loop)
-        future.result(timeout=10)
-    else:
-        asyncio.run(ctx.start(_nats_connection, mode="switch"))
+    future = asyncio.run_coroutine_threadsafe(
+        ctx.start(_nats_connection, mode="switch"), _main_event_loop
+    )
+    future.result(timeout=10)
 
     _active_context = ctx
     log.info("Session switched: session_id=%s db=%s", session_id, new_db_path)
@@ -1967,7 +1976,9 @@ async def _run_switch(session_path: str) -> None:
     global _active_context
 
     try:
-        old_session = _active_context.session_id if _active_context else None
+        old_ctx = _active_context
+        old_session = old_ctx.session_id if old_ctx else None
+
         await _publish_system_ops_event(
             "info",
             "SESSION_SWITCH_INITIATED",
@@ -1975,11 +1986,27 @@ async def _run_switch(session_path: str) -> None:
             {"old_session": old_session, "new_session_path": session_path},
         )
 
-        transitioning_frame = json.dumps({"msg_type": "session_transitioning"})
-        for ws in list(_ws_clients):
-            with contextlib.suppress(Exception):
-                await ws.send_text(transitioning_frame)
+        # Step a/b: null the context BEFORE pushing transitioning.
+        # The broadcast loop checks _active_context at the top of each
+        # tick — setting it to None immediately stops snapshot frames.
+        _active_context = None
 
+        # Step c: notify all WebSocket clients
+        await _broadcast_to_all(json.dumps({"msg_type": "session_transitioning"}))
+
+        # Step d: stop old context (async cleanup)
+        if old_ctx is not None:
+            await old_ctx.stop()
+
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_TEARDOWN_COMPLETE",
+            f"Old session {old_session} torn down",
+        )
+
+        # Step e: run session_manager.switch in executor
+        # _clear_state is now a no-op (context already stopped above)
+        # _update_session_globals creates and starts the new context
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None,
@@ -2015,9 +2042,7 @@ async def _run_switch(session_path: str) -> None:
                         "error": "New session did not become ready within 30s",
                     }
                 )
-                for ws in list(_ws_clients):
-                    with contextlib.suppress(Exception):
-                        await ws.send_text(failed_frame)
+                await _broadcast_to_all(failed_frame)
                 if _session_manager:
                     _session_manager._status = "error"
                     _session_manager.status_detail = "Session switch timeout"
@@ -2032,15 +2057,19 @@ async def _run_switch(session_path: str) -> None:
         )
 
         snapshot = _build_snapshot()
+        # Include ephemeris so VF can render immediately without
+        # waiting for the next session_ephemeris WebSocket message
+        ctx = _active_context
+        ephemeris = ctx.cached_ephemeris if ctx else None
+        if ephemeris:
+            await _broadcast_to_all(json.dumps(ephemeris))
         ready_frame = json.dumps(
             {
                 "msg_type": "session_ready",
                 "snapshot": snapshot,
             }
         )
-        for ws in list(_ws_clients):
-            with contextlib.suppress(Exception):
-                await ws.send_text(ready_frame)
+        await _broadcast_to_all(ready_frame)
 
         log.info("Session switch complete — %s active", new_session)
 
@@ -2061,9 +2090,7 @@ async def _run_switch(session_path: str) -> None:
                 "error": str(exc),
             }
         )
-        for ws in list(_ws_clients):
-            with contextlib.suppress(Exception):
-                await ws.send_text(failed_frame)
+        await _broadcast_to_all(failed_frame)
 
 
 async def _poll_cr_until_ready() -> None:
@@ -2120,15 +2147,13 @@ async def _poll_cr_until_ready() -> None:
                                 ctx.session_id,
                                 cr_session_id,
                             )
-                            session_config_path = Path("/etc/nodalarc/session-config/session.yaml")
-                            if session_config_path.is_file():
-                                await _run_switch(str(session_config_path))
+                            if _initial_session_file and Path(_initial_session_file).is_file():
+                                await _run_switch(_initial_session_file)
                                 return
                         elif not ctx:
-                            session_config_path = Path("/etc/nodalarc/session-config/session.yaml")
-                            if session_config_path.is_file():
+                            if _initial_session_file and Path(_initial_session_file).is_file():
                                 log.info("No active context but CR is Ready — bootstrapping")
-                                new_ctx = SessionContext(cr_session_id, str(session_config_path))
+                                new_ctx = SessionContext(cr_session_id, _initial_session_file)
                                 nc = _nats_connection
                                 if nc:
                                     await new_ctx.start(nc, mode="recovery")

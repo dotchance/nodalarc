@@ -380,7 +380,7 @@ class SessionContext:
         eph_dict = json.loads(msg.data.decode())
         eph_dict["msg_type"] = "session_ephemeris"
         self.cached_ephemeris = eph_dict
-        self._propagate_positions(eph)
+        self._propagate_positions_from_time(eph.sim_time.isoformat())
         if not self._ready.is_set():
             log.info("SessionContext ephemeris received: session_id=%s", self.session_id)
 
@@ -542,72 +542,85 @@ class SessionContext:
                 )
 
     async def _on_session_ops_event(self, msg) -> None:
-        try:
-            self.session_ops_events.append(json.loads(msg.data))
-        except Exception as exc:
-            log.warning("Failed to parse session OpsEvent: %s", exc)
+        data = json.loads(msg.data)
+        self.session_ops_events.append(data)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _propagate_positions(self, eph) -> None:
-        """Update node positions from a SessionEphemeris object."""
+    def _propagate_positions_from_time(self, sim_time_iso: str) -> None:
+        """Compute and update all node positions from cached SessionEphemeris.
+
+        Called on each ClockTick. Propagates satellite positions using
+        Keplerian orbital mechanics. Ground station positions are static.
+        """
         from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian
+        from nodalarc.orbital import elements_from_params
+        from nodalarc.propagator import propagate_keplerian
+
+        if self.cached_ephemeris_obj is None:
+            return
+
+        try:
+            sim_time_unix = datetime.fromisoformat(sim_time_iso).timestamp()
+        except (ValueError, TypeError):
+            return
 
         with self.state_lock:
-            for node_id, node_data in eph.nodes.items():
-                if isinstance(node_data, EphemerisNodeKeplerian):
+            self.sim_time = sim_time_iso
+
+            for node_id, node in self.cached_ephemeris_obj.nodes.items():
+                if isinstance(node, EphemerisNodeKeplerian):
+                    elements = elements_from_params(
+                        node.altitude_km,
+                        node.inclination_deg,
+                        node.raan_deg,
+                        node.true_anomaly_deg,
+                    )
+                    dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
+                    _pos_ecef, vel_ecef, geo = propagate_keplerian(
+                        elements,
+                        self.cached_ephemeris_obj.epoch_unix,
+                        dt,
+                    )
+
+                    existing = self.nodes.get(node_id)
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
                         node_type="satellite",
-                        lat_deg=0.0,
-                        lon_deg=0.0,
-                        alt_km=node_data.altitude_km,
-                        vel_x_km_s=None,
-                        vel_y_km_s=None,
-                        vel_z_km_s=None,
-                        plane=node_data.plane,
-                        slot=node_data.slot,
-                        routing_area=None,
-                        neighbor_count=0,
-                        isl_count=0,
-                        gnd_count=0,
-                        prefix=None,
-                        min_elevation_deg=None,
-                        beam_falloff_exponent=None,
-                    )
-                elif isinstance(node_data, EphemerisNodeFixed):
-                    self.nodes[node_id] = NodeState(
-                        node_id=node_id,
-                        node_type="ground_station",
-                        lat_deg=node_data.lat_deg,
-                        lon_deg=node_data.lon_deg,
-                        alt_km=node_data.alt_km,
-                        vel_x_km_s=None,
-                        vel_y_km_s=None,
-                        vel_z_km_s=None,
-                        plane=None,
-                        slot=None,
-                        routing_area=None,
-                        neighbor_count=0,
-                        isl_count=0,
-                        gnd_count=0,
-                        prefix=None,
-                        min_elevation_deg=self.gs_elevation_map.get(node_id),
+                        lat_deg=geo.lat_deg,
+                        lon_deg=geo.lon_deg,
+                        alt_km=geo.alt_km,
+                        vel_x_km_s=vel_ecef.x,
+                        vel_y_km_s=vel_ecef.y,
+                        vel_z_km_s=vel_ecef.z,
+                        plane=node.plane,
+                        slot=node.slot,
+                        routing_area=existing.routing_area if existing else None,
+                        neighbor_count=existing.neighbor_count if existing else 0,
+                        prefix=existing.prefix if existing else None,
                         beam_falloff_exponent=self.beam_falloff_exponent,
                     )
 
-    def _propagate_positions_from_time(self, sim_time_iso: str) -> None:
-        """Propagate satellite positions for a given sim_time.
-
-        Uses the cached ephemeris to compute Keplerian propagation.
-        Ground stations are static — only satellites move.
-        """
-        if self.cached_ephemeris_obj is None:
-            return
-        with self.state_lock:
-            self.sim_time = sim_time_iso
+                elif isinstance(node, EphemerisNodeFixed):
+                    existing = self.nodes.get(node_id)
+                    self.nodes[node_id] = NodeState(
+                        node_id=node_id,
+                        node_type="ground_station",
+                        lat_deg=node.lat_deg,
+                        lon_deg=node.lon_deg,
+                        alt_km=node.alt_km,
+                        vel_x_km_s=0.0,
+                        vel_y_km_s=0.0,
+                        vel_z_km_s=0.0,
+                        plane=None,
+                        slot=None,
+                        routing_area=existing.routing_area if existing else None,
+                        neighbor_count=existing.neighbor_count if existing else 0,
+                        prefix=existing.prefix if existing else None,
+                        min_elevation_deg=self.gs_elevation_map.get(node_id),
+                    )
 
     def _add_recent_event(self, event_data: dict, event_type: str) -> None:
         sim_time_raw = event_data.get("sim_time")
@@ -629,6 +642,8 @@ class SessionContext:
         )
         with self.state_lock:
             self.recent_events.append(event)
+            if len(self.recent_events) > 50:
+                del self.recent_events[:-50]
 
     def _notify_topology_change(self, node_a: str, node_b: str) -> None:
         if self.continuous_tracer is not None:
@@ -660,26 +675,29 @@ class SessionContext:
         from nodalarc.constellation_loader import load_ground_stations
         from nodalarc.models.addressing import AddressingScheme
 
-        try:
-            gs_file = load_ground_stations(session.ground_stations)
-            addressing = AddressingScheme(session.addressing)
-            result: dict[str, float] = {}
-            for station in gs_file.stations:
-                gs_id = addressing.gs_id(station.name)
-                result[gs_id] = (
-                    station.min_elevation_deg or gs_file.default_min_elevation_deg or 25.0
+        gs_file = load_ground_stations(session.ground_stations)
+        addressing = AddressingScheme(session.addressing)
+        result: dict[str, float] = {}
+        for station in gs_file.stations:
+            gs_id = addressing.gs_id(station.name)
+            elev = station.min_elevation_deg
+            if elev is None:
+                elev = gs_file.default_min_elevation_deg
+            if elev is None:
+                log.error(
+                    "FATAL: No min_elevation_deg for GS %s and no default set",
+                    station.name,
                 )
-            return result
-        except Exception:
-            return {}
+                raise ValueError(f"No min_elevation_deg for {station.name}")
+            result[gs_id] = elev
+        return result
 
     @staticmethod
     def _load_beam_falloff_exponent(session: SessionConfig) -> float:
-        try:
-            if session.routing and hasattr(session.routing, "beam_falloff_exponent"):
-                return session.routing.beam_falloff_exponent or 2.0
-        except Exception:
-            pass
+        if session.routing and hasattr(session.routing, "beam_falloff_exponent"):
+            val = session.routing.beam_falloff_exponent
+            if val is not None:
+                return val
         return 2.0
 
 
@@ -693,21 +711,16 @@ def _link_key(node_a: str, node_b: str) -> str:
 
 
 def _derive_link_type(node_a: str, node_b: str, raw_type: str | None = None) -> str:
+    import re
+
     if raw_type and raw_type != "isl":
         return raw_type
-    a_is_gs = node_a.startswith("gs-")
-    b_is_gs = node_b.startswith("gs-")
-    if a_is_gs or b_is_gs:
+    if node_a.startswith("gs-") or node_b.startswith("gs-"):
         return "ground"
-    a_parts = node_a.replace("sat-", "").split("s")
-    b_parts = node_b.replace("sat-", "").split("s")
-    if len(a_parts) >= 2 and len(b_parts) >= 2:
-        try:
-            a_plane = int(a_parts[0].replace("p", ""))
-            b_plane = int(b_parts[0].replace("p", ""))
-            if a_plane == b_plane:
-                return "intra_plane_isl"
-            return "cross_plane_isl"
-        except (ValueError, IndexError):
-            pass
+    ma = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_a)
+    mb = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_b)
+    if ma and mb:
+        if ma.group(1) == mb.group(1):
+            return "intra_plane_isl"
+        return "cross_plane_isl"
     return "isl"

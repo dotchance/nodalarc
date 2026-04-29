@@ -24,7 +24,7 @@ from pathlib import Path
 
 import nats
 import yaml
-from nodalarc.constants import LOG_FORMAT
+from nodal.logging import configure as _configure_logging
 from nodalarc.db.queries import (
     insert_adapter_event,
     insert_convergence_result,
@@ -372,7 +372,7 @@ class MIService:
 
 
 def main() -> None:
-    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+    _configure_logging("nodal.arc.mi", nats_level=logging.INFO)
     parser = argparse.ArgumentParser(description="MI service")
     parser.add_argument("--session", required=True, help="Path to session YAML")
     parser.add_argument("--db", required=True, help="Path to SQLite database")

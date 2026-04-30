@@ -171,16 +171,15 @@ def execute_wiring(
     for attempt in range(1, max_attempts + 1):
         fresh = discover_local_pod_pids(namespace)
         pid_map.update(fresh)
-        # Expected = local pods that are in the manifest
+        if attempt == 1 and not pid_map:
+            break
         expected_nodes = all_manifest_nodes & set(pid_map.keys())
-        # Also check if we've stabilized (no new PIDs found in 2 consecutive attempts)
         if attempt >= 3 and len(pid_map) > 0:
-            # All locally discoverable pods found — stop waiting
             prev_count = len(expected_nodes)
             if prev_count == len(pid_map):
                 break
         if attempt % 5 == 1:
-            log.info(
+            log.debug(
                 "PID discovery attempt %d: %d local pods found (manifest has %d total, node=%s)",
                 attempt,
                 len(pid_map),

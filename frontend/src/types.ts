@@ -117,6 +117,8 @@ export interface StateSnapshot {
   playback_speed: number;
   stale: boolean;
   ops_events?: OpsEvent[];
+  debug_events?: OpsEvent[];
+  debug_sources?: string[];
 }
 
 // Distributed ephemeris model (PRD v0.71)

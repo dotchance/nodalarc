@@ -117,7 +117,10 @@ def _phase0_cleanup(
         for link in ns_ipr.get_links():
             ifname = link.get_attr("IFLA_IFNAME")
             if ifname and (
-                ifname.startswith("isl") or ifname.startswith("term") or ifname.startswith("gnd")
+                ifname.startswith("isl")
+                or ifname.startswith("term")
+                or ifname.startswith("gnd")
+                or ifname.startswith("terr")
             ):
                 with contextlib.suppress(Exception):
                     ns_ipr.link("del", index=link["index"])

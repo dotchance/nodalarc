@@ -980,6 +980,8 @@ def _purge_session_jetstream_subjects(namespace: str, session_id: str) -> None:
         import nats
         from nodalarc.nats_channels import (
             NATS_CONNECT_OPTIONS,
+            STREAM_DEBUG_EVENTS,
+            STREAM_OPS_EVENTS,
             STREAM_SESSION_EVENTS,
             nats_url,
         )
@@ -988,12 +990,16 @@ def _purge_session_jetstream_subjects(namespace: str, session_id: str) -> None:
             nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
             try:
                 js = nc.jetstream()
-                # Purge ONLY this session's subjects — not the entire stream.
-                # Without the subject filter, concurrent sessions would lose
-                # their checkpoints, ephemeris, and playback state.
-                subject_filter = f"nodalarc.session.{session_id}.>"
-                await js.purge_stream(STREAM_SESSION_EVENTS, subject=subject_filter)
-                log.info("Purged session subjects: %s", subject_filter)
+                for stream, subject_filter in [
+                    (STREAM_SESSION_EVENTS, f"nodalarc.session.{session_id}.>"),
+                    (STREAM_OPS_EVENTS, f"nodalarc.ops.{session_id}.>"),
+                    (STREAM_DEBUG_EVENTS, f"nodalarc.debug.{session_id}.>"),
+                ]:
+                    try:
+                        await js.purge_stream(stream, subject=subject_filter)
+                        log.info("Purged %s: %s", stream, subject_filter)
+                    except Exception as exc:
+                        log.warning("Failed to purge %s: %s", stream, exc)
             finally:
                 await nc.close()
 

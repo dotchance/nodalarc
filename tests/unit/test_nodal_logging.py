@@ -709,3 +709,140 @@ class TestDrainLoop:
 
         assert js_mock.publish.call_count == 300
         assert len(handler._deque) == 0
+
+
+# ---------------------------------------------------------------------------
+# On-demand debug: set_nats_level + subject routing
+# ---------------------------------------------------------------------------
+
+
+class TestSetNatsLevel:
+    """Tests for NatsHandler.set_nats_level() — the package logger approach."""
+
+    def setup_method(self):
+        self.root = logging.getLogger()
+        self.root.setLevel(logging.INFO)
+        for h in self.root.handlers[:]:
+            self.root.removeHandler(h)
+
+    def teardown_method(self):
+        logging.getLogger("scheduler").setLevel(logging.NOTSET)
+        logging.getLogger("ome").setLevel(logging.NOTSET)
+        logging.getLogger("node_agent").setLevel(logging.NOTSET)
+
+    def test_enable_sets_handler_and_package_logger_to_debug(self):
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        handler.set_nats_level(logging.DEBUG)
+        assert handler.level == logging.DEBUG
+        assert logging.getLogger("scheduler").level == logging.DEBUG
+
+    def test_disable_resets_handler_and_package_logger(self):
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        handler.set_nats_level(logging.DEBUG)
+        handler.set_nats_level(logging.INFO)
+        assert handler.level == logging.INFO
+        assert logging.getLogger("scheduler").level == logging.NOTSET
+
+    def test_root_logger_never_changes(self):
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        assert self.root.level == logging.INFO
+        handler.set_nats_level(logging.DEBUG)
+        assert self.root.level == logging.INFO
+        handler.set_nats_level(logging.INFO)
+        assert self.root.level == logging.INFO
+
+    def test_debug_records_reach_handler_when_enabled(self):
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        self.root.addHandler(handler)
+        handler.set_nats_level(logging.DEBUG)
+
+        log = logging.getLogger("scheduler.dispatcher")
+        log.debug("test debug message")
+
+        assert len(handler._deque) == 1
+        subject, _ = handler._deque[0]
+        assert "nodalarc.debug." in subject
+
+    def test_debug_records_blocked_when_disabled(self):
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        self.root.addHandler(handler)
+
+        log = logging.getLogger("scheduler.dispatcher")
+        log.debug("test debug message")
+
+        assert len(handler._deque) == 0
+
+    def test_other_packages_unaffected_when_debug_enabled(self):
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        self.root.addHandler(handler)
+        handler.set_nats_level(logging.DEBUG)
+
+        ome_log = logging.getLogger("ome.main")
+        ome_log.debug("ome debug should not appear")
+
+        # Only the scheduler debug should be in the deque, not ome
+        subjects = [s for s, _ in handler._deque]
+        for s in subjects:
+            assert "ome" not in s
+
+    def test_info_records_use_ops_prefix(self):
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        nf = NodalFilter("nodal.arc.scheduler")
+        handler.addFilter(nf)
+        self.root.addHandler(handler)
+
+        log = logging.getLogger("scheduler.dispatcher")
+        log.info("test info message")
+
+        assert len(handler._deque) == 1
+        subject, _ = handler._deque[0]
+        assert subject.startswith("nodalarc.ops.")
+
+    def test_debug_records_use_debug_prefix(self):
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        nf = NodalFilter("nodal.arc.scheduler")
+        handler.addFilter(nf)
+        self.root.addHandler(handler)
+        handler.set_nats_level(logging.DEBUG)
+
+        log = logging.getLogger("scheduler.dispatcher")
+        log.debug("test debug message")
+
+        assert len(handler._deque) == 1
+        subject, _ = handler._deque[0]
+        assert subject.startswith("nodalarc.debug.")
+
+    def test_multiple_packages_can_be_debug_simultaneously(self):
+        handler_sched = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        handler_sched.set_nats_level(logging.DEBUG)
+        handler_ome = NatsHandler("nodal.arc.ome", level=logging.INFO)
+        handler_ome.set_nats_level(logging.DEBUG)
+
+        assert logging.getLogger("scheduler").level == logging.DEBUG
+        assert logging.getLogger("ome").level == logging.DEBUG
+        assert logging.getLogger("node_agent").level == logging.NOTSET
+
+    def test_stdout_handler_rejects_debug_regardless(self):
+        stdout_handler = logging.StreamHandler(io.StringIO())
+        stdout_handler.setLevel(logging.INFO)
+        self.root.addHandler(stdout_handler)
+
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        self.root.addHandler(handler)
+        handler.set_nats_level(logging.DEBUG)
+
+        log = logging.getLogger("scheduler.dispatcher")
+        log.debug("should not appear on stdout")
+
+        output = stdout_handler.stream.getvalue()
+        assert output == ""
+
+    def test_deep_nested_loggers_inherit_debug(self):
+        handler = NatsHandler("nodal.arc.scheduler", level=logging.INFO)
+        self.root.addHandler(handler)
+        handler.set_nats_level(logging.DEBUG)
+
+        deep_log = logging.getLogger("scheduler.dispatcher.reconcile.internal")
+        deep_log.debug("deep nested debug")
+
+        assert len(handler._deque) == 1

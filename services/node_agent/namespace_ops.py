@@ -352,4 +352,9 @@ def enable_mpls_input(pid: int, ifname: str) -> None:
     """Enable MPLS input on an interface inside a namespace."""
     err = _write_sysctl_in_netns(pid, f"net.mpls.conf.{ifname}.input", "1")
     if err:
-        log.warning("Failed to enable MPLS input for %s in ns(%d): %s", ifname, pid, err)
+        log.error(
+            "Failed to enable MPLS input for %s in ns(%d): %s — MPLS forwarding will not work on this interface",
+            ifname,
+            pid,
+            err,
+        )

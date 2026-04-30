@@ -473,3 +473,148 @@ class TestSubscriberResilience:
         ctx._ephemeris_received = True
         ctx._check_ready()
         assert ctx.is_ready(), "Should be ready with both"
+
+
+# ---------------------------------------------------------------------------
+# On-demand debug: ref-counting and cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestDebugRefCounting:
+    """Tests for VS-API debug source ref-counting across WebSocket clients."""
+
+    def setup_method(self):
+        import vs_api.main as m
+
+        self._m = m
+        self._orig_sources = m._debug_sources.copy()
+        self._orig_clients = m._debug_clients.copy()
+        m._debug_sources = set()
+        m._debug_clients = {}
+        m._debug_sub = None
+        m._debug_events.clear()
+
+    def teardown_method(self):
+        self._m._debug_sources = self._orig_sources
+        self._m._debug_clients = self._orig_clients
+
+    def test_handle_debug_stream_adds_to_client_and_sources(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        m = self._m
+        nc_mock = MagicMock()
+        resp_mock = MagicMock()
+        resp_mock.data = b'{"status": "ok", "level": "debug"}'
+        nc_mock.request = AsyncMock(return_value=resp_mock)
+        nc_mock.jetstream = MagicMock(
+            return_value=MagicMock(
+                subscribe=AsyncMock(return_value=MagicMock()),
+            )
+        )
+        m._nats_connection = nc_mock
+
+        asyncio.run(
+            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
+        )
+
+        assert "scheduler" in m._debug_sources
+        assert "scheduler" in m._debug_clients.get(1001, set())
+
+    def test_two_clients_same_source_ref_counted(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        m = self._m
+        nc_mock = MagicMock()
+        resp_mock = MagicMock()
+        resp_mock.data = b'{"status": "ok", "level": "debug"}'
+        nc_mock.request = AsyncMock(return_value=resp_mock)
+        nc_mock.jetstream = MagicMock(
+            return_value=MagicMock(
+                subscribe=AsyncMock(return_value=MagicMock()),
+            )
+        )
+        m._nats_connection = nc_mock
+
+        asyncio.run(
+            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
+        )
+        asyncio.run(
+            m._handle_ws_debug_command(1002, {"action": "debug_stream", "sources": ["scheduler"]})
+        )
+
+        assert "scheduler" in m._debug_sources
+        assert "scheduler" in m._debug_clients[1001]
+        assert "scheduler" in m._debug_clients[1002]
+
+    def test_first_client_disconnect_keeps_source_active(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        m = self._m
+        nc_mock = MagicMock()
+        resp_mock = MagicMock()
+        resp_mock.data = b'{"status": "ok", "level": "debug"}'
+        nc_mock.request = AsyncMock(return_value=resp_mock)
+        nc_mock.jetstream = MagicMock(
+            return_value=MagicMock(
+                subscribe=AsyncMock(return_value=MagicMock()),
+            )
+        )
+        m._nats_connection = nc_mock
+
+        asyncio.run(
+            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
+        )
+        asyncio.run(
+            m._handle_ws_debug_command(1002, {"action": "debug_stream", "sources": ["scheduler"]})
+        )
+        asyncio.run(m._cleanup_debug_client(1001))
+
+        assert "scheduler" in m._debug_sources, (
+            "Source should stay active — client 1002 still wants it"
+        )
+        assert 1001 not in m._debug_clients
+
+    def test_last_client_disconnect_disables_source(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        m = self._m
+        nc_mock = MagicMock()
+        resp_mock = MagicMock()
+        resp_mock.data = b'{"status": "ok", "level": "debug"}'
+        nc_mock.request = AsyncMock(return_value=resp_mock)
+        nc_mock.jetstream = MagicMock(
+            return_value=MagicMock(
+                subscribe=AsyncMock(return_value=MagicMock()),
+            )
+        )
+        m._nats_connection = nc_mock
+
+        asyncio.run(
+            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
+        )
+        asyncio.run(m._cleanup_debug_client(1001))
+
+        assert "scheduler" not in m._debug_sources, "Source should be disabled — no clients left"
+
+    def test_enable_failed_source_not_added(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        m = self._m
+        nc_mock = MagicMock()
+        resp_mock = MagicMock()
+        resp_mock.data = b'{"status": "error", "error": "service not running"}'
+        nc_mock.request = AsyncMock(return_value=resp_mock)
+        m._nats_connection = nc_mock
+        m._publish_system_ops_event = AsyncMock()
+
+        asyncio.run(
+            m._handle_ws_debug_command(1001, {"action": "debug_stream", "sources": ["scheduler"]})
+        )
+
+        assert "scheduler" not in m._debug_sources
+        assert "scheduler" not in m._debug_clients.get(1001, set())

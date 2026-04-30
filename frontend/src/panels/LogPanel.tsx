@@ -50,6 +50,8 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [searchPattern, setSearchPattern] = useState("");
   const [debugDropdownOpen, setDebugDropdownOpen] = useState(false);
+  const [debugPending, setDebugPending] = useState<Set<string>>(new Set());
+  const [debugFailed, setDebugFailed] = useState<Set<string>>(new Set());
   const [searchValid, setSearchValid] = useState(true);
   const [fontSize, setFontSize] = useState(11);
   const [cleared, setCleared] = useState(false);
@@ -189,6 +191,8 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
       if (isActive) {
         sendMessage({ action: "debug_stop", sources: [source] });
       } else {
+        setDebugPending((prev) => { const n = new Set(prev); n.add(source); return n; });
+        setDebugFailed((prev) => { const n = new Set(prev); n.delete(source); return n; });
         sendMessage({ action: "debug_stream", sources: [source] });
       }
     },
@@ -197,8 +201,34 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
 
   const disableAllDebug = useCallback(() => {
     sendMessage({ action: "debug_stop_all" });
+    setDebugPending(new Set());
+    setDebugFailed(new Set());
     setDebugDropdownOpen(false);
   }, [sendMessage]);
+
+  // Clear pending state when source appears in debugSources (confirmed)
+  useEffect(() => {
+    if (debugPending.size === 0) return;
+    setDebugPending((prev) => {
+      const next = new Set(prev);
+      for (const s of debugSources) next.delete(s);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [debugSources, debugPending.size]);
+
+  // Detect failed enables from ops_events
+  useEffect(() => {
+    for (const e of events) {
+      if (e.code === "DEBUG_ENABLE_FAILED" && e.message) {
+        for (const src of DEBUG_SOURCE_TYPES) {
+          if (e.message.includes(src) && debugPending.has(src)) {
+            setDebugPending((prev) => { const n = new Set(prev); n.delete(src); return n; });
+            setDebugFailed((prev) => { const n = new Set(prev); n.add(src); return n; });
+          }
+        }
+      }
+    }
+  }, [events, debugPending]);
 
   const sources = useMemo(() => {
     const s = new Set(events.map((e) => e.source));
@@ -557,6 +587,13 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
               </div>
               {DEBUG_SOURCE_TYPES.map((src) => {
                 const active = debugSources.includes(src);
+                const pending = debugPending.has(src);
+                const failed = debugFailed.has(src);
+                let icon = "☐";
+                let color = "var(--text-primary)";
+                if (active) { icon = "✓"; color = "var(--accent-blue)"; }
+                else if (pending) { icon = "⏳"; color = "var(--text-secondary)"; }
+                else if (failed) { icon = "✗"; color = "var(--accent-red)"; }
                 return (
                   <div
                     key={src}
@@ -568,12 +605,12 @@ export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClo
                       display: "flex",
                       alignItems: "center",
                       gap: 6,
-                      color: active ? "var(--accent-blue)" : "var(--text-primary)",
+                      color,
                     }}
                     onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-panel-hover)"; }}
                     onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                   >
-                    <span style={{ width: 14, textAlign: "center" }}>{active ? "✓" : "☐"}</span>
+                    <span style={{ width: 14, textAlign: "center" }}>{icon}</span>
                     {src.replace("_", " ")}
                   </div>
                 );

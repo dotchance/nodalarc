@@ -71,6 +71,14 @@ spec:
                 --max-age=4h \
                 --max-bytes=134217728 \
                 --defaults 2>/dev/null || true
+              nats stream add NODALARC_DEBUG \
+                --server=nats://nodalarc-nats:4222 \
+                --subjects="nodalarc.debug.>" \
+                --storage=memory --retention=limits \
+                --max-msgs-per-subject=500 \
+                --max-age=5m \
+                --max-bytes=67108864 \
+                --defaults 2>/dev/null || true
               echo "Streams ready."
       containers:
         - name: ome

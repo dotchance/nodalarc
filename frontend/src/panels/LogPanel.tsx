@@ -18,7 +18,7 @@ const DEBUG_SOURCE_TYPES = ["ome", "scheduler", "node_agent", "operator"] as con
 type SortField = "timestamp" | "source" | "level" | "code" | "message";
 type SortDir = "asc" | "desc";
 
-const LEVELS = ["critical", "error", "warning", "info", "debug"] as const;
+const LEVELS = ["critical", "error", "warning", "info"] as const;
 const LEVEL_COLORS: Record<string, string> = {
   critical: "var(--accent-red)",
   error: "var(--accent-red)",

@@ -34,6 +34,8 @@ class NatsHandler(logging.Handler):
         super().__init__(level)
         self._service = service
         self._source = service.rsplit(".", 1)[-1]
+        self._service_package = service.rsplit(".", 1)[-1]
+        self._nats_level = level
         self._deque: collections.deque[tuple[str, bytes]] = collections.deque(maxlen=500)
         self._ops_formatter = OpsEventFormatter()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -42,6 +44,24 @@ class NatsHandler(logging.Handler):
         self._drain_task: asyncio.Task | None = None
         self._last_error_time: float = 0.0
         self._dropped_since_last_report: int = 0
+
+    def set_nats_level(self, level: int) -> None:
+        """Change the minimum level for NATS publishing.
+
+        Adjusts both the handler's level gate AND the service's package
+        logger so DEBUG records are created by the originating logger.
+        The root logger is never touched — only the package logger
+        (e.g., "scheduler") changes, which scopes DEBUG record creation
+        to that package's loggers (scheduler.dispatcher, scheduler.__main__,
+        etc.) with zero effect on other packages or third-party libraries.
+        """
+        self._nats_level = level
+        self.setLevel(level)
+        pkg_logger = logging.getLogger(self._service_package)
+        if level <= logging.DEBUG:
+            pkg_logger.setLevel(logging.DEBUG)
+        else:
+            pkg_logger.setLevel(logging.NOTSET)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -62,14 +82,16 @@ class NatsHandler(logging.Handler):
         code = getattr(record, "nodal_code", "")
         code_lower = code.lower() if code else ""
 
+        stream_prefix = "nodalarc.debug" if record.levelno < logging.INFO else "nodalarc.ops"
+
         if not tenant and not session:
-            base = f"nodalarc.ops._infra.{source}"
+            base = f"{stream_prefix}._infra.{source}"
         elif not tenant and session:
-            base = f"nodalarc.ops.{session}.{source}"
+            base = f"{stream_prefix}.{session}.{source}"
         elif tenant and not session:
-            base = f"nodalarc.ops.{tenant}._tenant.{source}"
+            base = f"{stream_prefix}.{tenant}._tenant.{source}"
         else:
-            base = f"nodalarc.ops.{tenant}.{session}.{source}"
+            base = f"{stream_prefix}.{tenant}.{session}.{source}"
 
         if code_lower:
             return f"{base}.{code_lower}"

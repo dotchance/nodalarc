@@ -876,11 +876,13 @@ async def ws_state(websocket: WebSocket) -> None:
     ws_id = id(websocket)
     _audit_log.info(f"WS_CONNECT ip={ws_ip}")
 
+    done = asyncio.Event()
+
     async def _sender():
         ctx = _active_context
         if ctx and ctx.cached_ephemeris:
             await websocket.send_json(ctx.cached_ephemeris)
-        while True:
+        while not done.is_set():
             snapshot = _build_snapshot()
             if snapshot is None:
                 await asyncio.sleep(1.0)
@@ -902,13 +904,16 @@ async def ws_state(websocket: WebSocket) -> None:
                     log.warning("WS command error (ignored): %s", exc)
         except WebSocketDisconnect:
             pass
+        finally:
+            done.set()
 
     try:
         await asyncio.gather(_sender(), _receiver())
     except WebSocketDisconnect:
         pass
     except Exception as exc:
-        log.warning(f"WS error for {ws_ip}: {type(exc).__name__} {exc}")
+        if not done.is_set():
+            log.warning("WS error for %s: %s %s", ws_ip, type(exc).__name__, exc)
     finally:
         await _cleanup_debug_client(ws_id)
         _ws_clients.discard(websocket)

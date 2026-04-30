@@ -297,8 +297,12 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
     def _op(ipr: IPRoute) -> None:
         existing = ipr.link_lookup(ifname=ifname)
         if existing:
+            log.debug(
+                "dummy %s already exists in ns(%d) idx=%d, ensuring UP", ifname, pid, existing[0]
+            )
             ipr.link("set", index=existing[0], state="up")
             return
+        log.debug("dummy %s not found in ns(%d), creating", ifname, pid)
         ipr.link("add", ifname=ifname, kind="dummy")
         idx = ipr.link_lookup(ifname=ifname)[0]
         ipr.link("set", index=idx, state="up")

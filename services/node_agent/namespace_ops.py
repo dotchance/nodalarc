@@ -326,7 +326,18 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
             ip_addr, prefixlen = addr.split("/")
             ipr.addr("add", index=idx, address=ip_addr, prefixlen=int(prefixlen))
 
-    _in_namespace(pid, _op)
+    try:
+        _in_namespace(pid, _op)
+    except Exception as outer:
+        log.warning(
+            "DIAG create_dummy OUTER: type=%s code=%s args=%s ifname=%s pid=%d",
+            type(outer).__name__,
+            getattr(outer, "code", "N/A"),
+            outer.args,
+            ifname,
+            pid,
+        )
+        raise
 
 
 def enable_mpls_input(pid: int, ifname: str) -> None:

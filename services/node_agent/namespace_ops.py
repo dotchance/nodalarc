@@ -324,7 +324,15 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
         ipr.link("set", index=idx, state="up")
         for addr in addresses:
             ip_addr, prefixlen = addr.split("/")
-            ipr.addr("add", index=idx, address=ip_addr, prefixlen=int(prefixlen))
+            try:
+                ipr.addr("add", index=idx, address=ip_addr, prefixlen=int(prefixlen))
+            except Exception as addr_exc:
+                if getattr(addr_exc, "code", None) == 17 or (
+                    hasattr(addr_exc, "args") and addr_exc.args and addr_exc.args[0] == 17
+                ):
+                    pass
+                else:
+                    raise
 
     try:
         _in_namespace(pid, _op)

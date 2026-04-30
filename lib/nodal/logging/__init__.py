@@ -115,13 +115,66 @@ def configure(
 
 
 async def connect(nc: Any) -> None:
-    """Enable NATS publishing after connection established.
+    """Enable NATS publishing and debug control after connection established.
 
     Call from an async context after the NATS connection is live.
     Pre-connect records buffered in the deque drain immediately.
+
+    Also subscribes to the debug control subject so the VS-API can
+    enable/disable DEBUG publishing via NATS request/reply. The
+    logging library owns this — no service code changes needed.
     """
     if _nats_handler is not None:
         await _nats_handler.connect(nc)
+
+    if _nodal_filter is not None and _nats_handler is not None:
+        import json
+
+        source = _nodal_filter._source
+        subject = f"nodalarc.logging.debug_ctrl.{source}"
+        _log = logging.getLogger(__name__)
+
+        async def _handle_debug_ctrl(msg):
+            try:
+                cmd = json.loads(msg.data)
+            except Exception as exc:
+                _log.error("Malformed debug_ctrl message: %s", exc)
+                await msg.respond(
+                    json.dumps({"status": "error", "error": f"malformed: {exc}"}).encode()
+                )
+                return
+
+            action = cmd.get("action")
+            try:
+                if action == "enable":
+                    _nats_handler.set_nats_level(logging.DEBUG)
+                    _log.info("Debug logging enabled by operator")
+                    await msg.respond(json.dumps({"status": "ok", "level": "debug"}).encode())
+                elif action == "disable":
+                    _nats_handler.set_nats_level(logging.INFO)
+                    _log.info("Debug logging disabled")
+                    await msg.respond(json.dumps({"status": "ok", "level": "info"}).encode())
+                else:
+                    _log.error("Unknown debug_ctrl action: %s", action)
+                    await msg.respond(
+                        json.dumps(
+                            {"status": "error", "error": f"unknown action: {action}"}
+                        ).encode()
+                    )
+            except Exception as exc:
+                _log.error("Failed to change debug level: %s", exc)
+                await msg.respond(json.dumps({"status": "error", "error": str(exc)}).encode())
+
+        try:
+            await nc.subscribe(subject, cb=_handle_debug_ctrl)
+            _log.debug("Debug control active on %s", subject)
+        except Exception as exc:
+            _log.error(
+                "FATAL: Cannot subscribe to debug control %s: %s",
+                subject,
+                exc,
+            )
+            raise
 
 
 def set_session(session_id: str) -> None:

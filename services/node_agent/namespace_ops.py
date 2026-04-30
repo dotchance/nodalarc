@@ -296,11 +296,18 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
 
     def _op(ipr: IPRoute) -> None:
         existing = ipr.link_lookup(ifname=ifname)
-        log.info("DIAG create_dummy: ifname=%s pid=%d lookup=%s", ifname, pid, existing)
         if existing:
             ipr.link("set", index=existing[0], state="up")
             return
-        ipr.link("add", ifname=ifname, kind="dummy")
+        try:
+            ipr.link("add", ifname=ifname, kind="dummy")
+        except Exception as exc:
+            if getattr(exc, "code", 0) == 17:
+                existing = ipr.link_lookup(ifname=ifname)
+                if existing:
+                    ipr.link("set", index=existing[0], state="up")
+                    return
+            raise
         idx = ipr.link_lookup(ifname=ifname)[0]
         ipr.link("set", index=idx, state="up")
         for addr in addresses:
@@ -308,7 +315,6 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
             ipr.addr("add", index=idx, address=ip_addr, prefixlen=int(prefixlen))
 
     _in_namespace(pid, _op)
-    log.debug("Ensured dummy %s in ns(%d)", ifname, pid)
 
 
 def enable_mpls_input(pid: int, ifname: str) -> None:

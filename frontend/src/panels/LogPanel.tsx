@@ -7,8 +7,13 @@ import type { OpsEvent } from "../types";
 
 interface LogPanelProps {
   events: OpsEvent[];
+  debugEvents: OpsEvent[];
+  debugSources: string[];
+  sendMessage: (data: Record<string, unknown>) => void;
   onClose: () => void;
 }
+
+const DEBUG_SOURCE_TYPES = ["ome", "scheduler", "node_agent", "operator"] as const;
 
 type SortField = "timestamp" | "source" | "level" | "code" | "message";
 type SortDir = "asc" | "desc";
@@ -36,7 +41,7 @@ const COLUMNS: { field: SortField; label: string; defaultWidth: number; minWidth
   { field: "message", label: "message", defaultWidth: 0, minWidth: 100 },
 ];
 
-export function LogPanel({ events, onClose }: LogPanelProps) {
+export function LogPanel({ events, debugEvents, debugSources, sendMessage, onClose }: LogPanelProps) {
   const [paused, setPaused] = useState(false);
   const [pausedEvents, setPausedEvents] = useState<OpsEvent[]>([]);
   const [sortField, setSortField] = useState<SortField>("timestamp");
@@ -44,6 +49,7 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
   const [levelFilter, setLevelFilter] = useState<Set<string>>(new Set(LEVELS));
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [searchPattern, setSearchPattern] = useState("");
+  const [debugDropdownOpen, setDebugDropdownOpen] = useState(false);
   const [searchValid, setSearchValid] = useState(true);
   const [fontSize, setFontSize] = useState(11);
   const [cleared, setCleared] = useState(false);
@@ -81,16 +87,17 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
   }, [paused]);
 
   const displayEvents = useMemo(() => {
-    const source = paused ? pausedEvents : events;
-    if (!cleared) return source;
-    return source.filter((e) => {
+    const opsSource = paused ? pausedEvents : events;
+    const allEvents = debugSources.length > 0 ? [...opsSource, ...debugEvents] : opsSource;
+    if (!cleared) return allEvents;
+    return allEvents.filter((e) => {
       try {
         return new Date(e.timestamp).getTime() > clearedAt;
       } catch {
         return true;
       }
     });
-  }, [paused, pausedEvents, events, cleared, clearedAt]);
+  }, [paused, pausedEvents, events, debugEvents, debugSources, cleared, clearedAt]);
 
   useEffect(() => {
     if (paused && pausedEvents.length === 0 && events.length > 0) {
@@ -175,6 +182,23 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
       return next;
     });
   }, []);
+
+  const toggleDebugSource = useCallback(
+    (source: string) => {
+      const isActive = debugSources.includes(source);
+      if (isActive) {
+        sendMessage({ action: "debug_stop", sources: [source] });
+      } else {
+        sendMessage({ action: "debug_stream", sources: [source] });
+      }
+    },
+    [debugSources, sendMessage],
+  );
+
+  const disableAllDebug = useCallback(() => {
+    sendMessage({ action: "debug_stop_all" });
+    setDebugDropdownOpen(false);
+  }, [sendMessage]);
 
   const sources = useMemo(() => {
     const s = new Set(events.map((e) => e.source));
@@ -495,6 +519,86 @@ export function LogPanel({ events, onClose }: LogPanelProps) {
             {lvl}
           </button>
         ))}
+        <span style={{ color: "var(--border)" }}>|</span>
+        <div style={{ position: "relative", display: "inline-block" }}>
+          <button
+            onClick={() => setDebugDropdownOpen((v) => !v)}
+            style={{
+              background: debugSources.length > 0 ? "rgba(136,136,153,0.2)" : "transparent",
+              border: `1px solid ${debugSources.length > 0 ? "var(--accent-blue)" : "var(--border)"}`,
+              borderRadius: 3,
+              color: debugSources.length > 0 ? "var(--accent-blue)" : "var(--text-dim)",
+              padding: "1px 6px",
+              cursor: "pointer",
+              fontSize: 10,
+              textTransform: "uppercase",
+            }}
+          >
+            {debugSources.length > 0 ? `DEBUG (${debugSources.length})` : "DEBUG ▾"}
+          </button>
+          {debugDropdownOpen && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                marginTop: 4,
+                background: "var(--bg-panel)",
+                border: "1px solid var(--border)",
+                borderRadius: 4,
+                padding: "6px 0",
+                zIndex: 20,
+                minWidth: 180,
+                boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+              }}
+            >
+              <div style={{ padding: "2px 10px 6px", fontSize: 10, color: "var(--text-secondary)", fontWeight: 600 }}>
+                Enable debug output:
+              </div>
+              {DEBUG_SOURCE_TYPES.map((src) => {
+                const active = debugSources.includes(src);
+                return (
+                  <div
+                    key={src}
+                    onClick={() => toggleDebugSource(src)}
+                    style={{
+                      padding: "4px 10px",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      color: active ? "var(--accent-blue)" : "var(--text-primary)",
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-panel-hover)"; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                  >
+                    <span style={{ width: 14, textAlign: "center" }}>{active ? "✓" : "☐"}</span>
+                    {src.replace("_", " ")}
+                  </div>
+                );
+              })}
+              {debugSources.length > 0 && (
+                <>
+                  <div style={{ borderTop: "1px solid var(--border)", margin: "4px 0" }} />
+                  <div
+                    onClick={disableAllDebug}
+                    style={{
+                      padding: "4px 10px",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      color: "var(--accent-red)",
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--bg-panel-hover)"; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                  >
+                    Disable All
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
         <span style={{ color: "var(--border)" }}>|</span>
         <select
           value={sourceFilter}

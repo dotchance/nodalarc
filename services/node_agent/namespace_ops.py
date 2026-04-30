@@ -302,6 +302,13 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
         try:
             ipr.link("add", ifname=ifname, kind="dummy")
         except Exception as exc:
+            log.warning(
+                "DIAG link add failed: type=%s code=%s errno=%s args=%s",
+                type(exc).__name__,
+                getattr(exc, "code", "N/A"),
+                getattr(exc, "errno", "N/A"),
+                exc.args,
+            )
             is_eexist = (
                 getattr(exc, "code", None) == 17
                 or (isinstance(exc, OSError) and exc.errno == 17)

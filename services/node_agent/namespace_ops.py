@@ -302,7 +302,12 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
         try:
             ipr.link("add", ifname=ifname, kind="dummy")
         except Exception as exc:
-            if getattr(exc, "code", 0) == 17:
+            is_eexist = (
+                getattr(exc, "code", None) == 17
+                or (isinstance(exc, OSError) and exc.errno == 17)
+                or (hasattr(exc, "args") and exc.args and exc.args[0] == 17)
+            )
+            if is_eexist:
                 existing = ipr.link_lookup(ifname=ifname)
                 if existing:
                     ipr.link("set", index=existing[0], state="up")

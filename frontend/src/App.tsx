@@ -48,7 +48,7 @@ export function App() {
 }
 
 function AppInner() {
-  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, historicalMode, setHistoricalMode, fetchHistorical } =
+  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, historicalMode, setHistoricalMode, fetchHistorical, sendMessage } =
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
 
@@ -438,6 +438,9 @@ function AppInner() {
       {logPanelOpen && (
         <LogPanel
           events={snapshot?.ops_events ?? []}
+          debugEvents={snapshot?.debug_events ?? []}
+          debugSources={snapshot?.debug_sources ?? []}
+          sendMessage={sendMessage}
           onClose={() => setLogPanelOpen(false)}
         />
       )}

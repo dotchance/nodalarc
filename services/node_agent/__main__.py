@@ -210,36 +210,34 @@ async def main() -> None:
                     log.info("Cleaned %d stale kernel interfaces", cleaned)
 
                 wired = execute_wiring(manifest, namespace=ns, progress_fn=_publish_progress)
-                log.info("Wiring complete: %d nodes wired", len(wired))
 
-                # Refresh pid_map BEFORE writing wiring status. Once the status
-                # is written, the Operator advances to Ready and the Scheduler
-                # dispatches immediately. The pid_map must be current before
-                # any BatchLinkUp arrives, or the handler rejects with
-                # "PID not found."
-                _refresh_pids(shared_pid_map)
-                write_wiring_status(wired, namespace=ns)
-                loop.call_soon_threadsafe(first_wiring_done.set)
+                if not wired:
+                    # No local pods on this node — nothing to wire, nothing
+                    # to report. Advance cursor and move on silently.
+                    loop.call_soon_threadsafe(first_wiring_done.set)
+                    last_resource_version = rv
+                else:
+                    log.info("Wiring complete: %d nodes wired", len(wired))
 
-                # Advance the resource version cursor AFTER successful
-                # processing. If any step above fails, the next iteration
-                # re-processes the same manifest (idempotent — Case B no-ops).
-                last_resource_version = rv
+                    # Refresh pid_map BEFORE writing wiring status. Once the
+                    # status is written, the Operator advances to Ready and
+                    # the Scheduler dispatches immediately.
+                    _refresh_pids(shared_pid_map)
+                    write_wiring_status(wired, namespace=ns)
+                    loop.call_soon_threadsafe(first_wiring_done.set)
+                    last_resource_version = rv
 
-                # If some pods were skipped (no PID at wiring time), retry
-                # sysctls and finalization for them in the background. The
-                # veths and ISL interfaces are created at LinkUp time by the
-                # Scheduler, so we only need sysctls + default route removal
-                # + cni0 iptables for the late starters.
-                all_local = {n for n in nodes if n in shared_pid_map or n in wired}
-                missed = all_local - set(wired.keys())
-                if missed:
-                    log.warning(
-                        "Wiring partial: %d nodes skipped, retrying in background: %s",
-                        len(missed),
-                        ", ".join(sorted(missed)),
-                    )
-                    _retry_missed_nodes(missed, manifest, ns, shared_pid_map)
+                    # If some pods were skipped (no PID at wiring time),
+                    # retry sysctls and finalization in the background.
+                    all_local = {n for n in nodes if n in shared_pid_map or n in wired}
+                    missed = all_local - set(wired.keys())
+                    if missed:
+                        log.warning(
+                            "Wiring partial: %d nodes skipped, retrying in background: %s",
+                            len(missed),
+                            ", ".join(sorted(missed)),
+                        )
+                        _retry_missed_nodes(missed, manifest, ns, shared_pid_map)
 
             except Exception as exc:
                 if hasattr(exc, "status") and exc.status == 404:

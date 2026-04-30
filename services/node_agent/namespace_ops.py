@@ -290,22 +290,71 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
     """Create a dummy interface inside a namespace with given addresses.
 
     Used for terrestrial prefix interfaces (terr0) on ground station pods.
+    Idempotent — if the interface already exists (e.g., FRR zebra created
+    it from frr.conf), verifies it's UP and skips creation.
     """
 
     def _op(ipr: IPRoute) -> None:
-        ipr.link("add", ifname=ifname, kind="dummy")
+        existing = ipr.link_lookup(ifname=ifname)
+        if existing:
+            ipr.link("set", index=existing[0], state="up")
+            return
+        try:
+            ipr.link("add", ifname=ifname, kind="dummy")
+        except Exception as exc:
+            log.warning(
+                "DIAG link add failed: type=%s code=%s errno=%s args=%s",
+                type(exc).__name__,
+                getattr(exc, "code", "N/A"),
+                getattr(exc, "errno", "N/A"),
+                exc.args,
+            )
+            is_eexist = (
+                getattr(exc, "code", None) == 17
+                or (isinstance(exc, OSError) and exc.errno == 17)
+                or (hasattr(exc, "args") and exc.args and exc.args[0] == 17)
+            )
+            if is_eexist:
+                existing = ipr.link_lookup(ifname=ifname)
+                if existing:
+                    ipr.link("set", index=existing[0], state="up")
+                    return
+            raise
         idx = ipr.link_lookup(ifname=ifname)[0]
         ipr.link("set", index=idx, state="up")
         for addr in addresses:
             ip_addr, prefixlen = addr.split("/")
-            ipr.addr("add", index=idx, address=ip_addr, prefixlen=int(prefixlen))
+            try:
+                ipr.addr("add", index=idx, address=ip_addr, prefixlen=int(prefixlen))
+            except Exception as addr_exc:
+                if getattr(addr_exc, "code", None) == 17 or (
+                    hasattr(addr_exc, "args") and addr_exc.args and addr_exc.args[0] == 17
+                ):
+                    pass
+                else:
+                    raise
 
-    _in_namespace(pid, _op)
-    log.info("Created dummy %s in ns(%d) with %d addrs", ifname, pid, len(addresses))
+    try:
+        _in_namespace(pid, _op)
+    except Exception as outer:
+        log.warning(
+            "DIAG create_dummy OUTER: type=%s code=%s args=%s ifname=%s pid=%d",
+            type(outer).__name__,
+            getattr(outer, "code", "N/A"),
+            outer.args,
+            ifname,
+            pid,
+        )
+        raise
 
 
 def enable_mpls_input(pid: int, ifname: str) -> None:
     """Enable MPLS input on an interface inside a namespace."""
     err = _write_sysctl_in_netns(pid, f"net.mpls.conf.{ifname}.input", "1")
     if err:
-        log.warning("Failed to enable MPLS input for %s in ns(%d): %s", ifname, pid, err)
+        log.error(
+            "Failed to enable MPLS input for %s in ns(%d): %s — MPLS forwarding will not work on this interface",
+            ifname,
+            pid,
+            err,
+        )

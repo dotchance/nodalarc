@@ -16,6 +16,7 @@ interface WebSocketState {
   kicked: boolean;
   sessionTransitioning: boolean;
   sessionError: string | null;
+  sendMessage: (data: Record<string, unknown>) => void;
 }
 
 export function useWebSocket(): WebSocketState {
@@ -140,6 +141,12 @@ export function useWebSocket(): WebSocketState {
     };
   }, [connect]);
 
+  const sendMessage = useCallback((data: Record<string, unknown>) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+    }
+  }, []);
+
   return {
     snapshot,
     ephemeris,
@@ -149,5 +156,6 @@ export function useWebSocket(): WebSocketState {
     kicked,
     sessionTransitioning,
     sessionError,
+    sendMessage,
   };
 }

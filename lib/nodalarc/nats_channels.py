@@ -50,6 +50,9 @@ STREAM_LINK_EVENTS = "NODALARC_LINKS"
 STREAM_MI_EVENTS = "NODALARC_MI"
 STREAM_SESSION_EVENTS = "NODALARC_SESSION"
 STREAM_OPS_EVENTS = "NODALARC_OPS"
+STREAM_DEBUG_EVENTS = "NODALARC_DEBUG"
+
+DEBUG_CTRL_SUBJECT_PREFIX = "nodalarc.logging.debug_ctrl"
 
 # ---------------------------------------------------------------------------
 # Session-scoped subject builders — primary API for services
@@ -387,3 +390,35 @@ def ops_stream_config() -> dict:
         "max_age": 14400,  # 4 hours
         "max_bytes": 128 * 1024 * 1024,
     }
+
+
+def debug_stream_config() -> dict:
+    """StreamConfig for NODALARC_DEBUG stream.
+
+    On-demand debug events published when an operator enables debug
+    for a service via the log panel. Short retention — debug data is
+    ephemeral investigation output, not operational history.
+
+    Services publish to this stream only when their NatsHandler level
+    is lowered to DEBUG via the debug_ctrl request/reply channel.
+    When no operator has debug enabled, zero messages flow.
+    """
+    return {
+        "name": STREAM_DEBUG_EVENTS,
+        "subjects": ["nodalarc.debug.>"],
+        "retention": "limits",
+        "storage": "memory",
+        "max_age": 300,  # 5 minutes
+        "max_bytes": 64 * 1024 * 1024,
+        "max_msgs_per_subject": 500,
+    }
+
+
+def debug_ctrl_subject(source: str) -> str:
+    """Build the NATS request/reply subject for debug level control.
+
+    The VS-API sends enable/disable requests to this subject. The
+    logging library in the target service subscribes and responds.
+    Core NATS (not JetStream) — no retention, no stream.
+    """
+    return f"{DEBUG_CTRL_SUBJECT_PREFIX}.{source}"

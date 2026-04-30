@@ -117,7 +117,10 @@ def _phase0_cleanup(
         for link in ns_ipr.get_links():
             ifname = link.get_attr("IFLA_IFNAME")
             if ifname and (
-                ifname.startswith("isl") or ifname.startswith("term") or ifname.startswith("gnd")
+                ifname.startswith("isl")
+                or ifname.startswith("term")
+                or ifname.startswith("gnd")
+                or ifname.startswith("terr")
             ):
                 with contextlib.suppress(Exception):
                     ns_ipr.link("del", index=link["index"])
@@ -171,16 +174,15 @@ def execute_wiring(
     for attempt in range(1, max_attempts + 1):
         fresh = discover_local_pod_pids(namespace)
         pid_map.update(fresh)
-        # Expected = local pods that are in the manifest
+        if attempt == 1 and not pid_map:
+            break
         expected_nodes = all_manifest_nodes & set(pid_map.keys())
-        # Also check if we've stabilized (no new PIDs found in 2 consecutive attempts)
         if attempt >= 3 and len(pid_map) > 0:
-            # All locally discoverable pods found — stop waiting
             prev_count = len(expected_nodes)
             if prev_count == len(pid_map):
                 break
         if attempt % 5 == 1:
-            log.info(
+            log.debug(
                 "PID discovery attempt %d: %d local pods found (manifest has %d total, node=%s)",
                 attempt,
                 len(pid_map),
@@ -354,19 +356,21 @@ def execute_wiring(
     # brings it admin UP (no `shutdown` in config). With no host-side veth
     # connected, gnd0 enters LOWERLAYERDOWN (admin UP, no carrier).
 
-    def _create_ground_bridge_task(gs_id: str, gs_pid: int, gnd_ifaces: list) -> None:
+    def _create_ground_bridge_task(gs_id: str, gs_pid: int, gnd_ifaces: list, mpls: bool) -> None:
         for iface_spec in gnd_ifaces:
             ifname = iface_spec["name"]
             create_ground_bridge(gs_id, gs_pid, ifname=ifname)
             configure_interface(gs_pid, ifname, gs_id)
-            enable_mpls_input(gs_pid, ifname)
+            if mpls:
+                enable_mpls_input(gs_pid, ifname)
 
-    def _create_sat_ground_task(node_id: str, pid: int, gnd_ifaces: list) -> None:
+    def _create_sat_ground_task(node_id: str, pid: int, gnd_ifaces: list, mpls: bool) -> None:
         for iface_spec in gnd_ifaces:
             ifname = iface_spec["name"]
             create_satellite_ground_veth(node_id, pid, ifname=ifname)
             configure_interface(pid, ifname, node_id)
-            enable_mpls_input(pid, ifname)
+            if mpls:
+                enable_mpls_input(pid, ifname)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         gnd_futures = {}
@@ -377,7 +381,10 @@ def execute_wiring(
                 continue
             gs_node = nodes.get(gs_id, {})
             gs_ifaces = gs_node.get("gnd_interfaces", [{"name": "term0"}])
-            gnd_futures[pool.submit(_create_ground_bridge_task, gs_id, gs_pid, gs_ifaces)] = gs_id
+            gs_mpls = gs_node.get("mpls_enable", False)
+            gnd_futures[
+                pool.submit(_create_ground_bridge_task, gs_id, gs_pid, gs_ifaces, gs_mpls)
+            ] = gs_id
 
         for node_id, node_spec in nodes.items():
             if node_spec.get("node_type") != "satellite":
@@ -386,7 +393,10 @@ def execute_wiring(
             if pid == 0:
                 continue
             sat_ifaces = node_spec.get("gnd_interfaces", [{"name": "gnd0"}])
-            gnd_futures[pool.submit(_create_sat_ground_task, node_id, pid, sat_ifaces)] = node_id
+            sat_mpls = node_spec.get("mpls_enable", False)
+            gnd_futures[
+                pool.submit(_create_sat_ground_task, node_id, pid, sat_ifaces, sat_mpls)
+            ] = node_id
 
         gs_created = 0
         sat_gnd_created = 0

@@ -290,9 +290,13 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
     """Create a dummy interface inside a namespace with given addresses.
 
     Used for terrestrial prefix interfaces (terr0) on ground station pods.
+    Idempotent — removes existing interface before creating.
     """
 
     def _op(ipr: IPRoute) -> None:
+        existing = ipr.link_lookup(ifname=ifname)
+        if existing:
+            ipr.link("del", index=existing[0])
         ipr.link("add", ifname=ifname, kind="dummy")
         idx = ipr.link_lookup(ifname=ifname)[0]
         ipr.link("set", index=idx, state="up")
@@ -301,7 +305,7 @@ def create_dummy_interface(pid: int, ifname: str, addresses: list[str]) -> None:
             ipr.addr("add", index=idx, address=ip_addr, prefixlen=int(prefixlen))
 
     _in_namespace(pid, _op)
-    log.info("Created dummy %s in ns(%d) with %d addrs", ifname, pid, len(addresses))
+    log.debug("Created dummy %s in ns(%d) with %d addrs", ifname, pid, len(addresses))
 
 
 def enable_mpls_input(pid: int, ifname: str) -> None:

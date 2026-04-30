@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
-    kopf kubernetes pydantic>=2.0 pyyaml jinja2 numpy sgp4 skyfield
+    kopf kubernetes pydantic>=2.0 pyyaml jinja2 numpy sgp4 skyfield nats-py
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app

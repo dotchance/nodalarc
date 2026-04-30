@@ -52,7 +52,9 @@ from nodalarc.models.vs_api import (
 )
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
+    STREAM_DEBUG_EVENTS,
     STREAM_OPS_EVENTS,
+    debug_ctrl_subject,
     nats_url,
 )
 from nodalarc.platform_config import get_platform_config
@@ -200,6 +202,149 @@ from collections import deque
 
 _system_ops_events: deque = deque(maxlen=500)
 
+# On-demand debug — state managed by WebSocket command handlers
+_debug_sources: set[str] = set()
+_debug_clients: dict[int, set[str]] = {}
+_debug_sub: object | None = None
+_debug_events: deque = deque(maxlen=500)
+
+_KNOWN_DEBUG_SOURCES = ("ome", "scheduler", "node_agent", "operator", "vs_api")
+
+
+async def _enable_debug_source(source: str) -> bool:
+    """Enable debug for a service type via NATS request/reply.
+
+    Returns True on success. On failure, publishes an ERROR event
+    to the log panel and returns False.
+    """
+    global _debug_sub
+
+    if source not in _KNOWN_DEBUG_SOURCES:
+        log.error("Unknown debug source: %s", source)
+        return False
+
+    nc = _nats_connection
+    if nc is None:
+        log.error("Cannot enable debug for %s: no NATS connection", source)
+        return False
+
+    subject = debug_ctrl_subject(source)
+    payload = json.dumps({"action": "enable"}).encode()
+    try:
+        resp = await nc.request(subject, payload, timeout=5.0)
+        result = json.loads(resp.data)
+        if result.get("status") != "ok":
+            error = result.get("error", "unknown")
+            log.error("Debug enable failed for %s: %s", source, error)
+            await _publish_system_ops_event(
+                "error",
+                "DEBUG_ENABLE_FAILED",
+                f"Failed to enable debug for {source}: {error}",
+            )
+            return False
+    except Exception as exc:
+        log.error("Debug enable failed for %s: %s", source, exc)
+        await _publish_system_ops_event(
+            "error",
+            "DEBUG_ENABLE_FAILED",
+            f"Failed to enable debug for {source}: {exc}",
+        )
+        return False
+
+    _debug_sources.add(source)
+
+    if _debug_sub is None:
+        try:
+            js = nc.jetstream()
+            from nats.js.api import DeliverPolicy
+
+            _debug_sub = await js.subscribe(
+                "nodalarc.debug.>",
+                stream=STREAM_DEBUG_EVENTS,
+                ordered_consumer=True,
+                deliver_policy=DeliverPolicy.NEW,
+                cb=_on_debug_event,
+            )
+        except Exception as exc:
+            log.error("Failed to subscribe to debug stream: %s", exc)
+            await _publish_system_ops_event(
+                "error",
+                "DEBUG_SUBSCRIBE_FAILED",
+                f"Failed to subscribe to NODALARC_DEBUG: {exc}",
+            )
+
+    log.info("Debug enabled for %s", source)
+    return True
+
+
+async def _disable_debug_source(source: str) -> None:
+    """Disable debug for a service type."""
+    global _debug_sub
+
+    nc = _nats_connection
+    if nc is None:
+        return
+
+    subject = debug_ctrl_subject(source)
+    payload = json.dumps({"action": "disable"}).encode()
+    try:
+        await nc.request(subject, payload, timeout=5.0)
+    except Exception as exc:
+        log.warning("Debug disable request failed for %s: %s", source, exc)
+
+    _debug_sources.discard(source)
+
+    if not _debug_sources and _debug_sub is not None:
+        with contextlib.suppress(Exception):
+            await _debug_sub.unsubscribe()
+        _debug_sub = None
+
+
+async def _cleanup_debug_client(ws_id: int) -> None:
+    """Clean up debug sources when a WebSocket client disconnects."""
+    sources = _debug_clients.pop(ws_id, set())
+    for source in sources:
+        still_wanted = any(
+            source in client_sources
+            for cid, client_sources in _debug_clients.items()
+            if cid != ws_id
+        )
+        if not still_wanted:
+            await _disable_debug_source(source)
+
+
+async def _on_debug_event(msg) -> None:
+    """Callback for NODALARC_DEBUG stream subscription."""
+    with contextlib.suppress(Exception):
+        _debug_events.append(json.loads(msg.data))
+
+
+async def _handle_ws_debug_command(ws_id: int, msg: dict) -> None:
+    """Handle debug_stream/debug_stop WebSocket commands."""
+    action = msg.get("action")
+
+    if action == "debug_stream":
+        sources = msg.get("sources", [])
+        if not sources:
+            return
+        if ws_id not in _debug_clients:
+            _debug_clients[ws_id] = set()
+        for source in sources:
+            if await _enable_debug_source(source):
+                _debug_clients[ws_id].add(source)
+
+    elif action == "debug_stop":
+        sources = msg.get("sources", [])
+        client_sources = _debug_clients.get(ws_id, set())
+        for source in sources:
+            client_sources.discard(source)
+            still_wanted = any(source in cs for cid, cs in _debug_clients.items() if cid != ws_id)
+            if not still_wanted:
+                await _disable_debug_source(source)
+
+    elif action == "debug_stop_all":
+        await _cleanup_debug_client(ws_id)
+
 
 async def _publish_system_ops_event(
     level: str, code: str, message: str, details: dict | None = None
@@ -296,6 +441,9 @@ def _build_snapshot() -> dict | None:
         all_ops = list(_system_ops_events) + list(ctx.session_ops_events)
         all_ops.sort(key=lambda e: e.get("timestamp", ""))
         result["ops_events"] = all_ops[-500:]
+        if _debug_sources:
+            result["debug_events"] = list(_debug_events)[-100:]
+            result["debug_sources"] = sorted(_debug_sources)
         return result
 
 
@@ -709,8 +857,13 @@ async def _ws_broadcaster() -> None:
 
 @app.websocket("/ws/v1/state")
 async def ws_state(websocket: WebSocket) -> None:
-    """WebSocket endpoint — push state snapshots at ~1Hz from this handler."""
-    # Authenticate via ?token= query parameter when API key is set
+    """WebSocket endpoint — bidirectional: push snapshots + receive commands.
+
+    Sender: pushes StateSnapshot at ~1Hz (existing behavior).
+    Receiver: handles debug_stream/debug_stop commands from the log panel.
+    Both run concurrently via asyncio.gather. Either side ending
+    terminates the connection cleanly.
+    """
     ws_ip = websocket.client.host if websocket.client else "unknown"
     if _API_KEY:
         token = websocket.query_params.get("token", "")
@@ -720,14 +873,13 @@ async def ws_state(websocket: WebSocket) -> None:
             return
     await websocket.accept()
     _ws_clients.add(websocket)
+    ws_id = id(websocket)
     _audit_log.info(f"WS_CONNECT ip={ws_ip}")
 
-    try:
-        # Send SessionEphemeris as first message if available (PRD v0.71)
+    async def _sender():
         ctx = _active_context
         if ctx and ctx.cached_ephemeris:
             await websocket.send_json(ctx.cached_ephemeris)
-
         while True:
             snapshot = _build_snapshot()
             if snapshot is None:
@@ -735,11 +887,30 @@ async def ws_state(websocket: WebSocket) -> None:
                 continue
             await websocket.send_json(snapshot)
             await asyncio.sleep(1.0)
+
+    async def _receiver():
+        try:
+            while True:
+                data = await websocket.receive_json()
+                try:
+                    action = data.get("action", "")
+                    if action in ("debug_stream", "debug_stop", "debug_stop_all"):
+                        await _handle_ws_debug_command(ws_id, data)
+                    elif action:
+                        log.warning("Unknown WS action: %s", action)
+                except Exception as exc:
+                    log.warning("WS command error (ignored): %s", exc)
+        except WebSocketDisconnect:
+            pass
+
+    try:
+        await asyncio.gather(_sender(), _receiver())
     except WebSocketDisconnect:
         pass
     except Exception as exc:
-        log.warning(f"WS send error for {ws_ip}: {type(exc).__name__} {exc}")
+        log.warning(f"WS error for {ws_ip}: {type(exc).__name__} {exc}")
     finally:
+        await _cleanup_debug_client(ws_id)
         _ws_clients.discard(websocket)
         _audit_log.info(f"WS_DISCONNECT ip={ws_ip}")
 

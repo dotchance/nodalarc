@@ -153,7 +153,7 @@ def test_shared_models_exist(shared_pairs):
 
 
 _DYNAMIC_FIELDS = {
-    "StateSnapshot": {"ops_events"},
+    "StateSnapshot": {"ops_events", "debug_events", "debug_sources"},
 }
 
 

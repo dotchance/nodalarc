@@ -12,6 +12,8 @@ from pathlib import Path
 from nodal.logging import configure as _configure_logging
 
 _configure_logging("nodal.arc.operator", nats_level=logging.INFO)
+logging.getLogger("kopf.objects").setLevel(logging.WARNING)
+logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
 logging.getLogger(__name__).info(
     "Operator starting [build=%s]", os.environ.get("NODAL_BUILD", "dev")
 )

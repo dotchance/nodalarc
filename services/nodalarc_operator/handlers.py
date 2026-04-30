@@ -41,6 +41,21 @@ from nodalarc_operator.session_deployer import (
 log = logging.getLogger(__name__)
 
 
+@kopf.on.startup()
+async def on_startup(**_):
+    """Connect the logging library to NATS for OpsEvent publishing and debug control."""
+    import nats
+    from nodal.logging import connect as _connect_logging
+    from nodalarc.nats_channels import NATS_CONNECT_OPTIONS, nats_url
+
+    try:
+        nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+        await _connect_logging(nc)
+        log.info("Operator NATS logging connected")
+    except Exception as exc:
+        log.error("Operator NATS logging connection failed: %s", exc)
+
+
 # Module-level K8s clients — initialized once on first use, reused for all calls.
 # Eliminates per-call load_incluster_config() + client instantiation overhead.
 _custom_api: kubernetes.client.CustomObjectsApi | None = None

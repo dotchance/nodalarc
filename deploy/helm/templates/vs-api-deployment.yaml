@@ -1,3 +1,21 @@
+# VS-API is platform infrastructure, not a session-scoped service.
+#
+# It is the user's front door — the browser wizard, WebSocket streaming,
+# REST API, and session orchestrator. It must NEVER be restarted by the
+# Operator during session switches (restart_platform_pods excludes it).
+#
+# Volume mount philosophy:
+#   platform-config  — platform infrastructure config, does not change per session
+#   session-config   — directory mount (auto-updates), bootstrap for dev path only;
+#                      the wizard path reads session YAMLs from configs/sessions/
+#   session-db       — emptyDir for SQLite (future: PVC-backed persistent storage
+#                      for user-uploaded models, session history, and user catalog)
+#
+# Constellation, ground-station, satellite-type, and protocol definitions
+# are baked into the image as the static product catalog (configs/).
+# User-uploaded models will be stored on persistent volumes in a future
+# release, alongside the static catalog. VS-API reads both when presenting
+# the wizard — no ConfigMap mounts needed for session data.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -63,18 +81,6 @@ spec:
               subPath: platform.yaml
             - name: session-config
               mountPath: /etc/nodalarc/session-config
-            - name: constellation-config
-              mountPath: /etc/nodalarc/constellation.yaml
-              subPath: constellation.yaml
-            - name: ground-stations
-              mountPath: /etc/nodalarc/ground-stations.yaml
-              subPath: ground-stations.yaml
-            - name: pid-map
-              mountPath: /etc/nodalarc/state/pid_map.json
-              subPath: pid_map.json
-            - name: session-state
-              mountPath: /etc/nodalarc/state/session-state.json
-              subPath: session-state.json
             - name: session-db
               mountPath: /var/nodalarc/sessions
       volumes:
@@ -84,22 +90,6 @@ spec:
         - name: session-config
           configMap:
             name: nodalarc-session
-            optional: true
-        - name: constellation-config
-          configMap:
-            name: nodalarc-constellation
-            optional: true
-        - name: ground-stations
-          configMap:
-            name: nodalarc-ground-stations
-            optional: true
-        - name: pid-map
-          configMap:
-            name: nodalarc-pid-map
-            optional: true
-        - name: session-state
-          configMap:
-            name: nodalarc-session-state
             optional: true
         - name: session-db
           emptyDir: {}

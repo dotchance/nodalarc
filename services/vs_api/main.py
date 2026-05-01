@@ -521,7 +521,12 @@ async def _nats_subscriber() -> None:
     except Exception as exc:
         log.warning("System OpsEvent subscription failed: %s", exc)
 
-    # Wait for session config, then create initial SessionContext
+    # Wait for session config, then create initial SessionContext.
+    # _initial_session_file may point at the ConfigMap mount (Operator-rewritten
+    # paths) or at the original file in configs/sessions/ (resolved at startup).
+    # SessionContext must receive the original file so it can load constellation
+    # and ground station definitions from the baked-in catalog, not from
+    # ConfigMap subPath mounts that don't exist on VS-API.
     session_config_path = _initial_session_file
     if session_config_path:
         config_path = Path(session_config_path)
@@ -542,21 +547,20 @@ async def _nats_subscriber() -> None:
             log.error("FATAL: Failed to read session_id from config: %s", exc)
             raise
 
-        for dep_name, dep_ref in [
-            ("ground_stations", session.ground_stations),
-            ("constellation", session.constellation),
-        ]:
-            if isinstance(dep_ref, str):
-                dep = Path(dep_ref)
-                if not dep.is_file():
-                    log.error(
-                        "FATAL: %s config not found at %s — Operator restart_platform_pods may have failed",
-                        dep_name,
-                        dep,
-                    )
-                    raise FileNotFoundError(f"{dep_name} config not found at {dep}")
+        # Resolve to the original session file if config_path is a ConfigMap mount.
+        # The mounted session.yaml has rewritten paths (/etc/nodalarc/*.yaml) for
+        # FRR pods. VS-API needs the original with paths to baked-in configs/.
+        resolved_path = str(config_path)
+        if _session_manager:
+            session_name = raw.get("session", {}).get("name", "")
+            if session_name:
+                for _s in _session_manager._available:
+                    if _s.get("name") == session_name:
+                        resolved_path = _s["file"]
+                        log.info("Resolved session config: %s → %s", config_path, resolved_path)
+                        break
 
-        ctx = SessionContext(session_id, str(config_path))
+        ctx = SessionContext(session_id, resolved_path)
         await ctx.start(nc, mode="recovery")
         _active_context = ctx
         await _publish_system_ops_event(
@@ -2393,12 +2397,23 @@ def main() -> None:
             except Exception:
                 pass
             _session_manager.set_active(_active_path)
-            # Resolve mounted path to matching session file in scanned list
+            # Resolve mounted path to the original session file in configs/sessions/.
+            # The ConfigMap-mounted session.yaml has Operator-rewritten paths
+            # (e.g., /etc/nodalarc/ground-stations.yaml) for FRR pod consumption.
+            # VS-API must use the original file with original paths — it has the
+            # full catalog baked into its image and doesn't need ConfigMap mounts.
             _loaded_name = session_data.get("session", {}).get("name", "")
+            log.info(
+                "Session name=%s, available=%s",
+                _loaded_name,
+                [s.get("name") for s in _session_manager._available],
+            )
             if _loaded_name:
                 for _s in _session_manager._available:
                     if _s.get("name") == _loaded_name:
                         _session_manager.set_active(_s["file"])
+                        _initial_session_file = _s["file"]
+                        log.info("Resolved _initial_session_file → %s", _initial_session_file)
                         break
             # Check CR phase — don't claim ready if data plane is still wiring
             _cr_phase = ""

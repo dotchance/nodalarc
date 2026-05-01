@@ -1,9 +1,22 @@
-# VS-API container — FastAPI server for visualization state snapshots,
-# REST endpoints, WebSocket streaming, and session management.
+# VS-API container — platform infrastructure service.
 #
-# All runtime config comes from ConfigMap mounts at /etc/nodalarc/.
-# Static reference data (satellite types, ground stations, constellations,
-# sessions, nodalpath config) is baked into the image at /app/configs/.
+# VS-API is the user's front door: browser wizard, WebSocket streaming,
+# REST API, terminal proxy, and session lifecycle orchestrator. It is a
+# long-lived service that survives across session switches — the Operator
+# never restarts it. Session parameters are variables, not reasons to
+# restart; VS-API hot-reloads via SessionContext teardown/creation.
+#
+# configs/ is the static product catalog: verified satellite models,
+# ground station definitions, constellation templates, protocol configs,
+# and example sessions that ship with each release. Users assemble these
+# like building blocks to define sessions. In a future release, user-
+# uploaded models (custom satellites, ground stations, constellations)
+# will be stored on persistent volumes alongside this static catalog.
+#
+# Runtime data (live snapshots, link state, events) comes from NATS.
+# Platform config comes from a single ConfigMap mount (platform.yaml).
+# VS-API does NOT mount session-scoped ConfigMaps — those are for
+# session pods (FRR containers) that don't have the catalog baked in.
 #
 # Build context must be the repo root:
 #   docker build -f services/vs_api/Dockerfile -t nodalarc/vs-api:latest .

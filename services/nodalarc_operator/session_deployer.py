@@ -851,12 +851,26 @@ def set_nodalpath_mode(namespace: str, protocol: str) -> None:
 
 
 def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
-    """Trigger rolling restart of platform pods via annotation change.
+    """Trigger rolling restart of session-scoped platform pods.
 
     Patches each Deployment's pod template with a config-hash annotation,
-    which triggers a rolling update. All platform pods are restarted so
-    they pick up freshly-created session ConfigMaps (subPath mounts are
-    frozen at pod creation time — a restart is required).
+    which triggers a rolling update. Only session-scoped services are
+    restarted — those that initialize session state at startup and don't
+    yet have a hot-reload path for new session parameters.
+
+    VS-API is NOT restarted. It is platform infrastructure that
+    orchestrates session switches from the browser wizard. Restarting it
+    mid-switch kills the orchestrator, drops the WebSocket connections to
+    every connected browser, and leaves the frontend with no completion
+    signal. VS-API already has a hot-reload path: _run_switch() tears
+    down the old SessionContext and creates a new one with fresh NATS
+    subscriptions. No pod restart needed.
+
+    Architecture direction: eventually ALL platform services adopt the
+    hot-reload pattern (receive new config via NATS, reinitialize internal
+    state, continue serving) and this function becomes unnecessary. The
+    methods, procedures, and logic are the code — session parameters are
+    just variables. See PRD §3.3 "Platform Service Lifecycle."
     """
     apps_v1 = _get_apps_v1()
 
@@ -865,7 +879,6 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
     for label in [
         "app=nodalarc-ome",
         "app=nodalarc-scheduler",
-        "app=nodalarc-vs-api",
         "app=nodalarc-nodalpath",
     ]:
         deployments = apps_v1.list_namespaced_deployment(namespace, label_selector=label)

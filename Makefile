@@ -483,40 +483,46 @@ upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
 		exit 1'
 
 # ---------------------------------------------------------------------------
-# deploy-* — build one service, upgrade the platform in-place
+# deploy-* — build, load, and upgrade in-place
 # ---------------------------------------------------------------------------
 #
-# Each deploy-* target builds one service image, pushes all images to the
-# registry (unchanged images are fast — Docker layer dedup), then runs
-# `make upgrade` to update the Helm release. Helm compares the new image
+# Each deploy-* target rebuilds ALL service images (unchanged services hit
+# Docker layer cache and complete in <1s), pushes to the registry, and runs
+# `helm upgrade` to update the Helm release. Helm compares the new image
 # tags against the running Deployment specs and only restarts pods whose
 # image actually changed. Session pods are not affected.
 #
-# This is the correct iterative dev loop:
-#   edit code → make deploy-vs-api → test in browser → repeat
+# Why rebuild all images? Helm sets every Deployment's image tag to the
+# current git SHA via HELM_EXTRA_ARGS. If only one service was rebuilt,
+# the other services' images don't exist at the new SHA tag in the
+# registry, causing ImagePullBackOff. Rebuilding all images re-tags them
+# with the current SHA (Docker cache makes this instant for unchanged
+# services), so every tag Helm references is present in the registry.
 #
-# The old approach (kubectl rollout restart) created Helm drift: the
-# Deployment spec referenced the old tag from `make install` while the
-# pod ran :latest. `helm diff` showed spurious changes, and the next
-# `make install` reverted the running code. One mutation path fixes this.
+# The old approach (kubectl rollout restart without Helm) created drift:
+# the Deployment spec referenced the old tag from `make install` while
+# the pod ran :latest. One mutation path (Helm) fixes this.
+#
+# Iterative dev loop:
+#   edit code → commit → make deploy-vs-api → test in browser → repeat
 
 deploy-all: build-images load upgrade ## Build + load + upgrade all core services
 
-deploy-ome: build-ome load upgrade ## Build + load + upgrade OME
+deploy-ome: build-images load upgrade ## Build + load + upgrade OME
 
-deploy-scheduler: build-scheduler load upgrade ## Build + load + upgrade Scheduler
+deploy-scheduler: build-images load upgrade ## Build + load + upgrade Scheduler
 
-deploy-node-agent: build-node-agent load upgrade ## Build + load + upgrade Node Agent
+deploy-node-agent: build-images load upgrade ## Build + load + upgrade Node Agent
 
-deploy-vs-api: build-vs-api load upgrade ## Build + load + upgrade VS-API
+deploy-vs-api: build-images load upgrade ## Build + load + upgrade VS-API
 
-deploy-operator: build-operator load upgrade ## Build + load + upgrade Operator
+deploy-operator: build-images load upgrade ## Build + load + upgrade Operator
 
-deploy-vf: build-vf load upgrade ## Build + load + upgrade VF
+deploy-vf: build-frontends build-images load upgrade ## Build + load + upgrade VF
 
-deploy-nodalpath: build-nodalpath load upgrade ## Build + load + upgrade NodalPath
+deploy-nodalpath: build-images load upgrade ## Build + load + upgrade NodalPath
 
-deploy-measurement: build-measurement load upgrade ## Build + load + upgrade MI
+deploy-measurement: build-images build-measurement load upgrade ## Build + load + upgrade MI
 
 # ---------------------------------------------------------------------------
 # status / test / teardown / clean

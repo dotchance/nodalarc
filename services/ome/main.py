@@ -524,6 +524,8 @@ def _run_pacing(
             step=step,
             associations=assoc_flat,
             pending_teardowns=td_flat,
+            paused=_paused,
+            time_accel=_time_accel,
         )
 
     # Health server is started by main() before _run_pacing is called.
@@ -800,9 +802,14 @@ def _run_pacing(
                 logging.debug("Recovery replay: %d/%d steps", replay_step, step + 1)
         logging.debug("Replayed %d steps to rebuild link state", step + 1)
 
-    # Recovery → PAUSED (deterministic, operator must unpause).
-    # Fresh deployment → PLAYING (normal UX, session starts immediately).
-    _paused = recovered_checkpoint is not None
+    # Restore playback state from checkpoint. A restart is not a user action —
+    # if the session was playing, it resumes playing. If the user had paused,
+    # it stays paused. Fresh deployment starts playing (normal UX).
+    if recovered_checkpoint is not None:
+        _paused = recovered_checkpoint.paused
+        _time_accel = recovered_checkpoint.time_accel
+    else:
+        _paused = False
 
     # --- Session start sequence (epoch_id=0) ---
     # Order: SessionEphemeris → LinkStateSnapshot → PlaybackState(paused)
@@ -830,11 +837,13 @@ def _run_pacing(
     initial_playback_state = "paused" if _paused else "playing"
     ps = PlaybackState(epoch_id=_epoch_id, state=initial_playback_state)
     _enqueue(subj_playback, ps.model_dump_json().encode())
-    if _paused:
+    if recovered_checkpoint is not None:
         logging.info(
-            "OME recovered from checkpoint, starting paused [epoch_id=%d, step=%d]",
+            "OME recovered from checkpoint [epoch_id=%d, step=%d, paused=%s, speed=%.1fx]",
             _epoch_id,
             step,
+            _paused,
+            _time_accel,
         )
     else:
         logging.debug("OME fresh session, auto-play [epoch_id=%d]", _epoch_id)

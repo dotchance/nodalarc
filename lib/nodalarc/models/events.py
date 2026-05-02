@@ -241,6 +241,8 @@ class SchedulingCheckpoint(BaseModel):
     step: int
     associations: dict[str, str]  # gs_id → sat_id
     pending_teardowns: dict[str, TeardownEntry]  # pair_key → entry
+    paused: bool = False
+    time_accel: float = 1.0
 
 
 class OpsEvent(BaseModel):

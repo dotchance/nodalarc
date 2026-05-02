@@ -755,15 +755,32 @@ def _run_pacing(
     except Exception as exc:
         logging.warning("Checkpoint recovery failed (non-fatal): %s", exc)
 
+    # Checkpoint staleness threshold: if the checkpoint is more than 30 seconds
+    # old, discard it and start fresh at wall time. A 30-second gap means the OME
+    # was down long enough that the orbital geometry has moved — replaying from
+    # the old sim_time produces a wall/sim time mismatch that causes the frontend
+    # to show satellites at warp speed. For rapid crash recovery (< 30s), the
+    # checkpoint is valid and replay catches up the gap quickly.
+    _CHECKPOINT_STALENESS_THRESHOLD_S = 30.0
+
     if recovered_checkpoint:
-        epoch_unix = recovered_checkpoint.sim_time.timestamp()
-        step = recovered_checkpoint.step
-        logging.info(
-            "Recovered from checkpoint at T+%s (step=%d, epoch_id=%d)",
-            recovered_checkpoint.sim_time.isoformat(),
-            step,
-            recovered_checkpoint.epoch_id,
-        )
+        checkpoint_age = time.time() - recovered_checkpoint.sim_time.timestamp()
+        if checkpoint_age <= _CHECKPOINT_STALENESS_THRESHOLD_S:
+            epoch_unix = recovered_checkpoint.sim_time.timestamp()
+            step = recovered_checkpoint.step
+            logging.info(
+                "Recovered from checkpoint at T+%s (step=%d, age=%.1fs)",
+                recovered_checkpoint.sim_time.isoformat(),
+                step,
+                checkpoint_age,
+            )
+        else:
+            logging.info(
+                "Checkpoint too stale (age=%.0fs > %ds) — starting fresh at wall time",
+                checkpoint_age,
+                _CHECKPOINT_STALENESS_THRESHOLD_S,
+            )
+            recovered_checkpoint = None
     else:
         logging.info("No checkpoint found — starting from epoch")
 

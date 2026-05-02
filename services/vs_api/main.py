@@ -2403,17 +2403,11 @@ def main() -> None:
             # VS-API must use the original file with original paths — it has the
             # full catalog baked into its image and doesn't need ConfigMap mounts.
             _loaded_name = session_data.get("session", {}).get("name", "")
-            log.info(
-                "Session name=%s, available=%s",
-                _loaded_name,
-                [s.get("name") for s in _session_manager._available],
-            )
             if _loaded_name:
                 for _s in _session_manager._available:
                     if _s.get("name") == _loaded_name:
                         _session_manager.set_active(_s["file"])
                         _initial_session_file = _s["file"]
-                        log.info("Resolved _initial_session_file → %s", _initial_session_file)
                         break
             # Check CR phase — don't claim ready if data plane is still wiring
             _cr_phase = ""

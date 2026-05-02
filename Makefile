@@ -77,10 +77,10 @@ help: ## Show this help
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
-	@echo "  make all                               Full pipeline: deps → build → sudo load/install/session"
-	@echo "  make build && sudo make load            Rebuild images and push to registry"
-	@echo "  sudo make session DEFAULT_SESSION=configs/sessions/starlink-176-nodalpath.yaml"
-	@echo "  sudo make teardown                     Full teardown"
+	@echo "  make all                               Full pipeline: deps → build → load/install/session"
+	@echo "  make deploy-vs-api                     Iterative dev: build VS-API → load → upgrade in-place"
+	@echo "  make session DEFAULT_SESSION=configs/sessions/starlink-176-nodalpath.yaml"
+	@echo "  make teardown                          Full teardown"
 	@echo "  make test                              Run unit tests (no sudo needed)"
 	@echo "  make -n build                          Dry-run — show what would be built"
 	@echo ""
@@ -258,14 +258,18 @@ load: ## Import images into K3s (single-node) or push to registry (multi-node)
 	done
 	@echo "[load] Done."
 else
-# Multi-node: push to container registry (images already tagged with REGISTRY_PREFIX by build)
+# Multi-node: push to container registry (images already tagged with REGISTRY_PREFIX by build).
+# Skips images that don't exist locally — supports partial builds where only
+# one service was rebuilt (e.g., `make deploy-vs-api` only builds VS-API).
 load:
 	@echo "[load] Pushing images to registry $(REGISTRY_PREFIX) (tag=$(TAG))..."
 	@for name in nodalarc/frr nodalarc/node-agent nodalarc/ome nodalarc/scheduler \
 		nodalarc/vs-api nodalarc/operator nodalarc/vf nodalarc/nodalpath; do \
 		for tag in latest $(TAG); do \
-			echo "  $(REGISTRY_PREFIX)$$name:$$tag"; \
-			docker push $(REGISTRY_PREFIX)$$name:$$tag 2>&1 | tail -1; \
+			if docker image inspect $(REGISTRY_PREFIX)$$name:$$tag >/dev/null 2>&1; then \
+				echo "  $(REGISTRY_PREFIX)$$name:$$tag"; \
+				docker push $(REGISTRY_PREFIX)$$name:$$tag 2>&1 | tail -1; \
+			fi; \
 		done; \
 	done
 	@echo "[load] Done."
@@ -429,59 +433,90 @@ restart: ## Rolling restart all platform pods (forces image re-pull)
 	@echo "[restart] Done."
 
 # ---------------------------------------------------------------------------
-# deploy-* — build, load, restart a single service
+# upgrade — in-place Helm upgrade without teardown
 # ---------------------------------------------------------------------------
+#
+# Use `make upgrade` for iterative development. It updates image tags and
+# Helm values in-place via `helm upgrade --install` — no namespace deletion,
+# no pod teardown, no session disruption. Unchanged images keep their pods;
+# changed images get rolling updates.
+#
+# Use `make install` for fresh installs only (first deploy, or after teardown).
+# `make install` tears down the entire namespace before installing.
+#
+# The deploy-* targets use upgrade, not install. This is deliberate:
+# Helm is the single mutation path to Deployment specs. Using kubectl to
+# patch image tags or rollout restart creates drift between what Helm
+# thinks is deployed and what's actually running. One mutation path,
+# one source of truth, no drift.
 
-ifeq ($(REGISTRY_PREFIX),)
-define _load-image
-	@docker save $1 | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1
-	@docker save $(subst :$(TAG),:latest,$1) | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1
-endef
-else
-define _load-image
-	@docker push $(subst :$(TAG),:latest,$1) 2>&1 | tail -1
-endef
-endif
+upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
+	@echo "[upgrade] Upgrading Helm release..."
+	@NODAL_NODE=$$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo ""); \
+		if [ -n "$$NODAL_NODE" ]; then \
+			echo "[upgrade] Auto-detected node: $$NODAL_NODE"; \
+			helm upgrade --install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace \
+				--set controlPlaneNode=$$NODAL_NODE --set sessionNodeName=$$NODAL_NODE $(HELM_EXTRA_ARGS); \
+		else \
+			helm upgrade --install nodalarc deploy/helm --namespace $(NAMESPACE) --create-namespace $(HELM_EXTRA_ARGS); \
+		fi
+	@echo "[upgrade] Waiting for platform pods (timeout 120s)..."
+	@bash -c '\
+		WAIT=0; \
+		while [ $$WAIT -lt 120 ]; do \
+			TOTAL=$$(kubectl get deployments -n $(NAMESPACE) --no-headers 2>/dev/null | wc -l); \
+			AVAIL=$$(kubectl get deployments -n $(NAMESPACE) --no-headers 2>/dev/null | awk "{if (\$$4+0 >= 1) c++} END {print c+0}"); \
+			DS_DESIRED=$$(kubectl get ds nodalarc-node-agent -n $(NAMESPACE) -o jsonpath="{.status.desiredNumberScheduled}" 2>/dev/null || echo 0); \
+			DS_READY=$$(kubectl get ds nodalarc-node-agent -n $(NAMESPACE) -o jsonpath="{.status.numberReady}" 2>/dev/null || echo 0); \
+			if [ "$$AVAIL" -eq "$$TOTAL" ] && [ "$$DS_READY" -eq "$$DS_DESIRED" ] && [ "$$DS_DESIRED" -gt 0 ]; then \
+				echo ""; \
+				echo "[upgrade] Platform ready: $$TOTAL deployments available, $$DS_READY/$$DS_DESIRED Node Agent pods running."; \
+				exit 0; \
+			fi; \
+			sleep 2; \
+			WAIT=$$((WAIT + 2)); \
+			printf "\r[upgrade]   Deployments: $$AVAIL/$$TOTAL available, Node Agents: $$DS_READY/$$DS_DESIRED ready (%ds/120s)" $$WAIT; \
+		done; \
+		echo ""; \
+		echo "[upgrade] ERROR: Platform pods not ready after 120s."; \
+		kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | grep -v Running | grep -v Completed; \
+		exit 1'
 
-define _deploy-service
-	@echo "[deploy] Loading $1..."
-	$(call _load-image,$1)
-	@echo "[deploy] Restarting $2..."
-	@kubectl rollout restart $2 -n $(NAMESPACE)
-	@kubectl rollout status $2 -n $(NAMESPACE) --timeout=60s
-endef
+# ---------------------------------------------------------------------------
+# deploy-* — build one service, upgrade the platform in-place
+# ---------------------------------------------------------------------------
+#
+# Each deploy-* target builds one service image, pushes all images to the
+# registry (unchanged images are fast — Docker layer dedup), then runs
+# `make upgrade` to update the Helm release. Helm compares the new image
+# tags against the running Deployment specs and only restarts pods whose
+# image actually changed. Session pods are not affected.
+#
+# This is the correct iterative dev loop:
+#   edit code → make deploy-vs-api → test in browser → repeat
+#
+# The old approach (kubectl rollout restart) created Helm drift: the
+# Deployment spec referenced the old tag from `make install` while the
+# pod ran :latest. `helm diff` showed spurious changes, and the next
+# `make install` reverted the running code. One mutation path fixes this.
 
-deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf ## Build + load + restart all core services
-	$(call _deploy-service,$(IMG_OME),deployment/ome)
-	$(call _deploy-service,$(IMG_SCHEDULER),deployment/nodalarc-scheduler)
-	$(call _deploy-service,$(IMG_NODE_AGENT),daemonset/nodalarc-node-agent)
-	$(call _deploy-service,$(IMG_VS_API),deployment/nodalarc-vs-api)
-	$(call _deploy-service,$(IMG_OPERATOR),deployment/nodalarc-operator)
-	$(call _deploy-service,$(IMG_VF),deployment/nodalarc-vf)
+deploy-all: build-images load upgrade ## Build + load + upgrade all core services
 
-deploy-ome: build-ome ## Build + load + restart OME
-	$(call _deploy-service,$(IMG_OME),deployment/ome)
+deploy-ome: build-ome load upgrade ## Build + load + upgrade OME
 
-deploy-scheduler: build-scheduler ## Build + load + restart Scheduler
-	$(call _deploy-service,$(IMG_SCHEDULER),deployment/nodalarc-scheduler)
+deploy-scheduler: build-scheduler load upgrade ## Build + load + upgrade Scheduler
 
-deploy-node-agent: build-node-agent ## Build + load + restart Node Agent
-	$(call _deploy-service,$(IMG_NODE_AGENT),daemonset/nodalarc-node-agent)
+deploy-node-agent: build-node-agent load upgrade ## Build + load + upgrade Node Agent
 
-deploy-vs-api: build-vs-api ## Build + load + restart VS-API
-	$(call _deploy-service,$(IMG_VS_API),deployment/nodalarc-vs-api)
+deploy-vs-api: build-vs-api load upgrade ## Build + load + upgrade VS-API
 
-deploy-operator: build-operator ## Build + load + restart Operator
-	$(call _deploy-service,$(IMG_OPERATOR),deployment/nodalarc-operator)
+deploy-operator: build-operator load upgrade ## Build + load + upgrade Operator
 
-deploy-vf: build-vf ## Build + load + restart VF
-	$(call _deploy-service,$(IMG_VF),deployment/nodalarc-vf)
+deploy-vf: build-vf load upgrade ## Build + load + upgrade VF
 
-deploy-nodalpath: build-nodalpath ## Build + load + restart NodalPath
-	$(call _deploy-service,$(IMG_NODALPATH),deployment/nodalpath)
+deploy-nodalpath: build-nodalpath load upgrade ## Build + load + upgrade NodalPath
 
-deploy-measurement: build-measurement ## Build + load + restart MI
-	$(call _deploy-service,$(IMG_MI),deployment/nodalarc-measurement)
+deploy-measurement: build-measurement load upgrade ## Build + load + upgrade MI
 
 # ---------------------------------------------------------------------------
 # status / test / teardown / clean

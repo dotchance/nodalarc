@@ -84,6 +84,9 @@ function initBatch(scene: THREE.Scene, satCount: number): void {
     blending: THREE.AdditiveBlending,
   });
 
+  // Manual bounding sphere prevents NaN computation errors
+  batchGeometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1000);
+
   batch = new THREE.LineSegments(batchGeometry, material);
   batch.frustumCulled = false;
   scene.add(batch);

@@ -19,9 +19,9 @@ import { initWorkerBridge, sendEphemeris, requestFlush, destroyWorkerBridge } fr
 import { resetSimClock, interpolatedSimTimeMs, setPlaybackPaused, onSnapshot } from "../sim/simClock";
 import { gmstRadians, EARTH_ROTATION_RATE_RAD_S } from "./astronomy";
 import { updateGroundStations, updateGSLabels } from "./groundStations";
-import { updateLinks, animateLinks } from "./links";
+import { updateLinks, animateLinks, clearLinks } from "./links";
 import { updateFlowPaths, animateFlowPaths } from "./flowPaths";
-import { updateOrbitalTrails, flushTrails, notifyEpochChange } from "./orbitalTrails";
+import { updateOrbitalTrails, flushTrails, notifyEpochChange, clearTrails } from "./orbitalTrails";
 import { updateOrbitPins, clearOrbitPins, reseedAllPins } from "./orbitPins";
 import { updateAllOrbits, clearAllOrbits } from "./allOrbits";
 import { setupGpuPicker } from "./gpuPicker";
@@ -360,6 +360,8 @@ export function GlobeView({
       clearOrbitPins(scene);
       clearAllOrbits(scene);
       clearLabels();
+      clearLinks();
+      clearTrails();
       destroyWorkerBridge();
       renderer.dispose();
       container.removeChild(renderer.domElement);

@@ -214,9 +214,21 @@ async def _reconcile_session(spec, name, namespace, meta, status):
 
     # Compute desired state from spec — this is what makes it a REAL reconciler.
     # No K8s calls, no template rendering — just parse YAML and count nodes.
-    expected_count = await loop.run_in_executor(None, compute_expected_pod_count, spec_dict)
-    if expected_count == 0:
-        log.warning("Reconcile: computed expected_count=0 from spec, cannot reconcile")
+    # If the session config is invalid, compute_expected_pod_count raises.
+    # Set CR phase to Error so VS-API can relay the message to the browser.
+    try:
+        expected_count = await loop.run_in_executor(None, compute_expected_pod_count, spec_dict)
+    except Exception as exc:
+        error_msg = str(exc)
+        log.error("Reconcile: invalid session config: %s", error_msg)
+        _update_status(
+            name,
+            namespace,
+            {
+                "phase": "Error",
+                "message": f"Invalid session configuration: {error_msg}",
+            },
+        )
         return
 
     # --- Condition 1: Old pods terminated ---

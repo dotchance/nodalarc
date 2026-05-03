@@ -1086,21 +1086,33 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
 
 
 def compute_platform_hash(spec: dict) -> str:
-    """Hash platform-impacting fields of a ConstellationSpec for change detection.
+    """Hash platform-impacting fields for service restart detection.
 
-    Hashes only fields that affect the platform pods or data plane:
-    constellation, ground_stations, routing, time. Changes to display-only
-    fields (name, labels, etc.) do not produce a different hash.
+    The CR spec carries sessionYaml as a string. This function parses it
+    and hashes the fields that affect platform services: session identity
+    (name → session_id → NATS subjects), constellation, ground stations,
+    routing protocol, and time config. Changes to non-platform fields
+    (placement policy, MI settings) do not trigger restarts.
+
+    restart_platform_pods uses this hash as a Deployment annotation.
+    A changed hash triggers a rolling restart so OME/Scheduler pick up
+    the new session configuration and publish to the correct NATS subjects.
 
     Returns a hex digest string (SHA-256).
     """
-    platform_fields = {}
-    for key in ("constellation", "ground_stations", "routing", "time"):
-        if key in spec:
-            platform_fields[key] = spec[key]
-    # Canonical YAML serialization for deterministic hashing
-    canonical = yaml.dump(platform_fields, default_flow_style=False, sort_keys=True)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    session_yaml = spec.get("sessionYaml", "")
+    if not session_yaml:
+        return hashlib.sha256(b"").hexdigest()
+    try:
+        parsed = yaml.safe_load(session_yaml)
+        platform_fields = {}
+        for key in ("session", "constellation", "ground_stations", "routing", "time"):
+            if key in parsed:
+                platform_fields[key] = parsed[key]
+        canonical = yaml.dump(platform_fields, default_flow_style=False, sort_keys=True)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+    except Exception:
+        return hashlib.sha256(session_yaml.encode()).hexdigest()
 
 
 def compute_expected_pod_count(spec: dict) -> int:
@@ -1110,20 +1122,22 @@ def compute_expected_pod_count(spec: dict) -> int:
     satellites + ground stations. No K8s API calls, no template rendering,
     no ConfigMap creation. Fast enough for every reconciler invocation.
 
-    Returns 0 if sessionYaml is missing or unparseable (caller handles this).
+    Raises on invalid config — caller sets CR phase to Error with the
+    message so the user sees what went wrong in the browser.
     """
     session_yaml = spec.get("sessionYaml")
     if not session_yaml:
-        return 0
-    try:
-        session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
-        constellation = load_constellation(session.constellation)
-        gs_file = load_ground_stations(session.ground_stations)
-        satellites = expand_constellation(constellation)
-        return len(satellites) + len(gs_file.stations)
-    except Exception as exc:
-        log.warning("compute_expected_pod_count failed: %s", exc)
-        return 0
+        raise ValueError("spec.sessionYaml is missing")
+    session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
+    constellation = load_constellation(session.constellation)
+    gs_file = load_ground_stations(session.ground_stations)
+    satellites = expand_constellation(constellation)
+    count = len(satellites) + len(gs_file.stations)
+    if count == 0:
+        raise ValueError(
+            "Session expands to 0 nodes — check constellation and ground station configs"
+        )
+    return count
 
 
 def check_pods_ready_condition(namespace: str) -> tuple[int, int]:

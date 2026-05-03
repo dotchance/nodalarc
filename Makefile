@@ -259,17 +259,13 @@ load: ## Import images into K3s (single-node) or push to registry (multi-node)
 	@echo "[load] Done."
 else
 # Multi-node: push to container registry (images already tagged with REGISTRY_PREFIX by build).
-# Skips images that don't exist locally — supports partial builds where only
-# one service was rebuilt (e.g., `make deploy-vs-api` only builds VS-API).
 load:
 	@echo "[load] Pushing images to registry $(REGISTRY_PREFIX) (tag=$(TAG))..."
 	@for name in nodalarc/frr nodalarc/node-agent nodalarc/ome nodalarc/scheduler \
 		nodalarc/vs-api nodalarc/operator nodalarc/vf nodalarc/nodalpath; do \
 		for tag in latest $(TAG); do \
-			if docker image inspect $(REGISTRY_PREFIX)$$name:$$tag >/dev/null 2>&1; then \
-				echo "  $(REGISTRY_PREFIX)$$name:$$tag"; \
-				docker push $(REGISTRY_PREFIX)$$name:$$tag 2>&1 | tail -1; \
-			fi; \
+			echo "  $(REGISTRY_PREFIX)$$name:$$tag"; \
+			docker push $(REGISTRY_PREFIX)$$name:$$tag 2>&1 | tail -1; \
 		done; \
 	done
 	@echo "[load] Done."
@@ -436,19 +432,12 @@ restart: ## Rolling restart all platform pods (forces image re-pull)
 # upgrade — in-place Helm upgrade without teardown
 # ---------------------------------------------------------------------------
 #
-# Use `make upgrade` for iterative development. It updates image tags and
-# Helm values in-place via `helm upgrade --install` — no namespace deletion,
-# no pod teardown, no session disruption. Unchanged images keep their pods;
-# changed images get rolling updates.
+# Updates image tags and Helm values via `helm upgrade --install` without
+# tearing down the namespace. Use after committing to update the Helm
+# release with the new git SHA tags. Session pods are not affected.
 #
-# Use `make install` for fresh installs only (first deploy, or after teardown).
-# `make install` tears down the entire namespace before installing.
-#
-# The deploy-* targets use upgrade, not install. This is deliberate:
-# Helm is the single mutation path to Deployment specs. Using kubectl to
-# patch image tags or rollout restart creates drift between what Helm
-# thinks is deployed and what's actually running. One mutation path,
-# one source of truth, no drift.
+# Workflow:
+#   git commit → make build && make load && make upgrade
 
 upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
 	@echo "[upgrade] Upgrading Helm release..."
@@ -483,46 +472,80 @@ upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
 		exit 1'
 
 # ---------------------------------------------------------------------------
-# deploy-* — build, load, and upgrade in-place
+# deploy-* — build one service, push to registry, rollout restart
 # ---------------------------------------------------------------------------
 #
-# Each deploy-* target rebuilds ALL service images (unchanged services hit
-# Docker layer cache and complete in <1s), pushes to the registry, and runs
-# `helm upgrade` to update the Helm release. Helm compares the new image
-# tags against the running Deployment specs and only restarts pods whose
-# image actually changed. Session pods are not affected.
+# Iterative dev loop — no commit needed:
+#   edit code → make deploy-vs-api → test in browser → repeat
 #
-# Why rebuild all images? Helm sets every Deployment's image tag to the
-# current git SHA via HELM_EXTRA_ARGS. If only one service was rebuilt,
-# the other services' images don't exist at the new SHA tag in the
-# registry, causing ImagePullBackOff. Rebuilding all images re-tags them
-# with the current SHA (Docker cache makes this instant for unchanged
-# services), so every tag Helm references is present in the registry.
+# How it works:
+#   1. Build the one service image (Docker layer cache makes unchanged
+#      layers instant — only the COPY layer with your code change rebuilds)
+#   2. Push BOTH :SHA and :latest tags to the registry. The :SHA tag
+#      replaces the previous image at that tag. The Deployment spec
+#      already references :SHA from the last make install.
+#   3. kubectl rollout restart forces a new pod. imagePullPolicy=Always
+#      (set in config.mk for multi-node) ensures it pulls from the
+#      registry instead of using the node's containerd cache.
 #
-# The old approach (kubectl rollout restart without Helm) created drift:
-# the Deployment spec referenced the old tag from `make install` while
-# the pod ran :latest. One mutation path (Helm) fixes this.
+# No Helm involved — the Deployment spec doesn't change (same :SHA tag),
+# only the image content behind the tag changes in the registry. This
+# avoids Helm drift while supporting rapid iteration without commits.
 #
-# Iterative dev loop:
-#   edit code → commit → make deploy-vs-api → test in browser → repeat
+# After committing: make build && make load && make upgrade
+# This updates Helm with the new SHA tags (post-commit permanent state).
 
-deploy-all: build-images load upgrade ## Build + load + upgrade all core services
+ifeq ($(REGISTRY_PREFIX),)
+define _load-image
+	@docker save $1 | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1
+	@docker save $(subst :$(TAG),:latest,$1) | $(SUDO_CTR) k3s ctr images import - 2>&1 | tail -1
+endef
+else
+define _load-image
+	@docker push $1 2>&1 | tail -1
+	@docker push $(subst :$(TAG),:latest,$1) 2>&1 | tail -1
+endef
+endif
 
-deploy-ome: build-images load upgrade ## Build + load + upgrade OME
+define _deploy-service
+	@echo "[deploy] Loading $1..."
+	$(call _load-image,$1)
+	@echo "[deploy] Restarting $2..."
+	@kubectl rollout restart $2 -n $(NAMESPACE)
+	@kubectl rollout status $2 -n $(NAMESPACE) --timeout=60s
+endef
 
-deploy-scheduler: build-images load upgrade ## Build + load + upgrade Scheduler
+deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf ## Build + load + restart all core services
+	$(call _deploy-service,$(IMG_OME),deployment/ome)
+	$(call _deploy-service,$(IMG_SCHEDULER),deployment/nodalarc-scheduler)
+	$(call _deploy-service,$(IMG_NODE_AGENT),daemonset/nodalarc-node-agent)
+	$(call _deploy-service,$(IMG_VS_API),deployment/nodalarc-vs-api)
+	$(call _deploy-service,$(IMG_OPERATOR),deployment/nodalarc-operator)
+	$(call _deploy-service,$(IMG_VF),deployment/nodalarc-vf)
 
-deploy-node-agent: build-images load upgrade ## Build + load + upgrade Node Agent
+deploy-ome: build-ome ## Build + load + restart OME
+	$(call _deploy-service,$(IMG_OME),deployment/ome)
 
-deploy-vs-api: build-images load upgrade ## Build + load + upgrade VS-API
+deploy-scheduler: build-scheduler ## Build + load + restart Scheduler
+	$(call _deploy-service,$(IMG_SCHEDULER),deployment/nodalarc-scheduler)
 
-deploy-operator: build-images load upgrade ## Build + load + upgrade Operator
+deploy-node-agent: build-node-agent ## Build + load + restart Node Agent
+	$(call _deploy-service,$(IMG_NODE_AGENT),daemonset/nodalarc-node-agent)
 
-deploy-vf: build-frontends build-images load upgrade ## Build + load + upgrade VF
+deploy-vs-api: build-vs-api ## Build + load + restart VS-API
+	$(call _deploy-service,$(IMG_VS_API),deployment/nodalarc-vs-api)
 
-deploy-nodalpath: build-images load upgrade ## Build + load + upgrade NodalPath
+deploy-operator: build-operator ## Build + load + restart Operator
+	$(call _deploy-service,$(IMG_OPERATOR),deployment/nodalarc-operator)
 
-deploy-measurement: build-images build-measurement load upgrade ## Build + load + upgrade MI
+deploy-vf: build-vf ## Build + load + restart VF
+	$(call _deploy-service,$(IMG_VF),deployment/nodalarc-vf)
+
+deploy-nodalpath: build-nodalpath ## Build + load + restart NodalPath
+	$(call _deploy-service,$(IMG_NODALPATH),deployment/nodalpath)
+
+deploy-measurement: build-measurement ## Build + load + restart MI
+	$(call _deploy-service,$(IMG_MI),deployment/nodalarc-measurement)
 
 # ---------------------------------------------------------------------------
 # status / test / teardown / clean

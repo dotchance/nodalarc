@@ -308,13 +308,16 @@ class SessionManager:
 
         return removed
 
-    async def switch(self, session_path: str) -> None:
+    async def switch(self, session_path: str, progress_fn=None) -> None:
         """Tear down current session and deploy new one via ConstellationSpec CRD.
 
         Fully async — uses asyncio.sleep for polling, runs K8s API calls
         in executor to avoid blocking the event loop. Does NOT call any
         VS-API state callbacks — the caller (_run_switch) owns the
         SessionContext lifecycle.
+
+        progress_fn: optional async callback(detail: str) called at each
+        significant step so the browser can show real-time progress.
         """
 
         import kubernetes.client
@@ -337,9 +340,14 @@ class SessionManager:
         ns = cfg.kubernetes_namespace
         loop = asyncio.get_running_loop()
 
+        async def _progress(detail: str) -> None:
+            self.status_detail = detail
+            if progress_fn:
+                await progress_fn(detail)
+
         try:
             self._status = "switching"
-            self.status_detail = "Tearing down current session"
+            await _progress("Tearing down current session")
             log.info("Session switch: deploying %s via CRD", session_path)
 
             # === Delete existing ConstellationSpec CR ===
@@ -356,7 +364,7 @@ class SessionManager:
                 )
                 log.info("Deleted existing ConstellationSpec CR")
 
-                self.status_detail = "Waiting for old CR to finalize"
+                await _progress("Waiting for old session to finalize")
                 for _ in range(60):
                     try:
                         await loop.run_in_executor(
@@ -375,22 +383,24 @@ class SessionManager:
                             break
                         raise
 
-                self.status_detail = "Waiting for old session pods to terminate"
+                await _progress("Waiting for old session pods to terminate")
                 v1 = kubernetes.client.CoreV1Api()
                 for _ in range(60):
                     pods = await loop.run_in_executor(
                         None,
                         lambda: v1.list_namespaced_pod(ns, label_selector="nodalarc.io/node-id"),
                     )
-                    if len(pods.items) == 0:
+                    remaining = len(pods.items)
+                    if remaining == 0:
                         break
+                    await _progress(f"Waiting for {remaining} old pods to terminate")
                     await asyncio.sleep(2)
             except kubernetes.client.rest.ApiException as e:
                 if e.status != 404:
                     raise
 
             # === Build and apply ConstellationSpec CR ===
-            self.status_detail = "Deploying constellation"
+            await _progress("Deploying new constellation")
             session_yaml_content = Path(session_path).read_text()
             cr_body = {
                 "apiVersion": "nodalarc.io/v1alpha1",
@@ -413,7 +423,7 @@ class SessionManager:
             log.info("Applied ConstellationSpec CR for %s", session_path)
 
             # === Poll CR status until Ready ===
-            self.status_detail = "Waiting for constellation to deploy"
+            await _progress("Waiting for session to deploy")
             for _ in range(300):
                 cr = await loop.run_in_executor(
                     None,
@@ -427,16 +437,16 @@ class SessionManager:
                 )
                 phase = cr.get("status", {}).get("phase", "")
                 message = cr.get("status", {}).get("message", "")
-                if phase != "Wiring":
-                    self.status_detail = message or f"Phase: {phase}"
+                if message:
+                    await _progress(message)
                 if phase == "Ready":
                     self._current_session_file = session_path
                     return
                 if phase == "Error":
-                    raise RuntimeError(f"Operator error: {message}")
+                    raise RuntimeError(f"Deploy failed: {message}")
                 await asyncio.sleep(1)
 
-            raise TimeoutError("Deploy timed out waiting for CR Ready (5 minutes)")
+            raise TimeoutError("Deploy timed out waiting for session Ready (5 minutes)")
 
         except Exception as exc:
             self._status = "error"

@@ -13,6 +13,7 @@ interface KeyboardActions {
   onToggleGroundLinks: () => void;
   onToggleIslLinks: () => void;
   onToggleSatPaths: () => void;
+  onToggleTrails: () => void;
   onToggleHistorical: () => void;
   onPlayPause: () => void;
   onFollowNode: () => void;
@@ -77,6 +78,10 @@ export function useKeyboard(actions: KeyboardActions): void {
           break;
         case "t":
         case "T":
+          actions.onToggleTrails();
+          break;
+        case "v":
+        case "V":
           actions.onTopView();
           break;
         case "h":

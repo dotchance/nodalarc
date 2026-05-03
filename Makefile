@@ -186,8 +186,11 @@ build-frontends: ## Build VF and NodalPath console frontends
 		echo "[build] NodalPath console dist exists — skipping"; \
 	fi
 
-build-images: ensure-base-images build-ome build-scheduler build-node-agent \
+build-images: ensure-base-images _clear-build-cache build-ome build-scheduler build-node-agent \
               build-vs-api build-operator build-vf build-nodalpath
+
+_clear-build-cache:
+	@docker builder prune --filter type=source.local -f >/dev/null 2>&1 || true
 
 ensure-base-images:
 	@for img in nodalarc/base:latest nodalarc/frr:latest nodalarc/probe:latest nodalarc/nodalpath-fwd:latest; do \

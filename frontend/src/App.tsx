@@ -48,7 +48,7 @@ export function App() {
 }
 
 function AppInner() {
-  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, historicalMode, setHistoricalMode, fetchHistorical, sendMessage } =
+  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, historicalMode, setHistoricalMode, fetchHistorical, sendMessage } =
     useSnapshot();
   const { selection, select, clearSelection } = useSelection();
 
@@ -322,7 +322,7 @@ function AppInner() {
           <div className="switching-box">
             <p>{sessionTransitioning ? "Switching session..." : "Deploying session..."}</p>
             <p style={{ fontSize: 10, color: "var(--text-dim)" }}>
-              {snapshot?.session_status_detail ?? (sessionTransitioning ? "Tearing down old session, starting new one" : "")}
+              {switchDetail ?? snapshot?.session_status_detail ?? ""}
             </p>
           </div>
         </div>

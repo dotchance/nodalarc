@@ -121,8 +121,14 @@ function isGroundLink(nodeA: string, nodeB: string): boolean {
   return nodeA.startsWith("gs-") || nodeB.startsWith("gs-");
 }
 
+// Track allocated vs used capacity for dynamic growth
+let maxIslSlots = 0;
+let maxGndSlots = 0;
+let usedIslSlots = 0;
+let usedGndSlots = 0;
+
 function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
-  // Count ISL and ground links to determine buffer layout
+  // Count ISL and ground links from initial snapshot
   const islKeys = new Set<string>();
   const gndKeys = new Set<string>();
   for (const ls of linkStates) {
@@ -134,10 +140,11 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
     }
   }
 
-  const islCount = islKeys.size;
-  const gndCount = gndKeys.size;
-  islSegmentEnd = islCount * SEGMENTS_PER_ISL;
-  totalSegments = islSegmentEnd + gndCount;
+  // Allocate 2x headroom for links that appear after first snapshot
+  maxIslSlots = Math.max(islKeys.size * 2, 200);
+  maxGndSlots = Math.max(gndKeys.size * 2, 100);
+  islSegmentEnd = maxIslSlots * SEGMENTS_PER_ISL;
+  totalSegments = islSegmentEnd + maxGndSlots;
 
   // Allocate buffers
   const posFloats = totalSegments * 6;
@@ -149,23 +156,10 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
   colorBuffer.fill(0);
 
   // Assign buffer indices — ISLs first, then ground
-  let islIdx = 0;
-  let gndIdx = 0;
+  usedIslSlots = 0;
+  usedGndSlots = 0;
   for (const ls of linkStates) {
-    const key = linkKey(ls.node_a, ls.node_b);
-    if (links.has(key)) continue;
-    const ground = isGroundLink(ls.node_a, ls.node_b);
-    const bi = ground ? islSegmentEnd + gndIdx++ : islIdx++ * SEGMENTS_PER_ISL;
-    links.set(key, {
-      bufferIndex: bi,
-      segmentCount: ground ? 1 : SEGMENTS_PER_ISL,
-      state: "inactive",
-      nodeA: ls.node_a,
-      nodeB: ls.node_b,
-      isGround: ground,
-      failTime: null,
-      upTime: null,
-    });
+    addLinkEntry(ls.node_a, ls.node_b);
   }
 
   // Create geometry + material + mesh.
@@ -209,6 +203,35 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
   initialized = true;
 }
 
+function addLinkEntry(nodeA: string, nodeB: string): LinkEntry | undefined {
+  const key = linkKey(nodeA, nodeB);
+  if (links.has(key)) return links.get(key)!;
+
+  const ground = isGroundLink(nodeA, nodeB);
+  let bi: number;
+
+  if (ground) {
+    if (usedGndSlots >= maxGndSlots) return undefined;
+    bi = islSegmentEnd + usedGndSlots++;
+  } else {
+    if (usedIslSlots >= maxIslSlots) return undefined;
+    bi = usedIslSlots++ * SEGMENTS_PER_ISL;
+  }
+
+  const entry: LinkEntry = {
+    bufferIndex: bi,
+    segmentCount: ground ? 1 : SEGMENTS_PER_ISL,
+    state: "inactive",
+    nodeA,
+    nodeB,
+    isGround: ground,
+    failTime: null,
+    upTime: null,
+  };
+  links.set(key, entry);
+  return entry;
+}
+
 export function updateLinks(
   linkStates: LinkState[],
   earthFrame: THREE.Object3D,
@@ -227,9 +250,8 @@ export function updateLinks(
 
     let entry = links.get(key);
     if (!entry) {
-      // New link not seen during init — should not happen with static interface map
-      // but handle gracefully
-      continue;
+      entry = addLinkEntry(ls.node_a, ls.node_b);
+      if (!entry) continue; // buffer full
     }
 
     if (entry.state !== "active" && ls.state === "active") {
@@ -386,4 +408,8 @@ export function clearLinks(): void {
   initialized = false;
   totalSegments = 0;
   islSegmentEnd = 0;
+  maxIslSlots = 0;
+  maxGndSlots = 0;
+  usedIslSlots = 0;
+  usedGndSlots = 0;
 }

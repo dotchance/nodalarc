@@ -85,7 +85,7 @@ function initBatch(scene: THREE.Scene, satCount: number): void {
   });
 
   // Manual bounding sphere prevents NaN computation errors
-  batchGeometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1000);
+  batchGeometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 50000);
 
   batch = new THREE.LineSegments(batchGeometry, material);
   batch.frustumCulled = false;
@@ -256,12 +256,34 @@ export function updateOrbitalTrails(scene: THREE.Scene): void {
     initBatch(scene, Math.max(sats.size, 100));
   }
 
-  // Grow buffer if needed (new session with more sats)
+  // Grow buffer if needed — copy existing trail data to preserve history
   if (sats.size > maxSatellites) {
-    const parent = batch?.parent;
-    clearTrails();
-    initBatch(scene, sats.size);
-    if (parent && batch) parent.add(batch);
+    const newMax = Math.max(sats.size * 2, maxSatellites * 2);
+    const newFloatCount = newMax * TRAIL_LENGTH * 6;
+    const newPosBuf = new Float32Array(newFloatCount);
+    const newColBuf = new Float32Array(newFloatCount);
+    newPosBuf.fill(NaN);
+    newColBuf.fill(0);
+
+    if (positionBuffer && colorBuffer) {
+      const copyLen = Math.min(positionBuffer.length, newPosBuf.length);
+      newPosBuf.set(positionBuffer.subarray(0, copyLen));
+      newColBuf.set(colorBuffer.subarray(0, copyLen));
+    }
+
+    positionBuffer = newPosBuf;
+    colorBuffer = newColBuf;
+
+    if (batchGeometry && posAttr && colAttr) {
+      posAttr = new THREE.BufferAttribute(positionBuffer, 3);
+      colAttr = new THREE.BufferAttribute(colorBuffer, 3);
+      posAttr.setUsage(THREE.DynamicDrawUsage);
+      colAttr.setUsage(THREE.DynamicDrawUsage);
+      batchGeometry.setAttribute("position", posAttr);
+      batchGeometry.setAttribute("color", colAttr);
+    }
+
+    maxSatellites = newMax;
   }
 
   for (const [id] of sats) {

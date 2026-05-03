@@ -1,0 +1,121 @@
+# Terminal Access
+
+Every satellite and ground station in NodalArc runs a real FRRouting daemon. You can open an interactive terminal to any node and run the same CLI commands you'd use on a physical Cisco, Juniper, or Arista router.
+
+## Opening a Terminal from the Browser
+
+1. Open the terminal panel (bottom of the screen, or press **]**)
+2. Select a node from the dropdown
+3. An interactive vtysh session opens as a tab
+
+You land directly in the FRR CLI prompt:
+
+```
+sat-P00S00#
+```
+
+![Browser Terminal](../images/user-terminal.png)
+
+### Multiple Sessions
+
+Each node you select opens a new tab. Sessions persist when you switch between tabs — output accumulates in the background. Switch back and everything that happened while you were away is still there. This matches the standard network engineering workflow of having multiple SSH sessions open to different routers.
+
+## Common Commands
+
+### See routing neighbors
+
+```
+show isis neighbor          # IS-IS sessions
+show ip ospf neighbor       # OSPF sessions
+```
+
+This shows which adjacent nodes have formed routing adjacencies. You'll see ISL neighbors (connected satellites) and ground station neighbors (when a ground link is active).
+
+### View the routing table
+
+```
+show ip route
+```
+
+The full IP routing table. Routes learned via the IGP (IS-IS or OSPF) show the next-hop interface and metric. On satellites with active ground connections, you'll see a default route pointing toward the ground station.
+
+### Check a specific route
+
+```
+show ip route 10.255.1.1
+```
+
+Shows which interface and next-hop the router would use to reach a specific destination.
+
+### View interface state
+
+```
+show interface brief
+```
+
+Lists all interfaces with their admin state and link state:
+
+| Interface | What it connects to |
+|-----------|-------------------|
+| `isl0`, `isl1` | Intra-plane ISL links (forward/backward in the orbital ring) |
+| `isl2`, `isl3` | Cross-plane ISL links (to adjacent orbital planes) |
+| `gnd0` | Ground station link (active only when overhead a ground station) |
+| `lo` | Loopback (always UP, carries the node's stable address) |
+| `terr0` | Terrestrial network stub (ground stations only) |
+| `cni0` | Infrastructure interface (ignore — not a data path) |
+
+Interfaces that are **UP** have active routing adjacencies. Interfaces that are **DOWN** or **LOWERLAYERDOWN** don't currently have a connected peer (the satellite hasn't formed that link yet, or the ground station connection hasn't been established).
+
+### See the IS-IS database
+
+```
+show isis database detail
+```
+
+The full link-state database — every LSP (Link-State PDU) this router has received. This is how IS-IS knows about the entire network topology.
+
+### MPLS label table (SR-MPLS sessions)
+
+```
+show mpls table
+```
+
+Shows the MPLS forwarding table with incoming labels, outgoing labels, and next-hop interfaces.
+
+### View the running configuration
+
+```
+show running-config
+```
+
+The full FRR configuration for this node. Shows all enabled routing protocols, interface configurations, route-maps, and prefix-lists.
+
+### Connectivity testing
+
+```
+ping 10.0.0.5
+traceroute 10.255.1.1
+```
+
+Real ICMP ping and traceroute through the emulated constellation. Packets traverse real kernel interfaces with real latency shaping. The round-trip time you see is the actual emulated propagation delay based on orbital geometry.
+
+## What You're Actually Seeing
+
+When you run commands in the terminal, you're talking to a real FRRouting instance running inside a Linux container. The routing tables, adjacencies, and forwarding state are computed by the actual FRR code — the same code that runs on physical routers in production networks.
+
+This means:
+
+- **Routing convergence is real** — when a link goes down, IS-IS/OSPF detects it, floods the update, runs SPF, and installs new routes. The convergence time you observe is the real protocol implementation's convergence time.
+- **Forwarding is real** — packets traverse real kernel interfaces with tc netem latency shaping. The latency you ping is the actual emulated propagation delay.
+- **Configuration is real** — you can enter `configure terminal` and change FRR configuration. Add route-maps, change metrics, enable debugging. Changes take effect immediately, same as on hardware.
+
+## Power User: Direct SSH
+
+If you prefer a native SSH client (PuTTY, iTerm, SecureCRT), you can SSH directly to any node. See the [Operations Guide](../ops/operations.md) for SSH key setup and connection details.
+
+## Tips
+
+- Run `show isis neighbor` or `show ip ospf neighbor` repeatedly to watch adjacencies form and break as the constellation moves
+- Compare routing tables on two adjacent satellites to understand how traffic flows between them
+- On a ground station, run `show ip route 0.0.0.0/0` to see which satellite is currently the preferred gateway
+- Use `show interface gnd0` on a satellite to see if it currently has a ground connection (carrier UP means connected)

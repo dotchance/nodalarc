@@ -1,13 +1,19 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-/** Render orbit rings for ALL satellites when "Satellite Paths" toggle is on.
- *  Reuses computeOrbitPositions from orbitPins.ts.
- *  Uses plane color, thinner line (width 2), lower opacity (0.2).
+/** Render orbit rings for ALL satellites — batched into ONE draw call.
+ *
+ *  When "Satellite Paths" toggle is on, computes orbit rings from each
+ *  satellite's position and velocity, packs all segments into a single
+ *  LineSegments2 batch with per-vertex plane colors.
+ *
+ *  History: the original per-satellite Line2 approach created one draw
+ *  call per satellite (90 Line2 = 90 TRIANGLES draw calls). Batching
+ *  into one LineSegments2 reduces to 1 draw call.
  */
 
 import * as THREE from "three";
-import { Line2 } from "three/addons/lines/Line2.js";
-import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getSatellites } from "./satellites";
 import { getNodeLocalPosition, getNodeWorldPosition } from "./positionLookup";
@@ -16,19 +22,17 @@ import { getPlaneColor } from "../config";
 import { velocityToScene } from "./geo";
 import { worldVelocity } from "./astronomy";
 
-// Reusable temporaries for seed sampling — avoid per-sat allocation.
-const _allOrbitsWorldPos = new THREE.Vector3();
-const _allOrbitsLocalPos = new THREE.Vector3();
-const _allOrbitsVelEcef = new THREE.Vector3();
-const _allOrbitsVelWorld = new THREE.Vector3();
+const ORBIT_SAMPLES = 180;
+const SEGMENTS_PER_ORBIT = ORBIT_SAMPLES; // closed ring = N segments from N+1 vertices
 
-interface OrbitRing {
-  line: Line2;
-  geometry: LineGeometry;
-  material: LineMaterial;
-}
+const _worldPos = new THREE.Vector3();
+const _localPos = new THREE.Vector3();
+const _velEcef = new THREE.Vector3();
+const _velWorld = new THREE.Vector3();
 
-const orbits = new Map<string, OrbitRing>();
+let batch: LineSegments2 | null = null;
+let geometry: LineSegmentsGeometry | null = null;
+let material: LineMaterial | null = null;
 let lastSatCount = 0;
 
 export function updateAllOrbits(
@@ -44,78 +48,86 @@ export function updateAllOrbits(
 
   const sats = getSatellites();
 
-  // Only recompute when satellite set changes
-  if (sats.size === lastSatCount && orbits.size === sats.size) {
-    // Keep resolution in sync
-    for (const ring of orbits.values()) {
-      ring.material.resolution.set(window.innerWidth, window.innerHeight);
-    }
+  // Only rebuild when satellite set changes
+  if (sats.size === lastSatCount && batch) {
+    if (material) material.resolution.set(window.innerWidth, window.innerHeight);
     return;
   }
 
-  // Clear stale orbits for nodes no longer present
-  for (const [id, ring] of orbits) {
-    if (!sats.has(id)) {
-      scene.remove(ring.line);
-      ring.geometry.dispose();
-      ring.material.dispose();
-      orbits.delete(id);
-    }
-  }
+  // Clear old batch if sat count changed
+  clearAllOrbits(scene);
 
-  // Add orbits for new satellites
+  // Collect all orbit segments
+  const allPositions: number[] = [];
+  const allColors: number[] = [];
+
   for (const [id, sat] of sats) {
-    if (orbits.has(id)) continue;
-
     const ns = sat.nodeState;
     if (ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
     if (ns.plane == null) continue;
 
-    if (!getNodeWorldPosition(id, _allOrbitsWorldPos)) continue;
-    if (!getNodeLocalPosition(id, _allOrbitsLocalPos)) continue;
-    _allOrbitsVelEcef.copy(
-      velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s),
-    );
-    worldVelocity(
-      _allOrbitsLocalPos,
-      _allOrbitsVelEcef,
-      viewFrameRotationRad,
-      frameAngularVelocityRadS,
-      _allOrbitsVelWorld,
-    );
+    if (!getNodeWorldPosition(id, _worldPos)) continue;
+    if (!getNodeLocalPosition(id, _localPos)) continue;
+    _velEcef.copy(velocityToScene(ns.vel_x_km_s, ns.vel_y_km_s, ns.vel_z_km_s));
+    worldVelocity(_localPos, _velEcef, viewFrameRotationRad, frameAngularVelocityRadS, _velWorld);
 
-    const positions = computeOrbitPositions(_allOrbitsWorldPos, _allOrbitsVelWorld);
-    const geometry = new LineGeometry();
-    geometry.setPositions(positions);
-
+    const positions = computeOrbitPositions(_worldPos, _velWorld);
     const color = new THREE.Color(getPlaneColor(ns.plane));
-    const material = new LineMaterial({
-      color: color.getHex(),
-      linewidth: 2,
-      worldUnits: false,
-      transparent: true,
-      opacity: 0.2,
-      depthWrite: false,
-    });
-    material.resolution.set(window.innerWidth, window.innerHeight);
+    const r = color.r;
+    const g = color.g;
+    const b = color.b;
 
-    const line = new Line2(geometry, material);
-    line.computeLineDistances();
-    line.frustumCulled = false;
-    scene.add(line);
-
-    orbits.set(id, { line, geometry, material });
+    // Convert polyline vertices to segment pairs
+    for (let i = 0; i < SEGMENTS_PER_ORBIT; i++) {
+      const i0 = i * 3;
+      const i1 = (i + 1) * 3;
+      allPositions.push(
+        positions[i0]!, positions[i0 + 1]!, positions[i0 + 2]!,
+        positions[i1]!, positions[i1 + 1]!, positions[i1 + 2]!,
+      );
+      allColors.push(r, g, b, r, g, b);
+    }
   }
+
+  if (allPositions.length === 0) return;
+
+  geometry = new LineSegmentsGeometry();
+  geometry.computeBoundingSphere = () => {};
+  geometry.computeBoundingBox = () => {};
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1000);
+  geometry.boundingBox = new THREE.Box3(
+    new THREE.Vector3(-1000, -1000, -1000),
+    new THREE.Vector3(1000, 1000, 1000),
+  );
+  geometry.setPositions(new Float32Array(allPositions));
+  geometry.setColors(new Float32Array(allColors));
+
+  material = new LineMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    linewidth: 2,
+    worldUnits: false,
+    transparent: true,
+    opacity: 0.2,
+    depthWrite: false,
+    resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
+  });
+
+  batch = new LineSegments2(geometry, material);
+  batch.frustumCulled = false;
+  scene.add(batch);
 
   lastSatCount = sats.size;
 }
 
 export function clearAllOrbits(scene: THREE.Scene): void {
-  for (const ring of orbits.values()) {
-    scene.remove(ring.line);
-    ring.geometry.dispose();
-    ring.material.dispose();
+  if (batch) {
+    scene.remove(batch);
+    batch.geometry.dispose();
+    (batch.material as THREE.Material).dispose();
+    batch = null;
   }
-  orbits.clear();
+  geometry = null;
+  material = null;
   lastSatCount = 0;
 }

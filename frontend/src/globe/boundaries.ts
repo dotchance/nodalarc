@@ -3,8 +3,8 @@
 // Political boundaries — Natural Earth 110m country borders on the globe.
 //
 // Loads GeoJSON from /ne_110m_countries.geojson (bundled in the VF
-// container for offline operation). Renders as line geometry on the
-// earth sphere using design token colors.
+// container for offline operation). Renders as ONE LineSegments object
+// using disconnected segment pairs. One draw call for all borders.
 
 import * as THREE from "three";
 import { tokens } from "../styles/tokens";
@@ -13,30 +13,16 @@ const EARTH_RADIUS_SCENE = tokens.earthRadius;
 const BOUNDARY_COLOR = 0x88aacc;
 const BOUNDARY_OPACITY = 0.55;
 
-let boundaryGroup: THREE.Group | null = null;
+let boundaryMesh: THREE.LineSegments | null = null;
 let loaded = false;
 
-function geoToVec3(lon: number, lat: number): THREE.Vector3 {
+function geoToXYZ(lon: number, lat: number, out: { x: number; y: number; z: number }): void {
   const latR = (lat * Math.PI) / 180;
   const lonR = (lon * Math.PI) / 180;
   const r = EARTH_RADIUS_SCENE * 1.001;
-  return new THREE.Vector3(
-    r * Math.cos(latR) * Math.cos(lonR),
-    r * Math.sin(latR),
-    -r * Math.cos(latR) * Math.sin(lonR),
-  );
-}
-
-function buildLineGeometry(coords: number[][]): THREE.BufferGeometry | null {
-  if (coords.length < 2) return null;
-  const points: THREE.Vector3[] = [];
-  for (const [lon, lat] of coords) {
-    if (lon !== undefined && lat !== undefined) {
-      points.push(geoToVec3(lon, lat));
-    }
-  }
-  if (points.length < 2) return null;
-  return new THREE.BufferGeometry().setFromPoints(points);
+  out.x = r * Math.cos(latR) * Math.cos(lonR);
+  out.y = r * Math.sin(latR);
+  out.z = -r * Math.cos(latR) * Math.sin(lonR);
 }
 
 export async function loadBoundaries(earthFrame: THREE.Object3D): Promise<void> {
@@ -48,22 +34,17 @@ export async function loadBoundaries(earthFrame: THREE.Object3D): Promise<void> 
     if (!resp.ok) return;
     const geojson = await resp.json();
 
-    boundaryGroup = new THREE.Group();
-    boundaryGroup.name = "boundaries";
-
-    const material = new THREE.LineBasicMaterial({
-      color: BOUNDARY_COLOR,
-      transparent: true,
-      opacity: BOUNDARY_OPACITY,
-      depthWrite: false,
-    });
+    // Collect all line segments from all polygon rings.
+    // Each ring edge becomes a segment pair: (v0, v1), (v1, v2), ...
+    const segments: number[] = [];
+    const pt = { x: 0, y: 0, z: 0 };
+    const prevPt = { x: 0, y: 0, z: 0 };
 
     for (const feature of geojson.features) {
       const geom = feature.geometry;
       if (!geom) continue;
 
       let rings: number[][][] = [];
-
       if (geom.type === "Polygon") {
         rings = geom.coordinates;
       } else if (geom.type === "MultiPolygon") {
@@ -73,34 +54,52 @@ export async function loadBoundaries(earthFrame: THREE.Object3D): Promise<void> 
       }
 
       for (const ring of rings) {
-        const lineGeo = buildLineGeometry(ring);
-        if (lineGeo) {
-          const line = new THREE.Line(lineGeo, material);
-          line.renderOrder = 2;
-          boundaryGroup.add(line);
+        for (let i = 0; i < ring.length; i++) {
+          const coord = ring[i];
+          if (!coord || coord[0] === undefined || coord[1] === undefined) continue;
+          geoToXYZ(coord[0], coord[1], pt);
+
+          if (i > 0) {
+            segments.push(prevPt.x, prevPt.y, prevPt.z, pt.x, pt.y, pt.z);
+          }
+          prevPt.x = pt.x;
+          prevPt.y = pt.y;
+          prevPt.z = pt.z;
         }
       }
     }
 
-    earthFrame.add(boundaryGroup);
+    if (segments.length === 0) return;
+
+    const posArray = new Float32Array(segments);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(posArray, 3));
+
+    const material = new THREE.LineBasicMaterial({
+      color: BOUNDARY_COLOR,
+      transparent: true,
+      opacity: BOUNDARY_OPACITY,
+      depthWrite: false,
+    });
+
+    boundaryMesh = new THREE.LineSegments(geometry, material);
+    boundaryMesh.renderOrder = 2;
+    earthFrame.add(boundaryMesh);
   } catch {
     // GeoJSON not available — boundaries silently absent
   }
 }
 
 export function setBoundariesVisible(visible: boolean): void {
-  if (boundaryGroup) boundaryGroup.visible = visible;
+  if (boundaryMesh) boundaryMesh.visible = visible;
 }
 
 export function clearBoundaries(earthFrame: THREE.Object3D): void {
-  if (boundaryGroup) {
-    earthFrame.remove(boundaryGroup);
-    for (const child of boundaryGroup.children) {
-      if (child instanceof THREE.Line) {
-        child.geometry.dispose();
-      }
-    }
-    boundaryGroup = null;
+  if (boundaryMesh) {
+    earthFrame.remove(boundaryMesh);
+    boundaryMesh.geometry.dispose();
+    (boundaryMesh.material as THREE.Material).dispose();
+    boundaryMesh = null;
     loaded = false;
   }
 }

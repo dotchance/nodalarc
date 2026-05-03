@@ -57,9 +57,11 @@ export function updateAllOrbits(
   // Clear old batch if sat count changed
   clearAllOrbits(scene);
 
-  // Collect all orbit segments
-  const allPositions: number[] = [];
-  const allColors: number[] = [];
+  // Pre-allocate buffers based on sat count (avoid temporary number[] arrays)
+  const floatsPerOrbit = SEGMENTS_PER_ORBIT * 6;
+  const orbitPositions = new Float32Array(sats.size * floatsPerOrbit);
+  const orbitColors = new Float32Array(sats.size * floatsPerOrbit);
+  let orbitIdx = 0;
 
   for (const [id, sat] of sats) {
     const ns = sat.nodeState;
@@ -77,30 +79,44 @@ export function updateAllOrbits(
     const g = color.g;
     const b = color.b;
 
-    // Convert polyline vertices to segment pairs
+    const base = orbitIdx * floatsPerOrbit;
     for (let i = 0; i < SEGMENTS_PER_ORBIT; i++) {
       const i0 = i * 3;
       const i1 = (i + 1) * 3;
-      allPositions.push(
-        positions[i0]!, positions[i0 + 1]!, positions[i0 + 2]!,
-        positions[i1]!, positions[i1 + 1]!, positions[i1 + 2]!,
-      );
-      allColors.push(r, g, b, r, g, b);
+      const off = base + i * 6;
+      orbitPositions[off] = positions[i0]!;
+      orbitPositions[off + 1] = positions[i0 + 1]!;
+      orbitPositions[off + 2] = positions[i0 + 2]!;
+      orbitPositions[off + 3] = positions[i1]!;
+      orbitPositions[off + 4] = positions[i1 + 1]!;
+      orbitPositions[off + 5] = positions[i1 + 2]!;
+      orbitColors[off] = r;
+      orbitColors[off + 1] = g;
+      orbitColors[off + 2] = b;
+      orbitColors[off + 3] = r;
+      orbitColors[off + 4] = g;
+      orbitColors[off + 5] = b;
     }
+    orbitIdx++;
   }
 
-  if (allPositions.length === 0) return;
+  if (orbitIdx === 0) return;
+
+  // Trim to actual count (some sats may have been skipped)
+  const usedFloats = orbitIdx * floatsPerOrbit;
+  const posBuf = orbitIdx < sats.size ? orbitPositions.subarray(0, usedFloats) : orbitPositions;
+  const colBuf = orbitIdx < sats.size ? orbitColors.subarray(0, usedFloats) : orbitColors;
 
   geometry = new LineSegmentsGeometry();
   geometry.computeBoundingSphere = () => {};
   geometry.computeBoundingBox = () => {};
-  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1000);
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 50000);
   geometry.boundingBox = new THREE.Box3(
-    new THREE.Vector3(-1000, -1000, -1000),
-    new THREE.Vector3(1000, 1000, 1000),
+    new THREE.Vector3(-50000, -50000, -50000),
+    new THREE.Vector3(50000, 50000, 50000),
   );
-  geometry.setPositions(new Float32Array(allPositions));
-  geometry.setColors(new Float32Array(allColors));
+  geometry.setPositions(posBuf);
+  geometry.setColors(colBuf);
 
   material = new LineMaterial({
     color: 0xffffff,

@@ -3,19 +3,17 @@
 // Link rendering — batched into ONE draw call via LineSegments2.
 //
 // All ISL and ground links share a single LineSegmentsGeometry with a
-// dashed LineMaterial. ISL segments appear solid because their per-segment
-// distance attributes are set to [0, 1.0] — within one dash period, no
-// gap is ever reached. Ground segments use real distances for visible
-// dashing. This "dash-reset trick" unifies both link types in one batch.
+// solid LineMaterial and per-vertex colors. ISL links are green bowed
+// arcs (16 segments each). Ground links are cyan straight lines (1
+// segment each). Both are in the same buffer and batch.
 //
-// Fail-flash and up-pulse animations use vertex colors — no per-link
-// objects, no pools, no per-frame allocation. Scales to 10,000+ links
-// with the same 1 draw call.
+// Fail-flash animations use vertex colors (red → dark fade). No
+// per-link objects, no pools, no per-frame allocation.
 //
 // History: commit 83e86cf batched links into 2 draw calls. Commit
 // afb5381 reverted because LineGeometry (connected polyline) created
-// spurious connecting segments. The fix was LineSegmentsGeometry
-// (disconnected pairs), not reverting to per-link objects.
+// spurious connecting segments. LineSegmentsGeometry (disconnected
+// pairs) is the correct primitive — no connecting segments.
 
 import * as THREE from "three";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
@@ -172,10 +170,10 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
   // means Three.js never uses it for culling.
   geometry.computeBoundingSphere = () => {};
   geometry.computeBoundingBox = () => {};
-  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1000);
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 50000);
   geometry.boundingBox = new THREE.Box3(
-    new THREE.Vector3(-1000, -1000, -1000),
-    new THREE.Vector3(1000, 1000, 1000),
+    new THREE.Vector3(-50000, -50000, -50000),
+    new THREE.Vector3(50000, 50000, 50000),
   );
   geometry.setPositions(positionBuffer);
   geometry.setColors(colorBuffer);

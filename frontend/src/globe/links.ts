@@ -92,7 +92,6 @@ let geometry: LineSegmentsGeometry | null = null;
 let material: LineMaterial | null = null;
 let positionBuffer: Float32Array | null = null;
 let colorBuffer: Float32Array | null = null;
-let distanceBuffer: Float32Array | null = null;
 let totalSegments = 0;
 let initialized = false;
 
@@ -144,12 +143,10 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
   const posFloats = totalSegments * 6;
   positionBuffer = new Float32Array(posFloats);
   colorBuffer = new Float32Array(posFloats);
-  distanceBuffer = new Float32Array(totalSegments * 2);
 
   // Fill with NaN (hidden segments)
   positionBuffer.fill(NaN);
   colorBuffer.fill(0);
-  distanceBuffer.fill(0);
 
   // Assign buffer indices — ISLs first, then ground
   let islIdx = 0;
@@ -171,21 +168,29 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
     });
   }
 
-  // Create geometry + material + mesh
+  // Create geometry + material + mesh.
+  // Set bounding sphere BEFORE setPositions to prevent NaN computation
+  // errors from the NaN-initialized buffer. frustumCulled=false means
+  // bounding sphere isn't used for culling — this is purely cosmetic.
   geometry = new LineSegmentsGeometry();
+  // Override computeBoundingSphere to prevent NaN errors from NaN-initialized
+  // buffers. The real bounding sphere is set manually below. frustumCulled=false
+  // means Three.js never uses it for culling.
+  geometry.computeBoundingSphere = () => {};
+  geometry.computeBoundingBox = () => {};
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 1000);
+  geometry.boundingBox = new THREE.Box3(
+    new THREE.Vector3(-1000, -1000, -1000),
+    new THREE.Vector3(1000, 1000, 1000),
+  );
   geometry.setPositions(positionBuffer);
   geometry.setColors(colorBuffer);
 
-  // Use the wider of the two line widths
   const lineWidth = Math.max(LINK_ISL_WIDTH, LINK_GROUND_WIDTH);
   material = new LineMaterial({
-    color: 0xffffff, // vertex colors override this
+    color: 0xffffff,
     vertexColors: true,
     linewidth: lineWidth,
-    dashed: true,
-    dashScale: 1,
-    dashSize: 16,
-    gapSize: 8,
     transparent: true,
     opacity: 0.6,
     depthWrite: false,
@@ -194,7 +199,6 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
 
   batch = new LineSegments2(geometry, material);
   batch.frustumCulled = false;
-  batch.computeLineDistances();
   earthFrame.add(batch);
 
   // Listen for resize to update material resolution
@@ -246,10 +250,9 @@ export function updateLinks(
 }
 
 export function animateLinks(showIslLinks: boolean = true, showGroundLinks: boolean = true): void {
-  if (!initialized || !positionBuffer || !colorBuffer || !distanceBuffer || !geometry || !batch) return;
+  if (!initialized || !positionBuffer || !colorBuffer || !geometry || !batch) return;
 
   const now = performance.now();
-  let needsDistanceUpdate = false;
 
   for (const [, entry] of links) {
     const hasA = getNodeLocalPosition(entry.nodeA, _posA);
@@ -287,20 +290,8 @@ export function animateLinks(showIslLinks: boolean = true, showGroundLinks: bool
       positionBuffer[off + 3] = _posB.x;
       positionBuffer[off + 4] = _posB.y;
       positionBuffer[off + 5] = _posB.z;
-      // Update distance for this ground segment (real length for dashing)
-      const len = _posA.distanceTo(_posB);
-      distanceBuffer[entry.bufferIndex * 2] = 0;
-      distanceBuffer[entry.bufferIndex * 2 + 1] = len;
-      needsDistanceUpdate = true;
     } else {
       writeBowedSegments(positionBuffer, entry.bufferIndex * 6, _posA, _posB);
-      // ISL segments: tiny distance = appears solid within one dash period
-      for (let s = 0; s < SEGMENTS_PER_ISL; s++) {
-        const di = (entry.bufferIndex + s) * 2;
-        distanceBuffer[di] = 0;
-        distanceBuffer[di + 1] = 1.0;
-      }
-      needsDistanceUpdate = true;
     }
 
     // Write colors based on state
@@ -348,23 +339,6 @@ export function animateLinks(showIslLinks: boolean = true, showGroundLinks: bool
     colAttr.data.needsUpdate = true;
   }
 
-  // Update distance attributes for dashing
-  if (needsDistanceUpdate) {
-    let distAttr = geometry.getAttribute("instanceDistanceStart") as THREE.InterleavedBufferAttribute | null;
-    if (distAttr?.data) {
-      (distAttr.data.array as Float32Array).set(distanceBuffer);
-      distAttr.data.needsUpdate = true;
-    } else {
-      // First time — create distance attributes via computeLineDistances,
-      // then overwrite with our manual per-segment values
-      batch.computeLineDistances();
-      distAttr = geometry.getAttribute("instanceDistanceStart") as THREE.InterleavedBufferAttribute | null;
-      if (distAttr?.data) {
-        (distAttr.data.array as Float32Array).set(distanceBuffer);
-        distAttr.data.needsUpdate = true;
-      }
-    }
-  }
 }
 
 function writeNaN(buffer: Float32Array, segmentIndex: number, segmentCount: number): void {
@@ -408,7 +382,6 @@ export function clearLinks(): void {
   material = null;
   positionBuffer = null;
   colorBuffer = null;
-  distanceBuffer = null;
   links.clear();
   initialized = false;
   totalSegments = 0;

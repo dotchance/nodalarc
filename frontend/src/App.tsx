@@ -94,7 +94,7 @@ function AppInner() {
   const [showGroundLinks, setShowGroundLinks] = useState(true);
   const [showIslLinks, setShowIslLinks] = useState(true);
   const [showSatPaths, setShowSatPaths] = useState(false);
-  const [, setShowTrails] = useState(true);
+  const [showTrails, setShowTrails] = useState(true);
   const [globeMode, setGlobeMode] = useState<GlobeMode>("blue-marble");
   const [referenceFrame, setReferenceFrame] = useState<ReferenceFrame>(() => {
     const saved = localStorage.getItem(REFERENCE_FRAME_STORAGE_KEY);
@@ -145,6 +145,7 @@ function AppInner() {
       clearSelection();
     }
   }, [sessionTransitioning, clearSelection]);
+  useEffect(() => { setTrailsVisible(showTrails); }, [showTrails]);
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -234,12 +235,7 @@ function AppInner() {
       onToggleGroundLinks: () => setShowGroundLinks((v) => !v),
       onToggleIslLinks: () => setShowIslLinks((v) => !v),
       onToggleSatPaths: () => setShowSatPaths((v) => !v),
-      onToggleTrails: () => {
-        setShowTrails((v) => {
-          setTrailsVisible(!v);
-          return !v;
-        });
-      },
+      onToggleTrails: () => setShowTrails((v) => !v),
       onToggleHistorical: toggleHistorical,
       onPlayPause: () => {
         if (historicalMode) {

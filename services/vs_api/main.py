@@ -521,55 +521,101 @@ async def _nats_subscriber() -> None:
     except Exception as exc:
         log.warning("System OpsEvent subscription failed: %s", exc)
 
-    # Wait for session config, then create initial SessionContext.
-    # _initial_session_file may point at the ConfigMap mount (Operator-rewritten
-    # paths) or at the original file in configs/sessions/ (resolved at startup).
-    # SessionContext must receive the original file so it can load constellation
-    # and ground station definitions from the baked-in catalog, not from
-    # ConfigMap subPath mounts that don't exist on VS-API.
-    session_config_path = _initial_session_file
-    if session_config_path:
-        config_path = Path(session_config_path)
-        while not config_path.is_file():
-            log.info("NATS subscriber: waiting for session config at %s", config_path)
-            await asyncio.sleep(5)
+    # Bootstrap session from the ConstellationSpec CR — the single source of truth.
+    # The CR's spec.sessionYaml has the ORIGINAL session YAML with original file
+    # paths (e.g., configs/constellations/...). VS-API has the full catalog baked
+    # into its image, so these paths resolve correctly.
+    #
+    # We do NOT read from ConfigMap mounts. The Operator rewrites paths in the
+    # nodalarc-session ConfigMap for FRR pod consumption (/etc/nodalarc/*.yaml).
+    # Those paths don't exist in VS-API (we removed the subPath mounts). And for
+    # wizard-generated sessions, the original file only existed in the previous
+    # VS-API pod's ephemeral filesystem — it's gone on restart. The CR survives.
+    import kubernetes.client as _k8s
+    import kubernetes.config as _k8s_config
 
-        try:
-            from nodalarc.nats_channels import sanitize_session_id
+    try:
+        _k8s_config.load_incluster_config()
+    except _k8s_config.ConfigException:
+        _k8s_config.load_kube_config()
+    _cr_api = _k8s.CustomObjectsApi()
+    _cr_ns = get_platform_config().kubernetes_namespace
 
-            raw = yaml.safe_load(config_path.read_text())
-            if not raw:
-                log.error("FATAL: Session config is empty: %s", config_path)
-                raise ValueError("Session config is empty")
-            session = SessionConfig.model_validate(raw)
-            session_id = sanitize_session_id(session.session.name)
-        except Exception as exc:
-            log.error("FATAL: Failed to read session_id from config: %s", exc)
-            raise
-
-        # Resolve to the original session file if config_path is a ConfigMap mount.
-        # The mounted session.yaml has rewritten paths (/etc/nodalarc/*.yaml) for
-        # FRR pods. VS-API needs the original with paths to baked-in configs/.
-        resolved_path = str(config_path)
-        if _session_manager:
-            session_name = raw.get("session", {}).get("name", "")
-            if session_name:
-                for _s in _session_manager._available:
-                    if _s.get("name") == session_name:
-                        resolved_path = _s["file"]
-                        log.info("Resolved session config: %s → %s", config_path, resolved_path)
-                        break
-
-        ctx = SessionContext(session_id, resolved_path)
-        await ctx.start(nc, mode="recovery")
-        _active_context = ctx
-        await _publish_system_ops_event(
-            "info",
-            "SESSION_BOOTSTRAP",
-            f"VS-API started with session {session_id}",
-            {"session_id": session_id, "mode": "recovery"},
+    session_yaml_from_cr = None
+    _cr_phase = ""
+    _cr_message = ""
+    try:
+        _cr = _cr_api.get_namespaced_custom_object(
+            group="nodalarc.io",
+            version="v1alpha1",
+            namespace=_cr_ns,
+            plural="constellationspecs",
+            name="current-session",
         )
+        session_yaml_from_cr = _cr.get("spec", {}).get("sessionYaml", "")
+        _cr_phase = _cr.get("status", {}).get("phase", "")
+        _cr_message = _cr.get("status", {}).get("message", "")
+    except Exception:
+        pass
 
+    # Poll until a CR with sessionYaml exists. Handles both cases:
+    # - VS-API starts before `make session` creates the CR (poll waits)
+    # - VS-API restarts while a session is running (CR exists immediately)
+    if not session_yaml_from_cr:
+        log.info("No active session CR — waiting for session to be deployed")
+    while not session_yaml_from_cr:
+        await asyncio.sleep(5)
+        try:
+            _cr = _cr_api.get_namespaced_custom_object(
+                group="nodalarc.io",
+                version="v1alpha1",
+                namespace=_cr_ns,
+                plural="constellationspecs",
+                name="current-session",
+            )
+            session_yaml_from_cr = _cr.get("spec", {}).get("sessionYaml", "")
+            _cr_phase = _cr.get("status", {}).get("phase", "")
+            _cr_message = _cr.get("status", {}).get("message", "")
+        except Exception:
+            pass
+
+    try:
+        from nodalarc.nats_channels import sanitize_session_id
+
+        raw = yaml.safe_load(session_yaml_from_cr)
+        if not raw:
+            log.error("FATAL: CR sessionYaml is empty")
+            raise ValueError("CR sessionYaml is empty")
+        session = SessionConfig.model_validate(raw)
+        session_id = sanitize_session_id(session.session.name)
+    except Exception as exc:
+        log.error("FATAL: Failed to parse session from CR: %s", exc)
+        raise
+
+    _tmp_session = Path(f"/tmp/_session-{session_id}.yaml")
+    _tmp_session.write_text(session_yaml_from_cr)
+
+    log.info("Bootstrapping session %s from CR (phase=%s)", session_id, _cr_phase)
+
+    if _session_manager:
+        _session_manager._status = "wiring" if _cr_phase in ("Creating", "Wiring") else "ready"
+        _session_manager.status_detail = _cr_message or ""
+        for _s in _session_manager._available:
+            if _s.get("name") == session.session.name:
+                _session_manager.set_active(_s["file"])
+                break
+
+    ctx = SessionContext(session_id, str(_tmp_session))
+    await ctx.start(nc, mode="recovery")
+    _active_context = ctx
+    await _publish_system_ops_event(
+        "info",
+        "SESSION_BOOTSTRAP",
+        f"VS-API started with session {session_id}",
+        {"session_id": session_id, "mode": "recovery"},
+    )
+
+    if _cr_phase in ("Creating", "Wiring"):
         asyncio.ensure_future(_poll_cr_until_ready())
 
     # Keep alive until cancelled
@@ -1977,15 +2023,27 @@ async def preview_coverage(body: dict) -> dict:
             body.get("satellite_type"),
             body.get("ground_stations"),
         )
-    except Exception as exc:
-        log.warning("Coverage preview failed: %s", exc)
+    except (ValueError, FileNotFoundError) as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
+    except Exception as exc:
+        log.error("Coverage preview internal error: %s", exc, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Coverage preview failed: {type(exc).__name__}: {exc}"},
+        )
     return result.model_dump()
 
 
 @app.post("/api/v1/session/deploy", dependencies=[Depends(_require_api_key)])
 async def deploy_generated_session(body: dict) -> dict:
-    """Validate YAML, write to sessions dir, and trigger deploy."""
+    """Validate YAML, write to sessions dir, and trigger deploy.
+
+    Validates the FULL session config before creating any K8s resources:
+    schema validation (Pydantic), constellation expansion, ground station
+    loading, and session readiness checks. If any validation fails, the
+    user sees the error immediately — no CR is created, no switch is
+    started, no stuck "Switching session..." state.
+    """
     import yaml as _yaml
 
     yaml_str = body.get("yaml", "")
@@ -1996,6 +2054,28 @@ async def deploy_generated_session(body: dict) -> dict:
         session = SessionConfig.model_validate(raw)
     except Exception as exc:
         return JSONResponse(status_code=400, content={"error": f"Invalid session YAML: {exc}"})
+
+    # Full semantic validation — expand the constellation and ground stations
+    # to catch errors like invalid terminal counts, missing model files, or
+    # empty constellations BEFORE creating the CR.
+    try:
+        from nodalarc.constellation_loader import (
+            expand_constellation,
+            load_constellation,
+            load_ground_stations,
+        )
+
+        constellation = load_constellation(session.constellation)
+        gs_file = load_ground_stations(session.ground_stations)
+        satellites = expand_constellation(constellation)
+        if not satellites:
+            return JSONResponse(
+                status_code=400, content={"error": "Constellation expands to 0 satellites"}
+            )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400, content={"error": f"Invalid session configuration: {exc}"}
+        )
 
     # Write to sessions directory with _wizard- prefix
     from pathlib import Path
@@ -2056,6 +2136,27 @@ async def deploy_from_yaml(body: dict) -> dict:
     sessions_dir = Path("configs/sessions")
     session_file = sessions_dir / f"_wizard-{session_name}.yaml"
     session_file.write_text(_yaml.dump(modified, default_flow_style=False))
+
+    # Full semantic validation after ephemeral files are written
+    try:
+        from nodalarc.constellation_loader import (
+            expand_constellation,
+            load_constellation,
+            load_ground_stations,
+        )
+
+        _session_for_val = SessionConfig.model_validate(modified)
+        _const = load_constellation(_session_for_val.constellation)
+        load_ground_stations(_session_for_val.ground_stations)
+        _sats = expand_constellation(_const)
+        if not _sats:
+            return JSONResponse(
+                status_code=400, content={"error": "Constellation expands to 0 satellites"}
+            )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400, content={"error": f"Invalid session configuration: {exc}"}
+        )
 
     if _session_manager is None:
         return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
@@ -2144,8 +2245,16 @@ async def _run_switch(session_path: str) -> None:
             f"Old session {old_session} torn down",
         )
 
-        # (e) Deploy new session via K8s CR (fully async)
-        await _session_manager.switch(session_path)
+        # (e) Deploy new session via K8s CR (fully async).
+        # Progress callback broadcasts status updates to all connected
+        # browsers so the switch overlay shows real-time progress instead
+        # of a static "Switching session..." message.
+        async def _switch_progress(detail: str) -> None:
+            await _broadcast_to_all(
+                json.dumps({"msg_type": "session_transitioning", "detail": detail})
+            )
+
+        await _session_manager.switch(session_path, progress_fn=_switch_progress)
 
         # (f) Create new SessionContext
         from nodalarc.nats_channels import sanitize_session_id

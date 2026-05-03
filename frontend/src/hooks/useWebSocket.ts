@@ -16,6 +16,7 @@ interface WebSocketState {
   kicked: boolean;
   sessionTransitioning: boolean;
   sessionError: string | null;
+  switchDetail: string | null;
   sendMessage: (data: Record<string, unknown>) => void;
 }
 
@@ -29,6 +30,7 @@ export function useWebSocket(): WebSocketState {
   const [kicked, setKicked] = useState(false);
   const [sessionTransitioning, setSessionTransitioning] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [switchDetail, setSwitchDetail] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const retriesRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,17 +67,25 @@ export function useWebSocket(): WebSocketState {
           return;
         }
 
-        // Session lifecycle — VS-API sequential switch flow
+        // Session lifecycle — VS-API sequential switch flow.
+        // The first message clears state. Subsequent messages carry
+        // progress detail from the Operator (pod counts, wiring status).
         if (data.msg_type === "session_transitioning") {
+          if (!sessionTransitioning) {
+            setSnapshot(null);
+            setEphemeris(null);
+          }
           setSessionTransitioning(true);
           setSessionError(null);
-          setSnapshot(null);
-          setEphemeris(null);
+          if (data.detail) {
+            setSwitchDetail(data.detail as string);
+          }
           return;
         }
         if (data.msg_type === "session_ready") {
           setSessionTransitioning(false);
           setSessionError(null);
+          setSwitchDetail(null);
           if (data.snapshot) {
             setSnapshot(data.snapshot as StateSnapshot);
           }
@@ -84,6 +94,7 @@ export function useWebSocket(): WebSocketState {
         if (data.msg_type === "session_failed") {
           setSessionTransitioning(false);
           setSessionError(data.error || "Session switch failed");
+          setSwitchDetail(null);
           return;
         }
 
@@ -156,6 +167,7 @@ export function useWebSocket(): WebSocketState {
     kicked,
     sessionTransitioning,
     sessionError,
+    switchDetail,
     sendMessage,
   };
 }

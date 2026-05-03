@@ -94,7 +94,7 @@ def compute_coverage_preview(
     vis_params = _extract_visibility_params(constellation, gs_file)
 
     # Run timeline computation
-    events, _, _ = precompute_timeline_window(
+    events, _, _, _, _ = precompute_timeline_window(
         satellites=satellites,
         addressing=addressing,
         gs_file=gs_file,

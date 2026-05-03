@@ -1,0 +1,113 @@
+# Architectural Invariants
+
+These rules reflect deliberate design decisions validated through painful debugging. Violations produce subtle distributed system failures that are extremely expensive to diagnose. They are not style preferences — they are load-bearing constraints.
+
+## Session Type Boundary
+
+IGP sessions and NodalPath sessions share the OME, Scheduler, and Node Agent wiring. They share nothing in the forwarding plane.
+
+**IGP sessions (IS-IS, OSPF, BGP, any FRR combination):**
+- FRR owns forwarding state entirely
+- Scheduler dispatches BatchLinkUp/Down to Node Agent via NATS request/reply
+- Node Agent manipulates kernel interfaces via pyroute2
+- No gRPC. No NETCONF. No `agent_pool`. No `GetTopology`. No `load_interface_inventory`.
+- If you find any of these in an IGP code path, it is wrong. Remove it.
+
+**NodalPath sessions:**
+- nodalpath-fwd sidecar owns forwarding state via pyroute2 into policy table 100
+- FRR is observability only (zebra + staticd)
+- gRPC pushes ForwardingTableUpdates to sidecars
+- gRPC exists here and only here
+
+Before writing any Scheduler, Node Agent, or forwarding-plane code: determine which session type it applies to. If the answer is both, the code must not assume either.
+
+## Interface Map is Static
+
+`_interface_map` is built from the constellation definition at session start. It is static for the entire session lifetime. It must never be filtered, modified, or rebuilt from runtime queries.
+
+The OME governs which links are visible. The Scheduler dispatches based on OME events only. The interface map tells you what CAN exist; the OME tells you what DOES exist right now.
+
+## Single Dispatch Path
+
+`_reconcile_links(desired, nc)` in the Scheduler is the **only** method that dispatches link state changes to the Node Agent. There is no other mechanism for creating or destroying links.
+
+Both paths converge here:
+- `_dispatch_batch` (live VisibilityEvents) → builds desired state → calls `_reconcile_links`
+- `_on_link_state_snapshot` (periodic snapshot) → builds desired state → calls `_reconcile_links`
+
+This invariant eliminates state synchronization bugs that plagued earlier architectures with multiple dispatch paths.
+
+## NATS Subject Centralization
+
+All NATS subjects are defined in `lib/nodalarc/nats_channels.py`. No literal subject strings anywhere else. This ensures:
+- You can grep for any subject and find every publisher/subscriber
+- Renaming a subject is one edit, not a hunt through 6 services
+- Typos in subject strings are caught at import time, not at runtime
+
+## OME Threading Model
+
+The OME uses a producer-consumer threading model:
+
+- **Pacing thread** — synchronous `time.sleep()`, produces events to `queue.Queue`
+- **Publisher thread** — asyncio in a separate thread, consumes queue, publishes to NATS
+
+The pacing thread must never be converted to async. `asyncio.sleep()` does not provide wall-clock precision — it yields to the event loop and resumes when "convenient." For orbital mechanics, timing jitter causes visible satellite motion artifacts.
+
+`time.sleep()` is precise to 1ms on Linux. This is why the pacing thread is synchronous.
+
+## No Fork in Namespace Operations
+
+Never use `pyroute2.NetNS()`. It forks a child process that:
+- Inherits signal handlers (SIGTERM handler runs in the child)
+- Inherits socket file descriptors (child holds port 50100 after parent exits)
+- Creates orphaned processes that prevent clean restart
+
+Use `_in_namespace(pid, fn)` from `namespace_ops.py` — a single `setns()` syscall. Enter the namespace, perform the operation, return. No fork, no child process, no fd leakage.
+
+## Node Agent Startup Gate
+
+The Node Agent's NATS server must not subscribe to requests until the wiring thread has fully populated `pid_map`. If it subscribes early, the Scheduler dispatches link operations to a Node Agent that doesn't know where pods are.
+
+Share the pid_map from wiring — never rediscover PIDs during request handling. Missing node_id = return error immediately.
+
+## Stream Creation Ownership
+
+The OME init container creates all NATS JetStream streams before any other pod starts. Application code never creates streams at runtime. This ensures:
+- Stream configuration is consistent (retention, limits, subjects)
+- No race between stream creation and first publish
+- Downstream consumers can assume streams exist
+
+## LinkStateSnapshot Replace-Not-Merge
+
+`LinkStateSnapshot` on `NODALARC_LINKS` uses `MaxMsgsPerSubject=1`. Only the latest snapshot is retained. The Scheduler reconciles against this complete snapshot — if the OME says a link exists, the Scheduler activates it. If the OME doesn't mention a link, the Scheduler deactivates it.
+
+There is no delta/merge logic. The snapshot IS the desired state. This eliminates accumulation bugs at orbital window boundaries.
+
+## Snapshot Sequence Monotonicity
+
+`snapshot_seq` is monotonically increasing and never resets. The Scheduler uses it to detect stale/out-of-order snapshots. If `seq <= current`, discard. This holds across seeks, epoch transitions, and OME restarts.
+
+## Ground Link Carrier Model
+
+Ground station `gnd0` carrier is driven by host-side veth state — not by explicit admin manipulation inside the pod:
+
+- LinkUp: bring host-side veths UP → carrier arrives on pod gnd0 → FRR forms adjacency
+- LinkDown: bring host-side veths DOWN → carrier drops on pod gnd0 → FRR tears adjacency immediately
+
+FRR detects carrier loss without waiting for hold timers. This is the fastest convergence path.
+
+## rp_filter at Pod Creation
+
+`rp_filter=0` is set by the Operator as pod-level sysctls at creation time. The Node Agent does not set it. Without it, IS-IS/OSPF multicast hellos fail reverse-path filtering silently — routing appears broken with no errors in any log.
+
+## No Eliminated Patterns
+
+The following were removed after causing bugs. Do not reintroduce:
+
+- `FullStateSnapshot` — replaced by `LinkStateSnapshot`
+- `_pending_vis` — visibility event buffering caused ordering bugs
+- `_ome_catchup()` — catch-up logic was unreliable across epoch boundaries
+- `_dedup_threshold` — replaced by `snapshot_seq` monotonic ordering
+- 15-second watchdog — replaced by queue timeout + SystemExit
+- ZMQ (anything) — fully removed, NATS-only
+- `_dispatch_ups` / `_dispatch_downs` — replaced by `_reconcile_links`

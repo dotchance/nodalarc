@@ -240,7 +240,11 @@ class SessionContext:
         js = nc.jetstream()
         sid = self.session_id
 
-        state_policy = DeliverPolicy.NEW if mode == "switch" else DeliverPolicy.LAST_PER_SUBJECT
+        # Retained subjects (ephemeris, playback, link snapshot) always use
+        # LAST_PER_SUBJECT. These are published once at OME startup and retained
+        # in JetStream with MaxMsgsPerSubject=1. In switch mode, the OME restarts
+        # before VS-API subscribes — NEW would miss the retained messages.
+        state_policy = DeliverPolicy.LAST_PER_SUBJECT
 
         try:
             # Subscribe to all session-scoped subjects

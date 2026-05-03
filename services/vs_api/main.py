@@ -1013,6 +1013,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     _audit_log.info(f"WS_TERMINAL_CONNECT ip={ws_ip} node={node_id} pod_ip={pod_ip}")
 
     session = TerminalSession(pod_ip, ssh_key)
+    _term_conn_id: str | None = None
     try:
         await session.connect()
         _term_conn_id = await _terminal_manager.register(node_id, session, websocket)
@@ -1053,9 +1054,10 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
     except asyncssh.misc.DisconnectError as e:
         log.warning("SSH disconnect for %s: %s", node_id, e)
     except Exception as exc:
-        log.warning("Terminal session error for %s: %s", node_id, exc)
+        log.exception("Terminal session error for %s", node_id)
     finally:
-        await _terminal_manager.unregister(_term_conn_id)
+        if _term_conn_id is not None:
+            await _terminal_manager.unregister(_term_conn_id)
         await session.close()
         _audit_log.info(f"WS_TERMINAL_DISCONNECT ip={ws_ip} node={node_id}")
 

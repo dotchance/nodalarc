@@ -243,6 +243,7 @@ class SchedulingCheckpoint(BaseModel):
     pending_teardowns: dict[str, TeardownEntry]  # pair_key → entry
     paused: bool = False
     time_accel: float = 1.0
+    written_at: float = 0.0  # wall clock (time.time()) when checkpoint was published
 
 
 class OpsEvent(BaseModel):

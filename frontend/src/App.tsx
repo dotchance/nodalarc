@@ -26,6 +26,7 @@ import { SessionWizard } from "./catalog/SessionWizard";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
+import { setTrailsVisible } from "./globe/orbitalTrails";
 import type { ViewMode, ColorMode, GlobeMode, ReferenceFrame, TracedPath } from "./types";
 
 const REFERENCE_FRAME_STORAGE_KEY = "nodalarc.referenceFrame";
@@ -93,6 +94,7 @@ function AppInner() {
   const [showGroundLinks, setShowGroundLinks] = useState(true);
   const [showIslLinks, setShowIslLinks] = useState(true);
   const [showSatPaths, setShowSatPaths] = useState(false);
+  const [, setShowTrails] = useState(true);
   const [globeMode, setGlobeMode] = useState<GlobeMode>("blue-marble");
   const [referenceFrame, setReferenceFrame] = useState<ReferenceFrame>(() => {
     const saved = localStorage.getItem(REFERENCE_FRAME_STORAGE_KEY);
@@ -232,6 +234,12 @@ function AppInner() {
       onToggleGroundLinks: () => setShowGroundLinks((v) => !v),
       onToggleIslLinks: () => setShowIslLinks((v) => !v),
       onToggleSatPaths: () => setShowSatPaths((v) => !v),
+      onToggleTrails: () => {
+        setShowTrails((v) => {
+          setTrailsVisible(!v);
+          return !v;
+        });
+      },
       onToggleHistorical: toggleHistorical,
       onPlayPause: () => {
         if (historicalMode) {

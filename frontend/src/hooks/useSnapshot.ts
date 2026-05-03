@@ -17,6 +17,7 @@ interface SnapshotState {
   kicked: boolean;
   sessionTransitioning: boolean;
   sessionError: string | null;
+  switchDetail: string | null;
   historicalMode: boolean;
   setHistoricalMode: (val: boolean) => void;
   fetchHistorical: (simTime: string) => Promise<void>;
@@ -33,6 +34,7 @@ export function useSnapshot(): SnapshotState {
     kicked,
     sessionTransitioning,
     sessionError,
+    switchDetail,
     sendMessage,
   } = useWebSocket();
   const [historicalMode, setHistoricalMode] = useState(false);
@@ -61,6 +63,7 @@ export function useSnapshot(): SnapshotState {
     kicked,
     sessionTransitioning,
     sessionError,
+    switchDetail,
     historicalMode,
     setHistoricalMode,
     fetchHistorical,

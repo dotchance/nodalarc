@@ -526,6 +526,7 @@ def _run_pacing(
             pending_teardowns=td_flat,
             paused=_paused,
             time_accel=_time_accel,
+            written_at=time.time(),
         )
 
     # Health server is started by main() before _run_pacing is called.
@@ -593,12 +594,17 @@ def _run_pacing(
         sentinel = out_path.with_suffix(".ready")
 
     def _enqueue(subject: str, payload: bytes) -> None:
-        """Put event on queue. Blocks if full (backpressure)."""
+        """Put event on queue. If the queue is full after 10 seconds, the
+        NATS publisher is dead — exit the process so K8s restarts us."""
         try:
-            event_queue.put((subject, payload), timeout=5)
+            event_queue.put((subject, payload), timeout=10)
         except queue.Full:
-            logging.warning("Event queue full — backpressure from NATS publisher")
-            event_queue.put((subject, payload))  # blocking wait, no timeout
+            logging.error(
+                "FATAL: Event queue full for 10s — NATS publisher is not draining. "
+                "Exiting so K8s can restart the pod."
+            )
+            shutdown_event.set()
+            raise SystemExit(1) from None
 
     # Build StepContext for per-step computation (Physicist role)
     from collections import deque
@@ -755,24 +761,28 @@ def _run_pacing(
     except Exception as exc:
         logging.warning("Checkpoint recovery failed (non-fatal): %s", exc)
 
-    # Checkpoint staleness threshold: if the checkpoint is more than 30 seconds
-    # old, discard it and start fresh at wall time. A 30-second gap means the OME
-    # was down long enough that the orbital geometry has moved — replaying from
-    # the old sim_time produces a wall/sim time mismatch that causes the frontend
-    # to show satellites at warp speed. For rapid crash recovery (< 30s), the
-    # checkpoint is valid and replay catches up the gap quickly.
+    # Checkpoint staleness threshold: if the OME was down for more than 30
+    # seconds (measured by wall clock, not sim_time), discard the checkpoint
+    # and start a fresh epoch at current wall time. Sim_time diverges from
+    # wall_time (time compression, epoch anchoring) so it cannot be used for
+    # staleness. written_at is the wall clock at checkpoint publish time.
     _CHECKPOINT_STALENESS_THRESHOLD_S = 30.0
 
     if recovered_checkpoint:
-        checkpoint_age = time.time() - recovered_checkpoint.sim_time.timestamp()
+        if recovered_checkpoint.written_at > 0:
+            checkpoint_age = time.time() - recovered_checkpoint.written_at
+        else:
+            # Old checkpoint without written_at field — assume stale
+            checkpoint_age = _CHECKPOINT_STALENESS_THRESHOLD_S + 1
+
         if checkpoint_age <= _CHECKPOINT_STALENESS_THRESHOLD_S:
             epoch_unix = recovered_checkpoint.sim_time.timestamp()
             step = recovered_checkpoint.step
             logging.info(
-                "Recovered from checkpoint at T+%s (step=%d, age=%.1fs)",
-                recovered_checkpoint.sim_time.isoformat(),
-                step,
+                "Recovered from checkpoint (age=%.1fs, step=%d, sim=%s)",
                 checkpoint_age,
+                step,
+                recovered_checkpoint.sim_time.isoformat(),
             )
         else:
             logging.info(
@@ -1077,8 +1087,8 @@ def _run_pacing(
             if now_mono < wall_target:
                 time.sleep(wall_target - now_mono)
 
-    except KeyboardInterrupt:
-        logging.info("OME pacing interrupted")
+    except Exception:
+        logging.exception("FATAL: OME pacing thread crashed")
     finally:
         lookahead.cancel()
         shutdown_event.set()

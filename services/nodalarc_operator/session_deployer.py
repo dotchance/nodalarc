@@ -220,7 +220,7 @@ def ensure_session_configmaps(
     """
 
     def _progress(msg: str) -> None:
-        log.info(msg)
+        log.debug(msg)
         if progress_fn:
             progress_fn(msg)
 
@@ -255,7 +255,7 @@ def ensure_session_configmaps(
         eph_dir.mkdir(parents=True, exist_ok=True)
         eph_path = eph_dir / f"{session_id}.yaml"
         eph_path.write_text(yaml.dump(constellation_source, default_flow_style=False))
-        log.info(f"Wrote ephemeral constellation: {eph_path}")
+        log.debug("Wrote ephemeral constellation: %s", eph_path)
         constellation_source = str(eph_path)
     elif session.satellite_type:
         # Satellite type override on a file-path constellation
@@ -268,7 +268,7 @@ def ensure_session_configmaps(
         eph_dir.mkdir(parents=True, exist_ok=True)
         eph_path = eph_dir / f"{session_id}.yaml"
         eph_path.write_text(yaml.dump(merged, default_flow_style=False))
-        log.info(f"Wrote ephemeral constellation (satellite_type override): {eph_path}")
+        log.debug("Wrote ephemeral constellation (satellite_type override): %s", eph_path)
         constellation_source = str(eph_path)
 
     constellation = load_constellation(constellation_source)
@@ -280,7 +280,7 @@ def ensure_session_configmaps(
         eph_dir.mkdir(parents=True, exist_ok=True)
         eph_path = eph_dir / f"{session_id}.yaml"
         eph_path.write_text(yaml.dump(gs_source, default_flow_style=False))
-        log.info(f"Wrote ephemeral ground stations: {eph_path}")
+        log.debug("Wrote ephemeral ground stations: %s", eph_path)
         gs_source = str(eph_path)
 
     gs_file = load_ground_stations(gs_source)
@@ -419,7 +419,7 @@ def ensure_session_configmaps(
     for node_id, configs in rendered_configs.items():
         cm_name = f"frr-config-{node_id.lower()}"
         _create_or_update_configmap(v1, cm_name, namespace, configs, owner_ref)
-    log.info(f"Created {len(rendered_configs)} FRR config ConfigMaps")
+    log.info("Created %d FRR config ConfigMaps", len(rendered_configs))
 
     # --- Step 7: Create session-level ConfigMaps ---
     _progress("Creating session-level ConfigMaps")
@@ -489,7 +489,7 @@ def ensure_session_pods(
     """
 
     def _progress(msg: str) -> None:
-        log.info(msg)
+        log.debug(msg)
         if progress_fn:
             progress_fn(msg)
 
@@ -576,13 +576,13 @@ def ensure_session_pods(
                 _progress(f"Creating session pods: {created_pods}/{total_pods}")
             except Exception as exc:
                 errors.append(f"{node_id}: {exc}")
-                log.warning(f"Pod creation failed for {node_id}: {exc}")
+                log.error("Pod creation failed for %s: %s", node_id, exc)
 
     _pod_creation_done.set()
 
     if errors:
-        log.warning(f"Pod creation: {len(errors)} failures out of {total_pods}")
-    log.info(f"Created {created_pods} session pods (total expected: {total_pods})")
+        log.error("Pod creation: %d failures out of %d", len(errors), total_pods)
+    log.info("Created %d session pods (total expected: %d)", created_pods, total_pods)
 
     return total_pods
 
@@ -646,7 +646,7 @@ def write_wiring_manifest(
     # hits Case B (no-op) instead of Case A (wire from scratch).
     try:
         v1.delete_namespaced_config_map("nodalarc-wiring-status", namespace)
-        log.info("Deleted stale nodalarc-wiring-status")
+        log.debug("Deleted stale nodalarc-wiring-status")
     except kubernetes.client.rest.ApiException as e:
         if e.status != 404:
             raise
@@ -826,12 +826,12 @@ def set_nodalpath_mode(namespace: str, protocol: str) -> None:
             namespace, label_selector="app=nodalarc-nodalpath"
         )
         if not deployments.items:
-            log.info("NodalPath deployment not found — skipping mode patch")
+            log.debug("NodalPath deployment not found — skipping mode patch")
             return
         deployment = deployments.items[0]
         deploy_name = deployment.metadata.name
     except kubernetes.client.rest.ApiException:
-        log.info("NodalPath deployment not found — skipping mode patch")
+        log.debug("NodalPath deployment not found — skipping mode patch")
         return
 
     for container in deployment.spec.template.spec.containers:
@@ -843,9 +843,9 @@ def set_nodalpath_mode(namespace: str, protocol: str) -> None:
                         args[i + 1] = mode
                         container.args = args
                         apps_v1.patch_namespaced_deployment(deploy_name, namespace, deployment)
-                        log.info(f"NodalPath mode set to {mode}")
+                        log.info("NodalPath mode set to %s", mode)
                     else:
-                        log.info(f"NodalPath mode already {mode}")
+                        log.debug("NodalPath mode already %s", mode)
                     return
     log.warning("NodalPath container --mode arg not found in deployment spec")
 
@@ -896,9 +896,9 @@ def restart_platform_pods(namespace: str, config_hash: str = "") -> None:
             }
             try:
                 apps_v1.patch_namespaced_deployment(deploy.metadata.name, namespace, body)
-                log.info(f"Rolling restart triggered for {deploy.metadata.name}")
+                log.info("Rolling restart triggered for %s", deploy.metadata.name)
             except kubernetes.client.rest.ApiException as exc:
-                log.warning(f"Failed to patch deployment {deploy.metadata.name}: {exc}")
+                log.warning("Failed to patch deployment %s: %s", deploy.metadata.name, exc)
 
 
 def teardown_session(namespace: str, session_id: str | None = None) -> None:
@@ -948,10 +948,10 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
     ]:
         try:
             v1.delete_namespaced_config_map(cm_name, namespace)
-            log.info(f"Deleted ConfigMap {cm_name}")
+            log.debug("Deleted ConfigMap %s", cm_name)
         except kubernetes.client.rest.ApiException as e:
             if e.status != 404:
-                log.warning(f"Failed to delete ConfigMap {cm_name}: {e}")
+                log.warning("Failed to delete ConfigMap %s: %s", cm_name, e)
 
     # Delete per-node FRR config ConfigMaps
     from contextlib import suppress
@@ -960,7 +960,7 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
     for cm in cms.items:
         with suppress(kubernetes.client.rest.ApiException):
             v1.delete_namespaced_config_map(cm.metadata.name, namespace)
-    log.info(f"Cleaned up {len(cms.items)} FRR config ConfigMaps")
+    log.debug("Cleaned up %d FRR config ConfigMaps", len(cms.items))
 
     # Clean up ephemeral constellation and ground station files
     import glob
@@ -971,7 +971,7 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
     ]:
         for f in glob.glob(pattern):
             Path(f).unlink(missing_ok=True)
-    log.info("Cleaned up ephemeral config files")
+    log.debug("Cleaned up ephemeral config files")
 
     # Purge session-scoped JetStream subjects to prevent cross-session
     # checkpoint contamination on session name reuse. Without this, a new
@@ -1010,7 +1010,7 @@ def _purge_session_jetstream_subjects(namespace: str, session_id: str) -> None:
                 ]:
                     try:
                         await js.purge_stream(stream, subject=subject_filter)
-                        log.info("Purged %s: %s", stream, subject_filter)
+                        log.debug("Purged %s: %s", stream, subject_filter)
                     except Exception as exc:
                         log.warning("Failed to purge %s: %s", stream, exc)
             finally:
@@ -1111,7 +1111,8 @@ def compute_platform_hash(spec: dict) -> str:
                 platform_fields[key] = parsed[key]
         canonical = yaml.dump(platform_fields, default_flow_style=False, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()
-    except Exception:
+    except Exception as exc:
+        log.warning("Platform hash YAML parse failed, falling back to raw hash: %s", exc)
         return hashlib.sha256(session_yaml.encode()).hexdigest()
 
 
@@ -1177,7 +1178,7 @@ def write_pod_ips_configmap(namespace: str) -> None:
             ip_map[node_id] = pod.status.pod_ip
     data = {"pod-ips.json": json.dumps(ip_map)}
     _create_or_update_configmap(v1, "nodalarc-pod-ips", namespace, data, owner_ref=None)
-    log.info(f"Wrote nodalarc-pod-ips with {len(ip_map)} entries")
+    log.info("Wrote nodalarc-pod-ips with %d entries", len(ip_map))
 
 
 # ---------------------------------------------------------------------------
@@ -1320,7 +1321,7 @@ def _create_session_configmaps(
                 owner_ref,
             )
 
-    log.info("Created session-level ConfigMaps")
+    log.debug("Created session-level ConfigMaps")
 
 
 def _build_sidecar_config(resolved) -> dict | None:
@@ -1541,6 +1542,6 @@ def _create_session_pod(
         v1.create_namespaced_pod(namespace, pod)
     except kubernetes.client.rest.ApiException as e:
         if e.status == 409:  # Already exists
-            log.info(f"Pod {pod_name} already exists, skipping")
+            log.debug("Pod %s already exists, skipping", pod_name)
         else:
             raise

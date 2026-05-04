@@ -1,6 +1,6 @@
 # VF - Visualization Frontend
 
-**Location:** `frontend/vf/`
+**Location:** `frontend/`
 **Deployment:** Kubernetes Deployment (nginx serving static assets)
 **Port:** 3000
 **Stack:** React 19, Three.js, TypeScript, Vite
@@ -107,14 +107,14 @@ The rendering layer (Three.js) operates outside React's render cycle. React sets
 
 ```bash
 # Hot reload dev server
-cd frontend/vf
+cd frontend
 npm run dev
 
 # Type check
 npx tsc --noEmit
 
 # Tests
-npx vitest run
+npm test
 
 # Production build + deploy
 sudo make deploy-vf

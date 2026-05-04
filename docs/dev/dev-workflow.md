@@ -23,7 +23,7 @@ Rebuilds and restarts all core services (OME, Scheduler, Node Agent, VS-API, Ope
 For VF development, use the Vite dev server:
 
 ```bash
-cd frontend/vf
+cd frontend
 npm run dev
 ```
 
@@ -127,7 +127,7 @@ fix: update delivery policy
 ### Before Committing
 
 1. Run unit tests: `make test`
-2. Run frontend tests (if frontend changed): `cd frontend/vf && npx vitest run`
+2. Run frontend tests (if frontend changed): `cd frontend && npm test`
 3. Verify the change works in the running system
 4. Commit specific files (not `git add .`)
 

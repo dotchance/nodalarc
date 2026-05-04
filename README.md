@@ -21,7 +21,7 @@ The result: you can measure what actually happens, not what a model predicts sho
 ## Quickstart
 
 ```bash
-git clone https://github.com/nodalarc/nodalarc.git
+git clone https://github.com/dotchance/nodalarc.git
 cd nodalarc
 sudo scripts/bootstrap-host.sh   # installs K3s, Docker, Helm, Node.js (skip if you have K8s)
 make all                          # builds everything, deploys a 36-satellite OSPF constellation

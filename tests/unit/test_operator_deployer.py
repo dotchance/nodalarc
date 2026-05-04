@@ -9,6 +9,9 @@ Uses create_autospec for K8s client mocks to catch signature drift.
 
 from __future__ import annotations
 
+import base64
+import gzip
+import json
 import math
 from pathlib import Path
 from unittest.mock import MagicMock, create_autospec, patch
@@ -23,6 +26,8 @@ from nodalarc_operator.session_deployer import (
     compute_platform_hash,
     compute_pod_placement,
     discover_available_nodes,
+    ensure_session_configmaps,
+    write_wiring_manifest,
 )
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -315,3 +320,311 @@ class TestExpectedPodCount:
         spec = {"sessionYaml": _make_session_yaml(constellation_path="/nonexistent/path.yaml")}
         with pytest.raises(Exception):
             compute_expected_pod_count(spec)
+
+
+# ---------------------------------------------------------------------------
+# Inline config fixtures for Phase 2 (fully self-contained, no external files)
+# ---------------------------------------------------------------------------
+
+# Constellation with inline default_terminals - no satellite_type file reference.
+_INLINE_CONSTELLATION = {
+    "mode": "parametric",
+    "name": "test-4sat",
+    "default_terminals": {
+        "isl": [
+            {
+                "type": "optical",
+                "count": 4,
+                "max_range_km": 5000,
+                "bandwidth_mbps": 100,
+                "max_tracking_rate_deg_s": 3.0,
+                "field_of_regard_deg": 140,
+            }
+        ],
+        "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+    },
+    "orbit": {
+        "altitude_km": 550,
+        "inclination_deg": 53,
+        "pattern": "walker-delta",
+    },
+    "planes": {
+        "count": 2,
+        "raan_spacing_deg": 180,
+        "sats_per_plane": 2,
+        "phase_offset_deg": 90,
+    },
+}
+
+# Ground stations with inline station definitions.
+_INLINE_GROUND_STATIONS = {
+    "default_terminals": [
+        {"type": "optical", "count": 1, "bandwidth_mbps": 1000, "tracking_capacity": 1}
+    ],
+    "stations": [
+        {"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20},
+        {"name": "beta", "lat_deg": 50.0, "lon_deg": 8.0, "alt_m": 100},
+    ],
+}
+
+
+def _make_inline_spec(tmp_path, protocol="ospf", constellation=None, ground_stations=None):
+    """Build a fully self-contained CRD spec using tempfiles.
+
+    Writes constellation and ground station YAML to tmp_path so
+    load_constellation/load_ground_stations can resolve them.
+    Returns a spec dict with sessionYaml.
+    """
+    const = constellation or _INLINE_CONSTELLATION
+    gs = ground_stations or _INLINE_GROUND_STATIONS
+
+    const_path = tmp_path / "constellation.yaml"
+    const_path.write_text(yaml.dump(const, default_flow_style=False))
+
+    gs_path = tmp_path / "ground_stations.yaml"
+    gs_path.write_text(yaml.dump(gs, default_flow_style=False))
+
+    session = {
+        "session": {"name": "test-session"},
+        "constellation": str(const_path),
+        "ground_stations": str(gs_path),
+        "routing": {"protocol": protocol, "area_assignment": {"strategy": "flat"}},
+        "time": {"step_seconds": 1},
+    }
+    return {"sessionYaml": yaml.dump(session, default_flow_style=False)}
+
+
+def _extract_manifest(mock_v1):
+    """Extract and decompress the wiring manifest from the mock K8s client."""
+    for call in mock_v1.create_namespaced_config_map.call_args_list:
+        body = call[1].get("body") or call[0][1]
+        if hasattr(body, "data") and body.data and "manifest.json.gz.b64" in body.data:
+            compressed = body.data["manifest.json.gz.b64"]
+            raw = gzip.decompress(base64.b64decode(compressed))
+            return json.loads(raw)
+    for call in mock_v1.patch_namespaced_config_map.call_args_list:
+        args = call[0] if call[0] else ()
+        kwargs = call[1] if call[1] else {}
+        body = kwargs.get("body") or (args[2] if len(args) > 2 else None)
+        if body and hasattr(body, "data") and body.data and "manifest.json.gz.b64" in body.data:
+            compressed = body.data["manifest.json.gz.b64"]
+            raw = gzip.decompress(base64.b64decode(compressed))
+            return json.loads(raw)
+    pytest.fail("Wiring manifest ConfigMap not found in mock calls")
+
+
+# ---------------------------------------------------------------------------
+# Class 5: TestWiringManifest
+# ---------------------------------------------------------------------------
+
+
+class TestWiringManifest:
+    """Tests write_wiring_manifest() - the contract between Operator and Node Agent."""
+
+    def _build_and_extract(self, tmp_path, **kwargs):
+        spec = _make_inline_spec(tmp_path, **kwargs)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        # wiring-status delete returns 404 (normal for fresh deploy)
+        mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
+            status=404
+        )
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+        }
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            write_wiring_manifest(spec, "nodalarc", owner_ref)
+        return _extract_manifest(mock_v1)
+
+    def test_manifest_node_agent_schema(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+        assert "session_id" in manifest
+        assert isinstance(manifest["session_id"], str)
+        assert "isl_link_count" in manifest
+        assert isinstance(manifest["isl_link_count"], int)
+        assert "nodes" in manifest
+        assert "ground_bridges" in manifest
+        for node_id, node in manifest["nodes"].items():
+            assert "node_type" in node, f"{node_id} missing node_type"
+            assert node["node_type"] in ("satellite", "ground_station"), f"{node_id} bad node_type"
+            assert "isl_interfaces" in node, f"{node_id} missing isl_interfaces"
+            assert isinstance(node["isl_interfaces"], list), f"{node_id} isl_interfaces not list"
+            assert "gnd_interfaces" in node, f"{node_id} missing gnd_interfaces"
+            assert isinstance(node["gnd_interfaces"], list), f"{node_id} gnd_interfaces not list"
+            assert "sysctls" in node, f"{node_id} missing sysctls"
+            assert isinstance(node["sysctls"], dict), f"{node_id} sysctls not dict"
+            assert "mpls_enable" in node, f"{node_id} missing mpls_enable"
+            assert "segment_routing" in node, f"{node_id} missing segment_routing"
+            assert "remove_default_route" in node, f"{node_id} missing remove_default_route"
+            assert "mtu" in node, f"{node_id} missing mtu"
+
+    def test_isl_peer_symmetry_graph_walk(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+        forward_edges = set()
+        for node_id, node in manifest["nodes"].items():
+            for isl in node["isl_interfaces"]:
+                forward_edges.add((node_id, isl["name"], isl["peer_node"], isl["peer_iface"]))
+        reverse_edges = set()
+        for a, a_iface, b, b_iface in forward_edges:
+            reverse_edges.add((b, b_iface, a, a_iface))
+        missing = forward_edges - reverse_edges
+        assert not missing, f"Asymmetric ISL links (forward without reverse): {missing}"
+
+    def test_isl_interfaces_fully_resolved(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+        for node_id, node in manifest["nodes"].items():
+            for isl in node["isl_interfaces"]:
+                assert isl["peer_node"], f"{node_id}/{isl['name']} has empty peer_node"
+                assert isl["peer_iface"], f"{node_id}/{isl['name']} has empty peer_iface"
+
+    def test_ground_station_has_term_interfaces(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+        gs_nodes = {
+            nid: n for nid, n in manifest["nodes"].items() if n["node_type"] == "ground_station"
+        }
+        assert len(gs_nodes) > 0
+        for gs_id, gs in gs_nodes.items():
+            assert len(gs["gnd_interfaces"]) >= 1, f"{gs_id} has no gnd_interfaces"
+
+    def test_sysctls_include_rp_filter(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+        for node_id, node in manifest["nodes"].items():
+            sysctls = node["sysctls"]
+            assert sysctls.get("net.ipv4.conf.all.rp_filter") == "0", (
+                f"{node_id} missing rp_filter=0 on all"
+            )
+            assert sysctls.get("net.ipv4.conf.default.rp_filter") == "0", (
+                f"{node_id} missing rp_filter=0 on default"
+            )
+
+    def test_ground_bridges_match_gs_nodes(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+        gs_ids = {nid for nid, n in manifest["nodes"].items() if n["node_type"] == "ground_station"}
+        bridge_ids = set(manifest["ground_bridges"].keys())
+        assert gs_ids == bridge_ids, f"GS nodes {gs_ids} != bridges {bridge_ids}"
+
+    def test_manifest_compressed_roundtrip(self, tmp_path):
+        spec = _make_inline_spec(tmp_path)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
+            status=404
+        )
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+        }
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            write_wiring_manifest(spec, "nodalarc", owner_ref)
+        manifest = _extract_manifest(mock_v1)
+        assert isinstance(manifest, dict)
+        assert len(manifest["nodes"]) > 0
+
+    def test_manifest_size_at_scale(self, tmp_path):
+        large_constellation = dict(_INLINE_CONSTELLATION)
+        large_constellation["planes"] = {
+            "count": 80,
+            "raan_spacing_deg": 4.5,
+            "sats_per_plane": 20,
+            "phase_offset_deg": 0.225,
+        }
+        spec = _make_inline_spec(tmp_path, constellation=large_constellation)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
+            status=404
+        )
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+        }
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            write_wiring_manifest(spec, "nodalarc", owner_ref)
+        manifest = _extract_manifest(mock_v1)
+        assert len(manifest["nodes"]) == 1602
+        raw_json = json.dumps(manifest).encode()
+        compressed = base64.b64encode(gzip.compress(raw_json))
+        size_bytes = len(compressed)
+        assert size_bytes < 1_048_576, (
+            f"Compressed manifest is {size_bytes} bytes ({size_bytes / 1024:.0f} KB), exceeds 1 MiB K8s ConfigMap limit"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Class 7: TestConfigRendering
+# ---------------------------------------------------------------------------
+
+
+class TestConfigRendering:
+    """Tests FRR config rendering via ensure_session_configmaps()."""
+
+    def _render_configs(self, tmp_path, protocol="ospf"):
+        """Run the full config pipeline and capture rendered ConfigMaps."""
+        spec = _make_inline_spec(tmp_path, protocol=protocol)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        # SSH key creation - return existing secret (already exists path)
+        mock_v1.read_namespaced_secret.return_value = MagicMock()
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01", "node02"],
+            ),
+        ):
+            context = ensure_session_configmaps(spec, "current-session", "nodalarc", owner_ref)
+
+        # Collect rendered configs from ConfigMap create/patch calls
+        configs = {}
+        for call in mock_v1.create_namespaced_config_map.call_args_list:
+            body = call[1].get("body") or call[0][1]
+            if hasattr(body, "metadata") and hasattr(body, "data"):
+                name = body.metadata.name if hasattr(body.metadata, "name") else ""
+                if name.startswith("frr-config-"):
+                    configs[name] = body.data
+        return configs, context
+
+    def test_ospf_config_contains_router_ospf(self, tmp_path):
+        configs, _ = self._render_configs(tmp_path, protocol="ospf")
+        assert len(configs) > 0, "No FRR config ConfigMaps created"
+        for cm_name, data in configs.items():
+            if "frr.conf" in data:
+                assert "router ospf" in data["frr.conf"], f"{cm_name} missing 'router ospf'"
+
+    def test_isis_config_contains_router_isis(self, tmp_path):
+        configs, _ = self._render_configs(tmp_path, protocol="isis")
+        assert len(configs) > 0, "No FRR config ConfigMaps created"
+        for cm_name, data in configs.items():
+            if "frr.conf" in data:
+                assert "router isis" in data["frr.conf"], f"{cm_name} missing 'router isis'"
+
+    def test_config_version_hash_present(self, tmp_path):
+        configs, _ = self._render_configs(tmp_path)
+        for cm_name, data in configs.items():
+            assert "_config_version" in data, f"{cm_name} missing _config_version"
+            assert len(data["_config_version"]) == 16, f"{cm_name} _config_version wrong length"
+
+    def test_config_version_changes_with_content(self, tmp_path):
+        """Different routing configs must produce different _config_version hashes."""
+        configs_ospf, _ = self._render_configs(tmp_path, protocol="ospf")
+        configs_isis, _ = self._render_configs(tmp_path, protocol="isis")
+        # Pick the same node from both renders
+        ospf_names = sorted(configs_ospf.keys())
+        isis_names = sorted(configs_isis.keys())
+        assert ospf_names == isis_names, "Different node sets for ospf vs isis"
+        first = ospf_names[0]
+        v_ospf = configs_ospf[first]["_config_version"]
+        v_isis = configs_isis[first]["_config_version"]
+        assert v_ospf != v_isis, (
+            f"_config_version identical for ospf and isis ({v_ospf}). "
+            "Hash must be derived from rendered content, not template filename."
+        )

@@ -201,7 +201,7 @@ def main() -> None:
                 log.info("Wiring gate passed: %d/%d nodes wired", len(wired), expected_count)
                 break
             if int(_time.monotonic()) % 10 < 2:  # log every ~10s
-                log.info("Wiring in progress: %d/%d", len(wired), expected_count)
+                log.debug("Wiring in progress: %d/%d", len(wired), expected_count)
         except kubernetes.client.rest.ApiException as e:
             if e.status != 404:
                 log.warning("Wiring status check error: %s", e)
@@ -210,7 +210,8 @@ def main() -> None:
         try:
             cm = k8s_v1.read_namespaced_config_map("nodalarc-wiring-status", ns)
             wired = set(cm.data.keys()) if cm.data else set()
-        except Exception:
+        except Exception as exc:
+            log.warning("Failed to read wiring status after timeout: %s", exc)
             wired = set()
         missing = sorted(expected_nodes - wired)
         log.error(

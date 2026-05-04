@@ -258,8 +258,10 @@ async def _dispatch_on_main_loop(coro_fn, *args) -> str | None:
         result = await asyncio.wait_for(asyncio.wrap_future(future), timeout=30)
         return result
     except TimeoutError:
+        log.error("Cross-loop dispatch timed out after 30s")
         return "Dispatcher unresponsive — timed out after 30s"
     except Exception as exc:
+        log.error("Cross-loop dispatch failed: %s", exc)
         return f"Dispatch error: {exc}"
 
 

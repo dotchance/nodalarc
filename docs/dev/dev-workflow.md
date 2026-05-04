@@ -35,7 +35,7 @@ sudo make deploy-vf
 
 ## Docker Build Cache
 
-Docker BuildKit caches COPY layers aggressively using content-addressable hashing. This means edits to source files sometimes don't make it into the built image — BuildKit serves the cached layer because it believes the content hasn't changed.
+Docker BuildKit caches COPY layers aggressively using content-addressable hashing. This means edits to source files sometimes don't make it into the built image - BuildKit serves the cached layer because it believes the content hasn't changed.
 
 **For backend services:** This rarely causes problems. The cache is reliable.
 
@@ -115,7 +115,7 @@ Good:
 Session switch uses LAST_PER_SUBJECT for retained NATS messages
 
 DeliverPolicy.NEW skips messages retained in JetStream. The ephemeris
-is published once and retained — NEW never sees it. LAST_PER_SUBJECT
+is published once and retained - NEW never sees it. LAST_PER_SUBJECT
 returns the latest retained message, which is what switch mode needs.
 ```
 
@@ -139,7 +139,7 @@ All kubectl commands require the K3s kubeconfig:
 sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl <command>
 ```
 
-This is verbose but explicit. Never modify the default kubeconfig or set it globally — it's a K3s cluster detail that shouldn't leak into your shell.
+This is verbose but explicit. Never modify the default kubeconfig or set it globally - it's a K3s cluster detail that shouldn't leak into your shell.
 
 ## Debugging a Running Service
 

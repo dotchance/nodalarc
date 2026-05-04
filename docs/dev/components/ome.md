@@ -1,4 +1,4 @@
-# OME — Orbital Mechanics Engine
+# OME - Orbital Mechanics Engine
 
 **Location:** `services/ome/`
 **Deployment:** Kubernetes Deployment (1 replica)
@@ -22,7 +22,7 @@ The OME is the physics engine. It takes a constellation definition and ground st
 - Calls `time.sleep()` for wall-clock precision
 - Computes visibility events from precomputed timeline
 - Puts events into a bounded `queue.Queue`
-- Must never use `asyncio.sleep()` — causes satellite motion jitter
+- Must never use `asyncio.sleep()` - causes satellite motion jitter
 
 **Publisher thread** (async):
 - Runs its own asyncio event loop in a separate thread
@@ -55,7 +55,7 @@ Window computation happens once, then events are paced in real time. For 176 sat
 
 ## Playback Controls
 
-The OME handles pause/resume/set_speed/seek via NATS core request/reply on `nodalarc.ome_control.playback` (not JetStream — this is synchronous RPC).
+The OME handles pause/resume/set_speed/seek via NATS core request/reply on `nodalarc.ome_control.playback` (not JetStream - this is synchronous RPC).
 
 - **Pause:** Pacing thread stops sleeping, sim_time frozen
 - **Resume:** Pacing thread resumes sleeping, sim_time advances

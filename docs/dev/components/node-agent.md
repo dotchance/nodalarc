@@ -1,4 +1,4 @@
-# Node Agent — DaemonSet
+# Node Agent - DaemonSet
 
 **Location:** `services/node_agent/`
 **Deployment:** DaemonSet (one per labeled K8s node)
@@ -41,7 +41,7 @@ def _in_namespace(pid: int, fn: Callable):
     return result
 ```
 
-**Never use `pyroute2.NetNS()`** — it forks a child process that inherits signal handlers and socket fds. Causes orphaned processes, port conflicts on restart.
+**Never use `pyroute2.NetNS()`** - it forks a child process that inherits signal handlers and socket fds. Causes orphaned processes, port conflicts on restart.
 
 ## Link Operations
 

@@ -82,13 +82,13 @@ Additionally, NATS core request/reply (not JetStream) is used for:
 | Node Agent | Kernel network state | (responds to requests) | Scheduler requests, wiring manifest |
 | VS-API | Aggregated state for clients | WebSocket broadcasts | All NATS streams |
 | Operator | Session pod lifecycle | (K8s resources) | ConstellationSpec CR watch |
-| VF | Rendering, user interaction | (none — receives only) | VS-API WebSocket |
+| VF | Rendering, user interaction | (none - receives only) | VS-API WebSocket |
 
 ## Key Design Decisions
 
 ### Why NATS, not direct HTTP
 
-Services don't know about each other. The OME doesn't know the Scheduler exists. The Scheduler doesn't know the VS-API exists. They all publish to subjects and subscribe to subjects. Adding a new consumer (a monitoring system, a recording service) is zero-cost — subscribe to the subject, done.
+Services don't know about each other. The OME doesn't know the Scheduler exists. The Scheduler doesn't know the VS-API exists. They all publish to subjects and subscribe to subjects. Adding a new consumer (a monitoring system, a recording service) is zero-cost - subscribe to the subject, done.
 
 ### Why JetStream, not core NATS
 
@@ -102,7 +102,7 @@ Events can't be lost between component restarts. JetStream provides:
 The Scheduler doesn't track individual VisibilityEvents. It builds the complete desired state and reconciles against its current state. This means:
 - Missed events self-heal on the next snapshot
 - No accumulation bugs across epoch boundaries
-- Idempotent — running reconcile twice with the same desired state is a no-op
+- Idempotent - running reconcile twice with the same desired state is a no-op
 
 ### Why host-mediated networking (not CNI plugins)
 

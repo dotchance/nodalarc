@@ -5,7 +5,7 @@
 - **Python 3.14+** for all backend services
 - **TypeScript** (strict) for the frontend
 - **Pydantic v2** for all structured data crossing component boundaries
-- **pyroute2** for all kernel netlink operations — never shell out to `ip`, `tc`, `bridge`
+- **pyroute2** for all kernel netlink operations - never shell out to `ip`, `tc`, `bridge`
 - **f-strings** for formatting (except logging, which uses lazy format: `log.info("msg %s", val)`)
 - **uv** for Python dependency management
 - **Vitest** for frontend tests
@@ -25,7 +25,7 @@ class LinkStateSnapshot(BaseModel):
     links: list[LinkEntry]
 ```
 
-`frozen=True` on all event models — events are immutable once created.
+`frozen=True` on all event models - events are immutable once created.
 
 ## NATS Subjects
 
@@ -36,7 +36,7 @@ All NATS subject strings are defined in `lib/nodalarc/nats_channels.py`. No lite
 from nodalarc.nats_channels import SUBJECT_VISIBILITY_EVENT
 await nc.publish(SUBJECT_VISIBILITY_EVENT, data)
 
-# Bad — literal strings
+# Bad - literal strings
 await nc.publish("nodalarc.ome.visibility", data)
 ```
 
@@ -45,16 +45,16 @@ await nc.publish("nodalarc.ome.visibility", data)
 **Fail loudly.** Every error must be visible. No silent swallowing:
 
 ```python
-# Good — error is visible
+# Good - error is visible
 except Exception:
     logging.exception("Publisher thread died")
     raise SystemExit(1)
 
-# Bad — error disappears
+# Bad - error disappears
 except Exception:
     pass
 
-# Bad — error hidden behind a default
+# Bad - error hidden behind a default
 except Exception:
     return 0
 ```
@@ -95,23 +95,23 @@ log.error("Node agent unreachable: %s", node_id)
 Default to no comments. Only add one when the WHY is non-obvious:
 
 ```python
-# Good — explains a non-obvious constraint
-# setns() not NetNS() — fork inherits signal handlers, causes port conflicts on SIGTERM
+# Good - explains a non-obvious constraint
+# setns() not NetNS() - fork inherits signal handlers, causes port conflicts on SIGTERM
 with _in_namespace(pid, fn):
     ...
 
-# Bad — restates what the code does
+# Bad - restates what the code does
 # Reconcile the links
 _reconcile_links(desired, nc)
 
-# Bad — references the task that added it
+# Bad - references the task that added it
 # Added for the session switch fix (issue #47)
 state_policy = DeliverPolicy.LAST_PER_SUBJECT
 ```
 
 ## Git
 
-- Never commit directly to main — always use feature branches
+- Never commit directly to main - always use feature branches
 - No conventional commit prefixes (`feat:`, `fix:`, `chore:`)
 - No AI attribution lines
 - Commit specific files, not `git add .`
@@ -122,7 +122,7 @@ state_policy = DeliverPolicy.LAST_PER_SUBJECT
 
 - One responsibility per file. If a file is doing three different things, split it.
 - Imports at the top, constants next, then functions/classes
-- No circular imports — if A imports B and B needs A, refactor
+- No circular imports - if A imports B and B needs A, refactor
 - Keep files under 500 lines. If a file grows past this, it's doing too much.
 
 ## Frontend Conventions
@@ -130,7 +130,7 @@ state_policy = DeliverPolicy.LAST_PER_SUBJECT
 - React 19 with hooks (no class components)
 - Three.js for 3D rendering (raw Three.js, not React-Three-Fiber)
 - State management via React hooks + module-level singletons for rendering state
-- TypeScript strict mode — no `any`, no `@ts-ignore`
+- TypeScript strict mode - no `any`, no `@ts-ignore`
 - Shared geometries for batched rendering (O(1) draw calls)
 
 ## What NOT to Do
@@ -138,10 +138,10 @@ state_policy = DeliverPolicy.LAST_PER_SUBJECT
 - Don't add feature flags or backwards-compatibility shims
 - Don't add error handling for scenarios that can't happen
 - Don't add abstraction layers (EventBus, MessageRouter, etc.)
-- Don't shell out to system commands — use pyroute2 for netlink, native Python for everything else
+- Don't shell out to system commands - use pyroute2 for netlink, native Python for everything else
 - Don't use `asyncio.sleep()` in the OME pacing thread (causes satellite jitter)
-- Don't use `pyroute2.NetNS()` — it forks. Use `setns()` via `namespace_ops.py`
-- Don't put NATS subject literals in service code — import from `nats_channels.py`
+- Don't use `pyroute2.NetNS()` - it forks. Use `setns()` via `namespace_ops.py`
+- Don't put NATS subject literals in service code - import from `nats_channels.py`
 - Don't add new dependencies without discussion
 - Don't mock what you can run (prefer real objects in tests)
 - Don't commit specs/ or plans/ to git

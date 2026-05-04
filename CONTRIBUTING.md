@@ -1,10 +1,10 @@
 # Contributing to NodalArc
 
-We welcome contributions. Whether it's a bug fix, new routing protocol support, visualization improvement, documentation, or a feature you want to see — we want your help.
+We welcome contributions. Whether it's a bug fix, new routing protocol support, visualization improvement, documentation, or a feature you want to see - we want your help.
 
 ## Getting Started
 
-1. Read the [Developer Guide](docs/dev/) — especially [Architecture](docs/dev/architecture.md) and [Invariants](docs/dev/invariants.md)
+1. Read the [Developer Guide](docs/dev/) - especially [Architecture](docs/dev/architecture.md) and [Invariants](docs/dev/invariants.md)
 2. Set up your development environment: [Development Setup](docs/dev/getting-started.md)
 3. Run the tests: `make test`
 4. Find something to work on (see Issues) or bring your own idea

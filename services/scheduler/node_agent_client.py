@@ -38,7 +38,7 @@ class NodeAgentClient:
         self._host = addr
         self._subject = node_agent_subject(self._host)
         self._nc: nats.NATS | None = None
-        log.info("NodeAgentClient target: %s (subject=%s)", addr, self._subject)
+        log.debug("NodeAgentClient target: %s (subject=%s)", addr, self._subject)
 
     def set_nc(self, nc: nats.NATS) -> None:
         """Set shared NATS connection (from Scheduler's connection)."""

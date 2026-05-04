@@ -27,6 +27,7 @@ from nodalarc_operator.session_deployer import (
     compute_pod_placement,
     discover_available_nodes,
     ensure_session_configmaps,
+    ensure_session_pods,
     write_wiring_manifest,
 )
 
@@ -628,3 +629,111 @@ class TestConfigRendering:
             f"_config_version identical for ospf and isis ({v_ospf}). "
             "Hash must be derived from rendered content, not template filename."
         )
+
+
+# ---------------------------------------------------------------------------
+# Class 6: TestPodSpec
+# ---------------------------------------------------------------------------
+
+
+class TestPodSpec:
+    """Tests pod creation through ensure_session_pods().
+
+    Asserts on the V1Pod objects sent to v1.create_namespaced_pod().
+    The pod spec IS the Operator's primary output.
+    """
+
+    def _create_pods(self, tmp_path):
+        """Run the full pipeline and capture all created pods."""
+        spec = _make_inline_spec(tmp_path)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = MagicMock()
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid-456",
+            "blockOwnerDeletion": True,
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01", "node02"],
+            ),
+            patch.dict("os.environ", {"FRR_IMAGE": "test/frr:1", "IMAGE_PULL_POLICY": "Never"}),
+        ):
+            context = ensure_session_configmaps(spec, "current-session", "nodalarc", owner_ref)
+            ensure_session_pods(context, "nodalarc", owner_ref)
+
+        pods = []
+        for call in mock_v1.create_namespaced_pod.call_args_list:
+            pod = call[1].get("body") or call[0][1]
+            pods.append(pod)
+        return pods
+
+    def test_service_account_token_not_mounted(self, tmp_path):
+        pods = self._create_pods(tmp_path)
+        assert len(pods) > 0
+        for pod in pods:
+            assert pod.spec.automount_service_account_token is False, (
+                f"Pod {pod.metadata.name} has automount_service_account_token != False"
+            )
+
+    def test_security_context(self, tmp_path):
+        pods = self._create_pods(tmp_path)
+        for pod in pods:
+            frr = pod.spec.containers[0]
+            assert frr.name == "frr"
+            caps = frr.security_context.capabilities.add
+            assert "SYS_ADMIN" in caps, f"Pod {pod.metadata.name} missing SYS_ADMIN"
+            assert "NET_ADMIN" in caps, f"Pod {pod.metadata.name} missing NET_ADMIN"
+            assert "NET_RAW" in caps, f"Pod {pod.metadata.name} missing NET_RAW"
+            assert frr.security_context.read_only_root_filesystem is True
+
+    def test_labels(self, tmp_path):
+        pods = self._create_pods(tmp_path)
+        for pod in pods:
+            labels = pod.metadata.labels
+            assert labels.get("nodalarc.io/session") == "true"
+            assert "nodalarc.io/node-id" in labels
+            assert "nodalarc.io/role" in labels
+            role = labels["nodalarc.io/role"]
+            assert role in ("satellite", "ground-station")
+            if role == "satellite":
+                assert "nodalarc.io/plane" in labels
+                assert "nodalarc.io/slot" in labels
+
+    def test_owner_reference(self, tmp_path):
+        pods = self._create_pods(tmp_path)
+        for pod in pods:
+            refs = pod.metadata.owner_references
+            assert len(refs) >= 1
+            ref = refs[0]
+            assert ref["kind"] == "ConstellationSpec"
+            assert ref["uid"] == "test-uid-456"
+
+    def test_409_conflict_idempotent(self, tmp_path):
+        """If create_namespaced_pod raises 409, ensure_session_pods continues."""
+        spec = _make_inline_spec(tmp_path)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = MagicMock()
+        mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+            "blockOwnerDeletion": True,
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01"],
+            ),
+            patch.dict("os.environ", {"FRR_IMAGE": "test/frr:1", "IMAGE_PULL_POLICY": "Never"}),
+        ):
+            context = ensure_session_configmaps(spec, "current-session", "nodalarc", owner_ref)
+            total = ensure_session_pods(context, "nodalarc", owner_ref)
+        assert total > 0

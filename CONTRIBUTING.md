@@ -14,7 +14,7 @@ We welcome contributions. Whether it's a bug fix, new routing protocol support, 
 1. Fork the repository
 2. Create a feature branch from `main`
 3. Make your changes
-4. Run tests: `make test` (backend), `cd frontend/vf && npx vitest run` (frontend)
+4. Run tests: `make test` (backend), `cd frontend && npm test` (frontend)
 5. Deploy and verify: `sudo make deploy-<service>`
 6. Open a pull request
 

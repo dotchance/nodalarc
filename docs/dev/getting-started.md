@@ -13,7 +13,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/nodalarc/nodalarc.git
+git clone https://github.com/dotchance/nodalarc.git
 cd nodalarc
 
 # Bootstrap the host (installs K3s, Docker, Helm, kernel modules)
@@ -68,7 +68,7 @@ Each target builds the Docker image, loads it into the cluster, and does a rolli
 The VF frontend can be developed with hot reload:
 
 ```bash
-cd frontend/vf
+cd frontend
 npm run dev
 ```
 
@@ -89,7 +89,7 @@ services/node_agent/    Node Agent (DaemonSet, kernel netlink ops)
 services/vs_api/        VS-API (FastAPI REST + WebSocket)
 services/nodalarc_operator/  K8s Operator (kopf, session lifecycle)
 services/measurement/   Measurement Infrastructure (probes, adapters)
-frontend/vf/            Visualization Frontend (React 19 + Three.js)
+frontend/               Visualization Frontend (React 19 + Three.js)
 nodalpath/              NodalPath engine (self-contained)
 images/                 Base container images (FRR, probe, forwarding sidecar)
 deploy/helm/            Helm chart (templates, values)
@@ -109,8 +109,8 @@ tests/integration/      Integration tests
 | `services/node_agent/handlers.py` | BatchLinkUp/Down: the kernel operations |
 | `services/nodalarc_operator/session_deployer.py` | Session creation: pods, placement, config delivery |
 | `services/ome/main.py` | OME entry point, pacing thread, publisher thread |
-| `frontend/vf/src/App.tsx` | Frontend entry point |
-| `frontend/vf/src/globe/links.ts` | ISL/ground link rendering (batched LineSegments2) |
+| `frontend/src/App.tsx` | Frontend entry point |
+| `frontend/src/globe/links.ts` | ISL/ground link rendering (batched LineSegments2) |
 | `configs/templates/frr/` | Jinja2 templates for FRR config generation |
 | `deploy/helm/values.yaml` | Helm chart default values |
 

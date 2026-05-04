@@ -38,8 +38,8 @@ Never run pytest with `-x` (stop at first failure). It produces a misleadingly l
 ## Frontend Tests
 
 ```bash
-cd frontend/vf
-npx vitest run
+cd frontend
+npm test
 ```
 
 33+ tests covering React components and rendering logic. Must pass before any commit touching frontend code.
@@ -67,8 +67,8 @@ Requires a running session. Tests exercise real NATS communication, real pod ope
 
 ### For frontend changes
 
-1. **Frontend tests pass** (`cd frontend/vf && npx vitest run`)
-2. **TypeScript compiles** (`cd frontend/vf && npx tsc --noEmit`)
+1. **Frontend tests pass** (`cd frontend && npm test`)
+2. **TypeScript compiles** (`cd frontend && npx tsc --noEmit`)
 3. **Deploy and test in browser** (`sudo make deploy-vf`, then check http://localhost:3000)
 4. **Test the golden path** - the primary feature works
 5. **Test edge cases** - empty state, extreme zoom, large constellations

@@ -122,7 +122,7 @@ def _compute_expected_node_ids_cached(spec_hash: str, session_yaml: str) -> froz
             expected.add(addressing.gs_id(station.name).lower())
         return frozenset(expected)
     except Exception as exc:
-        log.warning("Cannot compute expected node_ids: %s", exc)
+        log.error("Cannot compute expected node_ids: %s", exc, exc_info=True)
         return frozenset()
 
 
@@ -153,7 +153,7 @@ def _delete_obsolete_pods(expected_ids: set[str], namespace: str) -> int:
                 deleted += 1
                 log.info("Deleted obsolete pod %s", pod_name)
             except Exception as exc:
-                log.warning("Failed to delete obsolete pod %s: %s", pod_name, exc)
+                log.error("Failed to delete obsolete pod %s: %s", pod_name, exc)
     return deleted
 
 
@@ -166,7 +166,8 @@ def _parse_session_yaml(spec: dict) -> dict | None:
         return None
     try:
         return yaml.safe_load(session_yaml)
-    except Exception:
+    except Exception as exc:
+        log.error("Failed to parse sessionYaml: %s", exc)
         return None
 
 
@@ -220,7 +221,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
         expected_count = await loop.run_in_executor(None, compute_expected_pod_count, spec_dict)
     except Exception as exc:
         error_msg = str(exc)
-        log.error("Reconcile: invalid session config: %s", error_msg)
+        log.error("Reconcile: invalid session config: %s", error_msg, exc_info=True)
         _update_status(
             name,
             namespace,
@@ -240,7 +241,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
             # Pods exist but count doesn't match expected — stale session remnants
             cleared = await loop.run_in_executor(None, check_old_pods_terminated, namespace)
             if not cleared:
-                log.info("Reconcile: waiting for old session pods to terminate")
+                log.debug("Reconcile: waiting for old session pods to terminate")
                 _update_status(
                     name,
                     namespace,
@@ -298,7 +299,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 None, ensure_session_pods, context, namespace, owner_ref, _progress
             )
         except Exception as exc:
-            log.error("Reconcile: ensure pipeline failed: %s", exc)
+            log.error("Reconcile: ensure pipeline failed: %s", exc, exc_info=True)
             _update_status(
                 name,
                 namespace,
@@ -340,7 +341,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 "message": f"Pods: {ready} running, {expected_count - ready} starting",
             },
         )
-        log.info(f"Reconcile: {ready}/{expected_count} pods running, waiting for all")
+        log.debug("Reconcile: %d/%d pods running, waiting for all", ready, expected_count)
         return
 
     # All pods running — proceed through remaining conditions.
@@ -410,7 +411,7 @@ async def _reconcile_session(spec, name, namespace, meta, status):
                 "message": display_msg,
             },
         )
-        log.info(f"Reconcile: wiring in progress ({wired_count}/{expected_count})")
+        log.debug("Reconcile: wiring in progress (%d/%d)", wired_count, expected_count)
         return
 
     # --- Condition 5: Ready ---
@@ -442,7 +443,7 @@ async def on_create(spec, name, namespace, meta, **_):
     progress through ConfigMap creation, pod creation, readiness, wiring,
     and Ready. No blocking waits — the Operator stays responsive.
     """
-    log.info(f"ConstellationSpec '{name}' created in {namespace}")
+    log.info("ConstellationSpec '%s' created in %s", name, namespace)
 
     if name != "current-session":
         _update_status(
@@ -482,7 +483,7 @@ async def on_update(spec, name, namespace, meta, status, **_):
     """
     phase = status.get("phase", "")
     if phase == "Error":
-        log.info("on_update: session in Error state, skipping")
+        log.debug("on_update: session in Error state, skipping")
         return
 
     loop = asyncio.get_running_loop()
@@ -514,7 +515,7 @@ async def on_update(spec, name, namespace, meta, status, **_):
 @kopf.on.delete("constellationspecs", group="nodalarc.io")
 async def on_delete(name, namespace, **_):
     """Handle ConstellationSpec CR deletion — tear down session."""
-    log.info(f"ConstellationSpec '{name}' deleted, tearing down session")
+    log.info("ConstellationSpec '%s' deleted, tearing down session", name)
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, teardown_session, namespace, name)
     await loop.run_in_executor(None, set_nodalpath_mode, namespace, "console")
@@ -525,10 +526,10 @@ async def on_delete(name, namespace, **_):
 async def on_resume(spec, name, namespace, meta, status, **_):
     """Handle Operator restart — reconcile existing session state."""
     phase = status.get("phase", "")
-    log.info(f"Resuming ConstellationSpec '{name}', current phase: {phase}")
+    log.info("Resuming ConstellationSpec '%s', current phase: %s", name, phase)
 
     if phase == "Error":
-        log.info(f"Operator resume: session in Error state: {status.get('message', '')}")
+        log.info("Operator resume: session in Error state: %s", status.get("message", ""))
         return
 
     await _reconcile_session(spec, name, namespace, meta, status)

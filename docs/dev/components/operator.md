@@ -1,4 +1,4 @@
-# Operator — Session Lifecycle Manager
+# Operator - Session Lifecycle Manager
 
 **Location:** `services/nodalarc_operator/`
 **Deployment:** Kubernetes Deployment (1 replica)
@@ -35,25 +35,25 @@ status:
 When a ConstellationSpec CR is created:
 
 1. **Parse session config** from `spec.sessionYaml`
-2. **Expand constellation** — resolve satellite type, compute orbital elements
-3. **Load ground stations** — resolve station set, compute terrestrial prefixes
-4. **Compute pod placement** — assign pods to nodes using the configured policy
-5. **Render FRR configs** — Jinja2 templates → per-node frr.conf + daemons file
-6. **Create ConfigMaps** — one per node with rendered FRR config
-7. **Create session pods** — with ownerReference to CR (enables GC cascade)
-8. **Wait for pods Running** — poll until all pods reach Running state
-9. **Deliver FRR config** — exec into each pod, copy configs, touch startup sentinel
-10. **Write wiring manifest** — `nodalarc-topology-wiring` ConfigMap
-11. **Wait for wiring complete** — Node Agent signals via `nodalarc-wiring-status`
+2. **Expand constellation** - resolve satellite type, compute orbital elements
+3. **Load ground stations** - resolve station set, compute terrestrial prefixes
+4. **Compute pod placement** - assign pods to nodes using the configured policy
+5. **Render FRR configs** - Jinja2 templates → per-node frr.conf + daemons file
+6. **Create ConfigMaps** - one per node with rendered FRR config
+7. **Create session pods** - with ownerReference to CR (enables GC cascade)
+8. **Wait for pods Running** - poll until all pods reach Running state
+9. **Deliver FRR config** - exec into each pod, copy configs, touch startup sentinel
+10. **Write wiring manifest** - `nodalarc-topology-wiring` ConfigMap
+11. **Wait for wiring complete** - Node Agent signals via `nodalarc-wiring-status`
 12. **Advance phase to Ready**
 
 ## Pod Placement
 
 `compute_pod_placement(constellation, ground_stations, policy, nodes)` assigns each pod to a K8s node:
 
-- **allOnOne** — all pods on the first available node
-- **planePerNode** — round-robin orbital planes across nodes
-- **planeGroupPerNode** — groups of adjacent planes per node
+- **allOnOne** - all pods on the first available node
+- **planePerNode** - round-robin orbital planes across nodes
+- **planeGroupPerNode** - groups of adjacent planes per node
 
 Ground stations are distributed across nodes regardless of policy.
 
@@ -73,7 +73,7 @@ FRR's stock entrypoint (`docker-start`) waits for a sentinel file before startin
 
 `compute_platform_hash()` hashes the platform-relevant fields from the session config (constellation, ground stations, routing). If the hash differs between old and new session, platform services (OME, Scheduler) are restarted to pick up the new configuration.
 
-This function parses the `sessionYaml` string and hashes fields inside it — they're not at the top level of the CR spec.
+This function parses the `sessionYaml` string and hashes fields inside it - they're not at the top level of the CR spec.
 
 ## Error Propagation
 

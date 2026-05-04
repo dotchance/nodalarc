@@ -4,15 +4,15 @@ This guide is for anyone using NodalArc through the web interface. You don't nee
 
 ## Contents
 
-1. [Getting Started](getting-started.md) — What you see when you open NodalArc, and the first things to try
-2. [Sessions](sessions.md) — Creating, switching, and configuring constellation sessions
-3. [Globe View](globe-view.md) — The 3D visualization: what everything means, how to navigate
-4. [Topology View](topology-view.md) — The network graph view
-5. [Terminal Access](terminal.md) — Using the browser terminal to inspect routers
-6. [Time Controls](time-controls.md) — Pause, resume, speed, seek
-7. [Keyboard Shortcuts](keyboard-shortcuts.md) — Quick reference
-8. [API for Power Users](api.md) — Scripting and automation via REST/WebSocket
-9. [Troubleshooting](troubleshooting.md) — Common issues and how to fix them
+1. [Getting Started](getting-started.md) - What you see when you open NodalArc, and the first things to try
+2. [Sessions](sessions.md) - Creating, switching, and configuring constellation sessions
+3. [Globe View](globe-view.md) - The 3D visualization: what everything means, how to navigate
+4. [Topology View](topology-view.md) - The network graph view
+5. [Terminal Access](terminal.md) - Using the browser terminal to inspect routers
+6. [Time Controls](time-controls.md) - Pause, resume, speed, seek
+7. [Keyboard Shortcuts](keyboard-shortcuts.md) - Quick reference
+8. [API for Power Users](api.md) - Scripting and automation via REST/WebSocket
+9. [Troubleshooting](troubleshooting.md) - Common issues and how to fix them
 
 ## What is NodalArc?
 

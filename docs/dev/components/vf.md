@@ -1,4 +1,4 @@
-# VF — Visualization Frontend
+# VF - Visualization Frontend
 
 **Location:** `frontend/vf/`
 **Deployment:** Kubernetes Deployment (nginx serving static assets)
@@ -52,7 +52,7 @@ Previous architecture: per-link `Line2` objects (261), per-satellite trail `THRE
 
 ### NaN Masking
 
-Hidden links/trails are masked by writing `NaN` to position buffer entries. The GPU clipper discards NaN vertices before rasterization — zero cost for hidden geometry. No JavaScript array manipulation needed to add/remove links.
+Hidden links/trails are masked by writing `NaN` to position buffer entries. The GPU clipper discards NaN vertices before rasterization - zero cost for hidden geometry. No JavaScript array manipulation needed to add/remove links.
 
 ### Buffer Growth
 
@@ -60,7 +60,7 @@ Link and trail buffers grow dynamically (2x headroom) when more elements appear 
 
 ## simClock
 
-`src/sim/simClock.ts` — single authoritative clock consumed by satellite interpolation and Earth rotation.
+`src/sim/simClock.ts` - single authoritative clock consumed by satellite interpolation and Earth rotation.
 
 - Adaptive EMA filter smooths server-reported sim_time
 - Outlier detection: if 3 consecutive snapshots are clamped as outliers, re-seed the clock
@@ -68,7 +68,7 @@ Link and trail buffers grow dynamically (2x headroom) when more elements appear 
 
 ## WebSocket Connection
 
-`src/hooks/useWebSocket.ts` — manages VS-API WebSocket lifecycle:
+`src/hooks/useWebSocket.ts` - manages VS-API WebSocket lifecycle:
 
 1. Connect to `ws://host:8080/ws/v1/state?token=<token>`
 2. First message: `SessionEphemeris` → stored for local propagation
@@ -79,14 +79,14 @@ Link and trail buffers grow dynamically (2x headroom) when more elements appear 
 
 React hooks + module-level singletons:
 
-- **React state** — UI state (selected node, panel visibility, color mode, toggles)
-- **Module singletons** — rendering state (Three.js objects, buffer positions, trail ring buffers)
+- **React state** - UI state (selected node, panel visibility, color mode, toggles)
+- **Module singletons** - rendering state (Three.js objects, buffer positions, trail ring buffers)
 
 The rendering layer (Three.js) operates outside React's render cycle. React sets flags; the animation loop reads them. This avoids re-rendering the entire component tree at 60fps.
 
 ## Key Bindings
 
-`src/hooks/useKeyboard.ts` — keyboard shortcut handler. Disabled when focus is in an input field.
+`src/hooks/useKeyboard.ts` - keyboard shortcut handler. Disabled when focus is in an input field.
 
 | Key | Action |
 |-----|--------|

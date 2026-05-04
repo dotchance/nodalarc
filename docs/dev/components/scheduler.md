@@ -1,4 +1,4 @@
-# Scheduler — Topology Dispatcher
+# Scheduler - Topology Dispatcher
 
 **Location:** `services/scheduler/`
 **Deployment:** Kubernetes Deployment (1 replica)
@@ -61,9 +61,9 @@ Substrate latency is measured by the Node Agent and published to `SUBJECT_SUBSTR
 NATS request/reply (not JetStream). Each node has subject `nodalarc.agent.{hostname}`. Messages are protobuf-encoded (`lib/nodalarc/proto/node_agent.proto`).
 
 Request types:
-- `BatchLinkUp` — activate a set of links
-- `BatchLinkDown` — deactivate a set of links
-- `SetLatency` — update tc netem on active links
+- `BatchLinkUp` - activate a set of links
+- `BatchLinkDown` - deactivate a set of links
+- `SetLatency` - update tc netem on active links
 
 Timeout: 60 seconds (accommodates cold-start VXLAN batch).
 

@@ -48,7 +48,7 @@ With `REGISTRY_PREFIX` set, `make load` pushes to the registry instead of import
 make all
 ```
 
-Works the same way — images are now pushed to the registry and Helm references them there.
+Works the same way - images are now pushed to the registry and Helm references them there.
 
 ## Node Labeling
 
@@ -73,14 +73,14 @@ placement:
 
 ### allOnOne (default)
 
-All session pods on a single node. No cross-node traffic. This is the default and works identically to a single-node deployment — use it when you have multiple nodes but don't need cross-node testing.
+All session pods on a single node. No cross-node traffic. This is the default and works identically to a single-node deployment - use it when you have multiple nodes but don't need cross-node testing.
 
 ### planePerNode
 
 Each orbital plane assigned to a separate K8s node. This is the recommended policy for multi-node deployments:
 
-- **Intra-plane ISLs** (isl0, isl1) — pod-to-pod on the same node. Fast, no encapsulation.
-- **Cross-plane ISLs** (isl2, isl3) — traverse VXLAN tunnels between nodes. Adds real network traversal.
+- **Intra-plane ISLs** (isl0, isl1) - pod-to-pod on the same node. Fast, no encapsulation.
+- **Cross-plane ISLs** (isl2, isl3) - traverse VXLAN tunnels between nodes. Adds real network traversal.
 
 This models realistic satellite constellation networking where intra-plane communication is "free" (same orbital shell) but cross-plane communication traverses real infrastructure.
 
@@ -100,7 +100,7 @@ Node A                                    Node B
 └─────────────────┘      UDP 4789        └─────────────────┘
 ```
 
-The VXLAN tunnel encapsulates Ethernet frames in UDP, carrying them across the physical network between nodes. From the perspective of the FRR routing daemon inside each pod, `isl2`/`isl3` look like normal network interfaces — FRR doesn't know or care that the physical path goes through a VXLAN tunnel.
+The VXLAN tunnel encapsulates Ethernet frames in UDP, carrying them across the physical network between nodes. From the perspective of the FRR routing daemon inside each pod, `isl2`/`isl3` look like normal network interfaces - FRR doesn't know or care that the physical path goes through a VXLAN tunnel.
 
 ### Substrate Latency Compensation
 

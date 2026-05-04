@@ -20,7 +20,7 @@ Common issues you might encounter when using NodalArc and how to resolve them.
 **Causes:**
 - No session is deployed. Use the session wizard to create one.
 - The session is still deploying. Wait 1-2 minutes for pods to come online.
-- Zoom level — you may be zoomed too far in or out to see satellites at their altitude.
+- Zoom level - you may be zoomed too far in or out to see satellites at their altitude.
 
 **Try:** Scroll out until you can see the full globe. Check the session status indicator in the toolbar.
 
@@ -31,7 +31,7 @@ Common issues you might encounter when using NodalArc and how to resolve them.
 **Causes:**
 - Links may be toggled off. Press **L** for ISL links, **G** for ground links.
 - The routing protocol is still converging. Wait 30-60 seconds after session deployment.
-- The constellation may be configured with a satellite type that has limited ISL range — satellites may be too far apart.
+- The constellation may be configured with a satellite type that has limited ISL range - satellites may be too far apart.
 
 **Try:** Press L and G to ensure links are enabled. Wait for convergence. Check the event log for link_up events.
 
@@ -89,6 +89,6 @@ Common issues you might encounter when using NodalArc and how to resolve them.
 
 If your issue isn't covered here:
 
-- Check with your system administrator — many issues are deployment-related
+- Check with your system administrator - many issues are deployment-related
 - Look at the browser developer console (F12) for JavaScript errors
 - File an issue on the GitHub repository with steps to reproduce

@@ -10,10 +10,10 @@ When NodalArc starts, a constellation session is already running. The default se
 
 On the globe you'll see:
 
-- **Satellites** — dots moving along their orbital paths
-- **ISL links** — lines connecting satellites that can currently see each other (inter-satellite links via optical laser terminals)
-- **Ground stations** — fixed points on the Earth's surface
-- **Ground links** — lines connecting ground stations to overhead satellites
+- **Satellites** - dots moving along their orbital paths
+- **ISL links** - lines connecting satellites that can currently see each other (inter-satellite links via optical laser terminals)
+- **Ground stations** - fixed points on the Earth's surface
+- **Ground links** - lines connecting ground stations to overhead satellites
 
 Everything moves in real time. As satellites orbit, links appear when satellites enter line-of-sight range and disappear when they move out of range. Ground stations hand off between satellites as the constellation passes overhead.
 
@@ -21,7 +21,7 @@ Everything moves in real time. As satellites orbit, links appear when satellites
 
 ### 1. Watch a ground station handoff
 
-Ground stations connect to whichever satellite is currently overhead with the best elevation angle. As the constellation moves, the connected satellite changes. Watch a ground station (fixed point on the surface) — you'll see its link disconnect from one satellite and connect to the next one passing overhead.
+Ground stations connect to whichever satellite is currently overhead with the best elevation angle. As the constellation moves, the connected satellite changes. Watch a ground station (fixed point on the surface) - you'll see its link disconnect from one satellite and connect to the next one passing overhead.
 
 ### 2. Click a satellite
 
@@ -29,11 +29,11 @@ Click any satellite to select it. The detail panel shows its current state: posi
 
 ### 3. Open a terminal
 
-With a satellite selected, open the terminal panel (bottom of screen). You land in a router CLI — the same interface network engineers use on physical routers. Try:
+With a satellite selected, open the terminal panel (bottom of screen). You land in a router CLI - the same interface network engineers use on physical routers. Try:
 
-- `show ip route` — see the routing table
-- `show ip ospf neighbor` — see which neighbors this satellite has formed adjacencies with
-- `show interface brief` — see all interfaces and their state (UP/DOWN)
+- `show ip route` - see the routing table
+- `show ip ospf neighbor` - see which neighbors this satellite has formed adjacencies with
+- `show interface brief` - see all interfaces and their state (UP/DOWN)
 
 ### 4. Trace a path
 
@@ -51,10 +51,10 @@ Open the session wizard to deploy a different constellation. You can change the 
 
 ### Globe Controls
 
-- **Left-click drag** — rotate the globe
-- **Scroll wheel** — zoom in/out
-- **Right-click drag** — pan
-- **Click a satellite/ground station** — select it, show details
+- **Left-click drag** - rotate the globe
+- **Scroll wheel** - zoom in/out
+- **Right-click drag** - pan
+- **Click a satellite/ground station** - select it, show details
 
 ### Keyboard
 
@@ -83,8 +83,8 @@ See [Keyboard Shortcuts](keyboard-shortcuts.md) for the full reference.
 
 ISL links are colored to convey information at a glance:
 
-- **Color by plane** (press 2) — each orbital plane gets a distinct color, making it easy to see intra-plane vs cross-plane links
-- **Color by area** (press 1) — links colored by routing area assignment
+- **Color by plane** (press 2) - each orbital plane gets a distinct color, making it easy to see intra-plane vs cross-plane links
+- **Color by area** (press 1) - links colored by routing area assignment
 
 ### Satellite Trails
 
@@ -100,7 +100,7 @@ When a link comes up or goes down, it appears/disappears in the visualization. T
 
 ## Next Steps
 
-- [Sessions](sessions.md) — deploy different constellations and routing stacks
-- [Globe View](globe-view.md) — detailed guide to the 3D visualization
-- [Terminal Access](terminal.md) — using the browser terminal to inspect routing state
-- [Time Controls](time-controls.md) — pause, speed up, and seek through the simulation
+- [Sessions](sessions.md) - deploy different constellations and routing stacks
+- [Globe View](globe-view.md) - detailed guide to the 3D visualization
+- [Terminal Access](terminal.md) - using the browser terminal to inspect routing state
+- [Time Controls](time-controls.md) - pause, speed up, and seek through the simulation

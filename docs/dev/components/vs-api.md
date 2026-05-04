@@ -1,4 +1,4 @@
-# VS-API — Visualization State API
+# VS-API - Visualization State API
 
 **Location:** `services/vs_api/`
 **Deployment:** Kubernetes Deployment (1 replica)
@@ -63,7 +63,7 @@ Also broadcasts:
 
 1. Validate config (expand constellation, load ground stations)
 2. Create ConstellationSpec CR
-3. Return immediately — Operator handles pod creation async
+3. Return immediately - Operator handles pod creation async
 4. WebSocket broadcasts progress as session deploys
 
 ### Switch

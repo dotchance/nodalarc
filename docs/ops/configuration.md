@@ -4,7 +4,7 @@ NodalArc sessions are configured through YAML files that define what to emulate:
 
 ## Session Configuration
 
-A session config assembles the building blocks — constellation, ground stations, routing protocol — into a deployable emulation:
+A session config assembles the building blocks - constellation, ground stations, routing protocol - into a deployable emulation:
 
 ```yaml
 session:
@@ -31,13 +31,13 @@ time:
 
 | Field | Required | Default | Description |
 |-------|:---:|---------|-------------|
-| `session.name` | yes | — | Session identifier |
-| `constellation` | yes | — | Path to constellation YAML |
-| `ground_stations` | yes | — | Path to ground station set YAML |
-| `routing.protocol` | yes | — | `isis`, `ospf`, or `nodalpath` |
+| `session.name` | yes | - | Session identifier |
+| `constellation` | yes | - | Path to constellation YAML |
+| `ground_stations` | yes | - | Path to ground station set YAML |
+| `routing.protocol` | yes | - | `isis`, `ospf`, or `nodalpath` |
 | `routing.extensions` | no | none | Protocol extensions (see below) |
 | `routing.area_assignment.strategy` | no | `flat` | `flat`, `per-plane`, or `stripe` |
-| `routing.area_assignment.planes_per_stripe` | no | — | Required for `stripe` strategy |
+| `routing.area_assignment.planes_per_stripe` | no | - | Required for `stripe` strategy |
 | `routing.config_overrides` | no | none | Key-value overrides for FRR templates |
 | `placement.policy` | no | `allOnOne` | `allOnOne`, `planePerNode`, `planeGroupPerNode` |
 | `time.step_seconds` | no | 1 | Simulation time step in seconds |
@@ -145,7 +145,7 @@ satellite_type:
       beam_falloff_exponent: 2.0
 ```
 
-**ISL terminals** — laser or RF links between satellites:
+**ISL terminals** - laser or RF links between satellites:
 
 | Field | Description |
 |-------|-------------|
@@ -156,7 +156,7 @@ satellite_type:
 | `max_tracking_rate_deg_s` | Terminal slew rate |
 | `field_of_regard_deg` | Pointing range (360 = hemispherical) |
 
-**Ground terminals** — satellite's downlink antennas:
+**Ground terminals** - satellite's downlink antennas:
 
 | Field | Description |
 |-------|-------------|

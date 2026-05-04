@@ -1,6 +1,6 @@
 # Architectural Invariants
 
-These rules reflect deliberate design decisions validated through painful debugging. Violations produce subtle distributed system failures that are extremely expensive to diagnose. They are not style preferences — they are load-bearing constraints.
+These rules reflect deliberate design decisions validated through painful debugging. Violations produce subtle distributed system failures that are extremely expensive to diagnose. They are not style preferences - they are load-bearing constraints.
 
 ## Session Type Boundary
 
@@ -48,10 +48,10 @@ All NATS subjects are defined in `lib/nodalarc/nats_channels.py`. No literal sub
 
 The OME uses a producer-consumer threading model:
 
-- **Pacing thread** — synchronous `time.sleep()`, produces events to `queue.Queue`
-- **Publisher thread** — asyncio in a separate thread, consumes queue, publishes to NATS
+- **Pacing thread** - synchronous `time.sleep()`, produces events to `queue.Queue`
+- **Publisher thread** - asyncio in a separate thread, consumes queue, publishes to NATS
 
-The pacing thread must never be converted to async. `asyncio.sleep()` does not provide wall-clock precision — it yields to the event loop and resumes when "convenient." For orbital mechanics, timing jitter causes visible satellite motion artifacts.
+The pacing thread must never be converted to async. `asyncio.sleep()` does not provide wall-clock precision - it yields to the event loop and resumes when "convenient." For orbital mechanics, timing jitter causes visible satellite motion artifacts.
 
 `time.sleep()` is precise to 1ms on Linux. This is why the pacing thread is synchronous.
 
@@ -62,13 +62,13 @@ Never use `pyroute2.NetNS()`. It forks a child process that:
 - Inherits socket file descriptors (child holds port 50100 after parent exits)
 - Creates orphaned processes that prevent clean restart
 
-Use `_in_namespace(pid, fn)` from `namespace_ops.py` — a single `setns()` syscall. Enter the namespace, perform the operation, return. No fork, no child process, no fd leakage.
+Use `_in_namespace(pid, fn)` from `namespace_ops.py` - a single `setns()` syscall. Enter the namespace, perform the operation, return. No fork, no child process, no fd leakage.
 
 ## Node Agent Startup Gate
 
 The Node Agent's NATS server must not subscribe to requests until the wiring thread has fully populated `pid_map`. If it subscribes early, the Scheduler dispatches link operations to a Node Agent that doesn't know where pods are.
 
-Share the pid_map from wiring — never rediscover PIDs during request handling. Missing node_id = return error immediately.
+Share the pid_map from wiring - never rediscover PIDs during request handling. Missing node_id = return error immediately.
 
 ## Stream Creation Ownership
 
@@ -79,7 +79,7 @@ The OME init container creates all NATS JetStream streams before any other pod s
 
 ## LinkStateSnapshot Replace-Not-Merge
 
-`LinkStateSnapshot` on `NODALARC_LINKS` uses `MaxMsgsPerSubject=1`. Only the latest snapshot is retained. The Scheduler reconciles against this complete snapshot — if the OME says a link exists, the Scheduler activates it. If the OME doesn't mention a link, the Scheduler deactivates it.
+`LinkStateSnapshot` on `NODALARC_LINKS` uses `MaxMsgsPerSubject=1`. Only the latest snapshot is retained. The Scheduler reconciles against this complete snapshot - if the OME says a link exists, the Scheduler activates it. If the OME doesn't mention a link, the Scheduler deactivates it.
 
 There is no delta/merge logic. The snapshot IS the desired state. This eliminates accumulation bugs at orbital window boundaries.
 
@@ -89,7 +89,7 @@ There is no delta/merge logic. The snapshot IS the desired state. This eliminate
 
 ## Ground Link Carrier Model
 
-Ground station `gnd0` carrier is driven by host-side veth state — not by explicit admin manipulation inside the pod:
+Ground station `gnd0` carrier is driven by host-side veth state - not by explicit admin manipulation inside the pod:
 
 - LinkUp: bring host-side veths UP → carrier arrives on pod gnd0 → FRR forms adjacency
 - LinkDown: bring host-side veths DOWN → carrier drops on pod gnd0 → FRR tears adjacency immediately
@@ -98,16 +98,16 @@ FRR detects carrier loss without waiting for hold timers. This is the fastest co
 
 ## rp_filter at Pod Creation
 
-`rp_filter=0` is set by the Operator as pod-level sysctls at creation time. The Node Agent does not set it. Without it, IS-IS/OSPF multicast hellos fail reverse-path filtering silently — routing appears broken with no errors in any log.
+`rp_filter=0` is set by the Operator as pod-level sysctls at creation time. The Node Agent does not set it. Without it, IS-IS/OSPF multicast hellos fail reverse-path filtering silently - routing appears broken with no errors in any log.
 
 ## No Eliminated Patterns
 
 The following were removed after causing bugs. Do not reintroduce:
 
-- `FullStateSnapshot` — replaced by `LinkStateSnapshot`
-- `_pending_vis` — visibility event buffering caused ordering bugs
-- `_ome_catchup()` — catch-up logic was unreliable across epoch boundaries
-- `_dedup_threshold` — replaced by `snapshot_seq` monotonic ordering
-- 15-second watchdog — replaced by queue timeout + SystemExit
-- ZMQ (anything) — fully removed, NATS-only
-- `_dispatch_ups` / `_dispatch_downs` — replaced by `_reconcile_links`
+- `FullStateSnapshot` - replaced by `LinkStateSnapshot`
+- `_pending_vis` - visibility event buffering caused ordering bugs
+- `_ome_catchup()` - catch-up logic was unreliable across epoch boundaries
+- `_dedup_threshold` - replaced by `snapshot_seq` monotonic ordering
+- 15-second watchdog - replaced by queue timeout + SystemExit
+- ZMQ (anything) - fully removed, NATS-only
+- `_dispatch_ups` / `_dispatch_downs` - replaced by `_reconcile_links`

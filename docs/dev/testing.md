@@ -70,15 +70,15 @@ Requires a running session. Tests exercise real NATS communication, real pod ope
 1. **Frontend tests pass** (`cd frontend/vf && npx vitest run`)
 2. **TypeScript compiles** (`cd frontend/vf && npx tsc --noEmit`)
 3. **Deploy and test in browser** (`sudo make deploy-vf`, then check http://localhost:3000)
-4. **Test the golden path** — the primary feature works
-5. **Test edge cases** — empty state, extreme zoom, large constellations
-6. **Check for regressions** — other features still work
+4. **Test the golden path** - the primary feature works
+5. **Test edge cases** - empty state, extreme zoom, large constellations
+6. **Check for regressions** - other features still work
 
 ### For configuration changes
 
 1. **Deploy a session** using the changed config
-2. **Verify routing works** — adjacencies form, pings succeed
-3. **Verify the visualization** — links appear, positions correct
+2. **Verify routing works** - adjacencies form, pings succeed
+3. **Verify the visualization** - links appear, positions correct
 
 ## Verification Standards
 
@@ -111,4 +111,4 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-scheduler
 - Never present old test results as validation of new code
 - Never mock what you can run (prefer real NATS, real models, real serialization)
 - Tests that only verify internal state without observable behavior are low value
-- Integration tests must cover ground stations — adjacency check + ping from GS pod
+- Integration tests must cover ground stations - adjacency check + ping from GS pod

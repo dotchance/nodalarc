@@ -61,7 +61,7 @@ sudo make deploy-vf           # Visualization Frontend
 sudo make deploy-all          # All services at once
 ```
 
-Each target builds the Docker image, loads it into the cluster, and does a rolling restart. The running session stays up — no teardown needed.
+Each target builds the Docker image, loads it into the cluster, and does a rolling restart. The running session stays up - no teardown needed.
 
 ### Frontend development
 
@@ -105,7 +105,7 @@ tests/integration/      Integration tests
 |------|---------------|
 | `lib/nodalarc/nats_channels.py` | All NATS subject definitions. Single source of truth. |
 | `lib/nodalarc/models/events.py` | Pydantic event models shared across all services |
-| `services/scheduler/dispatcher.py` | `_reconcile_links` — the only path to the Node Agent |
+| `services/scheduler/dispatcher.py` | `_reconcile_links` - the only path to the Node Agent |
 | `services/node_agent/handlers.py` | BatchLinkUp/Down: the kernel operations |
 | `services/nodalarc_operator/session_deployer.py` | Session creation: pods, placement, config delivery |
 | `services/ome/main.py` | OME entry point, pacing thread, publisher thread |
@@ -145,7 +145,7 @@ When a session is deployed, the `nodalarc` namespace contains:
 
 ## Next Steps
 
-- [Architecture](architecture.md) — understand how the components interact
-- [Development Workflow](dev-workflow.md) — make targets, build caching, iterative development
-- [Invariants](invariants.md) — the rules you cannot break
-- [Testing](testing.md) — what to test and how
+- [Architecture](architecture.md) - understand how the components interact
+- [Development Workflow](dev-workflow.md) - make targets, build caching, iterative development
+- [Invariants](invariants.md) - the rules you cannot break
+- [Testing](testing.md) - what to test and how

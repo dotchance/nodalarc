@@ -606,10 +606,10 @@ class Dispatcher:
             await self._dispatch_queue.put(None)  # sentinel
             await worker_task
             for sub in subs:
-                try:  # noqa: SIM105
+                try:
                     await sub.unsubscribe()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.warning("Unsubscribe failed during shutdown: %s", exc)
             if owns_nc:
                 await nc.close()
             log.info("Dispatcher stopped")
@@ -915,7 +915,7 @@ class Dispatcher:
                 )
         except kubernetes.client.rest.ApiException as exc:
             if exc.status == 404:
-                log.debug("No substrate latency ConfigMap — single-node deployment")
+                log.info("No substrate latency ConfigMap — single-node deployment")
             else:
                 log.warning("Failed to read substrate latency ConfigMap: %s", exc)
         except Exception as exc:
@@ -1296,9 +1296,13 @@ class Dispatcher:
             for i, result in enumerate(results):
                 addr = agent_addrs[i]
                 if isinstance(result, Exception):
-                    log.warning("BatchLinkDown failed for agent %s: %s", addr, result)
+                    log.error("BatchLinkDown failed for agent %s: %s", addr, result)
                 elif not result.success:
-                    log.warning("BatchLinkDown partial: %s", result.error_message[:200])
+                    log.error(
+                        "BatchLinkDown partial failure on agent %s: %s",
+                        addr,
+                        result.error_message[:200],
+                    )
                     if result.interfaces_downed > 0:
                         successful_agents.add(addr)
                 else:
@@ -1500,10 +1504,11 @@ class Dispatcher:
             for i, result in enumerate(results):
                 addr = agent_addrs[i]
                 if isinstance(result, Exception):
-                    log.warning("BatchLinkUp failed for agent %s: %s", addr, result)
+                    log.error("BatchLinkUp failed for agent %s: %s", addr, result)
                 elif not result.success:
-                    log.warning(
-                        "BatchLinkUp partial: %d upped: %s",
+                    log.error(
+                        "BatchLinkUp partial failure on agent %s: %d upped: %s",
+                        addr,
                         result.interfaces_upped,
                         result.error_message[:200],
                     )
@@ -1631,9 +1636,10 @@ class Dispatcher:
                 latency_ms=new_lat,
                 range_km=range_km,
             )
-            asyncio.ensure_future(
-                to_pub.publish(self._subj_latency, event.model_dump_json().encode())
-            )
+            try:
+                await to_pub.publish(self._subj_latency, event.model_dump_json().encode())
+            except Exception as exc:
+                log.error("Failed to publish LatencyUpdate for %s<->%s: %s", node_a, node_b, exc)
 
         # Send to agents concurrently
         tasks = []
@@ -1643,7 +1649,11 @@ class Dispatcher:
             tasks.append(stub.async_set_latency(req))
 
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    agent_addr = list(agent_entries.keys())[i]
+                    log.error("SetLatency failed for agent %s: %s", agent_addr, result)
 
     # ------------------------------------------------------------------
     # Checkpoint
@@ -1688,8 +1698,8 @@ class Dispatcher:
                     v1.create_namespaced_config_map(ns, body)
                 else:
                     raise
-        except Exception:
-            pass  # Checkpoint failure is non-fatal
+        except Exception as exc:
+            log.warning("Checkpoint write failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Epoch synchronization state machine (PRD v0.71)

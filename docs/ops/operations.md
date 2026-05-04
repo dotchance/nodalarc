@@ -6,7 +6,7 @@ Day-to-day management of a running NodalArc deployment.
 
 ### From the UI
 
-Users can switch sessions from the browser wizard. They select a new constellation, routing stack, and ground station set, then deploy. The platform handles the transition automatically — tears down the old session and brings up the new one.
+Users can switch sessions from the browser wizard. They select a new constellation, routing stack, and ground station set, then deploy. The platform handles the transition automatically - tears down the old session and brings up the new one.
 
 ### From the Command Line
 
@@ -24,7 +24,7 @@ When you need to fully stop the platform:
 sudo make teardown
 ```
 
-This runs `tools/na-teardown.sh` — a 9-step sequence that handles every failure mode:
+This runs `tools/na-teardown.sh` - a 9-step sequence that handles every failure mode:
 
 1. Strip finalizers from session resources, delete ConstellationSpec CRs
 2. Wait for session pods to terminate (force-deletes after 60s timeout)

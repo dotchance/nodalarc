@@ -61,7 +61,7 @@ The OME computes visibility between all satellite pairs. Computation time scales
 | 576 | 165,600 | ~5 minutes (estimated) |
 | 1,584 | 1,254,336 | Would benefit from spatial indexing |
 
-For constellations above 500 satellites, spatial indexing (octree/KD-tree) would significantly reduce computation time. This is an optimization opportunity, not a hard limit — the OME precomputes the full orbital window before pacing, so computation time adds to startup latency but doesn't affect runtime performance.
+For constellations above 500 satellites, spatial indexing (octree/KD-tree) would significantly reduce computation time. This is an optimization opportunity, not a hard limit - the OME precomputes the full orbital window before pacing, so computation time adds to startup latency but doesn't affect runtime performance.
 
 ## What Scales Well
 
@@ -73,7 +73,7 @@ For constellations above 500 satellites, spatial indexing (octree/KD-tree) would
 
 **Multi-node pod distribution.** Adding nodes scales linearly. Each node handles its own satellite pods, VXLAN tunnels to peers, and local kernel state. No shared state beyond NATS messages.
 
-**Frontend rendering.** O(1) draw call architecture — all links, trails, boundaries, and orbit paths are batched into shared geometries. Performance is constant regardless of constellation size (47 draw calls for 10 nodes or 10,000).
+**Frontend rendering.** O(1) draw call architecture - all links, trails, boundaries, and orbit paths are batched into shared geometries. Performance is constant regardless of constellation size (47 draw calls for 10 nodes or 10,000).
 
 ## What to Watch
 

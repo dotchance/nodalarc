@@ -75,11 +75,11 @@ This requires a new container image and changes to the session pod spec.
 
 ### What you need:
 
-1. **Container image** — your routing daemon packaged as a Docker image in `images/`
-2. **Interface compatibility** — must work with the existing interface model (isl0-3, gnd0, lo, terr0)
-3. **Carrier detection** — must detect link carrier state on interfaces (UP/DOWN/LOWERLAYERDOWN)
-4. **Config delivery** — mechanism to inject configuration at session start
-5. **Operator integration** — pod spec generation in `session_deployer.py`
+1. **Container image** - your routing daemon packaged as a Docker image in `images/`
+2. **Interface compatibility** - must work with the existing interface model (isl0-3, gnd0, lo, terr0)
+3. **Carrier detection** - must detect link carrier state on interfaces (UP/DOWN/LOWERLAYERDOWN)
+4. **Config delivery** - mechanism to inject configuration at session start
+5. **Operator integration** - pod spec generation in `session_deployer.py`
 
 ### Constraints:
 

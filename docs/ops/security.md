@@ -52,7 +52,7 @@ Every pod has a `cni0` interface (renamed from eth0 at boot by the FRR entrypoin
 - iptables `OUTPUT DROP` on cni0 blocks all egress
 - Exception: `ESTABLISHED,RELATED` allows return traffic for SSH sessions initiated from outside
 - Users cannot use cni0 to reach the K8s API, NATS, or any platform service
-- The name `cni0` signals "infrastructure, not yours" — `mgmt0` is reserved for user-created management interfaces
+- The name `cni0` signals "infrastructure, not yours" - `mgmt0` is reserved for user-created management interfaces
 
 ### Data Plane Interfaces
 
@@ -60,18 +60,18 @@ Only `isl0-3`, `gnd0`, `terr0`, and `lo` carry user-plane traffic. These are wir
 
 ## SSH Key Lifecycle
 
-1. **Generation** — Operator generates an ED25519 keypair when creating a session
-2. **Storage** — keypair stored in K8s Secret `nodalarc-terminal-keys` with ConstellationSpec ownerReference
-3. **Distribution** — public key mounted into session pods via volume mount, copied to operator's `~/.ssh/authorized_keys`
-4. **Usage** — VS-API reads private key from the Secret for its SSH proxy (browser terminal). Direct SSH clients use the same key.
-5. **Rotation** — new session = new keys. Each session deployment generates a fresh keypair.
-6. **Cleanup** — ownerReference on the Secret causes automatic garbage collection when the ConstellationSpec CR is deleted (teardown)
+1. **Generation** - Operator generates an ED25519 keypair when creating a session
+2. **Storage** - keypair stored in K8s Secret `nodalarc-terminal-keys` with ConstellationSpec ownerReference
+3. **Distribution** - public key mounted into session pods via volume mount, copied to operator's `~/.ssh/authorized_keys`
+4. **Usage** - VS-API reads private key from the Secret for its SSH proxy (browser terminal). Direct SSH clients use the same key.
+5. **Rotation** - new session = new keys. Each session deployment generates a fresh keypair.
+6. **Cleanup** - ownerReference on the Secret causes automatic garbage collection when the ConstellationSpec CR is deleted (teardown)
 
 No persistent SSH keys exist between sessions. No shared keys across deployments.
 
 ## rp_filter
 
-Reverse path filtering is disabled on all session pods (`net.ipv4.conf.all.rp_filter=0`). This is required for IS-IS and OSPF multicast hellos to pass — without it, routing protocol hellos arriving on ISL interfaces fail the kernel's reverse-path check and are silently dropped.
+Reverse path filtering is disabled on all session pods (`net.ipv4.conf.all.rp_filter=0`). This is required for IS-IS and OSPF multicast hellos to pass - without it, routing protocol hellos arriving on ISL interfaces fail the kernel's reverse-path check and are silently dropped.
 
 This is set as a pod-level sysctl by the Operator in `session_deployer.py`. The Node Agent does not need to manage it.
 

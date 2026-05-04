@@ -14,10 +14,10 @@ This is sufficient for LEO/MEO circular orbits where J2 perturbation effects are
 
 ## When You'd Want a Different Propagator
 
-- **High-fidelity requirements** — J2, J4, atmospheric drag, solar radiation pressure
-- **GEO orbits** — station-keeping effects matter over longer periods
-- **TLE/SGP4 input** — using real satellite TLEs instead of parametric constellation definitions
-- **Interplanetary** — different gravity models entirely
+- **High-fidelity requirements** - J2, J4, atmospheric drag, solar radiation pressure
+- **GEO orbits** - station-keeping effects matter over longer periods
+- **TLE/SGP4 input** - using real satellite TLEs instead of parametric constellation definitions
+- **Interplanetary** - different gravity models entirely
 
 ## Propagator Interface
 
@@ -76,4 +76,4 @@ The most common extension: use NORAD TLEs as input instead of parametric constel
 4. Update `SessionEphemeris` to carry TLE data instead of Keplerian elements
 5. Update the VF's `simClock.ts` to use `satellite.js` (JavaScript SGP4) for local propagation
 
-The sgp4 library is a clean swap — same input/output contract, higher fidelity for real satellite tracking.
+The sgp4 library is a clean swap - same input/output contract, higher fidelity for real satellite tracking.

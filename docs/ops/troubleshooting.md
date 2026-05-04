@@ -85,7 +85,7 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c
 
 - ISL interfaces should show `UP` state
 - `gnd0` shows `UP` when a ground link is active, `LOWERLAYERDOWN` when no satellite overhead
-- If interfaces show `DOWN`, the Node Agent hasn't brought them up yet — check Node Agent logs
+- If interfaces show `DOWN`, the Node Agent hasn't brought them up yet - check Node Agent logs
 
 ### Check FRR is Running
 
@@ -118,7 +118,7 @@ The teardown script has built-in timeouts and force-delete logic for every failu
 sudo make nuke
 ```
 
-This is the nuclear option — removes everything including images and dependencies. You'll need to `make all` again afterward.
+This is the nuclear option - removes everything including images and dependencies. You'll need to `make all` again afterward.
 
 ### Namespace Stuck in Terminating
 
@@ -179,7 +179,7 @@ The Scheduler dispatches to the Node Agent via NATS request/reply with a 60-seco
 ### Visualization Slow
 
 If the browser UI is slow:
-- Check satellite count — very large constellations (500+) with all visual effects enabled use more GPU
+- Check satellite count - very large constellations (500+) with all visual effects enabled use more GPU
 - Toggle off trails (T), orbital paths (P), and labels (;) to reduce rendering load
 - Check Chrome's Task Manager (Shift+Esc) for the tab's CPU/memory usage
 

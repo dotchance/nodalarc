@@ -1,4 +1,4 @@
-# Getting Started — Deployment
+# Getting Started - Deployment
 
 ## Prerequisites
 
@@ -47,7 +47,7 @@ This installs:
 | Kernel modules | `mpls_router`, `mpls_iptunnel` for MPLS forwarding |
 | Sysctls | IPv4/IPv6 forwarding, MPLS platform labels |
 
-The script is idempotent — safe to run multiple times. It does NOT modify an existing Kubernetes installation.
+The script is idempotent - safe to run multiple times. It does NOT modify an existing Kubernetes installation.
 
 ### What the Sysctls Do
 
@@ -202,7 +202,7 @@ These build, load, and restart a single service without tearing down the session
 
 ## Next Steps
 
-- [Configuration](configuration.md) — understand session YAML and building blocks
-- [Multi-Node Deployment](multi-node.md) — for clusters with multiple compute nodes
-- [Scaling](scaling.md) — capacity planning and performance characteristics
-- [Operations](operations.md) — day-to-day management and upgrades
+- [Configuration](configuration.md) - understand session YAML and building blocks
+- [Multi-Node Deployment](multi-node.md) - for clusters with multiple compute nodes
+- [Scaling](scaling.md) - capacity planning and performance characteristics
+- [Operations](operations.md) - day-to-day management and upgrades

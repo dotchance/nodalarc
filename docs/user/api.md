@@ -105,19 +105,19 @@ The WebSocket pushes a full state snapshot at ~1 Hz. On connect, you first recei
 
 The state snapshot contains:
 
-- **nodes** — array of all satellites and ground stations with position, link counts, and metadata
-- **links** — array of all active links with latency, bandwidth, and type (intra_plane_isl, cross_plane_isl, ground)
-- **recent_events** — last 50 link state changes and handoffs
-- **network_health** — convergence status
-- **sim_time** / **wall_time** — current simulation and wall-clock time
-- **playback_paused** / **playback_speed** — time control state
+- **nodes** - array of all satellites and ground stations with position, link counts, and metadata
+- **links** - array of all active links with latency, bandwidth, and type (intra_plane_isl, cross_plane_isl, ground)
+- **recent_events** - last 50 link state changes and handoffs
+- **network_health** - convergence status
+- **sim_time** / **wall_time** - current simulation and wall-clock time
+- **playback_paused** / **playback_speed** - time control state
 
 For the full schema with field descriptions, see the [VS-API Reference](../dev/components/vs-api.md) in the developer documentation.
 
 ## Use Cases
 
-- **Automated convergence testing** — deploy a session, wait for convergence, inject a link failure, measure time to reconverge via the API
-- **Custom dashboards** — stream state over WebSocket and render your own visualization
-- **CI/CD validation** — script path traces and verify reachability as part of a test pipeline
-- **Data collection** — record state snapshots over time for offline analysis of routing behavior
-- **Integration** — feed constellation state into external tools (Grafana, custom analysis scripts, etc.)
+- **Automated convergence testing** - deploy a session, wait for convergence, inject a link failure, measure time to reconverge via the API
+- **Custom dashboards** - stream state over WebSocket and render your own visualization
+- **CI/CD validation** - script path traces and verify reachability as part of a test pipeline
+- **Data collection** - record state snapshots over time for offline analysis of routing behavior
+- **Integration** - feed constellation state into external tools (Grafana, custom analysis scripts, etc.)

@@ -10,7 +10,7 @@ The session wizard walks you through building a constellation configuration step
 
 ### Step 1: Choose a Constellation
 
-The constellation defines the orbital geometry — how many satellites, at what altitude, in what pattern.
+The constellation defines the orbital geometry - how many satellites, at what altitude, in what pattern.
 
 | Constellation | Satellites | Description |
 |---------------|-----------|-------------|
@@ -26,7 +26,7 @@ Larger constellations take longer to deploy and require more system resources. S
 
 ### Step 2: Choose a Satellite Type
 
-The satellite type defines what hardware each satellite carries — specifically its inter-satellite link (ISL) terminals and ground-facing antennas.
+The satellite type defines what hardware each satellite carries - specifically its inter-satellite link (ISL) terminals and ground-facing antennas.
 
 | Satellite Type | ISL Terminals | ISL Range | Description |
 |---------------|--------------|-----------|-------------|
@@ -65,13 +65,13 @@ The routing protocol runs inside every satellite and ground station, computing f
 | IS-IS + SR-MPLS | IS-IS with segment routing over MPLS | Label-switched paths, service chaining |
 | NodalPath | Centralized path computation (not distributed routing) | NEBULA-aligned architectures, PCE testing |
 
-For your first session, OSPF or IS-IS with a flat area strategy is simplest. For larger constellations (100+ satellites), IS-IS with per-plane areas is recommended — it keeps the routing database manageable by limiting flooding scope to each orbital plane.
+For your first session, OSPF or IS-IS with a flat area strategy is simplest. For larger constellations (100+ satellites), IS-IS with per-plane areas is recommended - it keeps the routing database manageable by limiting flooding scope to each orbital plane.
 
 ### Step 5: Deploy
 
 Click Deploy. The system builds the constellation configuration, creates all satellite and ground station nodes, wires their network interfaces, and starts the routing protocol. Deployment takes 1-3 minutes depending on constellation size.
 
-The visualization updates live during deployment — you'll see satellites appear as their pods come online.
+The visualization updates live during deployment - you'll see satellites appear as their pods come online.
 
 ## Switching Sessions
 
@@ -95,21 +95,21 @@ More planes = wider longitude coverage with fewer satellites per plane. More sat
 
 For IS-IS and OSPF, the constellation is divided into routing areas to limit flooding scope:
 
-- **Flat** — all nodes in one area. Simplest but every topology change floods everywhere
-- **Per-plane** — each orbital plane is its own area. Recommended for large constellations
-- **Stripe** — groups of adjacent planes share an area. Balance between scope and inter-area routing
+- **Flat** - all nodes in one area. Simplest but every topology change floods everywhere
+- **Per-plane** - each orbital plane is its own area. Recommended for large constellations
+- **Stripe** - groups of adjacent planes share an area. Balance between scope and inter-area routing
 
 ### Minimum Elevation
 
-The minimum elevation angle for ground station visibility (set per ground station). Higher values mean the ground station only connects when a satellite is nearly overhead — shorter connection windows but stronger signal. Lower values mean longer connections but at lower signal quality and higher slant range.
+The minimum elevation angle for ground station visibility (set per ground station). Higher values mean the ground station only connects when a satellite is nearly overhead - shorter connection windows but stronger signal. Lower values mean longer connections but at lower signal quality and higher slant range.
 
 ## Session Lifecycle
 
 A session goes through these states:
 
-1. **Creating** — pods are being deployed, FRR configs delivered
-2. **Wiring** — network interfaces being connected, routing starting
-3. **Ready** — all nodes running, routing converging
-4. **Active** — routing converged, constellation fully operational
+1. **Creating** - pods are being deployed, FRR configs delivered
+2. **Wiring** - network interfaces being connected, routing starting
+3. **Ready** - all nodes running, routing converging
+4. **Active** - routing converged, constellation fully operational
 
 You can interact with the session at any point after it reaches Ready. Routing convergence typically takes 10-30 seconds after all interfaces are wired, depending on constellation size and protocol.

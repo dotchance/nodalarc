@@ -18,7 +18,7 @@ sat-P00S00#
 
 ### Multiple Sessions
 
-Each node you select opens a new tab. Sessions persist when you switch between tabs — output accumulates in the background. Switch back and everything that happened while you were away is still there. This matches the standard network engineering workflow of having multiple SSH sessions open to different routers.
+Each node you select opens a new tab. Sessions persist when you switch between tabs - output accumulates in the background. Switch back and everything that happened while you were away is still there. This matches the standard network engineering workflow of having multiple SSH sessions open to different routers.
 
 ## Common Commands
 
@@ -62,7 +62,7 @@ Lists all interfaces with their admin state and link state:
 | `gnd0` | Ground station link (active only when overhead a ground station) |
 | `lo` | Loopback (always UP, carries the node's stable address) |
 | `terr0` | Terrestrial network stub (ground stations only) |
-| `cni0` | Infrastructure interface (ignore — not a data path) |
+| `cni0` | Infrastructure interface (ignore - not a data path) |
 
 Interfaces that are **UP** have active routing adjacencies. Interfaces that are **DOWN** or **LOWERLAYERDOWN** don't currently have a connected peer (the satellite hasn't formed that link yet, or the ground station connection hasn't been established).
 
@@ -72,7 +72,7 @@ Interfaces that are **UP** have active routing adjacencies. Interfaces that are 
 show isis database detail
 ```
 
-The full link-state database — every LSP (Link-State PDU) this router has received. This is how IS-IS knows about the entire network topology.
+The full link-state database - every LSP (Link-State PDU) this router has received. This is how IS-IS knows about the entire network topology.
 
 ### MPLS label table (SR-MPLS sessions)
 
@@ -101,13 +101,13 @@ Real ICMP ping and traceroute through the emulated constellation. Packets traver
 
 ## What You're Actually Seeing
 
-When you run commands in the terminal, you're talking to a real FRRouting instance running inside a Linux container. The routing tables, adjacencies, and forwarding state are computed by the actual FRR code — the same code that runs on physical routers in production networks.
+When you run commands in the terminal, you're talking to a real FRRouting instance running inside a Linux container. The routing tables, adjacencies, and forwarding state are computed by the actual FRR code - the same code that runs on physical routers in production networks.
 
 This means:
 
-- **Routing convergence is real** — when a link goes down, IS-IS/OSPF detects it, floods the update, runs SPF, and installs new routes. The convergence time you observe is the real protocol implementation's convergence time.
-- **Forwarding is real** — packets traverse real kernel interfaces with tc netem latency shaping. The latency you ping is the actual emulated propagation delay.
-- **Configuration is real** — you can enter `configure terminal` and change FRR configuration. Add route-maps, change metrics, enable debugging. Changes take effect immediately, same as on hardware.
+- **Routing convergence is real** - when a link goes down, IS-IS/OSPF detects it, floods the update, runs SPF, and installs new routes. The convergence time you observe is the real protocol implementation's convergence time.
+- **Forwarding is real** - packets traverse real kernel interfaces with tc netem latency shaping. The latency you ping is the actual emulated propagation delay.
+- **Configuration is real** - you can enter `configure terminal` and change FRR configuration. Add route-maps, change metrics, enable debugging. Changes take effect immediately, same as on hardware.
 
 ## Power User: Direct SSH
 

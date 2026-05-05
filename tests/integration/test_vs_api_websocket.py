@@ -73,37 +73,5 @@ def test_vs_api_state_snapshot_schema():
     assert len(data["links"]) == 1
     assert data["network_health"]["status"] == "converged"
 
-
-def test_vs_api_state_management():
-    """Test VS-API in-memory state update functions."""
-
-    from vs_api.main import (
-        _build_snapshot,
-        _state,
-        _state_lock,
-        _update_link_down,
-        _update_link_up,
-    )
-
-    # Reset state
-    with _state_lock:
-        _state["links"].clear()
-        _state["nodes"].clear()
-        _state["recent_events"].clear()
-
-    _update_link_up(
-        {
-            "node_a": "sat-P00S00",
-            "node_b": "sat-P00S01",
-            "latency_ms": 5.0,
-            "bandwidth_mbps": 1000,
-            "reason": "vis_gained",
-        }
-    )
-
-    snapshot = _build_snapshot()
-    assert len(snapshot["links"]) == 1
-
-    _update_link_down({"node_a": "sat-P00S00", "node_b": "sat-P00S01"})
-    snapshot = _build_snapshot()
-    assert len(snapshot["links"]) == 0
+    # test_vs_api_state_management removed: it tested _state/_state_lock/_update_link_up
+    # which were refactored into SessionContext. The module-level state API no longer exists.

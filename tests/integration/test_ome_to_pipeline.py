@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 from nodalarc.models.events import (
     ClockTick,
-    TimelinePositionSnapshot,
     VisibilityEvent,
 )
 
@@ -126,10 +125,10 @@ class TestFourNodePipeline:
         types = {e["event_type"] for e in events}
         assert "ClockTick" in types
 
-    def test_timeline_contains_snapshots(self, four_node_timeline):
+    def test_timeline_event_types(self, four_node_timeline):
         events = _load_events(four_node_timeline)
         types = {e["event_type"] for e in events}
-        assert "Snapshot" in types
+        assert types == {"ClockTick", "VisibilityEvent"}
 
     def test_timeline_contains_visibility_events(self, four_node_timeline):
         events = _load_events(four_node_timeline)
@@ -142,8 +141,6 @@ class TestFourNodePipeline:
         for e in events:
             if e["event_type"] == "ClockTick":
                 ClockTick.model_validate(e["data"])
-            elif e["event_type"] == "Snapshot":
-                TimelinePositionSnapshot.model_validate(e["data"])
             elif e["event_type"] == "VisibilityEvent":
                 VisibilityEvent.model_validate(e["data"])
 

@@ -1,6 +1,6 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-/** Nodal Arc Visualization Frontend — main application component. */
+/** Nodal Arc Visualization Frontend - main application component. */
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Shell } from "./layout/Shell";
@@ -22,14 +22,12 @@ import { useSelection } from "./hooks/useSelection";
 import { useKeyboard } from "./hooks/useKeyboard";
 import { useSessionSwitcher } from "./hooks/useSessionSwitcher";
 import { usePlayback } from "./hooks/usePlayback";
+import { useAppState } from "./hooks/useAppState";
 import { SessionWizard } from "./catalog/SessionWizard";
 import { WS_URL, fetchApiKey } from "./config";
 import { setLabelsEnabled, getLabelsEnabled } from "./globe/labels";
 import { setGsLabelsEnabled, getGsLabelsEnabled } from "./globe/groundStations";
-import { setTrailsVisible } from "./globe/orbitalTrails";
-import type { ViewMode, ColorMode, GlobeMode, ReferenceFrame, TracedPath } from "./types";
-
-const REFERENCE_FRAME_STORAGE_KEY = "nodalarc.referenceFrame";
+import type { TracedPath } from "./types";
 
 import "./styles/variables.css";
 import "./styles/reset.css";
@@ -65,19 +63,24 @@ function AppInner() {
   const { sessions, switching, switchSession } = useSessionSwitcher(snapshot?.session_status ?? null);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
 
-  const [showCatalog, setShowCatalog] = useState(true);
-  const [hasEverDeployed, setHasEverDeployed] = useState(false);
+  const appState = useAppState({
+    snapshot,
+    clearSelection,
+    sessionTransitioning,
+    switching,
+  });
 
-  const sessionStatus = snapshot?.session_status ?? "idle";
-  const hasActiveSession = sessionStatus === "ready" || sessionStatus === "switching" || sessionStatus === "wiring";
-  const activeSessionName = snapshot?.constellation_name ?? null;
-
-  useEffect(() => {
-    if (hasActiveSession && !hasEverDeployed) {
-      setHasEverDeployed(true);
-      setShowCatalog(false);
-    }
-  }, [hasActiveSession, hasEverDeployed]);
+  const {
+    showCatalog, hasEverDeployed, setHasEverDeployed, setShowCatalog,
+    openCatalog, closeCatalog, hasActiveSession, activeSessionName, sessionStatus,
+    viewMode, setViewMode, colorMode, setColorMode,
+    showGroundLinks, setShowGroundLinks, showIslLinks, setShowIslLinks,
+    showSatPaths, setShowSatPaths, setShowTrails,
+    globeMode, setGlobeMode, referenceFrame, toggleReferenceFrame, toggleView,
+    cliDrawerOpen, setCliDrawerOpen, logPanelOpen, setLogPanelOpen,
+    filterOpen, setFilterOpen,
+    simTimeAdvanced, followNode, setFollowNode,
+  } = appState;
 
   const handleDeploy = useCallback((sessionId: string) => {
     if (hasActiveSession) {
@@ -87,26 +90,8 @@ function AppInner() {
     switchSession(`configs/sessions/${sessionId}.yaml`);
     setShowCatalog(false);
     setHasEverDeployed(true);
-  }, [switchSession, hasActiveSession]);
+  }, [switchSession, hasActiveSession, setShowCatalog, setHasEverDeployed]);
 
-  const [viewMode, setViewMode] = useState<ViewMode>("globe");
-  const [colorMode, setColorMode] = useState<ColorMode>("area");
-  const [showGroundLinks, setShowGroundLinks] = useState(true);
-  const [showIslLinks, setShowIslLinks] = useState(true);
-  const [showSatPaths, setShowSatPaths] = useState(false);
-  const [showTrails, setShowTrails] = useState(true);
-  const [globeMode, setGlobeMode] = useState<GlobeMode>("blue-marble");
-  const [referenceFrame, setReferenceFrame] = useState<ReferenceFrame>(() => {
-    const saved = localStorage.getItem(REFERENCE_FRAME_STORAGE_KEY);
-    return saved === "earth-fixed" ? "earth-fixed" : "earth-inertial";
-  });
-  useEffect(() => {
-    localStorage.setItem(REFERENCE_FRAME_STORAGE_KEY, referenceFrame);
-  }, [referenceFrame]);
-  const toggleReferenceFrame = useCallback(() => {
-    setReferenceFrame((f) => (f === "earth-fixed" ? "earth-inertial" : "earth-fixed"));
-  }, []);
-  const [followNode, setFollowNode] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
 
@@ -117,38 +102,8 @@ function AppInner() {
   }, []);
   const canSplit = windowWidth >= 1920;
 
-  const firstSimTimeRef = useRef<string | null>(null);
-  const [simTimeAdvanced, setSimTimeAdvanced] = useState(false);
-
-  useEffect(() => {
-    if (switching || !snapshot || snapshot.nodes.length === 0) {
-      firstSimTimeRef.current = null;
-      setSimTimeAdvanced(false);
-      return;
-    }
-    if (firstSimTimeRef.current === null) {
-      firstSimTimeRef.current = snapshot.sim_time;
-      return;
-    }
-    if (!simTimeAdvanced && snapshot.sim_time !== firstSimTimeRef.current) {
-      setSimTimeAdvanced(true);
-    }
-  }, [snapshot, switching, simTimeAdvanced]);
-
-  const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
-  const [logPanelOpen, setLogPanelOpen] = useState(false);
-
-  // Close terminal and clear selection on session transition
-  useEffect(() => {
-    if (sessionTransitioning) {
-      setCliDrawerOpen(false);
-      clearSelection();
-    }
-  }, [sessionTransitioning, clearSelection]);
-  useEffect(() => { setTrailsVisible(showTrails); }, [showTrails]);
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
-  const [filterOpen, setFilterOpen] = useState(false);
 
   const handleTogglePlane = useCallback((plane: number) => {
     setVisiblePlanes((prev) => {
@@ -205,37 +160,29 @@ function AppInner() {
     setHistoricalMode(!historicalMode);
   }, [historicalMode, setHistoricalMode]);
 
-  const toggleView = useCallback(() => {
-    setViewMode((prev) => (prev === "globe" ? "topology" : "globe"));
-  }, []);
-
   const handleFollowNode = useCallback(() => {
     if (!selection) return;
-    setFollowNode((prev) => {
+    setFollowNode((prev: boolean) => {
       const next = !prev;
       globeActionsRef.current?.setFollowTarget(next ? selection.id : null);
       return next;
     });
-  }, [selection]);
+  }, [selection, setFollowNode]);
 
   const handleTopView = useCallback(() => { globeActionsRef.current?.flyToTopView(); }, []);
   const handleScreenshot = useCallback(() => { globeActionsRef.current?.captureScreenshot(); }, []);
   const handleFlyToNode = useCallback((nodeId: string) => { globeActionsRef.current?.flyToNode(nodeId); }, []);
 
-  const handleCloseCatalog = useCallback(() => {
-    if (showCatalog && hasEverDeployed) setShowCatalog(false);
-  }, [showCatalog, hasEverDeployed]);
-
   const keyboardActions = useMemo(
     () => ({
       onEscape: clearSelection,
-      onCloseCatalog: showCatalog && hasEverDeployed ? handleCloseCatalog : undefined,
+      onCloseCatalog: showCatalog && hasEverDeployed ? closeCatalog : undefined,
       onToggleView: toggleView,
       onSetColorMode: setColorMode,
-      onToggleGroundLinks: () => setShowGroundLinks((v) => !v),
-      onToggleIslLinks: () => setShowIslLinks((v) => !v),
-      onToggleSatPaths: () => setShowSatPaths((v) => !v),
-      onToggleTrails: () => setShowTrails((v) => !v),
+      onToggleGroundLinks: () => setShowGroundLinks((v: boolean) => !v),
+      onToggleIslLinks: () => setShowIslLinks((v: boolean) => !v),
+      onToggleSatPaths: () => setShowSatPaths((v: boolean) => !v),
+      onToggleTrails: () => setShowTrails((v: boolean) => !v),
       onToggleHistorical: toggleHistorical,
       onPlayPause: () => {
         if (historicalMode) {
@@ -244,17 +191,17 @@ function AppInner() {
           playback.paused ? playback.resume() : playback.pause();
         }
       },
-      onToggleGlobeMode: () => setGlobeMode((m) => m === "blue-marble" ? "day-night" : m === "day-night" ? "political" : "blue-marble"),
+      onToggleGlobeMode: () => setGlobeMode((m: string) => m === "blue-marble" ? "day-night" : m === "day-night" ? "political" : "blue-marble"),
       onToggleReferenceFrame: toggleReferenceFrame,
       onFollowNode: handleFollowNode,
       onTopView: handleTopView,
-      onToggleCli: () => setCliDrawerOpen((v) => !v),
+      onToggleCli: () => setCliDrawerOpen((v: boolean) => !v),
       onTogglePanel: handlePanelToggle,
-      onToggleFilter: () => setFilterOpen((v) => !v),
+      onToggleFilter: () => setFilterOpen((v: boolean) => !v),
       onToggleLabels: () => setLabelsEnabled(!getLabelsEnabled()),
       onToggleGsLabels: () => setGsLabelsEnabled(!getGsLabelsEnabled()),
     }),
-    [clearSelection, handleCloseCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame],
+    [clearSelection, closeCatalog, showCatalog, hasEverDeployed, toggleView, toggleHistorical, handleFollowNode, handleTopView, historicalMode, playback, handlePanelToggle, toggleReferenceFrame, setColorMode, setShowGroundLinks, setShowIslLinks, setShowSatPaths, setShowTrails, setGlobeMode, setCliDrawerOpen, setFilterOpen],
   );
 
   useKeyboard(keyboardActions);
@@ -287,7 +234,7 @@ function AppInner() {
       onToggleHistorical={toggleHistorical}
       activeSessionName={activeSessionName}
       switching={switching}
-      onOpenCatalog={() => setShowCatalog(true)}
+      onOpenCatalog={openCatalog}
       playbackPaused={playback.paused}
       playbackSpeed={playback.speed}
       playbackLoading={playback.loading}
@@ -354,12 +301,12 @@ function AppInner() {
       )}
       {connected && !switching && snapshot && snapshot.nodes.length > 0 && !simTimeAdvanced && (
         <div className="connection-banner">
-          Waiting for orbital propagation — satellites will begin moving shortly
+          Waiting for orbital propagation - satellites will begin moving shortly
         </div>
       )}
       {snapshot?.stale && (
         <div className="connection-banner" style={{ background: "rgba(200, 60, 60, 0.85)" }}>
-          STALE DATA — waiting for upstream update
+          STALE DATA - waiting for upstream update
         </div>
       )}
       <div
@@ -412,11 +359,11 @@ function AppInner() {
         referenceFrame={referenceFrame}
         onViewMode={setViewMode}
         onColorMode={setColorMode}
-        onToggleGroundLinks={() => setShowGroundLinks((v) => !v)}
-        onToggleIslLinks={() => setShowIslLinks((v) => !v)}
-        onToggleSatPaths={() => setShowSatPaths((v) => !v)}
+        onToggleGroundLinks={() => setShowGroundLinks((v: boolean) => !v)}
+        onToggleIslLinks={() => setShowIslLinks((v: boolean) => !v)}
+        onToggleSatPaths={() => setShowSatPaths((v: boolean) => !v)}
         globeMode={globeMode}
-        onToggleGlobeMode={() => setGlobeMode((m) => m === "blue-marble" ? "day-night" : "blue-marble")}
+        onToggleGlobeMode={() => setGlobeMode((m: string) => m === "blue-marble" ? "day-night" : "blue-marble")}
         onToggleReferenceFrame={toggleReferenceFrame}
         onTopView={handleTopView}
         onFollowNode={handleFollowNode}
@@ -457,9 +404,9 @@ function AppInner() {
               showGroundLinks={showGroundLinks}
               showSatPaths={showSatPaths}
               colorMode={colorMode}
-              onToggleIslLinks={() => setShowIslLinks((v) => !v)}
-              onToggleGroundLinks={() => setShowGroundLinks((v) => !v)}
-              onToggleSatPaths={() => setShowSatPaths((v) => !v)}
+              onToggleIslLinks={() => setShowIslLinks((v: boolean) => !v)}
+              onToggleGroundLinks={() => setShowGroundLinks((v: boolean) => !v)}
+              onToggleSatPaths={() => setShowSatPaths((v: boolean) => !v)}
               onSetColorMode={setColorMode}
               visiblePlanes={visiblePlanes}
               onTogglePlane={handleTogglePlane}
@@ -483,7 +430,7 @@ function AppInner() {
   );
 
   const bottomBarContent = (
-    <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} logPanelOpen={logPanelOpen} onToggleLogPanel={() => setLogPanelOpen((v) => !v)} />
+    <BottomBar snapshot={snapshot} connected={connected} historicalMode={historicalMode} logPanelOpen={logPanelOpen} onToggleLogPanel={() => setLogPanelOpen((v: boolean) => !v)} />
   );
 
   const toastsContent = <Toasts events={snapshot?.recent_events} />;

@@ -18,7 +18,7 @@ import requests
 
 pytestmark = pytest.mark.integration
 
-VS_API_HOST = os.environ.get("VS_API_HOST", "192.168.10.202:8080")
+VS_API_HOST = os.environ.get("VS_API_HOST", "192.168.10.201:8080")
 
 
 def _get_state():

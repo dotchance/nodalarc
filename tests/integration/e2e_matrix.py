@@ -18,7 +18,7 @@ from pathlib import Path
 
 import requests
 
-VS_API_HOST = os.environ.get("VS_API_HOST", "192.168.10.202:8080")
+VS_API_HOST = os.environ.get("VS_API_HOST", "192.168.10.201:8080")
 BASE_URL = f"http://{VS_API_HOST}"
 KUBECTL = "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
 

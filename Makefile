@@ -106,7 +106,7 @@ all: deps build ## Full pipeline: checkout → running constellation
 
 deps: check-deps ## Install Python + Node.js dependencies (idempotent)
 	@echo "[deps] Installing Python dependencies..."
-	uv sync
+	uv sync --extra dev
 	uv pip install -e lib/
 	@echo "[deps] Installing VF frontend dependencies..."
 	cd frontend && npm ci
@@ -557,8 +557,13 @@ deploy-measurement: build-measurement ## Build + load + restart MI
 status: ## Show cluster status (pods, phase, links)
 	@KUBECONFIG=$(KUBECONFIG) NAMESPACE=$(NAMESPACE) REGISTRY_HOST=$(REGISTRY_HOST) DEFAULT_SESSION=$(DEFAULT_SESSION) bash tools/na-status.sh
 
-test: ## Run unit tests (868+, no sudo needed)
+test: test-backend test-frontend ## Run all unit tests (no sudo needed)
+
+test-backend: ## Run Python unit tests
 	uv run pytest --ignore=tests/integration --tb=short -q
+
+test-frontend: ## Run frontend unit tests (vitest)
+	cd frontend && npx vitest run
 
 test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q

@@ -26,9 +26,11 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-cov",
+    "pytest-timeout>=2.4.0",
     "mypy",
     "ruff>=0.4.4",
     "pre-commit>=3.7.0",
+    "kopf>=1.37",
 ]
 
 [build-system]

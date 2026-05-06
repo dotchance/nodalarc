@@ -19,6 +19,7 @@ from nodalarc.models.vs_api import (
     NodeState,
     StateSnapshot,
 )
+from nodalarc.nats_channels import STREAM_OME_EVENTS
 from vs_api.session_context import SessionContext, _link_key
 
 
@@ -410,7 +411,7 @@ class TestSubscriberResilience:
         js_mock = MagicMock()
 
         async def mock_subscribe(subject, **kwargs):
-            if "NODALARC_OME" in kwargs.get("stream", ""):
+            if STREAM_OME_EVENTS in kwargs.get("stream", ""):
                 raise NotFoundError(code=404, err_code=10059, description="stream not found")
             sub = AsyncMock()
             sub.unsubscribe = AsyncMock()

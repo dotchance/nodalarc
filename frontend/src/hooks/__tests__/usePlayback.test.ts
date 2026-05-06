@@ -18,27 +18,27 @@ describe("usePlayback", () => {
       ok: true,
       json: () => Promise.resolve({ paused: false, speed: 1 }),
     });
-    globalThis.fetch = fetchMock;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
   });
 
   it("pause sends correct action", async () => {
     const { result } = renderHook(() => usePlayback());
     await act(async () => { await result.current.pause(); });
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
     expect(body.action).toBe("pause");
   });
 
   it("resume sends correct action", async () => {
     const { result } = renderHook(() => usePlayback());
     await act(async () => { await result.current.resume(); });
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
     expect(body.action).toBe("resume");
   });
 
   it("setSpeed sends factor", async () => {
     const { result } = renderHook(() => usePlayback());
     await act(async () => { await result.current.setSpeed(10); });
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
     expect(body.action).toBe("set_speed");
     expect(body.factor).toBe(10);
   });
@@ -46,7 +46,7 @@ describe("usePlayback", () => {
   it("seek sends target_sim_time", async () => {
     const { result } = renderHook(() => usePlayback());
     await act(async () => { await result.current.seek("2026-01-01T12:00:00Z"); });
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body);
     expect(body.action).toBe("seek");
     expect(body.target_sim_time).toBe("2026-01-01T12:00:00Z");
   });

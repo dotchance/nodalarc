@@ -23,7 +23,9 @@ import asyncio
 import json
 import logging
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 
 import nats
 from nodalarc.models.events import PlaybackState, SessionEphemeris, VisibilityEvent
@@ -73,6 +75,37 @@ class ActiveLinkInfo:
         self.latency_ms = latency_ms
         self.bandwidth_mbps = bandwidth_mbps
         self.link_type = link_type
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchIntent:
+    """Typed payload for the dispatch queue.
+
+    Structurally frozen: field reassignment prevented by frozen=True.
+    Dict contents are mutable by Python convention — the actuator does
+    not mutate them. This is a convention boundary, not a type-level
+    guarantee.
+
+    Fields:
+        desired: effective desired topology (raw desired minus overrides)
+        down_reasons: reason per override-caused removal, captured at
+            enqueue time. Actuator uses down_reasons.get(pair, "vis_lost").
+        forced_bbm_pairs: pairs that must use BBM regardless of spare
+            capacity. For ground links, forces the entire GS segment to
+            BBM if any pair in the segment is forced. For ISLs, per-pair.
+        sim_time: captured at enqueue time for LinkUp/LinkDown timestamps.
+        source: origin for logging only — does not drive actuator behavior.
+        rebaseline_counts: True for snapshot-sourced intents. The dispatch
+            worker calls _rebaseline_active_counts() before reconciling.
+            OR'd across drained intents to preserve the side effect.
+    """
+
+    desired: dict[tuple[str, str], ActiveLinkInfo]
+    down_reasons: dict[tuple[str, str], str]
+    forced_bbm_pairs: frozenset[tuple[str, str]]
+    sim_time: datetime
+    source: Literal["ome_event", "snapshot", "scenario", "resume"]
+    rebaseline_counts: bool = False
 
 
 class Dispatcher:

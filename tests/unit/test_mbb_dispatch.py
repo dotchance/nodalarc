@@ -10,7 +10,6 @@ incremental counter integrity, and snapshot rebaselining.
 from __future__ import annotations
 
 import asyncio
-import threading
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -55,8 +54,6 @@ def _make_dispatcher(
         bandwidth_map=bmap,
         pod_locator=loc,
         agent_pool=pool,
-        override_set=set(),
-        override_lock=threading.Lock(),
         session_id="test-session",
         gs_terminal_capacities=gs_caps or {},
         sat_ground_terminal_capacities=sat_caps or {},

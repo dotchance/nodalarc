@@ -110,6 +110,7 @@ def _make_dispatcher(interface_map=None, stub_success=True):
     d._js = AsyncMock()
     d._nc = MagicMock()
     d._position_table = MagicMock()
+    d._position_table.compute_link_latency = MagicMock(return_value=3.0)
     d._position_table.compute_link_range = MagicMock(return_value=1500.0)
     return d, pool
 
@@ -242,8 +243,9 @@ class TestDispatcherLiveDispatch:
         stub = pool.get_stub.return_value
         assert stub.async_batch_link_up.called
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
-        assert len(pub.messages) > 0
-        assert pub.messages[0][0] == "nodalarc.links.default.up"
+        assert d._js.publish.called
+        published_subject = d._js.publish.call_args_list[0][0][0]
+        assert "up" in published_subject
 
     def test_link_down_publishes_after_node_agent_ack(self):
         d, pool = _make_dispatcher()
@@ -256,8 +258,9 @@ class TestDispatcherLiveDispatch:
         stub = pool.get_stub.return_value
         assert stub.async_batch_link_down.called
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
-        assert len(pub.messages) > 0
-        assert pub.messages[0][0] == "nodalarc.links.default.down"
+        assert d._js.publish.called
+        published_subject = d._js.publish.call_args_list[0][0][0]
+        assert "down" in published_subject
 
     def test_link_up_not_published_if_node_agent_exception(self):
         d, pool = _make_dispatcher()

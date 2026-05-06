@@ -134,8 +134,6 @@ class Dispatcher:
         bandwidth_map: dict[tuple[str, str], float],
         pod_locator: PodLocationMap,
         agent_pool: AgentPool,
-        override_set: set[tuple[str, str]],
-        override_lock: threading.Lock,
         session_id: str,
         compression_factor: int = 1,
         latency_update_interval_s: int = 10,
@@ -148,8 +146,6 @@ class Dispatcher:
         self._bandwidth_map = bandwidth_map
         self._loc = pod_locator
         self._pool = agent_pool
-        self._override_set = override_set
-        self._override_lock = override_lock
         self._compression = max(1, compression_factor)
         self._latency_interval = latency_update_interval_s
         self._epsilon_ms = epsilon_ms
@@ -202,6 +198,11 @@ class Dispatcher:
         self._substrate_latency: dict[str, float] = {}  # "nodeA-nodeB" -> ms (legacy ConfigMap)
         self._substrate_by_ip: dict[str, float] = {}  # peer_ip -> ms (live from Node Agent)
 
+        # Control plane state: scenario overrides. Values are reason strings.
+        # Mutated only by _on_scenario_command on the main event loop.
+        self._override_pairs: dict[tuple[str, str], str] = {}
+        self._override_nodes: dict[str, str] = {}
+
         # Ground links currently in MBB teardown state (held for overlap).
         # Used by the safety check to identify teardown-expired removals.
         self._teardown_pairs: set[tuple[str, str]] = set()
@@ -220,10 +221,8 @@ class Dispatcher:
         self._stale = False
         self._watchdog_task: asyncio.Task | None = None
 
-        # Queue: decision callbacks → dispatch worker
-        self._dispatch_queue: asyncio.Queue[dict[tuple[str, str], ActiveLinkInfo] | None] = (
-            asyncio.Queue()
-        )
+        # Queue: decision engine / control plane → actuator (dispatch worker)
+        self._dispatch_queue: asyncio.Queue[DispatchIntent | None] = asyncio.Queue()
 
     # Backward compat: tests that reference _active_links
     @property
@@ -275,6 +274,52 @@ class Dispatcher:
     @_active_links.setter
     def _active_links(self, value: dict[tuple[str, str], ActiveLinkInfo]) -> None:
         self._actual_links = value
+
+    def _build_dispatch_intent(
+        self,
+        sim_time: datetime,
+        source: Literal["ome_event", "snapshot", "scenario", "resume"],
+        rebaseline_counts: bool = False,
+    ) -> DispatchIntent:
+        """Build a DispatchIntent from current desired + override state.
+
+        Computes effective desired (raw desired minus overrides), captures
+        down_reasons and forced_bbm_pairs for override-caused removals at
+        this instant. The actuator uses the returned intent without reading
+        _override_pairs or _override_nodes.
+        """
+        effective = {
+            pair: info
+            for pair, info in self._desired_links.items()
+            if pair not in self._override_pairs
+            and pair[0] not in self._override_nodes
+            and pair[1] not in self._override_nodes
+        }
+
+        candidates = set(self._desired_links) | set(self._actual_links)
+
+        down_reasons: dict[tuple[str, str], str] = {}
+        forced_bbm: set[tuple[str, str]] = set()
+        for pair in candidates:
+            if pair not in effective:
+                reason = self._override_pairs.get(pair)
+                if not reason:
+                    for nid in pair:
+                        reason = self._override_nodes.get(nid)
+                        if reason:
+                            break
+                if reason:
+                    down_reasons[pair] = reason
+                    forced_bbm.add(pair)
+
+        return DispatchIntent(
+            desired=effective,
+            down_reasons=down_reasons,
+            forced_bbm_pairs=frozenset(forced_bbm),
+            sim_time=sim_time,
+            source=source,
+            rebaseline_counts=rebaseline_counts,
+        )
 
     async def run(self, nc: nats.NATS | None = None, **_kwargs) -> None:
         """Main async dispatch loop — NATS JetStream subscription.
@@ -423,8 +468,12 @@ class Dispatcher:
             if last_sim_time is not None and snap_sim != last_sim_time:
                 delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
                 if delta_ms > self._epsilon_ms and pending_vis:
-                    desired = self._apply_events_to_desired(list(pending_vis))
-                    await self._dispatch_queue.put(desired)
+                    self._apply_events_to_desired(list(pending_vis))
+                    intent = self._build_dispatch_intent(
+                        sim_time=pending_vis[0].sim_time,
+                        source="ome_event",
+                    )
+                    await self._dispatch_queue.put(intent)
                     pending_vis.clear()
 
             pending_vis.append(vis)
@@ -506,8 +555,12 @@ class Dispatcher:
             if pending_vis and tick_sim_time is not None:
                 pending_sim = pending_vis[0].sim_time
                 if pending_sim < tick_sim_time:
-                    desired = self._apply_events_to_desired(list(pending_vis))
-                    await self._dispatch_queue.put(desired)
+                    self._apply_events_to_desired(list(pending_vis))
+                    intent = self._build_dispatch_intent(
+                        sim_time=pending_vis[0].sim_time,
+                        source="ome_event",
+                    )
+                    await self._dispatch_queue.put(intent)
                     pending_vis.clear()
                     last_sim_time = tick_sim_time
 
@@ -534,12 +587,17 @@ class Dispatcher:
 
             desired = self._build_desired_from_snapshot(snapshot)
             if desired is not None:
+                intent = self._build_dispatch_intent(
+                    sim_time=snapshot.sim_time,
+                    source="snapshot",
+                    rebaseline_counts=True,
+                )
                 log.debug(
                     "Snapshot seq=%d queued: %d links desired",
                     snapshot.snapshot_seq,
-                    len(desired),
+                    len(intent.desired),
                 )
-                await self._dispatch_queue.put(desired)
+                await self._dispatch_queue.put(intent)
 
         async def _on_substrate_latency(msg):
             """Update substrate latency from live Node Agent measurements."""
@@ -665,9 +723,6 @@ class Dispatcher:
         """
         for vis in vis_events:
             pair = (vis.node_a, vis.node_b)
-            with self._override_lock:
-                if pair in self._override_set:
-                    continue
 
             if vis.visible and vis.scheduled:
                 sched_state = getattr(vis, "scheduling_state", "active")
@@ -757,15 +812,11 @@ class Dispatcher:
 
         self._last_snapshot_seq = snapshot.snapshot_seq
         desired: dict[tuple[str, str], ActiveLinkInfo] = {}
-
-        with self._override_lock:
-            current_overrides = set(self._override_set)
+        self._teardown_pairs.clear()
 
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 pair = (link.node_a, link.node_b)
-                if pair in current_overrides:
-                    continue
                 latency = link.latency_ms
                 if latency is None:
                     sim_unix = snapshot.sim_time.timestamp() if snapshot.sim_time else 0.0
@@ -816,9 +867,6 @@ class Dispatcher:
 
         # Replace _desired_links entirely — snapshot is authoritative
         self._desired_links = desired
-
-        # Re-baseline incremental active-link counters from source of truth
-        self._rebaseline_active_counts()
 
         isl = sum(1 for info in desired.values() if info.link_type == "isl")
         gs = sum(1 for info in desired.values() if info.link_type == "ground")
@@ -874,42 +922,52 @@ class Dispatcher:
         """
         log.debug("Dispatch worker started")
         while self._running:
-            # Block until work arrives (event-driven, no polling)
-            desired = await self._dispatch_queue.get()
+            intent = await self._dispatch_queue.get()
 
-            if desired is None:
-                break  # Shutdown sentinel
+            if intent is None:
+                break
 
-            # Drain queue to latest — discard stale intermediates
+            # Drain queue to latest intent. rebaseline_counts is OR'd
+            # across drained entries — it's a side effect that must not
+            # be lost when a snapshot intent is superseded.
+            rebaseline = intent.rebaseline_counts
             drained = 0
             while not self._dispatch_queue.empty():
                 try:
-                    next_desired = self._dispatch_queue.get_nowait()
+                    next_intent = self._dispatch_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-                if next_desired is None:
-                    desired = None
+                if next_intent is None:
+                    intent = None
                     break
-                desired = next_desired
+                rebaseline = rebaseline or next_intent.rebaseline_counts
+                intent = next_intent
                 drained += 1
 
-            if desired is None:
+            if intent is None:
                 break
 
             if drained > 0:
                 log.debug("Dispatch worker: drained %d stale entries from queue", drained)
 
-            sim_time = self._current_sim_time or datetime.now(UTC)
+            if rebaseline:
+                self._rebaseline_active_counts()
+
             log.debug(
-                "Dispatch worker: processing desired with %d links (actual has %d)",
-                len(desired),
+                "Dispatch worker: processing %s intent with %d links (actual has %d)",
+                intent.source,
+                len(intent.desired),
                 len(self._actual_links),
             )
 
-            # Reconcile desired vs actual
-            await self._reconcile_links(desired, nc, sim_time)
+            await self._reconcile_links(
+                intent.desired,
+                nc,
+                intent.sim_time,
+                intent.down_reasons,
+                intent.forced_bbm_pairs,
+            )
 
-            # Latency updates (queued by _on_clock_tick)
             if self._latency_update_pending:
                 await self._update_latencies(nc)
                 self._latency_update_pending = False
@@ -980,6 +1038,8 @@ class Dispatcher:
         desired: dict[tuple[str, str], ActiveLinkInfo],
         nc,
         sim_time: datetime,
+        down_reasons: dict[tuple[str, str], str] | None = None,
+        forced_bbm_pairs: frozenset[tuple[str, str]] | None = None,
     ) -> None:
         """Reconcile _actual_links toward desired state via Node Agent dispatch.
 
@@ -993,6 +1053,11 @@ class Dispatcher:
         When mbb_dispatch is disabled, uses original two-phase BBM
         (all downs then all ups).
         """
+        if down_reasons is None:
+            down_reasons = {}
+        if forced_bbm_pairs is None:
+            forced_bbm_pairs = frozenset()
+
         current_pairs = set(self._actual_links.keys())
         desired_pairs = set(desired.keys())
 
@@ -1007,7 +1072,9 @@ class Dispatcher:
         if not self._mbb_dispatch:
             # Original two-phase BBM dispatch
             if to_remove:
-                removed = await self._send_batch_down(to_remove, sim_iso, sim_time, nc)
+                removed = await self._send_batch_down(
+                    to_remove, sim_iso, sim_time, nc, down_reasons
+                )
                 for pair in removed:
                     info = self._actual_links.pop(pair, None)
                     self._last_latencies.pop(pair, None)
@@ -1020,7 +1087,16 @@ class Dispatcher:
                     self._last_latencies[pair] = desired[pair].latency_ms
                     self._increment_active_counts(pair)
         else:
-            await self._reconcile_mbb(to_remove, to_add, desired, sim_iso, sim_time, nc)
+            await self._reconcile_mbb(
+                to_remove,
+                to_add,
+                desired,
+                sim_iso,
+                sim_time,
+                nc,
+                down_reasons,
+                forced_bbm_pairs,
+            )
 
         if to_add or to_remove:
             added_str = ", ".join(f"{a}<->{b}" for a, b in sorted(to_add)) if to_add else ""
@@ -1052,13 +1128,22 @@ class Dispatcher:
         sim_iso: str,
         sim_time: datetime,
         nc,
+        down_reasons: dict[tuple[str, str], str] | None = None,
+        forced_bbm_pairs: frozenset[tuple[str, str]] | None = None,
     ) -> None:
         """Three-phase capacity-aware MBB dispatch for ground links.
 
         Phase 1: BBM downs + ISL downs (free capacity)
         Phase 2: All ups (greedy-reserved, no over-subscription)
         Phase 3: MBB downs (where Phase 2 up succeeded)
+
+        forced_bbm_pairs escalates to GS-segment level: if ANY pair
+        under a GS is forced, the entire segment goes BBM.
         """
+        if down_reasons is None:
+            down_reasons = {}
+        if forced_bbm_pairs is None:
+            forced_bbm_pairs = frozenset()
 
         def _gs_id_for_pair(pair: tuple[str, str]) -> str | None:
             if pair[0] in self._gs_capacities:
@@ -1102,6 +1187,13 @@ class Dispatcher:
         bbm_segments: set[str] = set()  # gs_ids forced to BBM
 
         for gs_id in dirty_gs:
+            # Forced BBM: if any pair under this GS is in forced_bbm_pairs,
+            # the entire segment goes BBM (scenario faults are immediate).
+            segment_pairs = gs_downs.get(gs_id, set()) | gs_ups.get(gs_id, set())
+            if segment_pairs & forced_bbm_pairs:
+                bbm_segments.add(gs_id)
+                continue
+
             ups = gs_ups.get(gs_id, set())
             if not ups:
                 # Pure down, no MBB needed
@@ -1142,7 +1234,7 @@ class Dispatcher:
             phase1_downs.update(gs_downs.get(gs_id, set()))
 
         if phase1_downs:
-            removed = await self._send_batch_down(phase1_downs, sim_iso, sim_time, nc)
+            removed = await self._send_batch_down(phase1_downs, sim_iso, sim_time, nc, down_reasons)
             failed_bbm_gs: set[str] = set()
             for pair in phase1_downs:
                 gs_id = _gs_id_for_pair(pair)
@@ -1205,7 +1297,9 @@ class Dispatcher:
                 phase3_downs.update(gs_downs.get(gs_id, set()))
 
         if phase3_downs:
-            removed3 = await self._send_batch_down(phase3_downs, sim_iso, sim_time, nc)
+            removed3 = await self._send_batch_down(
+                phase3_downs, sim_iso, sim_time, nc, down_reasons
+            )
             for pair in removed3:
                 info = self._actual_links.pop(pair, None)
                 self._last_latencies.pop(pair, None)
@@ -1217,8 +1311,11 @@ class Dispatcher:
         sim_iso: str,
         sim_time: datetime,
         nc,
+        down_reasons: dict[tuple[str, str], str] | None = None,
     ) -> set[tuple[str, str]]:
         """Send BatchLinkDown to Node Agents. Returns successfully removed pairs."""
+        if down_reasons is None:
+            down_reasons = {}
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
         pair_agents: dict[tuple[str, str], set[str]] = {}
 
@@ -1360,7 +1457,7 @@ class Dispatcher:
                         node_b=pair[1],
                         interface_a=info.interface_a,
                         interface_b=info.interface_b,
-                        reason="vis_lost",
+                        reason=down_reasons.get(pair, "vis_lost"),
                     )
                     try:
                         await self._js.publish(
@@ -1785,25 +1882,30 @@ class Dispatcher:
         self._suspended = False
         self._stale = False
 
-        # Apply the buffered LinkStateSnapshot
-        if self._buffered_snapshot:
-            desired = self._build_desired_from_snapshot(self._buffered_snapshot)
-            if desired is not None:
-                log.info(
-                    "Epoch %d resume: applying buffered snapshot seq=%d (%d links)",
-                    self._expected_epoch_id,
-                    self._buffered_snapshot.snapshot_seq,
-                    len(desired),
-                )
-                await self._dispatch_queue.put(desired)
-            self._buffered_snapshot = None
-
-        # Process the triggering ClockTick normally
+        # Process the triggering ClockTick's sim_time first — needed for intent
         tick_sim_str = tick_data.get("sim_time")
         if not tick_sim_str:
             log.error("ClockTick missing sim_time on seek resume: %s", tick_data)
             raise ValueError("ClockTick missing sim_time")
         self._current_sim_time = datetime.fromisoformat(tick_sim_str)
+
+        # Apply the buffered LinkStateSnapshot
+        if self._buffered_snapshot:
+            desired = self._build_desired_from_snapshot(self._buffered_snapshot)
+            if desired is not None:
+                intent = self._build_dispatch_intent(
+                    sim_time=self._current_sim_time,
+                    source="resume",
+                    rebaseline_counts=True,
+                )
+                log.info(
+                    "Epoch %d resume: applying buffered snapshot seq=%d (%d links)",
+                    self._expected_epoch_id,
+                    self._buffered_snapshot.snapshot_seq,
+                    len(intent.desired),
+                )
+                await self._dispatch_queue.put(intent)
+            self._buffered_snapshot = None
 
         log.info(
             "RESUMED: epoch_id=%d sim_time=%s",

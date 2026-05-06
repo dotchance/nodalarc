@@ -36,8 +36,6 @@ def _make_dispatcher(**overrides) -> Dispatcher:
         bandwidth_map={},
         pod_locator=MagicMock(),
         agent_pool=MagicMock(),
-        override_set=set(),
-        override_lock=MagicMock(),
         session_id="test-session",
         gs_terminal_capacities={},
         sat_ground_terminal_capacities={},
@@ -263,8 +261,6 @@ class TestDispatcherRequiresSessionId:
                 bandwidth_map={},
                 pod_locator=MagicMock(),
                 agent_pool=MagicMock(),
-                override_set=set(),
-                override_lock=MagicMock(),
                 gs_terminal_capacities={},
                 sat_ground_terminal_capacities={},
                 # session_id omitted
@@ -280,8 +276,6 @@ class TestDispatcherRequiresSessionId:
                 bandwidth_map={},
                 pod_locator=MagicMock(),
                 agent_pool=MagicMock(),
-                override_set=set(),
-                override_lock=MagicMock(),
                 session_id="test",
                 # capacities omitted — defaults to None
             )

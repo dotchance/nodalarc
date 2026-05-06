@@ -1,6 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Pod location map — maps canonical node IDs to K3s nodes and PIDs.
+"""Pod location map — maps canonical node IDs to K3s nodes.
 
 IMPORTANT — case sensitivity contract:
   All node IDs are derived from AddressingScheme (e.g., "sat-P01S02").
@@ -10,12 +10,11 @@ IMPORTANT — case sensitivity contract:
 
   This module reads the label value directly — it does not transform or
   derive node IDs from pod names. The canonical ID flows unchanged from
-  the label into pid_map keys and gRPC message fields.
+  the label into NATS request/reply message fields.
 
 The Scheduler uses this to:
   1. Route BatchLinkDown/Up to the correct Node Agent (by K3s node)
-  2. Pass PIDs to the Node Agent in gRPC messages
-  3. Build interface_map keys using canonical node IDs
+  2. Build interface_map keys using canonical node IDs
 """
 
 from __future__ import annotations
@@ -27,16 +26,16 @@ log = logging.getLogger(__name__)
 
 
 class PodLocationMap:
-    """Maps canonical node IDs to K3s node locations and PIDs.
+    """Maps canonical node IDs to K3s node locations.
 
-    Built from K8s API (live) or from a pid_map.json file (na_deploy).
+    Built from K8s API (live) or from a pid_map.json file (legacy).
     """
 
     def __init__(self) -> None:
         # canonical_node_id -> k3s node name
         self._node_of: dict[str, str] = {}
         self._node_ips: dict[str, str] = {}  # k3s_node_name -> InternalIP
-        # k3s node name -> Node Agent gRPC address
+        # k3s node name -> Node Agent NATS subject
         self._agent_addrs: dict[str, str] = {}
 
     @property
@@ -49,7 +48,7 @@ class PodLocationMap:
         return self._node_of.get(node_id, "")
 
     def agent_addr(self, node_id: str) -> str:
-        """Get Node Agent gRPC address for the K3s node hosting this pod."""
+        """Get Node Agent NATS subject for the K3s node hosting this pod."""
         k3s = self._node_of.get(node_id, "")
         return self._agent_addrs.get(k3s, "")
 
@@ -70,7 +69,7 @@ class PodLocationMap:
         return node_agent_pb2.LOCAL
 
     def all_agent_addrs(self) -> list[str]:
-        """All unique Node Agent gRPC addresses."""
+        """All unique Node Agent NATS subjects."""
         return list(set(self._agent_addrs.values()))
 
     def nodes_on_agent(self, agent_addr: str) -> list[str]:
@@ -116,10 +115,8 @@ class PodLocationMap:
         """Load pod locations from K8s API.
 
         Reads canonical node IDs from nodalarc.io/node-id label and
-        K3s node from pod.spec.nodeName. PIDs are NOT discovered here —
-        the Node Agent owns PID resolution internally.
-
-        Node Agent addresses are derived from the K3s node's InternalIP.
+        K3s node from pod.spec.nodeName. Node Agent NATS subjects are
+        the K3s node name (e.g. nodalarc.agent.{node_name}).
         """
         import kubernetes
         import kubernetes.client

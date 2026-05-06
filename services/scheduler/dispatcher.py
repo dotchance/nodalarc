@@ -31,6 +31,8 @@ from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
 from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
+    STREAM_LINK_EVENTS,
+    STREAM_OME_EVENTS,
     latency_update_subject,
     link_down_subject,
     link_state_snapshot_subject,
@@ -537,11 +539,11 @@ class Dispatcher:
             ),
             (
                 self._subj_link_snapshot,
-                "NODALARC_LINKS",
+                STREAM_LINK_EVENTS,
                 DeliverPolicy.LAST_PER_SUBJECT,
                 _on_link_state_snapshot,
             ),
-            (self._subj_substrate, "NODALARC_LINKS", DeliverPolicy.NEW, _on_substrate_latency),
+            (self._subj_substrate, STREAM_LINK_EVENTS, DeliverPolicy.NEW, _on_substrate_latency),
         ]
         for subj, stream, policy, cb in subscriptions:
             try:
@@ -573,7 +575,7 @@ class Dispatcher:
             subs.append(
                 await js.subscribe(
                     self._subj_ome_all,
-                    stream="NODALARC_OME",
+                    stream=STREAM_OME_EVENTS,
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
                     cb=_on_ome_event,
@@ -581,8 +583,9 @@ class Dispatcher:
             )
         except Exception as exc:
             log.error(
-                "FATAL: Failed to subscribe to %s on stream NODALARC_OME: %s",
+                "FATAL: Failed to subscribe to %s on stream %s: %s",
                 self._subj_ome_all,
+                STREAM_OME_EVENTS,
                 exc,
             )
             raise

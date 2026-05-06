@@ -130,6 +130,11 @@ def scheduling_checkpoint_subject(session_id: str) -> str:
     return f"nodalarc.session.{session_id}.scheduling_checkpoint"
 
 
+def scenario_inject_subject(session_id: str) -> str:
+    """Scenario injection subject for a specific session (core NATS request/reply)."""
+    return f"nodalarc.scheduler.{session_id}.scenario"
+
+
 def convergence_result_subject(session_id: str) -> str:
     """MI convergence result subject for a specific session."""
     return f"nodalarc.mi.{session_id}.convergence"

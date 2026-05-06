@@ -138,11 +138,6 @@ def main() -> None:
     _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Scheduler")
     parser.add_argument("--session", required=True, help="Path to session YAML")
-    parser.add_argument(
-        "--ome-endpoint",
-        default="",
-        help="Deprecated — OME events now via NATS. Ignored.",
-    )
     parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     parser.add_argument(
         "--platform-config",

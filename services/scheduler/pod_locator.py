@@ -194,15 +194,3 @@ def _discover_k3s_node() -> str:
     import socket
 
     return socket.gethostname()
-
-
-def _k3s_node_ip(v1, node_name: str) -> str:
-    """Get InternalIP for a K3s node."""
-    try:
-        node = v1.read_node(node_name)
-        for addr in node.status.addresses:
-            if addr.type == "InternalIP":
-                return addr.address
-    except Exception as exc:
-        log.warning("Failed to get IP for node %s: %s", node_name, exc)
-    return ""

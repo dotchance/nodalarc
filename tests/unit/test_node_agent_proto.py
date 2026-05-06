@@ -110,9 +110,6 @@ def test_node_agent_grpc_port():
         host_file_descriptor_limit=65536,
     )
     init_platform_config(cfg)
-    try:
-        from nodalarc.platform_config import get_platform_config
+    from nodalarc.platform_config import get_platform_config
 
-        assert get_platform_config().node_agent_grpc_port == 50100
-    finally:
-        reset_platform_config()
+    assert get_platform_config().node_agent_grpc_port == 50100

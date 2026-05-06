@@ -108,8 +108,6 @@ class Dispatcher:
         gs_terminal_capacities: dict[str, int] | None = None,
         sat_ground_terminal_capacities: dict[str, int] | None = None,
         mbb_dispatch: bool = False,
-        # Legacy — kept for test compatibility, ignored at runtime
-        ome_endpoint: str = "",
     ) -> None:
         self._interface_map = interface_map
         self._bandwidth_map = bandwidth_map
@@ -168,9 +166,6 @@ class Dispatcher:
         self._last_snapshot_seq: int = 0
         self._substrate_latency: dict[str, float] = {}  # "nodeA-nodeB" -> ms (legacy ConfigMap)
         self._substrate_by_ip: dict[str, float] = {}  # peer_ip -> ms (live from Node Agent)
-
-        # Pairs that failed dispatch and should not be retried.
-        self._skip_pairs: set[tuple[str, str]] = set()
 
         # Ground links currently in MBB teardown state (held for overlap).
         # Used by the safety check to identify teardown-expired removals.

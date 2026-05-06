@@ -17,17 +17,17 @@ describe("useSessionSwitcher", () => {
     fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) })
       .mockResolvedValue({ ok: true, json: () => Promise.resolve({}) });
-    globalThis.fetch = fetchMock;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
   });
 
   it("switchSession sends deploy request", async () => {
     const { result } = renderHook(() => useSessionSwitcher(null));
     await act(async () => { await result.current.switchSession("configs/sessions/demo.yaml"); });
     const switchCall = fetchMock.mock.calls.find(
-      (c: [string, RequestInit]) => c[0].includes("/sessions/switch"),
+      (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
     );
     expect(switchCall).toBeTruthy();
-    const body = JSON.parse(switchCall[1].body);
+    const body = JSON.parse(switchCall![1]!.body as string);
     expect(body.session).toBe("configs/sessions/demo.yaml");
   });
 
@@ -37,7 +37,7 @@ describe("useSessionSwitcher", () => {
     // Now switching is true - try to switch again
     await act(async () => { await result.current.switchSession("b.yaml"); });
     const switchCalls = fetchMock.mock.calls.filter(
-      (c: [string, RequestInit]) => c[0].includes("/sessions/switch"),
+      (c: unknown[]) => String(c[0]).includes("/sessions/switch"),
     );
     expect(switchCalls).toHaveLength(1);
   });

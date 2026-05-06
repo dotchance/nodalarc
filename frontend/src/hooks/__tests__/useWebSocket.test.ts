@@ -41,7 +41,7 @@ class MockWS {
 }
 
 // --- Helpers ---
-function lastWs(): MockWS { return wsInstances[wsInstances.length - 1]; }
+function lastWs(): MockWS { return wsInstances[wsInstances.length - 1]!; }
 
 function makeSnapshot(overrides?: Record<string, unknown>) {
   return {

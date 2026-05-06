@@ -557,7 +557,13 @@ deploy-measurement: build-measurement ## Build + load + restart MI
 status: ## Show cluster status (pods, phase, links)
 	@KUBECONFIG=$(KUBECONFIG) NAMESPACE=$(NAMESPACE) REGISTRY_HOST=$(REGISTRY_HOST) DEFAULT_SESSION=$(DEFAULT_SESSION) bash tools/na-status.sh
 
-test: test-backend test-frontend ## Run all unit tests (no sudo needed)
+test: ## Run all unit tests (no sudo needed)
+	@backend=0; frontend=0; \
+	uv run pytest --ignore=tests/integration --tb=short -q || backend=$$?; \
+	cd frontend && npx vitest run || frontend=$$?; \
+	if [ $$backend -ne 0 ] || [ $$frontend -ne 0 ]; then \
+		echo ""; echo "[test] FAILURES: backend=$$backend frontend=$$frontend"; exit 1; \
+	fi
 
 test-backend: ## Run Python unit tests
 	uv run pytest --ignore=tests/integration --tb=short -q

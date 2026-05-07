@@ -12,7 +12,6 @@ import argparse
 import asyncio
 import logging
 import os
-import threading
 from pathlib import Path
 
 import yaml
@@ -138,11 +137,6 @@ def main() -> None:
     _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Scheduler")
     parser.add_argument("--session", required=True, help="Path to session YAML")
-    parser.add_argument(
-        "--ome-endpoint",
-        default="",
-        help="Deprecated — OME events now via NATS. Ignored.",
-    )
     parser.add_argument("--pid-map", help="Path to pid_map.json from na-deploy")
     parser.add_argument(
         "--platform-config",
@@ -270,17 +264,11 @@ def main() -> None:
         mbb_dispatch,
     )
 
-    # Override set (shared between dispatcher and scenario handler)
-    override_set: set[tuple[str, str]] = set()
-    override_lock = threading.Lock()
-
     dispatcher = Dispatcher(
         interface_map=interface_map,
         bandwidth_map=bandwidth_map,
         pod_locator=loc,
         agent_pool=pool,
-        override_set=override_set,
-        override_lock=override_lock,
         compression_factor=session.time.compression,
         latency_update_interval_s=session.time.latency_update_interval_seconds,
         gs_terminal_capacities=gs_terminal_capacities,

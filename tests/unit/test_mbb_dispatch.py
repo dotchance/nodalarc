@@ -10,7 +10,6 @@ incremental counter integrity, and snapshot rebaselining.
 from __future__ import annotations
 
 import asyncio
-import threading
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -55,8 +54,6 @@ def _make_dispatcher(
         bandwidth_map=bmap,
         pod_locator=loc,
         agent_pool=pool,
-        override_set=set(),
-        override_lock=threading.Lock(),
         session_id="test-session",
         gs_terminal_capacities=gs_caps or {},
         sat_ground_terminal_capacities=sat_caps or {},
@@ -254,3 +251,111 @@ class TestCounterIntegrity:
         d._decrement_active_counts(("gs-A", "sat-01"))
         assert d._gs_active_count.get("gs-A", 0) == 0
         assert d._sat_active_count.get("sat-01", 0) == 0
+
+
+class TestForcedBBMSegmentEscalation:
+    """forced_bbm_pairs escalates to GS-segment level in _reconcile_mbb."""
+
+    def test_forced_segment_while_other_segments_mbb(self):
+        """Forced pair on gs-A → gs-A BBM, gs-B still MBB."""
+        pair_a_old = ("gs-A", "sat-01")
+        pair_a_new = ("gs-A", "sat-02")
+        pair_b_old = ("gs-B", "sat-03")
+        pair_b_new = ("gs-B", "sat-04")
+        all_pairs = [pair_a_old, pair_a_new, pair_b_old, pair_b_new]
+        d = _make_dispatcher(
+            gs_caps={"gs-A": 4, "gs-B": 4},
+            sat_caps={"sat-01": 1, "sat-02": 1, "sat-03": 1, "sat-04": 1},
+            pairs=all_pairs,
+        )
+        d._actual_links[pair_a_old] = ActiveLinkInfo(
+            "term0", "gnd0", 3.0, 1000.0, link_type="ground"
+        )
+        d._actual_links[pair_b_old] = ActiveLinkInfo(
+            "term0", "gnd0", 3.0, 1000.0, link_type="ground"
+        )
+        d._gs_active_count = {"gs-A": 1, "gs-B": 1}
+        d._sat_active_count = {"sat-01": 1, "sat-03": 1}
+
+        desired = {
+            pair_a_new: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground"),
+            pair_b_new: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground"),
+        }
+
+        forced = frozenset({pair_a_old})
+        down_reasons = {pair_a_old: "scenario_inject_down"}
+
+        nc = AsyncMock()
+        nc.publish = AsyncMock()
+
+        _run(d._reconcile_links(desired, nc, datetime.now(UTC), down_reasons, forced))
+
+        assert pair_a_old not in d._actual_links
+        assert pair_b_old not in d._actual_links
+        assert pair_a_new in d._actual_links
+        assert pair_b_new in d._actual_links
+
+    def test_mixed_forced_and_normal_under_same_gs(self):
+        """One forced pair + one normal pair under gs-A → entire segment BBM."""
+        pair_forced = ("gs-A", "sat-01")
+        pair_normal = ("gs-A", "sat-02")
+        pair_new = ("gs-A", "sat-03")
+        all_pairs = [pair_forced, pair_normal, pair_new]
+        d = _make_dispatcher(
+            gs_caps={"gs-A": 4},
+            sat_caps={"sat-01": 1, "sat-02": 1, "sat-03": 1},
+            pairs=all_pairs,
+        )
+        d._actual_links[pair_forced] = ActiveLinkInfo(
+            "term0", "gnd0", 3.0, 1000.0, link_type="ground"
+        )
+        d._actual_links[pair_normal] = ActiveLinkInfo(
+            "term0", "gnd0", 3.0, 1000.0, link_type="ground"
+        )
+        d._gs_active_count = {"gs-A": 2}
+        d._sat_active_count = {"sat-01": 1, "sat-02": 1}
+
+        desired = {
+            pair_new: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground"),
+        }
+
+        forced = frozenset({pair_forced})
+        down_reasons = {pair_forced: "scenario_inject_down"}
+
+        nc = AsyncMock()
+        nc.publish = AsyncMock()
+
+        _run(d._reconcile_links(desired, nc, datetime.now(UTC), down_reasons, forced))
+
+        assert pair_forced not in d._actual_links
+        assert pair_normal not in d._actual_links
+        assert pair_new in d._actual_links
+
+    def test_reason_through_mbb_path(self):
+        """Override reason flows through _reconcile_mbb → _send_batch_down."""
+        pair_old = ("gs-A", "sat-01")
+        pair_new = ("gs-A", "sat-02")
+        d = _make_dispatcher(
+            gs_caps={"gs-A": 4},
+            sat_caps={"sat-01": 1, "sat-02": 1},
+            pairs=[pair_old, pair_new],
+        )
+        d._actual_links[pair_old] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._gs_active_count = {"gs-A": 1}
+        d._sat_active_count = {"sat-01": 1}
+
+        desired = {
+            pair_new: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground"),
+        }
+
+        forced = frozenset({pair_old})
+        down_reasons = {pair_old: "satellite_loss"}
+
+        nc = AsyncMock()
+        nc.publish = AsyncMock()
+
+        _run(d._reconcile_links(desired, nc, datetime.now(UTC), down_reasons, forced))
+
+        published_calls = d._js.publish.call_args_list
+        down_calls = [c for c in published_calls if b"satellite_loss" in c[0][1]]
+        assert len(down_calls) == 1

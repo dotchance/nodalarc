@@ -220,6 +220,7 @@ class Dispatcher:
         self._buffered_snapshot: LinkStateSnapshot | None = None
         self._stale = False
         self._watchdog_task: asyncio.Task | None = None
+        self._scenario_sub = None
 
         # Queue: decision engine / control plane → actuator (dispatch worker)
         self._dispatch_queue: asyncio.Queue[DispatchIntent | None] = asyncio.Queue()
@@ -390,7 +391,7 @@ class Dispatcher:
         # Single-owner per session: if Scheduler replicas go above 1, this
         # needs a NATS queue group or leader election. Today replicas=1.
         self._subj_scenario = scenario_inject_subject(self._session_id)
-        await nc.subscribe(self._subj_scenario, cb=self._on_scenario_command)
+        self._scenario_sub = await nc.subscribe(self._subj_scenario, cb=self._on_scenario_command)
         log.debug("Scenario subscription active: %s", self._subj_scenario)
 
         # Start dispatch worker BEFORE subscriptions — ready to receive work
@@ -680,6 +681,11 @@ class Dispatcher:
                     await sub.unsubscribe()
                 except Exception as exc:
                     log.warning("Unsubscribe failed during shutdown: %s", exc)
+            if self._scenario_sub:
+                try:
+                    await self._scenario_sub.unsubscribe()
+                except Exception as exc:
+                    log.warning("Scenario unsubscribe failed: %s", exc)
             if owns_nc:
                 await nc.close()
             log.info("Dispatcher stopped")

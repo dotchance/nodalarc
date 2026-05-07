@@ -26,7 +26,7 @@ Communication: decision engine / control plane → dispatch queue → actuator.
 - **`DispatchIntent`** is the typed queue payload — carries effective desired
   state, down_reasons, forced_bbm_pairs, sim_time, source, rebaseline_counts.
 - **`_build_dispatch_intent()`** composes raw desired + overrides into an
-  immutable intent. Override-caused removals get reason attribution and
+  structurally frozen intent. Override-caused removals get reason attribution and
   forced BBM classification at enqueue time.
 - **LinkStateSnapshot** is applied as replace-not-merge — eliminates window
   boundary drift. Clears `_teardown_pairs` before rebuild.

@@ -2,6 +2,7 @@
 name = "nodal"
 version = "0.1.0"
 description = "Nodal Arc - Orbital Network Emulation Lab"
+license = { text = "NodalArc Source Available License 1.0" }
 requires-python = ">=3.14"
 dependencies = [
     "pydantic>=2.0",

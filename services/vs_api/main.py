@@ -18,7 +18,6 @@ import logging
 import os
 import secrets
 import sqlite3
-import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -2448,8 +2447,10 @@ def main() -> None:
     global _API_KEY
     if not _API_KEY:
         _API_KEY = secrets.token_urlsafe(32)
-        print(f"Generated API key: {_API_KEY}", file=sys.stderr)
-        log.info("Auto-generated API key (set NODAL_API_KEY to use a fixed key)")
+        log.info(
+            "Auto-generated ephemeral API key; retrieve it from /api/v1/auth/token "
+            "or set NODAL_API_KEY to use a fixed key"
+        )
     else:
         log.info("Using API key from NODAL_API_KEY environment variable")
 

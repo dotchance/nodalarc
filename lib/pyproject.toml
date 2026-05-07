@@ -2,6 +2,7 @@
 name = "nodalarc"
 version = "0.1.0"
 description = "Nodal Arc shared library - Pydantic models, DB schema, NATS channels"
+license = { text = "NodalArc Source Available License 1.0" }
 requires-python = ">=3.14"
 dependencies = [
     "pydantic>=2.0",

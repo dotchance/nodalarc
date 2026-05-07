@@ -181,7 +181,6 @@ export function updateSatellites(
 
 const _workerPos = { x: 0, y: 0, z: 0 };
 let _lastPropagateRequestTime = 0;
-let _workerWasReady = false;
 
 export function animateSatellites(_dt: number): void {
   if (!_ephemeris || !instancedMesh) return;
@@ -197,14 +196,6 @@ export function animateSatellites(_dt: number): void {
   if (workerReady && now - _lastPropagateRequestTime > 2000) {
     requestPropagate(simTimeUnix, 1.0);
     _lastPropagateRequestTime = now;
-  }
-
-  if (workerReady && !_workerWasReady) {
-    console.log("[satellites] Worker ready — using Worker positions");
-    _workerWasReady = true;
-  } else if (!workerReady && _workerWasReady) {
-    console.log("[satellites] Worker not ready — using main-thread propagation");
-    _workerWasReady = false;
   }
 
   for (const [nodeId, entry] of satellites) {

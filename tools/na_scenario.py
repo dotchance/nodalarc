@@ -57,13 +57,18 @@ def _resolve_session_id(session_path: str) -> str:
 
 
 async def _send_scheduler_cmd(nc: nats.NATS, subject: str, cmd: dict) -> dict:
-    """Send a command to the Scheduler and return the response."""
+    """Send a command to the Scheduler and return the response.
+
+    Raises SystemExit on rejection — a failed scenario command means
+    the rest of the scenario cannot be trusted.
+    """
     payload = json.dumps(cmd).encode()
     msg = await nc.request(subject, payload, timeout=10)
     resp = json.loads(msg.data)
     status = resp.get("status", "")
     if status not in ("accepted", "ok"):
-        log.error("Scheduler returned error: %s", resp)
+        log.error("Scheduler rejected command %s: %s", cmd.get("action"), resp)
+        sys.exit(1)
     return resp
 
 

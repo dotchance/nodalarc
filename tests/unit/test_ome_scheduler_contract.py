@@ -14,7 +14,6 @@ Covers:
 from __future__ import annotations
 
 import asyncio
-import threading
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -112,8 +111,6 @@ def _make_dispatcher(interface_map=None):
         bandwidth_map=bandwidth_map,
         pod_locator=loc,
         agent_pool=pool,
-        override_set=set(),
-        override_lock=threading.Lock(),
         session_id="test-session",
         gs_terminal_capacities={"gs-ashburn": 1},
         sat_ground_terminal_capacities={"sat-P00S00": 1, "sat-P00S01": 1},

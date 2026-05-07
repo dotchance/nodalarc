@@ -12,6 +12,7 @@ from nodalarc.models.scenario import (
     InjectSatelliteLossStep,
     MeasureStep,
     ReconfigStep,
+    RestoreSatelliteStep,
     ScenarioConfig,
     ScenarioStep,
     WaitConvergeStep,
@@ -59,6 +60,16 @@ class TestActionTypeValidation:
             }
         )
         assert isinstance(step, InjectSatelliteLossStep)
+        assert step.node == "sat-P02S03"
+
+    def test_restore_satellite_step(self):
+        step = step_adapter.validate_python(
+            {
+                "action": "restore_satellite",
+                "node": "sat-P02S03",
+            }
+        )
+        assert isinstance(step, RestoreSatelliteStep)
         assert step.node == "sat-P02S03"
 
     def test_wait_converge_step(self):
@@ -162,6 +173,10 @@ class TestScenarioConfigRoundTrip:
                     action="inject_satellite_loss",
                     node="sat-P02S03",
                 ),
+                RestoreSatelliteStep(
+                    action="restore_satellite",
+                    node="sat-P02S03",
+                ),
                 ReconfigStep(
                     action="reconfig",
                     target="all",
@@ -172,14 +187,15 @@ class TestScenarioConfigRoundTrip:
         json_str = config.model_dump_json()
         restored = ScenarioConfig.model_validate_json(json_str)
         assert restored.name == config.name
-        assert len(restored.steps) == 7
+        assert len(restored.steps) == 8
         assert isinstance(restored.steps[0], WaitStep)
         assert isinstance(restored.steps[1], InjectLinkDownStep)
         assert isinstance(restored.steps[2], WaitConvergeStep)
         assert isinstance(restored.steps[3], MeasureStep)
         assert isinstance(restored.steps[4], InjectLinkUpStep)
         assert isinstance(restored.steps[5], InjectSatelliteLossStep)
-        assert isinstance(restored.steps[6], ReconfigStep)
+        assert isinstance(restored.steps[6], RestoreSatelliteStep)
+        assert isinstance(restored.steps[7], ReconfigStep)
 
 
 class TestDiscriminatedUnionDispatch:
@@ -190,6 +206,7 @@ class TestDiscriminatedUnionDispatch:
             ({"action": "inject_link_down", "node_a": "a", "node_b": "b"}, InjectLinkDownStep),
             ({"action": "inject_link_up", "node_a": "a", "node_b": "b"}, InjectLinkUpStep),
             ({"action": "inject_satellite_loss", "node": "x"}, InjectSatelliteLossStep),
+            ({"action": "restore_satellite", "node": "x"}, RestoreSatelliteStep),
             ({"action": "wait_converge"}, WaitConvergeStep),
             ({"action": "measure", "duration_s": 5.0}, MeasureStep),
             ({"action": "reconfig", "target": "all"}, ReconfigStep),

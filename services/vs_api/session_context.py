@@ -45,6 +45,7 @@ from nodalarc.models.vs_api import (
 )
 from nodalarc.nats_channels import (
     STREAM_LINK_EVENTS,
+    STREAM_OME_EVENTS,
     STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
     almanac_event_subject,
@@ -305,7 +306,7 @@ class SessionContext:
             self._subscriptions.append(
                 await js.subscribe(
                     ome_clock_subject(sid),
-                    stream="NODALARC_OME",
+                    stream=STREAM_OME_EVENTS,
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
                     cb=self._on_clock_tick,

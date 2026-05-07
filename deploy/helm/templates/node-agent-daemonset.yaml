@@ -30,7 +30,7 @@ spec:
         {{- include "nodalarc.nats-wait-init" . | nindent 8 }}
       containers:
         - name: node-agent
-          image: {{ .Values.images.nodeAgent | default "docker.io/nodalarc/node-agent:latest" }}
+          image: {{ required "images.nodeAgent is required" .Values.images.nodeAgent | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           securityContext:
             privileged: true

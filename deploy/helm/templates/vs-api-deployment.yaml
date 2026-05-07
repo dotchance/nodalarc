@@ -44,7 +44,7 @@ spec:
         {{- include "nodalarc.nats-wait-init" . | nindent 8 }}
       containers:
         - name: vs-api
-          image: {{ .Values.images.vsApi | default "docker.io/nodalarc/vs-api:latest" }}
+          image: {{ required "images.vsApi is required" .Values.images.vsApi | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - "--session"

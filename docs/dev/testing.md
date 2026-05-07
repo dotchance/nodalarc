@@ -47,7 +47,7 @@ npm test
 ## Integration Tests
 
 ```bash
-sudo make test-integration
+make test-integration
 ```
 
 Requires a running session. Tests exercise real NATS communication, real pod operations, and real routing state.
@@ -57,7 +57,7 @@ Requires a running session. Tests exercise real NATS communication, real pod ope
 ### For backend changes
 
 1. **Unit tests pass** (`make test`)
-2. **Deploy the change** (`sudo make deploy-<service>`)
+2. **Deploy the change** (`make deploy-<service>`)
 3. **Verify behavior** in the running system:
    - For OME changes: check logs for event publishing, verify VF receives state
    - For Scheduler changes: verify links appear/disappear correctly, check Node Agent receives commands
@@ -69,7 +69,7 @@ Requires a running session. Tests exercise real NATS communication, real pod ope
 
 1. **Frontend tests pass** (`cd frontend && npm test`)
 2. **TypeScript compiles** (`cd frontend && npx tsc --noEmit`)
-3. **Deploy and test in browser** (`sudo make deploy-vf`, then check http://localhost:3000)
+3. **Deploy and test in browser** (`make deploy-vf`, then check http://localhost:3000)
 4. **Test the golden path** - the primary feature works
 5. **Test edge cases** - empty state, extreme zoom, large constellations
 6. **Check for regressions** - other features still work

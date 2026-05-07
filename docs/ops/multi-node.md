@@ -24,23 +24,11 @@ cp config.mk.example config.mk
 Edit `config.mk`:
 
 ```makefile
-# Your container registry (include trailing slash)
-REGISTRY_PREFIX ?= myregistry.local:5000/nodalarc/
-
-# Tell Helm where to find images
-HELM_EXTRA_ARGS ?= --set imagePullPolicy=IfNotPresent \
-    --set images.frr=$(REGISTRY_PREFIX)frr:latest \
-    --set images.probe=$(REGISTRY_PREFIX)probe:latest \
-    --set images.fwd=$(REGISTRY_PREFIX)fwd:latest \
-    --set images.ome=$(REGISTRY_PREFIX)ome:latest \
-    --set images.scheduler=$(REGISTRY_PREFIX)scheduler:latest \
-    --set images.nodeAgent=$(REGISTRY_PREFIX)node-agent:latest \
-    --set images.vsApi=$(REGISTRY_PREFIX)vs-api:latest \
-    --set images.operator=$(REGISTRY_PREFIX)operator:latest \
-    --set images.vf=$(REGISTRY_PREFIX)vf:latest
+# Hostname:port that every K3s node can pull from.
+REGISTRY_HOST ?= myregistry.local:5000
 ```
 
-With `REGISTRY_PREFIX` set, `make load` pushes to the registry instead of importing locally. All nodes pull from the registry automatically.
+With `REGISTRY_HOST` set, `make load` pushes NodalArc runtime images to the registry instead of importing locally. Helm image values are generated from the shared runtime image inventory, so do not duplicate image overrides in `HELM_EXTRA_ARGS`.
 
 ### 3. Build and deploy
 
@@ -48,7 +36,15 @@ With `REGISTRY_PREFIX` set, `make load` pushes to the registry instead of import
 make all
 ```
 
-Works the same way - images are now pushed to the registry and Helm references them there.
+Works the same way from a clean NodalArc state: images are pushed to the registry and Helm references them there.
+
+For full square-one validation on an existing K3s cluster:
+
+```bash
+make nuke && make all
+```
+
+For an already-running platform, use `make build && make load && make upgrade` rather than `make all`.
 
 ## Node Labeling
 

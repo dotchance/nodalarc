@@ -1,4 +1,4 @@
-# Demo-36 with OSPF: single orbital ring, 36 satellites, 6 ground stations.
+# Demo-36 with OSPF: single orbital ring, 36 satellites, 7 ground stations.
 # Good for quick demos, evaluation, and learning. Deploys in under a minute.
 session:
   name: demo-36-ospf

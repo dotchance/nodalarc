@@ -117,7 +117,7 @@ npx tsc --noEmit
 npm test
 
 # Production build + deploy
-sudo make deploy-vf
+make deploy-vf
 ```
 
 ## Key Directories

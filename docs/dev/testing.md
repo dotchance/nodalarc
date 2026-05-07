@@ -6,7 +6,9 @@
 make test
 ```
 
-This runs the full unit test suite (996+ tests) via pytest. All tests must pass before any commit touching backend code.
+This runs the full unit test suite via pytest. All tests must pass before any commit touching backend code.
+
+Unit tests use mocked NATS clients or a non-routable test URL. Tests that require a live NATS server belong in the integration suite.
 
 ### Running specific tests
 
@@ -28,7 +30,7 @@ uv run pytest tests/unit/test_ome_scheduler_contract.py -v --tb=long
 | `tests/unit/test_ome_scheduler_contract.py` | OME→Scheduler event contract. Must always pass. |
 | `tests/unit/test_scheduler_dispatcher.py` | Reconcile logic, dispatch correctness |
 | `tests/unit/test_node_agent_handlers.py` | BatchLinkUp/Down kernel operations |
-| `tests/unit/test_coverage_preview.py` | Coverage preview pipeline (13 e2e tests) |
+| `tests/unit/test_coverage_preview.py` | Coverage preview pipeline |
 | `tests/unit/test_session_deployer.py` | Operator session creation logic |
 
 ### Do not use `-x`
@@ -42,7 +44,7 @@ cd frontend
 npm test
 ```
 
-33+ tests covering React components and rendering logic. Must pass before any commit touching frontend code.
+The frontend test suite covers React components and rendering logic. It must pass before any commit touching frontend code.
 
 ## Integration Tests
 

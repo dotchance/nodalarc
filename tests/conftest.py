@@ -50,7 +50,8 @@ def _init_platform_config():
         trace_fast_window_seconds=30.0,
         host_inotify_max_user_instances=512,
         host_file_descriptor_limit=65536,
-        nats_url="nats://localhost:4222",
+        # Unit tests must not silently bind to a developer's live local NATS.
+        nats_url="nats://unit-test-nats.invalid:4222",
     )
     init_platform_config(cfg)
     yield

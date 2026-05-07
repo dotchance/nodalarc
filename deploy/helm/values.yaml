@@ -12,8 +12,8 @@ images:
   nodeAgent: nodalarc/node-agent:dev
   vsApi: nodalarc/vs-api:dev
   operator: nodalarc/operator:dev
-  nats: nats:2.11-alpine
-  natsBox: natsio/nats-box:0.19.3
+  nats: nats:2.11-alpine@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00
+  natsBox: natsio/nats-box:0.19.3@sha256:fbdf67cb49333afc50e2003c6857845d1ed9cf822d2b886cc5658ebf3c754b07
 
 buildTag: "dev"
 imagePullPolicy: Never  # Single-node: images loaded directly into containerd

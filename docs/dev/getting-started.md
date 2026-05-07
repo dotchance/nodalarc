@@ -48,7 +48,7 @@ make status
 make test
 ```
 
-Unit tests should report 996+ passing. If any fail on a fresh checkout, something is wrong with the setup, not the code.
+Unit tests should pass on a fresh checkout. If any fail, something is wrong with the setup or the code.
 
 Open http://localhost:3000 to verify the visualization loads and satellites are visible.
 

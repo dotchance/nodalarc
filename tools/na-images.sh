@@ -39,11 +39,11 @@ prefix_ref() {
 }
 
 nats_image() {
-    printf '%s\n' 'nats:2.11-alpine'
+    printf '%s\n' 'nats:2.11-alpine@sha256:e4bf19f15fd3218814a4e3c9e0064e1334bd8aa20d5984b9f1a0afd084f8cc00'
 }
 
 nats_box_image() {
-    printf '%s\n' 'natsio/nats-box:0.19.3'
+    printf '%s\n' 'natsio/nats-box:0.19.3@sha256:fbdf67cb49333afc50e2003c6857845d1ed9cf822d2b886cc5658ebf3c754b07'
 }
 
 emit_record() {

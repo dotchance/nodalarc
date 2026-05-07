@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
@@ -44,6 +43,7 @@ from nodalarc.nats_channels import (
     ome_clock_subject,
     ome_visibility_subject,
     playback_state_subject,
+    scenario_inject_subject,
     scheduling_checkpoint_subject,
     session_ephemeris_subject,
     substrate_latency_subject,
@@ -386,31 +386,12 @@ class Dispatcher:
         # Load substrate latency for cross-node compensation
         self._load_substrate_latency()
 
-        # Start scenario handler — must be AFTER loop and nc are ready.
-        # The scenario handler runs its own NATS connection for receiving
-        # commands, but dispatches to Node Agents on THIS loop via
-        # asyncio.run_coroutine_threadsafe().
-        from scheduler.scenario_handler import run_scenario_handler
-
-        scenario_thread = threading.Thread(
-            target=run_scenario_handler,
-            args=(
-                None,  # to_pub (legacy)
-                self._interface_map,
-                self._bandwidth_map,
-                self._override_set,
-                self._override_lock,
-                self._actual_links,
-                self._loc,
-                self._pool,
-                asyncio.get_running_loop(),
-                nc,
-                self._gs_capacities,
-                self._session_id,
-            ),
-            daemon=True,
-        )
-        scenario_thread.start()
+        # Scenario injection — core NATS request/reply (not JetStream).
+        # Single-owner per session: if Scheduler replicas go above 1, this
+        # needs a NATS queue group or leader election. Today replicas=1.
+        self._subj_scenario = scenario_inject_subject(self._session_id)
+        await nc.subscribe(self._subj_scenario, cb=self._on_scenario_command)
+        log.debug("Scenario subscription active: %s", self._subj_scenario)
 
         # Start dispatch worker BEFORE subscriptions — ready to receive work
         worker_task = asyncio.create_task(self._dispatch_worker(nc))
@@ -973,6 +954,60 @@ class Dispatcher:
                 self._latency_update_pending = False
 
         log.debug("Dispatch worker stopped")
+
+    # ------------------------------------------------------------------
+    # Control Plane: scenario command handling
+    # ------------------------------------------------------------------
+
+    async def _on_scenario_command(self, msg) -> None:
+        """Handle a scenario injection command (core NATS request/reply).
+
+        Parses the command, mutates override state, and enqueues a
+        DispatchIntent. Runs on the main event loop — no thread boundary.
+        """
+        import json as _json
+
+        from scheduler.scenario_handler import (
+            ClearAllOverrides,
+            InjectLinkDown,
+            InjectSatelliteLoss,
+            ReleaseLinkOverride,
+            RestoreSatellite,
+            parse_scenario_command,
+        )
+
+        try:
+            cmd = parse_scenario_command(msg.data)
+        except ValueError as exc:
+            await msg.respond(_json.dumps({"status": "error", "msg": str(exc)}).encode())
+            return
+
+        if isinstance(cmd, InjectLinkDown):
+            pair = (min(cmd.node_a, cmd.node_b), max(cmd.node_a, cmd.node_b))
+            self._override_pairs[pair] = cmd.reason
+        elif isinstance(cmd, InjectSatelliteLoss):
+            self._override_nodes[cmd.node] = "satellite_loss"
+        elif isinstance(cmd, ReleaseLinkOverride):
+            pair = (min(cmd.node_a, cmd.node_b), max(cmd.node_a, cmd.node_b))
+            self._override_pairs.pop(pair, None)
+        elif isinstance(cmd, RestoreSatellite):
+            self._override_nodes.pop(cmd.node, None)
+        elif isinstance(cmd, ClearAllOverrides):
+            self._override_pairs.clear()
+            self._override_nodes.clear()
+
+        if self._suspended:
+            await msg.respond(
+                _json.dumps(
+                    {"status": "accepted", "note": "scheduler suspended, will apply on resume"}
+                ).encode()
+            )
+            return
+
+        sim_time = self._current_sim_time or datetime.now(UTC)
+        intent = self._build_dispatch_intent(sim_time=sim_time, source="scenario")
+        await self._dispatch_queue.put(intent)
+        await msg.respond(_json.dumps({"status": "accepted"}).encode())
 
     # ------------------------------------------------------------------
     # Reconcile-based dispatch — single path to Node Agent

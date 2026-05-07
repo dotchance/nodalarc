@@ -1161,9 +1161,6 @@ class Dispatcher:
                 len(self._actual_links),
             )
 
-        # Checkpoint (fire-and-forget)
-        asyncio.create_task(self._write_checkpoint(sim_iso))
-
     async def _reconcile_mbb(
         self,
         to_remove: set[tuple[str, str]],
@@ -1826,52 +1823,6 @@ class Dispatcher:
                 if isinstance(result, Exception):
                     agent_addr = list(agent_entries.keys())[i]
                     log.error("SetLatency failed for agent %s: %s", agent_addr, result)
-
-    # ------------------------------------------------------------------
-    # Checkpoint
-    # ------------------------------------------------------------------
-
-    _k8s_v1 = None  # Cached K8s API client
-
-    def _get_k8s_v1(self):
-        """Get or create cached K8s CoreV1Api client."""
-        if self._k8s_v1 is None:
-            import kubernetes
-            import kubernetes.client
-            import kubernetes.config
-
-            try:
-                kubernetes.config.load_incluster_config()
-            except kubernetes.config.config_exception.ConfigException:
-                kubernetes.config.load_kube_config()
-            self._k8s_v1 = kubernetes.client.CoreV1Api()
-        return self._k8s_v1
-
-    async def _write_checkpoint(self, sim_time_iso: str) -> None:
-        """Write Scheduler checkpoint to K8s ConfigMap (non-blocking)."""
-        try:
-            import kubernetes.client
-
-            v1 = self._get_k8s_v1()
-            from nodalarc.platform_config import get_platform_config
-
-            ns = get_platform_config().kubernetes_namespace
-            body = kubernetes.client.V1ConfigMap(
-                metadata=kubernetes.client.V1ObjectMeta(name="nodalarc-scheduler-checkpoint"),
-                data={
-                    "sim_time": sim_time_iso,
-                    "active_links": str(len(self._actual_links)),
-                },
-            )
-            try:
-                v1.patch_namespaced_config_map("nodalarc-scheduler-checkpoint", ns, body)
-            except kubernetes.client.rest.ApiException as exc:
-                if exc.status == 404:
-                    v1.create_namespaced_config_map(ns, body)
-                else:
-                    raise
-        except Exception as exc:
-            log.warning("Checkpoint write failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Epoch synchronization state machine (PRD v0.71)

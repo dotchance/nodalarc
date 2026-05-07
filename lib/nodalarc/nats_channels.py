@@ -232,7 +232,6 @@ def ops_subscribe_subject(session_id: str, *, tenant_id: str = "") -> str:
 
 
 # Request/reply subjects (NATS core, not JetStream)
-SUBJECT_SCENARIO_INJECT = "nodalarc.scheduler.scenario"
 # Playback control (pause / resume / set_speed) owned by OME Pacemaker
 # (R-OME-008B). Subject is in ome_control namespace — deliberately outside
 # the "nodalarc.ome.>" JetStream-captured wildcard so request/reply

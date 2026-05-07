@@ -5,7 +5,7 @@
 ### Rebuild a Single Service
 
 ```bash
-sudo make deploy-scheduler
+make deploy-scheduler
 ```
 
 This builds the Docker image, loads it into the cluster, and does a rolling restart. The running session stays up. Takes 15-30 seconds.
@@ -13,7 +13,7 @@ This builds the Docker image, loads it into the cluster, and does a rolling rest
 ### Rebuild All Services
 
 ```bash
-sudo make deploy-all
+make deploy-all
 ```
 
 Rebuilds and restarts all core services (OME, Scheduler, Node Agent, VS-API, Operator, VF).
@@ -30,7 +30,7 @@ npm run dev
 Hot module replacement on port 5173. No Docker rebuild needed during iteration. Deploy the full image when ready for integration testing:
 
 ```bash
-sudo make deploy-vf
+make deploy-vf
 ```
 
 ## Docker Build Cache
@@ -48,7 +48,7 @@ If you suspect the deployed image doesn't contain your latest changes:
 docker builder prune -f
 
 # Then rebuild
-sudo make deploy-vf
+make deploy-vf
 ```
 
 **Verify your code is deployed:**
@@ -64,15 +64,34 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec deploy/nodalarc-vf -- \
 
 | Target | What It Does |
 |--------|--------------|
-| `make all` | Full pipeline: deps → build → load → install → session |
+| `make all` | Clean-state pipeline: deps → build → load → install → session → status |
 | `make build` | Build frontend + all Docker images |
-| `make test` | Run unit tests (996+) |
-| `sudo make deploy-<service>` | Build, load, and restart one service |
-| `sudo make deploy-all` | Build, load, and restart all services |
-| `sudo make teardown` | Tear down the running session |
-| `sudo make session` | Deploy a session |
-| `sudo make status` | Show pod states and session phase |
-| `sudo make upgrade` | In-place Helm upgrade (new image tags) |
+| `make load` | Import images into K3s or push them to the registry |
+| `make install` | Install the platform; refuses existing platform state |
+| `make upgrade` | In-place Helm upgrade for an existing platform |
+| `make reinstall` | Destructive platform reinstall through official teardown |
+| `make test` | Run backend and frontend unit tests |
+| `make deploy-<service>` | Build, load, and restart one service |
+| `make deploy-all` | Build, load, and restart all services |
+| `make teardown` | Full platform/session teardown and host cleanup |
+| `make session` | Deploy a session |
+| `make status` | Show pod states and session phase |
+
+Valid state transitions:
+
+```bash
+# Clean K3s or freshly nuked state
+make all
+
+# Prove square-one recovery
+make nuke && make all
+
+# Existing platform, update service images/chart values
+make build && make load && make upgrade
+
+# Existing platform, destructive refresh
+make build && make load && make reinstall && make session
+```
 
 ### Build Targets
 
@@ -92,9 +111,9 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec deploy/nodalarc-vf -- \
 | Target | Removes |
 |--------|---------|
 | `make clean` | Frontend dist, Python caches |
-| `make clean-images` | All nodalarc Docker images + build cache |
+| `make clean-images` | All local NodalArc Docker images |
 | `make clean-deps` | Python .venv, node_modules |
-| `sudo make nuke` | Everything (teardown + clean + clean-images + clean-deps) |
+| `make nuke` | Square-one reset: K3s remains, NodalArc state/deps/images/artifacts are removed |
 
 ## Git Workflow
 
@@ -108,7 +127,7 @@ refactor/description    # structural change
 
 ### Commit Messages
 
-Write what changed and why. No conventional commit prefixes (`feat:`, `fix:`, `chore:`). No AI attribution lines.
+Write what changed and why. No conventional commit prefixes (`feat:`, `fix:`, `chore:`). No boilerplate attribution, generated footer lines, tool signatures, or transcript fragments.
 
 Good:
 ```
@@ -179,4 +198,4 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c
 
 If developing with multiple K3s nodes, configure a container registry in `config.mk`. See the [Multi-Node Deployment](../ops/multi-node.md) guide for registry setup.
 
-With `REGISTRY_PREFIX` set, all `deploy-*` targets push to the registry and images are available on all nodes.
+With `REGISTRY_HOST` set, all `deploy-*` targets push to the registry and images are available on all nodes. Runtime image values are generated from the shared image inventory.

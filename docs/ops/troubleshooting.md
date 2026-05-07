@@ -30,8 +30,10 @@ Look for events like `Insufficient memory` or `node(s) didn't match Pod's node a
 **Cause:** Images aren't available on the target node.
 
 **Fix:**
-- Single-node: re-run `make load` to import images into K3s
-- Multi-node: verify registry is accessible from all nodes, check `config.mk` registry settings
+- Run `make status` first; it checks whether images are missing locally, missing from the registry, or present but not pullable.
+- If images are built but not distributed, run `make load`.
+- If source changed and the platform is already installed, run `make build && make load && make upgrade`.
+- Multi-node: verify the registry is accessible from all nodes and check `config.mk` registry settings.
 - Check: `sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl describe pod <pod> -n nodalarc | grep -A3 Events`
 
 ### Session Stuck in "Creating" Phase
@@ -115,10 +117,12 @@ The teardown script has built-in timeouts and force-delete logic for every failu
 
 **Emergency reset:**
 ```bash
-sudo make nuke
+make nuke
 ```
 
-This is the nuclear option - removes everything including images and dependencies. You'll need to `make all` again afterward.
+This is the square-one reset - it removes NodalArc state, images, build artifacts, and dependencies while leaving K3s installed. Run `make all` afterward.
+
+`make force-teardown` is a break-glass target only. It removes Kubernetes resources without deterministic host cleanup, so run `make nuke` before redeploying if you use it.
 
 ### Namespace Stuck in Terminating
 

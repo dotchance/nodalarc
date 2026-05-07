@@ -2,14 +2,18 @@
 namespace: nodalarc
 
 images:
-  frr: nodalarc/frr:latest
-  ome: nodalarc/ome:latest
-  vf: nodalarc/vf:latest
-  nodalpath: nodalarc/nodalpath:latest
-  scheduler: nodalarc/scheduler:latest
-  nodeAgent: nodalarc/node-agent:latest
-  vsApi: nodalarc/vs-api:latest
-  operator: nodalarc/operator:latest
+  frr: nodalarc/frr:dev
+  probe: nodalarc/probe:dev
+  nodalpathFwd: nodalarc/nodalpath-fwd:dev
+  ome: nodalarc/ome:dev
+  vf: nodalarc/vf:dev
+  nodalpath: nodalarc/nodalpath:dev
+  scheduler: nodalarc/scheduler:dev
+  nodeAgent: nodalarc/node-agent:dev
+  vsApi: nodalarc/vs-api:dev
+  operator: nodalarc/operator:dev
+  nats: nats:2.11-alpine
+  natsBox: natsio/nats-box:0.19.3
 
 buildTag: "dev"
 imagePullPolicy: Never  # Single-node: images loaded directly into containerd
@@ -54,7 +58,6 @@ vsApi:
 
 # NATS JetStream messaging server
 nats:
-  image: "nats:2.11-alpine"
   replicas: 1
   memoryLimit: 2Gi
   memoryRequest: 256Mi

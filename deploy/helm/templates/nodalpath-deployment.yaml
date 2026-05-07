@@ -22,11 +22,13 @@ spec:
 {{- end }}
       containers:
         - name: nodalpath
-          image: {{ .Values.images.nodalpath | default "nodalarc/nodalpath:latest" }}
+          image: {{ required "images.nodalpath is required" .Values.images.nodalpath | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+            - name: POD_IP_MAP_PATH
+              value: /etc/nodalarc/pod-ips.json
           args:
             - "--session"
             - "/etc/nodalarc/session.yaml"
@@ -44,9 +46,6 @@ spec:
             - containerPort: 3100
               name: console
               protocol: TCP
-          env:
-            - name: POD_IP_MAP_PATH
-              value: /etc/nodalarc/pod-ips.json
           readinessProbe:
             httpGet:
               path: /api/health

@@ -24,13 +24,25 @@ sudo scripts/bootstrap-host.sh
 make all
 ```
 
-`make all` installs Python/Node.js dependencies, builds all Docker images, deploys the platform via Helm, and starts a default session. ~3-5 minutes from scratch.
+`make all` is the clean-state bring-up path. It installs Python/Node.js dependencies, builds all Docker images, loads them into the selected image destination, deploys the platform via Helm, starts a default session, and prints status. ~3-5 minutes from scratch.
+
+If a previous NodalArc deployment may still exist, validate from square one instead:
+
+```bash
+make nuke && make all
+```
+
+If the platform is already running and you only need to update code, use:
+
+```bash
+make build && make load && make upgrade
+```
 
 ## Verify the Installation
 
 ```bash
 # Check everything is running
-sudo make status
+make status
 
 # Run unit tests
 make test
@@ -46,19 +58,21 @@ The typical development cycle:
 
 1. **Edit code** in your service/component
 2. **Run unit tests** to verify correctness: `make test`
-3. **Build and deploy** the changed service: `sudo make deploy-<service>`
+3. **Build and deploy** the changed service: `make deploy-<service>`
 4. **Verify** the change works in the running system (browser, logs, kubectl)
+
+For broad platform changes that need a Helm upgrade, use `make build && make load && make upgrade`. For a destructive refresh, use `make build && make load && make reinstall && make session`.
 
 ### Available deploy targets
 
 ```bash
-sudo make deploy-ome          # Orbital Mechanics Engine
-sudo make deploy-scheduler    # Topology Dispatcher
-sudo make deploy-node-agent   # Node Agent DaemonSet
-sudo make deploy-vs-api       # VS-API server
-sudo make deploy-operator     # K8s Operator
-sudo make deploy-vf           # Visualization Frontend
-sudo make deploy-all          # All services at once
+make deploy-ome          # Orbital Mechanics Engine
+make deploy-scheduler    # Topology Dispatcher
+make deploy-node-agent   # Node Agent DaemonSet
+make deploy-vs-api       # VS-API server
+make deploy-operator     # K8s Operator
+make deploy-vf           # Visualization Frontend
+make deploy-all          # All services at once
 ```
 
 Each target builds the Docker image, loads it into the cluster, and does a rolling restart. The running session stays up - no teardown needed.
@@ -76,7 +90,7 @@ This starts a Vite dev server on port 5173 with hot module replacement. Changes 
 
 For final verification, build and deploy the full image:
 ```bash
-sudo make deploy-vf
+make deploy-vf
 ```
 
 ## Project Structure

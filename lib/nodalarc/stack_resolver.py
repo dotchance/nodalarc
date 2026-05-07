@@ -30,6 +30,10 @@ GS_SID_HEADROOM = 100
 class ResolvedStack:
     """Fully resolved routing stack — everything the deployer needs.
 
+    The image field is a logical runtime image name, not a registry/tagged
+    deployment reference. Deployment image resolution belongs to the Operator
+    environment injected by Helm.
+
     The deployer merges base platform sysctls (forwarding, rp_filter) with
     the stack-provided sysctls and writes them to the wiring manifest.
     The deployer never interprets stack fields to derive sysctls.
@@ -184,7 +188,7 @@ def _resolve_nodalpath() -> ResolvedStack:
         daemons=["zebra", "staticd"],
         template_files=[_DAEMON_TEMPLATES["zebra"], _DAEMON_TEMPLATES["staticd"]],
         template_variables={"grpc_port": 50052},
-        image="nodalpath-fwd:latest",
+        image="nodalpath-fwd",
         mi_adapter=None,
         segment_routing=False,
         sysctls=_sr_sysctls(),
@@ -228,7 +232,7 @@ def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:
         daemons=daemons,
         template_files=templates,
         template_variables=template_vars,
-        image="nodalarc/frr:10",
+        image="frr",
         mi_adapter="frr_ospf_adapter",
         segment_routing=segment_routing,
         sysctls=sysctls,
@@ -264,7 +268,7 @@ def _resolve_isis(ext_set: set[str]) -> ResolvedStack:
         daemons=daemons,
         template_files=templates,
         template_variables=template_vars,
-        image="nodalarc/frr:10",
+        image="frr",
         mi_adapter="frr_isis_adapter",
         segment_routing=segment_routing,
         sysctls=sysctls,

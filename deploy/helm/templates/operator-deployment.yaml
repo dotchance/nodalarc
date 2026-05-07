@@ -24,11 +24,23 @@ spec:
 {{- end }}
       containers:
         - name: operator
-          image: {{ .Values.images.operator | default "nodalarc/operator:latest" }}
+          image: {{ required "images.operator is required" .Values.images.operator | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+            # Fallback if no nodes have nodalarc.io/node-agent=true label.
+            # The Operator discovers nodes automatically via the K8s API.
+            - name: SESSION_NODE_NAME
+              value: {{ .Values.sessionNodeName | quote }}
+            - name: FRR_IMAGE
+              value: {{ required "images.frr is required" .Values.images.frr | quote }}
+            - name: PROBE_IMAGE
+              value: {{ required "images.probe is required" .Values.images.probe | quote }}
+            - name: NODALPATH_FWD_IMAGE
+              value: {{ required "images.nodalpathFwd is required" .Values.images.nodalpathFwd | quote }}
+            - name: IMAGE_PULL_POLICY
+              value: {{ .Values.imagePullPolicy | quote }}
           ports:
             - containerPort: 8090
               name: health
@@ -45,15 +57,6 @@ spec:
               port: 8090
             initialDelaySeconds: 10
             periodSeconds: 30
-          env:
-            # Fallback if no nodes have nodalarc.io/node-agent=true label.
-            # The Operator discovers nodes automatically via the K8s API.
-            - name: SESSION_NODE_NAME
-              value: {{ .Values.sessionNodeName | quote }}
-            - name: FRR_IMAGE
-              value: {{ required "images.frr is required" .Values.images.frr | quote }}
-            - name: IMAGE_PULL_POLICY
-              value: {{ .Values.imagePullPolicy | quote }}
           resources:
             requests:
               memory: 256Mi

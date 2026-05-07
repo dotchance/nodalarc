@@ -24,10 +24,12 @@ The result: you can measure what actually happens, not what a model predicts sho
 git clone https://github.com/dotchance/nodalarc.git
 cd nodalarc
 sudo scripts/bootstrap-host.sh   # installs K3s, Docker, Helm, Node.js (skip if you have K8s)
-make all                          # builds everything, deploys a 36-satellite OSPF constellation
+make all                          # clean-state bring-up: deps, build, load, install, session
 ```
 
-Open **http://localhost:3000**. You're looking at 36 satellites orbiting Earth with OSPF routing, 6 ground stations, and live ISL links - all running real FRR daemons on real kernel interfaces. About 3 minutes from clone to running constellation.
+Open **http://localhost:3000**. You're looking at 36 satellites orbiting Earth with OSPF routing, 7 ground stations, and live ISL links - all running real FRR daemons on real kernel interfaces. About 3 minutes from clone to running constellation.
+
+For a full square-one validation on a machine that already has K3s installed, run `make nuke && make all`. For an existing platform, use `make build && make load && make upgrade` instead of `make all`; `make install` intentionally refuses existing platform state.
 
 ## What You Can Do
 

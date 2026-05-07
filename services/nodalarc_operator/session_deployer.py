@@ -1326,9 +1326,12 @@ def _create_session_configmaps(
 
 def _build_sidecar_config(resolved) -> dict | None:
     """Build sidecar container config from resolved stack."""
-    if resolved.image and not resolved.image.startswith("nodalarc/frr"):
+    if resolved.image and resolved.image != "frr":
+        if resolved.image != "nodalpath-fwd":
+            raise RuntimeError(f"Unsupported sidecar image intent: {resolved.image}")
         return {
-            "image": resolved.image,
+            "name": resolved.image,
+            "image": _require_env("NODALPATH_FWD_IMAGE"),
             "capabilities": resolved.security_context_capabilities
             or ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"],
         }
@@ -1478,9 +1481,9 @@ def _create_session_pod(
     # Sidecar container (e.g., nodalpath-fwd)
     if sidecar_config:
         sidecar_container = kubernetes.client.V1Container(
-            name=sidecar_config["image"].replace(":", "-").replace("/", "-").lower(),
+            name=sidecar_config["name"],
             image=sidecar_config["image"],
-            image_pull_policy="IfNotPresent",
+            image_pull_policy=_require_env("IMAGE_PULL_POLICY"),
             security_context=kubernetes.client.V1SecurityContext(
                 capabilities=kubernetes.client.V1Capabilities(
                     add=sidecar_config.get("capabilities", ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"])
@@ -1501,8 +1504,8 @@ def _create_session_pod(
     if node_type == "ground_station" and probe_enabled:
         probe_container = kubernetes.client.V1Container(
             name="probe",
-            image="nodalarc/probe:1",
-            image_pull_policy="IfNotPresent",
+            image=_require_env("PROBE_IMAGE"),
+            image_pull_policy=_require_env("IMAGE_PULL_POLICY"),
             security_context=kubernetes.client.V1SecurityContext(
                 capabilities=kubernetes.client.V1Capabilities(add=["NET_RAW"])
             ),

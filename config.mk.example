@@ -12,30 +12,31 @@ K3S_NODE ?= nodal
 # Set to empty string if your user can access the containerd socket directly
 SUDO_CTR ?= sudo
 
-# Default session for `make deploy`
+# Lifecycle mode:
+#   auto        = use REGISTRY_HOST when set; otherwise single-node unless a
+#                 multi-node cluster is detected
+#   single-node = import runtime images directly into local K3s containerd
+#   multi-node  = push NodalArc runtime images to REGISTRY_HOST
+MODE ?= auto
+
+# Default session for `make session`
 DEFAULT_SESSION ?= configs/sessions/starlink-176-isis-te.yaml
 
-# Extra Helm arguments (empty for single-node defaults)
+# Extra Helm arguments for non-image chart values.
+# Runtime image values are generated from tools/na-images.sh. Do not put
+# images.*, imagePullPolicy, or buildTag overrides here unless explicitly
+# running with ALLOW_IMAGE_ARG_OVERRIDE=1 for diagnostics.
 HELM_EXTRA_ARGS ?=
 
 # --- Multi-node setup ---
-# If running multiple K3s nodes with a container registry, set REGISTRY_PREFIX
-# to your registry URL (with trailing slash). This changes `make load` from
-# local containerd import to docker push, and `make build` tags images with
-# the prefix.
+# REGISTRY_HOST is the hostname:port Kubernetes nodes pull from.
+# REGISTRY_PREFIX is derived by the Makefile; do not set it independently.
 #
-# You must also set HELM_EXTRA_ARGS to tell Helm to use the registry images
-# and IfNotPresent pull policy so nodes can pull from the registry.
+# Empty REGISTRY_HOST means single-node direct import.
+# Non-empty REGISTRY_HOST means registry-backed image distribution.
+# tools/detect-registry.sh is used as a fallback when REGISTRY_HOST is empty
+# and /etc/rancher/k3s/registries.yaml declares a registry mirror.
 #
-# Example for a local dev registry at localhost:5000:
+# Example:
 #
-# REGISTRY_PREFIX ?= localhost:5000/
-# HELM_EXTRA_ARGS ?= --set imagePullPolicy=IfNotPresent \
-# 	--set images.frr=localhost:5000/nodalarc/frr:latest \
-# 	--set images.ome=localhost:5000/nodalarc/ome:latest \
-# 	--set images.vf=localhost:5000/nodalarc/vf:latest \
-# 	--set images.nodalpath=localhost:5000/nodalarc/nodalpath:latest \
-# 	--set images.scheduler=localhost:5000/nodalarc/scheduler:latest \
-# 	--set images.nodeAgent=localhost:5000/nodalarc/node-agent:latest \
-# 	--set images.vsApi=localhost:5000/nodalarc/vs-api:latest \
-# 	--set images.operator=localhost:5000/nodalarc/operator:latest
+# REGISTRY_HOST ?= node01:5000

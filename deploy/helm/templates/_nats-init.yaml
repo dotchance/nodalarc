@@ -4,7 +4,7 @@
      any consumer starts subscribing. */}}
 {{- define "nodalarc.nats-wait-init" }}
 - name: wait-nats-streams
-  image: natsio/nats-box:latest
+  image: {{ required "images.natsBox is required" .Values.images.natsBox | quote }}
   imagePullPolicy: {{ .Values.imagePullPolicy }}
   command: ["sh", "-c"]
   args:

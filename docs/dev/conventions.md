@@ -113,7 +113,7 @@ state_policy = DeliverPolicy.LAST_PER_SUBJECT
 
 - Never commit directly to main - always use feature branches
 - No conventional commit prefixes (`feat:`, `fix:`, `chore:`)
-- No AI attribution lines
+- No boilerplate attribution, generated footer lines, tool signatures, transcript fragments, scratchpad notes, or local tool/editor metadata
 - Commit specific files, not `git add .`
 - Commit messages: what changed and why (imperative mood)
 - Use: `git -c user.name='dotchance' -c user.email='<email>' commit`

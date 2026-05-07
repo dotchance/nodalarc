@@ -1,7 +1,7 @@
 """Integration test: Rolling window verification.
 
-PRD Appendix B: Since rolling windows are deferred (single-window approach
-per CLAUDE.md), verify:
+PRD Appendix B: Since rolling windows are deferred (single-window approach),
+verify:
 - Single window covers full orbital period
 - Timeline duration matches orbital_period() for the constellation
 - Events span from t=0 to t=period

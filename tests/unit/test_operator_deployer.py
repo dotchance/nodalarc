@@ -661,7 +661,15 @@ class TestPodSpec:
                 "nodalarc_operator.session_deployer.discover_available_nodes",
                 return_value=["node01", "node02"],
             ),
-            patch.dict("os.environ", {"FRR_IMAGE": "test/frr:1", "IMAGE_PULL_POLICY": "Never"}),
+            patch.dict(
+                "os.environ",
+                {
+                    "FRR_IMAGE": "test/frr:1",
+                    "PROBE_IMAGE": "test/probe:1",
+                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
+                    "IMAGE_PULL_POLICY": "Never",
+                },
+            ),
         ):
             context = ensure_session_configmaps(spec, "current-session", "nodalarc", owner_ref)
             ensure_session_pods(context, "nodalarc", owner_ref)
@@ -732,7 +740,15 @@ class TestPodSpec:
                 "nodalarc_operator.session_deployer.discover_available_nodes",
                 return_value=["node01"],
             ),
-            patch.dict("os.environ", {"FRR_IMAGE": "test/frr:1", "IMAGE_PULL_POLICY": "Never"}),
+            patch.dict(
+                "os.environ",
+                {
+                    "FRR_IMAGE": "test/frr:1",
+                    "PROBE_IMAGE": "test/probe:1",
+                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
+                    "IMAGE_PULL_POLICY": "Never",
+                },
+            ),
         ):
             context = ensure_session_configmaps(spec, "current-session", "nodalarc", owner_ref)
             total = ensure_session_pods(context, "nodalarc", owner_ref)

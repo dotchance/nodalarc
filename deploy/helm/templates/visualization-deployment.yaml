@@ -23,7 +23,7 @@ spec:
 {{- end }}
       containers:
         - name: vf
-          image: {{ .Values.images.vf | default "docker.io/nodalarc/vf:latest" }}
+          image: {{ required "images.vf is required" .Values.images.vf | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           ports:
             - containerPort: 80

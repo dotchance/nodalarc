@@ -8,7 +8,7 @@
 # Build context must be the repo root:
 #   docker build -f services/ome/Dockerfile -t nodalarc/ome:latest .
 
-FROM python:3.14-slim
+FROM python:3.14-slim@sha256:5b3879b6f3cb77e712644d50262d05a7c146b7312d784a18eff7ff5462e77033
 
 WORKDIR /app
 

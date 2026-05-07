@@ -1,0 +1,90 @@
+name: Bug report
+description: Report a reproducible problem in NodalArc.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Clear reproduction details help us separate code defects from local cluster or environment state.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Build, load, install, or teardown
+        - Kubernetes or Helm deployment
+        - OME orbital mechanics
+        - Scheduler or link dispatch
+        - Node Agent or kernel networking
+        - Operator or session deployment
+        - VS-API or web API
+        - Visualization frontend
+        - NodalPath
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include exact commands, session config, and any relevant environment settings.
+      placeholder: |
+        1. Run ...
+        2. Deploy ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Kubernetes distribution/version, node count, registry setup, and whether this is single-node or multi-node.
+      placeholder: |
+        OS:
+        Kubernetes:
+        Node count:
+        Registry:
+        NodalArc commit:
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste relevant command output. Prefer `make status`, failing command output, pod events, and logs.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit checks
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I included the exact command or workflow that fails.
+          required: true
+        - label: I included enough environment detail to reproduce or triage the problem.
+          required: true

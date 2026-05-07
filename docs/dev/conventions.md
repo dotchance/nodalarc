@@ -113,10 +113,10 @@ state_policy = DeliverPolicy.LAST_PER_SUBJECT
 
 - Never commit directly to main - always use feature branches
 - No conventional commit prefixes (`feat:`, `fix:`, `chore:`)
-- No boilerplate attribution, generated footer lines, tool signatures, transcript fragments, scratchpad notes, or local tool/editor metadata
+- No boilerplate attribution, generated footer lines, local notes, or editor metadata
 - Commit specific files, not `git add .`
 - Commit messages: what changed and why (imperative mood)
-- Use: `git -c user.name='dotchance' -c user.email='<email>' commit`
+- Use: `git -c user.name='Your Name' -c user.email='you@example.com' commit`
 
 ## File Organization
 
@@ -144,4 +144,4 @@ state_policy = DeliverPolicy.LAST_PER_SUBJECT
 - Don't put NATS subject literals in service code - import from `nats_channels.py`
 - Don't add new dependencies without discussion
 - Don't mock what you can run (prefer real objects in tests)
-- Don't commit specs/ or plans/ to git
+- Don't force-add ignored files or local workspace artifacts

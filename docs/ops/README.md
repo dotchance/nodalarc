@@ -27,21 +27,29 @@ All inter-service communication uses NATS JetStream. There is no direct HTTP bet
 ## Quick Reference
 
 ```bash
-# Deploy everything from scratch
+# Deploy from a clean NodalArc state
 make all
 
-# Start a session
-sudo make session
+# Prove square-one recovery; K3s remains installed
+make nuke && make all
 
 # Start a specific session
-sudo make session DEFAULT_SESSION=configs/sessions/starlink-176-isis-te.yaml
+make session DEFAULT_SESSION=configs/sessions/starlink-176-isis-te.yaml
+
+# Update an existing platform without teardown
+make build && make load && make upgrade
+
+# Destructive platform refresh through the official teardown path
+make build && make load && make reinstall && make session
 
 # Check status
-sudo make status
+make status
 
 # Teardown
-sudo make teardown
+make teardown
 
-# Full reset (remove everything)
-sudo make nuke
+# Square-one reset only
+make nuke
 ```
+
+`make install` refuses existing platform state. Use `make upgrade` for in-place updates, `make reinstall` for a destructive platform refresh, and `make nuke && make all` for full from-scratch validation.

@@ -10,7 +10,7 @@ class TestOSPF:
     def test_ospf_plain(self):
         r = resolve_stack("ospf", [])
         assert r.daemons == ["zebra", "ospfd"]
-        assert r.image == "nodalarc/frr:10"
+        assert r.image == "frr"
         assert r.mi_adapter == "frr_ospf_adapter"
         assert r.segment_routing is False
         assert r.template_variables["protocol"] == "ospf"
@@ -88,7 +88,7 @@ class TestNodalPath:
         r = resolve_stack("nodalpath", [])
         assert r.daemons == ["zebra", "staticd"]
         assert len(r.template_files) == 2
-        assert r.image == "nodalpath-fwd:latest"
+        assert r.image == "nodalpath-fwd"
         assert r.transport == "grpc"
         assert r.mi_adapter is None
         assert r.host_modules == ["mpls_router", "mpls_iptunnel"]

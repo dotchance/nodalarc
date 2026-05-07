@@ -7,11 +7,28 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-nodalarc}"
 DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/demo-36-ospf.yaml}"
 REGISTRY_HOST="${REGISTRY_HOST:-}"
+TAG="${TAG:-dev}"
 
-# Images that must exist locally for build
-BUILD_IMAGES="nodalarc/base nodalarc/frr nodalarc/probe nodalarc/nodalpath-fwd nodalarc/ome nodalarc/scheduler nodalarc/node-agent nodalarc/vs-api nodalarc/operator nodalarc/vf nodalarc/nodalpath"
-# Images that K8s pods actually pull — subset that must be in the registry
-DEPLOY_IMAGES="nodalarc/frr nodalarc/ome nodalarc/scheduler nodalarc/node-agent nodalarc/vs-api nodalarc/operator nodalarc/vf nodalarc/nodalpath"
+mapfile -t BUILD_IMAGES < <(
+    TAG="$TAG" REGISTRY_HOST="$REGISTRY_HOST" NA_IMAGES_NO_CLUSTER=1 \
+        bash "$(dirname "$0")/na-images.sh" list-build-images | awk -F '\t' '{print $4}'
+)
+mapfile -t DEPLOY_IMAGES < <(
+    TAG="$TAG" REGISTRY_HOST="$REGISTRY_HOST" NA_IMAGES_NO_CLUSTER=1 \
+        bash "$(dirname "$0")/na-images.sh" list-nodalarc-runtime-images | awk -F '\t' '{print $4}'
+)
+
+registry_manifest_exists() {
+    local image="$1"
+    local without_host repo tag accept
+    [ -n "$REGISTRY_HOST" ] || return 1
+    without_host="${image#"$REGISTRY_HOST"/}"
+    repo="${without_host%:*}"
+    tag="${without_host##*:}"
+    accept="application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json"
+    curl -sf --max-time 2 -H "Accept: $accept" \
+        "http://$REGISTRY_HOST/v2/$repo/manifests/$tag" >/dev/null 2>&1
+}
 
 echo "=== NodalArc Status ==="
 echo ""
@@ -36,25 +53,20 @@ echo ""
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo "Platform: NOT INSTALLED"
 
-    BUILT_IMAGES=$(docker images --format '{{.Repository}}' 2>/dev/null | sed "s|^${REGISTRY_HOST}/||" | sort -u)
     MISSING_BUILD=""
-    for img in $BUILD_IMAGES; do
-        if ! echo "$BUILT_IMAGES" | grep -q "^${img}$"; then
+    for img in "${BUILD_IMAGES[@]}"; do
+        if ! docker image inspect "$img" >/dev/null 2>&1; then
             MISSING_BUILD="$MISSING_BUILD $img"
         fi
     done
 
     if [ -n "$MISSING_BUILD" ]; then
         echo "  Missing images:$MISSING_BUILD"
-        if [ -n "$REGISTRY_HOST" ]; then
-            echo "  Run: make build && make load && make install"
-        else
-            echo "  Run: make build && make install"
-        fi
+        echo "  Run: make all"
     elif [ -n "$REGISTRY_HOST" ]; then
         MISSING_REG=""
-        for img in $DEPLOY_IMAGES; do
-            if ! curl -sf --max-time 2 "http://$REGISTRY_HOST/v2/$img/tags/list" >/dev/null 2>&1; then
+        for img in "${DEPLOY_IMAGES[@]}"; do
+            if ! registry_manifest_exists "$img"; then
                 MISSING_REG="$MISSING_REG $img"
             fi
         done
@@ -90,10 +102,16 @@ else
         CRASH=$(echo "$PLATFORM" | grep -c "CrashLoopBackOff\|Error" || true)
 
         if [ "$IMG_PULL" -gt 0 ]; then
-            if [ -n "$REGISTRY_HOST" ] && curl -sf --max-time 2 "http://$REGISTRY_HOST/v2/nodalarc/ome/tags/list" >/dev/null 2>&1; then
+            ome_image=""
+            for img in "${DEPLOY_IMAGES[@]}"; do
+                case "$img" in
+                    */nodalarc/ome:*|nodalarc/ome:*) ome_image="$img" ;;
+                esac
+            done
+            if [ -n "$REGISTRY_HOST" ] && [ -n "$ome_image" ] && registry_manifest_exists "$ome_image"; then
                 echo "  $IMG_PULL pod(s) stuck in ImagePullBackOff (images are in registry)."
                 echo "  Run: make restart"
-            elif docker images --format '{{.Repository}}' 2>/dev/null | grep -q 'nodalarc/ome'; then
+            elif [ -n "$ome_image" ] && docker image inspect "$ome_image" >/dev/null 2>&1; then
                 echo "  $IMG_PULL pod(s) failing to pull images."
                 echo "  Images built locally but not in registry."
                 echo "  Run: make load"

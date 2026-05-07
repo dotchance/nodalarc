@@ -30,7 +30,7 @@
 # `docker-registry garbage-collect`). Run it on a systemd timer on the
 # registry host, or use a managed registry that does it continuously.
 
-set -u
+set -euo pipefail
 
 host="${REGISTRY_HOST:-}"
 
@@ -66,7 +66,12 @@ case "${REGISTRY_INSECURE:-auto}" in
 esac
 
 echo "[clean-registry] Purging nodalarc/* from $host ${crane_opts:+(insecure)}..."
-repos=$(crane catalog "$host" $crane_opts 2>/dev/null | grep '^nodalarc/' || true)
+if ! catalog=$(crane catalog "$host" $crane_opts 2>&1); then
+    echo "[clean-registry] ERROR: registry catalog failed for $host" >&2
+    echo "$catalog" >&2
+    exit 1
+fi
+repos=$(printf '%s\n' "$catalog" | grep '^nodalarc/' || true)
 if [ -z "$repos" ]; then
     echo "[clean-registry]   (no nodalarc/* repos at $host)"
     exit 0
@@ -74,7 +79,12 @@ fi
 
 failed=0
 for repo in $repos; do
-    tags=$(crane ls "$host/$repo" $crane_opts 2>/dev/null || true)
+    if ! tags=$(crane ls "$host/$repo" $crane_opts 2>&1); then
+        echo "  FAILED  $host/$repo  (could not list tags)" >&2
+        echo "$tags" >&2
+        failed=1
+        continue
+    fi
     for tag in $tags; do
         # Distribution registry DELETE requires the server-authoritative
         # digest — deleting by tag returns DIGEST_INVALID. Resolve the

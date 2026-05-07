@@ -6,16 +6,31 @@
 # This script must be run to completion before any new deploy.
 
 set -euo pipefail
-NAMESPACE="nodalarc"
+NAMESPACE="${NAMESPACE:-nodalarc}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
 echo "=== NodalArc Teardown ==="
 
+cleanup_local_kernel_state() {
+    ip link show 2>/dev/null | grep -oE 'vx[0-9]{5}' | \
+        xargs -r -I{} ip link del {} 2>/dev/null || true
+    ip link show 2>/dev/null | grep -oE 'vh[0-9]{5}' | \
+        xargs -r -I{} ip link del {} 2>/dev/null || true
+    ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+' | \
+        xargs -r -I{} ip link del {} 2>/dev/null || true
+    ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_gnd_[a-zA-Z0-9_]+' | \
+        xargs -r -I{} ip link del {} 2>/dev/null || true
+    ip link show 2>/dev/null | grep -oE '_gbr-[a-z0-9_]+' | \
+        xargs -r -I{} ip link del {} 2>/dev/null || true
+    ip link show type bridge 2>/dev/null | grep -oE 'br-gnd-[a-z0-9_]+' | \
+        xargs -r -I{} ip link del {} 2>/dev/null || true
+}
+
 # Bail early if namespace doesn't exist
 if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
     echo "Namespace $NAMESPACE does not exist — nothing to tear down."
-    # Still clean cluster-scoped resources and kernel state (belt+suspenders)
+    # Still clean cluster-scoped resources and local kernel state.
     kubectl delete crd constellationspecs.nodalarc.io --ignore-not-found 2>/dev/null || true
     kubectl delete clusterrole nodalarc-operator nodalarc-orchestrator-cluster \
         nodalarc-node-agent nodalarc-scheduler --ignore-not-found 2>/dev/null || true
@@ -23,7 +38,9 @@ if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
         nodalarc-node-agent nodalarc-scheduler --ignore-not-found 2>/dev/null || true
     kubectl delete clusterrole,clusterrolebinding \
         -l nodalarc.io/managed-by=helm 2>/dev/null || true
+    cleanup_local_kernel_state
     echo "=== Teardown complete. Cluster is clean. ==="
+    echo "[teardown] Next: make install && make session, or make nuke for square-one reset."
     exit 0
 fi
 
@@ -68,6 +85,7 @@ done
 # on the host's network namespace. Clean VXLAN, veth, and bridge interfaces
 # BEFORE Helm uninstall deletes the DaemonSet pods.
 echo "[3/9] Cleaning host-side kernel state via Node Agent pods..."
+REMOTE_CLEANUP_ERRORS=0
 CLEANUP_SCRIPT='
 ip link show 2>/dev/null | grep -oE "vx[0-9]{5}" | xargs -r -I{} ip link del {} 2>/dev/null
 ip link show 2>/dev/null | grep -oE "vh[0-9]{5}" | xargs -r -I{} ip link del {} 2>/dev/null
@@ -84,28 +102,20 @@ if [ -n "$NA_PODS" ]; then
         POD_NAME=$(echo "$line" | awk '{print $1}')
         NODE_NAME=$(echo "$line" | awk '{print $2}')
         echo "  Cleaning $NODE_NAME via $POD_NAME..."
-        kubectl exec "$POD_NAME" -n "$NAMESPACE" -c node-agent -- \
-            sh -c "$CLEANUP_SCRIPT" 2>/dev/null || \
-            echo "  WARNING: exec failed on $POD_NAME (non-fatal)"
+        if ! kubectl exec "$POD_NAME" -n "$NAMESPACE" -c node-agent -- \
+            sh -c "$CLEANUP_SCRIPT" 2>/dev/null; then
+            echo "  ERROR: exec failed on $POD_NAME" >&2
+            REMOTE_CLEANUP_ERRORS=$((REMOTE_CLEANUP_ERRORS+1))
+        fi
     done <<< "$NA_PODS"
 else
-    echo "  No Node Agent pods found — cleaning local host only"
+    echo "  ERROR: no Node Agent pods found; remote host cleanup was not performed" >&2
+    REMOTE_CLEANUP_ERRORS=$((REMOTE_CLEANUP_ERRORS+1))
 fi
 
 # Local cleanup (belt and suspenders — also covers the control plane node
 # in case no Node Agent pod was scheduled here)
-ip link show 2>/dev/null | grep -oE 'vx[0-9]{5}' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE 'vh[0-9]{5}' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_gnd_[a-zA-Z0-9_]+' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '_gbr-[a-z0-9_]+' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show type bridge 2>/dev/null | grep -oE 'br-gnd-[a-z0-9_]+' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
+cleanup_local_kernel_state
 
 # Step 4: Helm uninstall — removes all Helm-managed resources including DaemonSet
 echo "[4/9] Helm uninstall..."
@@ -151,22 +161,16 @@ kubectl delete clusterrole,clusterrolebinding \
 
 # Step 8: Local kernel state catch-all (in case Step 3 exec failed)
 echo "[8/9] Final local kernel state cleanup..."
-ip link show 2>/dev/null | grep -oE 'vx[0-9]{5}' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE 'vh[0-9]{5}' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_isl_[a-zA-Z0-9_]+' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '[a-zA-Z0-9_]+_gnd_[a-zA-Z0-9_]+' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show 2>/dev/null | grep -oE '_gbr-[a-z0-9_]+' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
-ip link show type bridge 2>/dev/null | grep -oE 'br-gnd-[a-z0-9_]+' | \
-    xargs -r -I{} ip link del {} 2>/dev/null || true
+cleanup_local_kernel_state
 
 # Step 9: Verify — nothing should remain
 echo "[9/9] Verifying clean state..."
 ERRORS=0
+
+if [ "${REMOTE_CLEANUP_ERRORS:-0}" -gt 0 ]; then
+    echo "ERROR: Remote host cleanup was incomplete"
+    ERRORS=$((ERRORS+1))
+fi
 
 # Check no nodalarc pods survive
 PODS=$(kubectl get pods -A 2>/dev/null | grep nodalarc | grep -v Terminating || true)
@@ -205,3 +209,4 @@ fi
 
 echo ""
 echo "=== Teardown complete. Cluster is clean. ==="
+echo "[teardown] Next: make install && make session, or make nuke for square-one reset."

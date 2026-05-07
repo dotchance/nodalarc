@@ -68,16 +68,25 @@ These enable packet forwarding and MPLS label processing in the kernel. Required
 make all
 ```
 
-This executes the full pipeline:
+Use `make all` from a clean NodalArc state: no existing `nodalarc` namespace or Helm release. To prove a full from-scratch lifecycle on a machine that already has K3s installed, run:
+
+```bash
+make nuke && make all
+```
+
+`make all` executes the full bring-up pipeline:
 
 1. Install Python and Node.js dependencies
 2. Build the visualization frontend
 3. Build all Docker images (6 services + base images)
 4. Load images into the cluster (K3s import or registry push)
 5. Install the Helm chart
-6. Deploy a default session (36 satellites, OSPF, 6 ground stations)
+6. Deploy a default session (36 satellites, OSPF, 7 ground stations)
+7. Print status
 
 Total time: 3-5 minutes from a fresh checkout on a single machine.
+
+If the platform is already installed, `make all` is the wrong transition because `make install` refuses existing platform state. Use `make build && make load && make upgrade` for an in-place platform update, or `make build && make load && make reinstall && make session` for a destructive platform refresh through the official teardown path.
 
 ### What "make all" Creates
 
@@ -85,7 +94,7 @@ Total time: 3-5 minutes from a fresh checkout on a single machine.
 - ConstellationSpec CRD (cluster-scoped)
 - Platform services: OME, Scheduler, Node Agent (DaemonSet), VS-API, Operator, NATS
 - Frontend: VF (nginx serving the React app)
-- Session: 36 satellite pods + 6 ground station pods
+- Session: 36 satellite pods + 7 ground station pods
 - ConfigMaps: FRR configs, topology wiring manifest, platform config
 - Secrets: SSH terminal keys
 - PVC: NATS JetStream file storage
@@ -93,7 +102,7 @@ Total time: 3-5 minutes from a fresh checkout on a single machine.
 ## Step 3: Verify
 
 ```bash
-sudo make status
+make status
 ```
 
 This shows:
@@ -118,7 +127,7 @@ You should see adjacent satellites listed as FULL neighbors. If running IS-IS in
 
 ```bash
 # Switch to a 176-satellite IS-IS constellation
-sudo make session DEFAULT_SESSION=configs/sessions/starlink-176-isis-te.yaml
+make session DEFAULT_SESSION=configs/sessions/starlink-176-isis-te.yaml
 ```
 
 Or users can deploy sessions from the browser wizard at http://localhost:3000.
@@ -136,15 +145,27 @@ Available session configs:
 ## Step 5: Teardown
 
 ```bash
-sudo make teardown
+make teardown
 ```
 
 Cleanly stops the session, removes all pods, and cleans kernel state. Wait for "Teardown complete" before deploying again.
 
+Next valid transition:
+
+```bash
+make install && make session
+```
+
 To remove everything (images, dependencies, K3s image cache):
 
 ```bash
-sudo make nuke
+make nuke
+```
+
+Next valid transition:
+
+```bash
+make all
 ```
 
 ## Makefile Target Reference
@@ -153,15 +174,27 @@ sudo make nuke
 
 | Target | Requires sudo | Description |
 |--------|:---:|-------------|
-| `make all` | no | Full pipeline: deps → build → load → install → session |
+| `make all` | no | Clean-state pipeline: deps → build → load → install → session → status |
 | `make deps` | no | Install Python/Node.js dependencies |
 | `make build` | no | Build frontend and all Docker images |
 | `make load` | no | Import images to K3s or push to registry |
-| `make install` | sudo | Helm install/upgrade the platform chart |
-| `make session` | sudo | Deploy a constellation session |
-| `make status` | sudo | Show cluster status |
-| `make teardown` | sudo | Full teardown |
-| `make nuke` | sudo | Remove everything |
+| `make install` | no | Helm install the platform chart; refuses existing platform state |
+| `make upgrade` | no | In-place Helm upgrade for an existing platform |
+| `make reinstall` | no | Destructive platform reinstall through official teardown |
+| `make session` | no | Deploy a constellation session |
+| `make status` | no | Show cluster status |
+| `make teardown` | no | Full teardown |
+| `make nuke` | no | Square-one reset; K3s remains |
+
+### Valid Lifecycle Sequences
+
+| Current state | Command |
+|---------------|---------|
+| Clean checkout/K3s state | `make all` |
+| Prove full square-one recovery | `make nuke && make all` |
+| Existing platform, update images/chart | `make build && make load && make upgrade` |
+| Existing platform, destructive refresh | `make build && make load && make reinstall && make session` |
+| Existing platform, switch session | `make session DEFAULT_SESSION=configs/sessions/<name>.yaml` |
 
 ### Build Targets
 
@@ -198,7 +231,8 @@ These build, load, and restart a single service without tearing down the session
 | `make clean` | Build artifacts (dist/, caches) |
 | `make clean-images` | All nodalarc Docker images |
 | `make clean-deps` | Python .venv and node_modules |
-| `make clean-registry` | Images from registry + K3s containerd cache |
+| `make clean-registry` | Images from registry |
+| `make purge-containerd` | NodalArc images from K3s containerd cache |
 
 ## Next Steps
 

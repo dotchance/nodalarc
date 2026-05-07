@@ -6,7 +6,7 @@ Open your browser to the NodalArc URL (typically http://localhost:3000). You'll 
 
 ## What You're Looking At
 
-When NodalArc starts, a constellation session is already running. The default session deploys 36 satellites in a single orbital ring at 550 km altitude with OSPF routing and 6 ground stations.
+When NodalArc starts, a constellation session is already running. The default session deploys 36 satellites in a single orbital ring at 550 km altitude with OSPF routing and 7 ground stations.
 
 On the globe you'll see:
 

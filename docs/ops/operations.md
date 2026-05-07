@@ -11,7 +11,7 @@ Users can switch sessions from the browser wizard. They select a new constellati
 ### From the Command Line
 
 ```bash
-sudo make session DEFAULT_SESSION=configs/sessions/starlink-176-isis-te.yaml
+make session DEFAULT_SESSION=configs/sessions/starlink-176-isis-te.yaml
 ```
 
 No manual teardown needed. The system switches sessions automatically.
@@ -21,7 +21,7 @@ No manual teardown needed. The system switches sessions automatically.
 When you need to fully stop the platform:
 
 ```bash
-sudo make teardown
+make teardown
 ```
 
 This runs `tools/na-teardown.sh` - a 9-step sequence that handles every failure mode:
@@ -45,8 +45,10 @@ The script handles stuck pods, stuck finalizers, stuck namespaces, partially dep
 To bring the platform back up:
 
 ```bash
-sudo make install session
+make install && make session
 ```
+
+This assumes the required runtime images are already loaded into the selected image destination. If images were removed, run `make build && make load && make install && make session` instead.
 
 ## Upgrades
 
@@ -55,7 +57,7 @@ sudo make install session
 After rebuilding images from new source code:
 
 ```bash
-sudo make upgrade
+make build && make load && make upgrade
 ```
 
 This does a Helm upgrade with the new image tags. Platform services restart with new images. The running session is preserved if the upgrade is backward-compatible.
@@ -65,9 +67,15 @@ This does a Helm upgrade with the new image tags. Platform services restart with
 If Helm chart templates or configuration changed:
 
 ```bash
-sudo make teardown
-make build load
-sudo make install session
+make build && make load && make reinstall && make session
+```
+
+`make reinstall` uses the official teardown path before installing. Do not replace it with `kubectl delete namespace`.
+
+For a full square-one validation, including dependency/image/artifact cleanup while leaving K3s installed:
+
+```bash
+make nuke && make all
 ```
 
 ### Single Service Update
@@ -75,7 +83,7 @@ sudo make install session
 To rebuild and restart one service without affecting others:
 
 ```bash
-sudo make deploy-scheduler    # or deploy-ome, deploy-vs-api, etc.
+make deploy-scheduler    # or deploy-ome, deploy-vs-api, etc.
 ```
 
 ## Health Monitoring
@@ -83,7 +91,7 @@ sudo make deploy-scheduler    # or deploy-ome, deploy-vs-api, etc.
 ### Quick Status
 
 ```bash
-sudo make status
+make status
 ```
 
 Shows pod counts, session phase, and active links.
@@ -177,12 +185,24 @@ ssh -i nodalarc-ssh-key -o StrictHostKeyChecking=no operator@$POD_IP
 
 | Command | What It Removes | When to Use |
 |---------|----------------|-------------|
-| `sudo make teardown` | Session + platform (namespace, pods, CRD) | Normal shutdown |
+| `make teardown` | Session + platform (namespace, pods, CRD) | Normal shutdown |
 | `make clean` | Frontend dist, Python caches | Force frontend rebuild |
 | `make clean-images` | All nodalarc Docker images + build cache | Force full image rebuild |
 | `make clean-deps` | Python .venv, node_modules | Force dependency reinstall |
-| `make clean-registry` | Images from registry + K3s containerd cache | Purge stale images cluster-wide |
-| `sudo make nuke` | All of the above | Start completely fresh |
+| `make clean-registry` | Images from registry | Purge stale registry images |
+| `make purge-containerd` | NodalArc images from K3s containerd cache | Purge node image caches |
+| `make nuke` | All of the above | Square-one reset: K3s remains |
+
+## Lifecycle State Transitions
+
+| Current state | Correct transition |
+|---------------|--------------------|
+| Clean K3s or freshly nuked state | `make all` |
+| Running platform, same session | `make build && make load && make upgrade` |
+| Running platform, destructive refresh | `make build && make load && make reinstall && make session` |
+| Running platform, switch session only | `make session DEFAULT_SESSION=configs/sessions/<name>.yaml` |
+| Unknown or polluted NodalArc state | `make nuke && make all` |
+| Tooling broken and namespace must be removed | `make force-teardown`, then `make nuke` before redeploying |
 
 ## Backup and Recovery
 

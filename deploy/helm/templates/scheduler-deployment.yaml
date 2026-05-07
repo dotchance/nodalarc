@@ -24,7 +24,7 @@ spec:
         {{- include "nodalarc.nats-wait-init" . | nindent 8 }}
       containers:
         - name: scheduler
-          image: {{ .Values.images.scheduler | default "docker.io/nodalarc/scheduler:latest" }}
+          image: {{ required "images.scheduler is required" .Values.images.scheduler | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
             - name: NODAL_BUILD

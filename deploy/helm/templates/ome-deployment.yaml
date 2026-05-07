@@ -21,7 +21,7 @@ spec:
 {{- end }}
       initContainers:
         - name: ensure-nats-streams
-          image: natsio/nats-box:latest
+          image: {{ required "images.natsBox is required" .Values.images.natsBox | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           command: ["sh", "-c"]
           args:
@@ -82,7 +82,7 @@ spec:
               echo "Streams ready."
       containers:
         - name: ome
-          image: {{ .Values.images.ome }}
+          image: {{ required "images.ome is required" .Values.images.ome | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
             - name: NODAL_BUILD

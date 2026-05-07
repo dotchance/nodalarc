@@ -1,8 +1,8 @@
 """Production queue behavior tests — the real quality gate.
 
 Tests the dispatch worker, DispatchIntent, queue drain semantics,
-forced BBM escalation, suspend/resume override deferral, and reason
-attribution through the single dispatch path.
+forced BBM escalation, suspend/resume override deferral, reason
+attribution, and _on_scenario_command callback.
 
 These tests exercise the production code path (dispatch worker + queue),
 NOT the _dispatch_batch test-compat method.
@@ -11,6 +11,7 @@ NOT the _dispatch_batch test-compat method.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -73,11 +74,36 @@ def _make_dispatcher(mbb=False):
     return d, pool
 
 
-class TestDispatchWorkerReconcile:
-    """Dispatch worker performs actual BatchLinkDown/Up through _reconcile_links."""
+async def _run_worker_with_intents(d, intents: list[DispatchIntent], nc=None):
+    """Run the dispatch worker processing the given intents then stopping.
 
-    def test_scenario_override_dispatches_via_worker(self):
-        """Override causes down through worker, not scenario handler."""
+    Uses a task + sleep pattern: enqueue intents, let the worker process
+    them, then stop the worker cleanly. This exercises the real worker
+    loop including queue drain semantics.
+    """
+    if nc is None:
+        nc = MagicMock()
+    d._running = True
+    for intent in intents:
+        await d._dispatch_queue.put(intent)
+
+    async def _stop_after_processing():
+        while not d._dispatch_queue.empty():
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        d._running = False
+        await d._dispatch_queue.put(None)
+
+    worker = asyncio.create_task(d._dispatch_worker(nc))
+    stopper = asyncio.create_task(_stop_after_processing())
+    await asyncio.gather(worker, stopper)
+
+
+class TestDispatchWorkerReconcile:
+    """Dispatch worker processes queued intents through _reconcile_links."""
+
+    def test_worker_processes_queued_intent_and_dispatches_down(self):
+        """Worker dequeues intent, calls _reconcile_links, Node Agent gets BatchLinkDown."""
         d, pool = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
         d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
@@ -86,21 +112,25 @@ class TestDispatchWorkerReconcile:
         d._override_pairs[pair] = "scenario_inject_down"
         intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
 
-        async def _run():
-            nc = MagicMock()
-            await d._reconcile_links(
-                intent.desired,
-                nc,
-                intent.sim_time,
-                intent.down_reasons,
-                intent.forced_bbm_pairs,
-            )
-
-        asyncio.run(_run())
+        asyncio.run(_run_worker_with_intents(d, [intent]))
 
         stub = pool.get_stub.return_value
         assert stub.async_batch_link_down.called
         assert pair not in d._actual_links
+
+    def test_worker_processes_queued_intent_and_dispatches_up(self):
+        """Worker dequeues intent with new desired pair, calls BatchLinkUp."""
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+
+        intent = d._build_dispatch_intent(sim_time=SIM, source="ome_event")
+
+        asyncio.run(_run_worker_with_intents(d, [intent]))
+
+        stub = pool.get_stub.return_value
+        assert stub.async_batch_link_up.called
+        assert pair in d._actual_links
 
     def test_actual_links_only_modified_by_reconcile(self):
         """_override_pairs mutation alone does not change _actual_links."""
@@ -139,9 +169,9 @@ class TestDispatchWorkerReconcile:
 
 
 class TestReasonAttribution:
-    """LinkDown reason flows through the single dispatch path."""
+    """LinkDown reason flows through the single dispatch path via worker."""
 
-    def test_scenario_inject_down_reason(self):
+    def test_scenario_inject_down_reason_through_worker(self):
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
         d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
@@ -150,23 +180,13 @@ class TestReasonAttribution:
         d._override_pairs[pair] = "scenario_inject_down"
         intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
 
-        async def _run():
-            nc = MagicMock()
-            await d._reconcile_links(
-                intent.desired,
-                nc,
-                intent.sim_time,
-                intent.down_reasons,
-                intent.forced_bbm_pairs,
-            )
-
-        asyncio.run(_run())
+        asyncio.run(_run_worker_with_intents(d, [intent]))
 
         publish_call = d._js.publish.call_args_list[0]
         published_data = publish_call[0][1]
         assert b"scenario_inject_down" in published_data
 
-    def test_satellite_loss_reason(self):
+    def test_satellite_loss_reason_through_worker(self):
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
         d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
@@ -175,23 +195,13 @@ class TestReasonAttribution:
         d._override_nodes["sat-P00S00"] = "satellite_loss"
         intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
 
-        async def _run():
-            nc = MagicMock()
-            await d._reconcile_links(
-                intent.desired,
-                nc,
-                intent.sim_time,
-                intent.down_reasons,
-                intent.forced_bbm_pairs,
-            )
-
-        asyncio.run(_run())
+        asyncio.run(_run_worker_with_intents(d, [intent]))
 
         publish_call = d._js.publish.call_args_list[0]
         published_data = publish_call[0][1]
         assert b"satellite_loss" in published_data
 
-    def test_vis_lost_for_ome_removal(self):
+    def test_vis_lost_for_ome_removal_through_worker(self):
         """Non-override removal uses vis_lost."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
@@ -199,17 +209,7 @@ class TestReasonAttribution:
 
         intent = d._build_dispatch_intent(sim_time=SIM, source="ome_event")
 
-        async def _run():
-            nc = MagicMock()
-            await d._reconcile_links(
-                intent.desired,
-                nc,
-                intent.sim_time,
-                intent.down_reasons,
-                intent.forced_bbm_pairs,
-            )
-
-        asyncio.run(_run())
+        asyncio.run(_run_worker_with_intents(d, [intent]))
 
         publish_call = d._js.publish.call_args_list[0]
         published_data = publish_call[0][1]
@@ -219,37 +219,35 @@ class TestReasonAttribution:
 class TestQueueDrainSemantics:
     """Queue draining preserves rebaseline_counts via OR."""
 
-    def test_rebaseline_ored_across_drain(self):
-        """If a snapshot intent is drained, rebaseline_counts survives."""
+    def test_rebaseline_ored_corrects_counters(self):
+        """Snapshot intent drained by a later OME intent: counters still rebaselined."""
         d, _ = _make_dispatcher()
+        pair = ("gs-ashburn", "sat-P00S00")
+        d._actual_links[pair] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._gs_active_count["gs-ashburn"] = 99
+        d._sat_active_count["sat-P00S00"] = 99
 
         snapshot_intent = DispatchIntent(
-            desired={},
+            desired={pair: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")},
             down_reasons={},
             forced_bbm_pairs=frozenset(),
             sim_time=SIM,
             source="snapshot",
             rebaseline_counts=True,
         )
-        scenario_intent = DispatchIntent(
-            desired={},
+        ome_intent = DispatchIntent(
+            desired={pair: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")},
             down_reasons={},
             forced_bbm_pairs=frozenset(),
             sim_time=SIM,
-            source="scenario",
+            source="ome_event",
             rebaseline_counts=False,
         )
 
-        async def _run():
-            d._running = True
-            d._dispatch_queue.put_nowait(snapshot_intent)
-            d._dispatch_queue.put_nowait(scenario_intent)
-            d._dispatch_queue.put_nowait(None)
+        asyncio.run(_run_worker_with_intents(d, [snapshot_intent, ome_intent]))
 
-            nc = MagicMock()
-            await d._dispatch_worker(nc)
-
-        asyncio.run(_run())
+        assert d._gs_active_count["gs-ashburn"] == 1
+        assert d._sat_active_count["sat-P00S00"] == 1
 
     def test_rapid_inject_then_clear_no_down(self):
         """Inject then immediately clear before worker runs: no physical down."""
@@ -264,16 +262,7 @@ class TestQueueDrainSemantics:
         d._override_pairs.clear()
         clear_intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
 
-        async def _run():
-            d._running = True
-            d._dispatch_queue.put_nowait(inject_intent)
-            d._dispatch_queue.put_nowait(clear_intent)
-            d._dispatch_queue.put_nowait(None)
-
-            nc = MagicMock()
-            await d._dispatch_worker(nc)
-
-        asyncio.run(_run())
+        asyncio.run(_run_worker_with_intents(d, [inject_intent, clear_intent]))
 
         stub = pool.get_stub.return_value
         assert not stub.async_batch_link_down.called
@@ -299,40 +288,125 @@ class TestQueueDrainSemantics:
             source="ome_event",
         )
 
-        async def _run():
-            d._running = True
-            # Put both intents — worker will drain to latest
-            d._dispatch_queue.put_nowait(intent_with_forced)
-            d._dispatch_queue.put_nowait(intent_without_forced)
-
-            nc = MagicMock()
-            # Manually simulate one iteration of the worker loop
-            intent = await d._dispatch_queue.get()
-            rebaseline = intent.rebaseline_counts
-            while not d._dispatch_queue.empty():
-                try:
-                    next_intent = d._dispatch_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                if next_intent is None:
-                    intent = None
-                    break
-                rebaseline = rebaseline or next_intent.rebaseline_counts
-                intent = next_intent
-
-            assert intent is not None
-            assert intent.forced_bbm_pairs == frozenset()
-            await d._reconcile_links(
-                intent.desired,
-                nc,
-                intent.sim_time,
-                intent.down_reasons,
-                intent.forced_bbm_pairs,
-            )
-
-        asyncio.run(_run())
+        asyncio.run(_run_worker_with_intents(d, [intent_with_forced, intent_without_forced]))
 
         assert pair in d._actual_links
+
+
+class TestOnScenarioCommand:
+    """_on_scenario_command: parse → normalize → mutate → enqueue/suspend → respond."""
+
+    def _make_msg(self, data: dict) -> MagicMock:
+        msg = MagicMock()
+        msg.data = json.dumps(data).encode()
+        msg.respond = AsyncMock()
+        return msg
+
+    def test_inject_link_down_mutates_and_enqueues(self):
+        d, _ = _make_dispatcher()
+        d._current_sim_time = SIM
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+
+        msg = self._make_msg(
+            {"action": "inject_link_down", "node_a": "sat-P00S01", "node_b": "sat-P00S00"}
+        )
+
+        asyncio.run(d._on_scenario_command(msg))
+
+        canonical = ("sat-P00S00", "sat-P00S01")
+        assert canonical in d._override_pairs
+        assert d._override_pairs[canonical] == "scenario_inject_down"
+        assert not d._dispatch_queue.empty()
+        msg.respond.assert_called_once()
+        resp = json.loads(msg.respond.call_args[0][0])
+        assert resp["status"] == "accepted"
+
+    def test_inject_satellite_loss_mutates_override_nodes(self):
+        d, _ = _make_dispatcher()
+        d._current_sim_time = SIM
+
+        msg = self._make_msg({"action": "inject_satellite_loss", "node": "sat-P00S00"})
+        asyncio.run(d._on_scenario_command(msg))
+
+        assert "sat-P00S00" in d._override_nodes
+        assert d._override_nodes["sat-P00S00"] == "satellite_loss"
+
+    def test_release_link_override_removes_pair(self):
+        d, _ = _make_dispatcher()
+        d._current_sim_time = SIM
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._override_pairs[pair] = "scenario_inject_down"
+
+        msg = self._make_msg(
+            {"action": "inject_link_up", "node_a": "sat-P00S00", "node_b": "sat-P00S01"}
+        )
+        asyncio.run(d._on_scenario_command(msg))
+
+        assert pair not in d._override_pairs
+
+    def test_restore_satellite_removes_node(self):
+        d, _ = _make_dispatcher()
+        d._current_sim_time = SIM
+        d._override_nodes["sat-P00S00"] = "satellite_loss"
+
+        msg = self._make_msg({"action": "restore_satellite", "node": "sat-P00S00"})
+        asyncio.run(d._on_scenario_command(msg))
+
+        assert "sat-P00S00" not in d._override_nodes
+
+    def test_clear_overrides_clears_both_dicts(self):
+        d, _ = _make_dispatcher()
+        d._current_sim_time = SIM
+        d._override_pairs[("sat-P00S00", "sat-P00S01")] = "scenario_inject_down"
+        d._override_nodes["sat-P00S00"] = "satellite_loss"
+
+        msg = self._make_msg({"action": "clear_overrides"})
+        asyncio.run(d._on_scenario_command(msg))
+
+        assert len(d._override_pairs) == 0
+        assert len(d._override_nodes) == 0
+
+    def test_suspended_stores_override_but_no_enqueue(self):
+        d, _ = _make_dispatcher()
+        d._suspended = True
+        d._expected_epoch_id = 1
+        pair = ("sat-P00S00", "sat-P00S01")
+
+        msg = self._make_msg(
+            {"action": "inject_link_down", "node_a": "sat-P00S00", "node_b": "sat-P00S01"}
+        )
+        asyncio.run(d._on_scenario_command(msg))
+
+        assert pair in d._override_pairs
+        assert d._dispatch_queue.empty()
+        resp = json.loads(msg.respond.call_args[0][0])
+        assert resp["status"] == "accepted"
+        assert "suspended" in resp.get("note", "")
+
+    def test_malformed_command_returns_error(self):
+        d, _ = _make_dispatcher()
+        d._current_sim_time = SIM
+
+        msg = self._make_msg({"action": "bogus_action"})
+        asyncio.run(d._on_scenario_command(msg))
+
+        resp = json.loads(msg.respond.call_args[0][0])
+        assert resp["status"] == "error"
+        assert d._dispatch_queue.empty()
+
+    def test_pair_normalization(self):
+        """Pairs are normalized to (min, max) regardless of command order."""
+        d, _ = _make_dispatcher()
+        d._current_sim_time = SIM
+
+        msg = self._make_msg(
+            {"action": "inject_link_down", "node_a": "sat-P01S00", "node_b": "sat-P00S00"}
+        )
+        asyncio.run(d._on_scenario_command(msg))
+
+        assert ("sat-P00S00", "sat-P01S00") in d._override_pairs
+        assert ("sat-P01S00", "sat-P00S00") not in d._override_pairs
 
 
 class TestSuspendDeferral:
@@ -366,11 +440,10 @@ class TestSuspendDeferral:
 class TestForcedBBMEscalation:
     """Forced BBM escalates to GS-segment level in _reconcile_mbb."""
 
-    def test_forced_pair_forces_segment_bbm(self):
-        """If any pair under a GS is forced, entire segment goes BBM."""
+    def test_forced_pair_forces_segment_bbm_through_worker(self):
+        """Worker processes intent with forced pair → GS segment goes BBM."""
         d, pool = _make_dispatcher(mbb=True)
         old_pair = ("gs-ashburn", "sat-P00S00")
-        new_pair = ("gs-ashburn", "sat-P00S01")
         d._actual_links[old_pair] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._gs_active_count["gs-ashburn"] = 1
         d._sat_active_count["sat-P00S00"] = 1
@@ -380,19 +453,11 @@ class TestForcedBBMEscalation:
 
         assert old_pair in intent.forced_bbm_pairs
 
-        async def _run():
-            nc = MagicMock()
-            await d._reconcile_links(
-                intent.desired,
-                nc,
-                intent.sim_time,
-                intent.down_reasons,
-                intent.forced_bbm_pairs,
-            )
-
-        asyncio.run(_run())
+        asyncio.run(_run_worker_with_intents(d, [intent]))
 
         assert old_pair not in d._actual_links
+        stub = pool.get_stub.return_value
+        assert stub.async_batch_link_down.called
 
     def test_ome_removal_not_forced_bbm(self):
         """Normal OME removal does not appear in forced_bbm_pairs."""
@@ -408,23 +473,8 @@ class TestForcedBBMEscalation:
 class TestInFlightUpOmeRemoval:
     """In-flight up + OME removal: OME takes attribution precedence."""
 
-    def test_ome_removal_during_inflight_uses_vis_lost(self):
-        """Pair in actual (up ACKed), not in desired (OME removed), no override
-        reason captured because OME removal cleared it from desired before
-        intent was built. Falls back to vis_lost."""
-        d, _ = _make_dispatcher()
-        pair = ("sat-P00S00", "sat-P00S01")
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
-        d._override_pairs[pair] = "scenario_inject_down"
-        d._desired_links.pop(pair, None)
-
-        intent = d._build_dispatch_intent(sim_time=SIM, source="ome_event")
-
-        assert intent.down_reasons.get(pair) == "scenario_inject_down"
-
-    def test_ome_invisible_removes_from_desired_override_still_captures(self):
-        """If override exists AND pair is in actual, reason is captured
-        even if OME already removed from desired."""
+    def test_override_reason_captured_from_actual(self):
+        """Pair in actual + override → reason captured even if not in desired."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
         d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
@@ -434,6 +484,17 @@ class TestInFlightUpOmeRemoval:
 
         assert pair in intent.down_reasons
         assert intent.down_reasons[pair] == "scenario_inject_down"
+
+    def test_override_reason_captured_from_desired(self):
+        """Pair in desired (not yet in actual) + override → reason captured."""
+        d, _ = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._override_pairs[pair] = "scenario_inject_down"
+
+        intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
+
+        assert pair in intent.down_reasons
 
 
 class TestTeardownPairsClearedOnSnapshot:

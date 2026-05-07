@@ -41,6 +41,7 @@ class TestScenarioYAMLValidation:
             "inject_link_down",
             "inject_link_up",
             "inject_satellite_loss",
+            "restore_satellite",
             "wait_converge",
             "measure",
             "reconfig",

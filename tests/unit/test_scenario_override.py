@@ -1,95 +1,169 @@
-"""Test scenario override set logic and thread safety.
+"""Test scenario override state and _build_dispatch_intent composition.
 
-PRD Appendix B: proves that adding a link to the override set prevents
-the dispatcher from bringing it up when the OME reports visibility, that
-removing a link unblocks it, and that clearing the full set reconciles all.
-
-Dispatcher integration tests for override behavior are in
-tests/unit/test_scheduler_dispatcher.py (uses the live scheduler.dispatcher).
+Tests that override state (_override_pairs, _override_nodes) correctly
+filters _desired_links via _build_dispatch_intent, that node-level
+overrides suppress all pairs involving the node, and that pair
+normalization works at the intent builder level.
 """
 
-import threading
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
+
+from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 
 
-class TestOverrideSet:
-    def test_add_override_blocks_pair(self):
-        override_set: set[tuple[str, str]] = set()
-        lock = threading.Lock()
+def _make_dispatcher(**overrides) -> Dispatcher:
+    defaults = dict(
+        interface_map={},
+        bandwidth_map={},
+        pod_locator=MagicMock(),
+        agent_pool=MagicMock(),
+        session_id="test-session",
+        gs_terminal_capacities={},
+        sat_ground_terminal_capacities={},
+    )
+    defaults.update(overrides)
+    return Dispatcher(**defaults)
 
+
+SIM_TIME = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+class TestOverridePairs:
+    def test_add_pair_suppresses_from_effective_desired(self):
+        d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        with lock:
-            override_set.add(pair)
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
 
-        with lock:
-            assert pair in override_set
+        d._override_pairs[pair] = "scenario_inject_down"
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
 
-    def test_remove_override_unblocks_pair(self):
-        override_set: set[tuple[str, str]] = set()
-        lock = threading.Lock()
+        assert pair not in intent.desired
 
+    def test_remove_pair_restores_to_effective_desired(self):
+        d = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        with lock:
-            override_set.add(pair)
-        with lock:
-            override_set.discard(pair)
-        with lock:
-            assert pair not in override_set
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
 
-    def test_clear_removes_all(self):
-        override_set: set[tuple[str, str]] = set()
-        lock = threading.Lock()
+        d._override_pairs[pair] = "scenario_inject_down"
+        d._override_pairs.pop(pair)
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
 
-        override_set.add(("sat-P00S00", "sat-P00S01"))
-        override_set.add(("sat-P00S00", "sat-P01S00"))
-        override_set.add(("gs-hawthorne", "sat-P00S00"))
+        assert pair in intent.desired
 
-        with lock:
-            override_set.clear()
-        assert len(override_set) == 0
+    def test_clear_overrides_restores_all(self):
+        d = _make_dispatcher()
+        pairs = [("sat-P00S00", "sat-P00S01"), ("sat-P00S02", "sat-P00S03")]
+        for p in pairs:
+            d._desired_links[p] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+            d._override_pairs[p] = "scenario_inject_down"
 
-    def test_thread_safety(self):
-        """Override set is thread-safe under concurrent access."""
-        override_set: set[tuple[str, str]] = set()
-        lock = threading.Lock()
-        errors: list[str] = []
+        d._override_pairs.clear()
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
 
-        def writer():
-            for i in range(100):
-                pair = (f"sat-P00S{i:02d}", f"sat-P01S{i:02d}")
-                with lock:
-                    override_set.add(pair)
+        for p in pairs:
+            assert p in intent.desired
 
-        def reader():
-            for _ in range(100):
-                with lock:
-                    _ = len(override_set)
+    def test_desired_links_not_modified_by_override(self):
+        d = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
 
-        def remover():
-            for i in range(50):
-                pair = (f"sat-P00S{i:02d}", f"sat-P01S{i:02d}")
-                with lock:
-                    override_set.discard(pair)
+        d._override_pairs[pair] = "scenario_inject_down"
+        d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
 
-        threads = [
-            threading.Thread(target=writer),
-            threading.Thread(target=reader),
-            threading.Thread(target=remover),
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=5)
+        assert pair in d._desired_links
 
-        assert len(errors) == 0
 
-    def test_alphabetical_pair_normalization(self):
-        """Override pairs should be stored with node_a < node_b."""
-        override_set: set[tuple[str, str]] = set()
+class TestOverrideNodes:
+    def test_node_override_suppresses_all_pairs_involving_node(self):
+        d = _make_dispatcher()
+        d._desired_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[("sat-P00S00", "sat-P01S00")] = ActiveLinkInfo("isl1", "isl0", 3.0, 1000.0)
+        d._desired_links[("sat-P00S01", "sat-P01S00")] = ActiveLinkInfo("isl2", "isl2", 3.0, 1000.0)
 
-        # Normalize before inserting
-        a, b = "sat-P01S00", "sat-P00S00"
-        pair = (min(a, b), max(a, b))
-        override_set.add(pair)
+        d._override_nodes["sat-P00S00"] = "satellite_loss"
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
 
-        # Check with normalized pair
-        assert ("sat-P00S00", "sat-P01S00") in override_set
+        assert ("sat-P00S00", "sat-P00S01") not in intent.desired
+        assert ("sat-P00S00", "sat-P01S00") not in intent.desired
+        assert ("sat-P00S01", "sat-P01S00") in intent.desired
+
+    def test_node_override_suppresses_even_without_pair_override(self):
+        d = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+
+        d._override_nodes["sat-P00S00"] = "satellite_loss"
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
+
+        assert pair not in intent.desired
+        assert pair not in d._override_pairs
+
+    def test_restore_node_unsuppresses(self):
+        d = _make_dispatcher()
+        d._desired_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._override_nodes["sat-P00S00"] = "satellite_loss"
+        d._override_nodes.pop("sat-P00S00")
+
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
+        assert ("sat-P00S00", "sat-P00S01") in intent.desired
+
+
+class TestReasonCapture:
+    def test_pair_override_captured_in_down_reasons(self):
+        d = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+
+        d._override_pairs[pair] = "scenario_inject_down"
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
+
+        assert intent.down_reasons[pair] == "scenario_inject_down"
+        assert pair in intent.forced_bbm_pairs
+
+    def test_node_override_captured_in_down_reasons(self):
+        d = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+
+        d._override_nodes["sat-P00S00"] = "satellite_loss"
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
+
+        assert intent.down_reasons[pair] == "satellite_loss"
+        assert pair in intent.forced_bbm_pairs
+
+    def test_no_override_reason_for_ome_removed_pairs(self):
+        d = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="ome_event")
+
+        assert pair not in intent.down_reasons
+        assert pair not in intent.forced_bbm_pairs
+
+    def test_reason_from_desired_union_actual(self):
+        """Override reason captured for pairs in desired but not yet in actual."""
+        d = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+
+        d._override_pairs[pair] = "scenario_inject_down"
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
+
+        assert pair in intent.down_reasons
+
+
+class TestPairNormalization:
+    def test_canonical_ordering(self):
+        d = _make_dispatcher()
+        d._desired_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+
+        d._override_pairs[("sat-P00S00", "sat-P00S01")] = "scenario_inject_down"
+        intent = d._build_dispatch_intent(sim_time=SIM_TIME, source="scenario")
+
+        assert ("sat-P00S00", "sat-P00S01") not in intent.desired
+        assert ("sat-P00S00", "sat-P00S01") in intent.down_reasons

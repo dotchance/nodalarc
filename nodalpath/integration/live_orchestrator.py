@@ -19,6 +19,8 @@ from nodalarc.models.link_events import LinkDown, LinkUp
 from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
+    STREAM_LINK_EVENTS,
+    STREAM_OME_EVENTS,
     link_down_subject,
     link_state_snapshot_subject,
     link_up_subject,
@@ -132,7 +134,7 @@ class LiveOrchestrator:
             subs.append(
                 await js.subscribe(
                     self._subj_visibility,
-                    stream="NODALARC_OME",
+                    stream=STREAM_OME_EVENTS,
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
                     cb=self._on_visibility_event,
@@ -141,7 +143,7 @@ class LiveOrchestrator:
             subs.append(
                 await js.subscribe(
                     self._subj_link_down,
-                    stream="NODALARC_LINKS",
+                    stream=STREAM_LINK_EVENTS,
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
                     cb=self._on_link_down,
@@ -150,7 +152,7 @@ class LiveOrchestrator:
             subs.append(
                 await js.subscribe(
                     self._subj_link_up,
-                    stream="NODALARC_LINKS",
+                    stream=STREAM_LINK_EVENTS,
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.NEW,
                     cb=self._on_link_up,
@@ -198,7 +200,7 @@ class LiveOrchestrator:
         try:
             sub = await js.subscribe(
                 self._subj_link_snapshot,
-                stream="NODALARC_LINKS",
+                stream=STREAM_LINK_EVENTS,
                 ordered_consumer=True,
             )
             try:

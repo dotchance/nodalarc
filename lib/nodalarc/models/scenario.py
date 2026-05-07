@@ -32,6 +32,11 @@ class InjectSatelliteLossStep(BaseModel):
     node: str
 
 
+class RestoreSatelliteStep(BaseModel):
+    action: Literal["restore_satellite"]
+    node: str
+
+
 class WaitConvergeStep(BaseModel):
     action: Literal["wait_converge"]
     timeout_s: float = 30.0
@@ -54,6 +59,7 @@ ScenarioStep = Annotated[
     | Annotated[InjectLinkDownStep, Tag("inject_link_down")]
     | Annotated[InjectLinkUpStep, Tag("inject_link_up")]
     | Annotated[InjectSatelliteLossStep, Tag("inject_satellite_loss")]
+    | Annotated[RestoreSatelliteStep, Tag("restore_satellite")]
     | Annotated[WaitConvergeStep, Tag("wait_converge")]
     | Annotated[MeasureStep, Tag("measure")]
     | Annotated[ReconfigStep, Tag("reconfig")],

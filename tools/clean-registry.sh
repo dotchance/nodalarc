@@ -82,7 +82,6 @@ for repo in $repos; do
         digest=$(crane digest "$host/$repo:$tag" $crane_opts 2>/dev/null || true)
         if [ -z "$digest" ]; then
             echo "  SKIPPED $host/$repo:$tag  (could not resolve digest)" >&2
-            failed=1
             continue
         fi
         if crane delete "$host/$repo@$digest" $crane_opts 2>/dev/null; then

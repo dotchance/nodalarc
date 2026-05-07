@@ -1,0 +1,61 @@
+name: Feature request
+description: Propose a focused improvement to NodalArc.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for product, architecture, operations, or developer-experience improvements. Please describe the concrete workflow or system behavior you want to improve.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Build, load, install, or teardown
+        - Kubernetes or Helm deployment
+        - OME orbital mechanics
+        - Scheduler or link dispatch
+        - Node Agent or kernel networking
+        - Operator or session deployment
+        - VS-API or web API
+        - Visualization frontend
+        - NodalPath
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What limitation, workflow pain, or missing capability does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or interface you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider?
+  - type: textarea
+    id: impact
+    attributes:
+      label: Operational or architectural impact
+      description: Note any expected impact on deployment, lifecycle tooling, NATS contracts, Kubernetes resources, performance, or compatibility.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submit checks
+      options:
+        - label: I searched existing issues for similar requests.
+          required: true
+        - label: I described the user or operator workflow this improves.
+          required: true

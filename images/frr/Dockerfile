@@ -1,4 +1,4 @@
-FROM quay.io/frrouting/frr:10.3.1
+FROM quay.io/frrouting/frr:10.3.1@sha256:f90d26a9fd5c14fc5795a73b4254ac88bc3186c45bbeb220a225fb6182de812c
 
 # OpenSSH server for interactive terminal access (vtysh login shell).
 # Users SSH in and land directly in vtysh — same as a real router.

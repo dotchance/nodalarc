@@ -879,8 +879,11 @@ class Dispatcher:
         sim_time = vis_events[0].sim_time
         self._current_sim_time = sim_time
 
-        desired = self._apply_events_to_desired(vis_events)
-        await self._reconcile_links(desired, to_pub, sim_time)
+        self._apply_events_to_desired(vis_events)
+        intent = self._build_dispatch_intent(sim_time=sim_time, source="ome_event")
+        await self._reconcile_links(
+            intent.desired, to_pub, sim_time, intent.down_reasons, intent.forced_bbm_pairs
+        )
 
     def stop(self) -> None:
         self._running = False

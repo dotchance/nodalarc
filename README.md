@@ -107,7 +107,7 @@ scripts/        Host bootstrap and infrastructure scripts
 
 ## Community
 
-NodalArc is open source and welcomes contributions. Whether you're fixing a bug, adding a routing protocol, improving the visualization, or writing documentation - we want your help.
+NodalArc is source-available and welcomes contributions. Whether you're fixing a bug, adding a routing protocol, improving the visualization, or writing documentation - we want your help.
 
 - **Issues** - bug reports, feature requests, questions
 - **Pull Requests** - see the [Developer Guide](docs/dev/) for workflow and conventions
@@ -115,6 +115,6 @@ NodalArc is open source and welcomes contributions. Whether you're fixing a bug,
 
 ## License
 
-NodalArc Source Available License 1.0. You can use, modify, and distribute it freely. You cannot offer it as a hosted service or build a competing commercial product from it. See [LICENSE](LICENSE) for full terms.
+NodalArc Source Available License 1.0. You can use, modify, and distribute it subject to the license terms. You cannot offer it as a hosted or managed service that provides access to a substantial set of NodalArc features. See [LICENSE](LICENSE) for full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party notices.
 
 Copyright 2024-2026 .chance (dotchance)

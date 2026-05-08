@@ -83,15 +83,40 @@ manifests and lockfiles:
 
 These package dependencies are not vendored into the source tree, but built
 frontend bundles, Python wheels, and container images may include third-party
-software. Release artifacts should include a generated dependency license report
-for the exact artifact being distributed.
+software. The table below is the source-tree baseline for current direct and
+known transitive package licenses. Release artifacts should still include a
+generated dependency license report for the exact artifact being distributed.
 
-Known attribution-license dependency in current lockfiles:
+For dependencies that offer more than one license, NodalArc uses the following
+license election when building and distributing project artifacts:
 
-- `caniuse-lite`, used by the NodalPath console frontend toolchain
-- License: Creative Commons Attribution 4.0 International
-- License URL: <https://creativecommons.org/licenses/by/4.0/>
-- Source: <https://github.com/browserslist/caniuse-lite>
+| Package | Available licenses | NodalArc election |
+| --- | --- | --- |
+| `asyncssh` | EPL-2.0 OR GPL-2.0-or-later | EPL-2.0 |
+| `pyroute2` | Apache-2.0 OR GPL-2.0-or-later | Apache-2.0 |
+
+Current package license families:
+
+| License family | Current packages / artifacts | Local license text |
+| --- | --- | --- |
+| Apache-2.0 | `nats-py`, `grpcio`, `grpcio-tools`, `kubernetes`, `pyroute2` (elected), `typescript`, `aria-query`, `expect-type`, `xml-name-validator` | `LICENSES/Apache-2.0.txt` |
+| EPL-2.0 | `asyncssh` (elected) | `LICENSES/EPL-2.0.txt` |
+| GPL-2.0-or-later | FRRouting runtime image and FRR packages | `LICENSES/GPL-2.0-or-later.txt` |
+| BSD-3-Clause | `numpy`, `jinja2`, `uvicorn`, `websockets`, `protobuf`, `httpx`, `source-map-js`, `tough-cookie`, `@webgpu/types` | `LICENSES/BSD-3-Clause.txt` |
+| BSD-2-Clause | `entities`, `webidl-conversions` | `LICENSES/BSD-2-Clause.txt` |
+| MIT | `pydantic`, `fastapi`, `sgp4`, `skyfield`, `react`, `react-dom`, `three`, `@xterm/xterm`, Vite/Rollup/esbuild ecosystem packages, D3 packages | `LICENSES/MIT.txt` |
+| MIT-0 | `@csstools/color-helpers`, `@csstools/css-syntax-patches-for-csstree` | `LICENSES/MIT-0.txt` |
+| ISC | D3 packages and npm transitives recorded as ISC | `LICENSES/ISC.txt` |
+| MPL-2.0 | `certifi` | `LICENSES/MPL-2.0.txt` |
+| CC-BY-4.0 | `caniuse-lite` | `LICENSES/CC-BY-4.0.txt` |
+| CC0-1.0 | `mdn-data` | `LICENSES/CC0-1.0.txt` |
+| Unlicense | `robust-predicates` | `LICENSES/Unlicense.txt` |
+| BlueOak-1.0.0 | `lru-cache` | `LICENSES/BlueOak-1.0.0.txt` |
+
+Package-specific copyright notices remain in package metadata and should be
+carried into generated binary artifact reports. For GPL-licensed FRR packages,
+published container images should also provide or link to the corresponding
+source code in the way required by the package distributor and GPL terms.
 
 ## Container Base Images and System Packages
 

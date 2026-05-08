@@ -1,5 +1,9 @@
 # NodalArc Build System
 # Run `make help` for available targets.
+#
+# The Makefile is a facade over lifecycle scripts. Keep Make responsible for
+# the public command surface and simple dependency wiring; put stateful cluster
+# orchestration in tools/ scripts where it can be tested directly.
 
 -include config.mk
 
@@ -54,7 +58,7 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 .DEFAULT_GOAL := help
 
 # ---------------------------------------------------------------------------
-# help
+# Help and lifecycle map
 # ---------------------------------------------------------------------------
 
 help: ## Show this help
@@ -92,8 +96,12 @@ help: ## Show this help
 	@echo "  TAG             = $(TAG)"
 
 # ---------------------------------------------------------------------------
-# Composite targets
+# Primary lifecycle entry point
 # ---------------------------------------------------------------------------
+#
+# This is the normal clean-state path after bootstrap-host has prepared the
+# machine. It intentionally includes load before install so Helm never starts
+# pods whose images have not been placed where K3s can pull them.
 
 all: deps build ## Clean-state pipeline: deps → build → load → install → session → status
 	$(MAKE) load install session
@@ -105,8 +113,11 @@ all: deps build ## Clean-state pipeline: deps → build → load → install →
 	@echo ""
 
 # ---------------------------------------------------------------------------
-# deps
+# Dependencies
 # ---------------------------------------------------------------------------
+#
+# deps is idempotent setup for the local development machine. It installs
+# Python and frontend dependencies, but it does not build images or touch K3s.
 
 deps: check-deps ## Install Python + Node.js dependencies (idempotent)
 	@echo "[deps] Installing Python dependencies..."
@@ -142,8 +153,12 @@ check-deps:
 	@command -v node >/dev/null 2>&1   || { echo "ERROR: node not found. Run: sudo scripts/bootstrap-host.sh"; exit 1; }
 
 # ---------------------------------------------------------------------------
-# check-registry — diagnose multi-node registry config
+# Registry diagnostics
 # ---------------------------------------------------------------------------
+#
+# Multi-node clusters need an image registry that every node can pull from.
+# This target explains what Make resolved and fails early if the registry is
+# unreachable from the developer host.
 
 check-registry: ## Report resolved REGISTRY_HOST and verify the registry is reachable
 	@if [ -z "$(REGISTRY_HOST)" ]; then \
@@ -170,8 +185,12 @@ check-registry: ## Report resolved REGISTRY_HOST and verify the registry is reac
 	fi
 
 # ---------------------------------------------------------------------------
-# build
+# Build artifacts
 # ---------------------------------------------------------------------------
+#
+# Build targets produce local artifacts only: frontend dist/ directories and
+# Docker images tagged with the current git SHA. They do not install anything
+# into Kubernetes.
 
 build: deps build-frontends build-images ## Build frontend dist + all Docker images
 	@echo "[build] All images built with tag $(TAG)."
@@ -240,15 +259,22 @@ build-vf: build-frontends ## Build VF (visualization) image
 	docker build --build-arg BUILD_HASH=$(GIT_SHA) -t "$(call IMAGE_REF,vf)" -t "$(call IMAGE_REF_TAG,vf,latest)" frontend/
 
 # ---------------------------------------------------------------------------
-# load
+# Image transport
 # ---------------------------------------------------------------------------
+#
+# load is the bridge between local Docker builds and the cluster runtime:
+# single-node imports into K3s containerd; multi-node pushes to REGISTRY_HOST.
 
 load: ## Import images into K3s (single-node) or push to registry (multi-node)
 	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash tools/na-load-images.sh
 
 # ---------------------------------------------------------------------------
-# install
+# Platform lifecycle
 # ---------------------------------------------------------------------------
+#
+# Platform targets own the Helm release and long-running platform pods. They
+# do not create or switch emulation sessions; session is a separate lifecycle
+# transition below.
 
 # install waits for EVERY platform Deployment to reach Available AND the
 # Node Agent DaemonSet to finish rolling out. Any failure (timeout,
@@ -263,8 +289,12 @@ reinstall: ## Explicit destructive reinstall through official teardown
 	@ACTION=reinstall MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash tools/na-install-platform.sh
 
 # ---------------------------------------------------------------------------
-# deploy
+# Session lifecycle and platform restarts
 # ---------------------------------------------------------------------------
+#
+# session creates or switches the active emulation workload after the platform
+# is healthy. restart is a blunt operational tool for already-installed
+# platform pods; it does not change Helm values or session state.
 
 session: ## Start a session (DEFAULT_SESSION=path/to/session.yaml)
 	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' bash tools/na-session.sh
@@ -301,8 +331,14 @@ upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
 	@ACTION=upgrade MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash tools/na-install-platform.sh
 
 # ---------------------------------------------------------------------------
-# deploy-* — build one service, push to registry, rollout restart
+# Iterative service deploys
 # ---------------------------------------------------------------------------
+#
+# deploy-* is for fast inner-loop development against an already installed
+# platform. It is not the first-install path and it is not a replacement for
+# build/load/upgrade when you want Helm values to reflect a new committed SHA.
+# Each target builds one image, transports that image, then restarts only the
+# matching Deployment or DaemonSet.
 #
 # Iterative dev loop — no commit needed:
 #   edit code → make deploy-vs-api → test in browser → repeat
@@ -362,11 +398,18 @@ deploy-measurement: build-measurement ## Build + load + restart MI
 	$(call _deploy-service,measurement,deployment/nodalarc-measurement)
 
 # ---------------------------------------------------------------------------
-# status / test / teardown / clean
+# Status
 # ---------------------------------------------------------------------------
 
 status: ## Show cluster status (pods, phase, links)
 	@MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' DEFAULT_SESSION='$(DEFAULT_SESSION)' TAG='$(TAG)' bash tools/na-status.sh
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+#
+# Unit tests should not require a live cluster. Integration tests are explicit
+# because they assume a running platform or cluster-adjacent services.
 
 test: ## Run all unit tests (no sudo needed)
 	@backend=0; frontend=0; \
@@ -385,6 +428,14 @@ test-frontend: ## Run frontend unit tests (vitest)
 test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q
 
+# ---------------------------------------------------------------------------
+# Reset and teardown
+# ---------------------------------------------------------------------------
+#
+# teardown is the normal deterministic cleanup path. force-teardown is a
+# break-glass Kubernetes removal when the lifecycle tooling itself is broken;
+# it intentionally warns because it can leave host/container state behind.
+
 teardown: ## Full teardown — pods, namespace, cluster resources, kernel state
 	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash tools/na-teardown.sh
 
@@ -400,6 +451,14 @@ reset-platform: ## Teardown platform and runtime caches but keep dependencies
 	@$(MAKE) teardown
 	@$(MAKE) clean
 	@echo "[reset-platform] Next: make build && make load && make install && make session"
+
+# ---------------------------------------------------------------------------
+# Local cleanup
+# ---------------------------------------------------------------------------
+#
+# These targets clean files and images. They are intentionally separate from
+# teardown so a developer can remove build products without disturbing a
+# running cluster.
 
 clean: ## Remove build artifacts (dist/, caches)
 	rm -rf frontend/dist nodalpath/console/frontend/dist

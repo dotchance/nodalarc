@@ -36,6 +36,13 @@ from ome.ground_allocator import (
     MbbTeardownState,
     allocate_ground_links,
 )
+from ome.isl_engine import (
+    IslFeasibilityResult,
+    IslTerminalConstraints,
+    ScheduledIsl,
+    evaluate_isl_feasibility,
+    schedule_isl_links,
+)
 from ome.propagation_engine import (
     PropagatedState,
     build_node_positions,
@@ -49,10 +56,6 @@ from ome.propagator import (
 from ome.visibility import (
     GroundVisibility,
     check_ground_visibility,
-    check_isl_visibility,
-    compute_range,
-    enforce_symmetric_scheduling,
-    schedule_isl_terminals,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,23 +124,6 @@ from nodalarc.models.ground_station import HysteresisParameters
 
 
 @dataclass(frozen=True)
-class IslTerminalConstraints:
-    """Physical constraints applied to one endpoint of an ISL terminal.
-
-    Role is intentionally a stable string from the terminal model, not a
-    terminal-list index. The OME uses this object to keep structural topology
-    (`intra_plane_isl` vs `cross_plane_isl`) tied to the hardware limits that
-    real terminals impose.
-    """
-
-    role: str | None
-    max_range_km: float
-    max_tracking_rate_deg_s: float
-    field_of_regard_deg: float
-    terminal_type: str
-
-
-@dataclass(frozen=True)
 class StepContext:
     """Session-constant arguments for compute_step(). Built once, reused every step."""
 
@@ -174,6 +160,8 @@ class StepResult:
     events: list[TimelineEvent]
     positions: dict[str, NodePosition]
     isl_scheduled: dict[tuple[str, str], bool]
+    isl_feasibility: dict[tuple[str, str], IslFeasibilityResult]
+    isl_links: dict[tuple[str, str], ScheduledIsl]
     ground_allocation: GroundAllocationResult
     propagated_states: dict[str, PropagatedState]
     sim_time: datetime
@@ -192,17 +180,6 @@ class StepResult:
 def _latency_ms(range_km: float) -> float:
     """One-way propagation delay for an OME-authoritative range."""
     return range_km / SPEED_OF_LIGHT_KM_S * 1000.0
-
-
-def _role_allows_link(role: str | None, link_type: str) -> bool:
-    """Return whether a terminal role can serve a structural ISL type."""
-    if role is None:
-        return True
-    if link_type == "intra_plane_isl":
-        return role == "intra-plane"
-    if link_type == "cross_plane_isl":
-        return role == "cross-plane"
-    return True
 
 
 def build_step_context(
@@ -335,138 +312,27 @@ def compute_step(
         TimelineEvent(timestamp_s, "ClockTick", clock_tick),
     ]
 
-    # 3. Check ISL visibility for all assigned neighbor pairs
-    isl_visibility: dict[tuple[str, str], tuple[bool, float, float, str]] = {}
-
-    for sat in ctx.satellites:
-        node_id = ctx.addressing.sat_id(sat.plane, sat.slot)
-        node_neighbors = ctx.by_node.get(node_id, [])
-
-        if node_id not in sat_states:
-            continue
-        state_a = sat_states[node_id]
-        pos_a = state_a.position_ecef_km
-        vel_a = state_a.velocity_ecef_km_s
-        geo_a = state_a.geodetic
-
-        for na in node_neighbors:
-            peer_id = na.peer_node_id
-            if peer_id not in sat_states:
-                continue
-
-            pair = (min(node_id, peer_id), max(node_id, peer_id))
-            if pair[0] != node_id:
-                continue
-
-            state_b = sat_states[peer_id]
-            pos_b = state_b.position_ecef_km
-            vel_b = state_b.velocity_ecef_km_s
-            geo_b = state_b.geodetic
-            peer_assignment = next(
-                (
-                    peer_na
-                    for peer_na in ctx.by_node.get(peer_id, [])
-                    if peer_na.peer_node_id == node_id
-                ),
-                None,
-            )
-            if peer_assignment is None:
-                raise ValueError(
-                    f"Missing reciprocal ISL assignment for {node_id}<->{peer_id}; "
-                    "terminal-aware feasibility requires both endpoint interfaces"
-                )
-
-            constraints_a = ctx.sat_isl_terminal_constraints.get(node_id, {}).get(na.interface)
-            constraints_b = ctx.sat_isl_terminal_constraints.get(peer_id, {}).get(
-                peer_assignment.interface
-            )
-            if constraints_a is None or constraints_b is None:
-                raise ValueError(
-                    f"Missing terminal constraints for {node_id}:{na.interface}<->"
-                    f"{peer_id}:{peer_assignment.interface}"
-                )
-
-            if not _role_allows_link(constraints_a.role, na.link_type) or not _role_allows_link(
-                constraints_b.role, na.link_type
-            ):
-                range_km = compute_range(pos_a, pos_b)
-                isl_visibility[pair] = (
-                    False,
-                    range_km,
-                    _latency_ms(range_km),
-                    "terminal_role_mismatch",
-                )
-                continue
-
-            is_cross = na.link_type == "cross_plane_isl"
-            max_range_km = min(constraints_a.max_range_km, constraints_b.max_range_km)
-            max_tracking_rate_deg_s = min(
-                constraints_a.max_tracking_rate_deg_s,
-                constraints_b.max_tracking_rate_deg_s,
-            )
-            field_of_regard_deg = min(
-                constraints_a.field_of_regard_deg,
-                constraints_b.field_of_regard_deg,
-            )
-            result = check_isl_visibility(
-                pos_a,
-                vel_a,
-                pos_b,
-                vel_b,
-                max_range_km=max_range_km,
-                max_tracking_rate_deg_s=max_tracking_rate_deg_s if is_cross else None,
-                field_of_regard_deg=field_of_regard_deg,
-                polar_seam_enabled=ctx.polar_seam_enabled and is_cross,
-                latitude_threshold_deg=ctx.latitude_threshold_deg,
-                geo_a=geo_a,
-                geo_b=geo_b,
-            )
-
-            isl_visibility[pair] = (
-                result.visible,
-                result.range_km,
-                _latency_ms(result.range_km),
-                result.reason,
-            )
-
-    # 4. Schedule ISL terminals per node
-    node_feasible_isls: dict[str, list[tuple[str, int, float]]] = {}
-    for pair, (visible, range_km, _latency_ms_value, _reason) in isl_visibility.items():
-        if not visible:
-            continue
-        node_a, node_b = pair
-        for na in ctx.by_node.get(node_a, []):
-            if na.peer_node_id == node_b:
-                node_feasible_isls.setdefault(node_a, []).append(
-                    (node_b, na.priority, range_km),
-                )
-                break
-        for na in ctx.by_node.get(node_b, []):
-            if na.peer_node_id == node_a:
-                node_feasible_isls.setdefault(node_b, []).append(
-                    (node_a, na.priority, range_km),
-                )
-                break
-
-    all_isl_schedules: dict[str, list] = {}
-    for nid, feasible in node_feasible_isls.items():
-        tc = ctx.sat_isl_terminals.get(nid, 2)
-        all_isl_schedules[nid] = schedule_isl_terminals(nid, feasible, tc)
-
-    all_isl_schedules = enforce_symmetric_scheduling(all_isl_schedules)
-
-    isl_scheduled: dict[tuple[str, str], bool] = {}
-    for _nid, links in all_isl_schedules.items():
-        for link in links:
-            pair = (min(link.node_a, link.node_b), max(link.node_a, link.node_b))
-            if pair not in isl_scheduled:
-                isl_scheduled[pair] = link.scheduled
-            else:
-                isl_scheduled[pair] = isl_scheduled[pair] and link.scheduled
+    # 3-4. Evaluate ISL physics and allocate ISL terminals.
+    node_order = [ctx.addressing.sat_id(sat.plane, sat.slot) for sat in ctx.satellites]
+    isl_feasibility = evaluate_isl_feasibility(
+        node_order=node_order,
+        sat_states=sat_states,
+        by_node=ctx.by_node,
+        terminal_constraints=ctx.sat_isl_terminal_constraints,
+        polar_seam_enabled=ctx.polar_seam_enabled,
+        latitude_threshold_deg=ctx.latitude_threshold_deg,
+    )
+    isl_links = schedule_isl_links(
+        feasibility=isl_feasibility,
+        by_node=ctx.by_node,
+        terminal_counts=ctx.sat_isl_terminals,
+    )
+    isl_scheduled = {pair: link.scheduled for pair, link in isl_links.items()}
 
     # 5. Emit ISL visibility events on state changes
-    for pair, (visible, range_km, latency_ms, _reason) in isl_visibility.items():
-        scheduled = isl_scheduled.get(pair, False) if visible else False
+    for pair, result in isl_feasibility.items():
+        visible = result.feasible
+        scheduled = isl_links[pair].scheduled if visible else False
         prev_state = isl_state.get(pair, (False, False))
         new_state = (visible, scheduled)
 
@@ -478,8 +344,8 @@ def compute_step(
                 node_b=pair[1],
                 visible=visible,
                 scheduled=scheduled,
-                range_km=range_km,
-                latency_ms=latency_ms,
+                range_km=result.range_km,
+                latency_ms=result.orbital_one_way_ms,
                 elevation_deg=None,
                 terminal_type="optical",
             )
@@ -557,6 +423,8 @@ def compute_step(
         events=events,
         positions=positions,
         isl_scheduled=isl_scheduled,
+        isl_feasibility=isl_feasibility,
+        isl_links=isl_links,
         ground_allocation=ground_allocation,
         propagated_states=sat_states,
         sim_time=sim_time,

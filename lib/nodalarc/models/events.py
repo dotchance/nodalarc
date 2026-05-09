@@ -63,6 +63,7 @@ class VisibilityEvent(BaseModel):
     visible: bool
     scheduled: bool
     range_km: float
+    latency_ms: float | None = None  # authoritative OME one-way propagation delay
     elevation_deg: float | None  # None for ISLs, float for ground links
     terminal_type: str  # "optical" or "rf"
     link_type: str = "isl"  # "isl" or "ground" — set by OME from node type registry

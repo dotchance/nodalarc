@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from nodalarc.models.link_state import LinkStateSnapshot
 
-from nodalarc.constellation_loader import SatelliteNode
+from nodalarc.constants import SPEED_OF_LIGHT_KM_S
+from nodalarc.constellation_loader import SatelliteNode, isl_terminal_for_interface
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
@@ -40,6 +41,7 @@ from ome.visibility import (
     GroundVisibility,
     check_ground_visibility,
     check_isl_visibility,
+    compute_range,
     enforce_symmetric_scheduling,
     schedule_isl_terminals,
 )
@@ -163,6 +165,23 @@ from nodalarc.models.ground_station import HysteresisParameters
 
 
 @dataclass(frozen=True)
+class IslTerminalConstraints:
+    """Physical constraints applied to one endpoint of an ISL terminal.
+
+    Role is intentionally a stable string from the terminal model, not a
+    terminal-list index. The OME uses this object to keep structural topology
+    (`intra_plane_isl` vs `cross_plane_isl`) tied to the hardware limits that
+    real terminals impose.
+    """
+
+    role: str | None
+    max_range_km: float
+    max_tracking_rate_deg_s: float
+    field_of_regard_deg: float
+    terminal_type: str
+
+
+@dataclass(frozen=True)
 class StepContext:
     """Session-constant arguments for compute_step(). Built once, reused every step."""
 
@@ -176,6 +195,7 @@ class StepContext:
     gs_service_priorities: dict[str, int]
     by_node: dict  # neighbors_by_node result
     sat_isl_terminals: dict[str, int]
+    sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]]
     sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity
     max_range_km: float
     max_tracking_rate_deg_s: float
@@ -191,6 +211,22 @@ def _compute_pair_score(elevation_deg: float, policy: str) -> float:
     if policy == "longest-pass":
         return 90.0 - elevation_deg
     return elevation_deg
+
+
+def _latency_ms(range_km: float) -> float:
+    """One-way propagation delay for an OME-authoritative range."""
+    return range_km / SPEED_OF_LIGHT_KM_S * 1000.0
+
+
+def _role_allows_link(role: str | None, link_type: str) -> bool:
+    """Return whether a terminal role can serve a structural ISL type."""
+    if role is None:
+        return True
+    if link_type == "intra_plane_isl":
+        return role == "intra-plane"
+    if link_type == "cross_plane_isl":
+        return role == "cross-plane"
+    return True
 
 
 def _compute_effective_discount(
@@ -232,11 +268,24 @@ def build_step_context(
     by_node = neighbors_by_node(neighbors)
 
     sat_isl_terminals: dict[str, int] = {}
+    sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]] = {}
     sat_ground_terminals: dict[str, int] = {}
     for sat in satellites:
         nid = addressing.sat_id(sat.plane, sat.slot)
         sat_isl_terminals[nid] = sat.isl_terminal_count
         sat_ground_terminals[nid] = sat.ground_terminal_count
+        constraints_by_iface: dict[str, IslTerminalConstraints] = {}
+        for idx in range(sat.isl_terminal_count):
+            iface = f"isl{idx}"
+            term = isl_terminal_for_interface(sat.isl_terminals, iface)
+            constraints_by_iface[iface] = IslTerminalConstraints(
+                role=getattr(term, "role", None),
+                max_range_km=float(term.max_range_km),
+                max_tracking_rate_deg_s=float(term.max_tracking_rate_deg_s),
+                field_of_regard_deg=float(term.field_of_regard_deg),
+                terminal_type=str(term.type),
+            )
+        sat_isl_terminal_constraints[nid] = constraints_by_iface
 
     gs_positions: dict[str, tuple[EcefVec3, GeoPosition]] = {}
     gs_min_elevations: dict[str, float] = {}
@@ -271,6 +320,7 @@ def build_step_context(
         gs_service_priorities=gs_service_priorities,
         by_node=by_node,
         sat_isl_terminals=sat_isl_terminals,
+        sat_isl_terminal_constraints=sat_isl_terminal_constraints,
         sat_ground_terminals=sat_ground_terminals,
         max_range_km=max_range_km,
         max_tracking_rate_deg_s=max_tracking_rate_deg_s,
@@ -331,7 +381,7 @@ def compute_step(
     ]
 
     # 3. Check ISL visibility for all assigned neighbor pairs
-    isl_visibility: dict[tuple[str, str], tuple[bool, float]] = {}
+    isl_visibility: dict[tuple[str, str], tuple[bool, float, float, str]] = {}
 
     for sat in ctx.satellites:
         node_id = ctx.addressing.sat_id(sat.plane, sat.slot)
@@ -351,27 +401,76 @@ def compute_step(
                 continue
 
             pos_b, vel_b, geo_b = sat_positions[peer_id]
+            peer_assignment = next(
+                (
+                    peer_na
+                    for peer_na in ctx.by_node.get(peer_id, [])
+                    if peer_na.peer_node_id == node_id
+                ),
+                None,
+            )
+            if peer_assignment is None:
+                raise ValueError(
+                    f"Missing reciprocal ISL assignment for {node_id}<->{peer_id}; "
+                    "terminal-aware feasibility requires both endpoint interfaces"
+                )
+
+            constraints_a = ctx.sat_isl_terminal_constraints.get(node_id, {}).get(na.interface)
+            constraints_b = ctx.sat_isl_terminal_constraints.get(peer_id, {}).get(
+                peer_assignment.interface
+            )
+            if constraints_a is None or constraints_b is None:
+                raise ValueError(
+                    f"Missing terminal constraints for {node_id}:{na.interface}<->"
+                    f"{peer_id}:{peer_assignment.interface}"
+                )
+
+            if not _role_allows_link(constraints_a.role, na.link_type) or not _role_allows_link(
+                constraints_b.role, na.link_type
+            ):
+                range_km = compute_range(pos_a, pos_b)
+                isl_visibility[pair] = (
+                    False,
+                    range_km,
+                    _latency_ms(range_km),
+                    "terminal_role_mismatch",
+                )
+                continue
 
             is_cross = na.link_type == "cross_plane_isl"
+            max_range_km = min(constraints_a.max_range_km, constraints_b.max_range_km)
+            max_tracking_rate_deg_s = min(
+                constraints_a.max_tracking_rate_deg_s,
+                constraints_b.max_tracking_rate_deg_s,
+            )
+            field_of_regard_deg = min(
+                constraints_a.field_of_regard_deg,
+                constraints_b.field_of_regard_deg,
+            )
             result = check_isl_visibility(
                 pos_a,
                 vel_a,
                 pos_b,
                 vel_b,
-                max_range_km=ctx.max_range_km,
-                max_tracking_rate_deg_s=ctx.max_tracking_rate_deg_s if is_cross else None,
-                field_of_regard_deg=ctx.field_of_regard_deg,
+                max_range_km=max_range_km,
+                max_tracking_rate_deg_s=max_tracking_rate_deg_s if is_cross else None,
+                field_of_regard_deg=field_of_regard_deg,
                 polar_seam_enabled=ctx.polar_seam_enabled and is_cross,
                 latitude_threshold_deg=ctx.latitude_threshold_deg,
                 geo_a=geo_a,
                 geo_b=geo_b,
             )
 
-            isl_visibility[pair] = (result.visible, result.range_km)
+            isl_visibility[pair] = (
+                result.visible,
+                result.range_km,
+                _latency_ms(result.range_km),
+                result.reason,
+            )
 
     # 4. Schedule ISL terminals per node
     node_feasible_isls: dict[str, list[tuple[str, int, float]]] = {}
-    for pair, (visible, range_km) in isl_visibility.items():
+    for pair, (visible, range_km, _latency_ms_value, _reason) in isl_visibility.items():
         if not visible:
             continue
         node_a, node_b = pair
@@ -405,7 +504,7 @@ def compute_step(
                 isl_scheduled[pair] = isl_scheduled[pair] and link.scheduled
 
     # 5. Emit ISL visibility events on state changes
-    for pair, (visible, range_km) in isl_visibility.items():
+    for pair, (visible, range_km, latency_ms, _reason) in isl_visibility.items():
         scheduled = isl_scheduled.get(pair, False) if visible else False
         prev_state = isl_state.get(pair, (False, False))
         new_state = (visible, scheduled)
@@ -419,6 +518,7 @@ def compute_step(
                 visible=visible,
                 scheduled=scheduled,
                 range_km=range_km,
+                latency_ms=latency_ms,
                 elevation_deg=None,
                 terminal_type="optical",
             )
@@ -632,6 +732,7 @@ def compute_step(
                 visible=visible,
                 scheduled=scheduled,
                 range_km=range_km,
+                latency_ms=_latency_ms(range_km),
                 elevation_deg=elev_deg,
                 terminal_type="optical",
                 link_type="ground",
@@ -660,6 +761,8 @@ def precompute_timeline_window(
     max_range_km: float = 5016.0,
     max_tracking_rate_deg_s: float = 3.0,
     field_of_regard_deg: float = 360.0,
+    mbb_overlap_ticks: int = 3,
+    mbb_reserve: int = 0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
@@ -692,6 +795,8 @@ def precompute_timeline_window(
         max_range_km=max_range_km,
         max_tracking_rate_deg_s=max_tracking_rate_deg_s,
         field_of_regard_deg=field_of_regard_deg,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation_deg,
@@ -740,6 +845,8 @@ def precompute_timeline(
     max_range_km: float = 5016.0,
     max_tracking_rate_deg_s: float = 3.0,
     field_of_regard_deg: float = 360.0,
+    mbb_overlap_ticks: int = 3,
+    mbb_reserve: int = 0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
@@ -759,6 +866,8 @@ def precompute_timeline(
         max_range_km=max_range_km,
         max_tracking_rate_deg_s=max_tracking_rate_deg_s,
         field_of_regard_deg=field_of_regard_deg,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation_deg,
@@ -846,11 +955,12 @@ def build_link_state_snapshot(
         for node_id, pos in positions.items():
             ecef[node_id] = geodetic_to_ecef(pos.lat_deg, pos.lon_deg, pos.alt_km)
 
-    def _link_latency(node_a: str, node_b: str) -> float | None:
+    def _link_range_latency(node_a: str, node_b: str) -> tuple[float, float] | None:
         pa, pb = ecef.get(node_a), ecef.get(node_b)
         if pa is None or pb is None:
             return None
-        return compute_latency_ms(compute_range_km(pa, pb))
+        range_km = compute_range_km(pa, pb)
+        return range_km, compute_latency_ms(range_km)
 
     links: list[LinkState] = []
 
@@ -865,7 +975,11 @@ def build_link_state_snapshot(
         else:
             admin = AdminState.UP
             carrier = CarrierState.DOWN
-        latency = _link_latency(pair[0], pair[1]) if carrier == CarrierState.UP else None
+        range_latency = (
+            _link_range_latency(pair[0], pair[1]) if carrier == CarrierState.UP else None
+        )
+        range_km = range_latency[0] if range_latency else None
+        latency = range_latency[1] if range_latency else None
         links.append(
             LinkState(
                 node_a=pair[0],
@@ -875,6 +989,7 @@ def build_link_state_snapshot(
                 admin=admin,
                 carrier=carrier,
                 routing=RoutingState.UNKNOWN,
+                range_km=range_km,
                 latency_ms=latency,
                 bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
                 link_type="isl",
@@ -898,7 +1013,11 @@ def build_link_state_snapshot(
         else:
             admin = AdminState.UP
             carrier = CarrierState.DOWN
-        latency = _link_latency(pair[0], pair[1]) if carrier == CarrierState.UP else None
+        range_latency = (
+            _link_range_latency(pair[0], pair[1]) if carrier == CarrierState.UP else None
+        )
+        range_km = range_latency[0] if range_latency else None
+        latency = range_latency[1] if range_latency else None
         gs_ti, sat_ti = assoc.get(pair, (0, 0))
         td_remaining = None
         successor = None
@@ -914,6 +1033,7 @@ def build_link_state_snapshot(
                 admin=admin,
                 carrier=carrier,
                 routing=RoutingState.UNKNOWN,
+                range_km=range_km,
                 latency_ms=latency,
                 bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
                 link_type="ground",

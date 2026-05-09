@@ -34,6 +34,7 @@ class IslTerminal(BaseModel):
 
     type: str  # "optical" or "rf"
     count: int
+    role: str | None = None  # "intra-plane", "cross-plane", or None for pooled terminals
     max_range_km: float
     bandwidth_mbps: float
     max_tracking_rate_deg_s: float
@@ -51,6 +52,13 @@ class IslTerminal(BaseModel):
     def _positive_tracking_rate(cls, v: float) -> float:
         if v <= 0:
             raise ValueError(f"max_tracking_rate_deg_s must be positive, got {v}")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def _valid_role(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("intra-plane", "cross-plane"):
+            raise ValueError(f"role must be 'intra-plane', 'cross-plane', or None, got {v!r}")
         return v
 
 

@@ -36,11 +36,15 @@ from ome.ground_allocator import (
     MbbTeardownState,
     allocate_ground_links,
 )
+from ome.propagation_engine import (
+    PropagatedState,
+    build_node_positions,
+    propagate_satellites,
+)
 from ome.propagator import (
     EcefVec3,
     GeoPosition,
     geodetic_to_ecef,
-    propagate_keplerian,
 )
 from ome.visibility import (
     GroundVisibility,
@@ -107,59 +111,6 @@ class TimelineEvent:
         self.data = data
 
 
-def _compute_positions(
-    satellites: list[SatelliteNode],
-    addressing: AddressingScheme,
-    epoch_unix: float,
-    dt: float,
-) -> dict[str, tuple[EcefVec3, EcefVec3, GeoPosition]]:
-    """Compute ECEF position, ECEF velocity, and geodetic for all satellites at time dt.
-
-    All vectors are in the Earth-Centered Earth-Fixed frame. The velocity
-    includes Earth rotation subtraction (v_ecef = R·v_eci - ω×r_ecef).
-    """
-    positions: dict[str, tuple[EcefVec3, EcefVec3, GeoPosition]] = {}
-    for sat in satellites:
-        node_id = addressing.sat_id(sat.plane, sat.slot)
-        pos_ecef, vel_ecef, geo = propagate_keplerian(sat.elements, epoch_unix, dt)
-        positions[node_id] = (pos_ecef, vel_ecef, geo)
-    return positions
-
-
-def _build_positions(
-    sat_positions: dict[str, tuple[EcefVec3, EcefVec3, GeoPosition]],
-    gs_positions: dict[str, tuple[EcefVec3, GeoPosition]],
-) -> dict[str, NodePosition]:
-    """Build position snapshot for all nodes.
-
-    Velocity fields in NodePosition are ECEF (Earth-Centered Earth-Fixed).
-    Ground stations have zero velocity (static).
-    """
-    positions: dict[str, NodePosition] = {}
-
-    for node_id, (_ecef, vel_ecef, geo) in sat_positions.items():
-        positions[node_id] = NodePosition(
-            lat_deg=geo.lat_deg,
-            lon_deg=geo.lon_deg,
-            alt_km=geo.alt_km,
-            vel_x_km_s=vel_ecef.x,
-            vel_y_km_s=vel_ecef.y,
-            vel_z_km_s=vel_ecef.z,
-        )
-
-    for node_id, (_ecef, geo) in gs_positions.items():
-        positions[node_id] = NodePosition(
-            lat_deg=geo.lat_deg,
-            lon_deg=geo.lon_deg,
-            alt_km=geo.alt_km,
-            vel_x_km_s=0.0,
-            vel_y_km_s=0.0,
-            vel_z_km_s=0.0,
-        )
-
-    return positions
-
-
 # ---------------------------------------------------------------------------
 # Per-step computation — extracted for real-time stepped emission
 # ---------------------------------------------------------------------------
@@ -209,6 +160,7 @@ class StepContext:
     latitude_threshold_deg: float
     mbb_overlap_ticks: int = 3
     mbb_reserve: int = 0
+    propagator_id: str = "keplerian-circular"
 
 
 @dataclass(frozen=True)
@@ -223,6 +175,7 @@ class StepResult:
     positions: dict[str, NodePosition]
     isl_scheduled: dict[tuple[str, str], bool]
     ground_allocation: GroundAllocationResult
+    propagated_states: dict[str, PropagatedState]
     sim_time: datetime
     sim_time_unix: float
     step: int
@@ -265,6 +218,7 @@ def build_step_context(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
+    propagator_id: str = "keplerian-circular",
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     by_node = neighbors_by_node(neighbors)
@@ -331,6 +285,7 @@ def build_step_context(
         latitude_threshold_deg=latitude_threshold_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
+        propagator_id=propagator_id,
     )
 
 
@@ -360,11 +315,17 @@ def compute_step(
     timestamp_s = dt + timestamp_offset
     sim_time = datetime.fromtimestamp(epoch_unix + dt, tz=UTC)
 
-    # 1. Compute all satellite positions
-    sat_positions = _compute_positions(ctx.satellites, ctx.addressing, epoch_unix, dt)
+    # 1. Propagate all satellite states using the session-selected engine.
+    sat_states = propagate_satellites(
+        satellites=ctx.satellites,
+        addressing=ctx.addressing,
+        epoch_unix=epoch_unix,
+        dt=dt,
+        propagator_id=ctx.propagator_id,
+    )
 
     # 2. Build positions dict (for LinkStateSnapshot latency) and ClockTick
-    positions = _build_positions(sat_positions, ctx.gs_positions)
+    positions = build_node_positions(sat_states, ctx.gs_positions)
     clock_tick = ClockTick(
         sim_time=sim_time,
         wall_time=sim_time,  # Placeholder — Pacemaker overrides with real wall_time at emission
@@ -381,20 +342,26 @@ def compute_step(
         node_id = ctx.addressing.sat_id(sat.plane, sat.slot)
         node_neighbors = ctx.by_node.get(node_id, [])
 
-        if node_id not in sat_positions:
+        if node_id not in sat_states:
             continue
-        pos_a, vel_a, geo_a = sat_positions[node_id]
+        state_a = sat_states[node_id]
+        pos_a = state_a.position_ecef_km
+        vel_a = state_a.velocity_ecef_km_s
+        geo_a = state_a.geodetic
 
         for na in node_neighbors:
             peer_id = na.peer_node_id
-            if peer_id not in sat_positions:
+            if peer_id not in sat_states:
                 continue
 
             pair = (min(node_id, peer_id), max(node_id, peer_id))
             if pair[0] != node_id:
                 continue
 
-            pos_b, vel_b, geo_b = sat_positions[peer_id]
+            state_b = sat_states[peer_id]
+            pos_b = state_b.position_ecef_km
+            vel_b = state_b.velocity_ecef_km_s
+            geo_b = state_b.geodetic
             peer_assignment = next(
                 (
                     peer_na
@@ -527,9 +494,9 @@ def compute_step(
         visible_sats: list[GroundVisibility] = []
         for sat in ctx.satellites:
             sat_id = ctx.addressing.sat_id(sat.plane, sat.slot)
-            if sat_id not in sat_positions:
+            if sat_id not in sat_states:
                 continue
-            sat_ecef, _, _ = sat_positions[sat_id]
+            sat_ecef = sat_states[sat_id].position_ecef_km
 
             gv = check_ground_visibility(gs_ecef, gs_geo, sat_ecef, min_elev)
             pair = (min(gs_id, sat_id), max(gs_id, sat_id))
@@ -591,6 +558,7 @@ def compute_step(
         positions=positions,
         isl_scheduled=isl_scheduled,
         ground_allocation=ground_allocation,
+        propagated_states=sat_states,
         sim_time=sim_time,
         sim_time_unix=epoch_unix + dt,
         step=step,
@@ -618,6 +586,7 @@ def precompute_timeline_window(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
+    propagator_id: str = "keplerian-circular",
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
@@ -652,6 +621,7 @@ def precompute_timeline_window(
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation_deg,
+        propagator_id=propagator_id,
     )
 
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = (
@@ -704,6 +674,7 @@ def precompute_timeline(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
+    propagator_id: str = "keplerian-circular",
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper (backward compat).
 
@@ -725,6 +696,7 @@ def precompute_timeline(
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation_deg,
+        propagator_id=propagator_id,
     )
     return events
 

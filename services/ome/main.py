@@ -849,20 +849,21 @@ def _run_pacing(
         )
 
         for replay_step in range(step + 1):
-            replay_events, replayed_positions, current_associations, mbb_pending_teardowns = (
-                compute_step(
-                    step_ctx,
-                    epoch_unix,
-                    replay_step,
-                    step_seconds,
-                    0.0,
-                    isl_state,
-                    gs_state,
-                    current_associations,
-                    mbb_pending_teardowns,
-                )
+            replay_result = compute_step(
+                step_ctx,
+                epoch_unix,
+                replay_step,
+                step_seconds,
+                0.0,
+                isl_state,
+                gs_state,
+                current_associations,
+                mbb_pending_teardowns,
             )
-            for te in replay_events:
+            replayed_positions = replay_result.positions
+            current_associations = replay_result.associations
+            mbb_pending_teardowns = replay_result.pending_teardowns
+            for te in replay_result.events:
                 if te.event_type == "VisibilityEvent":
                     vis = te.data
                     pair = (vis.node_a, vis.node_b)
@@ -1050,19 +1051,21 @@ def _run_pacing(
                 current_rate = new_rate
 
             # --- Compute one step (Physicist role) ---
-            step_events, current_positions, current_associations, mbb_pending_teardowns = (
-                compute_step(
-                    step_ctx,
-                    epoch_unix,
-                    step,
-                    step_seconds,
-                    0.0,
-                    isl_state,
-                    gs_state,
-                    current_associations,
-                    mbb_pending_teardowns,
-                )
+            step_result = compute_step(
+                step_ctx,
+                epoch_unix,
+                step,
+                step_seconds,
+                0.0,
+                isl_state,
+                gs_state,
+                current_associations,
+                mbb_pending_teardowns,
             )
+            step_events = step_result.events
+            current_positions = step_result.positions
+            current_associations = step_result.associations
+            mbb_pending_teardowns = step_result.pending_teardowns
 
             # --- Emit events for this step ---
             sim_time = datetime.fromtimestamp(epoch_unix + step * step_seconds, UTC)

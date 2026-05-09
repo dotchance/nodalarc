@@ -244,11 +244,12 @@ def main() -> None:
         sat_id = addressing.sat_id(sat.plane, sat.slot)
         sat_ground_terminal_capacities[sat_id] = sat.ground_terminal_count
 
-    # Resolve mbb_dispatch: explicit override > protocol-based default
-    mbb_dispatch = session.routing.mbb_dispatch
-    if mbb_dispatch is None:
-        mbb_dispatch = session.routing.protocol == "nodalpath"
-    log.info("MBB dispatch: %s (protocol=%s)", mbb_dispatch, session.routing.protocol)
+    mbb_dispatch = session.scheduling.ground.handover_mode == "mbb"
+    log.info(
+        "Ground handover: %s (protocol=%s)",
+        session.scheduling.ground.handover_mode,
+        session.routing.protocol,
+    )
 
     # Session ID for NATS subject scoping
     from nodalarc.nats_channels import sanitize_session_id

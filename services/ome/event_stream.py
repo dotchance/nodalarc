@@ -196,6 +196,7 @@ def build_step_context(
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
     propagator_id: str = "keplerian-circular",
+    default_ground_policy: str | None = None,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     by_node = neighbors_by_node(neighbors)
@@ -227,7 +228,7 @@ def build_step_context(
     gs_hysteresis: dict[str, HysteresisParameters] = {}
     gs_service_priorities: dict[str, int] = {}
     if gs_file:
-        default_gs_policy = gs_file.default_scheduling_policy or "highest-elevation"
+        default_gs_policy = default_ground_policy or gs_file.default_scheduling_policy
         for _i, station in enumerate(gs_file.stations):
             node_id = addressing.gs_id(station.name)
             geo = GeoPosition(station.lat_deg, station.lon_deg, (station.alt_m or 0) / 1000.0)
@@ -455,6 +456,7 @@ def precompute_timeline_window(
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
     propagator_id: str = "keplerian-circular",
+    default_ground_policy: str | None = None,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
@@ -490,6 +492,7 @@ def precompute_timeline_window(
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation_deg,
         propagator_id=propagator_id,
+        default_ground_policy=default_ground_policy,
     )
 
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = (
@@ -543,6 +546,7 @@ def precompute_timeline(
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
     propagator_id: str = "keplerian-circular",
+    default_ground_policy: str | None = None,
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper (backward compat).
 
@@ -565,6 +569,7 @@ def precompute_timeline(
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation_deg,
         propagator_id=propagator_id,
+        default_ground_policy=default_ground_policy,
     )
     return events
 

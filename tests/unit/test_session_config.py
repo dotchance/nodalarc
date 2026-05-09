@@ -46,6 +46,10 @@ class TestSessionConfigLoading:
         assert config.addressing.sat_id_template == "sat-P{plane:02d}S{slot:02d}"
         assert config.addressing.gs_id_template == "gs-{name}"
         assert config.time.step_seconds == 1
+        assert config.simulation.schema_version == 2
+        assert config.orbit.propagator == "keplerian-circular"
+        assert config.dispatch.latency_authority == "ome"
+        assert config.scheduling.ground.handover_mode == "bbm"
         assert config.convergence.stability_period_s == 2.0
         assert config.convergence.timeout_s == 30.0
         assert config.convergence.probe_interval_ms == 100
@@ -93,6 +97,41 @@ class TestAreaAssignmentValidation:
         )
         assert len(config.assignments) == 2
         assert config.assignments[0].area_id == "49.0001"
+
+
+class TestEngineConfigValidation:
+    def test_bad_schema_version_rejected(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"schema_version": 1, "fidelity": "synthetic-keplerian"}
+        with pytest.raises(ValidationError, match="schema_version must be 2"):
+            SessionConfig.model_validate(data)
+
+    def test_unknown_propagator_rejected(self):
+        data = dict(_SAMPLE_SESSION)
+        data["orbit"] = {"propagator": "sgp4-tle"}
+        with pytest.raises(ValidationError, match="Input should be 'keplerian-circular'"):
+            SessionConfig.model_validate(data)
+
+    def test_mbb_requires_reserve_and_overlap(self):
+        data = dict(_SAMPLE_SESSION)
+        data["scheduling"] = {
+            "ground": {
+                "handover_mode": "mbb",
+                "mbb_overlap_ticks": 0,
+                "mbb_reserve": 0,
+            }
+        }
+        with pytest.raises(ValidationError, match="MBB handover requires"):
+            SessionConfig.model_validate(data)
+
+    def test_routing_rejects_deprecated_mbb_fields(self):
+        data = dict(_SAMPLE_SESSION)
+        data["routing"] = {
+            **_SAMPLE_SESSION["routing"],
+            "mbb_dispatch": True,
+        }
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            SessionConfig.model_validate(data)
 
 
 class TestSessionFromFixture:

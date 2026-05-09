@@ -51,6 +51,7 @@ from nodalarc.nats_channels import (
 from nodalarc.proto import node_agent_pb2
 
 from scheduler.agent_pool import AgentPool
+from scheduler.latency_compensator import LatencyCompensation, compensate_latency
 from scheduler.latency_model import PositionTable
 from scheduler.pod_locator import PodLocationMap
 
@@ -1117,18 +1118,23 @@ class Dispatcher:
             f"({k3s_a}<->{k3s_b}); refusing to dispatch with unknown substrate latency"
         )
 
+    def _latency_compensation(
+        self, node_a: str, node_b: str, orbital_one_way_ms: float
+    ) -> LatencyCompensation:
+        """Compute auditable netem compensation from OME latency and substrate RTT."""
+        substrate_rtt_ms = self._get_substrate_rtt_ms(node_a, node_b)
+        try:
+            return compensate_latency(
+                orbital_one_way_ms=orbital_one_way_ms,
+                substrate_rtt_ms=substrate_rtt_ms,
+                rtt_to_one_way_policy="half-rtt",
+            )
+        except ValueError as exc:
+            raise ValueError(f"Unrepresentable latency for {node_a}<->{node_b}: {exc}") from exc
+
     def _netem_delay_ms(self, node_a: str, node_b: str, orbital_one_way_ms: float) -> float:
         """Compute netem one-way delay from OME latency and measured substrate RTT."""
-        substrate_rtt_ms = self._get_substrate_rtt_ms(node_a, node_b)
-        substrate_one_way_ms = substrate_rtt_ms / 2.0
-        netem_ms = orbital_one_way_ms - substrate_one_way_ms
-        if netem_ms < 0:
-            raise ValueError(
-                f"Unrepresentable latency for {node_a}<->{node_b}: "
-                f"substrate_one_way_ms={substrate_one_way_ms:.6f} exceeds "
-                f"OME orbital_one_way_ms={orbital_one_way_ms:.6f}"
-            )
-        return netem_ms
+        return self._latency_compensation(node_a, node_b, orbital_one_way_ms).netem_one_way_ms
 
     def _link_locality(self, node_a: str, node_b: str) -> int | None:
         """Determine locality for a link pair. None if either pod unscheduled."""

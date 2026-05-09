@@ -10,7 +10,6 @@ import math
 
 import pytest
 from nodalarc.constants import EARTH_RADIUS_KM
-
 from ome.propagator import (
     GeoPosition,
     Vec3,
@@ -19,9 +18,11 @@ from ome.propagator import (
     eci_to_ecef_velocity,
     elements_from_params,
     geodetic_to_ecef,
+    j2_circular_secular_rates,
     orbital_period,
     orbital_velocity,
     propagate_eci,
+    propagate_j2_mean_elements,
     propagate_keplerian,
 )
 
@@ -92,6 +93,32 @@ class TestReturnToStart:
 
         assert abs(v0 - v_half) < 0.001
         assert abs(v0 - v_quarter) < 0.001
+
+
+class TestJ2MeanElementPropagation:
+    def test_j2_matches_keplerian_at_epoch(self, starlink_elements):
+        pos_k, vel_k, geo_k = propagate_keplerian(starlink_elements, EPOCH, 0.0)
+        pos_j2, vel_j2, geo_j2 = propagate_j2_mean_elements(starlink_elements, EPOCH, 0.0)
+
+        assert distance_km(pos_k, pos_j2) < 1e-9
+        assert distance_km(vel_k, vel_j2) < 0.02
+        assert abs(geo_k.lat_deg - geo_j2.lat_deg) < 1e-9
+        assert abs(geo_k.lon_deg - geo_j2.lon_deg) < 1e-9
+
+    def test_j2_raan_precession_rate_is_physical_for_starlink_shell(self, starlink_elements):
+        raan_dot, mean_anomaly_dot = j2_circular_secular_rates(starlink_elements)
+        raan_deg_per_day = math.degrees(raan_dot) * 86400.0
+        mean_motion_deg_per_s = math.degrees(mean_anomaly_dot)
+
+        assert -5.0 < raan_deg_per_day < -4.0
+        assert mean_motion_deg_per_s > 0.0
+
+    def test_j2_diverges_from_circular_keplerian_over_one_day(self, starlink_elements):
+        pos_k, _, _ = propagate_keplerian(starlink_elements, EPOCH, 86400.0)
+        pos_j2, vel_j2, _ = propagate_j2_mean_elements(starlink_elements, EPOCH, 86400.0)
+
+        assert distance_km(pos_k, pos_j2) > 100.0
+        assert math.sqrt(vel_j2.x**2 + vel_j2.y**2 + vel_j2.z**2) > 7.0
 
 
 class TestInclinationBounds:

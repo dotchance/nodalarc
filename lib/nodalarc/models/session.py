@@ -103,7 +103,7 @@ class SimulationConfig(BaseModel):
     """Simulation contract fields exposed to session YAML."""
 
     schema_version: int = 2
-    fidelity: Literal["synthetic-keplerian"] = "synthetic-keplerian"
+    fidelity: Literal["synthetic-keplerian", "j2-mean-elements"] = "synthetic-keplerian"
 
     @field_validator("schema_version")
     @classmethod
@@ -116,7 +116,7 @@ class SimulationConfig(BaseModel):
 class OrbitConfig(BaseModel):
     """Orbit propagation model selection."""
 
-    propagator: Literal["keplerian-circular"] = "keplerian-circular"
+    propagator: Literal["keplerian-circular", "j2-mean-elements"] = "keplerian-circular"
 
 
 class GroundSchedulingConfig(BaseModel):
@@ -296,3 +296,17 @@ class SessionConfig(BaseModel):
     placement: PlacementConfig = PlacementConfig()
     mi: MiConfig = MiConfig()
     convergence: ConvergenceConfig = ConvergenceConfig()  # backward compat — use mi.convergence
+
+    @model_validator(mode="after")
+    def _fidelity_matches_propagator(self):
+        expected = {
+            "synthetic-keplerian": "keplerian-circular",
+            "j2-mean-elements": "j2-mean-elements",
+        }[self.simulation.fidelity]
+        if self.orbit.propagator != expected:
+            raise ValueError(
+                "simulation.fidelity and orbit.propagator must describe the same "
+                f"physics model: fidelity={self.simulation.fidelity!r} requires "
+                f"orbit.propagator={expected!r}, got {self.orbit.propagator!r}"
+            )
+        return self

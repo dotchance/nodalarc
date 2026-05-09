@@ -2,9 +2,9 @@
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 """Session configuration models — top-level YAML schema."""
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nodalarc.models.ground_station import TerrestrialPrefixTemplate
 
@@ -61,14 +61,14 @@ class RoutingConfig(BaseModel):
     ``protocol`` (resolved via stack_resolver) must be set.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     protocol: str | None = None  # "ospf" | "isis" | "static" | "nodalpath"
     extensions: list[str] = []  # ["te", "mpls", "sr"]
     stack: str | None = None  # Legacy path — bypass resolution
     compression_factor: int = 1
     config_overrides: dict[str, Any] = {}
     area_assignment: AreaAssignmentConfig | None = None
-    mbb_dispatch: bool | None = None  # Default: True for nodalpath, False for IGP
-    mbb_overlap_ticks: int = 3  # Resource hold duration for MBB overlap
 
     # BFD — cross-protocol, independent of IS-IS/OSPF choice
     bfd: bool = False
@@ -97,6 +97,88 @@ class RoutingConfig(BaseModel):
         if self.stack is None and self.protocol is None:
             raise ValueError("Either 'stack' or 'protocol' must be set")
         return self
+
+
+class SimulationConfig(BaseModel):
+    """Simulation contract fields exposed to session YAML."""
+
+    schema_version: int = 2
+    fidelity: Literal["synthetic-keplerian"] = "synthetic-keplerian"
+
+    @field_validator("schema_version")
+    @classmethod
+    def _schema_version_supported(cls, value: int) -> int:
+        if value != 2:
+            raise ValueError("simulation.schema_version must be 2")
+        return value
+
+
+class OrbitConfig(BaseModel):
+    """Orbit propagation model selection."""
+
+    propagator: Literal["keplerian-circular"] = "keplerian-circular"
+
+
+class GroundSchedulingConfig(BaseModel):
+    """Ground handover and allocation behavior."""
+
+    policy: Literal["highest-elevation", "lowest-elevation"] = "highest-elevation"
+    handover_mode: Literal["bbm", "mbb"] = "bbm"
+    mbb_overlap_ticks: int = 3
+    mbb_reserve: int = 0
+
+    @field_validator("mbb_overlap_ticks")
+    @classmethod
+    def _positive_overlap(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("scheduling.ground.mbb_overlap_ticks must be >= 0")
+        return value
+
+    @field_validator("mbb_reserve")
+    @classmethod
+    def _non_negative_reserve(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("scheduling.ground.mbb_reserve must be >= 0")
+        return value
+
+    @model_validator(mode="after")
+    def _mbb_requires_overlap_capacity(self):
+        if self.handover_mode == "mbb":
+            if self.mbb_overlap_ticks <= 0:
+                raise ValueError("MBB handover requires mbb_overlap_ticks > 0")
+            if self.mbb_reserve <= 0:
+                raise ValueError("MBB handover requires mbb_reserve > 0")
+        return self
+
+
+class SchedulingConfig(BaseModel):
+    """Scheduling policy surface."""
+
+    ground: GroundSchedulingConfig = Field(default_factory=GroundSchedulingConfig)
+
+
+class SubstrateCompensationConfig(BaseModel):
+    """Substrate latency compensation settings."""
+
+    measurement_source: Literal["node-agent-rtt"] = "node-agent-rtt"
+    rtt_to_one_way: Literal["half"] = "half"
+
+
+class DispatchConfig(BaseModel):
+    """Dispatch authority and latency freshness settings."""
+
+    latency_authority: Literal["ome"] = "ome"
+    max_latency_age_ticks: int = 1
+    substrate_compensation: SubstrateCompensationConfig = Field(
+        default_factory=SubstrateCompensationConfig
+    )
+
+    @field_validator("max_latency_age_ticks")
+    @classmethod
+    def _positive_latency_age(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("dispatch.max_latency_age_ticks must be >= 1")
+        return value
 
 
 class TimeConfig(BaseModel):
@@ -202,6 +284,10 @@ class SessionConfig(BaseModel):
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = (
         None  # For direct station lists
     )
+    simulation: SimulationConfig = Field(default_factory=SimulationConfig)
+    orbit: OrbitConfig = Field(default_factory=OrbitConfig)
+    scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
+    dispatch: DispatchConfig = Field(default_factory=DispatchConfig)
     addressing: AddressingConfig = AddressingConfig()
     routing: RoutingConfig
     time: TimeConfig = TimeConfig()

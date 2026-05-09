@@ -248,4 +248,6 @@ class TestRoutingConfigRoundtrip:
         session = SessionConfig.model_validate(raw)
         assert session.routing.protocol == protocol
         assert session.routing.bfd is True
-        assert session.routing.mbb_dispatch is True
+        assert session.scheduling.ground.handover_mode == "mbb"
+        assert session.scheduling.ground.mbb_overlap_ticks == 3
+        assert session.scheduling.ground.mbb_reserve == 1

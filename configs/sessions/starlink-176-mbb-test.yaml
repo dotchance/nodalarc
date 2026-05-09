@@ -2,13 +2,29 @@ session:
   name: starlink-176-mbb-test
 constellation: configs/constellations/starlink-176.yaml
 ground_stations: configs/ground-stations/sets/mbb-test.yaml
+simulation:
+  schema_version: 2
+  fidelity: synthetic-keplerian
+orbit:
+  propagator: keplerian-circular
+scheduling:
+  ground:
+    policy: highest-elevation
+    handover_mode: mbb
+    mbb_overlap_ticks: 3
+    mbb_reserve: 1
+dispatch:
+  latency_authority: ome
+  max_latency_age_ticks: 1
+  substrate_compensation:
+    measurement_source: node-agent-rtt
+    rtt_to_one_way: half
 routing:
   protocol: isis
   extensions:
     - traffic-engineering
   area_assignment:
     strategy: per-plane
-  mbb_dispatch: true
   bfd: true
 time:
   step_seconds: 1

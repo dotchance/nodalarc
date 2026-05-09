@@ -1983,6 +1983,7 @@ def generate_session(body: dict) -> dict:
     custom_constellation = body.get("custom_constellation")
     custom_ground_stations = body.get("custom_ground_stations")
     routing_config = body.get("routing_config")
+    orbit_propagator = body.get("orbit_propagator", body.get("propagator", "keplerian-circular"))
     if not constellation or not protocol:
         return JSONResponse(
             status_code=400, content={"error": "constellation and protocol are required"}
@@ -1998,6 +1999,7 @@ def generate_session(body: dict) -> dict:
             custom_constellation=custom_constellation,
             custom_ground_stations=custom_ground_stations,
             routing_config=routing_config,
+            orbit_propagator=orbit_propagator,
         )
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})

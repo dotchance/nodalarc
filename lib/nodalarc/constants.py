@@ -9,6 +9,7 @@ from enum import StrEnum
 SPEED_OF_LIGHT_KM_S: float = 299_792.458
 EARTH_RADIUS_KM: float = 6_371.0
 EARTH_MU: float = 398_600.4418  # km^3/s^2, gravitational parameter
+EARTH_J2: float = 1.08262668e-3  # WGS84 second zonal harmonic, dimensionless
 
 # WGS84 ellipsoid parameters
 WGS84_A: float = 6_378.137  # Semi-major axis, km

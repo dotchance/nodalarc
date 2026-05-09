@@ -53,6 +53,24 @@ def test_propagate_satellites_returns_typed_state_with_model_identity():
     assert velocity_norm > 7.0
 
 
+def test_j2_propagator_is_explicitly_selectable():
+    addressing = AddressingScheme()
+    epoch_unix = 1735689600.0
+
+    states = propagate_satellites(
+        satellites=[_satellite()],
+        addressing=addressing,
+        epoch_unix=epoch_unix,
+        dt=86400.0,
+        propagator_id="j2-mean-elements",
+    )
+
+    state = states[addressing.sat_id(0, 0)]
+    assert state.propagator_id == "j2-mean-elements"
+    assert state.sim_time_unix == epoch_unix + 86400.0
+    assert abs(state.position_ecef_km.x) + abs(state.position_ecef_km.y) > 0.0
+
+
 def test_unknown_propagator_fails_loudly():
     with pytest.raises(ValueError, match="Unsupported OME propagator"):
         propagate_satellites(

@@ -1,120 +1,210 @@
 # NodalArc
 
-**Orbital network emulation at scale.** Deploy real routing stacks on satellite constellation topologies driven by real orbital mechanics. Every satellite runs a real router. Every link is shaped by real physics. Every packet traverses real kernel interfaces.
+Networks are leaving the ground.
+
+That sounds like a slogan until you have to route through it. A terrestrial
+network lets you pretend the topology is mostly fixed. Links fail, routers
+reboot, fiber gets cut, but the bones of the thing stay where you put them.
+
+Orbit does not work that way.
+
+A satellite in low Earth orbit is moving about seven and a half kilometers a
+second. A cross-plane link can exist now and be gone a few minutes later. A
+ground station can be the best exit from the network this pass, and useless on
+the next. On the ground, topology change is an event. In orbit, topology change
+is the medium you are swimming in.
+
+That is the gap NodalArc is meant to fill.
+
+NodalArc lets you run real routing stacks against orbital geometry. Not a
+drawing of a network. Not a simulator guessing what IS-IS or OSPF might do.
+Real Linux namespaces. Real FRR. Real kernel interfaces. Real link state changes
+driven by satellites moving through space.
 
 ![NodalArc Globe View](docs/images/hero-globe.png)
 
-## Why NodalArc Exists
+## Run It
 
-Satellite mega-constellations are reshaping global communications infrastructure. Starlink, Kuiper, OneWeb, SDA Transport Layer - thousands of satellites forming dynamic mesh networks in low Earth orbit. The routing problems are unlike anything in terrestrial networking: topologies that change every second, links that appear and vanish as satellites move, latencies that shift continuously with orbital geometry, and ground station handoffs that force real-time reconvergence across hundreds of nodes.
-
-You can't test this on real hardware - you'd need a thousand satellites. You can't test it in a simulator - simulators model protocol behavior, they don't execute it. They tell you "IS-IS should converge in 2 seconds." They can't tell you whether FRR's actual IS-IS implementation handles the specific sequence of interface state changes that happen during a polar ground station handoff at 7.5 km/s.
-
-NodalArc is an emulation platform. Every satellite and ground station is a real Linux network namespace running a real FRRouting daemon. IS-IS hellos, OSPF LSAs, BGP updates, and MPLS label operations happen in the kernel, not in a model. When you exec into a satellite and run `show isis neighbor`, you're talking to the same code that runs on production routers. When a link goes down because a satellite moved out of range, FRR detects real carrier loss on a real interface and reconverges exactly as it would on physical hardware.
-
-Every interface is shaped with real latency and bandwidth constraints using Linux tc netem. As satellites orbit, the range between connected pairs changes continuously, and the latency on each link updates in real time to match. A packet from a ground station in Hawthorne to a ground station in Frankfurt traverses real kernel interfaces across multiple hops, each with the correct propagation delay for the current orbital geometry. The latencies you measure are the latencies the constellation would actually produce.
-
-NodalArc scales from a laptop to a multi-node cluster. A single machine runs 200+ satellites. Distribute across a Kubernetes cluster and you can run thousands, with cross-node ISL links carried over VXLAN tunnels and substrate latency compensation ensuring the emulated delay is always accurate regardless of the physical network between nodes.
-
-The result: you can measure what actually happens, not what a model predicts should happen.
-
-## Quickstart
+Clone the repo, bootstrap the host, and bring the system up.
 
 ```bash
 git clone https://github.com/dotchance/nodalarc.git
 cd nodalarc
-sudo scripts/bootstrap-host.sh   # installs K3s, Docker, Helm, Node.js (skip if you have K8s)
-make all                          # clean-state bring-up: deps, build, load, install, session
+sudo scripts/bootstrap-host.sh   # installs K3s, Docker, Helm, Node.js
+make all                         # deps, build, load, install, session, status
 ```
 
-Open **http://localhost:3000**. You're looking at 36 satellites orbiting Earth with OSPF routing, 7 ground stations, and live ISL links - all running real FRR daemons on real kernel interfaces. About 3 minutes from clone to running constellation.
+Open `http://localhost:3000`.
 
-For a full square-one validation on a machine that already has K3s installed, run `make nuke && make all`. For an existing platform, use `make build && make load && make upgrade` instead of `make all`; `make install` intentionally refuses existing platform state.
+You are looking at 36 satellites moving around Earth with OSPF routing, seven
+ground stations, and live ISL links. Every satellite and ground station is a
+real router process in a real network namespace. You can exec into a node and
+ask FRR what it sees. You can trace a path. You can pause time, move it
+forward, and watch the network rearrange itself.
 
-## What You Can Do
+For a square-one proof on a machine that already has K3s installed, run:
 
-- **Test routing convergence on dynamic topologies** - watch IS-IS/OSPF reconverge as links appear and disappear with orbital geometry
-- **Measure ground station handoff impact** - see exactly how long traffic is disrupted when a satellite passes from one ground station's coverage to the next
-- **Compare routing protocols at scale** - run the same 176-satellite constellation with IS-IS, OSPF, or SR-MPLS and compare convergence time, routing table size, and path optimality
-- **Validate MPLS label stacks** - test segment routing and traffic engineering on topologies with hundreds of label-switched paths
-- **Experiment with constellation design** - change altitude, inclination, plane count, satellite count, and see how routing behavior changes
-- **Experiment with ground station placement** - move stations, change elevation masks, adjust tracking capacity, and observe the effect on network reachability
-- **Run real traffic** - ping, traceroute, iperf across the emulated constellation. Real packets, real forwarding, real latency
-- **Automate testing** - script everything through the REST/WebSocket API. Build CI pipelines that validate routing behavior on every commit
-- **Access any router from the browser** - open an SSH terminal to any satellite or ground station, run vtysh commands, inspect routing state live
+```bash
+make nuke && make all
+```
 
-## Key Capabilities
+For an existing platform, use:
 
-### Real-Time 3D Visualization
+```bash
+make build && make load && make upgrade
+```
 
-A web-based globe view shows the full constellation orbiting Earth in real time. ISL links, ground connections, orbital paths, and satellite trails render at 60fps. Click any node to inspect its routing state. Watch links form and break as satellites move.
+`make install` refuses existing platform state on purpose. Use `make upgrade`
+when you want to update the running platform, `make reinstall` when you want a
+destructive platform refresh, and `make nuke && make all` when you want to prove
+the whole bring-up path from scratch.
 
-### Browser Terminal Access
+## What You Are Running
 
-Open a persistent SSH session to any satellite or ground station directly from the UI. You land in vtysh - the same CLI as a physical router. Run `show ip route`, `show isis neighbor`, `configure terminal`, or any FRR command. Multiple sessions stay alive in tabs.
+NodalArc is an emulation platform for orbital networks.
 
-### Session Wizard
+Each satellite and ground station becomes a Linux network namespace running a
+real routing stack. IS-IS hellos, OSPF LSAs, BGP updates, and MPLS label
+operations happen in the kernel, not in a model. When a link drops because two
+satellites moved out of range, FRR sees carrier loss on an interface and
+reconverges the way it would on hardware.
 
-Configure and launch constellation sessions from the browser. Pick a constellation geometry, satellite type, ground station set, and routing protocol. Deploy without touching the command line. Switch between sessions without teardown.
+The links are not decorative lines. The Node Agent builds veth pairs and VXLAN
+tunnels, then shapes them with `tc netem` and `tc tbf`. Latency comes from the
+range between the endpoints. Bandwidth comes from the terminal model. If a
+packet moves from a ground station in Hawthorne to one in Frankfurt, it crosses
+real kernel interfaces with the propagation delay the geometry gives it at that
+moment.
 
-### Time Controls
+The architecture is built from primitives:
 
-Pause, resume, and adjust simulation speed. Seek to any point in the orbital period. Observe how routing state evolves at different time scales.
+- satellite types describe hardware: terminals, ranges, bandwidth, tracking
+  limits
+- constellation geometry describes where the satellites move
+- ground stations describe where the network touches Earth and what prefixes
+  enter there
+- routing stacks describe what runs inside each node
 
-### Programmable API
+Change one primitive and leave the others alone. Run a Walker Delta geometry
+with one routing stack, then swap in Iridium geometry. Hold the sky fixed and
+change IS-IS to OSPF. Move a ground station. Add segment routing. Watch what
+changes.
 
-Full REST and WebSocket access to all constellation state. Node positions, link metrics, routing tables, path traces, convergence events. Build custom dashboards, automated test harnesses, or integration scripts.
+That is the point. Measure what actually happens.
 
-### Multi-Node Scaling
+## What You Can Try
 
-Single-node deployments handle 200+ satellites on a laptop. Multi-node clusters scale to thousands. Cross-node ISLs traverse VXLAN tunnels with substrate latency compensation - the emulated latency is always accurate regardless of physical network topology.
+Once the system is running, you can:
 
-### Multiple Routing Stacks
+- watch IS-IS or OSPF reconverge as orbital links appear and disappear
+- measure ground station handoff impact instead of arguing about timers
+- run the same constellation under IS-IS, OSPF, SR-MPLS, or NodalPath
+- change altitude, inclination, plane count, and phase offset
+- move ground stations and see what reachability you bought or lost
+- run `ping`, `traceroute`, and `iperf` through the emulated constellation
+- open a browser terminal to any satellite or ground station and use `vtysh`
+- script experiments through the REST and WebSocket APIs
 
-IS-IS, OSPF, BGP, SR-MPLS, LDP, traffic engineering - any FRR-supported protocol combination. NodalPath provides centralized path computation for NEBULA-aligned architectures.
+Start small. Demo-36 is enough to see the machinery. Starlink-176 and Iridium-66
+start to show why the geometry matters. A Walker Delta gives you a steady
+backbone and access handoffs. A Walker Star gives you global reach and a polar
+seam that tears through the backbone on schedule.
+
+That is where the interesting questions start.
+
+## What The System Gives You
+
+### A live globe
+
+The browser view shows satellites, ground stations, orbital paths, ISL links,
+and ground links in motion. The frontend renders positions locally from
+ephemeris data, so it can run at 60fps without the backend publishing position
+updates sixty times a second.
+
+### Real router access
+
+Open a terminal to any satellite or ground station from the browser. You land in
+the same FRR CLI you would use on a physical router. Run `show ip route`,
+`show isis neighbor`, `show ospf neighbor`, or whatever the running stack
+supports.
+
+### Session switching
+
+The session wizard lets you choose a constellation, satellite type, ground
+station set, and routing protocol. Deploy a new session without rebuilding the
+platform. The Operator tears down the old session, creates the new pods, renders
+the router configs, and hands the topology to the Node Agents.
+
+### Time control
+
+Pause, resume, change speed, and seek. If a failure happens at a certain point
+in the orbit, move time there and inspect the state while the system is still.
+
+### Multi-node scale
+
+A single machine can run hundreds of nodes. A Kubernetes cluster can spread the
+emulation across machines. Local links use host-mediated veths. Cross-node links
+use VXLAN. Substrate latency compensation keeps the emulated delay tied to the
+orbital path, not to the physical lab network.
+
+### Multiple routing models
+
+FRR gives you IS-IS, OSPF, BGP, SR-MPLS, LDP, and traffic engineering. NodalPath
+provides centralized path computation for experiments where distributed routing
+is not the model you want to test.
 
 ## Documentation
 
-NodalArc documentation is organized by audience:
+The docs are split by the work you are trying to do.
 
-### [User Guide](docs/user/) - Using the visualization and simulation
+### [User Guide](docs/user/)
 
-For anyone interacting with NodalArc through the web interface. How to launch sessions, interpret the visualization, use the terminal, trace paths, and run experiments. No backend knowledge required.
+Use the visualization, launch sessions, inspect nodes, trace paths, and run
+experiments from the browser.
 
-### [Operations Guide](docs/ops/) - Deploying and maintaining NodalArc
+### [Operations Guide](docs/ops/)
 
-For infrastructure engineers deploying NodalArc on Kubernetes clusters. Installation, configuration, multi-node setup, scaling, monitoring, and troubleshooting. You know K8s; this teaches you NodalArc.
+Install NodalArc, run it on Kubernetes, configure multi-node clusters, scale it,
+tear it down, and keep it healthy.
 
-### [Developer Guide](docs/dev/) - Contributing to NodalArc
+### [Developer Guide](docs/dev/)
 
-For developers working on the NodalArc codebase. Architecture deep dives, component internals, development workflow, testing, code conventions, and extension points. Read this before opening a PR.
+Work on the codebase. Read the architecture, then the invariants. The system is
+modular because it has to be. If you bypass those boundaries, it will look fine
+right up to the moment it does something expensive and confusing.
 
 ## Project Structure
 
-```
-services/       Backend services (OME, Scheduler, Node Agent, VS-API, Operator)
-frontend/       Visualization frontend (React + Three.js)
+```text
+services/       Backend services: OME, Scheduler, Node Agent, VS-API, Operator
+frontend/       Visualization frontend: React + Three.js
 nodalpath/      NodalPath path computation engine
 lib/            Shared Python library
-images/         Container images (FRR, probe, forwarding sidecar)
+images/         Container images: FRR, probe, forwarding sidecar
 deploy/         Helm chart and deployment tooling
 configs/        Constellations, ground stations, satellite types, sessions
 tests/          Unit and integration tests
-docs/           Documentation (user, ops, dev)
-tools/          Operational tooling (teardown, scenario injection)
+docs/           User, operations, and developer documentation
+tools/          Lifecycle and operational tooling
 scripts/        Host bootstrap and infrastructure scripts
 ```
 
 ## Community
 
-NodalArc is source-available and welcomes contributions. Whether you're fixing a bug, adding a routing protocol, improving the visualization, or writing documentation - we want your help.
+NodalArc is source-available and welcomes useful contributions. Bugs, routing
+stacks, constellation models, visualization improvements, documentation fixes -
+all of it helps, as long as it respects the architecture.
 
-- **Issues** - bug reports, feature requests, questions
-- **Pull Requests** - see the [Developer Guide](docs/dev/) for workflow and conventions
-- **Discussions** - architecture proposals, use case ideas, integration questions
+- **Issues** - bug reports, feature requests, and questions
+- **Pull Requests** - read the [Developer Guide](docs/dev/) before opening one
+- **Discussions** - architecture proposals, use cases, and experiments
 
 ## License
 
-NodalArc Source Available License 1.0. You can use, modify, and distribute it subject to the license terms. You cannot offer it as a hosted or managed service that provides access to a substantial set of NodalArc features. See [LICENSE](LICENSE) for full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party notices.
+NodalArc Source Available License 1.0. You can use, modify, and distribute it
+subject to the license terms. You cannot offer it as a hosted or managed
+service that provides access to a substantial set of NodalArc features. See
+[LICENSE](LICENSE) for full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+for bundled third-party notices.
 
 Copyright 2024-2026 .chance (dotchance)

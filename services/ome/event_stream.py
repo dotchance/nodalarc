@@ -163,6 +163,8 @@ from dataclasses import dataclass
 
 from nodalarc.models.ground_station import HysteresisParameters
 
+_MbbTeardownState = dict[tuple[str, str], tuple[int, tuple[str, str]]]
+
 
 @dataclass(frozen=True)
 class IslTerminalConstraints:
@@ -204,6 +206,40 @@ class StepContext:
     latitude_threshold_deg: float
     mbb_overlap_ticks: int = 3
     mbb_reserve: int = 0
+
+
+@dataclass(frozen=True)
+class GroundAllocationResult:
+    """Result of the ground allocation pass for one OME tick."""
+
+    associations: dict[tuple[str, str], tuple[int, int]]
+    pending_teardowns: _MbbTeardownState
+    scheduled_pairs: frozenset[tuple[str, str]]
+
+
+@dataclass(frozen=True)
+class StepResult:
+    """Named result of one OME tick.
+
+    This replaces the former tuple return so callers cannot accidentally mix
+    physics output, allocation state, and MBB teardown state by position.
+    """
+
+    events: list[TimelineEvent]
+    positions: dict[str, NodePosition]
+    isl_scheduled: dict[tuple[str, str], bool]
+    ground_allocation: GroundAllocationResult
+    sim_time: datetime
+    sim_time_unix: float
+    step: int
+
+    @property
+    def associations(self) -> dict[tuple[str, str], tuple[int, int]]:
+        return self.ground_allocation.associations
+
+    @property
+    def pending_teardowns(self) -> _MbbTeardownState:
+        return self.ground_allocation.pending_teardowns
 
 
 def _compute_pair_score(elevation_deg: float, policy: str) -> float:
@@ -334,9 +370,6 @@ def build_step_context(
     )
 
 
-_MbbTeardownState = dict[tuple[str, str], tuple[int, tuple[str, str]]]
-
-
 def compute_step(
     ctx: StepContext,
     epoch_unix: float,
@@ -347,15 +380,10 @@ def compute_step(
     gs_state: dict[tuple[str, str], tuple[bool, bool, str]],
     current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     mbb_pending_teardowns: _MbbTeardownState | None = None,
-) -> tuple[
-    list[TimelineEvent],
-    dict[str, NodePosition],
-    dict[tuple[str, str], tuple[int, int]],
-    _MbbTeardownState,
-]:
+) -> StepResult:
     """Compute one step of the timeline. Mutates isl_state and gs_state in place.
 
-    Returns (events, positions, new_associations, new_pending_teardowns).
+    Returns a StepResult with named physics, scheduling, and allocation fields.
 
     Pure computation — no I/O, no wall-time awareness.
     This is the Physicist role (R-OME-008B Part 2).
@@ -744,7 +772,19 @@ def compute_step(
             )
             events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
 
-    return events, positions, new_associations, new_pending_teardowns
+    return StepResult(
+        events=events,
+        positions=positions,
+        isl_scheduled=isl_scheduled,
+        ground_allocation=GroundAllocationResult(
+            associations=new_associations,
+            pending_teardowns=new_pending_teardowns,
+            scheduled_pairs=frozenset(gs_scheduled),
+        ),
+        sim_time=sim_time,
+        sim_time_unix=epoch_unix + dt,
+        step=step,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -820,7 +860,7 @@ def precompute_timeline_window(
     events: list[TimelineEvent] = []
     steps = int(duration_s / step_seconds)
     for s in range(steps + 1):
-        step_events, _positions, associations, pending_teardowns = compute_step(
+        result = compute_step(
             ctx,
             epoch_unix,
             s,
@@ -831,7 +871,9 @@ def precompute_timeline_window(
             associations,
             pending_teardowns,
         )
-        events.extend(step_events)
+        events.extend(result.events)
+        associations = result.associations
+        pending_teardowns = result.pending_teardowns
 
     return events, isl_state, gs_state, associations, pending_teardowns
 

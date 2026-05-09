@@ -1,11 +1,6 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Tests for compute_step() — verifies per-step output matches batch window prefix.
-
-compute_step() returns (events, positions, associations) where events is a list of
-TimelineEvent (ClockTick + zero or more VisibilityEvents) and positions
-is a dict of NodePosition for all nodes at that step.
-"""
+"""Tests for compute_step() — verifies StepResult output matches batch windows."""
 
 from __future__ import annotations
 
@@ -73,10 +68,8 @@ class TestComputeStepMatchesWindow:
         gs_state: dict = {}
         step_events_all = []
         for step in range(n_steps + 1):
-            evts, _positions, _assoc, _ = compute_step(
-                ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state
-            )
-            step_events_all.extend(evts)
+            result = compute_step(ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state)
+            step_events_all.extend(result.events)
 
         # Must produce identical event count
         assert len(step_events_all) == len(window_events), (
@@ -143,15 +136,13 @@ class TestComputeStepMatchesWindow:
         gs_state: dict = {}
 
         # Step 0 may emit initial visibility events
-        events_0, _pos0, _assoc0, _ = compute_step(
-            ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state
-        )
+        result_0 = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state)
+        events_0 = result_0.events
         vis_count_0 = sum(1 for e in events_0 if e.event_type == "VisibilityEvent")
 
         # Step 1 should emit fewer or zero VisibilityEvents (state hasn't changed in 1 second)
-        events_1, _pos1, _assoc1, _ = compute_step(
-            ctx, epoch_unix, 1, step_seconds, 0.0, isl_state, gs_state
-        )
+        result_1 = compute_step(ctx, epoch_unix, 1, step_seconds, 0.0, isl_state, gs_state)
+        events_1 = result_1.events
         vis_count_1 = sum(1 for e in events_1 if e.event_type == "VisibilityEvent")
 
         # Every step emits exactly 1 ClockTick (Snapshot removed in PRD v0.71)
@@ -178,9 +169,8 @@ class TestComputeStepMatchesWindow:
         isl_state: dict = {}
         gs_state: dict = {}
 
-        events, positions, _assoc, _ = compute_step(
-            ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state
-        )
+        result = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state)
+        positions = result.positions
         assert isinstance(positions, dict)
         assert len(positions) > 0
         # Positions should include both satellites and ground stations

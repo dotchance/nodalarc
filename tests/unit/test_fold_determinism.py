@@ -68,7 +68,7 @@ class TestFoldDeterminism:
         associations: dict = {}
         step_events_all = []
         for step in range(n_steps + 1):
-            evts, _pos, associations, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -78,7 +78,8 @@ class TestFoldDeterminism:
                 gs_state,
                 associations,
             )
-            step_events_all.extend(evts)
+            associations = result.associations
+            step_events_all.extend(result.events)
 
         assert len(step_events_all) == len(window_events), (
             f"Event count: {len(step_events_all)} vs {len(window_events)}"
@@ -107,7 +108,7 @@ class TestFoldDeterminism:
         gs_state: dict = {}
         associations: dict = {}
         for step in range(11):
-            _, _, associations, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -117,6 +118,7 @@ class TestFoldDeterminism:
                 gs_state,
                 associations,
             )
+            associations = result.associations
         assert len(associations) > 0, "Should have associations after 10 ticks"
 
         # Simulate seek: reset all state
@@ -125,7 +127,7 @@ class TestFoldDeterminism:
         associations_fresh: frozenset = {}
 
         # Run first tick from both: seeded and fresh
-        events_seeded, _, assoc_seeded, _ = compute_step(
+        compute_step(
             ctx,
             epoch_unix,
             0,
@@ -135,7 +137,7 @@ class TestFoldDeterminism:
             gs_state.copy(),
             associations,
         )
-        events_fresh, _, assoc_fresh, _ = compute_step(
+        fresh_result = compute_step(
             ctx,
             epoch_unix,
             0,
@@ -145,6 +147,7 @@ class TestFoldDeterminism:
             gs_state_fresh,
             associations_fresh,
         )
+        assoc_fresh = fresh_result.associations
 
         # Fresh (post-seek) should match a clean start
         # They share the same epoch/step so positions are identical.
@@ -172,7 +175,7 @@ class TestFoldDeterminism:
         seed_gs: dict = {}
         seed_assoc: frozenset = {}
         for step in range(11):
-            _, _, seed_assoc, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -182,6 +185,7 @@ class TestFoldDeterminism:
                 seed_gs,
                 seed_assoc,
             )
+            seed_assoc = result.associations
 
         # Now run from the seeded state: batch vs tick-by-tick
         seed_epoch = epoch_unix + 11 * step_seconds
@@ -204,7 +208,7 @@ class TestFoldDeterminism:
         tick_assoc = seed_assoc
         tick_events = []
         for step in range(n_steps + 1):
-            evts, _pos, tick_assoc, _ = compute_step(
+            result = compute_step(
                 ctx,
                 seed_epoch,
                 step,
@@ -214,7 +218,8 @@ class TestFoldDeterminism:
                 tick_gs,
                 tick_assoc,
             )
-            tick_events.extend(evts)
+            tick_assoc = result.associations
+            tick_events.extend(result.events)
 
         assert len(tick_events) == len(window_events), (
             f"Event count: {len(tick_events)} vs {len(window_events)}"
@@ -254,7 +259,7 @@ class TestFoldDeterminism:
         a_assoc: frozenset = {}
         a_events = []
         for step in range(61):
-            evts, _pos, a_assoc, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -264,7 +269,8 @@ class TestFoldDeterminism:
                 a_gs,
                 a_assoc,
             )
-            a_events.extend(evts)
+            a_assoc = result.associations
+            a_events.extend(result.events)
 
         # --- Path B: two halves with explicit state handoff ---
         b_isl: dict = {}
@@ -274,7 +280,7 @@ class TestFoldDeterminism:
 
         # First half: steps 0..boundary
         for step in range(boundary + 1):
-            evts, _pos, b_assoc, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -284,7 +290,8 @@ class TestFoldDeterminism:
                 b_gs,
                 b_assoc,
             )
-            b_events.extend(evts)
+            b_assoc = result.associations
+            b_events.extend(result.events)
 
         # Snapshot the boundary state (simulates what _LookAheadThread returns)
         boundary_assoc = b_assoc
@@ -292,7 +299,7 @@ class TestFoldDeterminism:
 
         # Second half: steps boundary+1..60, seeded from boundary state
         for step in range(boundary + 1, 61):
-            evts, _pos, b_assoc, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -302,7 +309,8 @@ class TestFoldDeterminism:
                 b_gs,
                 b_assoc,
             )
-            b_events.extend(evts)
+            b_assoc = result.associations
+            b_events.extend(result.events)
 
         # (a) Event count must match
         assert len(b_events) == len(a_events), f"Event count: {len(b_events)} vs {len(a_events)}"

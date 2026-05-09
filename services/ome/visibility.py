@@ -7,7 +7,7 @@ Handles:
 - Range constraints
 - Elevation angle for ground stations
 - Angular velocity for polar seam tracking rate limits
-- Ground link scheduling (highest-elevation, longest-pass)
+- Ground link scheduling (highest-elevation, lowest-elevation)
 - ISL terminal scheduling (priority-based with symmetric constraint)
 
 Under 500 lines.

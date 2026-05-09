@@ -17,8 +17,8 @@ default_terminals:
 default_min_elevation_deg: 25
 
 # Scheduling policy when multiple satellites are visible simultaneously.
-# Options: "highest-elevation" (prefer best signal), "longest-pass" (prefer
-# longest remaining contact time).
+# Options: "highest-elevation" (prefer best signal), "lowest-elevation" (prefer
+# satellites lower on the horizon; this is not dwell-time prediction).
 default_scheduling_policy: highest-elevation
 
 # Default terrestrial prefix templates for ground station routing.
@@ -55,8 +55,8 @@ stations:
     alt_m: 30
     # Override the default elevation mask for polar geometry
     min_elevation_deg: 10
-    # Use longest-pass policy since passes are shorter at high latitudes
-    scheduling_policy: longest-pass
+    # Use the low-elevation heuristic since passes are shorter at high latitudes
+    scheduling_policy: lowest-elevation
     # Override terminal type (RF for Arctic weather reliability)
     terminals:
       - type: rf

@@ -4,7 +4,7 @@ ground_station:
   lon_deg: 166.67
   alt_m: 10
   min_elevation_deg: 15
-  scheduling_policy: longest-pass
+  scheduling_policy: lowest-elevation
   terminals:
     - type: rf
       band: Ka

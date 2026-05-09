@@ -354,3 +354,33 @@ class TestDispatcherLiveDispatch:
 
         with pytest.raises(ValueError, match="Unrepresentable latency"):
             d._netem_delay_ms("sat-P00S00", "sat-P00S01", 1.0)
+
+    def test_missing_pod_placement_is_not_treated_as_local(self):
+        d, _ = _make_dispatcher()
+        d._loc._node_of.pop("sat-P00S01")
+
+        with pytest.raises(ValueError, match="Missing Kubernetes node placement"):
+            d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0)
+
+    def test_cross_node_missing_remote_ip_fails_loudly(self):
+        d, _ = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        d._loc._node_of["sat-P00S00"] = "node-a"
+        d._loc._node_of["sat-P00S01"] = "node-b"
+        d._loc._agent_addrs["node-a"] = "agent-a"
+        d._loc._agent_addrs["node-b"] = "agent-b"
+        d._substrate_latency["node-a-node-b"] = 1.0
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                10.0,
+                1000.0,
+                range_km=3000.0,
+            )
+        }
+
+        with pytest.raises(RuntimeError, match="missing IP"):
+            asyncio.run(
+                d._send_batch_up({pair}, desired, "sim", datetime(2026, 1, 1, tzinfo=UTC), d._nc)
+            )

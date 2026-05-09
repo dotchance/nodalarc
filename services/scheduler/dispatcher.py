@@ -56,6 +56,12 @@ from scheduler.desired_state import (
     desired_link_from_snapshot_link,
     desired_link_from_visibility,
 )
+from scheduler.dispatch_planner import (
+    classify_mbb_changes,
+    diff_link_state,
+    gs_id_for_pair,
+    sat_id_for_gs_pair,
+)
 from scheduler.latency_compensator import LatencyCompensation, compensate_latency
 from scheduler.latency_model import PositionTable
 from scheduler.pod_locator import PodLocationMap
@@ -1067,21 +1073,12 @@ class Dispatcher:
         if forced_bbm_pairs is None:
             forced_bbm_pairs = frozenset()
 
-        current_pairs = set(self._actual_links.keys())
-        desired_pairs = set(desired.keys())
+        diff = diff_link_state(self._actual_links, desired)
+        to_remove = diff.to_remove
+        to_add = diff.to_add
+        to_update_latency = diff.to_update_latency
 
-        to_remove = current_pairs - desired_pairs
-        to_add = desired_pairs - current_pairs
-        to_update_latency = {
-            pair
-            for pair in current_pairs & desired_pairs
-            if (
-                abs(self._actual_links[pair].latency_ms - desired[pair].latency_ms) > 1e-9
-                or self._actual_links[pair].range_km != desired[pair].range_km
-            )
-        }
-
-        if not to_remove and not to_add and not to_update_latency:
+        if not diff.has_changes:
             return
 
         sim_iso = sim_time.isoformat()
@@ -1241,88 +1238,22 @@ class Dispatcher:
         if forced_bbm_pairs is None:
             forced_bbm_pairs = frozenset()
 
-        def _gs_id_for_pair(pair: tuple[str, str]) -> str | None:
-            if pair[0] in self._gs_capacities:
-                return pair[0]
-            if pair[1] in self._gs_capacities:
-                return pair[1]
-            return None
-
-        def _sat_id_for_gs_pair(pair: tuple[str, str]) -> str | None:
-            if pair[0] in self._gs_capacities:
-                return pair[1]
-            if pair[1] in self._gs_capacities:
-                return pair[0]
-            return None
-
         # --- Classify changes ---
-        isl_downs: set[tuple[str, str]] = set()
-        isl_ups: set[tuple[str, str]] = set()
-        gs_downs: dict[str, set[tuple[str, str]]] = {}  # gs_id → pairs
-        gs_ups: dict[str, set[tuple[str, str]]] = {}
-
-        for pair in to_remove:
-            gs_id = _gs_id_for_pair(pair)
-            if gs_id:
-                gs_downs.setdefault(gs_id, set()).add(pair)
-            else:
-                isl_downs.add(pair)
-
-        for pair in to_add:
-            gs_id = _gs_id_for_pair(pair)
-            if gs_id:
-                gs_ups.setdefault(gs_id, set()).add(pair)
-            else:
-                isl_ups.add(pair)
-
-        # --- MBB eligibility: dual-sided capacity check ---
-        # Dirty segments = GSes and sats involved in this tick's changes
-        dirty_gs = set(gs_downs.keys()) | set(gs_ups.keys())
-
-        mbb_segments: set[str] = set()  # gs_ids eligible for MBB
-        bbm_segments: set[str] = set()  # gs_ids forced to BBM
-
-        for gs_id in dirty_gs:
-            # Forced BBM: if any pair under this GS is in forced_bbm_pairs,
-            # the entire segment goes BBM (scenario faults are immediate).
-            segment_pairs = gs_downs.get(gs_id, set()) | gs_ups.get(gs_id, set())
-            if segment_pairs & forced_bbm_pairs:
-                bbm_segments.add(gs_id)
-                continue
-
-            ups = gs_ups.get(gs_id, set())
-            if not ups:
-                # Pure down, no MBB needed
-                bbm_segments.add(gs_id)
-                continue
-            downs = gs_downs.get(gs_id, set())
-            if not downs:
-                # Pure up — check if capacity allows without a preceding down
-                gs_spare = self._gs_capacities.get(gs_id, 1) - self._gs_active_count.get(gs_id, 0)
-                all_sats_ok = all(
-                    self._sat_capacities.get(_sat_id_for_gs_pair(p), 1)
-                    - self._sat_active_count.get(_sat_id_for_gs_pair(p), 0)
-                    > 0
-                    for p in ups
-                )
-                if gs_spare >= len(ups) and all_sats_ok:
-                    mbb_segments.add(gs_id)
-                else:
-                    bbm_segments.add(gs_id)
-                continue
-
-            # Handover: has both ups and downs
-            gs_spare = self._gs_capacities.get(gs_id, 1) - self._gs_active_count.get(gs_id, 0)
-            all_sats_ok = all(
-                self._sat_capacities.get(_sat_id_for_gs_pair(p), 1)
-                - self._sat_active_count.get(_sat_id_for_gs_pair(p), 0)
-                > 0
-                for p in ups
-            )
-            if gs_spare >= len(ups) and all_sats_ok:
-                mbb_segments.add(gs_id)
-            else:
-                bbm_segments.add(gs_id)
+        classification = classify_mbb_changes(
+            to_remove=to_remove,
+            to_add=to_add,
+            gs_capacities=self._gs_capacities,
+            gs_active_count=self._gs_active_count,
+            sat_capacities=self._sat_capacities,
+            sat_active_count=self._sat_active_count,
+            forced_bbm_pairs=forced_bbm_pairs,
+        )
+        isl_downs = classification.isl_downs
+        isl_ups = classification.isl_ups
+        gs_downs = classification.gs_downs
+        gs_ups = classification.gs_ups
+        mbb_segments = classification.mbb_segments
+        bbm_segments = classification.bbm_segments
 
         # --- PHASE 1: Free capacity (BBM downs + ISL downs) ---
         phase1_downs: set[tuple[str, str]] = set(isl_downs)
@@ -1333,7 +1264,7 @@ class Dispatcher:
             removed = await self._send_batch_down(phase1_downs, sim_iso, sim_time, nc, down_reasons)
             failed_bbm_gs: set[str] = set()
             for pair in phase1_downs:
-                gs_id = _gs_id_for_pair(pair)
+                gs_id = gs_id_for_pair(pair, self._gs_capacities)
                 if pair in removed:
                     info = self._actual_links.pop(pair, None)
                     self._last_latencies.pop(pair, None)
@@ -1358,7 +1289,7 @@ class Dispatcher:
             if gs_id in failed_bbm_gs:
                 continue  # Phase 1 down failed — terminal still occupied
             for pair in gs_ups.get(gs_id, set()):
-                sat_id = _sat_id_for_gs_pair(pair)
+                sat_id = sat_id_for_gs_pair(pair, self._gs_capacities)
                 gs_spare = self._gs_capacities.get(gs_id, 1) - self._gs_active_count.get(gs_id, 0)
                 sat_spare = self._sat_capacities.get(sat_id, 1) - self._sat_active_count.get(
                     sat_id, 0

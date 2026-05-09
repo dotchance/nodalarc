@@ -60,7 +60,14 @@ log = logging.getLogger(__name__)
 class ActiveLinkInfo:
     """Mutable internal state for an active link."""
 
-    __slots__ = ("interface_a", "interface_b", "latency_ms", "bandwidth_mbps", "link_type")
+    __slots__ = (
+        "interface_a",
+        "interface_b",
+        "latency_ms",
+        "bandwidth_mbps",
+        "link_type",
+        "range_km",
+    )
 
     def __init__(
         self,
@@ -69,12 +76,14 @@ class ActiveLinkInfo:
         latency_ms: float,
         bandwidth_mbps: float,
         link_type: str = "isl",
+        range_km: float | None = None,
     ) -> None:
         self.interface_a = interface_a
         self.interface_b = interface_b
         self.latency_ms = latency_ms
         self.bandwidth_mbps = bandwidth_mbps
         self.link_type = link_type
+        self.range_km = range_km
 
 
 @dataclass(frozen=True, slots=True)
@@ -694,6 +703,31 @@ class Dispatcher:
     # Decision Engine: build desired state (pure computation, no I/O)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _require_ome_geometry(
+        pair: tuple[str, str],
+        *,
+        range_km: float | None,
+        latency_ms: float | None,
+        source: str,
+    ) -> tuple[float, float]:
+        """Require OME-authoritative range and one-way latency.
+
+        The Scheduler is not a physics authority. Missing range/latency is a
+        corrupt control-plane input, not a condition to paper over with a
+        fallback. Raising here stops dispatch before the emulator can appear
+        healthy while applying made-up physics.
+        """
+        if range_km is None:
+            raise ValueError(f"{source} for {pair} is missing OME-authoritative range_km")
+        if latency_ms is None:
+            raise ValueError(f"{source} for {pair} is missing OME-authoritative latency_ms")
+        if range_km < 0:
+            raise ValueError(f"{source} for {pair} has negative range_km={range_km}")
+        if latency_ms < 0:
+            raise ValueError(f"{source} for {pair} has negative latency_ms={latency_ms}")
+        return range_km, latency_ms
+
     def _apply_events_to_desired(
         self,
         vis_events: list[VisibilityEvent],
@@ -731,18 +765,16 @@ class Dispatcher:
 
                     bandwidth = self._bandwidth_map.get(pair)
                     if bandwidth is None:
-                        log.warning(
-                            "No bandwidth configured for pair %s — "
-                            "skipping LinkUp (check satellite/GS terminal config)",
-                            pair,
+                        raise ValueError(
+                            f"VisibilityEvent for {pair} has no config-derived bandwidth; "
+                            "refusing to dispatch a link with unknown physical rate"
                         )
-                        continue
-                    sim_unix = vis.sim_time.timestamp() if vis.sim_time else 0.0
-                    latency = self._position_table.compute_link_latency(
-                        vis.node_a, vis.node_b, sim_unix
+                    range_km, latency = self._require_ome_geometry(
+                        pair,
+                        range_km=vis.range_km,
+                        latency_ms=vis.latency_ms,
+                        source="VisibilityEvent",
                     )
-                    if latency is None:
-                        latency = 3.0
 
                     self._desired_links[pair] = ActiveLinkInfo(
                         interface_a=ifaces[0],
@@ -750,6 +782,7 @@ class Dispatcher:
                         latency_ms=latency,
                         bandwidth_mbps=bandwidth,
                         link_type=vis.link_type,
+                        range_km=range_km,
                     )
             elif not vis.visible:
                 self._desired_links.pop(pair, None)
@@ -804,14 +837,12 @@ class Dispatcher:
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 pair = (link.node_a, link.node_b)
-                latency = link.latency_ms
-                if latency is None:
-                    sim_unix = snapshot.sim_time.timestamp() if snapshot.sim_time else 0.0
-                    latency = self._position_table.compute_link_latency(
-                        link.node_a, link.node_b, sim_unix
-                    )
-                if latency is None:
-                    latency = 3.0
+                range_km, latency = self._require_ome_geometry(
+                    pair,
+                    range_km=link.range_km,
+                    latency_ms=link.latency_ms,
+                    source="LinkStateSnapshot",
+                )
 
                 is_gs = link.link_type == "ground"
                 if is_gs:
@@ -823,28 +854,19 @@ class Dispatcher:
                     if not ifaces:
                         continue
 
-                # Prefer the pre-computed, config-derived bandwidth (authoritative).
-                # Fall back to the snapshot's value only if the config didn't
-                # resolve (e.g., missing terminal data). Skip the link entirely
-                # if neither source yields a positive bandwidth — a silent
-                # default would emulate the wrong link rate.
                 bandwidth = self._bandwidth_map.get(pair)
-                if bandwidth is None and link.bandwidth_mbps:
-                    bandwidth = link.bandwidth_mbps
                 if bandwidth is None or bandwidth <= 0:
-                    log.warning(
-                        "No bandwidth for pair %s (config_map=missing, snapshot=%s) "
-                        "— skipping in snapshot reconciliation",
-                        pair,
-                        link.bandwidth_mbps,
+                    raise ValueError(
+                        f"LinkStateSnapshot for {pair} has no config-derived bandwidth; "
+                        "refusing to dispatch a link with unknown physical rate"
                     )
-                    continue
                 desired[pair] = ActiveLinkInfo(
                     interface_a=ifaces[0],
                     interface_b=ifaces[1],
                     latency_ms=latency,
                     bandwidth_mbps=bandwidth,
                     link_type=link.link_type,
+                    range_km=range_km,
                 )
                 sched_state = getattr(link, "scheduling_state", "active")
                 if sched_state == "teardown":
@@ -1054,12 +1076,13 @@ class Dispatcher:
         except Exception as exc:
             log.warning("Substrate latency load failed: %s", exc)
 
-    def _get_substrate_ms(self, node_a: str, node_b: str) -> float:
-        """Get substrate latency for a link pair in ms.
+    def _get_substrate_rtt_ms(self, node_a: str, node_b: str) -> float:
+        """Get measured substrate RTT for a link pair in ms.
 
-        Prefers live measurements from Node Agent (by peer IP).
-        Falls back to ConfigMap value (by node name pair).
-        Returns 0.0 for LOCAL links (same node).
+        Returns 0.0 only for LOCAL links. CROSS_NODE links require a real
+        substrate measurement; otherwise dispatch fails. This prevents the
+        emulator from looking healthy while silently ignoring physical
+        substrate latency.
         """
         k3s_a = self._loc.k3s_node(node_a)
         k3s_b = self._loc.k3s_node(node_b)
@@ -1069,9 +1092,31 @@ class Dispatcher:
         ip_b = self._loc.node_ip(k3s_b)
         if ip_b and ip_b in self._substrate_by_ip:
             return self._substrate_by_ip[ip_b]
-        # Fallback to ConfigMap measurement (by node name pair)
+        # Static ConfigMap measurements are accepted only as explicit measured
+        # substrate inputs. Missing measurements are not treated as zero.
         key = f"{k3s_a}-{k3s_b}"
-        return self._substrate_latency.get(key, 0.0)
+        if key in self._substrate_latency:
+            return self._substrate_latency[key]
+        reverse_key = f"{k3s_b}-{k3s_a}"
+        if reverse_key in self._substrate_latency:
+            return self._substrate_latency[reverse_key]
+        raise ValueError(
+            f"No substrate RTT measurement for cross-node link {node_a}<->{node_b} "
+            f"({k3s_a}<->{k3s_b}); refusing to dispatch with unknown substrate latency"
+        )
+
+    def _netem_delay_ms(self, node_a: str, node_b: str, orbital_one_way_ms: float) -> float:
+        """Compute netem one-way delay from OME latency and measured substrate RTT."""
+        substrate_rtt_ms = self._get_substrate_rtt_ms(node_a, node_b)
+        substrate_one_way_ms = substrate_rtt_ms / 2.0
+        netem_ms = orbital_one_way_ms - substrate_one_way_ms
+        if netem_ms < 0:
+            raise ValueError(
+                f"Unrepresentable latency for {node_a}<->{node_b}: "
+                f"substrate_one_way_ms={substrate_one_way_ms:.6f} exceeds "
+                f"OME orbital_one_way_ms={orbital_one_way_ms:.6f}"
+            )
+        return netem_ms
 
     def _link_locality(self, node_a: str, node_b: str) -> int | None:
         """Determine locality for a link pair. None if either pod unscheduled."""
@@ -1107,8 +1152,16 @@ class Dispatcher:
 
         to_remove = current_pairs - desired_pairs
         to_add = desired_pairs - current_pairs
+        to_update_latency = {
+            pair
+            for pair in current_pairs & desired_pairs
+            if (
+                abs(self._actual_links[pair].latency_ms - desired[pair].latency_ms) > 1e-9
+                or self._actual_links[pair].range_km != desired[pair].range_km
+            )
+        }
 
-        if not to_remove and not to_add:
+        if not to_remove and not to_add and not to_update_latency:
             return
 
         sim_iso = sim_time.isoformat()
@@ -1142,6 +1195,9 @@ class Dispatcher:
                 forced_bbm_pairs,
             )
 
+        if to_update_latency:
+            await self._send_authoritative_latency_updates(to_update_latency, desired, sim_time)
+
         if to_add or to_remove:
             added_str = ", ".join(f"{a}<->{b}" for a, b in sorted(to_add)) if to_add else ""
             removed_str = ", ".join(f"{a}<->{b}" for a, b in sorted(to_remove)) if to_remove else ""
@@ -1160,6 +1216,85 @@ class Dispatcher:
                 "Reconcile: no changes (%d active)",
                 len(self._actual_links),
             )
+
+    async def _send_authoritative_latency_updates(
+        self,
+        pairs: set[tuple[str, str]],
+        desired: dict[tuple[str, str], ActiveLinkInfo],
+        sim_time: datetime,
+    ) -> None:
+        """Apply OME-authoritative latency changes for already-active links."""
+        agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
+        now = datetime.now(UTC)
+
+        for pair in pairs:
+            info = desired[pair]
+            node_a, node_b = pair
+            netem_ms = self._netem_delay_ms(node_a, node_b, info.latency_ms)
+
+            if info.link_type == "ground":
+                gs_id = node_a if node_a in self._gs_capacities else node_b
+                sat_id = node_b if node_a in self._gs_capacities else node_a
+                sat_iface = info.interface_b if node_a in self._gs_capacities else info.interface_a
+                agent = self._loc.agent_addr(sat_id)
+                agent_entries.setdefault(agent, []).append(
+                    node_agent_pb2.LatencyEntry(
+                        node_id=sat_id,
+                        interface_name=sat_iface,
+                        latency_ms=netem_ms,
+                        link_type=node_agent_pb2.GROUND,
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                    )
+                )
+            else:
+                for nid, ifname in [
+                    (node_a, info.interface_a),
+                    (node_b, info.interface_b),
+                ]:
+                    agent = self._loc.agent_addr(nid)
+                    agent_entries.setdefault(agent, []).append(
+                        node_agent_pb2.LatencyEntry(
+                            node_id=nid,
+                            interface_name=ifname,
+                            latency_ms=netem_ms,
+                            link_type=node_agent_pb2.ISL,
+                        )
+                    )
+
+        tasks = []
+        agent_addrs = list(agent_entries.keys())
+        for agent_addr in agent_addrs:
+            stub = self._pool.get_stub(agent_addr)
+            req = node_agent_pb2.SetLatencyRequest(entries=agent_entries[agent_addr])
+            tasks.append(stub.async_set_latency(req))
+
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    raise RuntimeError(f"SetLatency failed for agent {agent_addrs[i]}: {result}")
+                if not result.success:
+                    raise RuntimeError(
+                        f"SetLatency rejected by agent {agent_addrs[i]}: "
+                        f"{result.error_message[:200]}"
+                    )
+
+        for pair in pairs:
+            info = desired[pair]
+            self._actual_links[pair] = info
+            self._last_latencies[pair] = info.latency_ms
+            if info.range_km is None:
+                raise ValueError(f"Desired latency update for {pair} has no range_km")
+            event = LatencyUpdate(
+                sim_time=sim_time,
+                wall_time=now,
+                node_a=pair[0],
+                node_b=pair[1],
+                latency_ms=info.latency_ms,
+                range_km=info.range_km,
+            )
+            await self._js.publish(self._subj_latency, event.model_dump_json().encode())
 
     async def _reconcile_mbb(
         self,
@@ -1472,8 +1607,6 @@ class Dispatcher:
                         addr,
                         result.error_message[:200],
                     )
-                    if result.interfaces_downed > 0:
-                        successful_agents.add(addr)
                 else:
                     log.debug(
                         "BatchLinkDown: %d downed in %.1fms",
@@ -1499,6 +1632,7 @@ class Dispatcher:
                         interface_a=info.interface_a,
                         interface_b=info.interface_b,
                         reason=down_reasons.get(pair, "vis_lost"),
+                        link_type=info.link_type,
                     )
                     try:
                         await self._js.publish(
@@ -1534,17 +1668,7 @@ class Dispatcher:
                 continue
             is_gs = info.link_type == "ground" if info else False
 
-            substrate_ms = self._get_substrate_ms(node_a, node_b)
-            netem_ms = max(0.0, info.latency_ms - substrate_ms)
-            if substrate_ms > 0 and netem_ms == 0.0:
-                log.warning(
-                    "Substrate latency %.1fms exceeds orbital %.1fms for %s<->%s — "
-                    "emulated latency will be higher than physical reality",
-                    substrate_ms,
-                    info.latency_ms,
-                    node_a,
-                    node_b,
-                )
+            netem_ms = self._netem_delay_ms(node_a, node_b, info.latency_ms)
 
             if is_gs:
                 gs_id = node_a if node_a in self._gs_capacities else node_b
@@ -1681,8 +1805,6 @@ class Dispatcher:
                         result.interfaces_upped,
                         result.error_message[:200],
                     )
-                    if result.interfaces_upped > 0:
-                        successful_agents.add(addr)
                 else:
                     log.debug(
                         "BatchLinkUp: %d upped in %.1fms",
@@ -1704,14 +1826,10 @@ class Dispatcher:
                 if sim_time is None:
                     log.error("FATAL: LinkUp dispatch has no sim_time for pair %s", pair)
                     raise ValueError(f"sim_time is None for LinkUp dispatch of {pair}")
-                range_km = self._position_table.compute_link_range(
-                    pair[0], pair[1], sim_time.timestamp()
-                )
-                if range_km is None:
-                    log.error(
-                        "FATAL: Cannot compute range for link %s — position data missing", pair
+                if info.range_km is None:
+                    raise ValueError(
+                        f"ActiveLinkInfo for {pair} is missing OME-authoritative range_km"
                     )
-                    raise ValueError(f"range_km is None for {pair}")
                 event = LinkUp(
                     sim_time=sim_time,
                     wall_time=now,
@@ -1721,8 +1839,9 @@ class Dispatcher:
                     interface_b=info.interface_b,
                     latency_ms=info.latency_ms,
                     bandwidth_mbps=info.bandwidth_mbps,
-                    range_km=range_km,
+                    range_km=info.range_km,
                     reason="vis_gained",
+                    link_type=info.link_type,
                 )
                 try:
                     await self._js.publish(self._subj_link_up, event.model_dump_json().encode())
@@ -1737,92 +1856,13 @@ class Dispatcher:
     # ------------------------------------------------------------------
 
     async def _update_latencies(self, to_pub) -> None:
-        """Compute and dispatch latency updates for active links.
+        """Legacy hook retained for the dispatch loop.
 
-        Substrate compensation: netem_ms = max(0, target_ms - substrate_ms).
+        The Scheduler no longer computes orbital latency. OME-owned snapshots
+        and visibility events carry authoritative range/latency, and
+        _reconcile_links applies changes to already-active links. Keeping this
+        hook as a no-op avoids a competing geometry authority.
         """
-
-        active_set = set(self._actual_links.keys())
-        sim_time_unix = self._current_sim_time.timestamp() if self._current_sim_time else 0.0
-        updates = self._position_table.get_links_needing_update(
-            active_set, self._last_latencies, sim_time_unix=sim_time_unix
-        )
-        if not updates:
-            return
-
-        agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
-        now = datetime.now(UTC)
-
-        for node_a, node_b, new_lat, range_km in updates:
-            pair = (node_a, node_b)
-            info = self._actual_links.get(pair)
-            if not info:
-                continue
-
-            substrate_ms = self._get_substrate_ms(node_a, node_b)
-            netem_ms = max(0.0, new_lat - substrate_ms)
-
-            info.latency_ms = new_lat
-            self._last_latencies[pair] = new_lat
-
-            is_gs = info.link_type == "ground" if info else False
-
-            if is_gs:
-                gs_id = node_a if node_a in self._gs_capacities else node_b
-                sat_id = node_b if node_a in self._gs_capacities else node_a
-                sat_iface = info.interface_b if node_a in self._gs_capacities else info.interface_a
-                agent = self._loc.agent_addr(sat_id)
-                agent_entries.setdefault(agent, []).append(
-                    node_agent_pb2.LatencyEntry(
-                        node_id=sat_id,
-                        interface_name=sat_iface,
-                        latency_ms=netem_ms,
-                        link_type=node_agent_pb2.GROUND,
-                        gs_id=gs_id,
-                        sat_id=sat_id,
-                    )
-                )
-            else:
-                for nid, ifname in [
-                    (node_a, info.interface_a),
-                    (node_b, info.interface_b),
-                ]:
-                    agent = self._loc.agent_addr(nid)
-                    agent_entries.setdefault(agent, []).append(
-                        node_agent_pb2.LatencyEntry(
-                            node_id=nid,
-                            interface_name=ifname,
-                            latency_ms=netem_ms,
-                            link_type=node_agent_pb2.ISL,
-                        )
-                    )
-
-            event = LatencyUpdate(
-                sim_time=now,
-                wall_time=now,
-                node_a=node_a,
-                node_b=node_b,
-                latency_ms=new_lat,
-                range_km=range_km,
-            )
-            try:
-                await to_pub.publish(self._subj_latency, event.model_dump_json().encode())
-            except Exception as exc:
-                log.error("Failed to publish LatencyUpdate for %s<->%s: %s", node_a, node_b, exc)
-
-        # Send to agents concurrently
-        tasks = []
-        for agent_addr, entries in agent_entries.items():
-            stub = self._pool.get_stub(agent_addr)
-            req = node_agent_pb2.SetLatencyRequest(entries=entries)
-            tasks.append(stub.async_set_latency(req))
-
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    agent_addr = list(agent_entries.keys())[i]
-                    log.error("SetLatency failed for agent %s: %s", agent_addr, result)
 
     # ------------------------------------------------------------------
     # Epoch synchronization state machine (PRD v0.71)

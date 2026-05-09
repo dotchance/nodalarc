@@ -64,6 +64,7 @@ class LinkState(BaseModel):
     admin: AdminState
     carrier: CarrierState
     routing: RoutingState
+    range_km: float | None = None  # None when carrier is not UP
     latency_ms: float | None  # None when carrier is not UP
     bandwidth_mbps: float | None  # None when carrier is not UP
     link_type: Literal["isl", "ground"]

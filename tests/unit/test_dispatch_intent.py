@@ -15,6 +15,7 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from nodalarc.models.link_state import (
     AdminState,
     CarrierState,
@@ -27,6 +28,15 @@ from scheduler.dispatcher import ActiveLinkInfo, Dispatcher, DispatchIntent
 from scheduler.pod_locator import PodLocationMap
 
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
+OME_RANGE_KM = 1000.0
+
+
+def _isl_info() -> ActiveLinkInfo:
+    return ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, range_km=OME_RANGE_KM)
+
+
+def _ground_info() -> ActiveLinkInfo:
+    return ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground", range_km=OME_RANGE_KM)
 
 
 def _make_dispatcher(mbb=False):
@@ -106,8 +116,8 @@ class TestDispatchWorkerReconcile:
         """Worker dequeues intent, calls _reconcile_links, Node Agent gets BatchLinkDown."""
         d, pool = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
+        d._actual_links[pair] = _isl_info()
 
         d._override_pairs[pair] = "scenario_inject_down"
         intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
@@ -122,7 +132,7 @@ class TestDispatchWorkerReconcile:
         """Worker dequeues intent with new desired pair, calls BatchLinkUp."""
         d, pool = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
 
         intent = d._build_dispatch_intent(sim_time=SIM, source="ome_event")
 
@@ -136,7 +146,7 @@ class TestDispatchWorkerReconcile:
         """_override_pairs mutation alone does not change _actual_links."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._actual_links[pair] = _isl_info()
 
         d._override_pairs[pair] = "scenario_inject_down"
 
@@ -146,7 +156,7 @@ class TestDispatchWorkerReconcile:
         """Clear overrides + reconcile restores OME-desired links without OME wait."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
         d._override_pairs[pair] = "scenario_inject_down"
 
         d._override_pairs.clear()
@@ -158,7 +168,7 @@ class TestDispatchWorkerReconcile:
         """Link overridden then OME-invisible: clear does not bring it back."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
         d._override_pairs[pair] = "scenario_inject_down"
 
         d._desired_links.pop(pair)
@@ -174,8 +184,8 @@ class TestReasonAttribution:
     def test_scenario_inject_down_reason_through_worker(self):
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
+        d._actual_links[pair] = _isl_info()
 
         d._override_pairs[pair] = "scenario_inject_down"
         intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
@@ -189,8 +199,8 @@ class TestReasonAttribution:
     def test_satellite_loss_reason_through_worker(self):
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
+        d._actual_links[pair] = _isl_info()
 
         d._override_nodes["sat-P00S00"] = "satellite_loss"
         intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
@@ -205,7 +215,7 @@ class TestReasonAttribution:
         """Non-override removal uses vis_lost."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._actual_links[pair] = _isl_info()
 
         intent = d._build_dispatch_intent(sim_time=SIM, source="ome_event")
 
@@ -223,12 +233,12 @@ class TestQueueDrainSemantics:
         """Snapshot intent drained by a later OME intent: counters still rebaselined."""
         d, _ = _make_dispatcher()
         pair = ("gs-ashburn", "sat-P00S00")
-        d._actual_links[pair] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._actual_links[pair] = _ground_info()
         d._gs_active_count["gs-ashburn"] = 99
         d._sat_active_count["sat-P00S00"] = 99
 
         snapshot_intent = DispatchIntent(
-            desired={pair: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")},
+            desired={pair: _ground_info()},
             down_reasons={},
             forced_bbm_pairs=frozenset(),
             sim_time=SIM,
@@ -236,7 +246,7 @@ class TestQueueDrainSemantics:
             rebaseline_counts=True,
         )
         ome_intent = DispatchIntent(
-            desired={pair: ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")},
+            desired={pair: _ground_info()},
             down_reasons={},
             forced_bbm_pairs=frozenset(),
             sim_time=SIM,
@@ -253,8 +263,8 @@ class TestQueueDrainSemantics:
         """Inject then immediately clear before worker runs: no physical down."""
         d, pool = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
+        d._actual_links[pair] = _isl_info()
 
         d._override_pairs[pair] = "scenario_inject_down"
         inject_intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
@@ -281,7 +291,7 @@ class TestQueueDrainSemantics:
             source="scenario",
         )
         intent_without_forced = DispatchIntent(
-            desired={pair: ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)},
+            desired={pair: _isl_info()},
             down_reasons={},
             forced_bbm_pairs=frozenset(),
             sim_time=SIM,
@@ -306,7 +316,7 @@ class TestOnScenarioCommand:
         d, _ = _make_dispatcher()
         d._current_sim_time = SIM
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
 
         msg = self._make_msg(
             {"action": "inject_link_down", "node_a": "sat-P00S01", "node_b": "sat-P00S00"}
@@ -395,6 +405,18 @@ class TestOnScenarioCommand:
         assert resp["status"] == "error"
         assert d._dispatch_queue.empty()
 
+    def test_command_without_ome_sim_time_fails_loudly(self):
+        d, _ = _make_dispatcher()
+
+        msg = self._make_msg(
+            {"action": "inject_link_down", "node_a": "sat-P00S00", "node_b": "sat-P00S01"}
+        )
+
+        with pytest.raises(RuntimeError, match="before receiving OME simulation time"):
+            asyncio.run(d._on_scenario_command(msg))
+
+        assert d._dispatch_queue.empty()
+
     def test_pair_normalization(self):
         """Pairs are normalized to (min, max) regardless of command order."""
         d, _ = _make_dispatcher()
@@ -427,7 +449,7 @@ class TestSuspendDeferral:
         """Override set during suspend takes effect when resume builds intent."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
         d._override_pairs[pair] = "scenario_inject_down"
 
         intent = d._build_dispatch_intent(sim_time=SIM, source="resume", rebaseline_counts=True)
@@ -444,7 +466,7 @@ class TestForcedBBMEscalation:
         """Worker processes intent with forced pair → GS segment goes BBM."""
         d, pool = _make_dispatcher(mbb=True)
         old_pair = ("gs-ashburn", "sat-P00S00")
-        d._actual_links[old_pair] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
+        d._actual_links[old_pair] = _ground_info()
         d._gs_active_count["gs-ashburn"] = 1
         d._sat_active_count["sat-P00S00"] = 1
 
@@ -463,7 +485,7 @@ class TestForcedBBMEscalation:
         """Normal OME removal does not appear in forced_bbm_pairs."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._actual_links[pair] = _isl_info()
 
         intent = d._build_dispatch_intent(sim_time=SIM, source="ome_event")
 
@@ -477,7 +499,7 @@ class TestInFlightUpOmeRemoval:
         """Pair in actual + override → reason captured even if not in desired."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._actual_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._actual_links[pair] = _isl_info()
         d._override_pairs[pair] = "scenario_inject_down"
 
         intent = d._build_dispatch_intent(sim_time=SIM, source="ome_event")
@@ -489,7 +511,7 @@ class TestInFlightUpOmeRemoval:
         """Pair in desired (not yet in actual) + override → reason captured."""
         d, _ = _make_dispatcher()
         pair = ("sat-P00S00", "sat-P00S01")
-        d._desired_links[pair] = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        d._desired_links[pair] = _isl_info()
         d._override_pairs[pair] = "scenario_inject_down"
 
         intent = d._build_dispatch_intent(sim_time=SIM, source="scenario")
@@ -516,6 +538,7 @@ class TestTeardownPairsClearedOnSnapshot:
                     admin=AdminState.UP,
                     carrier=CarrierState.UP,
                     routing=RoutingState.UNKNOWN,
+                    range_km=OME_RANGE_KM,
                     latency_ms=3.0,
                     bandwidth_mbps=1000.0,
                     link_type="isl",

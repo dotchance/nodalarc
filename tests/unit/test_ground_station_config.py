@@ -62,7 +62,7 @@ class TestPolarStationOverrides:
 
         # Per-station overrides
         assert polar.min_elevation_deg == 10
-        assert polar.scheduling_policy == "longest-pass"
+        assert polar.scheduling_policy == "lowest-elevation"
 
         # RF terminal override
         assert polar.terminals is not None

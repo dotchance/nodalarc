@@ -9,6 +9,7 @@ scoring. All tests use synthetic StepContext with controlled geometry.
 
 from __future__ import annotations
 
+import pytest
 from nodalarc.models.ground_station import HysteresisParameters
 from ome.event_stream import _compute_effective_discount, _compute_pair_score
 
@@ -19,13 +20,13 @@ class TestComputePairScore:
     def test_highest_elevation_positive(self):
         assert _compute_pair_score(45.0, "highest-elevation") == 45.0
 
-    def test_longest_pass_positive(self):
-        score = _compute_pair_score(45.0, "longest-pass")
+    def test_lowest_elevation_positive(self):
+        score = _compute_pair_score(45.0, "lowest-elevation")
         assert score == 45.0  # 90 - 45
 
-    def test_longest_pass_lower_elev_higher_score(self):
-        s30 = _compute_pair_score(30.0, "longest-pass")
-        s45 = _compute_pair_score(45.0, "longest-pass")
+    def test_lowest_elevation_lower_elev_higher_score(self):
+        s30 = _compute_pair_score(30.0, "lowest-elevation")
+        s45 = _compute_pair_score(45.0, "lowest-elevation")
         assert s30 > s45  # 60 > 45
 
     def test_highest_elevation_higher_elev_higher_score(self):
@@ -33,8 +34,9 @@ class TestComputePairScore:
         s45 = _compute_pair_score(45.0, "highest-elevation")
         assert s45 > s30
 
-    def test_unknown_policy_defaults_to_elevation(self):
-        assert _compute_pair_score(50.0, "unknown") == 50.0
+    def test_unknown_policy_fails_loudly(self):
+        with pytest.raises(ValueError, match="Unknown ground scheduling policy"):
+            _compute_pair_score(50.0, "unknown")
 
 
 class TestComputeEffectiveDiscount:
@@ -121,6 +123,7 @@ class TestHysteresisDiscount:
             gs_service_priorities={gs_id: 10},
             by_node={},
             sat_isl_terminals={sid: 2 for sid in sat_ids},
+            sat_isl_terminal_constraints={sid: {} for sid in sat_ids},
             sat_ground_terminals={sid: 1 for sid in sat_ids},
             max_range_km=5016.0,
             max_tracking_rate_deg_s=3.0,
@@ -176,13 +179,13 @@ class TestHysteresisDiscount:
         )
         assert scored[0][3] == "sat-P00S01"  # 44° > 40°
 
-    def test_longest_pass_discount_protects(self):
-        """Under longest-pass, active at 40° (score=50) beats challenger at 45° (score=45).
+    def test_lowest_elevation_discount_protects(self):
+        """Under lowest-elevation, active at 40° (score=50) beats challenger at 45° (score=45).
         With discount: 50*1.15=57.5 > 45. Active wins."""
         scored = self._make_ctx_and_run(
             sat_elevations=[40.0, 45.0],
             gs_terminal_count=1,
-            policy="longest-pass",
+            policy="lowest-elevation",
             current_assoc=frozenset({("gs-test", "sat-P00S00")}),
         )
         assert scored[0][3] == "sat-P00S00"  # Active pair wins

@@ -512,28 +512,43 @@ def _run_pacing(
     def _build_scheduling_checkpoint(
         sim_time: datetime,
         epoch_id: int,
+        snapshot_seq: int,
         step: int,
         associations: dict[tuple[str, str], tuple[int, int]],
         teardowns: dict[tuple[str, str], tuple[int, tuple[str, str]]],
+        mbb_overlap_ticks: int,
     ) -> SchedulingCheckpoint:
         """Convert OME internal association/teardown state to SchedulingCheckpoint."""
+        if snapshot_seq <= 0:
+            raise ValueError("SchedulingCheckpoint requires a published snapshot_seq")
+        if step < 0:
+            raise ValueError("SchedulingCheckpoint step must be non-negative")
+
         # associations: (gs_id, sat_id) → (gs_ti, sat_ti) → flatten to gs_id → sat_id
         assoc_flat: dict[str, str] = {}
         for (gs_id, sat_id), _ in associations.items():
             assoc_flat[gs_id] = sat_id
 
-        # teardowns: (gs_id, sat_id) → (remaining_ticks, (succ_gs, succ_sat))
+        # Internal teardown state stores the absolute start tick because the
+        # allocator needs elapsed simulation ticks. The checkpoint also stores
+        # remaining_ticks as an audit value so recovery tests can prove that a
+        # no-time-advanced restart preserved MBB overlap semantics exactly.
         td_flat: dict[str, TeardownEntry] = {}
-        for (gs_id, sat_id), (ticks, _successor) in teardowns.items():
+        for (gs_id, sat_id), (start_tick, successor) in teardowns.items():
+            remaining_ticks = max(0, mbb_overlap_ticks - (step - start_tick))
             td_flat[f"{gs_id}:{sat_id}"] = TeardownEntry(
-                remaining_ticks=ticks,
+                start_step=start_tick,
+                remaining_ticks=remaining_ticks,
                 gs_id=gs_id,
                 sat_id=sat_id,
+                successor_node_a=successor[0],
+                successor_node_b=successor[1],
             )
 
         return SchedulingCheckpoint(
             sim_time=sim_time,
             epoch_id=epoch_id,
+            snapshot_seq=snapshot_seq,
             step=step,
             associations=assoc_flat,
             pending_teardowns=td_flat,
@@ -573,7 +588,7 @@ def _run_pacing(
 
     # Initialize Pacemaker rate from static compression (R-OME-008B Part 1).
     # Runtime set_speed commands replace this value dynamically.
-    global _time_accel, _seek_target, _seeking
+    global _time_accel, _seek_target, _seeking, _paused, _epoch_id
     _time_accel = float(compression)
     snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
@@ -730,8 +745,10 @@ def _run_pacing(
 
     # --- Checkpoint recovery (warm restart) ---
     # Try to read the retained SchedulingCheckpoint from JetStream.
-    # If found, recover sim_time from it. In all cases, start PAUSED
-    # so consumers get a deterministic initial state (no wall-clock teleport).
+    # If a checkpoint exists, it is the session-lineage authority for epoch,
+    # snapshot sequence, simulation step, and playback state. We do not ignore
+    # malformed or stale retained state because that can make the event stream
+    # look healthy while silently regressing simulation state.
     recovered_checkpoint = None
     try:
         import asyncio as _aio
@@ -763,7 +780,7 @@ def _run_pacing(
                     msg = await sub.next_msg(timeout=2.0)
                     decompressed = _ckpt_gzip.decompress(msg.data)
                     return SchedulingCheckpoint.model_validate_json(decompressed)
-                except Exception:
+                except TimeoutError:
                     return None
                 finally:
                     await sub.unsubscribe()
@@ -772,45 +789,58 @@ def _run_pacing(
 
         recovered_checkpoint = _aio.run(_read_checkpoint())
     except Exception as exc:
-        logging.warning("Checkpoint recovery failed (non-fatal): %s", exc)
+        raise RuntimeError(
+            "OME checkpoint recovery failed; refusing to start from unknown state"
+        ) from exc
 
     # Checkpoint staleness threshold: if the OME was down for more than 30
-    # seconds (measured by wall clock, not sim_time), discard the checkpoint
-    # and start a fresh epoch at current wall time. Sim_time diverges from
-    # wall_time (time compression, epoch anchoring) so it cannot be used for
-    # staleness. written_at is the wall clock at checkpoint publish time.
+    # seconds (measured by wall clock, not sim_time), fail loudly. Starting
+    # fresh on the same retained subjects would reset session-lineage sequence
+    # state and make downstream consumers distinguish truth from restart luck.
     _CHECKPOINT_STALENESS_THRESHOLD_S = 30.0
 
     if recovered_checkpoint:
-        if recovered_checkpoint.written_at > 0:
-            checkpoint_age = time.time() - recovered_checkpoint.written_at
-        else:
-            # Old checkpoint without written_at field — assume stale
-            checkpoint_age = _CHECKPOINT_STALENESS_THRESHOLD_S + 1
+        if recovered_checkpoint.written_at <= 0:
+            raise RuntimeError("Recovered checkpoint has invalid written_at; refusing recovery")
+        if recovered_checkpoint.step < 0:
+            raise RuntimeError("Recovered checkpoint has negative step; refusing recovery")
+        if recovered_checkpoint.snapshot_seq <= 0:
+            raise RuntimeError("Recovered checkpoint has invalid snapshot_seq; refusing recovery")
 
-        if checkpoint_age <= _CHECKPOINT_STALENESS_THRESHOLD_S:
-            epoch_unix = recovered_checkpoint.sim_time.timestamp()
-            step = recovered_checkpoint.step
-            logging.info(
-                "Recovered from checkpoint (age=%.1fs, step=%d, sim=%s)",
-                checkpoint_age,
-                step,
-                recovered_checkpoint.sim_time.isoformat(),
+        checkpoint_age = time.time() - recovered_checkpoint.written_at
+        if checkpoint_age < 0:
+            raise RuntimeError(
+                "Recovered checkpoint written_at is in the future; refusing recovery"
             )
-        else:
-            logging.info(
-                "Checkpoint too stale (age=%.0fs > %ds) — starting fresh at wall time",
-                checkpoint_age,
-                _CHECKPOINT_STALENESS_THRESHOLD_S,
+        if checkpoint_age > _CHECKPOINT_STALENESS_THRESHOLD_S:
+            raise RuntimeError(
+                "Recovered checkpoint is stale "
+                f"(age={checkpoint_age:.1f}s > {_CHECKPOINT_STALENESS_THRESHOLD_S:.1f}s); "
+                "refusing to reset session state"
             )
-            recovered_checkpoint = None
+
+        step = recovered_checkpoint.step
+        snapshot_seq = recovered_checkpoint.snapshot_seq
+        _epoch_id = recovered_checkpoint.epoch_id
+        # Keep epoch_unix as the original epoch anchor. The checkpoint stores
+        # the tick sim_time, so using it directly as epoch_unix would make the
+        # next live tick jump by step * step_seconds.
+        epoch_unix = recovered_checkpoint.sim_time.timestamp() - (step * step_seconds)
+        logging.info(
+            "Recovered from checkpoint (age=%.1fs, step=%d, seq=%d, sim=%s)",
+            checkpoint_age,
+            step,
+            snapshot_seq,
+            recovered_checkpoint.sim_time.isoformat(),
+        )
     else:
         logging.info("No checkpoint found — starting from epoch")
 
     # Recompute link state at recovered (or initial) sim_time before publishing.
     # Run enough steps from epoch to reach the recovered step so ISL/GS state
     # is accurate. For a fresh start (step=0), this is a no-op.
-    if step > 0:
+    replayed_positions = None
+    if recovered_checkpoint is not None:
         logging.warning(
             "RecoveryReplay: replaying %d steps from checkpoint (step=%d)",
             step + 1,
@@ -819,16 +849,18 @@ def _run_pacing(
         )
 
         for replay_step in range(step + 1):
-            replay_events, _, current_associations, mbb_pending_teardowns = compute_step(
-                step_ctx,
-                epoch_unix - (step * step_seconds),  # original epoch
-                replay_step,
-                step_seconds,
-                0.0,
-                isl_state,
-                gs_state,
-                current_associations,
-                mbb_pending_teardowns,
+            replay_events, replayed_positions, current_associations, mbb_pending_teardowns = (
+                compute_step(
+                    step_ctx,
+                    epoch_unix,
+                    replay_step,
+                    step_seconds,
+                    0.0,
+                    isl_state,
+                    gs_state,
+                    current_associations,
+                    mbb_pending_teardowns,
+                )
             )
             for te in replay_events:
                 if te.event_type == "VisibilityEvent":
@@ -860,18 +892,36 @@ def _run_pacing(
 
     # Force initial LinkStateSnapshot with epoch_id
     snapshot_seq += 1
+    initial_sim_time = datetime.fromtimestamp(epoch_unix + step * step_seconds, UTC)
     initial_snap = build_link_state_snapshot(
         isl_state=running_isl_state,
         gs_state=running_gs_state,
         interface_map=interface_map,
-        sim_time=datetime.fromtimestamp(epoch_unix, UTC),
+        sim_time=initial_sim_time,
         seq=snapshot_seq,
         interval_s=snapshot_interval_s,
-        positions=None,
+        positions=replayed_positions,
         epoch_id=_epoch_id,
+        current_associations=current_associations,
+        mbb_pending_teardowns=mbb_pending_teardowns,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        current_step=step,
     )
     _enqueue(subj_link_snapshot, initial_snap.model_dump_json().encode())
-    last_snapshot_sim_s = 0.0
+    initial_ckpt = _build_scheduling_checkpoint(
+        sim_time=initial_sim_time,
+        epoch_id=_epoch_id,
+        snapshot_seq=snapshot_seq,
+        step=step,
+        associations=current_associations,
+        teardowns=mbb_pending_teardowns,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+    )
+    _enqueue(
+        subj_checkpoint,
+        _ckpt_gzip.compress(initial_ckpt.model_dump_json().encode()),
+    )
+    last_snapshot_sim_s = step * step_seconds
     force_first_snapshot = False
 
     initial_playback_state = "paused" if _paused else "playing"
@@ -887,6 +937,12 @@ def _run_pacing(
         )
     else:
         logging.debug("OME fresh session, auto-play [epoch_id=%d]", _epoch_id)
+
+    if recovered_checkpoint is not None:
+        step += 1
+        pace_ref_wall = time.monotonic()
+        pace_ref_step = step
+        last_iter_start = time.monotonic()
 
     try:
         while not shutdown_event.is_set():
@@ -932,6 +988,19 @@ def _run_pacing(
                     epoch_id=_epoch_id,
                 )
                 _enqueue(subj_link_snapshot, seek_snap.model_dump_json().encode())
+                seek_ckpt = _build_scheduling_checkpoint(
+                    sim_time=datetime.fromtimestamp(epoch_unix, UTC),
+                    epoch_id=_epoch_id,
+                    snapshot_seq=snapshot_seq,
+                    step=step,
+                    associations=current_associations,
+                    teardowns=mbb_pending_teardowns,
+                    mbb_overlap_ticks=mbb_overlap_ticks,
+                )
+                _enqueue(
+                    subj_checkpoint,
+                    _ckpt_gzip.compress(seek_ckpt.model_dump_json().encode()),
+                )
                 last_snapshot_sim_s = 0.0
 
                 ps = PlaybackState(epoch_id=_epoch_id, state="playing")
@@ -1039,20 +1108,22 @@ def _run_pacing(
                 last_snapshot_sim_s = sim_s
                 force_first_snapshot = False
 
-                # Publish SchedulingCheckpoint alongside each LinkStateSnapshot.
-                # gzip-compressed to stay within NATS message size limits for
-                # large constellations with many GS associations.
-                ckpt = _build_scheduling_checkpoint(
-                    sim_time=sim_time,
-                    epoch_id=_epoch_id,
-                    step=step,
-                    associations=current_associations,
-                    teardowns=mbb_pending_teardowns,
-                )
-                _enqueue(
-                    subj_checkpoint,
-                    _ckpt_gzip.compress(ckpt.model_dump_json().encode()),
-                )
+            # Retain the latest authoritative scheduling state every tick, not
+            # only at snapshot cadence. Otherwise a crash between snapshots can
+            # force recovery to replay stale sim_time and duplicate decisions.
+            ckpt = _build_scheduling_checkpoint(
+                sim_time=sim_time,
+                epoch_id=_epoch_id,
+                snapshot_seq=snapshot_seq,
+                step=step,
+                associations=current_associations,
+                teardowns=mbb_pending_teardowns,
+                mbb_overlap_ticks=mbb_overlap_ticks,
+            )
+            _enqueue(
+                subj_checkpoint,
+                _ckpt_gzip.compress(ckpt.model_dump_json().encode()),
+            )
 
             # Write JSONL if --output-dir provided
             if out_path is not None:

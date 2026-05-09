@@ -6,6 +6,46 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
+
+def test_authority_snapshot_interval_respects_freshness_budget():
+    from ome.main import _authority_snapshot_interval_s
+
+    assert (
+        _authority_snapshot_interval_s(
+            platform_snapshot_interval_s=10.0,
+            max_latency_age_ticks=1,
+            step_seconds=1,
+        )
+        == 1.0
+    )
+    assert (
+        _authority_snapshot_interval_s(
+            platform_snapshot_interval_s=0.5,
+            max_latency_age_ticks=2,
+            step_seconds=1,
+        )
+        == 0.5
+    )
+
+
+def test_authority_snapshot_interval_rejects_nonpositive_budget():
+    from ome.main import _authority_snapshot_interval_s
+
+    with pytest.raises(ValueError, match="must be > 0"):
+        _authority_snapshot_interval_s(
+            platform_snapshot_interval_s=10.0,
+            max_latency_age_ticks=0,
+            step_seconds=1,
+        )
+    with pytest.raises(ValueError, match="snapshot interval must be > 0"):
+        _authority_snapshot_interval_s(
+            platform_snapshot_interval_s=0.0,
+            max_latency_age_ticks=1,
+            step_seconds=1,
+        )
+
 
 def test_lookahead_submit_and_get_result():
     """Submit a computation, verify result is retrievable."""

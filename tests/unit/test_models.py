@@ -211,6 +211,10 @@ class TestTimelinePositionSnapshot:
 class TestLinkUp:
     def test_round_trip(self):
         provenance = LinkDecisionProvenance(
+            authority_source="visibility_event",
+            authority_sim_time=NOW,
+            authority_sequence=None,
+            authority_age_ms=0.0,
             range_km=1500.0,
             orbital_one_way_ms=5.0,
             substrate_rtt_ms=2.0,
@@ -267,6 +271,10 @@ class TestLinkDown:
 class TestLatencyUpdate:
     def test_round_trip(self):
         provenance = LinkDecisionProvenance(
+            authority_source="link_state_snapshot",
+            authority_sim_time=NOW,
+            authority_sequence=12,
+            authority_age_ms=1000.0,
             range_km=1650.0,
             orbital_one_way_ms=5.5,
             substrate_rtt_ms=1.0,

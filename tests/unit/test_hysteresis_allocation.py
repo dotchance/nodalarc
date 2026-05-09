@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 from nodalarc.models.ground_station import HysteresisParameters
-from ome.event_stream import _compute_effective_discount, _compute_pair_score
+from ome.ground_allocator import _compute_effective_discount, _compute_pair_score
 
 
 class TestComputePairScore:

@@ -5,7 +5,8 @@ from __future__ import annotations
 from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment
 from nodalarc.orbital import elements_from_params
-from ome.event_stream import IslTerminalConstraints, StepContext, compute_step
+from ome.event_stream import StepContext, compute_step
+from ome.isl_engine import IslTerminalConstraints
 from ome.propagation_engine import PropagatedState
 from ome.propagator import EcefVec3, GeoPosition, Vec3
 

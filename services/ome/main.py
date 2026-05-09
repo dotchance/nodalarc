@@ -55,6 +55,7 @@ class _SessionBundle(NamedTuple):
     polar_seam_enabled: bool
     latitude_threshold_deg: float
     default_min_elevation_deg: float
+    propagator_id: str
 
 
 def _load_session_config(session_path: str | Path) -> _SessionBundle:
@@ -107,6 +108,7 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation,
+        propagator_id="keplerian-circular",
     )
 
 
@@ -155,6 +157,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         default_min_elevation_deg=cfg.default_min_elevation_deg,
+        propagator_id=cfg.propagator_id,
     )
 
     out_dir = Path(output_dir) if output_dir else Path("output")
@@ -668,6 +671,7 @@ def _run_pacing(
         default_min_elevation_deg=cfg.default_min_elevation_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
+        propagator_id=cfg.propagator_id,
     )
 
     step_seconds = session.time.step_seconds
@@ -707,6 +711,7 @@ def _run_pacing(
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         default_min_elevation_deg=cfg.default_min_elevation_deg,
+        propagator_id=cfg.propagator_id,
     )
     lookahead_launched_for_epoch: float | None = None
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}

@@ -6,6 +6,7 @@ from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment
 from nodalarc.orbital import elements_from_params
 from ome.event_stream import IslTerminalConstraints, StepContext, compute_step
+from ome.propagation_engine import PropagatedState
 from ome.propagator import EcefVec3, GeoPosition, Vec3
 
 
@@ -99,13 +100,29 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
     pos_b = EcefVec3(Vec3(7121.0, 0.0, 0.0))
     vel_b = EcefVec3(Vec3(0.0, -7.59, 0.0))
 
-    def fake_positions(_satellites, _addressing, _epoch_unix, _dt):
+    def fake_propagation(*, satellites, addressing, epoch_unix, dt, propagator_id):
+        del satellites, addressing, propagator_id
+        sim_time_unix = epoch_unix + dt
         return {
-            node_a: (pos_a, vel_a, GeoPosition(0.0, 0.0, 550.0)),
-            node_b: (pos_b, vel_b, GeoPosition(0.0, 0.0, 550.0)),
+            node_a: PropagatedState(
+                node_id=node_a,
+                sim_time_unix=sim_time_unix,
+                position_ecef_km=pos_a,
+                velocity_ecef_km_s=vel_a,
+                geodetic=GeoPosition(0.0, 0.0, 550.0),
+                propagator_id="test-fixture",
+            ),
+            node_b: PropagatedState(
+                node_id=node_b,
+                sim_time_unix=sim_time_unix,
+                position_ecef_km=pos_b,
+                velocity_ecef_km_s=vel_b,
+                geodetic=GeoPosition(0.0, 0.0, 550.0),
+                propagator_id="test-fixture",
+            ),
         }
 
-    monkeypatch.setattr("ome.event_stream._compute_positions", fake_positions)
+    monkeypatch.setattr("ome.event_stream.propagate_satellites", fake_propagation)
 
     isl_state = {pair: (True, True)}
     compute_step(

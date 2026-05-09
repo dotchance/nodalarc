@@ -211,6 +211,20 @@ class ValidationResult(BaseModel):
     code: str  # e.g., "E001", "W003"
     message: str
     remediation: str | None = None
+    field_path: str | None = None
+
+
+class ValidationReport(BaseModel):
+    """User-facing validation report for CLI/API/wizard surfaces."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["valid", "invalid"]
+    normalized_schema_version: int
+    effective_config: dict
+    errors: tuple[ValidationResult, ...] = ()
+    warnings: tuple[ValidationResult, ...] = ()
+    dispatchable: bool
 
 
 class TeardownEntry(BaseModel):

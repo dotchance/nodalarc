@@ -20,6 +20,7 @@ from nodalarc.models.constellation import (
     PlaneParams,
     TerminalConfig,
 )
+from nodalarc.models.events import ValidationResult
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
@@ -35,6 +36,7 @@ from nodalarc.models.session import (
 from nodalarc.orbital import elements_from_params
 from nodalarc.session_validator import (
     VALID_SCHEDULING_POLICIES,
+    build_validation_report,
     validate_session_readiness,
 )
 from nodalarc.stack_resolver import ResolvedStack, resolve_stack
@@ -934,6 +936,41 @@ class TestW008:
 
         w008 = [r for r in results if r.code == "W008"]
         assert len(w008) == 0
+
+
+class TestValidationReport:
+    def test_valid_report_is_dispatchable_and_contains_effective_config(self):
+        session = _make_session()
+        report = build_validation_report(session, [])
+
+        assert report.status == "valid"
+        assert report.dispatchable is True
+        assert report.normalized_schema_version == 2
+        assert report.errors == ()
+        assert report.effective_config["orbit"]["propagator"] == "keplerian-circular"
+
+    def test_invalid_report_separates_errors_and_warnings(self):
+        session = _make_session()
+        error = ValidationResult(
+            level="error",
+            code="E999",
+            message="bad config",
+            remediation="fix it",
+            field_path="orbit.propagator",
+        )
+        warning = ValidationResult(
+            level="warning",
+            code="W999",
+            message="risky config",
+        )
+
+        report = build_validation_report(session, [warning, error])
+
+        assert report.status == "invalid"
+        assert report.dispatchable is False
+        assert report.errors == (error,)
+        assert report.warnings == (warning,)
+        assert report.errors[0].field_path == "orbit.propagator"
 
 
 # ---------------------------------------------------------------------------

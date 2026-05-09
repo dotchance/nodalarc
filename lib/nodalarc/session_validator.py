@@ -12,7 +12,7 @@ from nodalarc.models.constellation import (
     ConstellationConfig,
     ParametricConstellation,
 )
-from nodalarc.models.events import ValidationResult
+from nodalarc.models.events import ValidationReport, ValidationResult
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig
 from nodalarc.stack_resolver import ResolvedStack
@@ -64,6 +64,23 @@ def validate_session_readiness(
     results.extend(_check_w008(session, constellation))
 
     return results
+
+
+def build_validation_report(
+    session: SessionConfig,
+    results: list[ValidationResult],
+) -> ValidationReport:
+    """Build the user-facing validation report from readiness results."""
+    errors = tuple(result for result in results if result.level == "error")
+    warnings = tuple(result for result in results if result.level == "warning")
+    return ValidationReport(
+        status="invalid" if errors else "valid",
+        normalized_schema_version=session.simulation.schema_version,
+        effective_config=session.model_dump(mode="json"),
+        errors=errors,
+        warnings=warnings,
+        dispatchable=not errors,
+    )
 
 
 # ---------------------------------------------------------------------------

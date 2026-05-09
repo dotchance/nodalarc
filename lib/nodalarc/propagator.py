@@ -17,7 +17,6 @@ services/ome/propagator.py re-exports everything from here.
 from __future__ import annotations
 
 import math
-from typing import NamedTuple, NewType
 
 from nodalarc.constants import (
     EARTH_MU,
@@ -26,6 +25,8 @@ from nodalarc.constants import (
     WGS84_A,
     WGS84_E2,
 )
+from nodalarc.frames import EcefVec3, EciVec3, GeoPosition, Vec3
+from nodalarc.geo import geodetic_to_ecef
 from nodalarc.orbital import (
     OrbitalElements,
     elements_from_params,
@@ -59,38 +60,6 @@ EARTH_ROTATION_RATE = 7.2921159e-5
 
 # J2000 epoch: 2000-01-01T12:00:00 UTC as Unix timestamp
 J2000_UNIX = 946728000.0
-
-
-class Vec3(NamedTuple):
-    """3D vector — frame-unaware base type.
-
-    Use EciVec3 or EcefVec3 in function signatures to document which
-    coordinate frame a vector belongs to. These are zero-cost NewType
-    wrappers — erased at runtime, enforced by mypy --strict.
-
-    Frame-agnostic functions (e.g., distance_km, relative-vector math
-    in visibility.py) should accept plain Vec3.
-    """
-
-    x: float
-    y: float
-    z: float
-
-
-# Zero-cost frame tags for type-checker enforcement (PEP 484 NewType).
-# At runtime: EciVec3 IS Vec3, EcefVec3 IS Vec3. No overhead.
-# At type-check time: passing EciVec3 where EcefVec3 is expected is an error.
-# This prevents the Mars Climate Orbiter class of frame confusion bugs.
-EciVec3 = NewType("EciVec3", Vec3)
-EcefVec3 = NewType("EcefVec3", Vec3)
-
-
-class GeoPosition(NamedTuple):
-    """Geodetic position."""
-
-    lat_deg: float
-    lon_deg: float
-    alt_km: float
 
 
 def orbital_period(altitude_km: float) -> float:
@@ -235,22 +204,6 @@ def ecef_to_geodetic(pos_ecef: EcefVec3) -> GeoPosition:
         lon_deg=math.degrees(lon_rad),
         alt_km=alt_km,
     )
-
-
-def geodetic_to_ecef(pos: GeoPosition) -> EcefVec3:
-    """Convert geodetic (lat_deg, lon_deg, alt_km) to ECEF (km)."""
-    lat_rad = math.radians(pos.lat_deg)
-    lon_rad = math.radians(pos.lon_deg)
-    sin_lat = math.sin(lat_rad)
-    cos_lat = math.cos(lat_rad)
-    sin_lon = math.sin(lon_rad)
-    cos_lon = math.cos(lon_rad)
-
-    n = WGS84_A / math.sqrt(1.0 - WGS84_E2 * sin_lat**2)
-    x = (n + pos.alt_km) * cos_lat * cos_lon
-    y = (n + pos.alt_km) * cos_lat * sin_lon
-    z = (n * (1.0 - WGS84_E2) + pos.alt_km) * sin_lat
-    return EcefVec3(Vec3(x, y, z))
 
 
 def eci_to_ecef_velocity(pos_eci: EciVec3, vel_eci: EciVec3, unix_timestamp: float) -> EcefVec3:

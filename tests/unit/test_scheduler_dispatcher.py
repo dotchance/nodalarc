@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -106,6 +106,7 @@ def _make_dispatcher(interface_map=None, stub_success=True):
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",
+        max_latency_age_s=1.0,
         gs_terminal_capacities={"gs-ashburn": 1},
         sat_ground_terminal_capacities={"sat-P00S00": 1},
     )
@@ -299,6 +300,10 @@ class TestDispatcherLiveDispatch:
         assert event.provenance.geometry_authority == "ome"
         assert event.provenance.range_km == vis.range_km
         assert event.provenance.orbital_one_way_ms == vis.latency_ms
+        assert event.provenance.authority_source == "visibility_event"
+        assert event.provenance.authority_sim_time == vis.sim_time
+        assert event.provenance.authority_sequence is None
+        assert event.provenance.authority_age_ms == 0.0
         assert event.provenance.substrate_rtt_ms == 0.0
         assert event.provenance.netem_one_way_ms == vis.latency_ms
 
@@ -387,6 +392,8 @@ class TestDispatcherLiveDispatch:
                 10.0,
                 1000.0,
                 range_km=3000.0,
+                authority_sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+                authority_source="test",
             )
         }
 
@@ -394,3 +401,45 @@ class TestDispatcherLiveDispatch:
             asyncio.run(
                 d._send_batch_up({pair}, desired, "sim", datetime(2026, 1, 1, tzinfo=UTC), d._nc)
             )
+
+    def test_stale_ome_authority_fails_before_link_up(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.0,
+                1000.0,
+                range_km=900.0,
+                authority_sim_time=sim_time - timedelta(seconds=2),
+                authority_source="test",
+            )
+        }
+
+        with pytest.raises(ValueError, match="stale OME geometry"):
+            asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+
+        assert not pool.get_stub.return_value.async_batch_link_up.called
+
+    def test_stale_ome_authority_fails_before_latency_update(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.1,
+                1000.0,
+                range_km=930.0,
+                authority_sim_time=sim_time - timedelta(seconds=2),
+                authority_source="test",
+            )
+        }
+
+        with pytest.raises(ValueError, match="stale OME geometry"):
+            asyncio.run(d._send_authoritative_latency_updates({pair}, desired, sim_time))
+
+        assert not pool.get_stub.return_value.async_set_latency.called

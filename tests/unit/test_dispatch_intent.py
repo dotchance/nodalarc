@@ -32,11 +32,28 @@ OME_RANGE_KM = 1000.0
 
 
 def _isl_info() -> ActiveLinkInfo:
-    return ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, range_km=OME_RANGE_KM)
+    return ActiveLinkInfo(
+        "isl0",
+        "isl1",
+        3.0,
+        1000.0,
+        range_km=OME_RANGE_KM,
+        authority_sim_time=SIM,
+        authority_source="test",
+    )
 
 
 def _ground_info() -> ActiveLinkInfo:
-    return ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground", range_km=OME_RANGE_KM)
+    return ActiveLinkInfo(
+        "term0",
+        "gnd0",
+        3.0,
+        1000.0,
+        link_type="ground",
+        range_km=OME_RANGE_KM,
+        authority_sim_time=SIM,
+        authority_source="test",
+    )
 
 
 def _make_dispatcher(mbb=False):
@@ -72,6 +89,7 @@ def _make_dispatcher(mbb=False):
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",
+        max_latency_age_s=1.0,
         gs_terminal_capacities={"gs-ashburn": 2},
         sat_ground_terminal_capacities={"sat-P00S00": 1, "sat-P00S01": 1},
         mbb_dispatch=mbb,

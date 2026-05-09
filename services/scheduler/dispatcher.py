@@ -127,6 +127,7 @@ class Dispatcher:
         pod_locator: PodLocationMap,
         agent_pool: AgentPool,
         session_id: str,
+        max_latency_age_s: float,
         compression_factor: int = 1,
         latency_update_interval_s: int = 10,
         epsilon_ms: float = 100.0,
@@ -138,6 +139,9 @@ class Dispatcher:
         self._bandwidth_map = bandwidth_map
         self._loc = pod_locator
         self._pool = agent_pool
+        if max_latency_age_s <= 0:
+            raise ValueError("max_latency_age_s must be > 0")
+        self._max_latency_age_s = max_latency_age_s
         self._compression = max(1, compression_factor)
         self._latency_interval = latency_update_interval_s
         self._epsilon_ms = epsilon_ms
@@ -775,6 +779,8 @@ class Dispatcher:
                 link,
                 interface_map=self._interface_map,
                 bandwidth_map=self._bandwidth_map,
+                snapshot_sim_time=snapshot.sim_time,
+                snapshot_seq=snapshot.snapshot_seq,
             )
             if built is None:
                 continue
@@ -1048,10 +1054,20 @@ class Dispatcher:
     def _link_provenance(
         info: ActiveLinkInfo,
         compensation: LatencyCompensation,
+        applied_sim_time: datetime,
     ) -> LinkDecisionProvenance:
         if info.range_km is None:
             raise ValueError("Cannot build link provenance without OME-authoritative range_km")
+        if info.authority_sim_time is None:
+            raise ValueError("Cannot build link provenance without OME authority sim_time")
+        if info.authority_source is None:
+            raise ValueError("Cannot build link provenance without OME authority source")
+        authority_age_ms = (applied_sim_time - info.authority_sim_time).total_seconds() * 1000.0
         return LinkDecisionProvenance(
+            authority_source=info.authority_source,
+            authority_sim_time=info.authority_sim_time,
+            authority_sequence=info.authority_sequence,
+            authority_age_ms=authority_age_ms,
             range_km=info.range_km,
             orbital_one_way_ms=info.latency_ms,
             substrate_rtt_ms=compensation.substrate_rtt_ms,
@@ -1059,6 +1075,53 @@ class Dispatcher:
             netem_one_way_ms=compensation.netem_one_way_ms,
             rtt_to_one_way_policy=compensation.rtt_to_one_way_policy,
         )
+
+    def _validate_authority_freshness(
+        self,
+        pair: tuple[str, str],
+        info: ActiveLinkInfo,
+        dispatch_sim_time: datetime,
+        *,
+        operation: str,
+    ) -> None:
+        """Refuse actuation based on stale or missing OME geometry.
+
+        OME is the only geometry authority. The Scheduler may carry that
+        authority to Node Agent, but it must not apply a link using geometry
+        whose simulation timestamp is missing, in the future, or older than
+        the configured budget.
+        """
+        if info.authority_sim_time is None:
+            raise ValueError(
+                f"{operation} for {pair} has no OME authority sim_time; "
+                "refusing to dispatch with untraceable geometry"
+            )
+        if info.authority_source is None:
+            raise ValueError(
+                f"{operation} for {pair} has no OME authority source; "
+                "refusing to dispatch with untraceable geometry"
+            )
+        try:
+            age_s = (dispatch_sim_time - info.authority_sim_time).total_seconds()
+        except TypeError as exc:
+            raise ValueError(
+                f"{operation} for {pair} has incompatible simulation timestamps: "
+                f"dispatch={dispatch_sim_time!r} authority={info.authority_sim_time!r}"
+            ) from exc
+
+        if age_s < -1e-9:
+            raise ValueError(
+                f"{operation} for {pair} uses future OME geometry: "
+                f"authority_sim_time={info.authority_sim_time.isoformat()} "
+                f"dispatch_sim_time={dispatch_sim_time.isoformat()}"
+            )
+        if age_s - self._max_latency_age_s > 1e-9:
+            raise ValueError(
+                f"{operation} for {pair} uses stale OME geometry: "
+                f"age={age_s:.6f}s exceeds max_latency_age_s={self._max_latency_age_s:.6f}s "
+                f"(authority_source={info.authority_source}, "
+                f"authority_sequence={info.authority_sequence})"
+            )
 
     def _link_locality(self, node_a: str, node_b: str) -> int | None:
         """Determine locality for a link pair. None if either pod unscheduled."""
@@ -1164,6 +1227,12 @@ class Dispatcher:
         for pair in pairs:
             info = desired[pair]
             node_a, node_b = pair
+            self._validate_authority_freshness(
+                pair,
+                info,
+                sim_time,
+                operation="LatencyUpdate",
+            )
             compensation = self._latency_compensation(node_a, node_b, info.latency_ms)
             pair_compensation[pair] = compensation
             netem_ms = compensation.netem_one_way_ms
@@ -1229,7 +1298,7 @@ class Dispatcher:
                 node_b=pair[1],
                 latency_ms=info.latency_ms,
                 range_km=info.range_km,
-                provenance=self._link_provenance(info, pair_compensation[pair]),
+                provenance=self._link_provenance(info, pair_compensation[pair], sim_time),
             )
             await self._js.publish(self._subj_latency, event.model_dump_json().encode())
 
@@ -1534,6 +1603,12 @@ class Dispatcher:
                 raise RuntimeError(
                     f"Dispatch planner requested LinkUp for missing desired pair {pair}"
                 )
+            self._validate_authority_freshness(
+                pair,
+                info,
+                sim_time,
+                operation="LinkUp",
+            )
 
             node_a, node_b = pair
             locality = self._link_locality(node_a, node_b)
@@ -1689,6 +1764,12 @@ class Dispatcher:
                 if sim_time is None:
                     log.error("FATAL: LinkUp dispatch has no sim_time for pair %s", pair)
                     raise ValueError(f"sim_time is None for LinkUp dispatch of {pair}")
+                self._validate_authority_freshness(
+                    pair,
+                    info,
+                    sim_time,
+                    operation="LinkUp",
+                )
                 if info.range_km is None:
                     raise ValueError(
                         f"ActiveLinkInfo for {pair} is missing OME-authoritative range_km"
@@ -1705,7 +1786,7 @@ class Dispatcher:
                     range_km=info.range_km,
                     reason="vis_gained",
                     link_type=info.link_type,
-                    provenance=self._link_provenance(info, pair_compensation[pair]),
+                    provenance=self._link_provenance(info, pair_compensation[pair], sim_time),
                 )
                 try:
                     await self._js.publish(self._subj_link_up, event.model_dump_json().encode())

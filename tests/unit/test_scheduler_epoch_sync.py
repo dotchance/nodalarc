@@ -37,6 +37,7 @@ def _make_dispatcher(**overrides) -> Dispatcher:
         pod_locator=MagicMock(),
         agent_pool=MagicMock(),
         session_id="test-session",
+        max_latency_age_s=1.0,
         gs_terminal_capacities={},
         sat_ground_terminal_capacities={},
     )
@@ -277,6 +278,7 @@ class TestDispatcherRequiresSessionId:
                 pod_locator=MagicMock(),
                 agent_pool=MagicMock(),
                 session_id="test",
+                max_latency_age_s=1.0,
                 # capacities omitted — defaults to None
             )
             assert False, "Should have raised ValueError"

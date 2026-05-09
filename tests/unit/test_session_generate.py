@@ -100,6 +100,30 @@ class TestNodalPathNoAreaAssignment:
         assert session.routing.area_assignment is None
 
 
+class TestOrbitPropagatorGeneration:
+    def test_j2_propagator_sets_matching_fidelity(self):
+        yaml_str, _ = generate_session_yaml(
+            "iridium-small-36",
+            "ospf",
+            [],
+            orbit_propagator="j2-mean-elements",
+        )
+        raw = yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+
+        assert session.orbit.propagator == "j2-mean-elements"
+        assert session.simulation.fidelity == "j2-mean-elements"
+
+    def test_unknown_propagator_rejected(self):
+        with pytest.raises(ValueError, match="Unsupported orbit_propagator"):
+            generate_session_yaml(
+                "iridium-small-36",
+                "ospf",
+                [],
+                orbit_propagator="sgp4-tle",
+            )
+
+
 class TestRoutingConfigRoundtrip:
     """Verify routing config fields survive generate → YAML → parse."""
 

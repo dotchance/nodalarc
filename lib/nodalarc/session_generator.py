@@ -80,6 +80,7 @@ def generate_session_yaml(
     custom_constellation: dict | None = None,
     custom_ground_stations: list[dict] | None = None,
     routing_config: dict | None = None,
+    orbit_propagator: str = "keplerian-circular",
 ) -> tuple[str, list[str]]:
     """Generate a session YAML from wizard selections.
 
@@ -97,6 +98,8 @@ def generate_session_yaml(
             When provided, ``constellation`` preset is used only for name
             and defaults (time, traffic_flows).
         custom_ground_stations: List of inline station dicts (advanced mode).
+        orbit_propagator: Physical propagation model. The generator derives
+            the matching simulation fidelity label and refuses unknown models.
 
     Returns:
         (yaml_str, warnings).
@@ -176,6 +179,12 @@ def generate_session_yaml(
     routing_overrides = dict(routing_config or {})
     mbb_requested = bool(routing_overrides.pop("mbb_dispatch", protocol == "nodalpath"))
     mbb_overlap_ticks = int(routing_overrides.pop("mbb_overlap_ticks", 3 if mbb_requested else 0))
+    propagator_to_fidelity = {
+        "keplerian-circular": "synthetic-keplerian",
+        "j2-mean-elements": "j2-mean-elements",
+    }
+    if orbit_propagator not in propagator_to_fidelity:
+        raise ValueError(f"Unsupported orbit_propagator: {orbit_propagator!r}")
 
     # Build session dict
     session_dict: dict[str, Any] = {
@@ -184,10 +193,10 @@ def generate_session_yaml(
         "ground_stations": gs_value,
         "simulation": {
             "schema_version": 2,
-            "fidelity": "synthetic-keplerian",
+            "fidelity": propagator_to_fidelity[orbit_propagator],
         },
         "orbit": {
-            "propagator": "keplerian-circular",
+            "propagator": orbit_propagator,
         },
         "scheduling": {
             "ground": {

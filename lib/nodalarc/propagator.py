@@ -1,8 +1,10 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Keplerian orbital propagator — shared library.
+"""Orbital propagators — shared library.
 
-Pure math, no I/O. Circular orbit simplification (e=0).
+Pure math, no I/O. Current element support is circular (e=0), with a
+selectable two-body Keplerian model and a first-order secular J2 mean-element
+model.
 
 Coordinate frames:
 - ECI (Earth-Centered Inertial): fixed stars frame
@@ -19,6 +21,7 @@ from __future__ import annotations
 import math
 
 from nodalarc.constants import (
+    EARTH_J2,
     EARTH_MU,
     EARTH_RADIUS_KM,
     TWO_PI,
@@ -44,7 +47,9 @@ __all__ = [
     "J2000_UNIX",
     "orbital_period",
     "orbital_velocity",
+    "j2_circular_secular_rates",
     "propagate_eci",
+    "propagate_eci_j2_mean_elements",
     "gmst",
     "eci_to_ecef",
     "ecef_to_eci",
@@ -52,6 +57,7 @@ __all__ = [
     "geodetic_to_ecef",
     "eci_to_ecef_velocity",
     "propagate_keplerian",
+    "propagate_j2_mean_elements",
     "distance_km",
 ]
 
@@ -78,6 +84,22 @@ def orbital_velocity(altitude_km: float) -> float:
     """
     a = EARTH_RADIUS_KM + altitude_km
     return math.sqrt(EARTH_MU / a)
+
+
+def j2_circular_secular_rates(elements: OrbitalElements) -> tuple[float, float]:
+    """Return (RAAN rate, mean-anomaly rate) for the circular J2 model.
+
+    Rates are radians per second. The second value includes the Keplerian
+    mean motion plus the first-order secular J2 correction.
+    """
+    a = elements.semi_major_axis_km
+    i = elements.inclination_rad
+    n = math.sqrt(EARTH_MU / a**3)
+    cos_i = math.cos(i)
+    j2_factor = EARTH_J2 * (WGS84_A / a) ** 2
+    raan_dot = -1.5 * j2_factor * n * cos_i
+    mean_anomaly_dot = n * (1.0 + 0.75 * j2_factor * (3.0 * cos_i**2 - 1.0))
+    return raan_dot, mean_anomaly_dot
 
 
 def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec3]:
@@ -127,6 +149,48 @@ def propagate_eci(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec
     vz_eci = sin_i * vy_pf
 
     return EciVec3(Vec3(x_eci, y_eci, z_eci)), EciVec3(Vec3(vx_eci, vy_eci, vz_eci))
+
+
+def propagate_eci_j2_mean_elements(elements: OrbitalElements, dt: float) -> tuple[EciVec3, EciVec3]:
+    """Propagate a circular mean-element orbit with first-order secular J2.
+
+    This model is intentionally explicit and limited: the current constellation
+    element type has no eccentricity or argument of perigee, so this propagates
+    circular mean elements by applying secular RAAN precession and the standard
+    first-order J2 correction to mean anomaly. It does not include short-period
+    terms and must not be represented as an SGP4/TLE-quality ephemeris.
+    """
+    a = elements.semi_major_axis_km
+    i = elements.inclination_rad
+    cos_i = math.cos(i)
+    sin_i = math.sin(i)
+    raan_dot, mean_anomaly_dot = j2_circular_secular_rates(elements)
+
+    raan = elements.raan_rad + raan_dot * dt
+    u = elements.true_anomaly_rad + mean_anomaly_dot * dt
+
+    cos_raan = math.cos(raan)
+    sin_raan = math.sin(raan)
+    cos_u = math.cos(u)
+    sin_u = math.sin(u)
+
+    x = a * (cos_raan * cos_u - sin_raan * cos_i * sin_u)
+    y = a * (sin_raan * cos_u + cos_raan * cos_i * sin_u)
+    z = a * sin_i * sin_u
+
+    # Differentiate the circular mean-element position. This includes the
+    # secular node regression term, which is needed for tracking-rate checks.
+    vx = a * (
+        raan_dot * (-sin_raan * cos_u - cos_raan * cos_i * sin_u)
+        + mean_anomaly_dot * (-cos_raan * sin_u - sin_raan * cos_i * cos_u)
+    )
+    vy = a * (
+        raan_dot * (cos_raan * cos_u - sin_raan * cos_i * sin_u)
+        + mean_anomaly_dot * (-sin_raan * sin_u + cos_raan * cos_i * cos_u)
+    )
+    vz = a * mean_anomaly_dot * sin_i * cos_u
+
+    return EciVec3(Vec3(x, y, z)), EciVec3(Vec3(vx, vy, vz))
 
 
 def gmst(unix_timestamp: float) -> float:
@@ -249,6 +313,20 @@ def propagate_keplerian(
         (pos_ecef_km, vel_ecef_km_s, geodetic_position)
     """
     pos_eci, vel_eci = propagate_eci(elements, dt)
+    current_time = epoch_unix + dt
+    pos_ecef = eci_to_ecef(pos_eci, current_time)
+    vel_ecef = eci_to_ecef_velocity(pos_eci, vel_eci, current_time)
+    geo = ecef_to_geodetic(pos_ecef)
+    return pos_ecef, vel_ecef, geo
+
+
+def propagate_j2_mean_elements(
+    elements: OrbitalElements,
+    epoch_unix: float,
+    dt: float,
+) -> tuple[EcefVec3, EcefVec3, GeoPosition]:
+    """Propagate with the explicit circular J2 mean-element model."""
+    pos_eci, vel_eci = propagate_eci_j2_mean_elements(elements, dt)
     current_time = epoch_unix + dt
     pos_ecef = eci_to_ecef(pos_eci, current_time)
     vel_ecef = eci_to_ecef_velocity(pos_eci, vel_eci, current_time)

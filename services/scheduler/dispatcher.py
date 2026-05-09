@@ -29,7 +29,7 @@ from typing import Literal
 import nats
 from nodalarc.models.events import PlaybackState, SessionEphemeris, VisibilityEvent
 from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
-from nodalarc.models.link_state import AdminState, CarrierState, LinkStateSnapshot
+from nodalarc.models.link_state import LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     STREAM_LINK_EVENTS,
@@ -51,40 +51,16 @@ from nodalarc.nats_channels import (
 from nodalarc.proto import node_agent_pb2
 
 from scheduler.agent_pool import AgentPool
+from scheduler.desired_state import (
+    ActiveLinkInfo,
+    desired_link_from_snapshot_link,
+    desired_link_from_visibility,
+)
 from scheduler.latency_compensator import LatencyCompensation, compensate_latency
 from scheduler.latency_model import PositionTable
 from scheduler.pod_locator import PodLocationMap
 
 log = logging.getLogger(__name__)
-
-
-class ActiveLinkInfo:
-    """Mutable internal state for an active link."""
-
-    __slots__ = (
-        "interface_a",
-        "interface_b",
-        "latency_ms",
-        "bandwidth_mbps",
-        "link_type",
-        "range_km",
-    )
-
-    def __init__(
-        self,
-        interface_a: str,
-        interface_b: str,
-        latency_ms: float,
-        bandwidth_mbps: float,
-        link_type: str = "isl",
-        range_km: float | None = None,
-    ) -> None:
-        self.interface_a = interface_a
-        self.interface_b = interface_b
-        self.latency_ms = latency_ms
-        self.bandwidth_mbps = bandwidth_mbps
-        self.link_type = link_type
-        self.range_km = range_km
 
 
 @dataclass(frozen=True, slots=True)
@@ -707,31 +683,6 @@ class Dispatcher:
     # Decision Engine: build desired state (pure computation, no I/O)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _require_ome_geometry(
-        pair: tuple[str, str],
-        *,
-        range_km: float | None,
-        latency_ms: float | None,
-        source: str,
-    ) -> tuple[float, float]:
-        """Require OME-authoritative range and one-way latency.
-
-        The Scheduler is not a physics authority. Missing range/latency is a
-        corrupt control-plane input, not a condition to paper over with a
-        fallback. Raising here stops dispatch before the emulator can appear
-        healthy while applying made-up physics.
-        """
-        if range_km is None:
-            raise ValueError(f"{source} for {pair} is missing OME-authoritative range_km")
-        if latency_ms is None:
-            raise ValueError(f"{source} for {pair} is missing OME-authoritative latency_ms")
-        if range_km < 0:
-            raise ValueError(f"{source} for {pair} has negative range_km={range_km}")
-        if latency_ms < 0:
-            raise ValueError(f"{source} for {pair} has negative latency_ms={latency_ms}")
-        return range_km, latency_ms
-
     def _apply_events_to_desired(
         self,
         vis_events: list[VisibilityEvent],
@@ -757,37 +708,12 @@ class Dispatcher:
                     self._teardown_pairs.discard(pair)
 
                 if pair not in self._desired_links:
-                    is_gs = vis.link_type == "ground"
-                    if is_gs:
-                        gs_ti = vis.gs_terminal_index if vis.gs_terminal_index is not None else 0
-                        sat_ti = vis.sat_terminal_index if vis.sat_terminal_index is not None else 0
-                        ifaces = (f"term{gs_ti}", f"gnd{sat_ti}")
-                    else:
-                        ifaces = self._interface_map.get(pair)
-                        if not ifaces:
-                            continue
-
-                    bandwidth = self._bandwidth_map.get(pair)
-                    if bandwidth is None:
-                        raise ValueError(
-                            f"VisibilityEvent for {pair} has no config-derived bandwidth; "
-                            "refusing to dispatch a link with unknown physical rate"
-                        )
-                    range_km, latency = self._require_ome_geometry(
-                        pair,
-                        range_km=vis.range_km,
-                        latency_ms=vis.latency_ms,
-                        source="VisibilityEvent",
+                    _pair, info = desired_link_from_visibility(
+                        vis,
+                        interface_map=self._interface_map,
+                        bandwidth_map=self._bandwidth_map,
                     )
-
-                    self._desired_links[pair] = ActiveLinkInfo(
-                        interface_a=ifaces[0],
-                        interface_b=ifaces[1],
-                        latency_ms=latency,
-                        bandwidth_mbps=bandwidth,
-                        link_type=vis.link_type,
-                        range_km=range_km,
-                    )
+                    self._desired_links[pair] = info
             elif not vis.visible:
                 self._desired_links.pop(pair, None)
                 self._teardown_pairs.discard(pair)
@@ -839,44 +765,20 @@ class Dispatcher:
         self._teardown_pairs.clear()
 
         for link in snapshot.links:
-            if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
-                pair = (link.node_a, link.node_b)
-                range_km, latency = self._require_ome_geometry(
-                    pair,
-                    range_km=link.range_km,
-                    latency_ms=link.latency_ms,
-                    source="LinkStateSnapshot",
-                )
-
-                is_gs = link.link_type == "ground"
-                if is_gs:
-                    gs_ti = link.gs_terminal_index if link.gs_terminal_index is not None else 0
-                    sat_ti = link.sat_terminal_index if link.sat_terminal_index is not None else 0
-                    ifaces = (f"term{gs_ti}", f"gnd{sat_ti}")
-                else:
-                    ifaces = self._interface_map.get(pair)
-                    if not ifaces:
-                        continue
-
-                bandwidth = self._bandwidth_map.get(pair)
-                if bandwidth is None or bandwidth <= 0:
-                    raise ValueError(
-                        f"LinkStateSnapshot for {pair} has no config-derived bandwidth; "
-                        "refusing to dispatch a link with unknown physical rate"
-                    )
-                desired[pair] = ActiveLinkInfo(
-                    interface_a=ifaces[0],
-                    interface_b=ifaces[1],
-                    latency_ms=latency,
-                    bandwidth_mbps=bandwidth,
-                    link_type=link.link_type,
-                    range_km=range_km,
-                )
-                sched_state = getattr(link, "scheduling_state", "active")
-                if sched_state == "teardown":
-                    self._teardown_pairs.add(pair)
-                else:
-                    self._teardown_pairs.discard(pair)
+            built = desired_link_from_snapshot_link(
+                link,
+                interface_map=self._interface_map,
+                bandwidth_map=self._bandwidth_map,
+            )
+            if built is None:
+                continue
+            pair, info = built
+            desired[pair] = info
+            sched_state = getattr(link, "scheduling_state", "active")
+            if sched_state == "teardown":
+                self._teardown_pairs.add(pair)
+            else:
+                self._teardown_pairs.discard(pair)
 
         # Replace _desired_links entirely — snapshot is authoritative
         self._desired_links = desired

@@ -10,7 +10,7 @@ regardless of score. This is strict preemption, not weighted scoring.
 from __future__ import annotations
 
 from nodalarc.models.ground_station import HysteresisParameters
-from ome.event_stream import _compute_effective_discount, _compute_pair_score
+from ome.ground_allocator import _compute_effective_discount, _compute_pair_score
 
 
 def _score_and_sort(pairs_config):

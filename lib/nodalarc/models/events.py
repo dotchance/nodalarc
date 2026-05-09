@@ -218,9 +218,12 @@ class TeardownEntry(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    start_step: int
     remaining_ticks: int
     gs_id: str
     sat_id: str
+    successor_node_a: str
+    successor_node_b: str
 
 
 class SchedulingCheckpoint(BaseModel):
@@ -231,6 +234,7 @@ class SchedulingCheckpoint(BaseModel):
     other consumers with the OME's current ground-station association
     state for recovery after restart.
 
+    snapshot_seq: last LinkStateSnapshot sequence published with this checkpoint
     associations: gs_id → sat_id (current GS-to-satellite assignments)
     pending_teardowns: pair_key → TeardownEntry (MBB teardowns in progress)
     """
@@ -239,12 +243,13 @@ class SchedulingCheckpoint(BaseModel):
 
     sim_time: datetime
     epoch_id: int
+    snapshot_seq: int
     step: int
     associations: dict[str, str]  # gs_id → sat_id
     pending_teardowns: dict[str, TeardownEntry]  # pair_key → entry
-    paused: bool = False
-    time_accel: float = 1.0
-    written_at: float = 0.0  # wall clock (time.time()) when checkpoint was published
+    paused: bool
+    time_accel: float
+    written_at: float  # wall clock (time.time()) when checkpoint was published
 
 
 class OpsEvent(BaseModel):

@@ -10,6 +10,7 @@ import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import (
     AdminState,
@@ -133,6 +134,25 @@ class TestDispatcherActiveLinks:
 
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
 
+    def test_visibility_event_missing_latency_fails_loudly(self):
+        d, _ = _make_dispatcher()
+        vis = VisibilityEvent(
+            sim_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            visible=True,
+            scheduled=True,
+            range_km=500.0,
+            elevation_deg=45.0,
+            terminal_type="optical",
+            link_type="isl",
+        )
+
+        with pytest.raises(ValueError, match="missing OME-authoritative latency_ms"):
+            d._apply_events_to_desired([vis])
+
+        assert ("sat-P00S00", "sat-P00S01") not in d._desired_links
+
     def test_visibility_event_adds_gs_to_active_links(self):
         d, _ = _make_dispatcher()
         vis = _make_vis(
@@ -199,6 +219,32 @@ class TestDispatcherLinkStateSnapshot:
 
         assert ("sat-P99S99", "sat-P99S98") not in desired
         assert ("sat-P00S00", "sat-P00S01") in desired
+
+    def test_snapshot_missing_range_fails_loudly(self):
+        d, _ = _make_dispatcher()
+        snapshot = LinkStateSnapshot(
+            sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+            snapshot_seq=1,
+            links=(
+                LinkState(
+                    node_a="sat-P00S00",
+                    node_b="sat-P00S01",
+                    interface_a="isl0",
+                    interface_b="isl1",
+                    admin=AdminState.UP,
+                    carrier=CarrierState.UP,
+                    routing=RoutingState.UNKNOWN,
+                    latency_ms=3.0,
+                    bandwidth_mbps=1000.0,
+                    link_type="isl",
+                    sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+            ),
+            interval_s=5.0,
+        )
+
+        with pytest.raises(ValueError, match="missing OME-authoritative range_km"):
+            d._build_desired_from_snapshot(snapshot)
 
     def test_snapshot_gs_exclusion(self):
         d, _ = _make_dispatcher()
@@ -274,3 +320,37 @@ class TestDispatcherLiveDispatch:
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
         link_up_msgs = [m for m in pub.messages if m[0] == "nodalarc.links.up"]
         assert len(link_up_msgs) == 0
+
+    def test_cross_node_missing_substrate_measurement_fails_loudly(self):
+        d, _ = _make_dispatcher()
+        d._loc._node_of["sat-P00S00"] = "node-a"
+        d._loc._node_of["sat-P00S01"] = "node-b"
+        d._loc._agent_addrs["node-a"] = "agent-a"
+        d._loc._agent_addrs["node-b"] = "agent-b"
+        d._loc._node_ips["node-b"] = "10.0.0.2"
+
+        with pytest.raises(ValueError, match="No substrate RTT measurement"):
+            d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0)
+
+    def test_cross_node_substrate_rtt_is_converted_to_one_way(self):
+        d, _ = _make_dispatcher()
+        d._loc._node_of["sat-P00S00"] = "node-a"
+        d._loc._node_of["sat-P00S01"] = "node-b"
+        d._loc._agent_addrs["node-a"] = "agent-a"
+        d._loc._agent_addrs["node-b"] = "agent-b"
+        d._loc._node_ips["node-b"] = "10.0.0.2"
+        d._substrate_by_ip["10.0.0.2"] = 4.0
+
+        assert d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0) == 8.0
+
+    def test_negative_substrate_compensation_is_unrepresentable(self):
+        d, _ = _make_dispatcher()
+        d._loc._node_of["sat-P00S00"] = "node-a"
+        d._loc._node_of["sat-P00S01"] = "node-b"
+        d._loc._agent_addrs["node-a"] = "agent-a"
+        d._loc._agent_addrs["node-b"] = "agent-b"
+        d._loc._node_ips["node-b"] = "10.0.0.2"
+        d._substrate_by_ip["10.0.0.2"] = 4.0
+
+        with pytest.raises(ValueError, match="Unrepresentable latency"):
+            d._netem_delay_ms("sat-P00S00", "sat-P00S01", 1.0)

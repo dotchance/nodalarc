@@ -15,7 +15,12 @@ from nodalarc.models.events import (
     TimelinePositionSnapshot,
     VisibilityEvent,
 )
-from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.link_events import (
+    LatencyUpdate,
+    LinkDecisionProvenance,
+    LinkDown,
+    LinkUp,
+)
 from nodalarc.models.metrics import (
     AdapterEvent,
     ConvergenceRequest,
@@ -205,6 +210,14 @@ class TestTimelinePositionSnapshot:
 
 class TestLinkUp:
     def test_round_trip(self):
+        provenance = LinkDecisionProvenance(
+            range_km=1500.0,
+            orbital_one_way_ms=5.0,
+            substrate_rtt_ms=2.0,
+            substrate_one_way_ms=1.0,
+            netem_one_way_ms=4.0,
+            rtt_to_one_way_policy="half-rtt",
+        )
         evt = LinkUp(
             sim_time=NOW,
             wall_time=NOW,
@@ -214,9 +227,12 @@ class TestLinkUp:
             interface_b="isl1",
             latency_ms=5.0,
             bandwidth_mbps=1000.0,
+            range_km=1500.0,
             reason="vis_gained",
+            provenance=provenance,
         )
         _round_trip(evt)
+        assert evt.provenance == provenance
 
     def test_frozen(self):
         evt = LinkUp(
@@ -250,6 +266,14 @@ class TestLinkDown:
 
 class TestLatencyUpdate:
     def test_round_trip(self):
+        provenance = LinkDecisionProvenance(
+            range_km=1650.0,
+            orbital_one_way_ms=5.5,
+            substrate_rtt_ms=1.0,
+            substrate_one_way_ms=0.5,
+            netem_one_way_ms=5.0,
+            rtt_to_one_way_policy="half-rtt",
+        )
         evt = LatencyUpdate(
             sim_time=NOW,
             wall_time=NOW,
@@ -257,8 +281,10 @@ class TestLatencyUpdate:
             node_b="sat-P00S01",
             latency_ms=5.5,
             range_km=1650.0,
+            provenance=provenance,
         )
         _round_trip(evt)
+        assert evt.provenance == provenance
 
 
 # --- metrics.py ---

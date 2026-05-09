@@ -7,11 +7,13 @@ through actual _dispatch_batch() and _build_desired_from_snapshot() methods.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from nodalarc.models.events import VisibilityEvent
+from nodalarc.models.link_events import LinkUp
 from nodalarc.models.link_state import (
     AdminState,
     CarrierState,
@@ -291,6 +293,14 @@ class TestDispatcherLiveDispatch:
         assert d._js.publish.called
         published_subject = d._js.publish.call_args_list[0][0][0]
         assert "up" in published_subject
+        payload = d._js.publish.call_args_list[0][0][1]
+        event = LinkUp.model_validate(json.loads(payload.decode()))
+        assert event.provenance is not None
+        assert event.provenance.geometry_authority == "ome"
+        assert event.provenance.range_km == vis.range_km
+        assert event.provenance.orbital_one_way_ms == vis.latency_ms
+        assert event.provenance.substrate_rtt_ms == 0.0
+        assert event.provenance.netem_one_way_ms == vis.latency_ms
 
     def test_link_down_publishes_after_node_agent_ack(self):
         d, pool = _make_dispatcher()

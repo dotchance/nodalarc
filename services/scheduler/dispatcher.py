@@ -28,7 +28,7 @@ from typing import Literal
 
 import nats
 from nodalarc.models.events import PlaybackState, SessionEphemeris, VisibilityEvent
-from nodalarc.models.link_events import LatencyUpdate, LinkDown, LinkUp
+from nodalarc.models.link_events import LatencyUpdate, LinkDecisionProvenance, LinkDown, LinkUp
 from nodalarc.models.link_state import LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
@@ -1044,6 +1044,22 @@ class Dispatcher:
         """Compute netem one-way delay from OME latency and measured substrate RTT."""
         return self._latency_compensation(node_a, node_b, orbital_one_way_ms).netem_one_way_ms
 
+    @staticmethod
+    def _link_provenance(
+        info: ActiveLinkInfo,
+        compensation: LatencyCompensation,
+    ) -> LinkDecisionProvenance:
+        if info.range_km is None:
+            raise ValueError("Cannot build link provenance without OME-authoritative range_km")
+        return LinkDecisionProvenance(
+            range_km=info.range_km,
+            orbital_one_way_ms=info.latency_ms,
+            substrate_rtt_ms=compensation.substrate_rtt_ms,
+            substrate_one_way_ms=compensation.substrate_one_way_ms,
+            netem_one_way_ms=compensation.netem_one_way_ms,
+            rtt_to_one_way_policy=compensation.rtt_to_one_way_policy,
+        )
+
     def _link_locality(self, node_a: str, node_b: str) -> int | None:
         """Determine locality for a link pair. None if either pod unscheduled."""
         return self._loc.link_locality(node_a, node_b)
@@ -1142,12 +1158,15 @@ class Dispatcher:
     ) -> None:
         """Apply OME-authoritative latency changes for already-active links."""
         agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
+        pair_compensation: dict[tuple[str, str], LatencyCompensation] = {}
         now = datetime.now(UTC)
 
         for pair in pairs:
             info = desired[pair]
             node_a, node_b = pair
-            netem_ms = self._netem_delay_ms(node_a, node_b, info.latency_ms)
+            compensation = self._latency_compensation(node_a, node_b, info.latency_ms)
+            pair_compensation[pair] = compensation
+            netem_ms = compensation.netem_one_way_ms
 
             if info.link_type == "ground":
                 gs_id = node_a if node_a in self._gs_capacities else node_b
@@ -1210,6 +1229,7 @@ class Dispatcher:
                 node_b=pair[1],
                 latency_ms=info.latency_ms,
                 range_km=info.range_km,
+                provenance=self._link_provenance(info, pair_compensation[pair]),
             )
             await self._js.publish(self._subj_latency, event.model_dump_json().encode())
 
@@ -1506,6 +1526,7 @@ class Dispatcher:
         """Send BatchLinkUp to Node Agents. Returns successfully added pairs."""
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
         pair_agents: dict[tuple[str, str], set[str]] = {}
+        pair_compensation: dict[tuple[str, str], LatencyCompensation] = {}
 
         for pair in pairs:
             info = desired.get(pair)
@@ -1522,7 +1543,9 @@ class Dispatcher:
                 )
             is_gs = info.link_type == "ground" if info else False
 
-            netem_ms = self._netem_delay_ms(node_a, node_b, info.latency_ms)
+            compensation = self._latency_compensation(node_a, node_b, info.latency_ms)
+            pair_compensation[pair] = compensation
+            netem_ms = compensation.netem_one_way_ms
 
             if is_gs:
                 gs_id = node_a if node_a in self._gs_capacities else node_b
@@ -1682,6 +1705,7 @@ class Dispatcher:
                     range_km=info.range_km,
                     reason="vis_gained",
                     link_type=info.link_type,
+                    provenance=self._link_provenance(info, pair_compensation[pair]),
                 )
                 try:
                     await self._js.publish(self._subj_link_up, event.model_dump_json().encode())

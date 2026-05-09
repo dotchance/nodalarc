@@ -6,8 +6,23 @@ Published via NATS JetStream.
 """
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+
+class LinkDecisionProvenance(BaseModel):
+    """Physics and substrate inputs that explain an applied link decision."""
+
+    model_config = ConfigDict(frozen=True)
+
+    geometry_authority: Literal["ome"] = "ome"
+    range_km: float
+    orbital_one_way_ms: float
+    substrate_rtt_ms: float
+    substrate_one_way_ms: float
+    netem_one_way_ms: float
+    rtt_to_one_way_policy: str
 
 
 class LinkUp(BaseModel):
@@ -26,6 +41,7 @@ class LinkUp(BaseModel):
     range_km: float = 0.0
     reason: str  # vis_gained, gs_above_horizon, scenario_inject_up, scenario_reconciliation
     link_type: str = "isl"  # "isl" or "ground"
+    provenance: LinkDecisionProvenance | None = None
 
 
 class LinkDown(BaseModel):
@@ -54,3 +70,4 @@ class LatencyUpdate(BaseModel):
     node_b: str
     latency_ms: float
     range_km: float
+    provenance: LinkDecisionProvenance | None = None

@@ -173,11 +173,38 @@ def generate_session_yaml(
         elif protocol == "ospf":
             area_assignment["gs_area_id"] = "0.0.0.0"
 
+    routing_overrides = dict(routing_config or {})
+    mbb_requested = bool(routing_overrides.pop("mbb_dispatch", protocol == "nodalpath"))
+    mbb_overlap_ticks = int(routing_overrides.pop("mbb_overlap_ticks", 3 if mbb_requested else 0))
+
     # Build session dict
     session_dict: dict[str, Any] = {
         "session": {"name": session_name},
         "constellation": constellation_value,
         "ground_stations": gs_value,
+        "simulation": {
+            "schema_version": 2,
+            "fidelity": "synthetic-keplerian",
+        },
+        "orbit": {
+            "propagator": "keplerian-circular",
+        },
+        "scheduling": {
+            "ground": {
+                "policy": "highest-elevation",
+                "handover_mode": "mbb" if mbb_requested else "bbm",
+                "mbb_overlap_ticks": mbb_overlap_ticks,
+                "mbb_reserve": 1 if mbb_requested else 0,
+            }
+        },
+        "dispatch": {
+            "latency_authority": "ome",
+            "max_latency_age_ticks": 1,
+            "substrate_compensation": {
+                "measurement_source": "node-agent-rtt",
+                "rtt_to_one_way": "half",
+            },
+        },
         "routing": {
             "protocol": protocol,
             "extensions": extensions,
@@ -189,8 +216,8 @@ def generate_session_yaml(
 
     if area_assignment:
         session_dict["routing"]["area_assignment"] = area_assignment
-    if routing_config:
-        session_dict["routing"].update(routing_config)
+    if routing_overrides:
+        session_dict["routing"].update(routing_overrides)
 
     if preset and preset.time:
         session_dict["time"] = preset.time

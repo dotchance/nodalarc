@@ -108,7 +108,7 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation,
-        propagator_id="keplerian-circular",
+        propagator_id=session.orbit.propagator,
     )
 
 
@@ -129,17 +129,9 @@ _seeking: bool = False  # True while seek in progress — mutex for pause/set_sp
 def run(session_path: str, output_dir: str | None = None) -> Path:
     """Run the OME pipeline (single window, batch mode) and return the output path."""
     cfg = _load_session_config(session_path)
-    mbb_dispatch = cfg.session.routing.mbb_dispatch if cfg.session.routing else False
-    mbb_overlap_ticks = cfg.session.routing.mbb_overlap_ticks if cfg.session.routing else 3
-    mbb_reserve = (
-        1
-        if mbb_dispatch
-        and any(
-            sum(t.tracking_capacity for t in (st.terminals or cfg.gs_file.default_terminals)) > 1
-            for st in (cfg.gs_file.stations if cfg.gs_file else [])
-        )
-        else 0
-    )
+    mbb_dispatch = cfg.session.scheduling.ground.handover_mode == "mbb"
+    mbb_overlap_ticks = cfg.session.scheduling.ground.mbb_overlap_ticks
+    mbb_reserve = cfg.session.scheduling.ground.mbb_reserve if mbb_dispatch else 0
 
     events = precompute_timeline(
         satellites=cfg.satellites,
@@ -158,6 +150,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         default_min_elevation_deg=cfg.default_min_elevation_deg,
         propagator_id=cfg.propagator_id,
+        default_ground_policy=cfg.session.scheduling.ground.policy,
     )
 
     out_dir = Path(output_dir) if output_dir else Path("output")
@@ -643,20 +636,9 @@ def _run_pacing(
 
     from ome.event_stream import build_step_context, compute_step
 
-    mbb_dispatch = session.routing.mbb_dispatch if session.routing else False
-    mbb_overlap_ticks = session.routing.mbb_overlap_ticks if session.routing else 3
-    mbb_reserve = (
-        1
-        if mbb_dispatch
-        and any(
-            ctx_tc > 1
-            for ctx_tc in (
-                sum(t.tracking_capacity for t in (st.terminals or cfg.gs_file.default_terminals))
-                for st in (cfg.gs_file.stations if cfg.gs_file else [])
-            )
-        )
-        else 0
-    )
+    mbb_dispatch = session.scheduling.ground.handover_mode == "mbb"
+    mbb_overlap_ticks = session.scheduling.ground.mbb_overlap_ticks
+    mbb_reserve = session.scheduling.ground.mbb_reserve if mbb_dispatch else 0
 
     step_ctx = build_step_context(
         satellites=cfg.satellites,
@@ -672,6 +654,7 @@ def _run_pacing(
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
         propagator_id=cfg.propagator_id,
+        default_ground_policy=session.scheduling.ground.policy,
     )
 
     step_seconds = session.time.step_seconds
@@ -712,6 +695,7 @@ def _run_pacing(
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         default_min_elevation_deg=cfg.default_min_elevation_deg,
         propagator_id=cfg.propagator_id,
+        default_ground_policy=session.scheduling.ground.policy,
     )
     lookahead_launched_for_epoch: float | None = None
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}

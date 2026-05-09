@@ -58,6 +58,7 @@ def _dispatcher() -> Dispatcher:
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",
+        max_latency_age_s=1.0,
         gs_terminal_capacities={},
         sat_ground_terminal_capacities={},
     )

@@ -112,6 +112,26 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
     )
 
 
+def _authority_snapshot_interval_s(
+    *,
+    platform_snapshot_interval_s: float,
+    max_latency_age_ticks: int,
+    step_seconds: int,
+) -> float:
+    """Bound authoritative snapshots by the Scheduler freshness contract.
+
+    The Scheduler refuses to actuate stale OME geometry. OME therefore cannot
+    publish full-state authority less frequently than the configured maximum
+    geometry age and still claim active-link latency freshness.
+    """
+    if platform_snapshot_interval_s <= 0:
+        raise ValueError("platform OME link-state snapshot interval must be > 0")
+    max_authority_age_s = max_latency_age_ticks * step_seconds
+    if max_authority_age_s <= 0:
+        raise ValueError("dispatch.max_latency_age_ticks * time.step_seconds must be > 0")
+    return min(platform_snapshot_interval_s, float(max_authority_age_s))
+
+
 # ---------------------------------------------------------------------------
 # Shared playback state (Pacemaker role, R-OME-008B)
 # ---------------------------------------------------------------------------
@@ -586,7 +606,7 @@ def _run_pacing(
     # Runtime set_speed commands replace this value dynamically.
     global _time_accel, _seek_target, _seeking, _paused, _epoch_id
     _time_accel = float(compression)
-    snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
+    platform_snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
     # Build interface map for LinkStateSnapshot
     from nodalarc.models.addressing import neighbors_by_node
@@ -658,6 +678,19 @@ def _run_pacing(
     )
 
     step_seconds = session.time.step_seconds
+    snapshot_interval_s = _authority_snapshot_interval_s(
+        platform_snapshot_interval_s=platform_snapshot_interval_s,
+        max_latency_age_ticks=session.dispatch.max_latency_age_ticks,
+        step_seconds=step_seconds,
+    )
+    if snapshot_interval_s < platform_snapshot_interval_s:
+        logging.info(
+            "Tightening LinkStateSnapshot interval from %.3fs to %.3fs to satisfy "
+            "dispatch.max_latency_age_ticks=%d",
+            platform_snapshot_interval_s,
+            snapshot_interval_s,
+            session.dispatch.max_latency_age_ticks,
+        )
 
     # --- MBB capability validation (R-OME-004a) ---
     is_nodalpath = session.routing.protocol == "nodalpath" if session.routing else False

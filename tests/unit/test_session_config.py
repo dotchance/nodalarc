@@ -109,7 +109,22 @@ class TestEngineConfigValidation:
     def test_unknown_propagator_rejected(self):
         data = dict(_SAMPLE_SESSION)
         data["orbit"] = {"propagator": "sgp4-tle"}
-        with pytest.raises(ValidationError, match="Input should be 'keplerian-circular'"):
+        with pytest.raises(ValidationError, match="Input should be"):
+            SessionConfig.model_validate(data)
+
+    def test_j2_propagator_requires_matching_fidelity_label(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"schema_version": 2, "fidelity": "j2-mean-elements"}
+        data["orbit"] = {"propagator": "j2-mean-elements"}
+        config = SessionConfig.model_validate(data)
+        assert config.orbit.propagator == "j2-mean-elements"
+        assert config.simulation.fidelity == "j2-mean-elements"
+
+    def test_fidelity_and_propagator_mismatch_rejected(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"schema_version": 2, "fidelity": "j2-mean-elements"}
+        data["orbit"] = {"propagator": "keplerian-circular"}
+        with pytest.raises(ValidationError, match="must describe the same physics model"):
             SessionConfig.model_validate(data)
 
     def test_mbb_requires_reserve_and_overlap(self):

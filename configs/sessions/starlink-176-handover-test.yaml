@@ -2,6 +2,23 @@ session:
   name: starlink-176-handover-test
 constellation: configs/constellations/starlink-176.yaml
 ground_stations: configs/ground-stations/sets/handover-test.yaml
+simulation:
+  schema_version: 2
+  fidelity: synthetic-keplerian
+orbit:
+  propagator: keplerian-circular
+scheduling:
+  ground:
+    policy: highest-elevation
+    handover_mode: bbm
+    mbb_overlap_ticks: 0
+    mbb_reserve: 0
+dispatch:
+  latency_authority: ome
+  max_latency_age_ticks: 1
+  substrate_compensation:
+    measurement_source: node-agent-rtt
+    rtt_to_one_way: half
 routing:
   protocol: isis
   extensions:

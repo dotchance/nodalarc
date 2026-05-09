@@ -379,19 +379,22 @@ class Dispatcher:
                 self._current_sim_time = ckpt.sim_time
                 log.info(
                     "Recovered SchedulingCheckpoint: sim_time=%s step=%d epoch_id=%d "
-                    "associations=%d teardowns=%d",
+                    "snapshot_seq=%d associations=%d teardowns=%d",
                     ckpt.sim_time.isoformat(),
                     ckpt.step,
                     ckpt.epoch_id,
+                    ckpt.snapshot_seq,
                     len(ckpt.associations),
                     len(ckpt.pending_teardowns),
                 )
-            except (TimeoutError, Exception) as exc:
+            except TimeoutError as exc:
                 log.info("No SchedulingCheckpoint retained (fresh session): %s", type(exc).__name__)
             finally:
                 await ckpt_sub.unsubscribe()
         except Exception as exc:
-            log.warning("SchedulingCheckpoint recovery failed (non-fatal): %s", exc)
+            raise RuntimeError(
+                "SchedulingCheckpoint recovery failed; refusing to start from unknown state"
+            ) from exc
 
         # Load substrate latency for cross-node compensation
         self._load_substrate_latency()
@@ -1035,7 +1038,11 @@ class Dispatcher:
             )
             return
 
-        sim_time = self._current_sim_time or datetime.now(UTC)
+        if self._current_sim_time is None:
+            raise RuntimeError(
+                "Cannot dispatch scenario override before receiving OME simulation time"
+            )
+        sim_time = self._current_sim_time
         intent = self._build_dispatch_intent(sim_time=sim_time, source="scenario")
         await self._dispatch_queue.put(intent)
         await msg.respond(_json.dumps({"status": "accepted"}).encode())
@@ -1086,7 +1093,12 @@ class Dispatcher:
         """
         k3s_a = self._loc.k3s_node(node_a)
         k3s_b = self._loc.k3s_node(node_b)
-        if not k3s_a or not k3s_b or k3s_a == k3s_b:
+        if not k3s_a or not k3s_b:
+            raise ValueError(
+                f"Missing Kubernetes node placement for {node_a}<->{node_b}; "
+                "refusing to treat unknown substrate locality as local"
+            )
+        if k3s_a == k3s_b:
             return 0.0
         # Prefer live measurement (by IP) from Node Agent
         ip_b = self._loc.node_ip(k3s_b)
@@ -1505,7 +1517,7 @@ class Dispatcher:
             if locality is None:
                 log.warning("Skipping DOWN %s-%s: pod(s) not yet scheduled", node_a, node_b)
                 continue
-            is_gs = info.link_type == "ground" if info else False
+            is_gs = info.link_type == "ground"
 
             if is_gs:
                 gs_id = node_a if node_a in self._gs_capacities else node_b
@@ -1659,13 +1671,16 @@ class Dispatcher:
         for pair in pairs:
             info = desired.get(pair)
             if info is None:
-                continue
+                raise RuntimeError(
+                    f"Dispatch planner requested LinkUp for missing desired pair {pair}"
+                )
 
             node_a, node_b = pair
             locality = self._link_locality(node_a, node_b)
             if locality is None:
-                log.warning("Skipping UP %s-%s: pod(s) not yet scheduled", node_a, node_b)
-                continue
+                raise RuntimeError(
+                    f"Cannot dispatch LinkUp for {node_a}<->{node_b}: pod placement is unknown"
+                )
             is_gs = info.link_type == "ground" if info else False
 
             netem_ms = self._netem_delay_ms(node_a, node_b, info.latency_ms)
@@ -1701,19 +1716,14 @@ class Dispatcher:
                     )
                     pair_agents.setdefault(pair, set()).add(agent)
                 else:
-                    skip_pair = False
                     for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
                         peer_k3s = self._loc.k3s_node(peer_nid)
                         remote_ip = self._loc.node_ip(peer_k3s)
                         if not remote_ip:
-                            log.error(
-                                "CROSS_NODE GS LinkUp %s<->%s: no IP for node %s — skipping",
-                                gs_id,
-                                sat_id,
-                                peer_k3s,
+                            raise RuntimeError(
+                                f"CROSS_NODE GS LinkUp {gs_id}<->{sat_id}: "
+                                f"missing IP for Kubernetes node {peer_k3s}"
                             )
-                            skip_pair = True
-                            break
                         iface = gs_iface if nid == gs_id else sat_iface
                         peer_iface = sat_iface if nid == gs_id else gs_iface
                         agent_addr = self._loc.agent_addr(nid)
@@ -1734,8 +1744,6 @@ class Dispatcher:
                             )
                         )
                         pair_agents.setdefault(pair, set()).add(agent_addr)
-                    if skip_pair:
-                        continue
             else:
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
@@ -1743,7 +1751,6 @@ class Dispatcher:
 
                     vni = compute_vni(node_a, node_b, info.interface_a, info.interface_b)
 
-                skip_pair = False
                 for nid, ifname, peer_nid, peer_ifname in [
                     (node_a, info.interface_a, node_b, info.interface_b),
                     (node_b, info.interface_b, node_a, info.interface_a),
@@ -1754,14 +1761,10 @@ class Dispatcher:
                         peer_k3s = self._loc.k3s_node(peer_nid)
                         remote_ip = self._loc.node_ip(peer_k3s)
                         if not remote_ip:
-                            log.error(
-                                "CROSS_NODE ISL LinkUp %s<->%s: no IP for node %s — skipping",
-                                node_a,
-                                node_b,
-                                peer_k3s,
+                            raise RuntimeError(
+                                f"CROSS_NODE ISL LinkUp {node_a}<->{node_b}: "
+                                f"missing IP for Kubernetes node {peer_k3s}"
                             )
-                            skip_pair = True
-                            break
                     agent_ifaces.setdefault(agent, []).append(
                         node_agent_pb2.InterfaceUp(
                             node_id=nid,
@@ -1777,8 +1780,6 @@ class Dispatcher:
                         )
                     )
                     pair_agents.setdefault(pair, set()).add(agent)
-                if skip_pair:
-                    continue
 
         successful_agents: set[str] = set()
         agent_addrs = list(agent_ifaces.keys())

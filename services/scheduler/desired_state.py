@@ -1,0 +1,164 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+"""Scheduler desired-state construction helpers.
+
+This module is the Scheduler-side OME authority boundary. It preserves
+OME-provided range and one-way latency, derives configured interfaces and
+bandwidth, and fails loudly when required authority is missing.
+"""
+
+from __future__ import annotations
+
+from nodalarc.models.events import VisibilityEvent
+from nodalarc.models.link_state import AdminState, CarrierState, LinkState
+
+
+class ActiveLinkInfo:
+    """Mutable internal state for a desired or active link."""
+
+    __slots__ = (
+        "interface_a",
+        "interface_b",
+        "latency_ms",
+        "bandwidth_mbps",
+        "link_type",
+        "range_km",
+    )
+
+    def __init__(
+        self,
+        interface_a: str,
+        interface_b: str,
+        latency_ms: float,
+        bandwidth_mbps: float,
+        link_type: str = "isl",
+        range_km: float | None = None,
+    ) -> None:
+        self.interface_a = interface_a
+        self.interface_b = interface_b
+        self.latency_ms = latency_ms
+        self.bandwidth_mbps = bandwidth_mbps
+        self.link_type = link_type
+        self.range_km = range_km
+
+
+def require_ome_geometry(
+    pair: tuple[str, str],
+    *,
+    range_km: float | None,
+    latency_ms: float | None,
+    source: str,
+) -> tuple[float, float]:
+    """Require OME-authoritative range and one-way latency.
+
+    The Scheduler is not a physics authority. Missing range/latency is a
+    corrupt control-plane input, not a condition to paper over with a fallback.
+    Raising here stops dispatch before the emulator can apply made-up physics.
+    """
+    if range_km is None:
+        raise ValueError(f"{source} for {pair} is missing OME-authoritative range_km")
+    if latency_ms is None:
+        raise ValueError(f"{source} for {pair} is missing OME-authoritative latency_ms")
+    if range_km < 0:
+        raise ValueError(f"{source} for {pair} has negative range_km={range_km}")
+    if latency_ms < 0:
+        raise ValueError(f"{source} for {pair} has negative latency_ms={latency_ms}")
+    return range_km, latency_ms
+
+
+def _ground_interfaces(
+    gs_terminal_index: int | None, sat_terminal_index: int | None
+) -> tuple[str, str]:
+    gs_ti = gs_terminal_index if gs_terminal_index is not None else 0
+    sat_ti = sat_terminal_index if sat_terminal_index is not None else 0
+    return f"term{gs_ti}", f"gnd{sat_ti}"
+
+
+def _configured_bandwidth(
+    pair: tuple[str, str],
+    bandwidth_map: dict[tuple[str, str], float],
+    *,
+    source: str,
+) -> float:
+    bandwidth = bandwidth_map.get(pair)
+    if bandwidth is None or bandwidth <= 0:
+        raise ValueError(
+            f"{source} for {pair} has no config-derived bandwidth; "
+            "refusing to dispatch a link with unknown physical rate"
+        )
+    return bandwidth
+
+
+def desired_link_from_visibility(
+    vis: VisibilityEvent,
+    *,
+    interface_map: dict[tuple[str, str], tuple[str, str]],
+    bandwidth_map: dict[tuple[str, str], float],
+) -> tuple[tuple[str, str], ActiveLinkInfo]:
+    """Build one desired link from a scheduled visible OME event."""
+    pair = (vis.node_a, vis.node_b)
+    range_km, latency = require_ome_geometry(
+        pair,
+        range_km=vis.range_km,
+        latency_ms=vis.latency_ms,
+        source="VisibilityEvent",
+    )
+
+    if vis.link_type == "ground":
+        ifaces = _ground_interfaces(vis.gs_terminal_index, vis.sat_terminal_index)
+    else:
+        ifaces = interface_map.get(pair)
+        if ifaces is None:
+            raise ValueError(
+                f"VisibilityEvent for {pair} has no configured ISL interfaces; "
+                "refusing to dispatch an unmapped link"
+            )
+
+    bandwidth = _configured_bandwidth(pair, bandwidth_map, source="VisibilityEvent")
+    return pair, ActiveLinkInfo(
+        interface_a=ifaces[0],
+        interface_b=ifaces[1],
+        latency_ms=latency,
+        bandwidth_mbps=bandwidth,
+        link_type=vis.link_type,
+        range_km=range_km,
+    )
+
+
+def desired_link_from_snapshot_link(
+    link: LinkState,
+    *,
+    interface_map: dict[tuple[str, str], tuple[str, str]],
+    bandwidth_map: dict[tuple[str, str], float],
+) -> tuple[tuple[str, str], ActiveLinkInfo] | None:
+    """Build one desired link from an authoritative snapshot link entry."""
+    if link.admin != AdminState.UP or link.carrier != CarrierState.UP:
+        return None
+
+    pair = (link.node_a, link.node_b)
+    range_km, latency = require_ome_geometry(
+        pair,
+        range_km=link.range_km,
+        latency_ms=link.latency_ms,
+        source="LinkStateSnapshot",
+    )
+
+    if link.link_type == "ground":
+        ifaces = _ground_interfaces(link.gs_terminal_index, link.sat_terminal_index)
+    else:
+        ifaces = interface_map.get(pair)
+        if ifaces is None:
+            raise ValueError(
+                f"LinkStateSnapshot for {pair} has no configured ISL interfaces; "
+                "refusing to dispatch an unmapped link"
+            )
+
+    bandwidth = _configured_bandwidth(pair, bandwidth_map, source="LinkStateSnapshot")
+    return pair, ActiveLinkInfo(
+        interface_a=ifaces[0],
+        interface_b=ifaces[1],
+        latency_ms=latency,
+        bandwidth_mbps=bandwidth,
+        link_type=link.link_type,
+        range_km=range_km,
+    )

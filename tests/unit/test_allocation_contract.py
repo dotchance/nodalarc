@@ -60,7 +60,7 @@ class TestAllocationContractInvariants:
         associations: dict = {}
 
         for step in range(121):
-            _events, _positions, associations, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -70,6 +70,7 @@ class TestAllocationContractInvariants:
                 gs_state,
                 associations,
             )
+            associations = result.associations
 
             # Invariant 1: No GS exceeds its terminal capacity
             gs_counts: dict[str, int] = {}
@@ -112,7 +113,7 @@ class TestAllocationContractInvariants:
         associations: dict = {}
 
         for step in range(61):
-            _events, _positions, associations, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -122,6 +123,7 @@ class TestAllocationContractInvariants:
                 gs_state,
                 associations,
             )
+            associations = result.associations
 
             # Invariant 3: allocated pairs must be in gs_state with visible=True
             for pair in associations:
@@ -153,7 +155,7 @@ class TestAllocationContractInvariants:
         assoc_h: frozenset = {}
         hyst_transitions = 0
         for step in range(n_steps + 1):
-            _e, _p, new_assoc_h, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -163,6 +165,7 @@ class TestAllocationContractInvariants:
                 gs_h,
                 assoc_h,
             )
+            new_assoc_h = result.associations
             if step > 0:
                 hyst_transitions += len(
                     set(new_assoc_h.keys()).symmetric_difference(set(assoc_h.keys()))
@@ -175,7 +178,7 @@ class TestAllocationContractInvariants:
         amnesiac_transitions = 0
         prev_assoc: frozenset = {}
         for step in range(n_steps + 1):
-            _e, _p, new_assoc_a, _ = compute_step(
+            result = compute_step(
                 ctx,
                 epoch_unix,
                 step,
@@ -185,6 +188,7 @@ class TestAllocationContractInvariants:
                 gs_a,
                 {},
             )
+            new_assoc_a = result.associations
             if step > 0:
                 amnesiac_transitions += len(
                     set(new_assoc_a.keys()).symmetric_difference(set(prev_assoc.keys()))

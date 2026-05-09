@@ -216,6 +216,10 @@ def main() -> None:
             ", ".join(missing[:20])
             + (f" ... and {len(missing) - 20} more" if len(missing) > 20 else ""),
         )
+        raise RuntimeError(
+            f"Wiring gate timeout: {len(wired)}/{expected_count} nodes wired; "
+            f"missing={missing[:20]}"
+        )
 
     # Agent pool
     pool = AgentPool()

@@ -942,7 +942,7 @@ def build_link_state_snapshot(
     range_km / 299792.458 * 1000. Positions come from the
     TimelinePositionSnapshot at the same sim_time tick.
     """
-    from nodalarc.geo import compute_latency_ms, compute_range_km, geodetic_to_ecef
+    from nodalarc.geo import compute_latency_ms, compute_range_km
     from nodalarc.models.link_state import (
         AdminState,
         CarrierState,
@@ -952,10 +952,10 @@ def build_link_state_snapshot(
     )
 
     # Convert geodetic positions to ECEF for range computation
-    ecef: dict[str, tuple[float, float, float]] = {}
+    ecef: dict[str, EcefVec3] = {}
     if positions:
         for node_id, pos in positions.items():
-            ecef[node_id] = geodetic_to_ecef(pos.lat_deg, pos.lon_deg, pos.alt_km)
+            ecef[node_id] = geodetic_to_ecef(GeoPosition(pos.lat_deg, pos.lon_deg, pos.alt_km))
 
     def _link_range_latency(node_a: str, node_b: str) -> tuple[float, float] | None:
         pa, pb = ecef.get(node_a), ecef.get(node_b)

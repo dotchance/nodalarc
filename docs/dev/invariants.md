@@ -1,6 +1,14 @@
 # Architectural Invariants
 
-These rules reflect deliberate design decisions validated through painful debugging. Violations produce subtle distributed system failures that are extremely expensive to diagnose. They are not style preferences - they are load-bearing constraints.
+These are not style preferences.
+
+Each rule here exists because breaking it produced a failure mode that was
+expensive to find and easy to reintroduce. If you change code in the Scheduler,
+OME, Node Agent, NATS layer, or forwarding plane, read this first. The system
+only stays understandable while these boundaries hold.
+
+If a proposed change needs to violate one of these rules, the change is not
+ready. Fix the design before touching the code.
 
 ## Session Type Boundary
 
@@ -29,13 +37,22 @@ The OME governs which links are visible. The Scheduler dispatches based on OME e
 
 ## Single Dispatch Path
 
-`_reconcile_links(desired, nc)` in the Scheduler is the **only** method that dispatches link state changes to the Node Agent. There is no other mechanism for creating or destroying links.
+`_reconcile_links(...)` in the Scheduler is the **only** method that dispatches
+link state changes to the Node Agent. There is no other mechanism for creating
+or destroying links.
 
-Both paths converge here:
-- `_dispatch_batch` (live VisibilityEvents) → builds desired state → calls `_reconcile_links`
-- `_on_link_state_snapshot` (periodic snapshot) → builds desired state → calls `_reconcile_links`
+In production, only the dispatch worker calls `_reconcile_links`.
 
-This invariant eliminates state synchronization bugs that plagued earlier architectures with multiple dispatch paths.
+Decision callbacks and control-plane callbacks do not talk to Node Agents. They
+mutate their owned state, build a `DispatchIntent`, and put it on the dispatch
+queue. The worker drains that queue, reconciles latest effective desired state
+against actual state, and then calls `_reconcile_links`.
+
+The legacy `_dispatch_batch` helper exists for tests only. Do not add new
+behavior there and do not treat it as a production path.
+
+This invariant keeps the actuator honest. `_actual_links`, capacity counters,
+Node Agent I/O, and LinkUp/LinkDown publication all stay behind one door.
 
 ## NATS Subject Centralization
 

@@ -1,8 +1,16 @@
 # NodalArc Documentation
 
+Start with the work you are trying to do.
+
+If you want to run experiments, use the user guide. If you own the cluster, use
+the operations guide. If you are changing code, read the developer guide before
+you touch a boundary between components.
+
 ## [User Guide](user/) - Using NodalArc
 
-For anyone interacting with NodalArc through the web interface. No backend knowledge required.
+For anyone sitting in front of the browser, launching sessions, watching links
+move, tracing paths, and inspecting routers. You do not need backend knowledge
+to use the system.
 
 - [Getting Started](user/getting-started.md) - what you see when you open NodalArc, first things to try
 - [Sessions](user/sessions.md) - creating, switching, and configuring constellation sessions
@@ -16,7 +24,9 @@ For anyone interacting with NodalArc through the web interface. No backend knowl
 
 ## [Operations Guide](ops/) - Deploying and Maintaining NodalArc
 
-For infrastructure engineers deploying NodalArc on Kubernetes clusters.
+For infrastructure engineers deploying and maintaining NodalArc on Kubernetes
+clusters. This is where the lifecycle lives: install, upgrade, session switch,
+teardown, nuke, scale, and troubleshoot.
 
 - [Getting Started](ops/getting-started.md) - prerequisites, installation, first deployment
 - [Configuration](ops/configuration.md) - session YAML, constellations, ground stations, satellite types
@@ -28,7 +38,9 @@ For infrastructure engineers deploying NodalArc on Kubernetes clusters.
 
 ## [Developer Guide](dev/) - Contributing to NodalArc
 
-For developers working on the NodalArc codebase.
+For developers working on the codebase. Read the architecture first, then the
+invariants. The platform is modular because orbital mechanics, kernel state,
+routing state, and visualization state are different jobs.
 
 - [Development Setup](dev/getting-started.md) - clone, build, run, test
 - [Architecture](dev/architecture.md) - components, data flow, threading models

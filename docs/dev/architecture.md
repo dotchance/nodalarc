@@ -1,8 +1,21 @@
 # System Architecture
 
-## Overview
+A simulator can keep the whole universe in one process.
 
-NodalArc is a distributed system deployed on Kubernetes. Six backend services, a messaging backbone, and a visualization frontend work together to emulate satellite constellation networks with real routing stacks.
+NodalArc cannot.
+
+The point of the system is to let real routing implementations react to a
+moving orbital network. That means the pieces have to stay honest. Orbital
+mechanics should not know how to configure FRR. The Scheduler should not know
+how to draw a globe. The Node Agent should not know why a link exists; it should
+only know how to make the kernel obey.
+
+That separation is the architecture.
+
+Kubernetes gives us the rooms. NATS carries the facts between them. The OME
+moves the sky. The Scheduler turns visibility into desired link state. The Node
+Agent touches the host kernel. FRR routes inside the session pods. VS-API
+gathers what happened. VF shows it to a human.
 
 ```
                         +---------------------------------+
@@ -42,110 +55,190 @@ NodalArc is a distributed system deployed on Kubernetes. Six backend services, a
     |  FRR     | |  FRR     | |  FRR     | |  FRR     |
     |  IS-IS   | |  IS-IS   | |  IS-IS   | |  IS-IS   |
     +----------+ +----------+ +----------+ +----------+
-        Session Pods - one per satellite and ground station
+        Session pods - one per satellite and ground station
 ```
 
-## Data Flow
+## How One Link Becomes Real
 
-A complete cycle from orbital mechanics to user-visible routing behavior:
+Start with geometry.
 
-1. **OME** propagates satellite positions, computes line-of-sight visibility between all pairs, publishes events to NATS JetStream.
+The OME decides two satellites can see each other. That fact goes onto NATS.
+The Scheduler receives it, compares the desired topology against what is already
+active, and emits only the delta. The Node Agent gets the request and does the
+host work: veths, VXLAN, carrier state, `tc` shaping.
 
-2. **Scheduler** receives events, builds desired link state, calls `_reconcile_links()` to compute the delta, dispatches `BatchLinkUp/Down` to the appropriate Node Agent(s) via NATS request/reply.
+FRR sees an interface come up. Not a fake event. A real interface. It sends
+hellos, forms an adjacency, floods state, runs SPF, and changes the forwarding
+table.
 
-3. **Node Agent** executes kernel operations: creates/destroys veth pairs or VXLAN tunnels, applies tc netem for latency and tc tbf for bandwidth shaping, manages ground station bridge attachments.
+By the time the browser paints the link, the network has already had to live
+with it.
 
-4. **FRR** inside each pod detects interface state changes. When an ISL comes UP with carrier, FRR sends hellos, forms an adjacency, floods LSPs, runs SPF. Real protocol behavior, same code as production routers.
+The full cycle looks like this:
 
-5. **VS-API** subscribes to NATS, aggregates state, pushes to WebSocket clients at ~1 Hz. Sends `SessionEphemeris` on connect so clients run local Keplerian propagation.
+1. **OME** propagates satellite positions, computes line-of-sight visibility,
+   and publishes visibility, clock, heartbeat, ephemeris, and playback events.
 
-6. **VF** renders satellite positions at 60fps from ephemeris, shows link state and events from VS-API WebSocket.
+2. **Scheduler** consumes visibility and snapshot state, builds desired link
+   state, reconciles it against active link state, and dispatches
+   `BatchLinkUp`, `BatchLinkDown`, and `SetLatency` requests to Node Agents.
 
-## NATS JetStream Streams
+3. **Node Agent** performs kernel operations on the host: veth creation, VXLAN
+   tunnel setup, carrier changes, `tc netem` latency, `tc tbf` bandwidth
+   shaping, and ground bridge attachment.
 
-| Stream | Contents | Retention |
-|--------|----------|-----------|
-| `NODALARC_OME` | VisibilityEvent, ClockTick, HeartbeatTick | Limits-based, 128 MB |
-| `NODALARC_LINKS` | LinkUp, LinkDown, LatencyUpdate, LinkStateSnapshot | MaxMsgsPerSubject=1 for snapshot |
-| `NODALARC_SESSION` | SessionEphemeris, PlaybackState | MaxMsgsPerSubject=1 |
+4. **FRR** inside each session pod reacts to interface state. IS-IS sends
+   hellos, OSPF floods LSAs, BGP updates neighbors, MPLS labels enter the
+   kernel. The behavior is protocol implementation behavior, not a model of it.
 
-Additionally, NATS core request/reply (not JetStream) is used for:
-- Scheduler → Node Agent: BatchLinkUp, BatchLinkDown, SetLatency
-- VS-API → OME: playback control (pause, resume, set_speed, seek)
+5. **VS-API** subscribes to NATS, aggregates state for clients, serves REST
+   requests, and pushes WebSocket updates to browsers.
+
+6. **VF** renders satellite positions locally from `SessionEphemeris`, draws
+   live link state, and gives the user a way to inspect what the network is
+   doing.
 
 ## Component Responsibilities
 
-| Component | Owns | Publishes | Subscribes |
-|-----------|------|-----------|------------|
-| OME | Orbital state, visibility, clock | VisibilityEvent, ClockTick, LinkStateSnapshot, SessionEphemeris, PlaybackState | Playback control requests |
-| Scheduler | Active link set, dispatch | LinkUp, LinkDown, LatencyUpdate | VisibilityEvent, LinkStateSnapshot, SessionEphemeris |
-| Node Agent | Kernel network state | (responds to requests) | Scheduler requests, wiring manifest |
-| VS-API | Aggregated state for clients | WebSocket broadcasts | All NATS streams |
-| Operator | Session pod lifecycle | (K8s resources) | ConstellationSpec CR watch |
-| VF | Rendering, user interaction | (none - receives only) | VS-API WebSocket |
+Each component owns a narrow piece of the machine. If a change needs one
+component to reach through another component's boundary, stop and rethink it.
 
-## Key Design Decisions
+| Component | Owns | Publishes | Subscribes |
+| --- | --- | --- | --- |
+| OME | Orbital state, visibility, clock | VisibilityEvent, ClockTick, HeartbeatTick, LinkStateSnapshot, SessionEphemeris, PlaybackState | Playback control requests |
+| Scheduler | Desired links, active links, dispatch ordering | LinkUp, LinkDown, LatencyUpdate | VisibilityEvent, LinkStateSnapshot, SessionEphemeris |
+| Node Agent | Host kernel network state | Request replies, wiring progress | Scheduler requests, wiring manifest |
+| VS-API | Aggregated state for clients | WebSocket broadcasts | OME, link, session, ops, and debug streams |
+| Operator | Session pod lifecycle and generated configs | Kubernetes resources | ConstellationSpec CR watch |
+| VF | Rendering and user interaction | None | VS-API WebSocket |
+
+## NATS Streams
+
+NATS is the spine. Components publish facts and subscribe to the facts they
+need. They do not discover each other, call each other by service name, or
+smuggle state through side channels.
+
+| Stream | Contents | Retention model |
+| --- | --- | --- |
+| `NODALARC_OME` | VisibilityEvent, ClockTick, HeartbeatTick | Limits-based history for two orbital periods |
+| `NODALARC_LINKS` | LinkUp, LinkDown, LatencyUpdate, LinkStateSnapshot | Latest snapshot per subject, bounded event history |
+| `NODALARC_SESSION` | SessionEphemeris, PlaybackState | Latest value per subject |
+| `NODALARC_MI` | Measurement and instrumentation events | Bounded event history |
+| `NODALARC_OPS` | Operational events | Four-hour transient history |
+| `NODALARC_DEBUG` | On-demand debug events | Five-minute transient history |
+
+Core NATS request/reply is used where persistence would be wrong:
+
+- Scheduler to Node Agent: `BatchLinkUp`, `BatchLinkDown`, `SetLatency`
+- VS-API to OME: pause, resume, set speed, seek
+- VS-API to services: debug control
+
+## Why The Boundaries Exist
 
 ### Why NATS, not direct HTTP
 
-Services don't know about each other. The OME doesn't know the Scheduler exists. The Scheduler doesn't know the VS-API exists. They all publish to subjects and subscribe to subjects. Adding a new consumer (a monitoring system, a recording service) is zero-cost - subscribe to the subject, done.
+Direct calls make services know too much. The OME should publish visibility
+because visibility is a fact. It should not know whether the Scheduler, VS-API,
+a recorder, or a future measurement service is listening.
 
-### Why JetStream, not core NATS
+That gives us a pattern: publish facts, consume facts, keep ownership local.
+Adding a consumer should mean subscribing to a subject, not changing the
+producer.
 
-Events can't be lost between component restarts. JetStream provides:
-- Message persistence and replay
-- Consumer position tracking (each subscriber resumes where it left off)
-- MaxMsgsPerSubject=1 for latest-value semantics (ephemeris, playback state)
+### Why JetStream, not only core NATS
+
+Some facts need memory. If the Scheduler restarts, it has to recover the latest
+session ephemeris and link snapshot. If VS-API reconnects, it needs the current
+playback state. JetStream gives those facts a shelf life without making
+application code invent replay logic.
+
+Request/reply still uses core NATS. A Node Agent command is an operation, not
+history. It should succeed, fail, or time out.
 
 ### Why reconcile-based dispatch
 
-The Scheduler doesn't track individual VisibilityEvents. It builds the complete desired state and reconciles against its current state. This means:
-- Missed events self-heal on the next snapshot
-- No accumulation bugs across epoch boundaries
-- Idempotent - running reconcile twice with the same desired state is a no-op
+The Scheduler does not treat each visibility event as a tiny imperative command.
+It builds desired state, compares that against actual state, and reconciles.
 
-### Why host-mediated networking (not CNI plugins)
+That matters. Missed events self-heal on the next snapshot. Epoch boundaries do
+not accumulate stale edges. Running the same reconcile twice with the same
+desired state does nothing.
 
-Session pod networking is entirely custom. The Node Agent creates veth pairs, VXLAN tunnels, and tc rules in the host network namespace, then moves interface ends into pod namespaces. This gives us:
-- Carrier-state control (admin UP/DOWN the host-side veth to control link state)
-- Precise latency shaping per interface
-- VXLAN tunnels for cross-node links
-- Full control over the network topology without fighting CNI
+The dispatch worker is the actuator. It is the only writer of active link state
+and the only code path that sends link up/down operations to Node Agents.
+
+### Why host-mediated networking
+
+The emulated topology cannot be handed to the CNI and wished into existence.
+NodalArc needs carrier control, per-interface latency shaping, bandwidth limits,
+ground bridge attachment, and cross-node links that look like local interfaces
+inside the pods.
+
+The Node Agent owns that work. It creates the host-side plumbing, moves the pod
+ends into namespaces, drives carrier state from the host, and shapes the link.
+FRR sees ordinary interfaces. That is the point.
 
 ### Why position propagation is distributed
 
-The OME doesn't publish per-tick satellite positions. It publishes Keplerian orbital elements (SessionEphemeris) once per epoch. Every consumer (Scheduler, VS-API, VF) runs local Keplerian propagation to compute positions on demand. This means:
-- NATS bandwidth for position data is zero regardless of constellation size
-- 60fps rendering without 60 network messages per second
-- No clock synchronization issues between services
+The OME does not publish per-tick satellite positions. It publishes ephemeris
+for the epoch. Consumers propagate positions locally.
 
-## Multi-Node Architecture
+That keeps NATS bandwidth from growing with frame rate. The browser can render
+at 60fps without asking the backend for 60 position updates per second. The
+Scheduler can compute visibility when it needs it. VS-API can answer state
+requests without turning OME into a position server.
 
-On a single node, ISL links are host-mediated veth pairs with tc mirred redirect. On multi-node:
+Build the pattern once. Let each component use it where it stands.
 
-- **Local links** (same node): veth pair + tc mirred
-- **Cross-node links** (different nodes): VXLAN tunnel + veth pair into pod
+## Multi-Node Model
 
-The Scheduler sets per-interface locality (LOCAL or CROSS_NODE) on every dispatch message. The Node Agent knows whether to create a veth or a VXLAN without querying anything.
+On one Kubernetes node, an ISL is host-mediated veth plumbing with `tc` redirect
+and shaping. Across Kubernetes nodes, it becomes a VXLAN tunnel with a pod-side
+interface at each end.
 
-Substrate latency compensation: the Node Agent measures physical inter-node latency continuously and publishes it. The Scheduler subtracts physical latency from orbital latency when setting tc netem values. Total packet delay always equals orbital latency.
+The Scheduler marks every interface operation with locality:
+
+- `LOCAL` - both session pods live on the same Kubernetes node
+- `CROSS_NODE` - session pods live on different Kubernetes nodes
+
+The Node Agent does not query the cluster to decide what to build. The Scheduler
+already resolved placement and put the answer in the dispatch message.
+
+Physical lab networks still have latency. NodalArc compensates for it. Node
+Agents measure substrate latency between Kubernetes nodes. The Scheduler
+subtracts that substrate delay from the orbital delay before setting `tc netem`.
+The packet sees the orbital delay, not orbital delay plus whatever the lab
+switch happened to add.
 
 ## Session Lifecycle
 
-```
-User clicks Deploy in wizard
-    → VS-API validates config, creates ConstellationSpec CR
-    → Operator watches CR, creates pods with placement policy
-    → Operator renders FRR configs from templates, delivers to pods
-    → Operator writes topology wiring manifest ConfigMap
-    → Node Agent detects manifest, wires all interfaces
-    → Node Agent signals wiring complete
-    → Operator advances session to Ready
-    → OME begins publishing events
-    → Scheduler activates links
-    → FRR forms adjacencies, routing converges
-    → VS-API pushes state to VF
-    → User sees live constellation
+A session joins the primitives: constellation geometry, satellite type, ground
+station set, routing stack, placement policy, and time model.
+
+The path from a button click to routing looks like this:
+
+```text
+User clicks Deploy in the wizard
+    -> VS-API validates config and creates a ConstellationSpec CR
+    -> Operator watches the CR and creates session pods
+    -> Operator renders FRR configs from templates
+    -> Operator writes the topology wiring manifest
+    -> Node Agent detects the manifest and wires interfaces
+    -> Node Agent signals wiring complete
+    -> Operator advances the session to Ready
+    -> OME begins publishing orbital events
+    -> Scheduler activates visible links
+    -> FRR forms adjacencies and converges
+    -> VS-API pushes state to VF
+    -> User sees the live constellation
 ```
 
-For detailed component documentation, see the [Components](components/) directory.
+The important part is not the number of steps. The important part is ownership.
+The Operator owns pod lifecycle and generated config. The Node Agent owns
+kernel wiring. The OME owns orbital truth. The Scheduler owns reconciliation.
+FRR owns routing.
+
+Keep those boundaries intact.
+
+For deeper detail, read the component documents in [components/](components/)
+and the non-negotiable rules in [Architectural Invariants](invariants.md).

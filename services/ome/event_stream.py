@@ -208,9 +208,11 @@ class StepContext:
 
 def _compute_pair_score(elevation_deg: float, policy: str) -> float:
     """Score a GS-satellite pair. Always positive, higher = better."""
-    if policy == "longest-pass":
+    if policy == "highest-elevation":
+        return elevation_deg
+    if policy == "lowest-elevation":
         return 90.0 - elevation_deg
-    return elevation_deg
+    raise ValueError(f"Unknown ground scheduling policy: {policy!r}")
 
 
 def _latency_ms(range_km: float) -> float:

@@ -86,13 +86,11 @@ def _build_interface_map(
     for pair, (iface_a, iface_b) in interface_map.items():
         node_a, node_b = pair
         if not iface_a or not iface_b:
-            log.warning(
-                "Interface map incomplete for pair %s (%s, %s) — skipping bandwidth resolution",
-                pair,
-                iface_a or "<empty>",
-                iface_b or "<empty>",
+            raise ValueError(
+                "Interface map incomplete for "
+                f"{pair}: iface_a={iface_a or '<empty>'}, iface_b={iface_b or '<empty>'}. "
+                "Scheduler refuses to continue with unresolved ISL bandwidth."
             )
-            continue
         plane_a, slot_a = sat_location[node_a]
         plane_b, slot_b = sat_location[node_b]
         bandwidth_map[pair] = isl_link_bandwidth_mbps(

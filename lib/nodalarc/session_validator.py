@@ -21,9 +21,7 @@ from nodalarc.stack_resolver import ResolvedStack
 VALID_SCHEDULING_POLICIES = frozenset(
     {
         "highest-elevation",
-        "strongest-signal",
-        "longest-visibility",
-        "longest-pass",
+        "lowest-elevation",
     }
 )
 

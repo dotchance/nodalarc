@@ -9,12 +9,11 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 from nodalarc.constants import SPEED_OF_LIGHT_KM_S, WGS84_A, WGS84_B
+from nodalarc.frames import GeoPosition, Vec3
 from nodalarc.geo import (
     compute_latency_ms,
     compute_range_km,
-)
-from nodalarc.geo import (
-    geodetic_to_ecef as tuple_geodetic_to_ecef,
+    geodetic_to_ecef,
 )
 from nodalarc.models.events import NodePosition, VisibilityEvent
 from nodalarc.models.link_state import (
@@ -24,8 +23,7 @@ from nodalarc.models.link_state import (
     LinkStateSnapshot,
     RoutingState,
 )
-from nodalarc.propagator import GeoPosition
-from nodalarc.propagator import geodetic_to_ecef as typed_geodetic_to_ecef
+from nodalarc.propagator import geodetic_to_ecef as reexported_geodetic_to_ecef
 from ome.event_stream import build_link_state_snapshot
 from scheduler.dispatcher import Dispatcher
 from scheduler.pod_locator import PodLocationMap
@@ -67,7 +65,7 @@ def _dispatcher() -> Dispatcher:
 
 class TestAnalyticGeometry:
     def test_ecef_range_matches_euclidean_distance(self):
-        assert compute_range_km((0.0, 0.0, 0.0), (3.0, 4.0, 12.0)) == 13.0
+        assert compute_range_km(Vec3(0.0, 0.0, 0.0), Vec3(3.0, 4.0, 12.0)) == 13.0
 
     def test_speed_of_light_latency_formula(self):
         assert compute_latency_ms(SPEED_OF_LIGHT_KM_S) == 1000.0
@@ -78,24 +76,26 @@ class TestAnalyticGeometry:
         )
 
     def test_wgs84_axis_fixtures(self):
-        x, y, z = tuple_geodetic_to_ecef(0.0, 0.0, 0.0)
+        x, y, z = geodetic_to_ecef(GeoPosition(0.0, 0.0, 0.0))
         assert math.isclose(x, WGS84_A, abs_tol=RANGE_TOL_KM)
         assert math.isclose(y, 0.0, abs_tol=RANGE_TOL_KM)
         assert math.isclose(z, 0.0, abs_tol=RANGE_TOL_KM)
 
-        x, y, z = tuple_geodetic_to_ecef(90.0, 0.0, 0.0)
+        x, y, z = geodetic_to_ecef(GeoPosition(90.0, 0.0, 0.0))
         assert math.isclose(x, 0.0, abs_tol=RANGE_TOL_KM)
         assert math.isclose(y, 0.0, abs_tol=RANGE_TOL_KM)
         assert math.isclose(z, WGS84_B, abs_tol=RANGE_TOL_KM)
 
-    def test_duplicate_geodetic_to_ecef_paths_stay_identical_until_consolidated(self):
-        geo = GeoPosition(lat_deg=33.9175, lon_deg=-118.328111, alt_km=0.04)
-        tuple_ecef = tuple_geodetic_to_ecef(geo.lat_deg, geo.lon_deg, geo.alt_km)
-        typed_ecef = typed_geodetic_to_ecef(geo)
+    def test_propagator_reexports_single_geodetic_to_ecef_implementation(self):
+        assert reexported_geodetic_to_ecef is geodetic_to_ecef
 
-        assert math.isclose(tuple_ecef[0], typed_ecef.x, abs_tol=RANGE_TOL_KM)
-        assert math.isclose(tuple_ecef[1], typed_ecef.y, abs_tol=RANGE_TOL_KM)
-        assert math.isclose(tuple_ecef[2], typed_ecef.z, abs_tol=RANGE_TOL_KM)
+        geo = GeoPosition(lat_deg=33.9175, lon_deg=-118.328111, alt_km=0.04)
+        direct_ecef = geodetic_to_ecef(geo)
+        reexported_ecef = reexported_geodetic_to_ecef(geo)
+
+        assert math.isclose(direct_ecef.x, reexported_ecef.x, abs_tol=RANGE_TOL_KM)
+        assert math.isclose(direct_ecef.y, reexported_ecef.y, abs_tol=RANGE_TOL_KM)
+        assert math.isclose(direct_ecef.z, reexported_ecef.z, abs_tol=RANGE_TOL_KM)
 
 
 class TestOmeSnapshotGeometry:
@@ -117,8 +117,8 @@ class TestOmeSnapshotGeometry:
         )
         link = snapshot.links[0]
         expected_range = compute_range_km(
-            tuple_geodetic_to_ecef(0.0, 0.0, 550.0),
-            tuple_geodetic_to_ecef(0.0, 5.0, 550.0),
+            geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0)),
+            geodetic_to_ecef(GeoPosition(0.0, 5.0, 550.0)),
         )
 
         assert link.range_km is not None

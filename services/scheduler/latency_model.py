@@ -11,6 +11,7 @@ Does NOT apply tc commands, manage interfaces, or know about convergence.
 
 from __future__ import annotations
 
+from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.geo import compute_latency_ms, compute_range_km, geodetic_to_ecef
 from nodalarc.models.events import (
     EphemerisNodeFixed,
@@ -31,7 +32,7 @@ class PositionTable:
 
     def __init__(self) -> None:
         self._sat_elements: dict[str, object] = {}  # node_id -> OrbitalElements
-        self._gs_ecef: dict[str, tuple[float, float, float]] = {}  # node_id -> (x, y, z)
+        self._gs_ecef: dict[str, EcefVec3] = {}
         self._epoch_unix: float = 0.0
         self._loaded = False
 
@@ -59,12 +60,12 @@ class PositionTable:
                     node.true_anomaly_deg,
                 )
             elif isinstance(node, EphemerisNodeFixed):
-                ecef = geodetic_to_ecef(node.lat_deg, node.lon_deg, node.alt_km)
+                ecef = geodetic_to_ecef(GeoPosition(node.lat_deg, node.lon_deg, node.alt_km))
                 self._gs_ecef[node_id] = ecef
 
         self._loaded = True
 
-    def _get_ecef(self, node_id: str, sim_time_unix: float) -> tuple[float, float, float] | None:
+    def _get_ecef(self, node_id: str, sim_time_unix: float) -> EcefVec3 | None:
         """Get ECEF position for a node at the given sim_time.
 
         Satellites: propagate from orbital elements.
@@ -79,7 +80,7 @@ class PositionTable:
 
         dt = sim_time_unix - self._epoch_unix
         pos_ecef, _vel, _geo = propagate_keplerian(elements, self._epoch_unix, dt)
-        return (pos_ecef.x, pos_ecef.y, pos_ecef.z)
+        return pos_ecef
 
     def compute_link_range(
         self, node_a: str, node_b: str, sim_time_unix: float = 0.0

@@ -416,28 +416,47 @@ class SessionContext:
                 self.last_snapshot_seq,
             )
             return
-        self.last_snapshot_seq = snapshot.snapshot_seq
+        new_links: dict[str, LinkState] = {}
+        for link in snapshot.links:
+            if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
+                missing = [
+                    field
+                    for field in (
+                        "latency_ms",
+                        "bandwidth_mbps",
+                        "range_km",
+                        "interface_a",
+                        "interface_b",
+                    )
+                    if getattr(link, field) in (None, "")
+                ]
+                if missing:
+                    raise ValueError(
+                        "LinkStateSnapshot active link "
+                        f"{link.node_a}<->{link.node_b} is missing required "
+                        f"authoritative field(s): {', '.join(missing)}"
+                    )
+                key = _link_key(link.node_a, link.node_b)
+                new_links[key] = LinkState(
+                    node_a=link.node_a,
+                    node_b=link.node_b,
+                    state="active",
+                    link_type=_derive_link_type(link.node_a, link.node_b, link.link_type),
+                    link_reason="",
+                    latency_ms=link.latency_ms,
+                    bandwidth_mbps=link.bandwidth_mbps,
+                    range_km=link.range_km,
+                    traffic_load_pct=None,
+                    interface_a=link.interface_a,
+                    interface_b=link.interface_b,
+                )
 
         with self.state_lock:
             self.links.clear()
-            for link in snapshot.links:
-                if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
-                    key = _link_key(link.node_a, link.node_b)
-                    self.links[key] = LinkState(
-                        node_a=link.node_a,
-                        node_b=link.node_b,
-                        state="active",
-                        link_type=_derive_link_type(link.node_a, link.node_b, link.link_type),
-                        link_reason="",
-                        latency_ms=link.latency_ms,
-                        bandwidth_mbps=link.bandwidth_mbps,
-                        range_km=link.latency_ms * 299792.458 / 1000.0,
-                        traffic_load_pct=None,
-                        interface_a="",
-                        interface_b="",
-                    )
+            self.links.update(new_links)
             self.prev_snapshot_active_count = self.curr_snapshot_active_count
             self.curr_snapshot_active_count = len(self.links)
+            self.last_snapshot_seq = snapshot.snapshot_seq
 
         if not self._snapshot_received:
             self._snapshot_received = True
@@ -463,8 +482,9 @@ class SessionContext:
             "bandwidth_mbps",
             "range_km",
             "reason",
+            "link_type",
         ):
-            if field not in data:
+            if field not in data or data[field] is None:
                 log.error("Malformed LinkUp — missing %s: %s", field, data)
                 raise ValueError(f"LinkUp missing required field: {field}")
         key = _link_key(node_a, node_b)
@@ -473,7 +493,7 @@ class SessionContext:
                 node_a=node_a,
                 node_b=node_b,
                 state="active",
-                link_type=_derive_link_type(node_a, node_b, data.get("link_type", "isl")),
+                link_type=_derive_link_type(node_a, node_b, data["link_type"]),
                 link_reason=data["reason"],
                 latency_ms=data["latency_ms"],
                 bandwidth_mbps=data["bandwidth_mbps"],
@@ -493,6 +513,9 @@ class SessionContext:
         if not node_a or not node_b:
             log.error("Malformed LinkDown — missing node_a=%r or node_b=%r", node_a, node_b)
             raise ValueError(f"LinkDown missing required fields: node_a={node_a}, node_b={node_b}")
+        if data.get("link_type") is None:
+            log.error("Malformed LinkDown — missing link_type: %s", data)
+            raise ValueError("LinkDown missing required field: link_type")
         key = _link_key(node_a, node_b)
         with self.state_lock:
             self.links.pop(key, None)

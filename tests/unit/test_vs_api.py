@@ -4,6 +4,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
+import pytest
 from nodalarc.db.queries import (
     insert_convergence_result,
     insert_link_up,
@@ -50,6 +51,7 @@ def _make_link_down_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides)
         "interface_b": "isl1",
         "reason": "vis_lost",
         "sim_time": datetime.now(UTC).isoformat(),
+        "link_type": "isl",
     }
     event.update(overrides)
     return event
@@ -458,6 +460,131 @@ class TestSubscriberResilience:
 
         asyncio.run(ctx._on_link_state_snapshot(msg))
         assert ctx.last_snapshot_seq == 11
+
+    def test_snapshot_uses_authoritative_range_and_interfaces(self):
+        """VS-API must not derive range from latency or discard interfaces."""
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        msg = MagicMock()
+        msg.data = json.dumps(
+            {
+                "snapshot_seq": 12,
+                "sim_time": "2025-01-01T00:00:00+00:00",
+                "interval_s": 1.0,
+                "epoch_id": 0,
+                "links": [
+                    {
+                        "node_a": "sat-P00S00",
+                        "node_b": "sat-P00S01",
+                        "interface_a": "isl0",
+                        "interface_b": "isl1",
+                        "admin": "UP",
+                        "carrier": "UP",
+                        "routing": "UNKNOWN",
+                        "range_km": 900.0,
+                        "latency_ms": 3.0,
+                        "bandwidth_mbps": 1000.0,
+                        "link_type": "isl",
+                        "sim_time": "2025-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+        ).encode()
+
+        asyncio.run(ctx._on_link_state_snapshot(msg))
+
+        link = ctx.links[_link_key("sat-P00S00", "sat-P00S01")]
+        assert link.range_km == 900.0
+        assert link.interface_a == "isl0"
+        assert link.interface_b == "isl1"
+        assert ctx.last_snapshot_seq == 12
+
+    def test_malformed_snapshot_does_not_advance_sequence_or_replace_state(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.last_snapshot_seq = 11
+        existing_key = _link_key("sat-P00S00", "sat-P00S01")
+        ctx.links[existing_key] = LinkState(
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            state="active",
+            link_type="intra_plane_isl",
+            link_reason="vis_gained",
+            latency_ms=5.0,
+            bandwidth_mbps=1000.0,
+            range_km=1500.0,
+            traffic_load_pct=None,
+            interface_a="isl0",
+            interface_b="isl1",
+        )
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        msg = MagicMock()
+        msg.data = json.dumps(
+            {
+                "snapshot_seq": 12,
+                "sim_time": "2025-01-01T00:00:00+00:00",
+                "interval_s": 1.0,
+                "epoch_id": 0,
+                "links": [
+                    {
+                        "node_a": "sat-P00S00",
+                        "node_b": "sat-P00S01",
+                        "interface_a": "isl0",
+                        "interface_b": "isl1",
+                        "admin": "UP",
+                        "carrier": "UP",
+                        "routing": "UNKNOWN",
+                        "latency_ms": 3.0,
+                        "bandwidth_mbps": 1000.0,
+                        "link_type": "isl",
+                        "sim_time": "2025-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+        ).encode()
+
+        with pytest.raises(ValueError, match="missing required authoritative field"):
+            asyncio.run(ctx._on_link_state_snapshot(msg))
+
+        assert ctx.last_snapshot_seq == 11
+        assert ctx.links[existing_key].range_km == 1500.0
+
+    def test_link_up_requires_explicit_link_type(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        event = _make_link_up_event()
+        event.pop("link_type")
+        msg = MagicMock()
+        msg.data = json.dumps(event).encode()
+
+        with pytest.raises(ValueError, match="link_type"):
+            asyncio.run(ctx._on_link_up(msg))
+
+    def test_link_down_requires_explicit_link_type(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        event = _make_link_down_event()
+        event.pop("link_type")
+        msg = MagicMock()
+        msg.data = json.dumps(event).encode()
+
+        with pytest.raises(ValueError, match="link_type"):
+            asyncio.run(ctx._on_link_down(msg))
 
     def test_ready_requires_ephemeris_and_snapshot(self):
         """is_ready() only returns True when both ephemeris AND snapshot

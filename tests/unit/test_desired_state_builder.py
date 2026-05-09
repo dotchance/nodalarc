@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from nodalarc.models.events import VisibilityEvent
@@ -68,6 +68,8 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
     assert info.range_km == event.range_km
     assert info.latency_ms == event.latency_ms
     assert info.bandwidth_mbps == 1000.0
+    assert info.authority_sim_time == SIM
+    assert info.authority_source == "visibility_event"
 
 
 def test_ground_visibility_event_uses_terminal_indices():
@@ -136,6 +138,8 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
             down,
             interface_map={PAIR: ("isl0", "isl1")},
             bandwidth_map={PAIR: 1000.0},
+            snapshot_sim_time=SIM,
+            snapshot_seq=42,
         )
         is None
     )
@@ -152,10 +156,41 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
         up,
         interface_map={PAIR: ("isl0", "isl1")},
         bandwidth_map={PAIR: 1000.0},
+        snapshot_sim_time=SIM,
+        snapshot_seq=42,
     )
     assert pair == PAIR
     assert info.range_km == 3333.0
     assert info.latency_ms == 11.118
+    assert info.authority_sim_time == SIM
+    assert info.authority_source == "link_state_snapshot"
+    assert info.authority_sequence == 42
+
+
+def test_snapshot_link_sim_time_mismatch_fails_loudly():
+    link = LinkState(
+        node_a=PAIR[0],
+        node_b=PAIR[1],
+        interface_a="isl0",
+        interface_b="isl1",
+        admin=AdminState.UP,
+        carrier=CarrierState.UP,
+        routing=RoutingState.UNKNOWN,
+        range_km=3333.0,
+        latency_ms=11.118,
+        bandwidth_mbps=1000.0,
+        link_type="isl",
+        sim_time=SIM - timedelta(seconds=1),
+    )
+
+    with pytest.raises(ValueError, match="sim_time does not match"):
+        desired_link_from_snapshot_link(
+            link,
+            interface_map={PAIR: ("isl0", "isl1")},
+            bandwidth_map={PAIR: 1000.0},
+            snapshot_sim_time=SIM,
+            snapshot_seq=42,
+        )
 
 
 def test_missing_or_nonpositive_bandwidth_fails_loudly():

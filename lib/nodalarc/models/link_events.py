@@ -17,6 +17,10 @@ class LinkDecisionProvenance(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     geometry_authority: Literal["ome"] = "ome"
+    authority_source: str
+    authority_sim_time: datetime
+    authority_sequence: int | None
+    authority_age_ms: float
     range_km: float
     orbital_one_way_ms: float
     substrate_rtt_ms: float

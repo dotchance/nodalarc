@@ -9,6 +9,8 @@ bandwidth, and fails loudly when required authority is missing.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import AdminState, CarrierState, LinkState
 
@@ -23,6 +25,9 @@ class ActiveLinkInfo:
         "bandwidth_mbps",
         "link_type",
         "range_km",
+        "authority_sim_time",
+        "authority_source",
+        "authority_sequence",
     )
 
     def __init__(
@@ -33,6 +38,9 @@ class ActiveLinkInfo:
         bandwidth_mbps: float,
         link_type: str = "isl",
         range_km: float | None = None,
+        authority_sim_time: datetime | None = None,
+        authority_source: str | None = None,
+        authority_sequence: int | None = None,
     ) -> None:
         self.interface_a = interface_a
         self.interface_b = interface_b
@@ -40,6 +48,9 @@ class ActiveLinkInfo:
         self.bandwidth_mbps = bandwidth_mbps
         self.link_type = link_type
         self.range_km = range_km
+        self.authority_sim_time = authority_sim_time
+        self.authority_source = authority_source
+        self.authority_sequence = authority_sequence
 
 
 def require_ome_geometry(
@@ -122,6 +133,8 @@ def desired_link_from_visibility(
         bandwidth_mbps=bandwidth,
         link_type=vis.link_type,
         range_km=range_km,
+        authority_sim_time=vis.sim_time,
+        authority_source="visibility_event",
     )
 
 
@@ -130,10 +143,18 @@ def desired_link_from_snapshot_link(
     *,
     interface_map: dict[tuple[str, str], tuple[str, str]],
     bandwidth_map: dict[tuple[str, str], float],
+    snapshot_sim_time: datetime,
+    snapshot_seq: int,
 ) -> tuple[tuple[str, str], ActiveLinkInfo] | None:
     """Build one desired link from an authoritative snapshot link entry."""
     if link.admin != AdminState.UP or link.carrier != CarrierState.UP:
         return None
+    if link.sim_time != snapshot_sim_time:
+        raise ValueError(
+            "LinkStateSnapshot contains a link whose sim_time does not match "
+            f"the snapshot authority time: link={link.sim_time.isoformat()} "
+            f"snapshot={snapshot_sim_time.isoformat()}"
+        )
 
     pair = (link.node_a, link.node_b)
     range_km, latency = require_ome_geometry(
@@ -161,4 +182,7 @@ def desired_link_from_snapshot_link(
         bandwidth_mbps=bandwidth,
         link_type=link.link_type,
         range_km=range_km,
+        authority_sim_time=snapshot_sim_time,
+        authority_source="link_state_snapshot",
+        authority_sequence=snapshot_seq,
     )

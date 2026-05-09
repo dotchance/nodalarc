@@ -18,8 +18,19 @@ from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 OME_RANGE_KM = 1000.0
 
 
-def _ground_info() -> ActiveLinkInfo:
-    return ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground", range_km=OME_RANGE_KM)
+def _ground_info(authority_sim_time: datetime | None = None) -> ActiveLinkInfo:
+    if authority_sim_time is None:
+        authority_sim_time = datetime.now(UTC)
+    return ActiveLinkInfo(
+        "term0",
+        "gnd0",
+        3.0,
+        1000.0,
+        link_type="ground",
+        range_km=OME_RANGE_KM,
+        authority_sim_time=authority_sim_time,
+        authority_source="test",
+    )
 
 
 def _make_dispatcher(
@@ -61,6 +72,7 @@ def _make_dispatcher(
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",
+        max_latency_age_s=60.0,
         gs_terminal_capacities=gs_caps or {},
         sat_ground_terminal_capacities=sat_caps or {},
         mbb_dispatch=mbb,
@@ -94,7 +106,7 @@ class TestMBBCapacityClassification:
         nc = AsyncMock()
         nc.publish = AsyncMock()
         sim = datetime.now(UTC)
-        desired = {pair_new: _ground_info()}
+        desired = {pair_new: _ground_info(authority_sim_time=sim)}
 
         _run(d._reconcile_links(desired, nc, sim))
 
@@ -117,9 +129,10 @@ class TestMBBCapacityClassification:
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: _ground_info()}
+        sim = datetime.now(UTC)
+        desired = {pair_new: _ground_info(authority_sim_time=sim)}
 
-        _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
+        _run(d._reconcile_links(desired, nc, sim))
 
         assert pair_new in d._actual_links
         assert pair_old not in d._actual_links
@@ -141,9 +154,10 @@ class TestMBBCapacityClassification:
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: _ground_info()}
+        sim = datetime.now(UTC)
+        desired = {pair_new: _ground_info(authority_sim_time=sim)}
 
-        _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
+        _run(d._reconcile_links(desired, nc, sim))
 
         # Should still complete (BBM: down sat-X first, then up sat-Y fails
         # because sat-Y is occupied by another GS, not freed by this handover)
@@ -176,9 +190,10 @@ class TestMBBRollback:
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: _ground_info()}
+        sim = datetime.now(UTC)
+        desired = {pair_new: _ground_info(authority_sim_time=sim)}
 
-        _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
+        _run(d._reconcile_links(desired, nc, sim))
 
         # Rollback: sat-01 should still be active (Phase 3 skipped)
         assert pair_old in d._actual_links
@@ -200,9 +215,10 @@ class TestMBBDispatchFlag:
 
         nc = AsyncMock()
         nc.publish = AsyncMock()
-        desired = {pair_new: _ground_info()}
+        sim = datetime.now(UTC)
+        desired = {pair_new: _ground_info(authority_sim_time=sim)}
 
-        _run(d._reconcile_links(desired, nc, datetime.now(UTC)))
+        _run(d._reconcile_links(desired, nc, sim))
 
         assert pair_new in d._actual_links
         assert pair_old not in d._actual_links
@@ -277,9 +293,10 @@ class TestForcedBBMSegmentEscalation:
         d._gs_active_count = {"gs-A": 1, "gs-B": 1}
         d._sat_active_count = {"sat-01": 1, "sat-03": 1}
 
+        sim = datetime.now(UTC)
         desired = {
-            pair_a_new: _ground_info(),
-            pair_b_new: _ground_info(),
+            pair_a_new: _ground_info(authority_sim_time=sim),
+            pair_b_new: _ground_info(authority_sim_time=sim),
         }
 
         forced = frozenset({pair_a_old})
@@ -288,7 +305,7 @@ class TestForcedBBMSegmentEscalation:
         nc = AsyncMock()
         nc.publish = AsyncMock()
 
-        _run(d._reconcile_links(desired, nc, datetime.now(UTC), down_reasons, forced))
+        _run(d._reconcile_links(desired, nc, sim, down_reasons, forced))
 
         assert pair_a_old not in d._actual_links
         assert pair_b_old not in d._actual_links
@@ -311,8 +328,9 @@ class TestForcedBBMSegmentEscalation:
         d._gs_active_count = {"gs-A": 2}
         d._sat_active_count = {"sat-01": 1, "sat-02": 1}
 
+        sim = datetime.now(UTC)
         desired = {
-            pair_new: _ground_info(),
+            pair_new: _ground_info(authority_sim_time=sim),
         }
 
         forced = frozenset({pair_forced})
@@ -321,7 +339,7 @@ class TestForcedBBMSegmentEscalation:
         nc = AsyncMock()
         nc.publish = AsyncMock()
 
-        _run(d._reconcile_links(desired, nc, datetime.now(UTC), down_reasons, forced))
+        _run(d._reconcile_links(desired, nc, sim, down_reasons, forced))
 
         assert pair_forced not in d._actual_links
         assert pair_normal not in d._actual_links
@@ -340,8 +358,9 @@ class TestForcedBBMSegmentEscalation:
         d._gs_active_count = {"gs-A": 1}
         d._sat_active_count = {"sat-01": 1}
 
+        sim = datetime.now(UTC)
         desired = {
-            pair_new: _ground_info(),
+            pair_new: _ground_info(authority_sim_time=sim),
         }
 
         forced = frozenset({pair_old})
@@ -350,7 +369,7 @@ class TestForcedBBMSegmentEscalation:
         nc = AsyncMock()
         nc.publish = AsyncMock()
 
-        _run(d._reconcile_links(desired, nc, datetime.now(UTC), down_reasons, forced))
+        _run(d._reconcile_links(desired, nc, sim, down_reasons, forced))
 
         published_calls = d._js.publish.call_args_list
         down_calls = [c for c in published_calls if b"satellite_loss" in c[0][1]]

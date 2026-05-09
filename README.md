@@ -6,7 +6,7 @@ That sounds like a slogan until you have to route through it. A terrestrial
 network lets you pretend the topology is mostly fixed. Links fail, routers
 reboot, fiber gets cut, but the bones of the thing stay where you put them.
 
-Orbit does not work that way.
+On-orbit and space based networks do not work that way.
 
 A satellite in low Earth orbit is moving about seven and a half kilometers a
 second. A cross-plane link can exist now and be gone a few minutes later. A
@@ -23,41 +23,6 @@ driven by satellites moving through space.
 
 ![NodalArc Globe View](docs/images/hero-globe.png)
 
-## Run It
-
-Clone the repo, bootstrap the host, and bring the system up.
-
-```bash
-git clone https://github.com/dotchance/nodalarc.git
-cd nodalarc
-sudo scripts/bootstrap-host.sh   # installs K3s, Docker, Helm, Node.js
-make all                         # deps, build, load, install, session, status
-```
-
-Open `http://localhost:3000`.
-
-You are looking at 36 satellites moving around Earth with OSPF routing, seven
-ground stations, and live ISL links. Every satellite and ground station is a
-real router process in a real network namespace. You can exec into a node and
-ask FRR what it sees. You can trace a path. You can pause time, move it
-forward, and watch the network rearrange itself.
-
-For a square-one proof on a machine that already has K3s installed, run:
-
-```bash
-make nuke && make all
-```
-
-For an existing platform, use:
-
-```bash
-make build && make load && make upgrade
-```
-
-`make install` refuses existing platform state on purpose. Use `make upgrade`
-when you want to update the running platform, `make reinstall` when you want a
-destructive platform refresh, and `make nuke && make all` when you want to prove
-the whole bring-up path from scratch.
 
 ## What You Are Running
 
@@ -90,7 +55,7 @@ with one routing stack, then swap in Iridium geometry. Hold the sky fixed and
 change IS-IS to OSPF. Move a ground station. Add segment routing. Watch what
 changes.
 
-That is the point. Measure what actually happens.
+That is the point. Measure and tinker to see what actually happens.
 
 ## What You Can Try
 
@@ -104,6 +69,7 @@ Once the system is running, you can:
 - run `ping`, `traceroute`, and `iperf` through the emulated constellation
 - open a browser terminal to any satellite or ground station and use `vtysh`
 - script experiments through the REST and WebSocket APIs
+- run external systems through the emulation to see how they act
 
 Start small. Demo-36 is enough to see the machinery. Starlink-176 and Iridium-66
 start to show why the geometry matters. A Walker Delta gives you a steady
@@ -127,6 +93,8 @@ Open a terminal to any satellite or ground station from the browser. You land in
 the same FRR CLI you would use on a physical router. Run `show ip route`,
 `show isis neighbor`, `show ospf neighbor`, or whatever the running stack
 supports.
+
+You can change out FRR for an Arista container, or Juniper container router.
 
 ### Session switching
 

@@ -133,6 +133,7 @@ def _sat_type_to_terminal_config(sat_type: SatelliteTypeConfig) -> TerminalConfi
             IslTerminal(
                 type=td.type,
                 count=td.count,
+                role=td.role,
                 max_range_km=td.max_range_km,
                 bandwidth_mbps=td.bandwidth_mbps,
                 max_tracking_rate_deg_s=td.max_tracking_rate_deg_s,
@@ -188,7 +189,15 @@ def _terminal_counts_from_inline(terminals) -> tuple[int, int]:
 class SatelliteNode:
     """Expanded satellite with computed orbital elements and identity."""
 
-    __slots__ = ("plane", "slot", "elements", "isl_terminal_count", "ground_terminal_count")
+    __slots__ = (
+        "plane",
+        "slot",
+        "elements",
+        "isl_terminal_count",
+        "ground_terminal_count",
+        "isl_terminals",
+        "ground_terminals",
+    )
 
     def __init__(
         self,
@@ -197,12 +206,16 @@ class SatelliteNode:
         elements: OrbitalElements,
         isl_terminal_count: int,
         ground_terminal_count: int,
+        isl_terminals: list | tuple | None = None,
+        ground_terminals: list | tuple | None = None,
     ) -> None:
         self.plane = plane
         self.slot = slot
         self.elements = elements
         self.isl_terminal_count = isl_terminal_count
         self.ground_terminal_count = ground_terminal_count
+        self.isl_terminals = tuple(isl_terminals or ())
+        self.ground_terminals = tuple(ground_terminals or ())
 
 
 def load_constellation(source: str | Path | dict) -> ConstellationConfig:
@@ -413,23 +426,13 @@ def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
     phase_offset = config.planes.phase_offset_deg
     anomaly_spacing = 360.0 / sats_per_plane
 
-    default_isl_count, default_gnd_count = _resolve_default_terminals(config)
-
-    # Build plane override lookup
-    plane_terminal_overrides: dict[int, tuple[int, int]] = {}
-    if config.plane_overrides:
-        for ovr in config.plane_overrides:
-            isl_count, gnd_count = _resolve_plane_override(ovr)
-            for p in ovr.planes:
-                plane_terminal_overrides[p] = (isl_count, gnd_count)
-
     for p in range(plane_count):
         raan = p * raan_spacing
-        isl_count, gnd_count = plane_terminal_overrides.get(
-            p, (default_isl_count, default_gnd_count)
-        )
 
         for s in range(sats_per_plane):
+            isl_terminals, ground_terminals = _terminals_for_node(config, p, s)
+            isl_count = sum(t.count for t in isl_terminals)
+            gnd_count = sum(t.count for t in ground_terminals)
             true_anomaly = s * anomaly_spacing + p * phase_offset
             elements = elements_from_params(
                 altitude_km=config.orbit.altitude_km,
@@ -444,6 +447,8 @@ def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
                     elements=elements,
                     isl_terminal_count=isl_count,
                     ground_terminal_count=gnd_count,
+                    isl_terminals=isl_terminals,
+                    ground_terminals=ground_terminals,
                 )
             )
 
@@ -454,18 +459,10 @@ def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
     """Expand explicit constellation — each satellite has its own orbital elements."""
     satellites: list[SatelliteNode] = []
 
-    default_isl_count, default_gnd_count = _resolve_default_terminals(config)
-
     for sat_cfg in config.satellites:
-        # Priority: per-node satellite_type > per-node inline terminals > constellation default
-        if sat_cfg.satellite_type is not None:
-            sat_type = load_satellite_type(sat_cfg.satellite_type)
-            isl_count, gnd_count = _terminal_counts_from_sat_type(sat_type)
-        elif sat_cfg.terminals:
-            isl_count, gnd_count = _terminal_counts_from_inline(sat_cfg.terminals)
-        else:
-            isl_count = default_isl_count
-            gnd_count = default_gnd_count
+        isl_terminals, ground_terminals = _terminals_for_node(config, sat_cfg.plane, sat_cfg.slot)
+        isl_count = sum(t.count for t in isl_terminals)
+        gnd_count = sum(t.count for t in ground_terminals)
 
         elements = elements_from_params(
             altitude_km=sat_cfg.orbit.altitude_km,
@@ -480,6 +477,8 @@ def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
                 elements=elements,
                 isl_terminal_count=isl_count,
                 ground_terminal_count=gnd_count,
+                isl_terminals=isl_terminals,
+                ground_terminals=ground_terminals,
             )
         )
 
@@ -594,6 +593,33 @@ def isl_terminal_bandwidth_mbps(isl_terminals: list, interface_name: str) -> flo
     for block in isl_terminals:
         if idx < cumulative + block.count:
             return float(block.bandwidth_mbps)
+        cumulative += block.count
+    raise ValueError(
+        f"ISL interface index {idx} (from {interface_name!r}) out of range — "
+        f"satellite has only {cumulative} ISL terminals total"
+    )
+
+
+def isl_terminal_for_interface(isl_terminals: list | tuple, interface_name: str):
+    """Return the terminal block that owns an ISL interface.
+
+    Interface names map to flattened terminal slots across ordered terminal
+    blocks. This helper is the authoritative bridge from structural neighbor
+    assignment (`isl2`) to terminal-role physics (`cross-plane`, max tracking
+    rate, field of regard, range). Callers must use this instead of assuming
+    `default_terminals.isl[0]` represents every ISL.
+    """
+    if not interface_name.startswith("isl"):
+        raise ValueError(f"Expected 'islN' interface name, got {interface_name!r}")
+    try:
+        idx = int(interface_name[3:])
+    except ValueError as exc:
+        raise ValueError(f"Invalid ISL interface name {interface_name!r}") from exc
+
+    cumulative = 0
+    for block in isl_terminals:
+        if idx < cumulative + block.count:
+            return block
         cumulative += block.count
     raise ValueError(
         f"ISL interface index {idx} (from {interface_name!r}) out of range — "

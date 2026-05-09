@@ -81,15 +81,15 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
     polar_seam_enabled = False
     latitude_threshold_deg = 70.0
 
-    if isinstance(constellation_config, ParametricConstellation):
-        if constellation_config.default_terminals and constellation_config.default_terminals.isl:
-            isl_term = constellation_config.default_terminals.isl[0]
-            max_range_km = isl_term.max_range_km
-            max_tracking_rate_deg_s = isl_term.max_tracking_rate_deg_s
-            field_of_regard_deg = isl_term.field_of_regard_deg
-        if constellation_config.polar_seam:
-            polar_seam_enabled = constellation_config.polar_seam.enabled
-            latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
+    if (
+        isinstance(constellation_config, ParametricConstellation)
+        and constellation_config.polar_seam
+    ):
+        # ISL physics is terminal-role-aware in compute_step(); do not collapse
+        # all terminals to default_terminals.isl[0]. These legacy scalar values
+        # remain only for older call signatures and are not dispatch authority.
+        polar_seam_enabled = constellation_config.polar_seam.enabled
+        latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
 
     default_min_elevation = gs_file.default_min_elevation_deg or 25.0
 
@@ -127,6 +127,17 @@ _seeking: bool = False  # True while seek in progress — mutex for pause/set_sp
 def run(session_path: str, output_dir: str | None = None) -> Path:
     """Run the OME pipeline (single window, batch mode) and return the output path."""
     cfg = _load_session_config(session_path)
+    mbb_dispatch = cfg.session.routing.mbb_dispatch if cfg.session.routing else False
+    mbb_overlap_ticks = cfg.session.routing.mbb_overlap_ticks if cfg.session.routing else 3
+    mbb_reserve = (
+        1
+        if mbb_dispatch
+        and any(
+            sum(t.tracking_capacity for t in (st.terminals or cfg.gs_file.default_terminals)) > 1
+            for st in (cfg.gs_file.stations if cfg.gs_file else [])
+        )
+        else 0
+    )
 
     events = precompute_timeline(
         satellites=cfg.satellites,
@@ -139,6 +150,8 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         max_range_km=cfg.max_range_km,
         max_tracking_rate_deg_s=cfg.max_tracking_rate_deg_s,
         field_of_regard_deg=cfg.field_of_regard_deg,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         default_min_elevation_deg=cfg.default_min_elevation_deg,

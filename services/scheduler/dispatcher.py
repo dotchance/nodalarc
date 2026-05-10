@@ -62,6 +62,7 @@ from scheduler.dispatch_planner import (
     gs_id_for_pair,
     sat_id_for_gs_pair,
 )
+from scheduler.epoch_sync import EpochSyncState
 from scheduler.latency_compensator import LatencyCompensation, compensate_latency
 from scheduler.latency_model import PositionTable
 from scheduler.node_agent_batches import (
@@ -219,12 +220,7 @@ class Dispatcher:
         # publishes PlaybackState(state="seeking"), signaling a sim_time
         # discontinuity that requires fresh ephemeris + snapshot before
         # dispatch can resume safely.
-        self._suspended = False
-        self._expected_epoch_id = 0
-        self._playback_playing_received = False
-        self._epoch_deps_met = {"ephemeris": False, "snapshot": False}
-        self._buffered_snapshot: LinkStateSnapshot | None = None
-        self._stale = False
+        self._epoch_sync = EpochSyncState()
         self._watchdog_task: asyncio.Task | None = None
         self._scenario_sub = None
 
@@ -235,6 +231,54 @@ class Dispatcher:
     @property
     def _active_links(self) -> dict[tuple[str, str], ActiveLinkInfo]:
         return self._actual_links
+
+    @property
+    def _suspended(self) -> bool:
+        return self._epoch_sync.suspended
+
+    @_suspended.setter
+    def _suspended(self, value: bool) -> None:
+        self._epoch_sync.suspended = value
+
+    @property
+    def _expected_epoch_id(self) -> int:
+        return self._epoch_sync.expected_epoch_id
+
+    @_expected_epoch_id.setter
+    def _expected_epoch_id(self, value: int) -> None:
+        self._epoch_sync.expected_epoch_id = value
+
+    @property
+    def _playback_playing_received(self) -> bool:
+        return self._epoch_sync.playback_playing_received
+
+    @_playback_playing_received.setter
+    def _playback_playing_received(self, value: bool) -> None:
+        self._epoch_sync.playback_playing_received = value
+
+    @property
+    def _epoch_deps_met(self) -> dict[str, bool]:
+        return self._epoch_sync.deps_met
+
+    @_epoch_deps_met.setter
+    def _epoch_deps_met(self, value: dict[str, bool]) -> None:
+        self._epoch_sync.deps_met = value
+
+    @property
+    def _buffered_snapshot(self) -> LinkStateSnapshot | None:
+        return self._epoch_sync.buffered_snapshot
+
+    @_buffered_snapshot.setter
+    def _buffered_snapshot(self, value: LinkStateSnapshot | None) -> None:
+        self._epoch_sync.buffered_snapshot = value
+
+    @property
+    def _stale(self) -> bool:
+        return self._epoch_sync.stale
+
+    @_stale.setter
+    def _stale(self, value: bool) -> None:
+        self._epoch_sync.stale = value
 
     def _rebaseline_active_counts(self) -> None:
         """Re-derive incremental counters from _actual_links (source of truth).
@@ -474,7 +518,7 @@ class Dispatcher:
             eph = SessionEphemeris.model_validate_json(msg.data)
             if eph.epoch_id == self._expected_epoch_id:
                 self._position_table.load_ephemeris(eph)
-                self._epoch_deps_met["ephemeris"] = True
+                self._epoch_sync.mark_ephemeris(eph.epoch_id)
                 log.debug(
                     "SessionEphemeris epoch_id=%d loaded: %d nodes",
                     eph.epoch_id,
@@ -492,12 +536,7 @@ class Dispatcher:
             ps = PlaybackState.model_validate_json(msg.data)
             if ps.state == "seeking" and ps.epoch_id > self._expected_epoch_id:
                 # New seek — enter SUSPENDED state
-                self._suspended = True
-                self._stale = False
-                self._expected_epoch_id = ps.epoch_id
-                self._playback_playing_received = False
-                self._epoch_deps_met = {"ephemeris": False, "snapshot": False}
-                self._buffered_snapshot = None
+                self._epoch_sync.begin_seek(ps.epoch_id)
                 self._latency_update_pending = False
                 self._steps_since_latency_update = 0
                 # Start watchdog
@@ -506,7 +545,7 @@ class Dispatcher:
                 self._watchdog_task = asyncio.create_task(self._epoch_watchdog(ps.epoch_id))
                 log.info("SUSPENDED: seeking epoch_id=%d", ps.epoch_id)
             elif ps.state == "playing" and ps.epoch_id == self._expected_epoch_id:
-                self._playback_playing_received = True
+                self._epoch_sync.mark_playing(ps.epoch_id)
                 log.debug("PlaybackState(playing, epoch_id=%d) received", ps.epoch_id)
                 await self._check_epoch_resume()
             elif ps.state == "paused":
@@ -565,9 +604,7 @@ class Dispatcher:
 
             if self._suspended:
                 # Buffer if matching epoch_id, discard otherwise
-                if snapshot.epoch_id == self._expected_epoch_id:
-                    self._buffered_snapshot = snapshot
-                    self._epoch_deps_met["snapshot"] = True
+                if self._epoch_sync.buffer_snapshot(snapshot):
                     log.debug(
                         "Buffered LinkStateSnapshot seq=%d epoch_id=%d",
                         snapshot.snapshot_seq,
@@ -1685,8 +1722,7 @@ class Dispatcher:
         """
         if not self._suspended:
             return
-        deps = self._epoch_deps_met
-        if deps["ephemeris"] and deps["snapshot"] and self._playback_playing_received:
+        if self._epoch_sync.ready_for_clock_resume():
             log.info(
                 "Epoch %d: all deps met — waiting for first ClockTick to resume",
                 self._expected_epoch_id,
@@ -1704,13 +1740,7 @@ class Dispatcher:
         if not self._suspended:
             return
 
-        missing = []
-        if not self._playback_playing_received:
-            missing.append("PlaybackState(playing)")
-        if not self._epoch_deps_met["ephemeris"]:
-            missing.append("SessionEphemeris")
-        if not self._epoch_deps_met["snapshot"]:
-            missing.append("LinkStateSnapshot")
+        missing = self._epoch_sync.missing_resume_dependencies()
         if missing:
             log.warning(
                 "Seek resume blocked — epoch_id=%d waiting for: %s",
@@ -1723,8 +1753,7 @@ class Dispatcher:
         if self._watchdog_task and not self._watchdog_task.done():
             self._watchdog_task.cancel()
 
-        self._suspended = False
-        self._stale = False
+        buffered_snapshot = self._epoch_sync.resume()
 
         # Process the triggering ClockTick's sim_time first — needed for intent
         tick_sim_str = tick_data.get("sim_time")
@@ -1734,8 +1763,8 @@ class Dispatcher:
         self._current_sim_time = datetime.fromisoformat(tick_sim_str)
 
         # Apply the buffered LinkStateSnapshot
-        if self._buffered_snapshot:
-            desired = self._build_desired_from_snapshot(self._buffered_snapshot)
+        if buffered_snapshot:
+            desired = self._build_desired_from_snapshot(buffered_snapshot)
             if desired is not None:
                 intent = self._build_dispatch_intent(
                     sim_time=self._current_sim_time,
@@ -1745,11 +1774,10 @@ class Dispatcher:
                 log.info(
                     "Epoch %d resume: applying buffered snapshot seq=%d (%d links)",
                     self._expected_epoch_id,
-                    self._buffered_snapshot.snapshot_seq,
+                    buffered_snapshot.snapshot_seq,
                     len(intent.desired),
                 )
                 await self._dispatch_queue.put(intent)
-            self._buffered_snapshot = None
 
         log.info(
             "RESUMED: epoch_id=%d sim_time=%s",
@@ -1766,8 +1794,7 @@ class Dispatcher:
         """
         try:
             await asyncio.sleep(30)
-            if self._suspended and self._expected_epoch_id == epoch_id:
-                self._stale = True
+            if self._epoch_sync.mark_watchdog_timeout(epoch_id):
                 deps = self._epoch_deps_met
                 log.error(
                     "FATAL: seek epoch_id=%d timed out after 30s — killing process. "

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import math
+
 from nodalarc.models.addressing import NeighborAssignment
 from ome.isl_engine import (
     IslFeasibilityResult,
@@ -151,3 +153,42 @@ def test_symmetric_isl_scheduling_respects_terminal_capacity_and_priority():
     assert scheduled[("sat-A", "sat-B")].scheduled
     assert not scheduled[("sat-A", "sat-C")].scheduled
     assert scheduled[("sat-A", "sat-C")].unscheduled_reason == "capacity"
+
+
+def test_isl_feasibility_is_topology_bounded_not_all_pairs():
+    sat_count = 200
+    node_ids = [f"sat-{idx:04d}" for idx in range(sat_count)]
+    radius_km = 6921.0
+
+    sat_states = {}
+    by_node = {}
+    terminal_constraints = {}
+    for idx, node_id in enumerate(node_ids):
+        theta = 2.0 * math.pi * idx / sat_count
+        sat_states[node_id] = _state(
+            node_id,
+            Vec3(radius_km * math.cos(theta), radius_km * math.sin(theta), 0.0),
+            Vec3(-7.5 * math.sin(theta), 7.5 * math.cos(theta), 0.0),
+        )
+        prev_id = node_ids[(idx - 1) % sat_count]
+        next_id = node_ids[(idx + 1) % sat_count]
+        by_node[node_id] = [
+            _assignment("isl0", prev_id, "intra_plane_isl", 1),
+            _assignment("isl1", next_id, "intra_plane_isl", 1),
+        ]
+        terminal_constraints[node_id] = {
+            "isl0": _constraints("intra-plane"),
+            "isl1": _constraints("intra-plane"),
+        }
+
+    feasibility = evaluate_isl_feasibility(
+        node_order=node_ids,
+        sat_states=sat_states,
+        by_node=by_node,
+        terminal_constraints=terminal_constraints,
+        polar_seam_enabled=False,
+        latitude_threshold_deg=70.0,
+    )
+
+    assert len(feasibility) == sat_count
+    assert len(feasibility) < sat_count * (sat_count - 1) // 20

@@ -11,7 +11,12 @@ from nodalarc.constellation_loader import (
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.session import SessionConfig
-from ome.event_stream import build_step_context, compute_step, precompute_timeline_window
+from ome.event_stream import (
+    build_step_context,
+    compute_step,
+    precompute_timeline_window,
+    precompute_timeline_window_from_context,
+)
 
 
 def _load_test_session():
@@ -47,7 +52,7 @@ class TestComputeStepMatchesWindow:
         step_seconds = session.time.step_seconds
 
         # Batch: compute a window of n_steps
-        window_events, window_isl, window_gs, _window_assoc, _ = precompute_timeline_window(
+        window = precompute_timeline_window(
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -56,6 +61,7 @@ class TestComputeStepMatchesWindow:
             duration_s=n_steps * step_seconds,
             step_seconds=step_seconds,
         )
+        window_events = window.events
 
         # Per-step: compute the same steps one at a time
         ctx = build_step_context(
@@ -96,7 +102,7 @@ class TestComputeStepMatchesWindow:
         n_steps = 10
         step_seconds = session.time.step_seconds
 
-        _, window_isl, window_gs, _window_assoc, _ = precompute_timeline_window(
+        window = precompute_timeline_window(
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -117,8 +123,39 @@ class TestComputeStepMatchesWindow:
         for step in range(n_steps + 1):
             compute_step(ctx, epoch_unix, step, step_seconds, 0.0, isl_state, gs_state)
 
-        assert isl_state == window_isl
-        assert gs_state == window_gs
+        assert isl_state == window.isl_state
+        assert gs_state == window.gs_state
+
+    def test_context_precompute_uses_exact_context_configuration(self):
+        """Context-based precompute shares live OME scheduling parameters."""
+        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        epoch_unix = 1704067200.0
+        step_seconds = session.time.step_seconds
+
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=addressing,
+            gs_file=gs_file,
+            neighbors=neighbors,
+            mbb_overlap_ticks=7,
+            mbb_reserve=2,
+            default_ground_policy="lowest-elevation",
+            propagator_id="j2-mean-elements",
+        )
+
+        window = precompute_timeline_window_from_context(
+            ctx,
+            epoch_unix=epoch_unix,
+            duration_s=2 * step_seconds,
+            step_seconds=step_seconds,
+            predictive=True,
+        )
+
+        assert window.predictive is True
+        assert ctx.mbb_overlap_ticks == 7
+        assert ctx.mbb_reserve == 2
+        assert ctx.propagator_id == "j2-mean-elements"
+        assert len(window.events) > 0
 
     def test_visibility_transitions_only_on_state_change(self):
         """VisibilityEvents are emitted only when state changes, not every step."""

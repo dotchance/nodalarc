@@ -177,6 +177,23 @@ class StepResult:
         return self.ground_allocation.pending_teardowns
 
 
+@dataclass(frozen=True)
+class TimelineWindowResult:
+    """Named result for precomputed OME windows.
+
+    Lookahead windows are predictive. They may be useful for proactive
+    scheduling, but they are not authoritative dispatch state and must not be
+    replayed as if they came from the live pacing loop.
+    """
+
+    events: list[TimelineEvent]
+    isl_state: dict[tuple[str, str], tuple[bool, bool]]
+    gs_state: dict[tuple[str, str], tuple[bool, bool, str]]
+    associations: dict[tuple[str, str], tuple[int, int]]
+    pending_teardowns: MbbTeardownState
+    predictive: bool = False
+
+
 def _latency_ms(range_km: float) -> float:
     """One-way propagation delay for an OME-authoritative range."""
     return range_km / SPEED_OF_LIGHT_KM_S * 1000.0
@@ -435,66 +452,31 @@ def compute_step(
 
 
 # ---------------------------------------------------------------------------
-# Batch window precomputation — used by look-ahead thread and offline tools
+# Batch window precomputation — used by lookahead thread and offline tools
 # ---------------------------------------------------------------------------
 
 
-def precompute_timeline_window(
-    satellites: list[SatelliteNode],
-    addressing: AddressingScheme,
-    gs_file: GroundStationFile | None,
-    neighbors: frozenset[tuple[str, NeighborAssignment]],
+def precompute_timeline_window_from_context(
+    ctx: StepContext,
     epoch_unix: float,
     duration_s: float,
     step_seconds: int = 1,
-    max_range_km: float = 5016.0,
-    max_tracking_rate_deg_s: float = 3.0,
-    field_of_regard_deg: float = 360.0,
-    mbb_overlap_ticks: int = 3,
-    mbb_reserve: int = 0,
-    polar_seam_enabled: bool = False,
-    latitude_threshold_deg: float = 70.0,
-    default_min_elevation_deg: float = 25.0,
-    propagator_id: str = "keplerian-circular",
-    default_ground_policy: str | None = None,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
-    initial_gs_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
+    initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     initial_pending_teardowns: MbbTeardownState | None = None,
     timestamp_offset: float = 0.0,
-) -> tuple[
-    list[TimelineEvent],
-    dict[tuple[str, str], tuple[bool, bool]],
-    dict[tuple[str, str], tuple[bool, bool, str]],
-    dict[tuple[str, str], tuple[int, int]],
-    MbbTeardownState,
-]:
-    """Precompute a single window of the timeline (batch mode).
+    predictive: bool = False,
+) -> TimelineWindowResult:
+    """Precompute a single window using an already-normalized StepContext.
 
-    Calls compute_step() for each step in the window. Used by the look-ahead
-    thread for NodalPath almanac and by offline tools (coverage preview, JSONL
-    generation). The real-time Pacemaker calls compute_step() directly.
+    This is the path used by live lookahead. Passing the live StepContext makes
+    propagation, visibility, allocation, hysteresis, and MBB parameters
+    identical by construction instead of relying on a duplicate argument list.
 
-    Returns (events, isl_state, gs_state, associations, pending_teardowns)
-    so the caller can carry boundary state into the next window.
+    Returns named boundary state so callers can carry the result into the next
+    window without tuple-position coupling.
     """
-    ctx = build_step_context(
-        satellites=satellites,
-        addressing=addressing,
-        gs_file=gs_file,
-        neighbors=neighbors,
-        max_range_km=max_range_km,
-        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-        field_of_regard_deg=field_of_regard_deg,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
-        polar_seam_enabled=polar_seam_enabled,
-        latitude_threshold_deg=latitude_threshold_deg,
-        default_min_elevation_deg=default_min_elevation_deg,
-        propagator_id=propagator_id,
-        default_ground_policy=default_ground_policy,
-    )
-
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = (
         dict(initial_isl_state) if initial_isl_state else {}
     )
@@ -526,7 +508,75 @@ def precompute_timeline_window(
         associations = result.associations
         pending_teardowns = result.pending_teardowns
 
-    return events, isl_state, gs_state, associations, pending_teardowns
+    return TimelineWindowResult(
+        events=events,
+        isl_state=isl_state,
+        gs_state=gs_state,
+        associations=associations,
+        pending_teardowns=pending_teardowns,
+        predictive=predictive,
+    )
+
+
+def precompute_timeline_window(
+    satellites: list[SatelliteNode],
+    addressing: AddressingScheme,
+    gs_file: GroundStationFile | None,
+    neighbors: frozenset[tuple[str, NeighborAssignment]],
+    epoch_unix: float,
+    duration_s: float,
+    step_seconds: int = 1,
+    max_range_km: float = 5016.0,
+    max_tracking_rate_deg_s: float = 3.0,
+    field_of_regard_deg: float = 360.0,
+    mbb_overlap_ticks: int = 3,
+    mbb_reserve: int = 0,
+    polar_seam_enabled: bool = False,
+    latitude_threshold_deg: float = 70.0,
+    default_min_elevation_deg: float = 25.0,
+    propagator_id: str = "keplerian-circular",
+    default_ground_policy: str | None = None,
+    initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
+    initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
+    initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
+    initial_pending_teardowns: MbbTeardownState | None = None,
+    timestamp_offset: float = 0.0,
+    predictive: bool = False,
+) -> TimelineWindowResult:
+    """Precompute a single window of the timeline (batch mode).
+
+    Offline callers provide raw session inputs; this wrapper normalizes them
+    into a StepContext once, then delegates to the same context-based engine
+    used by live lookahead.
+    """
+    ctx = build_step_context(
+        satellites=satellites,
+        addressing=addressing,
+        gs_file=gs_file,
+        neighbors=neighbors,
+        max_range_km=max_range_km,
+        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
+        field_of_regard_deg=field_of_regard_deg,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
+        polar_seam_enabled=polar_seam_enabled,
+        latitude_threshold_deg=latitude_threshold_deg,
+        default_min_elevation_deg=default_min_elevation_deg,
+        propagator_id=propagator_id,
+        default_ground_policy=default_ground_policy,
+    )
+    return precompute_timeline_window_from_context(
+        ctx,
+        epoch_unix=epoch_unix,
+        duration_s=duration_s,
+        step_seconds=step_seconds,
+        initial_isl_state=initial_isl_state,
+        initial_gs_state=initial_gs_state,
+        initial_associations=initial_associations,
+        initial_pending_teardowns=initial_pending_teardowns,
+        timestamp_offset=timestamp_offset,
+        predictive=predictive,
+    )
 
 
 def precompute_timeline(
@@ -552,7 +602,7 @@ def precompute_timeline(
 
     Returns only events, discarding boundary state.
     """
-    events, _, _, _, _ = precompute_timeline_window(
+    result = precompute_timeline_window(
         satellites=satellites,
         addressing=addressing,
         gs_file=gs_file,
@@ -571,7 +621,7 @@ def precompute_timeline(
         propagator_id=propagator_id,
         default_ground_policy=default_ground_policy,
     )
-    return events
+    return result.events
 
 
 def write_timeline_jsonl(events: list[TimelineEvent], output_path: Path) -> None:

@@ -47,7 +47,7 @@ class TestFoldDeterminism:
         n_steps = 60
         step_seconds = session.time.step_seconds
 
-        window_events, _wisl, _wgs, _wassoc, _ = precompute_timeline_window(
+        window = precompute_timeline_window(
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -56,6 +56,7 @@ class TestFoldDeterminism:
             duration_s=n_steps * step_seconds,
             step_seconds=step_seconds,
         )
+        window_events = window.events
 
         ctx = build_step_context(
             satellites=sats,
@@ -190,7 +191,7 @@ class TestFoldDeterminism:
         # Now run from the seeded state: batch vs tick-by-tick
         seed_epoch = epoch_unix + 11 * step_seconds
 
-        window_events, _wisl, _wgs, window_assoc, _ = precompute_timeline_window(
+        window = precompute_timeline_window(
             satellites=sats,
             addressing=addressing,
             gs_file=gs_file,
@@ -202,6 +203,7 @@ class TestFoldDeterminism:
             initial_gs_state=dict(seed_gs),
             initial_associations=seed_assoc,
         )
+        window_events = window.events
 
         tick_isl = dict(seed_isl)
         tick_gs = dict(seed_gs)
@@ -230,7 +232,7 @@ class TestFoldDeterminism:
                 f"Event {i} ({te.event_type}): data mismatch at index {i}"
             )
         # Final association state must also match
-        assert tick_assoc == window_assoc, "Final associations must match"
+        assert tick_assoc == window.associations, "Final associations must match"
 
     def test_cross_window_state_handoff(self):
         """NON-NEGOTIABLE GATE: fold state survives a window boundary.

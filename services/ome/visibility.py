@@ -20,12 +20,9 @@ import math
 from typing import NamedTuple
 
 from nodalarc.constants import WGS84_A, WGS84_B
+from nodalarc.geo import compute_range_km
 
-from ome.propagator import (
-    GeoPosition,
-    Vec3,
-    distance_km,
-)
+from ome.propagator import GeoPosition, Vec3
 
 
 class VisibilityResult(NamedTuple):
@@ -110,7 +107,7 @@ def has_line_of_sight(pos_a: Vec3, pos_b: Vec3) -> bool:
 
 def compute_range(pos_a: Vec3, pos_b: Vec3) -> float:
     """Compute range (distance) in km between two ECEF positions."""
-    return distance_km(pos_a, pos_b)
+    return compute_range_km(pos_a, pos_b)
 
 
 def compute_elevation_angle(

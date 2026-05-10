@@ -29,6 +29,7 @@ from nodalarc.constellation_loader import (
     load_constellation,
     load_ground_stations,
 )
+from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.session import SessionConfig, resolve_session_epoch
 from nodalarc.tle import tle_age_days
@@ -53,13 +54,11 @@ class _SessionBundle(NamedTuple):
     period: float
     addressing: AddressingScheme
     neighbors: frozenset
-    max_range_km: float
-    max_tracking_rate_deg_s: float
-    field_of_regard_deg: float
     polar_seam_enabled: bool
     latitude_threshold_deg: float
-    default_min_elevation_deg: float
     propagator_id: str
+    interface_map: dict[tuple[str, str], tuple[str, str]]
+    bandwidth_map: dict[tuple[str, str], float]
 
 
 def _load_session_config(session_path: str | Path) -> _SessionBundle:
@@ -95,9 +94,6 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
     addressing = AddressingScheme(session.addressing)
     neighbors = assign_isl_neighbors(constellation_config, addressing)
 
-    max_range_km = 5016.0
-    max_tracking_rate_deg_s = 3.0
-    field_of_regard_deg = 360.0
     polar_seam_enabled = False
     latitude_threshold_deg = 70.0
 
@@ -105,13 +101,10 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
         isinstance(constellation_config, ParametricConstellation)
         and constellation_config.polar_seam
     ):
-        # ISL physics is terminal-role-aware in compute_step(); do not collapse
-        # all terminals to default_terminals.isl[0]. These legacy scalar values
-        # remain only for older call signatures and are not dispatch authority.
         polar_seam_enabled = constellation_config.polar_seam.enabled
         latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
 
-    default_min_elevation = gs_file.default_min_elevation_deg or 25.0
+    metadata = build_link_metadata_maps(session, addressing)
 
     return _SessionBundle(
         session=session,
@@ -121,13 +114,11 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
         period=period,
         addressing=addressing,
         neighbors=neighbors,
-        max_range_km=max_range_km,
-        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-        field_of_regard_deg=field_of_regard_deg,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
-        default_min_elevation_deg=default_min_elevation,
         propagator_id=session.orbit.propagator,
+        interface_map=metadata.interface_map,
+        bandwidth_map=metadata.bandwidth_map,
     )
 
 
@@ -205,10 +196,8 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         neighbors=cfg.neighbors,
         epoch_unix=epoch_unix,
         duration_s=cfg.period,
+        propagator_id=cfg.propagator_id,
         step_seconds=cfg.session.time.step_seconds,
-        max_range_km=cfg.max_range_km,
-        max_tracking_rate_deg_s=cfg.max_tracking_rate_deg_s,
-        field_of_regard_deg=cfg.field_of_regard_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
         ground_policy_lookahead_horizon_ticks=(
@@ -216,8 +205,6 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         ),
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
-        default_min_elevation_deg=cfg.default_min_elevation_deg,
-        propagator_id=cfg.propagator_id,
         default_ground_policy=cfg.session.scheduling.ground.policy,
     )
 
@@ -658,25 +645,8 @@ def _run_pacing(
     _time_accel = float(compression)
     platform_snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
-    # Build interface map for LinkStateSnapshot
-    from nodalarc.models.addressing import neighbors_by_node
-
-    by_node = neighbors_by_node(cfg.neighbors)
-    interface_map: dict[tuple[str, str], tuple[str, str]] = {}
-    for node_id, assignments in by_node.items():
-        for na in assignments:
-            pair = (min(node_id, na.peer_node_id), max(node_id, na.peer_node_id))
-            if pair not in interface_map:
-                if node_id == pair[0]:
-                    interface_map[pair] = (na.interface, "")
-                else:
-                    interface_map[pair] = ("", na.interface)
-            else:
-                existing = interface_map[pair]
-                if node_id == pair[0] and not existing[0]:
-                    interface_map[pair] = (na.interface, existing[1])
-                elif node_id == pair[1] and not existing[1]:
-                    interface_map[pair] = (existing[0], na.interface)
+    interface_map = cfg.interface_map
+    bandwidth_map = cfg.bandwidth_map
 
     # Optional file output
     out_path = None
@@ -715,16 +685,12 @@ def _run_pacing(
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,
         neighbors=cfg.neighbors,
-        max_range_km=cfg.max_range_km,
-        max_tracking_rate_deg_s=cfg.max_tracking_rate_deg_s,
-        field_of_regard_deg=cfg.field_of_regard_deg,
+        propagator_id=cfg.propagator_id,
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
-        default_min_elevation_deg=cfg.default_min_elevation_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
         ground_policy_lookahead_horizon_ticks=session.scheduling.ground.lookahead_horizon_ticks,
-        propagator_id=cfg.propagator_id,
         default_ground_policy=session.scheduling.ground.policy,
     )
 
@@ -748,7 +714,7 @@ def _run_pacing(
         invalid_mbb_stations: list[str] = []
         for station in cfg.gs_file.stations:
             gs_id = cfg.addressing.gs_id(station.name)
-            cap = step_ctx.gs_terminal_counts.get(gs_id, 1)
+            cap = step_ctx.gs_terminal_counts[gs_id]
             required_capacity = mbb_reserve + 1
             if cap < required_capacity:
                 invalid_mbb_stations.append(
@@ -838,8 +804,11 @@ def _run_pacing(
                 )
                 try:
                     msg = await sub.next_msg(timeout=2.0)
-                    decompressed = _ckpt_gzip.decompress(msg.data)
-                    return SchedulingCheckpoint.model_validate_json(decompressed)
+                    from nodalarc.scheduling_checkpoint import (
+                        decode_retained_scheduling_checkpoint,
+                    )
+
+                    return decode_retained_scheduling_checkpoint(msg.data)
                 except TimeoutError:
                     return None
                 finally:
@@ -958,6 +927,7 @@ def _run_pacing(
         isl_state=running_isl_state,
         gs_state=running_gs_state,
         interface_map=interface_map,
+        bandwidth_map=bandwidth_map,
         sim_time=initial_sim_time,
         seq=snapshot_seq,
         interval_s=snapshot_interval_s,
@@ -1043,6 +1013,7 @@ def _run_pacing(
                     isl_state=running_isl_state,
                     gs_state=running_gs_state,
                     interface_map=interface_map,
+                    bandwidth_map=bandwidth_map,
                     sim_time=datetime.fromtimestamp(epoch_unix, UTC),
                     seq=snapshot_seq,
                     interval_s=snapshot_interval_s,
@@ -1158,6 +1129,7 @@ def _run_pacing(
                     isl_state=running_isl_state,
                     gs_state=running_gs_state,
                     interface_map=interface_map,
+                    bandwidth_map=bandwidth_map,
                     sim_time=sim_time,
                     seq=snapshot_seq,
                     interval_s=snapshot_interval_s,

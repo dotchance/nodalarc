@@ -85,15 +85,17 @@ class PositionTable:
         elements = self._sat_elements.get(node_id)
         dt = sim_time_unix - self._epoch_unix
         if elements is not None:
-            propagator = self._sat_propagators.get(node_id, "keplerian-circular")
+            propagator = self._sat_propagators[node_id]
             if propagator == "j2-mean-elements":
                 pos_ecef, _vel, _geo = propagate_j2_mean_elements(
                     elements,
                     self._epoch_unix,
                     dt,
                 )
-            else:
+            elif propagator == "keplerian-circular":
                 pos_ecef, _vel, _geo = propagate_keplerian(elements, self._epoch_unix, dt)
+            else:
+                raise ValueError(f"Unsupported ephemeris propagator for {node_id}: {propagator!r}")
             return pos_ecef
 
         tle = self._sat_tles.get(node_id)

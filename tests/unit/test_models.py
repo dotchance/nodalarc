@@ -115,6 +115,7 @@ class TestVisibilityEvent:
             sim_time=NOW,
             node_a="sat-P00S00",
             node_b="sat-P00S01",
+            link_type="isl",
             visible=True,
             scheduled=True,
             range_km=1500.0,
@@ -129,6 +130,7 @@ class TestVisibilityEvent:
             sim_time=NOW,
             node_a="sat-P01S00",
             node_b="sat-P00S00",
+            link_type="isl",
             visible=True,
             scheduled=True,
             range_km=1000.0,
@@ -143,6 +145,7 @@ class TestVisibilityEvent:
             sim_time=NOW,
             node_a="gs-ashburn",
             node_b="sat-P00S00",
+            link_type="ground",
             visible=True,
             scheduled=True,
             range_km=800.0,
@@ -156,6 +159,7 @@ class TestVisibilityEvent:
             sim_time=NOW,
             node_a="sat-P00S00",
             node_b="sat-P00S01",
+            link_type="isl",
             visible=True,
             scheduled=True,
             range_km=1000.0,
@@ -164,6 +168,19 @@ class TestVisibilityEvent:
         )
         with pytest.raises(Exception):
             evt.visible = False
+
+    def test_link_type_required(self):
+        with pytest.raises(Exception):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                visible=True,
+                scheduled=True,
+                range_km=1000.0,
+                elevation_deg=None,
+                terminal_type="optical",
+            )
 
 
 class TestClockTick:
@@ -227,6 +244,7 @@ class TestLinkUp:
             wall_time=NOW,
             node_a="sat-P00S00",
             node_b="sat-P00S01",
+            link_type="isl",
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
@@ -244,14 +262,31 @@ class TestLinkUp:
             wall_time=NOW,
             node_a="sat-P00S00",
             node_b="sat-P00S01",
+            link_type="isl",
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
             bandwidth_mbps=1000.0,
+            range_km=1500.0,
             reason="vis_gained",
         )
         with pytest.raises(Exception):
             evt.reason = "vis_lost"
+
+    def test_link_type_required(self):
+        with pytest.raises(Exception):
+            LinkUp(
+                sim_time=NOW,
+                wall_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                interface_a="isl0",
+                interface_b="isl1",
+                latency_ms=5.0,
+                bandwidth_mbps=1000.0,
+                range_km=1500.0,
+                reason="vis_gained",
+            )
 
 
 class TestLinkDown:
@@ -261,11 +296,24 @@ class TestLinkDown:
             wall_time=NOW,
             node_a="sat-P00S00",
             node_b="sat-P00S01",
+            link_type="isl",
             interface_a="isl0",
             interface_b="isl1",
             reason="vis_lost",
         )
         _round_trip(evt)
+
+    def test_link_type_required(self):
+        with pytest.raises(Exception):
+            LinkDown(
+                sim_time=NOW,
+                wall_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                interface_a="isl0",
+                interface_b="isl1",
+                reason="vis_lost",
+            )
 
 
 class TestLatencyUpdate:
@@ -305,10 +353,12 @@ class TestConvergenceRequest:
             wall_time=NOW,
             node_a="sat-P00S00",
             node_b="sat-P00S01",
+            link_type="isl",
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
             bandwidth_mbps=1000.0,
+            range_km=1500.0,
             reason="vis_gained",
         )
         req = ConvergenceRequest(event_id="evt-001", link_event=link_up)
@@ -320,6 +370,7 @@ class TestConvergenceRequest:
             wall_time=NOW,
             node_a="sat-P00S00",
             node_b="sat-P00S01",
+            link_type="isl",
             interface_a="isl0",
             interface_b="isl1",
             reason="vis_lost",

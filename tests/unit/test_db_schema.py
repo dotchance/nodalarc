@@ -37,10 +37,12 @@ def _link_up(sim_time=T0) -> LinkUp:
         wall_time=WALL,
         node_a="sat-P00S00",
         node_b="sat-P00S01",
+        link_type="isl",
         interface_a="isl0",
         interface_b="isl1",
         latency_ms=2.5,
         bandwidth_mbps=1000.0,
+        range_km=749.481145,
         reason="visibility",
     )
 
@@ -106,6 +108,7 @@ class TestLinkEventQueries:
             wall_time=WALL,
             node_a="sat-P00S00",
             node_b="sat-P00S01",
+            link_type="isl",
             interface_a="isl0",
             interface_b="isl1",
             reason="los-blocked",
@@ -142,10 +145,12 @@ class TestLinkEventQueries:
                 wall_time=WALL,
                 node_a="sat-P01S00",
                 node_b="sat-P01S01",
+                link_type="isl",
                 interface_a="isl0",
                 interface_b="isl1",
                 latency_ms=2.5,
                 bandwidth_mbps=1000.0,
+                range_km=749.481145,
                 reason="vis",
             ),
         )

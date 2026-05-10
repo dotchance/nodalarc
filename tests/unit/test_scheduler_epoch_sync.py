@@ -54,6 +54,7 @@ def _make_ephemeris(epoch_id: int = 0) -> SessionEphemeris:
         epoch_unix=EPOCH,
         nodes={
             "sat-P00S00": EphemerisNodeKeplerian(
+                propagator="keplerian-circular",
                 altitude_km=550.0,
                 inclination_deg=53.0,
                 raan_deg=0.0,

@@ -20,6 +20,30 @@ pytestmark = pytest.mark.integration
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
+def _optical_ground_stations() -> dict:
+    return {
+        "default_terminals": [
+            {
+                "type": "optical",
+                "count": 1,
+                "bandwidth_mbps": 1000,
+                "tracking_capacity": 1,
+            }
+        ],
+        "default_min_elevation_deg": 25,
+        "default_scheduling_policy": "highest-elevation",
+        "default_terrestrial_prefixes": {
+            "ipv4_template": "172.16.{gs_index}.0/24",
+            "ipv6_template": "fd10::{gs_index}:0/112",
+            "metric": 10,
+        },
+        "stations": [
+            {"name": "new-york", "lat_deg": 40.71, "lon_deg": -74.01, "alt_m": 10},
+            {"name": "london", "lat_deg": 51.51, "lon_deg": -0.13, "alt_m": 11},
+        ],
+    }
+
+
 @pytest.fixture
 def four_node_timeline(tmp_path):
     """Generate custom-example timeline."""
@@ -30,8 +54,9 @@ def four_node_timeline(tmp_path):
 
     session = {
         "session": {"name": "rolling-window-test"},
+        "orbit": {"propagator": "keplerian-circular"},
         "constellation": "configs/constellations/custom-example.yaml",
-        "ground_stations": "configs/ground-stations/sets/us-conus.yaml",
+        "ground_stations": _optical_ground_stations(),
         "routing": {
             "protocol": "isis",
             "extensions": ["sr"],

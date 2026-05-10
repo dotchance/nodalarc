@@ -102,8 +102,9 @@ class RoutingConfig(BaseModel):
 class SimulationConfig(BaseModel):
     """Simulation contract fields exposed to session YAML."""
 
+    model_config = ConfigDict(extra="forbid")
+
     schema_version: int = 2
-    fidelity: Literal["synthetic-keplerian", "j2-mean-elements", "sgp4-tle"] = "synthetic-keplerian"
 
     @field_validator("schema_version")
     @classmethod
@@ -116,8 +117,17 @@ class SimulationConfig(BaseModel):
 class OrbitConfig(BaseModel):
     """Orbit propagation model selection."""
 
-    propagator: Literal["keplerian-circular", "j2-mean-elements", "sgp4-tle"] = "keplerian-circular"
+    model_config = ConfigDict(extra="forbid")
+
+    propagator: Literal["keplerian-circular", "j2-mean-elements", "sgp4-tle"]
     tle_max_age_days: float | None = None
+
+    @property
+    def fidelity_label(self) -> Literal["synthetic-keplerian", "j2-mean-elements", "sgp4-tle"]:
+        """User-facing fidelity label derived from the selected propagator."""
+        if self.propagator == "keplerian-circular":
+            return "synthetic-keplerian"
+        return self.propagator
 
     @field_validator("tle_max_age_days")
     @classmethod
@@ -137,6 +147,8 @@ class OrbitConfig(BaseModel):
 
 class GroundSchedulingConfig(BaseModel):
     """Ground handover and allocation behavior."""
+
+    model_config = ConfigDict(extra="forbid")
 
     policy: Literal["highest-elevation", "lowest-elevation", "longest-remaining-pass"] = (
         "highest-elevation"
@@ -184,11 +196,15 @@ class GroundSchedulingConfig(BaseModel):
 class SchedulingConfig(BaseModel):
     """Scheduling policy surface."""
 
+    model_config = ConfigDict(extra="forbid")
+
     ground: GroundSchedulingConfig = Field(default_factory=GroundSchedulingConfig)
 
 
 class SubstrateCompensationConfig(BaseModel):
     """Substrate latency compensation settings."""
+
+    model_config = ConfigDict(extra="forbid")
 
     measurement_source: Literal["node-agent-rtt"] = "node-agent-rtt"
     rtt_to_one_way: Literal["half-rtt"] = "half-rtt"
@@ -196,6 +212,8 @@ class SubstrateCompensationConfig(BaseModel):
 
 class DispatchConfig(BaseModel):
     """Dispatch authority and latency freshness settings."""
+
+    model_config = ConfigDict(extra="forbid")
 
     latency_authority: Literal["ome"] = "ome"
     max_latency_age_ticks: int = 1
@@ -238,11 +256,12 @@ def resolve_session_epoch(time_config: TimeConfig) -> float:
     is called exactly once at session start — the resolved value is the
     sim-time basis for every event emitted during the session.
     """
-    from datetime import UTC, datetime
+    import time
+    from datetime import datetime
 
     if time_config.start_time:
         return datetime.fromisoformat(time_config.start_time).timestamp()
-    return datetime.now(UTC).timestamp()
+    return time.time()
 
 
 class TrafficFlowConfig(BaseModel):
@@ -290,6 +309,8 @@ class TerrestrialLinkConfig(BaseModel):
 class DecisionTraceConfig(BaseModel):
     """User-facing audit trace retention settings."""
 
+    model_config = ConfigDict(extra="forbid")
+
     active_links: Literal["always"] = "always"
     rejected_candidates_retention: Literal["none", "bounded", "full"] = "bounded"
     retention_ticks: int = 300
@@ -304,6 +325,8 @@ class DecisionTraceConfig(BaseModel):
 
 class ObservabilityConfig(BaseModel):
     """Observability and provenance knobs exposed in session YAML."""
+
+    model_config = ConfigDict(extra="forbid")
 
     decision_trace: DecisionTraceConfig = Field(default_factory=DecisionTraceConfig)
 
@@ -346,7 +369,7 @@ class SessionConfig(BaseModel):
         None  # For direct station lists
     )
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
-    orbit: OrbitConfig = Field(default_factory=OrbitConfig)
+    orbit: OrbitConfig
     scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
     dispatch: DispatchConfig = Field(default_factory=DispatchConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
@@ -358,18 +381,3 @@ class SessionConfig(BaseModel):
     placement: PlacementConfig = PlacementConfig()
     mi: MiConfig = MiConfig()
     convergence: ConvergenceConfig = ConvergenceConfig()  # backward compat — use mi.convergence
-
-    @model_validator(mode="after")
-    def _fidelity_matches_propagator(self):
-        expected = {
-            "synthetic-keplerian": "keplerian-circular",
-            "j2-mean-elements": "j2-mean-elements",
-            "sgp4-tle": "sgp4-tle",
-        }[self.simulation.fidelity]
-        if self.orbit.propagator != expected:
-            raise ValueError(
-                "simulation.fidelity and orbit.propagator must describe the same "
-                f"physics model: fidelity={self.simulation.fidelity!r} requires "
-                f"orbit.propagator={expected!r}, got {self.orbit.propagator!r}"
-            )
-        return self

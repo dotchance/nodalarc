@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from nodalarc.models.link_events import LinkDecisionProvenance
 from nodalarc.proto import node_agent_pb2
 from scheduler.desired_state import ActiveLinkInfo
-from scheduler.dispatch_actuator import send_batch_up
+from scheduler.dispatch_actuator import send_authoritative_latency_updates, send_batch_up
 from scheduler.latency_compensator import LatencyCompensation
 
 PAIR = ("sat-a", "sat-b")
@@ -56,6 +56,14 @@ class _Stub:
             interfaces_upped=sum(1 for result in results if result.success),
             apply_time_ms=1.0,
             interface_results=results,
+        )
+
+    async def async_set_latency(self, req):
+        self.requests.append(req)
+        return node_agent_pb2.SetLatencyResponse(
+            success=True,
+            error_message="",
+            entries_updated=len(req.entries),
         )
 
 
@@ -104,7 +112,7 @@ def _compensation(_node_a: str, _node_b: str, orbital_ms: float) -> LatencyCompe
 
 
 def _validate(_pair, _info, _sim_time, *, operation: str) -> None:
-    assert operation == "LinkUp"
+    assert operation in {"LinkUp", "LatencyUpdate"}
 
 
 def _provenance(info, compensation, sim_time):
@@ -174,3 +182,48 @@ def test_send_batch_up_requires_every_interface_ack_for_pair_success():
 
     assert added == set()
     assert js.published == []
+
+
+def test_ground_latency_update_updates_both_local_shaped_interfaces():
+    pair = ("gs-den", "sat-a")
+    desired = {
+        pair: ActiveLinkInfo(
+            interface_a="term0",
+            interface_b="gnd0",
+            latency_ms=10.0,
+            bandwidth_mbps=1000.0,
+            link_type="ground",
+            range_km=2997.92458,
+            authority_sim_time=SIM_TIME,
+            authority_source="snapshot",
+            authority_sequence=7,
+        )
+    }
+    pool = _Pool()
+    js = _Js()
+
+    updated = asyncio.run(
+        send_authoritative_latency_updates(
+            pairs={pair},
+            desired=desired,
+            locator=_Locator(),
+            pool=pool,
+            js=js,
+            subj_latency="links.latency",
+            sim_time=SIM_TIME,
+            gs_capacities={"gs-den": 1},
+            latency_compensation=_compensation,
+            validate_authority_freshness=_validate,
+            link_provenance=_provenance,
+        )
+    )
+
+    assert updated == {pair}
+    stub = pool.stubs["agent-sat-a"]
+    req = stub.requests[0]
+    assert {(entry.node_id, entry.interface_name) for entry in req.entries} == {
+        ("gs-den", "term0"),
+        ("sat-a", "gnd0"),
+    }
+    assert len(js.published) == 1
+    assert datetime.fromisoformat(js.published[0][1]["sim_time"].replace("Z", "+00:00")) == SIM_TIME

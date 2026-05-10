@@ -297,7 +297,7 @@ def _check_e008(
                     "constellation.mode is 'tle' but orbit.propagator is not 'sgp4-tle'. "
                     "TLE sources must not be approximated by a lower-fidelity propagator."
                 ),
-                remediation="Set orbit.propagator and simulation.fidelity to 'sgp4-tle'.",
+                remediation="Set orbit.propagator to 'sgp4-tle'.",
             )
         )
 

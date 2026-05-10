@@ -14,6 +14,7 @@ _SAMPLE_SESSION = {
     "session": {"name": "test-session"},
     "constellation": "configs/constellations/iridium-small-36.yaml",
     "ground_stations": "configs/ground-stations/sets/polar-emphasis.yaml",
+    "orbit": {"propagator": "keplerian-circular"},
     "routing": {
         "protocol": "isis",
         "extensions": ["sr"],
@@ -105,8 +106,14 @@ class TestAreaAssignmentValidation:
 class TestEngineConfigValidation:
     def test_bad_schema_version_rejected(self):
         data = dict(_SAMPLE_SESSION)
-        data["simulation"] = {"schema_version": 1, "fidelity": "synthetic-keplerian"}
+        data["simulation"] = {"schema_version": 1}
         with pytest.raises(ValidationError, match="schema_version must be 2"):
+            SessionConfig.model_validate(data)
+
+    def test_simulation_fidelity_is_not_a_second_propagator_knob(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"schema_version": 2, "fidelity": "j2-mean-elements"}
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             SessionConfig.model_validate(data)
 
     def test_unknown_propagator_rejected(self):
@@ -115,18 +122,22 @@ class TestEngineConfigValidation:
         with pytest.raises(ValidationError, match="Input should be"):
             SessionConfig.model_validate(data)
 
-    def test_sgp4_propagator_requires_matching_fidelity_and_tle_age_window(self):
+    def test_orbit_propagator_is_required(self):
         data = dict(_SAMPLE_SESSION)
-        data["simulation"] = {"schema_version": 2, "fidelity": "sgp4-tle"}
+        data.pop("orbit")
+        with pytest.raises(ValidationError, match="orbit"):
+            SessionConfig.model_validate(data)
+
+    def test_sgp4_propagator_requires_tle_age_window(self):
+        data = dict(_SAMPLE_SESSION)
         data["orbit"] = {"propagator": "sgp4-tle", "tle_max_age_days": 7.0}
         config = SessionConfig.model_validate(data)
         assert config.orbit.propagator == "sgp4-tle"
         assert config.orbit.tle_max_age_days == 7.0
-        assert config.simulation.fidelity == "sgp4-tle"
+        assert config.orbit.fidelity_label == "sgp4-tle"
 
     def test_sgp4_propagator_rejects_missing_tle_age_window(self):
         data = dict(_SAMPLE_SESSION)
-        data["simulation"] = {"schema_version": 2, "fidelity": "sgp4-tle"}
         data["orbit"] = {"propagator": "sgp4-tle"}
         with pytest.raises(ValidationError, match="tle_max_age_days is required"):
             SessionConfig.model_validate(data)
@@ -137,20 +148,12 @@ class TestEngineConfigValidation:
         with pytest.raises(ValidationError, match="only valid"):
             SessionConfig.model_validate(data)
 
-    def test_j2_propagator_requires_matching_fidelity_label(self):
+    def test_j2_propagator_derives_fidelity_label(self):
         data = dict(_SAMPLE_SESSION)
-        data["simulation"] = {"schema_version": 2, "fidelity": "j2-mean-elements"}
         data["orbit"] = {"propagator": "j2-mean-elements"}
         config = SessionConfig.model_validate(data)
         assert config.orbit.propagator == "j2-mean-elements"
-        assert config.simulation.fidelity == "j2-mean-elements"
-
-    def test_fidelity_and_propagator_mismatch_rejected(self):
-        data = dict(_SAMPLE_SESSION)
-        data["simulation"] = {"schema_version": 2, "fidelity": "j2-mean-elements"}
-        data["orbit"] = {"propagator": "keplerian-circular"}
-        with pytest.raises(ValidationError, match="must describe the same physics model"):
-            SessionConfig.model_validate(data)
+        assert config.orbit.fidelity_label == "j2-mean-elements"
 
     def test_mbb_requires_reserve_and_overlap(self):
         data = dict(_SAMPLE_SESSION)

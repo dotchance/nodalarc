@@ -258,18 +258,34 @@ async def send_authoritative_latency_updates(
         if info.link_type == "ground":
             gs_id = node_a if node_a in gs_capacities else node_b
             sat_id = node_b if node_a in gs_capacities else node_a
+            gs_iface = info.interface_a if node_a in gs_capacities else info.interface_b
             sat_iface = info.interface_b if node_a in gs_capacities else info.interface_a
-            agent = locator.agent_addr(sat_id)
-            agent_entries.setdefault(agent, []).append(
-                node_agent_pb2.LatencyEntry(
-                    node_id=sat_id,
-                    interface_name=sat_iface,
-                    latency_ms=netem_ms,
-                    link_type=node_agent_pb2.GROUND,
-                    gs_id=gs_id,
-                    sat_id=sat_id,
+            locality = locator.link_locality(node_a, node_b)
+            if locality is None:
+                raise RuntimeError(
+                    f"Cannot update ground latency for {node_a}<->{node_b}: pod placement unknown"
                 )
-            )
+
+            # Ground LinkUp shapes both GS and satellite pod interfaces. Latency
+            # updates must therefore update both qdiscs as well; updating only
+            # the satellite side leaves stale delay on the GS namespace.
+            endpoint_agents = [(sat_id, sat_iface, locator.agent_addr(sat_id))]
+            if locality == node_agent_pb2.LOCAL:
+                endpoint_agents.append((gs_id, gs_iface, locator.agent_addr(sat_id)))
+            else:
+                endpoint_agents.append((gs_id, gs_iface, locator.agent_addr(gs_id)))
+
+            for endpoint_id, endpoint_iface, agent in endpoint_agents:
+                agent_entries.setdefault(agent, []).append(
+                    node_agent_pb2.LatencyEntry(
+                        node_id=endpoint_id,
+                        interface_name=endpoint_iface,
+                        latency_ms=netem_ms,
+                        link_type=node_agent_pb2.GROUND,
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                    )
+                )
         else:
             for nid, ifname in [
                 (node_a, info.interface_a),

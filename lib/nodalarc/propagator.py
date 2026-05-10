@@ -383,5 +383,11 @@ def propagate_sgp4_tle(
 
 
 def distance_km(a: Vec3, b: Vec3) -> float:
-    """Euclidean distance between two 3D points."""
-    return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
+    """Euclidean distance between two 3D points.
+
+    Compatibility wrapper around the single geometry contract in
+    ``nodalarc.geo``. Keep callers working while avoiding a second formula.
+    """
+    from nodalarc.geo import compute_range_km
+
+    return compute_range_km(a, b)

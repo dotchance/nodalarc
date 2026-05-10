@@ -543,6 +543,61 @@ class TestE005:
 
 
 # ---------------------------------------------------------------------------
+# E009: Future-dwell policy requires lookahead horizon
+# ---------------------------------------------------------------------------
+
+
+class TestE009:
+    def test_longest_remaining_pass_default_policy_requires_lookahead_horizon(self):
+        session = _make_session()
+        gs = _make_gs_file(default_scheduling_policy="longest-remaining-pass")
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E009"]
+        assert len(errors) == 1
+        assert "lookahead_horizon_ticks" in errors[0].message
+
+    def test_longest_remaining_pass_station_override_requires_lookahead_horizon(self):
+        session = _make_session()
+        gs = _make_gs_file(
+            stations=[
+                GroundStationConfig(
+                    name="dwell-policy",
+                    lat_deg=34.0,
+                    lon_deg=-118.0,
+                    scheduling_policy="longest-remaining-pass",
+                )
+            ]
+        )
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E009"]
+        assert len(errors) == 1
+        assert "stations.dwell-policy.scheduling_policy" in errors[0].message
+
+    def test_longest_remaining_pass_with_lookahead_horizon_passes(self):
+        session = _make_session()
+        session.scheduling.ground.lookahead_horizon_ticks = 600
+        gs = _make_gs_file(default_scheduling_policy="longest-remaining-pass")
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        e009 = [r for r in results if r.code == "E009"]
+        assert e009 == []
+
+
+# ---------------------------------------------------------------------------
 # E007: PlacementConfig coherence
 # ---------------------------------------------------------------------------
 

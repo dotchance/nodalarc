@@ -91,8 +91,9 @@ export const GROUND_STATION_HELP: Record<string, string> = {
 
   scheduling_policy:
     "Highest-elevation prefers the satellite directly overhead (best link quality). " +
-    "Longest-pass prefers the satellite that will remain visible longest (fewer handoffs, " +
-    "better routing stability).",
+    "Lowest-elevation prefers satellites nearer the elevation mask. " +
+    "Longest-remaining-pass uses OME lookahead to prefer the satellite with the most sampled " +
+    "visibility time remaining.",
 
   terminal_count:
     "Number of simultaneous satellite contacts this ground station can maintain. Most " +

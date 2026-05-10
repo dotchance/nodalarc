@@ -30,12 +30,23 @@ class GroundAllocationResult:
     scheduled_pairs: frozenset[tuple[str, str]]
 
 
-def _compute_pair_score(elevation_deg: float, policy: str) -> float:
+def _compute_pair_score(
+    elevation_deg: float,
+    policy: str,
+    remaining_visible_s: float | None = None,
+) -> float:
     """Score a GS/satellite pair. Always positive, higher is better."""
     if policy == "highest-elevation":
         return elevation_deg
     if policy == "lowest-elevation":
         return 90.0 - elevation_deg
+    if policy == "longest-remaining-pass":
+        if remaining_visible_s is None:
+            raise ValueError(
+                "Ground scheduling policy 'longest-remaining-pass' requires "
+                "OME pass lookahead; missing remaining_visible_s"
+            )
+        return remaining_visible_s
     raise ValueError(f"Unknown ground scheduling policy: {policy!r}")
 
 
@@ -105,7 +116,7 @@ def allocate_ground_links(
         priority = gs_service_priorities.get(gs_id, 10)
 
         for gv in visible_sats:
-            score = _compute_pair_score(gv.elevation_deg, policy)
+            score = _compute_pair_score(gv.elevation_deg, policy, gv.remaining_visible_s)
             pair = (min(gs_id, gv.sat_id), max(gs_id, gv.sat_id))
 
             if pair in current_associations:

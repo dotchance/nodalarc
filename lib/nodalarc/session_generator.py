@@ -81,6 +81,8 @@ def generate_session_yaml(
     custom_ground_stations: list[dict] | None = None,
     routing_config: dict | None = None,
     orbit_propagator: str = "keplerian-circular",
+    ground_policy: str = "highest-elevation",
+    ground_lookahead_horizon_ticks: int = 0,
 ) -> tuple[str, list[str]]:
     """Generate a session YAML from wizard selections.
 
@@ -100,6 +102,9 @@ def generate_session_yaml(
         custom_ground_stations: List of inline station dicts (advanced mode).
         orbit_propagator: Physical propagation model. The generator derives
             the matching simulation fidelity label and refuses unknown models.
+        ground_policy: Ground handover scoring policy.
+        ground_lookahead_horizon_ticks: Required when ground_policy is
+            ``longest-remaining-pass``; measured in OME ticks.
 
     Returns:
         (yaml_str, warnings).
@@ -210,10 +215,11 @@ def generate_session_yaml(
         },
         "scheduling": {
             "ground": {
-                "policy": "highest-elevation",
+                "policy": ground_policy,
                 "handover_mode": "mbb" if mbb_requested else "bbm",
                 "mbb_overlap_ticks": mbb_overlap_ticks,
                 "mbb_reserve": 1 if mbb_requested else 0,
+                "lookahead_horizon_ticks": ground_lookahead_horizon_ticks,
             }
         },
         "dispatch": {

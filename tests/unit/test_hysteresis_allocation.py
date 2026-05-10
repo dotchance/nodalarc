@@ -34,6 +34,15 @@ class TestComputePairScore:
         s45 = _compute_pair_score(45.0, "highest-elevation")
         assert s45 > s30
 
+    def test_longest_remaining_pass_uses_dwell_time(self):
+        s_short = _compute_pair_score(70.0, "longest-remaining-pass", 12.0)
+        s_long = _compute_pair_score(30.0, "longest-remaining-pass", 90.0)
+        assert s_long > s_short
+
+    def test_longest_remaining_pass_requires_lookahead_value(self):
+        with pytest.raises(ValueError, match="requires OME pass lookahead"):
+            _compute_pair_score(50.0, "longest-remaining-pass")
+
     def test_unknown_policy_fails_loudly(self):
         with pytest.raises(ValueError, match="Unknown ground scheduling policy"):
             _compute_pair_score(50.0, "unknown")

@@ -138,10 +138,13 @@ class OrbitConfig(BaseModel):
 class GroundSchedulingConfig(BaseModel):
     """Ground handover and allocation behavior."""
 
-    policy: Literal["highest-elevation", "lowest-elevation"] = "highest-elevation"
+    policy: Literal["highest-elevation", "lowest-elevation", "longest-remaining-pass"] = (
+        "highest-elevation"
+    )
     handover_mode: Literal["bbm", "mbb"] = "bbm"
     mbb_overlap_ticks: int = 3
     mbb_reserve: int = 0
+    lookahead_horizon_ticks: int = 0
 
     @field_validator("mbb_overlap_ticks")
     @classmethod
@@ -157,6 +160,13 @@ class GroundSchedulingConfig(BaseModel):
             raise ValueError("scheduling.ground.mbb_reserve must be >= 0")
         return value
 
+    @field_validator("lookahead_horizon_ticks")
+    @classmethod
+    def _non_negative_lookahead(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("scheduling.ground.lookahead_horizon_ticks must be >= 0")
+        return value
+
     @model_validator(mode="after")
     def _mbb_requires_overlap_capacity(self):
         if self.handover_mode == "mbb":
@@ -164,6 +174,10 @@ class GroundSchedulingConfig(BaseModel):
                 raise ValueError("MBB handover requires mbb_overlap_ticks > 0")
             if self.mbb_reserve <= 0:
                 raise ValueError("MBB handover requires mbb_reserve > 0")
+        if self.policy == "longest-remaining-pass" and self.lookahead_horizon_ticks <= 0:
+            raise ValueError(
+                "longest-remaining-pass requires scheduling.ground.lookahead_horizon_ticks > 0"
+            )
         return self
 
 

@@ -38,6 +38,27 @@ export interface LinkState {
   interface_b: string;
 }
 
+export interface LinkDecisionTrace {
+  node_a: string;
+  node_b: string;
+  link_type: string;
+  state: string;
+  interface_a: string;
+  interface_b: string;
+  reason: string | null;
+  geometry_authority: string;
+  authority_source: string;
+  authority_sim_time: string;
+  authority_sequence: number | null;
+  authority_age_ms: number | null;
+  range_km: number;
+  orbital_one_way_ms: number;
+  substrate_rtt_ms: number | null;
+  substrate_one_way_ms: number | null;
+  netem_one_way_ms: number | null;
+  rtt_to_one_way_policy: string | null;
+}
+
 export interface TracedPath {
   flow_id: string;
   src_node: string;

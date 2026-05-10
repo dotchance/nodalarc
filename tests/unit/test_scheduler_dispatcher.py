@@ -81,20 +81,43 @@ def _make_dispatcher(interface_map=None, stub_success=True):
 
     pool = MagicMock()
     mock_stub = MagicMock()
-    up_resp = node_agent_pb2.BatchLinkUpResponse(
-        success=stub_success,
-        error_message="" if stub_success else "mock failure",
-        interfaces_upped=1 if stub_success else 0,
-        apply_time_ms=0.0,
-    )
-    down_resp = node_agent_pb2.BatchLinkDownResponse(
-        success=stub_success,
-        error_message="" if stub_success else "mock failure",
-        interfaces_downed=1 if stub_success else 0,
-        apply_time_ms=0.0,
-    )
-    mock_stub.async_batch_link_up = AsyncMock(return_value=up_resp)
-    mock_stub.async_batch_link_down = AsyncMock(return_value=down_resp)
+
+    def up_resp(req):
+        return node_agent_pb2.BatchLinkUpResponse(
+            success=stub_success,
+            error_message="" if stub_success else "mock failure",
+            interfaces_upped=len(req.interfaces) if stub_success else 0,
+            apply_time_ms=0.0,
+            interface_results=[
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=stub_success,
+                    error_message="" if stub_success else "mock failure",
+                )
+                for iface in req.interfaces
+            ],
+        )
+
+    def down_resp(req):
+        return node_agent_pb2.BatchLinkDownResponse(
+            success=stub_success,
+            error_message="" if stub_success else "mock failure",
+            interfaces_downed=len(req.interfaces) if stub_success else 0,
+            apply_time_ms=0.0,
+            interface_results=[
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=stub_success,
+                    error_message="" if stub_success else "mock failure",
+                )
+                for iface in req.interfaces
+            ],
+        )
+
+    mock_stub.async_batch_link_up = AsyncMock(side_effect=up_resp)
+    mock_stub.async_batch_link_down = AsyncMock(side_effect=down_resp)
     mock_stub.async_set_latency = AsyncMock(
         return_value=node_agent_pb2.SetLatencyResponse(success=True)
     )
@@ -335,6 +358,76 @@ class TestDispatcherLiveDispatch:
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
         link_up_msgs = [m for m in pub.messages if m[0] == "nodalarc.links.up"]
         assert len(link_up_msgs) == 0
+
+    def test_partial_interface_ack_does_not_mark_pair_added(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.0,
+                1000.0,
+                range_km=900.0,
+                authority_sim_time=sim_time,
+                authority_source="test",
+            )
+        }
+
+        def partial_up(req):
+            return node_agent_pb2.BatchLinkUpResponse(
+                success=False,
+                error_message="one interface failed",
+                interfaces_upped=1,
+                apply_time_ms=0.0,
+                interface_results=[
+                    node_agent_pb2.InterfaceResult(
+                        node_id=req.interfaces[0].node_id,
+                        interface_name=req.interfaces[0].interface_name,
+                        success=True,
+                    ),
+                    node_agent_pb2.InterfaceResult(
+                        node_id=req.interfaces[1].node_id,
+                        interface_name=req.interfaces[1].interface_name,
+                        success=False,
+                        error_message="failed",
+                    ),
+                ],
+            )
+
+        pool.get_stub.return_value.async_batch_link_up = AsyncMock(side_effect=partial_up)
+
+        added = asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+
+        assert added == set()
+        assert not d._js.publish.called
+
+    def test_batch_up_requires_per_interface_ack_identity(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.0,
+                1000.0,
+                range_km=900.0,
+                authority_sim_time=sim_time,
+                authority_source="test",
+            )
+        }
+        pool.get_stub.return_value.async_batch_link_up = AsyncMock(
+            return_value=node_agent_pb2.BatchLinkUpResponse(
+                success=True,
+                interfaces_upped=2,
+                apply_time_ms=0.0,
+            )
+        )
+
+        with pytest.raises(RuntimeError, match="did not identify every requested interface"):
+            asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
 
     def test_cross_node_missing_substrate_measurement_fails_loudly(self):
         d, _ = _make_dispatcher()

@@ -12,6 +12,7 @@ def test_proto_stubs_importable():
     assert hasattr(node_agent_pb2, "SetLatencyRequest")
     assert hasattr(node_agent_pb2, "InterfaceDown")
     assert hasattr(node_agent_pb2, "InterfaceUp")
+    assert hasattr(node_agent_pb2, "InterfaceResult")
     assert hasattr(node_agent_pb2, "LatencyEntry")
     assert hasattr(node_agent_pb2_grpc, "NodeAgentServiceServicer")
     assert hasattr(node_agent_pb2_grpc, "NodeAgentServiceStub")
@@ -55,6 +56,21 @@ def test_message_construction():
     assert req.interfaces[0].node_id == "sat-p00s00"
     # Per-interface locality (PRD Decision 1)
     assert req.interfaces[0].locality == node_agent_pb2.LOCAL  # default
+
+    resp = node_agent_pb2.BatchLinkDownResponse(
+        success=False,
+        interfaces_downed=0,
+        interface_results=[
+            node_agent_pb2.InterfaceResult(
+                node_id="sat-p00s00",
+                interface_name="isl0",
+                success=False,
+                error_message="missing pid",
+            )
+        ],
+    )
+    assert resp.interface_results[0].node_id == "sat-p00s00"
+    assert resp.interface_results[0].success is False
 
 
 def test_latency_entry():

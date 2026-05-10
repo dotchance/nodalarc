@@ -38,7 +38,7 @@ class PropagatedState:
     position_ecef_km: EcefVec3
     velocity_ecef_km_s: EcefVec3
     geodetic: GeoPosition
-    propagator_id: str
+    propagator_id: PropagatorId
 
 
 def propagate_satellites(
@@ -47,7 +47,7 @@ def propagate_satellites(
     addressing: AddressingScheme,
     epoch_unix: float,
     dt: float,
-    propagator_id: str = "keplerian-circular",
+    propagator_id: PropagatorId,
 ) -> dict[str, PropagatedState]:
     """Propagate all satellites for one tick.
 

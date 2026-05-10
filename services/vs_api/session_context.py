@@ -740,7 +740,7 @@ class SessionContext:
 
         A snapshot proves OME geometry at a specific simulation time. It does
         not prove the Node Agent's applied netem value, so substrate fields are
-        deliberately absent instead of invented.
+        explicitly null instead of invented.
         """
         return LinkDecisionTrace(
             node_a=link.node_a,
@@ -757,6 +757,10 @@ class SessionContext:
             authority_age_ms=0.0,
             range_km=link.range_km,
             orbital_one_way_ms=link.latency_ms,
+            substrate_rtt_ms=None,
+            substrate_one_way_ms=None,
+            netem_one_way_ms=None,
+            rtt_to_one_way_policy=None,
         )
 
     @staticmethod

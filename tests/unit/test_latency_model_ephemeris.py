@@ -27,6 +27,7 @@ def _make_ephemeris() -> SessionEphemeris:
         epoch_unix=EPOCH,
         nodes={
             "sat-P00S00": EphemerisNodeKeplerian(
+                propagator="keplerian-circular",
                 altitude_km=550.0,
                 inclination_deg=53.0,
                 raan_deg=0.0,
@@ -35,6 +36,7 @@ def _make_ephemeris() -> SessionEphemeris:
                 slot=0,
             ),
             "sat-P00S01": EphemerisNodeKeplerian(
+                propagator="keplerian-circular",
                 altitude_km=550.0,
                 inclination_deg=53.0,
                 raan_deg=0.0,
@@ -64,6 +66,7 @@ class TestLoadEphemeris:
             epoch_unix=EPOCH,
             nodes={
                 "sat-P00S00": EphemerisNodeKeplerian(
+                    propagator="keplerian-circular",
                     altitude_km=550.0,
                     inclination_deg=53.0,
                     raan_deg=0.0,

@@ -74,13 +74,14 @@ def generate_session_yaml(
     constellation: str,
     protocol: str,
     extensions: list[str],
+    *,
+    orbit_propagator: str,
     area_strategy: str = "flat",
     ground_stations: str | list[str] | None = None,
     satellite_type: str | None = None,
     custom_constellation: dict | None = None,
     custom_ground_stations: list[dict] | None = None,
     routing_config: dict | None = None,
-    orbit_propagator: str = "keplerian-circular",
     ground_policy: str = "highest-elevation",
     ground_lookahead_horizon_ticks: int = 0,
 ) -> tuple[str, list[str]]:
@@ -100,8 +101,9 @@ def generate_session_yaml(
             When provided, ``constellation`` preset is used only for name
             and defaults (time, traffic_flows).
         custom_ground_stations: List of inline station dicts (advanced mode).
-        orbit_propagator: Physical propagation model. The generator derives
-            the matching simulation fidelity label and refuses unknown models.
+        orbit_propagator: Required physical propagation model. This is the
+            single user-facing fidelity choice; the fidelity label is derived
+            from it.
         ground_policy: Ground handover scoring policy.
         ground_lookahead_horizon_ticks: Required when ground_policy is
             ``longest-remaining-pass``; measured in OME ticks.
@@ -193,12 +195,8 @@ def generate_session_yaml(
     routing_overrides = dict(routing_config or {})
     mbb_requested = bool(routing_overrides.pop("mbb_dispatch", protocol == "nodalpath"))
     mbb_overlap_ticks = int(routing_overrides.pop("mbb_overlap_ticks", 3 if mbb_requested else 0))
-    propagator_to_fidelity = {
-        "keplerian-circular": "synthetic-keplerian",
-        "j2-mean-elements": "j2-mean-elements",
-        "sgp4-tle": "sgp4-tle",
-    }
-    if orbit_propagator not in propagator_to_fidelity:
+    supported_propagators = {"keplerian-circular", "j2-mean-elements", "sgp4-tle"}
+    if orbit_propagator not in supported_propagators:
         raise ValueError(f"Unsupported orbit_propagator: {orbit_propagator!r}")
 
     # Build session dict
@@ -208,7 +206,6 @@ def generate_session_yaml(
         "ground_stations": gs_value,
         "simulation": {
             "schema_version": 2,
-            "fidelity": propagator_to_fidelity[orbit_propagator],
         },
         "orbit": {
             "propagator": orbit_propagator,

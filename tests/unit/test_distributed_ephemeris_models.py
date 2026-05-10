@@ -31,6 +31,7 @@ from pydantic import ValidationError
 class TestEphemerisNodeKeplerian:
     def test_round_trip(self):
         node = EphemerisNodeKeplerian(
+            propagator="keplerian-circular",
             altitude_km=550.0,
             inclination_deg=53.0,
             raan_deg=0.0,
@@ -46,6 +47,7 @@ class TestEphemerisNodeKeplerian:
 
     def test_frozen(self):
         node = EphemerisNodeKeplerian(
+            propagator="keplerian-circular",
             altitude_km=550.0,
             inclination_deg=53.0,
             raan_deg=0.0,
@@ -58,6 +60,7 @@ class TestEphemerisNodeKeplerian:
 
     def test_type_discriminator_default(self):
         node = EphemerisNodeKeplerian(
+            propagator="keplerian-circular",
             altitude_km=550.0,
             inclination_deg=53.0,
             raan_deg=0.0,
@@ -80,6 +83,17 @@ class TestEphemerisNodeKeplerian:
         )
         restored = EphemerisNodeKeplerian.model_validate(node.model_dump(mode="json"))
         assert restored.propagator == "j2-mean-elements"
+
+    def test_propagator_identity_required(self):
+        with pytest.raises(ValidationError, match="propagator"):
+            EphemerisNodeKeplerian(
+                altitude_km=550.0,
+                inclination_deg=53.0,
+                raan_deg=0.0,
+                true_anomaly_deg=0.0,
+                plane=0,
+                slot=0,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +158,7 @@ class TestSessionEphemeris:
             epoch_unix=1735689600.0,
             nodes={
                 "sat-P00S00": EphemerisNodeKeplerian(
+                    propagator="keplerian-circular",
                     altitude_km=550.0,
                     inclination_deg=53.0,
                     raan_deg=0.0,

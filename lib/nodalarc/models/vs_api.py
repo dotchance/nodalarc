@@ -6,6 +6,7 @@ StateSnapshot is the complete payload sent over WebSocket at ~1Hz.
 """
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -64,17 +65,17 @@ class LinkDecisionTrace(BaseModel):
     interface_a: str
     interface_b: str
     reason: str | None = None
-    geometry_authority: str
+    geometry_authority: Literal["ome"]
     authority_source: str
     authority_sim_time: datetime
     authority_sequence: int | None = None
-    authority_age_ms: float | None = None
+    authority_age_ms: float
     range_km: float
     orbital_one_way_ms: float
-    substrate_rtt_ms: float | None = None
-    substrate_one_way_ms: float | None = None
-    netem_one_way_ms: float | None = None
-    rtt_to_one_way_policy: str | None = None
+    substrate_rtt_ms: float | None
+    substrate_one_way_ms: float | None
+    netem_one_way_ms: float | None
+    rtt_to_one_way_policy: str | None
 
 
 class TracedPath(BaseModel):

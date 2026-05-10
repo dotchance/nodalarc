@@ -49,6 +49,7 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
         gs_policies={},
         gs_hysteresis={},
         gs_service_priorities={},
+        ground_pair_terminal_types={},
         by_node={
             node_a: [
                 NeighborAssignment(
@@ -89,9 +90,7 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
             },
         },
         sat_ground_terminals={node_a: 0, node_b: 0},
-        max_range_km=5016.0,
-        max_tracking_rate_deg_s=4.0,
-        field_of_regard_deg=360.0,
+        propagator_id="keplerian-circular",
         polar_seam_enabled=False,
         latitude_threshold_deg=70.0,
     )

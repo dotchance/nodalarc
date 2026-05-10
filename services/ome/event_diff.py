@@ -71,7 +71,7 @@ def diff_isl_visibility_events(
                 range_km=result.range_km,
                 latency_ms=result.orbital_one_way_ms,
                 elevation_deg=None,
-                terminal_type="optical",
+                terminal_type=result.terminal_type,
                 link_type="isl",
             )
         )
@@ -85,6 +85,7 @@ def diff_ground_visibility_events(
     visibility_details: GroundVisibilityDetails,
     allocation: GroundAllocationResult,
     previous_state: Mapping[tuple[str, str], tuple[bool, bool, str]],
+    terminal_types: Mapping[tuple[str, str], str],
 ) -> GroundEventDiff:
     """Emit ground VisibilityEvents for changed visibility/allocation state."""
     state = dict(previous_state)
@@ -99,7 +100,7 @@ def diff_ground_visibility_events(
             continue
 
         state[pair] = new_state
-        indices = allocation.associations.get(pair)
+        indices = allocation.associations[pair] if scheduled else None
         events.append(
             VisibilityEvent(
                 sim_time=sim_time,
@@ -110,7 +111,7 @@ def diff_ground_visibility_events(
                 range_km=range_km,
                 latency_ms=compute_latency_ms(range_km),
                 elevation_deg=elev_deg,
-                terminal_type="optical",
+                terminal_type=terminal_types[pair],
                 link_type="ground",
                 gs_terminal_index=indices[0] if indices else None,
                 sat_terminal_index=indices[1] if indices else None,

@@ -89,7 +89,7 @@ def _estimate_remaining_visible_seconds(
                 gs_ecef,
                 gs_geo,
                 state.position_ecef_km,
-                gs_min_elevations.get(gs_id, 25.0),
+                gs_min_elevations[gs_id],
             ).visible
             if not visible:
                 remaining[(gs_id, sat_id)] = (tick_offset - 1) * lookahead.step_seconds
@@ -121,6 +121,18 @@ def evaluate_ground_visibility(
     visible_per_station: dict[str, list[GroundVisibility]] = {}
 
     policies = gs_policies or {}
+    if gs_policies is not None:
+        missing_policies = sorted(set(gs_positions) - set(gs_policies))
+        if missing_policies:
+            raise ValueError(
+                f"Ground visibility is missing scheduling policy for {', '.join(missing_policies)}"
+            )
+    missing_min_elev = sorted(set(gs_positions) - set(gs_min_elevations))
+    if missing_min_elev:
+        raise ValueError(
+            "Ground visibility is missing minimum elevation config for "
+            f"{', '.join(missing_min_elev)}"
+        )
     longest_pass_station_ids = {
         gs_id for gs_id in gs_positions if policies.get(gs_id) == "longest-remaining-pass"
     }
@@ -131,7 +143,7 @@ def evaluate_ground_visibility(
 
     visible_candidates_requiring_dwell: set[tuple[str, str]] = set()
     for gs_id, (gs_ecef, gs_geo) in gs_positions.items():
-        min_elev = gs_min_elevations.get(gs_id, 25.0)
+        min_elev = gs_min_elevations[gs_id]
         visible_sats: list[GroundVisibility] = []
         for sat_id in ordered_satellite_ids:
             state = sat_states.get(sat_id)

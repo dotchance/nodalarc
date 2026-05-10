@@ -53,6 +53,7 @@ class TestAllocationContractInvariants:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
 
         isl_state: dict = {}
@@ -78,7 +79,7 @@ class TestAllocationContractInvariants:
                 gs_counts[gs_id] = gs_counts.get(gs_id, 0) + 1
 
             for gs_id, count in gs_counts.items():
-                cap = ctx.gs_terminal_counts.get(gs_id, 1)
+                cap = ctx.gs_terminal_counts[gs_id]
                 assert count <= cap, (
                     f"Step {step}: {gs_id} has {count} associations but capacity is {cap}"
                 )
@@ -89,7 +90,7 @@ class TestAllocationContractInvariants:
                 sat_counts[sat_id] = sat_counts.get(sat_id, 0) + 1
 
             for sat_id, count in sat_counts.items():
-                cap = ctx.sat_ground_terminals.get(sat_id, 1)
+                cap = ctx.sat_ground_terminals[sat_id]
                 assert count <= cap, (
                     f"Step {step}: {sat_id} has {count} GS associations "
                     f"but ground_terminal_count is {cap}"
@@ -106,6 +107,7 @@ class TestAllocationContractInvariants:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
 
         isl_state: dict = {}
@@ -147,6 +149,7 @@ class TestAllocationContractInvariants:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
 
         # Run with hysteresis (stateful fold)

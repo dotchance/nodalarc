@@ -18,20 +18,20 @@ Published via NATS JetStream with MaxMsgsPerSubject=1 retention.
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
 
-class AdminState(str, Enum):
+class AdminState(StrEnum):
     """Interface administrative state. Lowest layer."""
 
     UP = "UP"
     DOWN = "DOWN"
 
 
-class CarrierState(str, Enum):
+class CarrierState(StrEnum):
     """Physical signal state. Only meaningful when admin is UP."""
 
     UP = "UP"
@@ -39,7 +39,7 @@ class CarrierState(str, Enum):
     DOWN = "DOWN"  # admin DOWN — carrier question is moot
 
 
-class RoutingState(str, Enum):
+class RoutingState(StrEnum):
     """Routing protocol adjacency state. Only meaningful when carrier is UP."""
 
     ADJACENT = "ADJACENT"  # ISIS Up / OSPF Full / BGP Established

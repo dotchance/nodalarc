@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from nodalarc.constants import SPEED_OF_LIGHT_KM_S
+from nodalarc.geo import compute_latency_ms
 from nodalarc.models.addressing import NeighborAssignment
 
 from ome.propagation_engine import PropagatedState
@@ -54,6 +54,7 @@ class IslFeasibilityResult:
     reject_reason: str
     terminal_role_a: str | None
     terminal_role_b: str | None
+    terminal_type: str
     interface_a: str
     interface_b: str
     applied_max_range_km: float
@@ -72,10 +73,6 @@ class ScheduledIsl:
     orbital_one_way_ms: float
     scheduled: bool
     unscheduled_reason: str | None
-
-
-def _latency_ms(range_km: float) -> float:
-    return range_km / SPEED_OF_LIGHT_KM_S * 1000.0
 
 
 def _role_allows_link(role: str | None, link_type: str) -> bool:
@@ -150,6 +147,27 @@ def evaluate_isl_feasibility(
             applied_tracking_rate = (
                 max_tracking_rate_deg_s if assignment_a.link_type == "cross_plane_isl" else None
             )
+            terminal_type = constraints_a.terminal_type
+
+            if constraints_a.terminal_type != constraints_b.terminal_type:
+                range_km = compute_range(state_a.position_ecef_km, state_b.position_ecef_km)
+                results[pair] = IslFeasibilityResult(
+                    pair=pair,
+                    link_type=assignment_a.link_type,
+                    feasible=False,
+                    range_km=range_km,
+                    orbital_one_way_ms=compute_latency_ms(range_km),
+                    reject_reason="terminal_type_mismatch",
+                    terminal_role_a=constraints_a.role,
+                    terminal_role_b=constraints_b.role,
+                    terminal_type=f"{constraints_a.terminal_type}/{constraints_b.terminal_type}",
+                    interface_a=assignment_a.interface,
+                    interface_b=assignment_b.interface,
+                    applied_max_range_km=max_range_km,
+                    applied_max_tracking_rate_deg_s=applied_tracking_rate,
+                    applied_field_of_regard_deg=field_of_regard_deg,
+                )
+                continue
 
             if not _role_allows_link(
                 constraints_a.role, assignment_a.link_type
@@ -160,10 +178,11 @@ def evaluate_isl_feasibility(
                     link_type=assignment_a.link_type,
                     feasible=False,
                     range_km=range_km,
-                    orbital_one_way_ms=_latency_ms(range_km),
+                    orbital_one_way_ms=compute_latency_ms(range_km),
                     reject_reason="terminal_role_mismatch",
                     terminal_role_a=constraints_a.role,
                     terminal_role_b=constraints_b.role,
+                    terminal_type=terminal_type,
                     interface_a=assignment_a.interface,
                     interface_b=assignment_b.interface,
                     applied_max_range_km=max_range_km,
@@ -192,10 +211,11 @@ def evaluate_isl_feasibility(
                 link_type=assignment_a.link_type,
                 feasible=visibility.visible,
                 range_km=visibility.range_km,
-                orbital_one_way_ms=_latency_ms(visibility.range_km),
+                orbital_one_way_ms=compute_latency_ms(visibility.range_km),
                 reject_reason=visibility.reason,
                 terminal_role_a=constraints_a.role,
                 terminal_role_b=constraints_b.role,
+                terminal_type=terminal_type,
                 interface_a=assignment_a.interface,
                 interface_b=assignment_b.interface,
                 applied_max_range_km=max_range_km,
@@ -233,7 +253,7 @@ def schedule_isl_links(
 
     all_isl_schedules: dict[str, list] = {}
     for node_id, feasible_links in node_feasible_isls.items():
-        terminal_count = terminal_counts.get(node_id, 2)
+        terminal_count = terminal_counts[node_id]
         all_isl_schedules[node_id] = schedule_isl_terminals(node_id, feasible_links, terminal_count)
 
     all_isl_schedules = enforce_symmetric_scheduling(all_isl_schedules)

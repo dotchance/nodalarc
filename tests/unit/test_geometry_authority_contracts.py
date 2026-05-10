@@ -113,6 +113,7 @@ class TestOmeSnapshotGeometry:
             isl_state={pair: (True, True)},
             gs_state={},
             interface_map={pair: ("isl0", "isl1")},
+            bandwidth_map={pair: 1000.0},
             sim_time=SIM,
             seq=1,
             interval_s=1.0,
@@ -142,11 +143,31 @@ class TestOmeSnapshotGeometry:
                 isl_state={pair: (True, True)},
                 gs_state={},
                 interface_map={pair: ("isl0", "isl1")},
+                bandwidth_map={pair: 1000.0},
                 sim_time=SIM,
                 seq=1,
                 interval_s=1.0,
                 propagated_states={
                     "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
+                },
+                epoch_id=0,
+            )
+
+    def test_active_snapshot_link_missing_bandwidth_fails_loudly(self):
+        pair = ("sat-a", "sat-b")
+
+        with pytest.raises(ValueError, match="missing config-derived bandwidth"):
+            build_link_state_snapshot(
+                isl_state={pair: (True, True)},
+                gs_state={},
+                interface_map={pair: ("isl0", "isl1")},
+                bandwidth_map={},
+                sim_time=SIM,
+                seq=1,
+                interval_s=1.0,
+                propagated_states={
+                    "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
+                    "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
                 },
                 epoch_id=0,
             )

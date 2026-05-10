@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from vs_api.session_manager import SessionManager, _pid_alive
 
 
@@ -28,6 +27,8 @@ session:
   data_dir: {data_dir}
 constellation: configs/constellations/custom-example.yaml
 ground_stations: configs/ground-stations/default.yaml
+orbit:
+  propagator: keplerian-circular
 routing:
   protocol: isis
   area_assignment:
@@ -294,6 +295,8 @@ session:
   data_dir: {tmp_sessions["data_dir"]}
 constellation: configs/constellations/custom-example.yaml
 ground_stations: configs/ground-stations/default.yaml
+orbit:
+  propagator: keplerian-circular
 routing:
   protocol: isis
   area_assignment:

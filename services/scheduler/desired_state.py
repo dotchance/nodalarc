@@ -36,7 +36,8 @@ class ActiveLinkInfo:
         interface_b: str,
         latency_ms: float,
         bandwidth_mbps: float,
-        link_type: str = "isl",
+        *,
+        link_type: str,
         range_km: float | None = None,
         authority_sim_time: datetime | None = None,
         authority_source: str | None = None,
@@ -80,9 +81,13 @@ def require_ome_geometry(
 def _ground_interfaces(
     gs_terminal_index: int | None, sat_terminal_index: int | None
 ) -> tuple[str, str]:
-    gs_ti = gs_terminal_index if gs_terminal_index is not None else 0
-    sat_ti = sat_terminal_index if sat_terminal_index is not None else 0
-    return f"term{gs_ti}", f"gnd{sat_ti}"
+    if gs_terminal_index is None or sat_terminal_index is None:
+        raise ValueError(
+            "Scheduled ground links require OME-provided terminal indices; "
+            f"got gs_terminal_index={gs_terminal_index!r}, "
+            f"sat_terminal_index={sat_terminal_index!r}"
+        )
+    return f"term{gs_terminal_index}", f"gnd{sat_terminal_index}"
 
 
 def _configured_bandwidth(

@@ -50,6 +50,8 @@ def _make_vis(
         elevation_deg=45.0,
         terminal_type="optical",
         link_type=link_type,
+        gs_terminal_index=0 if link_type == "ground" else None,
+        sat_terminal_index=0 if link_type == "ground" else None,
     )
 
 
@@ -73,6 +75,8 @@ def _make_link_state(
         latency_ms=3.0 if carrier == CarrierState.UP else None,
         bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
         link_type=link_type,
+        gs_terminal_index=0 if link_type == "ground" else None,
+        sat_terminal_index=0 if link_type == "ground" else None,
         sim_time=sim_time or datetime(2026, 1, 1, tzinfo=UTC),
     )
 
@@ -169,6 +173,7 @@ class TestGsDeallocationSnapshot:
             "gnd0",
             3.0,
             1000.0,
+            link_type="ground",
         )
 
         # Snapshot with NO GS links — replaces everything
@@ -196,6 +201,7 @@ class TestGsDeallocationSnapshot:
             "gnd0",
             3.0,
             1000.0,
+            link_type="ground",
         )
 
         # Snapshot with different GS satellite
@@ -225,6 +231,7 @@ class TestGsDeallocationSnapshot:
             "isl1",
             3.0,
             1000.0,
+            link_type="isl",
         )
         desired = d._build_desired_from_snapshot(snapshot)
 
@@ -342,7 +349,7 @@ class TestGsDeallocationDispatchBatch:
 
     def test_gs_pair_removed_via_dispatch_batch(self):
         d = _make_dispatcher()
-        info = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0)
+        info = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         d._desired_links[("gs-ashburn", "sat-P00S00")] = info
         d._active_links[("gs-ashburn", "sat-P00S00")] = info
 
@@ -354,7 +361,7 @@ class TestGsDeallocationDispatchBatch:
 
     def test_isl_deallocation_not_removed(self):
         d = _make_dispatcher()
-        info = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0)
+        info = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
         d._desired_links[("sat-P00S00", "sat-P00S01")] = info
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
@@ -373,7 +380,7 @@ class TestGsDeallocationConsistency:
 
         # Path 1: snapshot with no GS link — desired dict excludes pair
         d1 = _make_dispatcher()
-        d1._active_links[pair] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0)
+        d1._active_links[pair] = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         snapshot = LinkStateSnapshot(
             sim_time=datetime(2026, 1, 1, tzinfo=UTC),
             snapshot_seq=1,
@@ -384,7 +391,7 @@ class TestGsDeallocationConsistency:
 
         # Path 2: dispatch batch with deallocation event → _reconcile_links removes
         d2 = _make_dispatcher()
-        info = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0)
+        info = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         d2._desired_links[pair] = info
         d2._active_links[pair] = info
         vis = _make_vis("gs-ashburn", "sat-P00S00", True, False, link_type="ground")
@@ -417,6 +424,7 @@ class TestSessionEphemerisContract:
             epoch_unix=1735689600.0,
             nodes={
                 "sat-P00S00": EphemerisNodeKeplerian(
+                    propagator="keplerian-circular",
                     altitude_km=550.0,
                     inclination_deg=53.0,
                     raan_deg=22.5,
@@ -486,6 +494,7 @@ class TestSessionEphemerisContract:
             epoch_unix=1735689600.0,
             nodes={
                 "sat-P00S00": EphemerisNodeKeplerian(
+                    propagator="keplerian-circular",
                     altitude_km=550.0,
                     inclination_deg=53.0,
                     raan_deg=0.0,

@@ -110,10 +110,10 @@ def allocate_ground_links(
     scored_pairs: list[tuple[int, float, str, str, float, int]] = []
     score_lookup: dict[tuple[str, str], tuple[float, int]] = {}
     for gs_id, visible_sats in visible_per_station.items():
-        policy = gs_policies.get(gs_id, "highest-elevation")
-        min_elev = gs_min_elevations.get(gs_id, 25.0)
-        hyst = gs_hysteresis.get(gs_id, HysteresisParameters())
-        priority = gs_service_priorities.get(gs_id, 10)
+        policy = gs_policies[gs_id]
+        min_elev = gs_min_elevations[gs_id]
+        hyst = gs_hysteresis[gs_id]
+        priority = gs_service_priorities[gs_id]
 
         for gv in visible_sats:
             score = _compute_pair_score(gv.elevation_deg, policy, gv.remaining_visible_s)
@@ -123,7 +123,7 @@ def allocate_ground_links(
                 discount = _compute_effective_discount(gv.elevation_deg, min_elev, hyst)
                 score *= discount
 
-            sat_gnd_cap = sat_ground_terminals.get(gv.sat_id, 1)
+            sat_gnd_cap = sat_ground_terminals[gv.sat_id]
             scored_pairs.append((priority, score, gs_id, gv.sat_id, gv.range_km, sat_gnd_cap))
             score_lookup[pair] = (score, priority)
 
@@ -199,7 +199,7 @@ def allocate_ground_links(
 
         if kind == "overlap":
             gs_idx, sat_idx = current_associations[pair]
-            if sat_capacity.get(sat_id_m, 0) > 0:
+            if sat_capacity[sat_id_m] > 0:
                 new_associations[pair] = (gs_idx, sat_idx)
                 sat_capacity[sat_id_m] -= 1
                 if successor_m is None:
@@ -210,7 +210,7 @@ def allocate_ground_links(
                 gs_occupied.setdefault(gs_id_m, set()).discard(gs_idx)
                 sat_gnd_occupied.setdefault(sat_id_m, set()).discard(sat_idx)
         else:
-            tc = gs_terminal_counts.get(gs_id_m, 1)
+            tc = gs_terminal_counts[gs_id_m]
             gs_steady = sum(
                 1
                 for p in new_associations
@@ -221,10 +221,10 @@ def allocate_ground_links(
             logical_room = gs_steady < (tc - mbb_reserve)
             physical_room = gs_physical < tc
 
-            if logical_room and physical_room and sat_capacity.get(sat_id_m, 0) > 0:
+            if logical_room and physical_room and sat_capacity[sat_id_m] > 0:
                 gs_occ = gs_occupied.get(gs_id_m, set())
                 sat_occ = sat_gnd_occupied.get(sat_id_m, set())
-                sat_cap_total = sat_ground_terminals.get(sat_id_m, 1)
+                sat_cap_total = sat_ground_terminals[sat_id_m]
                 gs_idx = next((i for i in range(tc) if i not in gs_occ), None)
                 sat_idx = next((i for i in range(sat_cap_total) if i not in sat_occ), None)
                 if gs_idx is not None and sat_idx is not None:
@@ -234,7 +234,7 @@ def allocate_ground_links(
                     sat_capacity[sat_id_m] -= 1
                     gs_scheduled[pair] = True
 
-            elif not logical_room and physical_room and sat_capacity.get(sat_id_m, 0) > 0:
+            elif not logical_room and physical_room and sat_capacity[sat_id_m] > 0:
                 worst_pair: tuple[str, str] | None = None
                 worst_score = float("inf")
                 worst_prio = 0
@@ -242,7 +242,7 @@ def allocate_ground_links(
                     p_gs, _p_sat = _ground_and_satellite_ids(p, ground_station_ids)
                     if p_gs != gs_id_m or p in new_pending_teardowns:
                         continue
-                    p_score, p_prio = score_lookup.get(p, (0.0, 10))
+                    p_score, p_prio = score_lookup[p]
                     if p_score < worst_score:
                         worst_pair, worst_score, worst_prio = p, p_score, p_prio
 
@@ -250,7 +250,7 @@ def allocate_ground_links(
                 if worst_pair is not None and score > worst_score and prio <= worst_prio:
                     gs_occ = gs_occupied.get(gs_id_m, set())
                     sat_occ = sat_gnd_occupied.get(sat_id_m, set())
-                    sat_cap_total = sat_ground_terminals.get(sat_id_m, 1)
+                    sat_cap_total = sat_ground_terminals[sat_id_m]
                     gs_idx = next((i for i in range(tc) if i not in gs_occ), None)
                     sat_idx = next((i for i in range(sat_cap_total) if i not in sat_occ), None)
                     if gs_idx is not None and sat_idx is not None:

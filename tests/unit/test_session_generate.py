@@ -59,6 +59,7 @@ class TestGenerateSessionYaml:
             constellation=constellation,
             protocol=protocol,
             extensions=extensions,
+            orbit_propagator="keplerian-circular",
         )
         # Must parse back to valid SessionConfig
         raw = yaml.safe_load(yaml_str)
@@ -77,6 +78,7 @@ class TestGenerateSessionYaml:
             constellation="iridium-small-36",
             protocol="ospf",
             extensions=[],
+            orbit_propagator="keplerian-circular",
             area_strategy=area_strategy,
         )
         raw = yaml.safe_load(yaml_str)
@@ -90,6 +92,7 @@ class TestGenerateSessionYaml:
                 constellation="iridium-small-36",
                 protocol="ospf",
                 extensions=[],
+                orbit_propagator="keplerian-circular",
                 ground_policy="longest-remaining-pass",
             )
 
@@ -98,6 +101,7 @@ class TestGenerateSessionYaml:
             constellation="iridium-small-36",
             protocol="ospf",
             extensions=[],
+            orbit_propagator="keplerian-circular",
             ground_policy="longest-remaining-pass",
             ground_lookahead_horizon_ticks=600,
         )
@@ -110,23 +114,27 @@ class TestGenerateSessionYaml:
 class TestGenerateInvalid:
     def test_unknown_constellation(self):
         with pytest.raises(ValueError, match="Unknown constellation"):
-            generate_session_yaml("nonexistent", "ospf", [])
+            generate_session_yaml("nonexistent", "ospf", [], orbit_propagator="keplerian-circular")
 
     def test_invalid_combo(self):
         with pytest.raises(ValueError, match="does not accept extensions"):
-            generate_session_yaml("iridium-66", "nodalpath", ["sr"])
+            generate_session_yaml(
+                "iridium-66", "nodalpath", ["sr"], orbit_propagator="keplerian-circular"
+            )
 
 
 class TestNodalPathNoAreaAssignment:
     def test_no_area_assignment(self):
-        yaml_str, _ = generate_session_yaml("iridium-66", "nodalpath", [])
+        yaml_str, _ = generate_session_yaml(
+            "iridium-66", "nodalpath", [], orbit_propagator="keplerian-circular"
+        )
         raw = yaml.safe_load(yaml_str)
         session = SessionConfig.model_validate(raw)
         assert session.routing.area_assignment is None
 
 
 class TestOrbitPropagatorGeneration:
-    def test_j2_propagator_sets_matching_fidelity(self):
+    def test_j2_propagator_is_the_single_fidelity_knob(self):
         yaml_str, _ = generate_session_yaml(
             "iridium-small-36",
             "ospf",
@@ -137,7 +145,7 @@ class TestOrbitPropagatorGeneration:
         session = SessionConfig.model_validate(raw)
 
         assert session.orbit.propagator == "j2-mean-elements"
-        assert session.simulation.fidelity == "j2-mean-elements"
+        assert session.orbit.fidelity_label == "j2-mean-elements"
         assert session.dispatch.substrate_compensation.rtt_to_one_way == "half-rtt"
 
     def test_sgp4_requires_tle_constellation(self):
@@ -180,8 +188,8 @@ class TestOrbitPropagatorGeneration:
         raw = yaml.safe_load(yaml_str)
         session = SessionConfig.model_validate(raw)
 
-        assert session.simulation.fidelity == "sgp4-tle"
         assert session.orbit.propagator == "sgp4-tle"
+        assert session.orbit.fidelity_label == "sgp4-tle"
         assert session.orbit.tle_max_age_days == 7.0
 
 
@@ -202,6 +210,7 @@ class TestRoutingConfigRoundtrip:
             constellation="iridium-small-36",
             protocol=protocol,
             extensions=[],
+            orbit_propagator="keplerian-circular",
             routing_config={"bfd": bfd},
         )
         raw = yaml.safe_load(yaml_str)
@@ -222,6 +231,7 @@ class TestRoutingConfigRoundtrip:
             constellation="iridium-small-36",
             protocol="isis",
             extensions=[],
+            orbit_propagator="keplerian-circular",
             routing_config=timers,
         )
         raw = yaml.safe_load(yaml_str)
@@ -246,6 +256,7 @@ class TestRoutingConfigRoundtrip:
             constellation="iridium-small-36",
             protocol="ospf",
             extensions=[],
+            orbit_propagator="keplerian-circular",
             routing_config=timers,
         )
         raw = yaml.safe_load(yaml_str)
@@ -267,6 +278,7 @@ class TestRoutingConfigRoundtrip:
             constellation="iridium-small-36",
             protocol="isis",
             extensions=["te"],
+            orbit_propagator="keplerian-circular",
             routing_config=timers,
         )
         raw = yaml.safe_load(yaml_str)
@@ -281,6 +293,7 @@ class TestRoutingConfigRoundtrip:
             constellation="iridium-small-36",
             protocol="isis",
             extensions=[],
+            orbit_propagator="keplerian-circular",
         )
         raw = yaml.safe_load(yaml_str)
         session = SessionConfig.model_validate(raw)
@@ -327,6 +340,7 @@ class TestRoutingConfigRoundtrip:
             constellation="iridium-small-36",
             protocol=protocol,
             extensions=extensions,
+            orbit_propagator="keplerian-circular",
             routing_config=routing_config,
         )
         raw = yaml.safe_load(yaml_str)

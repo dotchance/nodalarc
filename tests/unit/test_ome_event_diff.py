@@ -23,6 +23,7 @@ def _isl_result(pair: tuple[str, str], *, feasible: bool = True) -> IslFeasibili
         range_km=1234.5,
         orbital_one_way_ms=compute_latency_ms(1234.5),
         reject_reason="ok" if feasible else "range_exceeded",
+        terminal_type="optical",
         terminal_role_a="intra-plane",
         terminal_role_b="intra-plane",
         interface_a="isl0",
@@ -84,6 +85,7 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
         sim_time=SIM,
         visibility_details={pair: (True, 2000.0, 37.5)},
         allocation=allocation,
+        terminal_types={pair: "rf"},
         previous_state={},
     )
 
@@ -109,6 +111,7 @@ def test_ground_event_diff_marks_mbb_teardown_state():
         sim_time=SIM,
         visibility_details={pair: (True, 1900.0, 25.0)},
         allocation=allocation,
+        terminal_types={pair: "rf", successor: "rf"},
         previous_state={},
     )
 

@@ -121,13 +121,15 @@ def classify_mbb_changes(
             continue
 
         downs = gs_downs.get(gs_id, set())
-        gs_spare = gs_capacities.get(gs_id, 1) - gs_active_count.get(gs_id, 0)
-        all_sats_ok = all(
-            sat_capacities.get(sat_id_for_gs_pair(pair, gs_capacities), 1)
-            - sat_active_count.get(sat_id_for_gs_pair(pair, gs_capacities), 0)
-            > 0
-            for pair in ups
-        )
+        gs_spare = gs_capacities[gs_id] - gs_active_count.get(gs_id, 0)
+        all_sats_ok = True
+        for pair in ups:
+            sat_id = sat_id_for_gs_pair(pair, gs_capacities)
+            if sat_id is None:
+                raise ValueError(f"Ground segment {gs_id!r} includes non-ground pair {pair}")
+            if sat_capacities[sat_id] - sat_active_count.get(sat_id, 0) <= 0:
+                all_sats_ok = False
+                break
 
         if not downs:
             if gs_spare >= len(ups) and all_sats_ok:

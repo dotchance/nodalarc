@@ -49,7 +49,10 @@ class TestSessionConfigLoading:
         assert config.simulation.schema_version == 2
         assert config.orbit.propagator == "keplerian-circular"
         assert config.dispatch.latency_authority == "ome"
+        assert config.dispatch.substrate_compensation.rtt_to_one_way == "half-rtt"
         assert config.scheduling.ground.handover_mode == "bbm"
+        assert config.observability.decision_trace.active_links == "always"
+        assert config.observability.decision_trace.rejected_candidates_retention == "bounded"
         assert config.convergence.stability_period_s == 2.0
         assert config.convergence.timeout_s == 30.0
         assert config.convergence.probe_interval_ms == 100
@@ -146,6 +149,33 @@ class TestEngineConfigValidation:
             "mbb_dispatch": True,
         }
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            SessionConfig.model_validate(data)
+
+    def test_substrate_rtt_policy_is_explicit_half_rtt(self):
+        data = dict(_SAMPLE_SESSION)
+        data["dispatch"] = {
+            "substrate_compensation": {
+                "measurement_source": "node-agent-rtt",
+                "rtt_to_one_way": "half",
+            }
+        }
+        with pytest.raises(ValidationError, match="half-rtt"):
+            SessionConfig.model_validate(data)
+
+    def test_time_values_must_be_positive(self):
+        data = dict(_SAMPLE_SESSION)
+        data["time"] = {"step_seconds": 0}
+        with pytest.raises(ValidationError, match="must be >= 1"):
+            SessionConfig.model_validate(data)
+
+    def test_active_decision_trace_cannot_be_disabled(self):
+        data = dict(_SAMPLE_SESSION)
+        data["observability"] = {
+            "decision_trace": {
+                "active_links": "none",
+            }
+        }
+        with pytest.raises(ValidationError, match="always"):
             SessionConfig.model_validate(data)
 
 

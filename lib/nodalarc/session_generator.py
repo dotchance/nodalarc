@@ -211,7 +211,7 @@ def generate_session_yaml(
             "max_latency_age_ticks": 1,
             "substrate_compensation": {
                 "measurement_source": "node-agent-rtt",
-                "rtt_to_one_way": "half",
+                "rtt_to_one_way": "half-rtt",
             },
         },
         "routing": {

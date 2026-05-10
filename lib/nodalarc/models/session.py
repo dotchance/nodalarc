@@ -161,7 +161,7 @@ class SubstrateCompensationConfig(BaseModel):
     """Substrate latency compensation settings."""
 
     measurement_source: Literal["node-agent-rtt"] = "node-agent-rtt"
-    rtt_to_one_way: Literal["half"] = "half"
+    rtt_to_one_way: Literal["half-rtt"] = "half-rtt"
 
 
 class DispatchConfig(BaseModel):
@@ -188,6 +188,16 @@ class TimeConfig(BaseModel):
     start_time: str | None = None  # ISO 8601 (default: now per R-OME-005)
     step_seconds: int = 1
     latency_update_interval_seconds: int = 10
+
+    @field_validator("compression", "step_seconds", "latency_update_interval_seconds")
+    @classmethod
+    def _positive_time_values(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError(
+                "time.compression, time.step_seconds, and "
+                "time.latency_update_interval_seconds must be >= 1"
+            )
+        return value
 
 
 def resolve_session_epoch(time_config: TimeConfig) -> float:
@@ -247,6 +257,27 @@ class TerrestrialLinkConfig(BaseModel):
     loss_pct: float = 0.0
 
 
+class DecisionTraceConfig(BaseModel):
+    """User-facing audit trace retention settings."""
+
+    active_links: Literal["always"] = "always"
+    rejected_candidates_retention: Literal["none", "bounded", "full"] = "bounded"
+    retention_ticks: int = 300
+
+    @field_validator("retention_ticks")
+    @classmethod
+    def _positive_retention(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("observability.decision_trace.retention_ticks must be >= 1")
+        return value
+
+
+class ObservabilityConfig(BaseModel):
+    """Observability and provenance knobs exposed in session YAML."""
+
+    decision_trace: DecisionTraceConfig = Field(default_factory=DecisionTraceConfig)
+
+
 class PlacementConfig(BaseModel):
     """Pod placement policy for multi-node deployment.
 
@@ -288,6 +319,7 @@ class SessionConfig(BaseModel):
     orbit: OrbitConfig = Field(default_factory=OrbitConfig)
     scheduling: SchedulingConfig = Field(default_factory=SchedulingConfig)
     dispatch: DispatchConfig = Field(default_factory=DispatchConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     addressing: AddressingConfig = AddressingConfig()
     routing: RoutingConfig
     time: TimeConfig = TimeConfig()

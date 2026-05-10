@@ -15,6 +15,7 @@ from nodalarc.db.schema import create_tables
 from nodalarc.models.link_events import LinkUp
 from nodalarc.models.metrics import ConvergenceResult
 from nodalarc.models.vs_api import (
+    LinkDecisionTrace,
     LinkState,
     NetworkHealth,
     NodeState,
@@ -22,6 +23,24 @@ from nodalarc.models.vs_api import (
 )
 from nodalarc.nats_channels import STREAM_OME_EVENTS
 from vs_api.session_context import SessionContext, _link_key
+
+
+def _make_provenance(**overrides):
+    provenance = {
+        "geometry_authority": "ome",
+        "authority_source": "visibility_event",
+        "authority_sim_time": "2026-01-01T00:00:00+00:00",
+        "authority_sequence": None,
+        "authority_age_ms": 0.0,
+        "range_km": 1500.0,
+        "orbital_one_way_ms": 5.0,
+        "substrate_rtt_ms": 0.0,
+        "substrate_one_way_ms": 0.0,
+        "netem_one_way_ms": 5.0,
+        "rtt_to_one_way_policy": "half-rtt",
+    }
+    provenance.update(overrides)
+    return provenance
 
 
 def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
@@ -37,6 +56,7 @@ def _make_link_up_event(node_a="sat-P00S00", node_b="sat-P00S01", **overrides):
         "reason": "vis_gained",
         "sim_time": datetime.now(UTC).isoformat(),
         "link_type": "isl",
+        "provenance": _make_provenance(),
     }
     event.update(overrides)
     return event
@@ -345,6 +365,139 @@ class TestSessionContextInit:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         assert ctx.is_stale() is False
+
+
+class TestLinkDecisionTraceState:
+    """VS-API retains active-link decision traces for auditability."""
+
+    def test_link_up_records_decision_trace(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        event = _make_link_up_event()
+        msg = MagicMock()
+        msg.data = json.dumps(event).encode()
+
+        asyncio.run(ctx._on_link_up(msg))
+
+        key = _link_key("sat-P00S00", "sat-P00S01")
+        trace = ctx.link_decision_traces[key]
+        assert isinstance(trace, LinkDecisionTrace)
+        assert trace.geometry_authority == "ome"
+        assert trace.authority_source == "visibility_event"
+        assert trace.range_km == 1500.0
+        assert trace.netem_one_way_ms == 5.0
+
+    def test_link_up_requires_provenance(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        event = _make_link_up_event()
+        event.pop("provenance")
+        msg = MagicMock()
+        msg.data = json.dumps(event).encode()
+
+        with pytest.raises(ValueError, match="provenance"):
+            asyncio.run(ctx._on_link_up(msg))
+
+    def test_link_up_rejects_contradictory_provenance(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        event = _make_link_up_event(
+            provenance=_make_provenance(range_km=1499.0),
+        )
+        msg = MagicMock()
+        msg.data = json.dumps(event).encode()
+
+        with pytest.raises(ValueError, match="range_km disagrees"):
+            asyncio.run(ctx._on_link_up(msg))
+
+    def test_snapshot_records_ome_authority_trace(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        msg = MagicMock()
+        msg.data = json.dumps(
+            {
+                "snapshot_seq": 12,
+                "sim_time": "2025-01-01T00:00:00+00:00",
+                "interval_s": 1.0,
+                "epoch_id": 0,
+                "links": [
+                    {
+                        "node_a": "sat-P00S00",
+                        "node_b": "sat-P00S01",
+                        "interface_a": "isl0",
+                        "interface_b": "isl1",
+                        "admin": "UP",
+                        "carrier": "UP",
+                        "routing": "UNKNOWN",
+                        "range_km": 900.0,
+                        "latency_ms": 3.0,
+                        "bandwidth_mbps": 1000.0,
+                        "link_type": "isl",
+                        "sim_time": "2025-01-01T00:00:00+00:00",
+                    }
+                ],
+            }
+        ).encode()
+
+        asyncio.run(ctx._on_link_state_snapshot(msg))
+
+        trace = ctx.link_decision_traces[_link_key("sat-P00S00", "sat-P00S01")]
+        assert trace.authority_source == "link_state_snapshot"
+        assert trace.authority_sequence == 12
+        assert trace.range_km == 900.0
+        assert trace.orbital_one_way_ms == 3.0
+        assert trace.netem_one_way_ms is None
+
+    def test_latency_update_refreshes_decision_trace(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        import asyncio
+        from unittest.mock import MagicMock
+
+        up = MagicMock()
+        up.data = json.dumps(_make_link_up_event()).encode()
+        asyncio.run(ctx._on_link_up(up))
+
+        latency = MagicMock()
+        latency.data = json.dumps(
+            {
+                "node_a": "sat-P00S00",
+                "node_b": "sat-P00S01",
+                "latency_ms": 6.0,
+                "range_km": 1800.0,
+                "provenance": _make_provenance(
+                    authority_source="link_state_snapshot",
+                    authority_sequence=99,
+                    range_km=1800.0,
+                    orbital_one_way_ms=6.0,
+                    netem_one_way_ms=6.0,
+                ),
+            }
+        ).encode()
+
+        asyncio.run(ctx._on_latency_update(latency))
+
+        key = _link_key("sat-P00S00", "sat-P00S01")
+        assert ctx.links[key].latency_ms == 6.0
+        assert ctx.link_decision_traces[key].authority_sequence == 99
+        assert ctx.link_decision_traces[key].range_km == 1800.0
 
 
 class TestSubscriberResilience:

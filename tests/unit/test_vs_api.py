@@ -609,7 +609,8 @@ class TestSubscriberResilience:
 
         async def run():
             await ctx.start(nc, mode="recovery")
-            await asyncio.sleep(0.5)
+            with pytest.raises(NotFoundError):
+                await asyncio.wait_for(ctx._subscriber_task, timeout=0.5)
             return ctx._subscriber_task.done()
 
         task_done = asyncio.run(run())

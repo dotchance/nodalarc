@@ -23,12 +23,12 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
 
 import nats
 from nodalarc.models.events import PlaybackState, SessionEphemeris, VisibilityEvent
-from nodalarc.models.link_events import LatencyUpdate, LinkDecisionProvenance, LinkDown, LinkUp
+from nodalarc.models.link_events import LinkDecisionProvenance
 from nodalarc.models.link_state import LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
@@ -48,13 +48,17 @@ from nodalarc.nats_channels import (
     session_ephemeris_subject,
     substrate_latency_subject,
 )
-from nodalarc.proto import node_agent_pb2
 
 from scheduler.agent_pool import AgentPool
 from scheduler.desired_state import (
     ActiveLinkInfo,
     desired_link_from_snapshot_link,
     desired_link_from_visibility,
+)
+from scheduler.dispatch_actuator import (
+    send_authoritative_latency_updates,
+    send_batch_down,
+    send_batch_up,
 )
 from scheduler.dispatch_planner import (
     classify_mbb_changes,
@@ -65,11 +69,7 @@ from scheduler.dispatch_planner import (
 from scheduler.epoch_sync import EpochSyncState
 from scheduler.latency_compensator import LatencyCompensation, compensate_latency
 from scheduler.latency_model import PositionTable
-from scheduler.node_agent_batches import (
-    build_link_down_batch_plan,
-    build_link_up_batch_plan,
-    successful_interface_acks,
-)
+from scheduler.node_agent_batches import successful_interface_acks
 from scheduler.pod_locator import PodLocationMap
 
 log = logging.getLogger(__name__)
@@ -1296,87 +1296,23 @@ class Dispatcher:
         sim_time: datetime,
     ) -> None:
         """Apply OME-authoritative latency changes for already-active links."""
-        agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
-        pair_compensation: dict[tuple[str, str], LatencyCompensation] = {}
-        now = datetime.now(UTC)
-
-        for pair in pairs:
-            info = desired[pair]
-            node_a, node_b = pair
-            self._validate_authority_freshness(
-                pair,
-                info,
-                sim_time,
-                operation="LatencyUpdate",
-            )
-            compensation = self._latency_compensation(node_a, node_b, info.latency_ms)
-            pair_compensation[pair] = compensation
-            netem_ms = compensation.netem_one_way_ms
-
-            if info.link_type == "ground":
-                gs_id = node_a if node_a in self._gs_capacities else node_b
-                sat_id = node_b if node_a in self._gs_capacities else node_a
-                sat_iface = info.interface_b if node_a in self._gs_capacities else info.interface_a
-                agent = self._loc.agent_addr(sat_id)
-                agent_entries.setdefault(agent, []).append(
-                    node_agent_pb2.LatencyEntry(
-                        node_id=sat_id,
-                        interface_name=sat_iface,
-                        latency_ms=netem_ms,
-                        link_type=node_agent_pb2.GROUND,
-                        gs_id=gs_id,
-                        sat_id=sat_id,
-                    )
-                )
-            else:
-                for nid, ifname in [
-                    (node_a, info.interface_a),
-                    (node_b, info.interface_b),
-                ]:
-                    agent = self._loc.agent_addr(nid)
-                    agent_entries.setdefault(agent, []).append(
-                        node_agent_pb2.LatencyEntry(
-                            node_id=nid,
-                            interface_name=ifname,
-                            latency_ms=netem_ms,
-                            link_type=node_agent_pb2.ISL,
-                        )
-                    )
-
-        tasks = []
-        agent_addrs = list(agent_entries.keys())
-        for agent_addr in agent_addrs:
-            stub = self._pool.get_stub(agent_addr)
-            req = node_agent_pb2.SetLatencyRequest(entries=agent_entries[agent_addr])
-            tasks.append(stub.async_set_latency(req))
-
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    raise RuntimeError(f"SetLatency failed for agent {agent_addrs[i]}: {result}")
-                if not result.success:
-                    raise RuntimeError(
-                        f"SetLatency rejected by agent {agent_addrs[i]}: "
-                        f"{result.error_message[:200]}"
-                    )
-
-        for pair in pairs:
+        updated = await send_authoritative_latency_updates(
+            pairs=pairs,
+            desired=desired,
+            locator=self._loc,
+            pool=self._pool,
+            js=self._js,
+            subj_latency=self._subj_latency,
+            sim_time=sim_time,
+            gs_capacities=self._gs_capacities,
+            latency_compensation=self._latency_compensation,
+            validate_authority_freshness=self._validate_authority_freshness,
+            link_provenance=self._link_provenance,
+        )
+        for pair in updated:
             info = desired[pair]
             self._actual_links[pair] = info
             self._last_latencies[pair] = info.latency_ms
-            if info.range_km is None:
-                raise ValueError(f"Desired latency update for {pair} has no range_km")
-            event = LatencyUpdate(
-                sim_time=sim_time,
-                wall_time=now,
-                node_a=pair[0],
-                node_b=pair[1],
-                latency_ms=info.latency_ms,
-                range_km=info.range_km,
-                provenance=self._link_provenance(info, pair_compensation[pair], sim_time),
-            )
-            await self._js.publish(self._subj_latency, event.model_dump_json().encode())
 
     async def _reconcile_mbb(
         self,
@@ -1508,82 +1444,18 @@ class Dispatcher:
         """Send BatchLinkDown to Node Agents. Returns successfully removed pairs."""
         if down_reasons is None:
             down_reasons = {}
-        plan = build_link_down_batch_plan(
+        return await send_batch_down(
             pairs=pairs,
             actual_links=self._actual_links,
             locator=self._loc,
+            pool=self._pool,
+            js=self._js,
+            subj_link_down=self._subj_link_down,
+            sim_iso=sim_iso,
+            sim_time=sim_time,
+            down_reasons=down_reasons,
             gs_capacities=self._gs_capacities,
         )
-        for node_a, node_b in plan.skipped_unscheduled:
-            log.warning("Skipping DOWN %s-%s: pod(s) not yet scheduled", node_a, node_b)
-
-        successful_ifaces: set[tuple[str, str, str]] = set()
-        agent_addrs = list(plan.agent_ifaces.keys())
-        if agent_addrs:
-            tasks = []
-            for addr in agent_addrs:
-                stub = self._pool.get_stub(addr)
-                req = node_agent_pb2.BatchLinkDownRequest(
-                    batch_id=f"{sim_iso}-down",
-                    target_sim_time=sim_iso,
-                    interfaces=plan.agent_ifaces[addr],
-                )
-                tasks.append(stub.async_batch_link_down(req))
-
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                addr = agent_addrs[i]
-                if isinstance(result, Exception):
-                    log.error("BatchLinkDown failed for agent %s: %s", addr, result)
-                else:
-                    successful_ifaces.update(
-                        self._successful_interface_acks(
-                            result=result,
-                            requested_interfaces=plan.agent_ifaces[addr],
-                            agent_addr=addr,
-                            operation="BatchLinkDown",
-                        )
-                    )
-                    if not result.success:
-                        log.error(
-                            "BatchLinkDown partial failure on agent %s: %s",
-                            addr,
-                            result.error_message[:200],
-                        )
-                    else:
-                        log.debug(
-                            "BatchLinkDown: %d downed in %.1fms",
-                            result.interfaces_downed,
-                            result.apply_time_ms,
-                        )
-
-        removed: set[tuple[str, str]] = set()
-        now = datetime.now(UTC)
-        for pair in pairs:
-            expected_ifaces = plan.pair_agent_ifaces.get(pair, set())
-            if expected_ifaces and expected_ifaces <= successful_ifaces:
-                removed.add(pair)
-                info = self._actual_links.get(pair)
-                if info:
-                    event = LinkDown(
-                        sim_time=sim_time,
-                        wall_time=now,
-                        node_a=pair[0],
-                        node_b=pair[1],
-                        interface_a=info.interface_a,
-                        interface_b=info.interface_b,
-                        reason=down_reasons.get(pair, "vis_lost"),
-                        link_type=info.link_type,
-                    )
-                    try:
-                        await self._js.publish(
-                            self._subj_link_down, event.model_dump_json().encode()
-                        )
-                    except Exception as exc:
-                        log.error("Failed to publish LinkDown for %s: %s", pair, exc)
-                        raise
-
-        return removed
 
     async def _send_batch_up(
         self,
@@ -1594,108 +1466,20 @@ class Dispatcher:
         nc,
     ) -> set[tuple[str, str]]:
         """Send BatchLinkUp to Node Agents. Returns successfully added pairs."""
-        for pair in pairs:
-            info = desired.get(pair)
-            if info is None:
-                raise RuntimeError(
-                    f"Dispatch planner requested LinkUp for missing desired pair {pair}"
-                )
-            self._validate_authority_freshness(
-                pair,
-                info,
-                sim_time,
-                operation="LinkUp",
-            )
-        plan = build_link_up_batch_plan(
+        return await send_batch_up(
             pairs=pairs,
             desired=desired,
             locator=self._loc,
+            pool=self._pool,
+            js=self._js,
+            subj_link_up=self._subj_link_up,
+            sim_iso=sim_iso,
+            sim_time=sim_time,
             gs_capacities=self._gs_capacities,
-            compensation_for_pair=self._latency_compensation,
+            latency_compensation=self._latency_compensation,
+            validate_authority_freshness=self._validate_authority_freshness,
+            link_provenance=self._link_provenance,
         )
-
-        successful_ifaces: set[tuple[str, str, str]] = set()
-        agent_addrs = list(plan.agent_ifaces.keys())
-        if agent_addrs:
-            tasks = []
-            for addr in agent_addrs:
-                stub = self._pool.get_stub(addr)
-                req = node_agent_pb2.BatchLinkUpRequest(
-                    batch_id=f"{sim_iso}-up",
-                    target_sim_time=sim_iso,
-                    interfaces=plan.agent_ifaces[addr],
-                )
-                tasks.append(stub.async_batch_link_up(req))
-
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for i, result in enumerate(results):
-                addr = agent_addrs[i]
-                if isinstance(result, Exception):
-                    log.error("BatchLinkUp failed for agent %s: %s", addr, result)
-                else:
-                    successful_ifaces.update(
-                        self._successful_interface_acks(
-                            result=result,
-                            requested_interfaces=plan.agent_ifaces[addr],
-                            agent_addr=addr,
-                            operation="BatchLinkUp",
-                        )
-                    )
-                    if not result.success:
-                        log.error(
-                            "BatchLinkUp partial failure on agent %s: %d upped: %s",
-                            addr,
-                            result.interfaces_upped,
-                            result.error_message[:200],
-                        )
-                    else:
-                        log.debug(
-                            "BatchLinkUp: %d upped in %.1fms",
-                            result.interfaces_upped,
-                            result.apply_time_ms,
-                        )
-
-        added: set[tuple[str, str]] = set()
-        now = datetime.now(UTC)
-        for pair in pairs:
-            expected_ifaces = plan.pair_agent_ifaces.get(pair, set())
-            if expected_ifaces and expected_ifaces <= successful_ifaces:
-                added.add(pair)
-                info = desired[pair]
-                if sim_time is None:
-                    log.error("FATAL: LinkUp dispatch has no sim_time for pair %s", pair)
-                    raise ValueError(f"sim_time is None for LinkUp dispatch of {pair}")
-                self._validate_authority_freshness(
-                    pair,
-                    info,
-                    sim_time,
-                    operation="LinkUp",
-                )
-                if info.range_km is None:
-                    raise ValueError(
-                        f"ActiveLinkInfo for {pair} is missing OME-authoritative range_km"
-                    )
-                event = LinkUp(
-                    sim_time=sim_time,
-                    wall_time=now,
-                    node_a=pair[0],
-                    node_b=pair[1],
-                    interface_a=info.interface_a,
-                    interface_b=info.interface_b,
-                    latency_ms=info.latency_ms,
-                    bandwidth_mbps=info.bandwidth_mbps,
-                    range_km=info.range_km,
-                    reason="vis_gained",
-                    link_type=info.link_type,
-                    provenance=self._link_provenance(info, plan.pair_compensation[pair], sim_time),
-                )
-                try:
-                    await self._js.publish(self._subj_link_up, event.model_dump_json().encode())
-                except Exception as exc:
-                    log.error("Failed to publish LinkUp for %s: %s", pair, exc)
-                    raise
-
-        return added
 
     # ------------------------------------------------------------------
     # Latency updates

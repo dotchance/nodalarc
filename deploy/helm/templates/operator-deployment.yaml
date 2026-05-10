@@ -7,6 +7,12 @@ metadata:
     app: nodalarc-operator
 spec:
   replicas: 1
+  strategy:
+    # The Operator runs on the host network and binds its health port on the
+    # control-plane node. A rolling surge can leave the replacement pod Pending
+    # forever because the old pod still owns that host port. Recreate preserves
+    # the single-authority operator contract and makes upgrades deterministic.
+    type: Recreate
   selector:
     matchLabels:
       app: nodalarc-operator

@@ -53,6 +53,10 @@ class TestBatchLinkDown:
         assert resp.success is False
         assert resp.interfaces_downed == 0
         assert resp.error_message != ""
+        assert len(resp.interface_results) == 1
+        assert resp.interface_results[0].node_id == "sat-P00S00"
+        assert resp.interface_results[0].interface_name == "isl0"
+        assert resp.interface_results[0].success is False
 
     def test_multiple_links_one_fails(self):
         req = node_agent_pb2.BatchLinkDownRequest(
@@ -73,6 +77,9 @@ class TestBatchLinkDown:
         resp = handle_batch_link_down(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is False
         assert resp.interfaces_downed == 0
+        assert len(resp.interface_results) == 2
+        assert {r.interface_name for r in resp.interface_results} == {"isl0", "isl1"}
+        assert all(not r.success for r in resp.interface_results)
 
     def test_none_pid_map_raises(self):
         req = node_agent_pb2.BatchLinkDownRequest(batch_id="test-none")
@@ -109,6 +116,10 @@ class TestBatchLinkUp:
         resp = handle_batch_link_up(req, pid_map=EMPTY_PID_MAP)
         assert resp.success is False
         assert resp.error_message != ""
+        assert len(resp.interface_results) == 1
+        assert resp.interface_results[0].node_id == "sat-P00S00"
+        assert resp.interface_results[0].interface_name == "isl0"
+        assert resp.interface_results[0].success is False
 
     def test_none_pid_map_raises(self):
         req = node_agent_pb2.BatchLinkUpRequest(batch_id="test-none")

@@ -598,6 +598,76 @@ class TestE009:
 
 
 # ---------------------------------------------------------------------------
+# E010: MBB requires enough ground terminal capacity
+# ---------------------------------------------------------------------------
+
+
+class TestE010:
+    def test_mbb_requires_capacity_for_steady_link_plus_reserve(self):
+        session = _make_session()
+        session.scheduling.ground.handover_mode = "mbb"
+        session.scheduling.ground.mbb_overlap_ticks = 3
+        session.scheduling.ground.mbb_reserve = 1
+        gs = _make_gs_file(
+            stations=[
+                GroundStationConfig(
+                    name="single-terminal",
+                    lat_deg=34.0,
+                    lon_deg=-118.0,
+                    terminals=[
+                        GroundTerminalDef(
+                            type="rf",
+                            count=1,
+                            bandwidth_mbps=1000,
+                            tracking_capacity=1,
+                        )
+                    ],
+                )
+            ]
+        )
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E010"]
+        assert len(errors) == 1
+        assert "capacity 1" in errors[0].message
+        assert "requires capacity >= 2" in errors[0].message
+
+    def test_mbb_capacity_uses_terminal_count_times_tracking_capacity(self):
+        session = _make_session()
+        session.scheduling.ground.handover_mode = "mbb"
+        session.scheduling.ground.mbb_overlap_ticks = 3
+        session.scheduling.ground.mbb_reserve = 1
+        gs = _make_gs_file(
+            stations=[
+                GroundStationConfig(
+                    name="two-terminals",
+                    lat_deg=34.0,
+                    lon_deg=-118.0,
+                    terminals=[
+                        GroundTerminalDef(
+                            type="rf",
+                            count=2,
+                            bandwidth_mbps=1000,
+                            tracking_capacity=1,
+                        )
+                    ],
+                )
+            ]
+        )
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        assert [r for r in results if r.code == "E010"] == []
+
+
+# ---------------------------------------------------------------------------
 # E007: PlacementConfig coherence
 # ---------------------------------------------------------------------------
 

@@ -744,23 +744,23 @@ def _run_pacing(
         )
 
     # --- MBB capability validation (R-OME-004a) ---
-    is_nodalpath = session.routing.protocol == "nodalpath" if session.routing else False
-    if cfg.gs_file:
+    if mbb_dispatch and cfg.gs_file:
+        invalid_mbb_stations: list[str] = []
         for station in cfg.gs_file.stations:
             gs_id = cfg.addressing.gs_id(station.name)
             cap = step_ctx.gs_terminal_counts.get(gs_id, 1)
-            if cap <= 1 and not is_nodalpath:
-                logging.warning(
-                    "MBB-INFEASIBLE: %s has tracking_capacity=%d and no "
-                    "proactive control plane (routing=%s). Physical-layer MBB "
-                    "requires spare terminal capacity; routing-layer MBB "
-                    "requires NodalPath. This segment will use cold handover "
-                    "(break-before-make) with expected packet loss during "
-                    "handoff events.",
-                    gs_id,
-                    cap,
-                    session.routing.protocol if session.routing else "none",
+            required_capacity = mbb_reserve + 1
+            if cap < required_capacity:
+                invalid_mbb_stations.append(
+                    f"{gs_id}(capacity={cap}, required>={required_capacity})"
                 )
+        if invalid_mbb_stations:
+            raise RuntimeError(
+                "MBB handover requested but these ground stations do not have "
+                "enough terminal capacity for one steady link plus the configured "
+                f"reserve: {', '.join(invalid_mbb_stations)}. Refusing to degrade "
+                "to BBM; fix the model or select scheduling.ground.handover_mode='bbm'."
+            )
 
     # Lookahead uses the same StepContext object as the live pacing loop. That
     # keeps predictive windows on the same propagation, visibility, allocation,

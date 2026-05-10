@@ -27,9 +27,9 @@ orbit:
 scheduling:
   ground:
     policy: highest-elevation
-    handover_mode: mbb
-    mbb_overlap_ticks: 3
-    mbb_reserve: 1
+    handover_mode: bbm
+    mbb_overlap_ticks: 0
+    mbb_reserve: 0
 dispatch:
   latency_authority: ome
   max_latency_age_ticks: 1

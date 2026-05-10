@@ -1,7 +1,7 @@
 session:
   name: starlink-176-nodalpath
 constellation: configs/constellations/starlink-176.yaml
-ground_stations: configs/ground-stations/sets/global.yaml
+ground_stations: configs/ground-stations/sets/mbb-test.yaml
 simulation:
   schema_version: 2
   fidelity: synthetic-keplerian

@@ -130,22 +130,44 @@ class TimelinePositionSnapshot(BaseModel):
 
 
 class EphemerisNodeKeplerian(BaseModel):
-    """Orbital elements for a parametric satellite.
+    """Circular-element ephemeris for a satellite.
 
-    Fields mirror OrbitalElements from constellation.py. The propagator
-    derives semi_major_axis from altitude_km and assumes circular orbit
-    (eccentricity=0).
+    Fields mirror OrbitalElements from constellation.py. The `propagator`
+    field is part of the contract because the same circular element fields can
+    drive either the synthetic Keplerian engine or the J2 mean-element engine.
+    Consumers must not silently treat J2 sessions as Keplerian.
     """
 
     model_config = ConfigDict(frozen=True)
 
     type: Literal["keplerian"] = "keplerian"
+    propagator: Literal["keplerian-circular", "j2-mean-elements"] = "keplerian-circular"
     altitude_km: float
     inclination_deg: float
     raan_deg: float
     true_anomaly_deg: float
     plane: int
     slot: int
+
+
+class EphemerisNodeTLE(BaseModel):
+    """TLE-backed satellite ephemeris for SGP4 propagation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["tle"] = "tle"
+    tle_line_1: str
+    tle_line_2: str
+    plane: int
+    slot: int
+    norad_id: int | None = None
+
+    @model_validator(mode="after")
+    def _validate_tle_pair(self):
+        from nodalarc.tle import validate_tle_pair
+
+        validate_tle_pair(self.tle_line_1, self.tle_line_2)
+        return self
 
 
 class EphemerisNodeFixed(BaseModel):
@@ -160,7 +182,7 @@ class EphemerisNodeFixed(BaseModel):
 
 
 EphemerisNode = Annotated[
-    EphemerisNodeKeplerian | EphemerisNodeFixed,
+    EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed,
     Field(discriminator="type"),
 ]
 

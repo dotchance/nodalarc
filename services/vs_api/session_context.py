@@ -595,12 +595,20 @@ class SessionContext:
     def _propagate_positions_from_time(self, sim_time_iso: str) -> None:
         """Compute and update all node positions from cached SessionEphemeris.
 
-        Called on each ClockTick. Propagates satellite positions using
-        Keplerian orbital mechanics. Ground station positions are static.
+        Called on each ClockTick. Propagates satellite positions using the
+        ephemeris model published by OME. Ground station positions are static.
         """
-        from nodalarc.models.events import EphemerisNodeFixed, EphemerisNodeKeplerian
+        from nodalarc.models.events import (
+            EphemerisNodeFixed,
+            EphemerisNodeKeplerian,
+            EphemerisNodeTLE,
+        )
         from nodalarc.orbital import elements_from_params
-        from nodalarc.propagator import propagate_keplerian
+        from nodalarc.propagator import (
+            propagate_j2_mean_elements,
+            propagate_keplerian,
+            propagate_sgp4_tle,
+        )
 
         if self.cached_ephemeris_obj is None:
             return
@@ -622,8 +630,42 @@ class SessionContext:
                         node.true_anomaly_deg,
                     )
                     dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
-                    _pos_ecef, vel_ecef, geo = propagate_keplerian(
-                        elements,
+                    if node.propagator == "j2-mean-elements":
+                        _pos_ecef, vel_ecef, geo = propagate_j2_mean_elements(
+                            elements,
+                            self.cached_ephemeris_obj.epoch_unix,
+                            dt,
+                        )
+                    else:
+                        _pos_ecef, vel_ecef, geo = propagate_keplerian(
+                            elements,
+                            self.cached_ephemeris_obj.epoch_unix,
+                            dt,
+                        )
+
+                    existing = self.nodes.get(node_id)
+                    self.nodes[node_id] = NodeState(
+                        node_id=node_id,
+                        node_type="satellite",
+                        lat_deg=geo.lat_deg,
+                        lon_deg=geo.lon_deg,
+                        alt_km=geo.alt_km,
+                        vel_x_km_s=vel_ecef.x,
+                        vel_y_km_s=vel_ecef.y,
+                        vel_z_km_s=vel_ecef.z,
+                        plane=node.plane,
+                        slot=node.slot,
+                        routing_area=existing.routing_area if existing else None,
+                        neighbor_count=existing.neighbor_count if existing else 0,
+                        prefix=existing.prefix if existing else None,
+                        beam_falloff_exponent=self.beam_falloff_exponent,
+                    )
+
+                elif isinstance(node, EphemerisNodeTLE):
+                    dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
+                    _pos_ecef, vel_ecef, geo = propagate_sgp4_tle(
+                        node.tle_line_1,
+                        node.tle_line_2,
                         self.cached_ephemeris_obj.epoch_unix,
                         dt,
                     )

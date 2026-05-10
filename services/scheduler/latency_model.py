@@ -1,10 +1,10 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Latency model — computes one-way latency from local Keplerian propagation.
+"""Latency model — computes one-way latency from SessionEphemeris geometry.
 
-Holds orbital elements from SessionEphemeris. Propagates only the two
-endpoints of a link on demand (never the full constellation). Ground
-station positions are static ECEF.
+Holds OME-published ephemeris inputs for cross-check and diagnostic paths.
+Propagates only the two endpoints of a link on demand (never the full
+constellation). Ground station positions are static ECEF.
 
 Does NOT apply tc commands, manage interfaces, or know about convergence.
 """
@@ -16,22 +16,25 @@ from nodalarc.geo import compute_latency_ms, compute_range_km, geodetic_to_ecef
 from nodalarc.models.events import (
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
+    EphemerisNodeTLE,
     SessionEphemeris,
 )
 from nodalarc.orbital import elements_from_params
-from nodalarc.propagator import propagate_keplerian
+from nodalarc.propagator import propagate_j2_mean_elements, propagate_keplerian, propagate_sgp4_tle
 
 
 class PositionTable:
-    """Local Keplerian propagator for on-demand latency computation.
+    """Local ephemeris propagator for on-demand latency computation.
 
-    Initialized from SessionEphemeris. Propagates satellite positions
-    from orbital elements at the requested sim_time. Ground stations
-    are static ECEF positions.
+    Initialized from SessionEphemeris. Propagates satellite positions using
+    the ephemeris node type OME published. Ground stations are static ECEF
+    positions.
     """
 
     def __init__(self) -> None:
         self._sat_elements: dict[str, object] = {}  # node_id -> OrbitalElements
+        self._sat_propagators: dict[str, str] = {}
+        self._sat_tles: dict[str, tuple[str, str]] = {}
         self._gs_ecef: dict[str, EcefVec3] = {}
         self._epoch_unix: float = 0.0
         self._loaded = False
@@ -42,12 +45,14 @@ class PositionTable:
         return self._loaded
 
     def load_ephemeris(self, ephemeris: SessionEphemeris) -> None:
-        """Load orbital elements from SessionEphemeris.
+        """Load propagation inputs from SessionEphemeris.
 
-        Satellites get OrbitalElements for on-demand propagation.
-        Ground stations get static ECEF positions (no propagation needed).
+        Satellites get the engine-specific propagation inputs OME published.
+        Ground stations get static ECEF positions.
         """
         self._sat_elements.clear()
+        self._sat_propagators.clear()
+        self._sat_tles.clear()
         self._gs_ecef.clear()
         self._epoch_unix = ephemeris.epoch_unix
 
@@ -59,6 +64,9 @@ class PositionTable:
                     node.raan_deg,
                     node.true_anomaly_deg,
                 )
+                self._sat_propagators[node_id] = node.propagator
+            elif isinstance(node, EphemerisNodeTLE):
+                self._sat_tles[node_id] = (node.tle_line_1, node.tle_line_2)
             elif isinstance(node, EphemerisNodeFixed):
                 ecef = geodetic_to_ecef(GeoPosition(node.lat_deg, node.lon_deg, node.alt_km))
                 self._gs_ecef[node_id] = ecef
@@ -68,19 +76,32 @@ class PositionTable:
     def _get_ecef(self, node_id: str, sim_time_unix: float) -> EcefVec3 | None:
         """Get ECEF position for a node at the given sim_time.
 
-        Satellites: propagate from orbital elements.
+        Satellites: propagate from OME-published ephemeris inputs.
         Ground stations: return cached static position.
         """
         if node_id in self._gs_ecef:
             return self._gs_ecef[node_id]
 
         elements = self._sat_elements.get(node_id)
-        if elements is None:
-            return None
-
         dt = sim_time_unix - self._epoch_unix
-        pos_ecef, _vel, _geo = propagate_keplerian(elements, self._epoch_unix, dt)
-        return pos_ecef
+        if elements is not None:
+            propagator = self._sat_propagators.get(node_id, "keplerian-circular")
+            if propagator == "j2-mean-elements":
+                pos_ecef, _vel, _geo = propagate_j2_mean_elements(
+                    elements,
+                    self._epoch_unix,
+                    dt,
+                )
+            else:
+                pos_ecef, _vel, _geo = propagate_keplerian(elements, self._epoch_unix, dt)
+            return pos_ecef
+
+        tle = self._sat_tles.get(node_id)
+        if tle is not None:
+            pos_ecef, _vel, _geo = propagate_sgp4_tle(tle[0], tle[1], self._epoch_unix, dt)
+            return pos_ecef
+
+        return None
 
     def compute_link_range(
         self, node_a: str, node_b: str, sim_time_unix: float = 0.0

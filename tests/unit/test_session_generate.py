@@ -7,6 +7,7 @@ from nodalarc.session_generator import (
     generate_session_yaml,
     load_constellation_presets,
 )
+from pydantic import ValidationError
 
 from tests.conftest import FIXTURES_DIR
 
@@ -82,6 +83,28 @@ class TestGenerateSessionYaml:
         session = SessionConfig.model_validate(raw)
         assert session.routing.area_assignment is not None
         assert session.routing.area_assignment.strategy == area_strategy
+
+    def test_longest_remaining_pass_generation_requires_horizon(self):
+        with pytest.raises(ValidationError, match="lookahead_horizon_ticks"):
+            generate_session_yaml(
+                constellation="iridium-small-36",
+                protocol="ospf",
+                extensions=[],
+                ground_policy="longest-remaining-pass",
+            )
+
+    def test_longest_remaining_pass_generation_sets_horizon(self):
+        yaml_str, _ = generate_session_yaml(
+            constellation="iridium-small-36",
+            protocol="ospf",
+            extensions=[],
+            ground_policy="longest-remaining-pass",
+            ground_lookahead_horizon_ticks=600,
+        )
+        raw = yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+        assert session.scheduling.ground.policy == "longest-remaining-pass"
+        assert session.scheduling.ground.lookahead_horizon_ticks == 600
 
 
 class TestGenerateInvalid:

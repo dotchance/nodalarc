@@ -51,6 +51,19 @@ def test_highest_elevation_selects_best_visible_candidate():
     assert result.pending_teardowns == {}
 
 
+def test_longest_remaining_pass_selects_longest_sampled_dwell_not_highest_elevation():
+    result = _allocate(
+        [
+            GroundVisibility("sat-high-short", True, 70.0, 900.0, 5.0),
+            GroundVisibility("sat-low-long", True, 30.0, 1200.0, 60.0),
+        ],
+        policy="longest-remaining-pass",
+    )
+
+    assert result.associations == {("gs-A", "sat-low-long"): (0, 0)}
+    assert result.scheduled_pairs == frozenset({("gs-A", "sat-low-long")})
+
+
 def test_mbb_replacement_starts_teardown_when_challenger_beats_hysteresis():
     old_pair = ("gs-A", "sat-old")
     new_pair = ("gs-A", "sat-new")

@@ -7,7 +7,8 @@ Handles:
 - Range constraints
 - Elevation angle for ground stations
 - Angular velocity for polar seam tracking rate limits
-- Ground link scheduling (highest-elevation, lowest-elevation)
+- Ground link scheduling (highest-elevation, lowest-elevation,
+  longest-remaining-pass)
 - ISL terminal scheduling (priority-based with symmetric constraint)
 
 Under 500 lines.
@@ -42,6 +43,9 @@ class GroundVisibility(NamedTuple):
     visible: bool
     elevation_deg: float
     range_km: float
+    # Populated only for policies that explicitly require future dwell
+    # prediction. None is fatal for longest-remaining-pass scoring.
+    remaining_visible_s: float | None = None
 
 
 class IslVisibility(NamedTuple):
@@ -98,8 +102,7 @@ def has_line_of_sight(pos_a: Vec3, pos_b: Vec3) -> bool:
     cy = pos_a.y + t * dy
     cz = pos_a.z + t * dz
 
-    # Check against oblate Earth (approximate with mean of semi-axes for simplicity)
-    # More accurate: normalize by semi-axes
+    # Check against the WGS84 oblate ellipsoid by normalizing each axis.
     # (cx/a)² + (cy/a)² + (cz/b)² >= 1 means outside ellipsoid
     norm_sq = (cx / WGS84_A) ** 2 + (cy / WGS84_A) ** 2 + (cz / WGS84_B) ** 2
     return norm_sq >= 1.0

@@ -200,6 +200,28 @@ class TestEngineConfigValidation:
         with pytest.raises(ValidationError, match="always"):
             SessionConfig.model_validate(data)
 
+    def test_longest_remaining_pass_requires_lookahead_horizon(self):
+        data = dict(_SAMPLE_SESSION)
+        data["scheduling"] = {
+            "ground": {
+                "policy": "longest-remaining-pass",
+            }
+        }
+        with pytest.raises(ValidationError, match="lookahead_horizon_ticks"):
+            SessionConfig.model_validate(data)
+
+    def test_longest_remaining_pass_accepts_explicit_lookahead_horizon(self):
+        data = dict(_SAMPLE_SESSION)
+        data["scheduling"] = {
+            "ground": {
+                "policy": "longest-remaining-pass",
+                "lookahead_horizon_ticks": 600,
+            }
+        }
+        config = SessionConfig.model_validate(data)
+        assert config.scheduling.ground.policy == "longest-remaining-pass"
+        assert config.scheduling.ground.lookahead_horizon_ticks == 600
+
 
 class TestSessionFromFixture:
     def test_missing_stripe_config_rejected(self):

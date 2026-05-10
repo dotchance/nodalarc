@@ -852,7 +852,7 @@ def _run_pacing(
     # Recompute link state at recovered (or initial) sim_time before publishing.
     # Run enough steps from epoch to reach the recovered step so ISL/GS state
     # is accurate. For a fresh start (step=0), this is a no-op.
-    replayed_positions = None
+    replayed_propagated_states = None
     if recovered_checkpoint is not None:
         logging.warning(
             "RecoveryReplay: replaying %d steps from checkpoint (step=%d)",
@@ -873,7 +873,7 @@ def _run_pacing(
                 current_associations,
                 mbb_pending_teardowns,
             )
-            replayed_positions = replay_result.positions
+            replayed_propagated_states = replay_result.propagated_states
             current_associations = replay_result.associations
             mbb_pending_teardowns = replay_result.pending_teardowns
             for te in replay_result.events:
@@ -914,7 +914,8 @@ def _run_pacing(
         sim_time=initial_sim_time,
         seq=snapshot_seq,
         interval_s=snapshot_interval_s,
-        positions=replayed_positions,
+        propagated_states=replayed_propagated_states,
+        fixed_positions=step_ctx.gs_positions,
         epoch_id=_epoch_id,
         current_associations=current_associations,
         mbb_pending_teardowns=mbb_pending_teardowns,
@@ -998,7 +999,8 @@ def _run_pacing(
                     sim_time=datetime.fromtimestamp(epoch_unix, UTC),
                     seq=snapshot_seq,
                     interval_s=snapshot_interval_s,
-                    positions=None,
+                    propagated_states={},
+                    fixed_positions=step_ctx.gs_positions,
                     epoch_id=_epoch_id,
                 )
                 _enqueue(subj_link_snapshot, seek_snap.model_dump_json().encode())
@@ -1076,7 +1078,6 @@ def _run_pacing(
                 mbb_pending_teardowns,
             )
             step_events = step_result.events
-            current_positions = step_result.positions
             current_associations = step_result.associations
             mbb_pending_teardowns = step_result.pending_teardowns
 
@@ -1113,7 +1114,8 @@ def _run_pacing(
                     sim_time=sim_time,
                     seq=snapshot_seq,
                     interval_s=snapshot_interval_s,
-                    positions=current_positions,
+                    propagated_states=step_result.propagated_states,
+                    fixed_positions=step_ctx.gs_positions,
                     epoch_id=_epoch_id,
                     current_associations=current_associations,
                     mbb_pending_teardowns=mbb_pending_teardowns,

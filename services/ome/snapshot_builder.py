@@ -10,11 +10,11 @@ wire contract.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 
 from nodalarc.frames import EcefVec3, GeoPosition
-from nodalarc.geo import compute_latency_ms, compute_range_km, geodetic_to_ecef
-from nodalarc.models.events import NodePosition
+from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.models.link_state import (
     AdminState,
     CarrierState,
@@ -24,6 +24,7 @@ from nodalarc.models.link_state import (
 )
 
 from ome.ground_allocator import MbbTeardownState
+from ome.propagation_engine import PropagatedState
 
 
 def build_link_state_snapshot(
@@ -33,7 +34,8 @@ def build_link_state_snapshot(
     sim_time: datetime,
     seq: int,
     interval_s: float,
-    positions: dict[str, NodePosition] | None = None,
+    propagated_states: Mapping[str, PropagatedState] | None = None,
+    fixed_positions: Mapping[str, tuple[EcefVec3, GeoPosition]] | None = None,
     epoch_id: int = 0,
     current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
     mbb_pending_teardowns: MbbTeardownState | None = None,
@@ -42,20 +44,32 @@ def build_link_state_snapshot(
 ) -> LinkStateSnapshot:
     """Build a LinkStateSnapshot from OME internal state.
 
-    Active links require same-tick positions so range and one-way latency are
-    OME-authoritative. Missing positions for an otherwise active link leave
-    range/latency absent; downstream validators fail loudly rather than
-    inventing geometry.
+    Active links require same-tick propagated ECEF state so range and
+    one-way latency are OME-authoritative. Missing state for an active link is
+    fatal here; publishing an active link without geometry would force
+    downstream components to decide whether to invent or reject physics.
     """
     ecef: dict[str, EcefVec3] = {}
-    if positions:
-        for node_id, pos in positions.items():
-            ecef[node_id] = geodetic_to_ecef(GeoPosition(pos.lat_deg, pos.lon_deg, pos.alt_km))
+    if propagated_states:
+        for node_id, state in propagated_states.items():
+            ecef[node_id] = state.position_ecef_km
+    if fixed_positions:
+        for node_id, (position_ecef, _geo) in fixed_positions.items():
+            ecef[node_id] = position_ecef
 
-    def _link_range_latency(node_a: str, node_b: str) -> tuple[float, float] | None:
+    def _link_range_latency(
+        node_a: str,
+        node_b: str,
+        link_type: str,
+    ) -> tuple[float, float]:
         pa, pb = ecef.get(node_a), ecef.get(node_b)
         if pa is None or pb is None:
-            return None
+            missing = ", ".join(node for node, pos in ((node_a, pa), (node_b, pb)) if pos is None)
+            raise ValueError(
+                "Cannot build authoritative LinkStateSnapshot for active "
+                f"{link_type} link {node_a}<->{node_b}: missing same-tick ECEF state "
+                f"for {missing}"
+            )
         range_km = compute_range_km(pa, pb)
         return range_km, compute_latency_ms(range_km)
 
@@ -67,7 +81,7 @@ def build_link_state_snapshot(
             continue
         carrier = CarrierState.UP if visible and scheduled else CarrierState.DOWN
         range_latency = (
-            _link_range_latency(pair[0], pair[1]) if carrier == CarrierState.UP else None
+            _link_range_latency(pair[0], pair[1], "isl") if carrier == CarrierState.UP else None
         )
         links.append(
             LinkState(
@@ -99,7 +113,7 @@ def build_link_state_snapshot(
         else:
             carrier = CarrierState.DOWN
         range_latency = (
-            _link_range_latency(pair[0], pair[1]) if carrier == CarrierState.UP else None
+            _link_range_latency(pair[0], pair[1], "ground") if carrier == CarrierState.UP else None
         )
         gs_ti, sat_ti = assoc.get(pair, (0, 0))
         td_remaining = None

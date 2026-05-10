@@ -8,14 +8,15 @@ import math
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
+import pytest
 from nodalarc.constants import SPEED_OF_LIGHT_KM_S, WGS84_A, WGS84_B
-from nodalarc.frames import GeoPosition, Vec3
+from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.geo import (
     compute_latency_ms,
     compute_range_km,
     geodetic_to_ecef,
 )
-from nodalarc.models.events import NodePosition, VisibilityEvent
+from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import (
     AdminState,
     CarrierState,
@@ -25,6 +26,7 @@ from nodalarc.models.link_state import (
 )
 from nodalarc.propagator import geodetic_to_ecef as reexported_geodetic_to_ecef
 from ome.event_stream import build_link_state_snapshot
+from ome.propagation_engine import PropagatedState
 from scheduler.dispatcher import Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
@@ -33,14 +35,15 @@ RANGE_TOL_KM = 1e-6
 LATENCY_TOL_MS = 1e-9
 
 
-def _node_position(lat: float, lon: float, alt_km: float) -> NodePosition:
-    return NodePosition(
-        lat_deg=lat,
-        lon_deg=lon,
-        alt_km=alt_km,
-        vel_x_km_s=0.0,
-        vel_y_km_s=0.0,
-        vel_z_km_s=0.0,
+def _propagated_state(node_id: str, lat: float, lon: float, alt_km: float) -> PropagatedState:
+    geo = GeoPosition(lat, lon, alt_km)
+    return PropagatedState(
+        node_id=node_id,
+        sim_time_unix=SIM.timestamp(),
+        position_ecef_km=geodetic_to_ecef(geo),
+        velocity_ecef_km_s=EcefVec3(Vec3(0.0, 0.0, 0.0)),
+        geodetic=geo,
+        propagator_id="test-authority",
     )
 
 
@@ -102,9 +105,9 @@ class TestAnalyticGeometry:
 class TestOmeSnapshotGeometry:
     def test_snapshot_range_and_latency_match_authoritative_geometry_formula(self):
         pair = ("sat-a", "sat-b")
-        positions = {
-            "sat-a": _node_position(0.0, 0.0, 550.0),
-            "sat-b": _node_position(0.0, 5.0, 550.0),
+        propagated_states = {
+            "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
+            "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
         }
         snapshot = build_link_state_snapshot(
             isl_state={pair: (True, True)},
@@ -113,7 +116,7 @@ class TestOmeSnapshotGeometry:
             sim_time=SIM,
             seq=1,
             interval_s=1.0,
-            positions=positions,
+            propagated_states=propagated_states,
             epoch_id=0,
         )
         link = snapshot.links[0]
@@ -130,6 +133,23 @@ class TestOmeSnapshotGeometry:
             compute_latency_ms(expected_range),
             abs_tol=LATENCY_TOL_MS,
         )
+
+    def test_active_snapshot_link_missing_authority_fails_loudly(self):
+        pair = ("sat-a", "sat-b")
+
+        with pytest.raises(ValueError, match="missing same-tick ECEF state"):
+            build_link_state_snapshot(
+                isl_state={pair: (True, True)},
+                gs_state={},
+                interface_map={pair: ("isl0", "isl1")},
+                sim_time=SIM,
+                seq=1,
+                interval_s=1.0,
+                propagated_states={
+                    "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
+                },
+                epoch_id=0,
+            )
 
 
 class TestSchedulerAuthorityPreservation:

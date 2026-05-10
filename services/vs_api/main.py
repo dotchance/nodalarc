@@ -1227,6 +1227,36 @@ def get_link_events(
         conn.close()
 
 
+@app.get(
+    "/api/v1/link-decision-traces",
+    dependencies=[Depends(_require_api_key)],
+    response_model=None,
+)
+def get_link_decision_traces(
+    node_a: str = Query(None),
+    node_b: str = Query(None),
+) -> list[dict] | dict | JSONResponse:
+    """Return active-link decision traces retained by the current session."""
+    ctx = _active_context
+    if ctx is None:
+        return []
+    if (node_a is None) != (node_b is None):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "node_a and node_b must be provided together"},
+        )
+    with ctx.state_lock:
+        if node_a and node_b:
+            key = ":".join(sorted((node_a, node_b)))
+            trace = ctx.link_decision_traces.get(key)
+            if trace is None:
+                return JSONResponse(status_code=404, content={"error": "Link trace not found"})
+            return json.loads(trace.model_dump_json())
+        traces = [json.loads(t.model_dump_json()) for t in ctx.link_decision_traces.values()]
+    traces.sort(key=lambda item: (item["node_a"], item["node_b"]))
+    return traces
+
+
 @app.get("/api/v1/metrics/convergence", dependencies=[Depends(_require_api_key)])
 def get_convergence_events(
     start: str = Query(None),

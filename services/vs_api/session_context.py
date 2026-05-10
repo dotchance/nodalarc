@@ -38,6 +38,7 @@ import yaml
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
     AlmanacState,
+    LinkDecisionTrace,
     LinkState,
     NetworkHealth,
     NodeState,
@@ -115,6 +116,7 @@ class SessionContext:
         self.state_lock = threading.Lock()
         self.nodes: dict[str, NodeState] = {}
         self.links: dict[str, LinkState] = {}
+        self.link_decision_traces: dict[str, LinkDecisionTrace] = {}
         self.recent_events: list[RecentEvent] = []
         self.network_health: NetworkHealth = NetworkHealth(
             status="no measurement",
@@ -417,6 +419,7 @@ class SessionContext:
             )
             return
         new_links: dict[str, LinkState] = {}
+        new_traces: dict[str, LinkDecisionTrace] = {}
         for link in snapshot.links:
             if link.admin == AdminState.UP and link.carrier == CarrierState.UP:
                 missing = [
@@ -450,10 +453,13 @@ class SessionContext:
                     interface_a=link.interface_a,
                     interface_b=link.interface_b,
                 )
+                new_traces[key] = self._trace_from_snapshot_link(link, snapshot)
 
         with self.state_lock:
             self.links.clear()
             self.links.update(new_links)
+            self.link_decision_traces.clear()
+            self.link_decision_traces.update(new_traces)
             self.prev_snapshot_active_count = self.curr_snapshot_active_count
             self.curr_snapshot_active_count = len(self.links)
             self.last_snapshot_seq = snapshot.snapshot_seq
@@ -483,11 +489,13 @@ class SessionContext:
             "range_km",
             "reason",
             "link_type",
+            "provenance",
         ):
             if field not in data or data[field] is None:
                 log.error("Malformed LinkUp — missing %s: %s", field, data)
                 raise ValueError(f"LinkUp missing required field: {field}")
         key = _link_key(node_a, node_b)
+        trace = self._trace_from_link_event(data)
         with self.state_lock:
             self.links[key] = LinkState(
                 node_a=node_a,
@@ -502,6 +510,7 @@ class SessionContext:
                 interface_a=data["interface_a"],
                 interface_b=data["interface_b"],
             )
+            self.link_decision_traces[key] = trace
         self._notify_topology_change(node_a, node_b)
         self._add_recent_event(data, "link_up")
 
@@ -519,6 +528,7 @@ class SessionContext:
         key = _link_key(node_a, node_b)
         with self.state_lock:
             self.links.pop(key, None)
+            self.link_decision_traces.pop(key, None)
         self._notify_topology_change(node_a, node_b)
         self._add_recent_event(data, "link_down")
 
@@ -534,13 +544,18 @@ class SessionContext:
         if latency_ms is None or range_km is None:
             log.error("Malformed LatencyUpdate — missing latency_ms or range_km: %s", data)
             raise ValueError("LatencyUpdate missing latency_ms or range_km")
+        if data.get("provenance") is None:
+            log.error("Malformed LatencyUpdate — missing provenance: %s", data)
+            raise ValueError("LatencyUpdate missing required field: provenance")
         key = _link_key(node_a, node_b)
         with self.state_lock:
             existing = self.links.get(key)
             if existing is not None:
+                trace = self._trace_from_latency_update(data)
                 self.links[key] = existing.model_copy(
                     update={"latency_ms": latency_ms, "range_km": range_km}
                 )
+                self.link_decision_traces[key] = trace
 
     async def _on_almanac(self, msg) -> None:
         data = json.loads(msg.data)
@@ -676,6 +691,123 @@ class SessionContext:
     def _notify_topology_change(self, node_a: str, node_b: str) -> None:
         if self.continuous_tracer is not None:
             self.continuous_tracer.notify_topology_change(node_a, node_b)
+
+    @staticmethod
+    def _trace_from_snapshot_link(link, snapshot) -> LinkDecisionTrace:
+        """Build an OME-authority trace from a full-state snapshot link.
+
+        A snapshot proves OME geometry at a specific simulation time. It does
+        not prove the Node Agent's applied netem value, so substrate fields are
+        deliberately absent instead of invented.
+        """
+        return LinkDecisionTrace(
+            node_a=link.node_a,
+            node_b=link.node_b,
+            link_type=link.link_type,
+            state="active",
+            interface_a=link.interface_a,
+            interface_b=link.interface_b,
+            reason="link_state_snapshot",
+            geometry_authority="ome",
+            authority_source="link_state_snapshot",
+            authority_sim_time=snapshot.sim_time,
+            authority_sequence=snapshot.snapshot_seq,
+            authority_age_ms=0.0,
+            range_km=link.range_km,
+            orbital_one_way_ms=link.latency_ms,
+        )
+
+    @staticmethod
+    def _require_provenance(data: dict, event_type: str) -> dict:
+        provenance = data.get("provenance")
+        if not isinstance(provenance, dict):
+            log.error("Malformed %s — provenance must be an object: %s", event_type, data)
+            raise ValueError(f"{event_type} provenance must be an object")
+        required = (
+            "geometry_authority",
+            "authority_source",
+            "authority_sim_time",
+            "authority_sequence",
+            "authority_age_ms",
+            "range_km",
+            "orbital_one_way_ms",
+            "substrate_rtt_ms",
+            "substrate_one_way_ms",
+            "netem_one_way_ms",
+            "rtt_to_one_way_policy",
+        )
+        missing = [field for field in required if field not in provenance]
+        if missing:
+            raise ValueError(f"{event_type} provenance missing field(s): {', '.join(missing)}")
+        return provenance
+
+    @staticmethod
+    def _assert_provenance_matches_event(data: dict, provenance: dict, event_type: str) -> None:
+        if abs(float(data["range_km"]) - float(provenance["range_km"])) > 1e-9:
+            raise ValueError(
+                f"{event_type} range_km disagrees with provenance: "
+                f"event={data['range_km']} provenance={provenance['range_km']}"
+            )
+        if abs(float(data["latency_ms"]) - float(provenance["orbital_one_way_ms"])) > 1e-9:
+            raise ValueError(
+                f"{event_type} latency_ms disagrees with provenance orbital_one_way_ms: "
+                f"event={data['latency_ms']} provenance={provenance['orbital_one_way_ms']}"
+            )
+
+    def _trace_from_link_event(self, data: dict) -> LinkDecisionTrace:
+        provenance = self._require_provenance(data, "LinkUp")
+        self._assert_provenance_matches_event(data, provenance, "LinkUp")
+        return LinkDecisionTrace(
+            node_a=data["node_a"],
+            node_b=data["node_b"],
+            link_type=data["link_type"],
+            state="active",
+            interface_a=data["interface_a"],
+            interface_b=data["interface_b"],
+            reason=data["reason"],
+            geometry_authority=provenance["geometry_authority"],
+            authority_source=provenance["authority_source"],
+            authority_sim_time=provenance["authority_sim_time"],
+            authority_sequence=provenance["authority_sequence"],
+            authority_age_ms=provenance["authority_age_ms"],
+            range_km=provenance["range_km"],
+            orbital_one_way_ms=provenance["orbital_one_way_ms"],
+            substrate_rtt_ms=provenance["substrate_rtt_ms"],
+            substrate_one_way_ms=provenance["substrate_one_way_ms"],
+            netem_one_way_ms=provenance["netem_one_way_ms"],
+            rtt_to_one_way_policy=provenance["rtt_to_one_way_policy"],
+        )
+
+    def _trace_from_latency_update(self, data: dict) -> LinkDecisionTrace:
+        provenance = self._require_provenance(data, "LatencyUpdate")
+        self._assert_provenance_matches_event(data, provenance, "LatencyUpdate")
+        key = _link_key(data["node_a"], data["node_b"])
+        existing = self.link_decision_traces.get(key)
+        if existing is None:
+            raise ValueError(
+                f"LatencyUpdate for {data['node_a']}<->{data['node_b']} has no existing "
+                "LinkDecisionTrace"
+            )
+        return LinkDecisionTrace(
+            node_a=data["node_a"],
+            node_b=data["node_b"],
+            link_type=existing.link_type,
+            state="active",
+            interface_a=existing.interface_a,
+            interface_b=existing.interface_b,
+            reason="latency_update",
+            geometry_authority=provenance["geometry_authority"],
+            authority_source=provenance["authority_source"],
+            authority_sim_time=provenance["authority_sim_time"],
+            authority_sequence=provenance["authority_sequence"],
+            authority_age_ms=provenance["authority_age_ms"],
+            range_km=provenance["range_km"],
+            orbital_one_way_ms=provenance["orbital_one_way_ms"],
+            substrate_rtt_ms=provenance["substrate_rtt_ms"],
+            substrate_one_way_ms=provenance["substrate_one_way_ms"],
+            netem_one_way_ms=provenance["netem_one_way_ms"],
+            rtt_to_one_way_policy=provenance["rtt_to_one_way_policy"],
+        )
 
     def compute_convergence_state(self) -> None:
         """Update network_health based on current link counts."""

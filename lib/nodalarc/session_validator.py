@@ -8,6 +8,7 @@ No K8s, no NATS, no file system access, no imports from services/.
 
 from __future__ import annotations
 
+from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ParametricConstellation,
@@ -58,6 +59,7 @@ def validate_session_readiness(
     results.extend(_check_e007(session))
     results.extend(_check_e008(session, constellation, satellites))
     results.extend(_check_e009(session, ground_stations))
+    results.extend(_check_e010(session, ground_stations))
 
     results.extend(_check_w001(ground_stations))
     results.extend(_check_w002(ground_stations))
@@ -387,6 +389,43 @@ def _check_e009(
             ),
         )
     ]
+
+
+def _check_e010(
+    session: SessionConfig,
+    ground_stations: GroundStationFile,
+) -> list[ValidationResult]:
+    """E010: MBB handover requires station capacity for steady + reserve links."""
+    ground = session.scheduling.ground
+    if ground.handover_mode != "mbb":
+        return []
+
+    required_capacity = ground.mbb_reserve + 1
+    results: list[ValidationResult] = []
+    for station in ground_stations.stations:
+        capacity = station_ground_terminal_capacity(ground_stations, station)
+        if capacity >= required_capacity:
+            continue
+        results.append(
+            ValidationResult(
+                level="error",
+                code="E010",
+                message=(
+                    f"MBB handover requested, but station '{station.name}' has "
+                    f"ground terminal capacity {capacity}. With mbb_reserve="
+                    f"{ground.mbb_reserve}, MBB requires capacity >= {required_capacity} "
+                    "so one steady link can exist while the reserved terminal is held "
+                    "for make-before-break overlap."
+                ),
+                remediation=(
+                    f"Increase terminal count/tracking_capacity for station '{station.name}', "
+                    "lower mbb_reserve, or set scheduling.ground.handover_mode to 'bbm'."
+                ),
+                field_path="scheduling.ground.handover_mode",
+            )
+        )
+
+    return results
 
 
 # ---------------------------------------------------------------------------

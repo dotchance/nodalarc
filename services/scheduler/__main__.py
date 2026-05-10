@@ -16,6 +16,12 @@ from pathlib import Path
 
 import yaml
 from nodal.logging import configure as _configure_logging
+from nodalarc.constellation_loader import (
+    expand_constellation,
+    load_constellation,
+    load_ground_stations,
+)
+from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.addressing import (
     AddressingScheme,
     assign_isl_neighbors,
@@ -223,12 +229,6 @@ def main() -> None:
     pool = AgentPool()
 
     # Build capacity maps for MBB dispatch ordering
-    from nodalarc.constellation_loader import (
-        expand_constellation,
-        load_constellation,
-        load_ground_stations,
-    )
-
     constellation = load_constellation(session.constellation)
     satellites = expand_constellation(constellation)
     gs_file = load_ground_stations(session.ground_stations)
@@ -236,8 +236,7 @@ def main() -> None:
     gs_terminal_capacities: dict[str, int] = {}
     for station in gs_file.stations:
         gs_id = addressing.gs_id(station.name)
-        effective_terminals = station.terminals or gs_file.default_terminals
-        gs_terminal_capacities[gs_id] = sum(t.tracking_capacity for t in effective_terminals) or 1
+        gs_terminal_capacities[gs_id] = station_ground_terminal_capacity(gs_file, station)
 
     sat_ground_terminal_capacities: dict[str, int] = {}
     for sat in satellites:

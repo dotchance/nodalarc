@@ -24,6 +24,7 @@ VALID_SCHEDULING_POLICIES = frozenset(
     {
         "highest-elevation",
         "lowest-elevation",
+        "longest-remaining-pass",
     }
 )
 
@@ -56,6 +57,7 @@ def validate_session_readiness(
     results.extend(_check_e005(ground_stations))
     results.extend(_check_e007(session))
     results.extend(_check_e008(session, constellation, satellites))
+    results.extend(_check_e009(session, ground_stations))
 
     results.extend(_check_w001(ground_stations))
     results.extend(_check_w002(ground_stations))
@@ -227,6 +229,17 @@ def _check_e005(ground_stations: GroundStationFile) -> list[ValidationResult]:
     return results
 
 
+def _ground_policies_requiring_lookahead(ground_stations: GroundStationFile) -> list[str]:
+    """Return station labels using future-dwell policies."""
+    labels: list[str] = []
+    if ground_stations.default_scheduling_policy == "longest-remaining-pass":
+        labels.append("default_scheduling_policy")
+    for station in ground_stations.stations:
+        if station.scheduling_policy == "longest-remaining-pass":
+            labels.append(f"stations.{station.name}.scheduling_policy")
+    return labels
+
+
 def _check_e007(session: SessionConfig) -> list[ValidationResult]:
     """E007: PlacementConfig coherence — planeGroupPerNode needs planes_per_group."""
     results: list[ValidationResult] = []
@@ -347,6 +360,33 @@ def _check_e008(
         )
 
     return results
+
+
+def _check_e009(
+    session: SessionConfig,
+    ground_stations: GroundStationFile,
+) -> list[ValidationResult]:
+    """E009: Future-dwell ground policies require an explicit lookahead horizon."""
+    labels = _ground_policies_requiring_lookahead(ground_stations)
+    if not labels:
+        return []
+    if session.scheduling.ground.lookahead_horizon_ticks > 0:
+        return []
+    return [
+        ValidationResult(
+            level="error",
+            code="E009",
+            message=(
+                "Ground scheduling policy 'longest-remaining-pass' requires "
+                "scheduling.ground.lookahead_horizon_ticks > 0. Affected fields: "
+                f"{', '.join(labels)}"
+            ),
+            remediation=(
+                "Set scheduling.ground.lookahead_horizon_ticks to the dwell-prediction "
+                "horizon, in OME ticks, or choose highest-elevation/lowest-elevation."
+            ),
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from nodalarc.constants import SPEED_OF_LIGHT_KM_S
 from nodalarc.constellation_loader import SatelliteNode, isl_terminal_for_interface
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
@@ -24,10 +23,10 @@ from nodalarc.models.events import (
     EphemerisNodeKeplerian,
     NodePosition,
     SessionEphemeris,
-    VisibilityEvent,
 )
 from nodalarc.models.ground_station import GroundStationFile
 
+from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import (
     GroundAllocationResult,
     MbbTeardownState,
@@ -192,11 +191,6 @@ class TimelineWindowResult:
     predictive: bool = False
 
 
-def _latency_ms(range_km: float) -> float:
-    """One-way propagation delay for an OME-authoritative range."""
-    return range_km / SPEED_OF_LIGHT_KM_S * 1000.0
-
-
 def build_step_context(
     satellites: list[SatelliteNode],
     addressing: AddressingScheme,
@@ -345,27 +339,16 @@ def compute_step(
     )
     isl_scheduled = {pair: link.scheduled for pair, link in isl_links.items()}
 
-    # 5. Emit ISL visibility events on state changes
-    for pair, result in isl_feasibility.items():
-        visible = result.feasible
-        scheduled = isl_links[pair].scheduled if visible else False
-        prev_state = isl_state.get(pair, (False, False))
-        new_state = (visible, scheduled)
-
-        if new_state != prev_state:
-            isl_state[pair] = new_state
-            vis_event = VisibilityEvent(
-                sim_time=sim_time,
-                node_a=pair[0],
-                node_b=pair[1],
-                visible=visible,
-                scheduled=scheduled,
-                range_km=result.range_km,
-                latency_ms=result.orbital_one_way_ms,
-                elevation_deg=None,
-                terminal_type="optical",
-            )
-            events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
+    # 5. Emit ISL visibility events on state changes.
+    isl_diff = diff_isl_visibility_events(
+        sim_time=sim_time,
+        feasibility=isl_feasibility,
+        scheduled_links=isl_links,
+        previous_state=isl_state,
+    )
+    isl_state.clear()
+    isl_state.update(isl_diff.state)
+    events.extend(TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in isl_diff.events)
 
     # 6. Check ground station visibility and schedule
     gs_vis_details: dict[tuple[str, str], tuple[bool, float, float | None]] = {}
@@ -405,35 +388,18 @@ def compute_step(
         mbb_overlap_ticks=ctx.mbb_overlap_ticks,
         mbb_reserve=ctx.mbb_reserve,
     )
-    new_associations = ground_allocation.associations
-    new_pending_teardowns = ground_allocation.pending_teardowns
-
-    # 8. Emit ground visibility events on state changes (triple state)
-    for pair, (visible, range_km, elev_deg) in gs_vis_details.items():
-        scheduled = pair in ground_allocation.scheduled_pairs if visible else False
-        sched_state = "teardown" if pair in new_pending_teardowns else "active"
-        prev_state = gs_state.get(pair, (False, False, "active"))
-        new_state = (visible, scheduled, sched_state)
-
-        if new_state != prev_state:
-            gs_state[pair] = new_state
-            indices = new_associations.get(pair)
-            vis_event = VisibilityEvent(
-                sim_time=sim_time,
-                node_a=pair[0],
-                node_b=pair[1],
-                visible=visible,
-                scheduled=scheduled,
-                range_km=range_km,
-                latency_ms=_latency_ms(range_km),
-                elevation_deg=elev_deg,
-                terminal_type="optical",
-                link_type="ground",
-                gs_terminal_index=indices[0] if indices else None,
-                sat_terminal_index=indices[1] if indices else None,
-                scheduling_state=sched_state,
-            )
-            events.append(TimelineEvent(timestamp_s, "VisibilityEvent", vis_event))
+    # 8. Emit ground visibility events on state changes (triple state).
+    ground_diff = diff_ground_visibility_events(
+        sim_time=sim_time,
+        visibility_details=gs_vis_details,
+        allocation=ground_allocation,
+        previous_state=gs_state,
+    )
+    gs_state.clear()
+    gs_state.update(ground_diff.state)
+    events.extend(
+        TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in ground_diff.events
+    )
 
     return StepResult(
         events=events,

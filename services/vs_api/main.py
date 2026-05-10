@@ -2013,11 +2013,13 @@ def generate_session(body: dict) -> dict:
     custom_constellation = body.get("custom_constellation")
     custom_ground_stations = body.get("custom_ground_stations")
     routing_config = body.get("routing_config")
-    orbit_propagator = body.get("orbit_propagator", body.get("propagator", "keplerian-circular"))
+    orbit_propagator = body.get("orbit_propagator", body.get("propagator"))
     if not constellation or not protocol:
         return JSONResponse(
             status_code=400, content={"error": "constellation and protocol are required"}
         )
+    if not orbit_propagator:
+        return JSONResponse(status_code=400, content={"error": "orbit_propagator is required"})
     try:
         yaml_str, warnings = generate_session_yaml(
             constellation=constellation,

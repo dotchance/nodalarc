@@ -31,7 +31,27 @@ def four_node_timeline():
     sats = expand_constellation(config)
     addressing = AddressingScheme()
     neighbors = assign_isl_neighbors(config, addressing)
-    gs_file = load_ground_stations(CONFIGS_DIR / "ground-stations/sets/global.yaml")
+    gs_file = load_ground_stations(
+        {
+            "default_terminals": [
+                {
+                    "type": "optical",
+                    "count": 1,
+                    "bandwidth_mbps": 1000,
+                    "tracking_capacity": 1,
+                }
+            ],
+            "default_min_elevation_deg": 25,
+            "default_scheduling_policy": "highest-elevation",
+            "stations": [
+                {
+                    "name": "equator",
+                    "lat_deg": 0.0,
+                    "lon_deg": 0.0,
+                }
+            ],
+        }
+    )
 
     events = precompute_timeline(
         satellites=sats,
@@ -40,6 +60,7 @@ def four_node_timeline():
         neighbors=neighbors,
         epoch_unix=EPOCH,
         duration_s=60.0,  # Short: 60 seconds
+        propagator_id="keplerian-circular",
         step_seconds=10,
     )
     return events
@@ -132,6 +153,7 @@ class TestNoGroundStations:
             neighbors=neighbors,
             epoch_unix=EPOCH,
             duration_s=10.0,
+            propagator_id="keplerian-circular",
             step_seconds=5,
         )
         ticks = [e for e in events if e.event_type == "ClockTick"]

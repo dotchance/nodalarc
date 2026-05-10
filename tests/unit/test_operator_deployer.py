@@ -77,6 +77,7 @@ def _make_session_yaml(
         "session": {"name": "test-session"},
         "constellation": constellation_path,
         "ground_stations": gs_path,
+        "orbit": {"propagator": "keplerian-circular"},
         "routing": {
             "protocol": protocol,
             "area_assignment": {"strategy": strategy},
@@ -389,6 +390,7 @@ def _make_inline_spec(tmp_path, protocol="ospf", constellation=None, ground_stat
         "session": {"name": "test-session"},
         "constellation": str(const_path),
         "ground_stations": str(gs_path),
+        "orbit": {"propagator": "keplerian-circular"},
         "routing": {"protocol": protocol, "area_assignment": {"strategy": "flat"}},
         "time": {"step_seconds": 1},
     }

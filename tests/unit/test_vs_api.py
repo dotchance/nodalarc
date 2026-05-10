@@ -277,6 +277,7 @@ class TestSQLiteQueries:
             wall_time=datetime(2025, 1, 1, tzinfo=UTC),
             node_a="sat-P00S00",
             node_b="sat-P00S01",
+            link_type="isl",
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,

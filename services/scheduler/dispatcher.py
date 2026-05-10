@@ -71,6 +71,7 @@ from scheduler.latency_compensator import LatencyCompensation, compensate_latenc
 from scheduler.latency_model import PositionTable
 from scheduler.node_agent_batches import successful_interface_acks
 from scheduler.pod_locator import PodLocationMap
+from scheduler.substrate_latency import resolve_substrate_rtt_ms
 
 log = logging.getLogger(__name__)
 
@@ -400,7 +401,6 @@ class Dispatcher:
         # --- Read retained SchedulingCheckpoint for recovery context ---
         try:
             from nats.js.api import DeliverPolicy as _DP
-            from nodalarc.models.events import SchedulingCheckpoint
             from nodalarc.nats_channels import (
                 STREAM_SESSION_EVENTS,
             )
@@ -412,22 +412,24 @@ class Dispatcher:
                 deliver_policy=_DP.LAST_PER_SUBJECT,
             )
             try:
-                import gzip as _ckpt_gzip
+                from nodalarc.scheduling_checkpoint import decode_retained_scheduling_checkpoint
 
                 ckpt_msg = await asyncio.wait_for(ckpt_sub.next_msg(), timeout=2.0)
-                decompressed = _ckpt_gzip.decompress(ckpt_msg.data)
-                ckpt = SchedulingCheckpoint.model_validate_json(decompressed)
-                self._current_sim_time = ckpt.sim_time
-                log.info(
-                    "Recovered SchedulingCheckpoint: sim_time=%s step=%d epoch_id=%d "
-                    "snapshot_seq=%d associations=%d teardowns=%d",
-                    ckpt.sim_time.isoformat(),
-                    ckpt.step,
-                    ckpt.epoch_id,
-                    ckpt.snapshot_seq,
-                    len(ckpt.associations),
-                    len(ckpt.pending_teardowns),
-                )
+                ckpt = decode_retained_scheduling_checkpoint(ckpt_msg.data)
+                if ckpt is None:
+                    log.info("Retained SchedulingCheckpoint is incompatible; starting fresh")
+                else:
+                    self._current_sim_time = ckpt.sim_time
+                    log.info(
+                        "Recovered SchedulingCheckpoint: sim_time=%s step=%d epoch_id=%d "
+                        "snapshot_seq=%d associations=%d teardowns=%d",
+                        ckpt.sim_time.isoformat(),
+                        ckpt.step,
+                        ckpt.epoch_id,
+                        ckpt.snapshot_seq,
+                        len(ckpt.associations),
+                        len(ckpt.pending_teardowns),
+                    )
             except TimeoutError as exc:
                 log.info("No SchedulingCheckpoint retained (fresh session): %s", type(exc).__name__)
             finally:
@@ -501,7 +503,12 @@ class Dispatcher:
             # completed in cycle N+1, and the detach brought the shared
             # GS bridge port DOWN, killing the freshly-established carrier.
             if last_sim_time is not None and snap_sim != last_sim_time:
-                delta_ms = abs((snap_sim - last_sim_time).total_seconds() * 1000)
+                delta_ms = (snap_sim - last_sim_time).total_seconds() * 1000
+                if delta_ms < 0:
+                    raise RuntimeError(
+                        "VisibilityEvent sim_time regressed outside an epoch seek: "
+                        f"last={last_sim_time.isoformat()} current={snap_sim.isoformat()}"
+                    )
                 if delta_ms > self._epsilon_ms and pending_vis:
                     self._apply_events_to_desired(list(pending_vis))
                     intent = self._build_dispatch_intent(
@@ -1066,30 +1073,12 @@ class Dispatcher:
         emulator from looking healthy while silently ignoring physical
         substrate latency.
         """
-        k3s_a = self._loc.k3s_node(node_a)
-        k3s_b = self._loc.k3s_node(node_b)
-        if not k3s_a or not k3s_b:
-            raise ValueError(
-                f"Missing Kubernetes node placement for {node_a}<->{node_b}; "
-                "refusing to treat unknown substrate locality as local"
-            )
-        if k3s_a == k3s_b:
-            return 0.0
-        # Prefer live measurement (by IP) from Node Agent
-        ip_b = self._loc.node_ip(k3s_b)
-        if ip_b and ip_b in self._substrate_by_ip:
-            return self._substrate_by_ip[ip_b]
-        # Static ConfigMap measurements are accepted only as explicit measured
-        # substrate inputs. Missing measurements are not treated as zero.
-        key = f"{k3s_a}-{k3s_b}"
-        if key in self._substrate_latency:
-            return self._substrate_latency[key]
-        reverse_key = f"{k3s_b}-{k3s_a}"
-        if reverse_key in self._substrate_latency:
-            return self._substrate_latency[reverse_key]
-        raise ValueError(
-            f"No substrate RTT measurement for cross-node link {node_a}<->{node_b} "
-            f"({k3s_a}<->{k3s_b}); refusing to dispatch with unknown substrate latency"
+        return resolve_substrate_rtt_ms(
+            locator=self._loc,
+            live_rtt_by_peer_ip=self._substrate_by_ip,
+            configured_rtt_by_node_pair=self._substrate_latency,
+            node_a=node_a,
+            node_b=node_b,
         )
 
     def _latency_compensation(
@@ -1391,10 +1380,10 @@ class Dispatcher:
                 continue  # Phase 1 down failed — terminal still occupied
             for pair in gs_ups.get(gs_id, set()):
                 sat_id = sat_id_for_gs_pair(pair, self._gs_capacities)
-                gs_spare = self._gs_capacities.get(gs_id, 1) - self._gs_active_count.get(gs_id, 0)
-                sat_spare = self._sat_capacities.get(sat_id, 1) - self._sat_active_count.get(
-                    sat_id, 0
-                )
+                if sat_id is None:
+                    raise ValueError(f"Ground segment {gs_id!r} includes non-ground pair {pair}")
+                gs_spare = self._gs_capacities[gs_id] - self._gs_active_count.get(gs_id, 0)
+                sat_spare = self._sat_capacities[sat_id] - self._sat_active_count.get(sat_id, 0)
                 if gs_spare > 0 and sat_spare > 0:
                     phase2_ups.add(pair)
                 else:

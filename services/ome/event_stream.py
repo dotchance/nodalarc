@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from nodalarc.constellation_loader import SatelliteNode, isl_terminal_for_interface
-from nodalarc.ground_terminals import station_ground_terminal_capacity
+from nodalarc.ground_terminals import (
+    ground_terminal_type,
+    station_ground_terminal_capacity,
+    station_ground_terminal_type,
+)
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
@@ -44,6 +48,7 @@ from ome.isl_engine import (
 )
 from ome.propagation_engine import (
     PropagatedState,
+    PropagatorId,
     build_node_positions,
     propagate_satellites,
 )
@@ -146,19 +151,17 @@ class StepContext:
     gs_policies: dict[str, str]
     gs_hysteresis: dict[str, HysteresisParameters]
     gs_service_priorities: dict[str, int]
+    ground_pair_terminal_types: dict[tuple[str, str], str]
     by_node: dict  # neighbors_by_node result
     sat_isl_terminals: dict[str, int]
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]]
     sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity
-    max_range_km: float
-    max_tracking_rate_deg_s: float
-    field_of_regard_deg: float
+    propagator_id: PropagatorId
     polar_seam_enabled: bool
     latitude_threshold_deg: float
     mbb_overlap_ticks: int = 3
     mbb_reserve: int = 0
     ground_policy_lookahead_horizon_ticks: int = 0
-    propagator_id: str = "keplerian-circular"
 
 
 @dataclass(frozen=True)
@@ -211,16 +214,12 @@ def build_step_context(
     addressing: AddressingScheme,
     gs_file: GroundStationFile | None,
     neighbors: frozenset[tuple[str, NeighborAssignment]],
-    max_range_km: float = 5016.0,
-    max_tracking_rate_deg_s: float = 3.0,
-    field_of_regard_deg: float = 360.0,
+    propagator_id: PropagatorId,
     mbb_overlap_ticks: int = 3,
     mbb_reserve: int = 0,
     ground_policy_lookahead_horizon_ticks: int = 0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
-    default_min_elevation_deg: float = 25.0,
-    propagator_id: str = "keplerian-circular",
     default_ground_policy: str | None = None,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
@@ -229,10 +228,12 @@ def build_step_context(
     sat_isl_terminals: dict[str, int] = {}
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]] = {}
     sat_ground_terminals: dict[str, int] = {}
+    sat_ground_terminal_types: dict[str, str] = {}
     for sat in satellites:
         nid = addressing.sat_id(sat.plane, sat.slot)
         sat_isl_terminals[nid] = sat.isl_terminal_count
         sat_ground_terminals[nid] = sat.ground_terminal_count
+        sat_ground_terminal_types[nid] = ground_terminal_type(sat.ground_terminals)
         constraints_by_iface: dict[str, IslTerminalConstraints] = {}
         for idx in range(sat.isl_terminal_count):
             iface = f"isl{idx}"
@@ -252,20 +253,43 @@ def build_step_context(
     gs_policies: dict[str, str] = {}
     gs_hysteresis: dict[str, HysteresisParameters] = {}
     gs_service_priorities: dict[str, int] = {}
+    gs_terminal_types: dict[str, str] = {}
+    ground_pair_terminal_types: dict[tuple[str, str], str] = {}
     if gs_file:
-        default_gs_policy = default_ground_policy or gs_file.default_scheduling_policy
+        default_gs_policy = (
+            default_ground_policy
+            if default_ground_policy is not None
+            else gs_file.default_scheduling_policy
+        )
         for _i, station in enumerate(gs_file.stations):
             node_id = addressing.gs_id(station.name)
             geo = GeoPosition(station.lat_deg, station.lon_deg, (station.alt_m or 0) / 1000.0)
             ecef = geodetic_to_ecef(geo)
             gs_positions[node_id] = (ecef, geo)
             gs_min_elevations[node_id] = (
-                station.min_elevation_deg or gs_file.default_min_elevation_deg or 25.0
+                station.min_elevation_deg
+                if station.min_elevation_deg is not None
+                else gs_file.default_min_elevation_deg
             )
             gs_terminal_counts[node_id] = station_ground_terminal_capacity(gs_file, station)
-            gs_policies[node_id] = station.scheduling_policy or default_gs_policy
+            gs_terminal_types[node_id] = station_ground_terminal_type(gs_file, station)
+            gs_policies[node_id] = (
+                station.scheduling_policy
+                if station.scheduling_policy is not None
+                else default_gs_policy
+            )
             gs_hysteresis[node_id] = station.hysteresis
             gs_service_priorities[node_id] = station.service_priority
+        for gs_id, gs_type in gs_terminal_types.items():
+            for sat_id, sat_type in sat_ground_terminal_types.items():
+                if gs_type != sat_type:
+                    raise ValueError(
+                        f"Ground terminal type mismatch for {gs_id}<->{sat_id}: "
+                        f"ground station uses {gs_type!r}, satellite uses {sat_type!r}. "
+                        "Mixed terminal types require an explicit compatibility model."
+                    )
+                pair = (min(gs_id, sat_id), max(gs_id, sat_id))
+                ground_pair_terminal_types[pair] = gs_type
 
     return StepContext(
         satellites=satellites,
@@ -276,19 +300,17 @@ def build_step_context(
         gs_policies=gs_policies,
         gs_hysteresis=gs_hysteresis,
         gs_service_priorities=gs_service_priorities,
+        ground_pair_terminal_types=ground_pair_terminal_types,
         by_node=by_node,
         sat_isl_terminals=sat_isl_terminals,
         sat_isl_terminal_constraints=sat_isl_terminal_constraints,
         sat_ground_terminals=sat_ground_terminals,
-        max_range_km=max_range_km,
-        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-        field_of_regard_deg=field_of_regard_deg,
+        propagator_id=propagator_id,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
         ground_policy_lookahead_horizon_ticks=ground_policy_lookahead_horizon_ticks,
-        propagator_id=propagator_id,
     )
 
 
@@ -410,6 +432,7 @@ def compute_step(
         visibility_details=ground_visibility.details,
         allocation=ground_allocation,
         previous_state=gs_state,
+        terminal_types=ctx.ground_pair_terminal_types,
     )
     gs_state.clear()
     gs_state.update(ground_diff.state)
@@ -505,17 +528,13 @@ def precompute_timeline_window(
     neighbors: frozenset[tuple[str, NeighborAssignment]],
     epoch_unix: float,
     duration_s: float,
+    propagator_id: PropagatorId,
     step_seconds: int = 1,
-    max_range_km: float = 5016.0,
-    max_tracking_rate_deg_s: float = 3.0,
-    field_of_regard_deg: float = 360.0,
     mbb_overlap_ticks: int = 3,
     mbb_reserve: int = 0,
     ground_policy_lookahead_horizon_ticks: int = 0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
-    default_min_elevation_deg: float = 25.0,
-    propagator_id: str = "keplerian-circular",
     default_ground_policy: str | None = None,
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
@@ -535,16 +554,12 @@ def precompute_timeline_window(
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
-        max_range_km=max_range_km,
-        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-        field_of_regard_deg=field_of_regard_deg,
+        propagator_id=propagator_id,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
         ground_policy_lookahead_horizon_ticks=ground_policy_lookahead_horizon_ticks,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
-        default_min_elevation_deg=default_min_elevation_deg,
-        propagator_id=propagator_id,
         default_ground_policy=default_ground_policy,
     )
     return precompute_timeline_window_from_context(
@@ -568,20 +583,16 @@ def precompute_timeline(
     neighbors: frozenset[tuple[str, NeighborAssignment]],
     epoch_unix: float,
     duration_s: float,
+    propagator_id: PropagatorId,
     step_seconds: int = 1,
-    max_range_km: float = 5016.0,
-    max_tracking_rate_deg_s: float = 3.0,
-    field_of_regard_deg: float = 360.0,
     mbb_overlap_ticks: int = 3,
     mbb_reserve: int = 0,
     ground_policy_lookahead_horizon_ticks: int = 0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
-    default_min_elevation_deg: float = 25.0,
-    propagator_id: str = "keplerian-circular",
     default_ground_policy: str | None = None,
 ) -> list[TimelineEvent]:
-    """Single-window convenience wrapper (backward compat).
+    """Single-window convenience wrapper.
 
     Returns only events, discarding boundary state.
     """
@@ -592,17 +603,13 @@ def precompute_timeline(
         neighbors=neighbors,
         epoch_unix=epoch_unix,
         duration_s=duration_s,
+        propagator_id=propagator_id,
         step_seconds=step_seconds,
-        max_range_km=max_range_km,
-        max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-        field_of_regard_deg=field_of_regard_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
         ground_policy_lookahead_horizon_ticks=ground_policy_lookahead_horizon_ticks,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
-        default_min_elevation_deg=default_min_elevation_deg,
-        propagator_id=propagator_id,
         default_ground_policy=default_ground_policy,
     )
     return result.events

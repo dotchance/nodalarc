@@ -66,7 +66,7 @@ class VisibilityEvent(BaseModel):
     latency_ms: float | None = None  # authoritative OME one-way propagation delay
     elevation_deg: float | None  # None for ISLs, float for ground links
     terminal_type: str  # "optical" or "rf"
-    link_type: str = "isl"  # "isl" or "ground" — set by OME from node type registry
+    link_type: Literal["isl", "ground"]  # set by OME from node type registry
     gs_terminal_index: int | None = None  # None for ISL events
     sat_terminal_index: int | None = None  # None for ISL events
     scheduling_state: str = "active"  # "active" | "teardown"
@@ -141,7 +141,7 @@ class EphemerisNodeKeplerian(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["keplerian"] = "keplerian"
-    propagator: Literal["keplerian-circular", "j2-mean-elements"] = "keplerian-circular"
+    propagator: Literal["keplerian-circular", "j2-mean-elements"]
     altitude_km: float
     inclination_deg: float
     raan_deg: float

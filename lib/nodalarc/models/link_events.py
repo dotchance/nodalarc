@@ -42,9 +42,9 @@ class LinkUp(BaseModel):
     interface_b: str
     latency_ms: float
     bandwidth_mbps: float
-    range_km: float = 0.0
+    range_km: float
     reason: str  # vis_gained, gs_above_horizon, scenario_inject_up, scenario_reconciliation
-    link_type: str = "isl"  # "isl" or "ground"
+    link_type: Literal["isl", "ground"]
     provenance: LinkDecisionProvenance | None = None
 
 
@@ -60,7 +60,7 @@ class LinkDown(BaseModel):
     interface_a: str
     interface_b: str
     reason: str  # vis_lost, tracking_exceeded, terminal_exhausted, gs_below_horizon, scenario_inject_down, scenario_reconciliation, satellite_loss
-    link_type: str = "isl"  # "isl" or "ground"
+    link_type: Literal["isl", "ground"]
 
 
 class LatencyUpdate(BaseModel):

@@ -8,7 +8,6 @@ Tests:
 """
 
 import pytest
-
 from ome.propagator import (
     Vec3,
     elements_from_params,

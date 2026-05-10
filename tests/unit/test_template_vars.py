@@ -5,6 +5,7 @@ from nodalarc.constellation_loader import load_constellation
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.session import (
     AreaAssignmentConfig,
+    OrbitConfig,
     RoutingConfig,
     SessionConfig,
     SessionMeta,
@@ -44,6 +45,7 @@ def flat_session():
         session=SessionMeta(name="test-flat"),
         constellation="configs/constellations/custom-example.yaml",
         ground_stations="configs/ground-stations/sets/global.yaml",
+        orbit=OrbitConfig(propagator="keplerian-circular"),
         routing=RoutingConfig(
             protocol="isis",
             extensions=["sr"],
@@ -60,6 +62,7 @@ def stripe_session():
         session=SessionMeta(name="test-stripe"),
         constellation="configs/constellations/starlink-early-44.yaml",
         ground_stations="configs/ground-stations/sets/global.yaml",
+        orbit=OrbitConfig(propagator="keplerian-circular"),
         routing=RoutingConfig(
             protocol="isis",
             extensions=["sr"],

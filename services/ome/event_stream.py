@@ -32,6 +32,7 @@ from ome.ground_allocator import (
     MbbTeardownState,
     allocate_ground_links,
 )
+from ome.ground_visibility_engine import evaluate_ground_visibility
 from ome.isl_engine import (
     IslFeasibilityResult,
     IslTerminalConstraints,
@@ -50,10 +51,6 @@ from ome.propagator import (
     geodetic_to_ecef,
 )
 from ome.snapshot_builder import build_link_state_snapshot as build_link_state_snapshot
-from ome.visibility import (
-    GroundVisibility,
-    check_ground_visibility,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -351,31 +348,17 @@ def compute_step(
     events.extend(TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in isl_diff.events)
 
     # 6. Check ground station visibility and schedule
-    gs_vis_details: dict[tuple[str, str], tuple[bool, float, float | None]] = {}
-    gs_visible_per_station: dict[str, list[GroundVisibility]] = {}
-
-    for gs_id, (gs_ecef, gs_geo) in ctx.gs_positions.items():
-        min_elev = ctx.gs_min_elevations.get(gs_id, 25.0)
-        visible_sats: list[GroundVisibility] = []
-        for sat in ctx.satellites:
-            sat_id = ctx.addressing.sat_id(sat.plane, sat.slot)
-            if sat_id not in sat_states:
-                continue
-            sat_ecef = sat_states[sat_id].position_ecef_km
-
-            gv = check_ground_visibility(gs_ecef, gs_geo, sat_ecef, min_elev)
-            pair = (min(gs_id, sat_id), max(gs_id, sat_id))
-            gs_vis_details[pair] = (gv.visible, gv.range_km, gv.elevation_deg)
-            if gv.visible:
-                visible_sats.append(
-                    GroundVisibility(sat_id, gv.visible, gv.elevation_deg, gv.range_km),
-                )
-        gs_visible_per_station[gs_id] = visible_sats
+    ground_visibility = evaluate_ground_visibility(
+        satellite_ids=node_order,
+        sat_states=sat_states,
+        gs_positions=ctx.gs_positions,
+        gs_min_elevations=ctx.gs_min_elevations,
+    )
 
     # 7. Scored, hysteresis-aware ground link allocation.
     ground_allocation = allocate_ground_links(
         step=step,
-        visible_per_station=gs_visible_per_station,
+        visible_per_station=ground_visibility.visible_per_station,
         ground_station_ids=set(ctx.gs_positions),
         current_associations=current_associations,
         pending_teardowns=mbb_pending_teardowns,
@@ -391,7 +374,7 @@ def compute_step(
     # 8. Emit ground visibility events on state changes (triple state).
     ground_diff = diff_ground_visibility_events(
         sim_time=sim_time,
-        visibility_details=gs_vis_details,
+        visibility_details=ground_visibility.details,
         allocation=ground_allocation,
         previous_state=gs_state,
     )

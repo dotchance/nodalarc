@@ -120,6 +120,28 @@ class TestJ2MeanElementPropagation:
         assert distance_km(pos_k, pos_j2) > 100.0
         assert math.sqrt(vel_j2.x**2 + vel_j2.y**2 + vel_j2.z**2) > 7.0
 
+    def test_j2_starlink_mean_element_golden_fixture(self, starlink_elements):
+        """Numeric fixture for the declared J2 mean-element model.
+
+        This is a model-contract golden, not an SGP4 realism claim. The values
+        lock down the selected first-order secular equations and the ECI→ECEF
+        conversion at the fixed test epoch.
+        """
+        raan_dot, mean_anomaly_dot = j2_circular_secular_rates(starlink_elements)
+        assert math.degrees(raan_dot) * 86400.0 == pytest.approx(-4.505416931930125, abs=1e-12)
+        assert math.degrees(mean_anomaly_dot) == pytest.approx(0.06282958110459273, abs=1e-14)
+
+        pos, vel, geo = propagate_j2_mean_elements(starlink_elements, EPOCH, 21600.0)
+        assert pos.x == pytest.approx(40.398574119250725, abs=1e-9)
+        assert pos.y == pytest.approx(4220.920583012797, abs=1e-9)
+        assert pos.z == pytest.approx(-5484.745972887718, abs=1e-9)
+        assert vel.x == pytest.approx(-7.167530737504994, abs=1e-12)
+        assert vel.y == pytest.approx(1.044676948129793, abs=1e-12)
+        assert vel.z == pytest.approx(0.7511633960031487, abs=1e-12)
+        assert geo.lat_deg == pytest.approx(-52.58870323827494, abs=1e-12)
+        assert geo.lon_deg == pytest.approx(89.45163689399021, abs=1e-12)
+        assert geo.alt_km == pytest.approx(556.3155246749066, abs=1e-9)
+
 
 class TestInclinationBounds:
     def test_latitude_bounded_by_inclination(self, starlink_elements):

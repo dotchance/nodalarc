@@ -31,6 +31,7 @@ from nodalarc.constellation_loader import (
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.session import SessionConfig, resolve_session_epoch
+from nodalarc.tle import tle_age_days
 
 from ome.event_stream import (
     precompute_timeline,
@@ -63,7 +64,7 @@ class _SessionBundle(NamedTuple):
 
 def _load_session_config(session_path: str | Path) -> _SessionBundle:
     """Load and validate all session config. Pure — no side effects."""
-    from nodalarc.models.constellation import ParametricConstellation
+    from nodalarc.models.constellation import ParametricConstellation, TLEConstellation
 
     data = yaml.safe_load(Path(session_path).read_text())
     session = SessionConfig.model_validate(data)
@@ -73,6 +74,21 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
     satellites = expand_constellation(constellation_config)
     if not satellites:
         raise ValueError("No satellites in constellation")
+    if session.orbit.propagator == "sgp4-tle" and not isinstance(
+        constellation_config, TLEConstellation
+    ):
+        raise ValueError(
+            "orbit.propagator='sgp4-tle' requires constellation.mode='tle'; "
+            "OME will not approximate a non-TLE source as SGP4"
+        )
+    if (
+        isinstance(constellation_config, TLEConstellation)
+        and session.orbit.propagator != "sgp4-tle"
+    ):
+        raise ValueError(
+            "constellation.mode='tle' requires orbit.propagator='sgp4-tle'; "
+            "OME will not downgrade TLEs into circular elements"
+        )
 
     first_alt = satellites[0].elements.semi_major_axis_km - 6371.0
     period = orbital_period(first_alt)
@@ -115,6 +131,30 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
     )
 
 
+def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None:
+    """Fail before dispatch if a selected SGP4 source violates its age budget."""
+    if cfg.session.orbit.propagator != "sgp4-tle":
+        return
+
+    max_age_days = cfg.session.orbit.tle_max_age_days
+    if max_age_days is None:
+        raise ValueError("orbit.tle_max_age_days is required for SGP4/TLE sessions")
+
+    stale: list[str] = []
+    for sat in cfg.satellites:
+        node_id = cfg.addressing.sat_id(sat.plane, sat.slot)
+        if sat.tle_line_1 is None or sat.tle_line_2 is None:
+            raise ValueError(f"Satellite {node_id} has no TLE record for SGP4 propagation")
+        age_days = tle_age_days(sat.tle_line_1, epoch_unix)
+        if age_days > max_age_days:
+            stale.append(f"{node_id} NORAD {sat.norad_id} age {age_days:.2f}d")
+
+    if stale:
+        raise ValueError(
+            f"TLE age exceeds orbit.tle_max_age_days={max_age_days:g}: {', '.join(stale[:5])}"
+        )
+
+
 def _authority_snapshot_interval_s(
     *,
     platform_snapshot_interval_s: float,
@@ -152,6 +192,8 @@ _seeking: bool = False  # True while seek in progress — mutex for pause/set_sp
 def run(session_path: str, output_dir: str | None = None) -> Path:
     """Run the OME pipeline (single window, batch mode) and return the output path."""
     cfg = _load_session_config(session_path)
+    epoch_unix = resolve_session_epoch(cfg.session.time)
+    _validate_sgp4_tle_freshness(cfg, epoch_unix)
     mbb_dispatch = cfg.session.scheduling.ground.handover_mode == "mbb"
     mbb_overlap_ticks = cfg.session.scheduling.ground.mbb_overlap_ticks
     mbb_reserve = cfg.session.scheduling.ground.mbb_reserve if mbb_dispatch else 0
@@ -161,7 +203,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         addressing=cfg.addressing,
         gs_file=cfg.gs_file,
         neighbors=cfg.neighbors,
-        epoch_unix=resolve_session_epoch(cfg.session.time),
+        epoch_unix=epoch_unix,
         duration_s=cfg.period,
         step_seconds=cfg.session.time.step_seconds,
         max_range_km=cfg.max_range_km,
@@ -595,6 +637,7 @@ def _run_pacing(
     session_id = sanitize_session_id(session.session.name)
     period = cfg.period
     epoch_unix = resolve_session_epoch(session.time)
+    _validate_sgp4_tle_freshness(cfg, epoch_unix)
     compression = session.time.compression if session.time.compression else 1
 
     # Build session-scoped NATS subjects

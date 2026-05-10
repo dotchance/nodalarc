@@ -13,6 +13,10 @@ from nodalarc.orbital import elements_from_params
 from ome.propagation_engine import build_node_positions, propagate_satellites
 from ome.propagator import GeoPosition, geodetic_to_ecef
 
+ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
+ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
+ISS_TLE_EPOCH_UNIX = 1615896900.000275
+
 
 def _satellite() -> SatelliteNode:
     return SatelliteNode(
@@ -21,6 +25,19 @@ def _satellite() -> SatelliteNode:
         elements=elements_from_params(550.0, 53.0, 0.0, 0.0),
         isl_terminal_count=2,
         ground_terminal_count=1,
+    )
+
+
+def _tle_satellite() -> SatelliteNode:
+    return SatelliteNode(
+        plane=0,
+        slot=0,
+        elements=elements_from_params(420.0, 51.6, 21.5, 21.8),
+        isl_terminal_count=2,
+        ground_terminal_count=1,
+        tle_line_1=ISS_TLE_LINE_1,
+        tle_line_2=ISS_TLE_LINE_2,
+        norad_id=25544,
     )
 
 
@@ -71,6 +88,36 @@ def test_j2_propagator_is_explicitly_selectable():
     assert abs(state.position_ecef_km.x) + abs(state.position_ecef_km.y) > 0.0
 
 
+def test_sgp4_propagator_requires_tle_record():
+    with pytest.raises(ValueError, match="requires a TLE constellation"):
+        propagate_satellites(
+            satellites=[_satellite()],
+            addressing=AddressingScheme(),
+            epoch_unix=ISS_TLE_EPOCH_UNIX,
+            dt=0.0,
+            propagator_id="sgp4-tle",
+        )
+
+
+def test_sgp4_propagator_is_explicitly_selectable():
+    addressing = AddressingScheme()
+
+    states = propagate_satellites(
+        satellites=[_tle_satellite()],
+        addressing=addressing,
+        epoch_unix=ISS_TLE_EPOCH_UNIX,
+        dt=0.0,
+        propagator_id="sgp4-tle",
+    )
+
+    state = states[addressing.sat_id(0, 0)]
+    assert state.propagator_id == "sgp4-tle"
+    assert state.position_ecef_km.x == pytest.approx(-4329.375350762542, abs=1e-6)
+    assert state.position_ecef_km.y == pytest.approx(2211.9930425759426, abs=1e-6)
+    assert state.position_ecef_km.z == pytest.approx(4740.40568912658, abs=1e-6)
+    assert state.velocity_ecef_km_s.x == pytest.approx(-5.240188571438462, abs=1e-9)
+
+
 def test_unknown_propagator_fails_loudly():
     with pytest.raises(ValueError, match="Unsupported OME propagator"):
         propagate_satellites(
@@ -78,7 +125,7 @@ def test_unknown_propagator_fails_loudly():
             addressing=AddressingScheme(),
             epoch_unix=1735689600.0,
             dt=0.0,
-            propagator_id="sgp4-tle",
+            propagator_id="unknown",
         )
 
 

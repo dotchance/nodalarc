@@ -111,8 +111,30 @@ class TestEngineConfigValidation:
 
     def test_unknown_propagator_rejected(self):
         data = dict(_SAMPLE_SESSION)
-        data["orbit"] = {"propagator": "sgp4-tle"}
+        data["orbit"] = {"propagator": "unknown"}
         with pytest.raises(ValidationError, match="Input should be"):
+            SessionConfig.model_validate(data)
+
+    def test_sgp4_propagator_requires_matching_fidelity_and_tle_age_window(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"schema_version": 2, "fidelity": "sgp4-tle"}
+        data["orbit"] = {"propagator": "sgp4-tle", "tle_max_age_days": 7.0}
+        config = SessionConfig.model_validate(data)
+        assert config.orbit.propagator == "sgp4-tle"
+        assert config.orbit.tle_max_age_days == 7.0
+        assert config.simulation.fidelity == "sgp4-tle"
+
+    def test_sgp4_propagator_rejects_missing_tle_age_window(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"schema_version": 2, "fidelity": "sgp4-tle"}
+        data["orbit"] = {"propagator": "sgp4-tle"}
+        with pytest.raises(ValidationError, match="tle_max_age_days is required"):
+            SessionConfig.model_validate(data)
+
+    def test_tle_age_window_rejected_for_non_tle_propagators(self):
+        data = dict(_SAMPLE_SESSION)
+        data["orbit"] = {"propagator": "keplerian-circular", "tle_max_age_days": 7.0}
+        with pytest.raises(ValidationError, match="only valid"):
             SessionConfig.model_validate(data)
 
     def test_j2_propagator_requires_matching_fidelity_label(self):

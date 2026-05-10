@@ -8,6 +8,8 @@ from nodalarc.session_generator import (
     load_constellation_presets,
 )
 
+from tests.conftest import FIXTURES_DIR
+
 
 class TestLoadPresets:
     def test_loads_all_presets(self):
@@ -115,14 +117,49 @@ class TestOrbitPropagatorGeneration:
         assert session.simulation.fidelity == "j2-mean-elements"
         assert session.dispatch.substrate_compensation.rtt_to_one_way == "half-rtt"
 
-    def test_unknown_propagator_rejected(self):
-        with pytest.raises(ValueError, match="Unsupported orbit_propagator"):
+    def test_sgp4_requires_tle_constellation(self):
+        with pytest.raises(ValueError, match="requires a TLE constellation"):
             generate_session_yaml(
                 "iridium-small-36",
                 "ospf",
                 [],
                 orbit_propagator="sgp4-tle",
             )
+
+    def test_sgp4_tle_custom_constellation_sets_matching_fidelity(self):
+        yaml_str, _ = generate_session_yaml(
+            "custom-tle",
+            "ospf",
+            [],
+            custom_constellation={
+                "mode": "tle",
+                "name": "sample-tle",
+                "tle_file": str(FIXTURES_DIR / "tles/sample.tle"),
+                "filter": {"max_count": 1},
+                "default_terminals": {
+                    "isl": [
+                        {
+                            "type": "optical",
+                            "count": 2,
+                            "max_range_km": 5000,
+                            "bandwidth_mbps": 1000,
+                            "max_tracking_rate_deg_s": 3.0,
+                        }
+                    ],
+                    "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+                },
+            },
+            custom_ground_stations=[
+                {"name": "ashburn", "lat_deg": 39.04, "lon_deg": -77.49, "alt_km": 0.095}
+            ],
+            orbit_propagator="sgp4-tle",
+        )
+        raw = yaml.safe_load(yaml_str)
+        session = SessionConfig.model_validate(raw)
+
+        assert session.simulation.fidelity == "sgp4-tle"
+        assert session.orbit.propagator == "sgp4-tle"
+        assert session.orbit.tle_max_age_days == 7.0
 
 
 class TestRoutingConfigRoundtrip:

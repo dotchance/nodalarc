@@ -9,6 +9,7 @@ YAML loading happens here (component responsibility, not shared lib).
 from __future__ import annotations
 
 import logging
+import math
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +18,7 @@ log = logging.getLogger(__name__)
 import yaml
 from pydantic import TypeAdapter
 
+from nodalarc.constants import EARTH_MU
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ExplicitConstellation,
@@ -35,6 +37,7 @@ from nodalarc.models.ground_station import (
 )
 from nodalarc.models.satellite_type import SatelliteTypeConfig
 from nodalarc.orbital import OrbitalElements, elements_from_params
+from nodalarc.tle import tle_norad_id, validate_tle_pair
 
 adapter = TypeAdapter(ConstellationConfig)
 
@@ -197,6 +200,9 @@ class SatelliteNode:
         "ground_terminal_count",
         "isl_terminals",
         "ground_terminals",
+        "tle_line_1",
+        "tle_line_2",
+        "norad_id",
     )
 
     def __init__(
@@ -208,6 +214,9 @@ class SatelliteNode:
         ground_terminal_count: int,
         isl_terminals: list | tuple | None = None,
         ground_terminals: list | tuple | None = None,
+        tle_line_1: str | None = None,
+        tle_line_2: str | None = None,
+        norad_id: int | None = None,
     ) -> None:
         self.plane = plane
         self.slot = slot
@@ -216,6 +225,9 @@ class SatelliteNode:
         self.ground_terminal_count = ground_terminal_count
         self.isl_terminals = tuple(isl_terminals or ())
         self.ground_terminals = tuple(ground_terminals or ())
+        self.tle_line_1 = tle_line_1
+        self.tle_line_2 = tle_line_2
+        self.norad_id = norad_id
 
 
 def load_constellation(source: str | Path | dict) -> ConstellationConfig:
@@ -228,8 +240,13 @@ def load_constellation(source: str | Path | dict) -> ConstellationConfig:
     if isinstance(source, dict):
         config = adapter.validate_python(source)
     else:
-        data = yaml.safe_load(Path(source).read_text())
+        source_path = Path(source)
+        data = yaml.safe_load(source_path.read_text())
         config = adapter.validate_python(data)
+        if isinstance(config, TLEConstellation):
+            tle_path = Path(config.tle_file)
+            if not tle_path.is_absolute():
+                config.tle_file = str(source_path.parent / tle_path)
     resolve_constellation_terminals(config)
     return config
 
@@ -485,9 +502,108 @@ def expand_explicit(config: ExplicitConstellation) -> list[SatelliteNode]:
     return satellites
 
 
+def _elements_from_tle_lines(line_1: str, line_2: str) -> OrbitalElements:
+    """Build approximate circular elements for non-authoritative metadata.
+
+    SGP4 propagation uses the original TLE lines. These elements exist only for
+    legacy code paths and ephemeris summaries that still expect circular
+    `OrbitalElements` on `SatelliteNode`; they are not used as physics
+    authority for `orbit.propagator: sgp4-tle`.
+    """
+    if not line_1.startswith("1 ") or not line_2.startswith("2 "):
+        raise ValueError("TLE records must contain line 1 followed by line 2")
+
+    inclination_deg = float(line_2[8:16])
+    raan_deg = float(line_2[17:25])
+    eccentricity = float(f"0.{line_2[26:33].strip()}")
+    mean_anomaly_rad = math.radians(float(line_2[43:51]))
+    mean_motion_rev_day = float(line_2[52:63])
+    mean_motion_rad_s = mean_motion_rev_day * 2.0 * math.pi / 86400.0
+    semi_major_axis_km = (EARTH_MU / (mean_motion_rad_s**2)) ** (1.0 / 3.0)
+
+    # Convert mean anomaly to true anomaly for a closer metadata summary. This
+    # does not make the circular element model authoritative for TLE sessions.
+    eccentric_anomaly = mean_anomaly_rad
+    for _ in range(8):
+        eccentric_anomaly -= (
+            eccentric_anomaly - eccentricity * math.sin(eccentric_anomaly) - mean_anomaly_rad
+        ) / (1.0 - eccentricity * math.cos(eccentric_anomaly))
+    true_anomaly_rad = math.atan2(
+        math.sqrt(1.0 - eccentricity**2) * math.sin(eccentric_anomaly),
+        math.cos(eccentric_anomaly) - eccentricity,
+    )
+
+    return OrbitalElements(
+        semi_major_axis_km=semi_major_axis_km,
+        inclination_rad=math.radians(inclination_deg),
+        raan_rad=math.radians(raan_deg),
+        true_anomaly_rad=true_anomaly_rad,
+    )
+
+
+def _read_tle_records(path: Path) -> list[tuple[str | None, str, str]]:
+    """Read 2-line or 3-line TLE records from a file."""
+    if not path.exists():
+        raise FileNotFoundError(f"TLE file not found: {path}")
+
+    lines = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+    records: list[tuple[str | None, str, str]] = []
+    idx = 0
+    while idx < len(lines):
+        name: str | None = None
+        if lines[idx].startswith("1 "):
+            line_1 = lines[idx]
+            idx += 1
+        else:
+            name = lines[idx]
+            idx += 1
+            if idx >= len(lines) or not lines[idx].startswith("1 "):
+                raise ValueError(f"TLE name {name!r} is not followed by line 1")
+            line_1 = lines[idx]
+            idx += 1
+
+        if idx >= len(lines) or not lines[idx].startswith("2 "):
+            raise ValueError(f"TLE line 1 is not followed by line 2: {line_1!r}")
+        line_2 = lines[idx]
+        idx += 1
+        validate_tle_pair(line_1, line_2)
+        records.append((name, line_1, line_2))
+
+    return records
+
+
 def expand_tle(config: TLEConstellation) -> list[SatelliteNode]:
-    """Expand TLE constellation — not yet implemented."""
-    raise NotImplementedError("TLE constellation expansion not yet implemented")
+    """Expand a TLE constellation into SGP4-backed satellite nodes."""
+    satellites: list[SatelliteNode] = []
+    records = _read_tle_records(Path(config.tle_file))
+    if config.filter and config.filter.norad_ids is not None:
+        allowed = set(config.filter.norad_ids)
+        records = [record for record in records if tle_norad_id(record[1]) in allowed]
+    if config.filter and config.filter.max_count is not None:
+        records = records[: config.filter.max_count]
+    if not records:
+        raise ValueError(f"TLE constellation {config.name!r} selected zero satellites")
+
+    for slot, (_name, line_1, line_2) in enumerate(records):
+        isl_terminals, ground_terminals = _terminals_for_node(config, 0, slot)
+        isl_count = sum(t.count for t in isl_terminals)
+        gnd_count = sum(t.count for t in ground_terminals)
+        satellites.append(
+            SatelliteNode(
+                plane=0,
+                slot=slot,
+                elements=_elements_from_tle_lines(line_1, line_2),
+                isl_terminal_count=isl_count,
+                ground_terminal_count=gnd_count,
+                isl_terminals=isl_terminals,
+                ground_terminals=ground_terminals,
+                tle_line_1=line_1,
+                tle_line_2=line_2,
+                norad_id=tle_norad_id(line_1),
+            )
+        )
+
+    return satellites
 
 
 def expand_constellation(config: ConstellationConfig) -> list[SatelliteNode]:

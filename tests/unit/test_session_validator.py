@@ -19,6 +19,7 @@ from nodalarc.models.constellation import (
     ParametricConstellation,
     PlaneParams,
     TerminalConfig,
+    TLEConstellation,
 )
 from nodalarc.models.events import ValidationResult
 from nodalarc.models.ground_station import (
@@ -27,10 +28,12 @@ from nodalarc.models.ground_station import (
     GroundTerminalDef,
 )
 from nodalarc.models.session import (
+    OrbitConfig,
     PlacementConfig,
     RoutingConfig,
     SessionConfig,
     SessionMeta,
+    SimulationConfig,
     TimeConfig,
 )
 from nodalarc.orbital import elements_from_params
@@ -42,6 +45,9 @@ from nodalarc.session_validator import (
 from nodalarc.stack_resolver import ResolvedStack, resolve_stack
 
 from tests.conftest import CONFIGS_DIR
+
+ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
+ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 
 # ---------------------------------------------------------------------------
 # Helpers — build minimal valid models for testing
@@ -185,6 +191,52 @@ def _make_resolved_stack(
     return resolve_stack("isis", ["traffic-engineering"])
 
 
+def _make_tle_constellation() -> TLEConstellation:
+    return TLEConstellation(
+        mode="tle",
+        name="sample-tle",
+        tle_file="tests/fixtures/tles/sample.tle",
+        default_terminals=TerminalConfig(
+            isl=[
+                IslTerminal(
+                    type="optical",
+                    count=2,
+                    max_range_km=5000.0,
+                    bandwidth_mbps=100000.0,
+                    max_tracking_rate_deg_s=5.0,
+                ),
+            ],
+            ground=[GroundTerminal(type="rf", count=1, bandwidth_mbps=1000.0)],
+        ),
+    )
+
+
+def _make_sgp4_session(start_time: str = "2021-03-16T12:15:00+00:00") -> SessionConfig:
+    session = _make_session()
+    return session.model_copy(
+        update={
+            "simulation": SimulationConfig(schema_version=2, fidelity="sgp4-tle"),
+            "orbit": OrbitConfig(propagator="sgp4-tle", tle_max_age_days=2.0),
+            "time": TimeConfig(start_time=start_time, step_seconds=1),
+        }
+    )
+
+
+def _make_tle_satellites() -> list[SatelliteNode]:
+    return [
+        SatelliteNode(
+            plane=0,
+            slot=0,
+            elements=elements_from_params(420.0, 51.6, 21.5, 21.8),
+            isl_terminal_count=2,
+            ground_terminal_count=1,
+            tle_line_1=ISS_TLE_LINE_1,
+            tle_line_2=ISS_TLE_LINE_2,
+            norad_id=25544,
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
@@ -212,6 +264,56 @@ class TestValidSession:
         assert errors == [], f"Unexpected errors: {errors}"
         # Warnings are OK but no errors
         # (W001 won't fire because our station has explicit terminals)
+
+
+class TestPhysicsSourceValidation:
+    def test_sgp4_requires_tle_constellation_source(self):
+        results = validate_session_readiness(
+            _make_sgp4_session(),
+            _make_constellation(),
+            _make_satellites(count=1),
+            _make_gs_file(),
+            _make_resolved_stack(),
+        )
+
+        assert any(r.level == "error" and r.code == "E008" for r in results)
+        assert any("require a TLE-backed constellation" in r.message for r in results)
+
+    def test_tle_constellation_requires_sgp4_propagator(self):
+        results = validate_session_readiness(
+            _make_session(),
+            _make_tle_constellation(),
+            _make_tle_satellites(),
+            _make_gs_file(),
+            _make_resolved_stack(),
+        )
+
+        assert any(r.level == "error" and r.code == "E008" for r in results)
+        assert any("must not be approximated" in r.message for r in results)
+
+    def test_sgp4_rejects_stale_tle(self):
+        results = validate_session_readiness(
+            _make_sgp4_session(start_time="2026-05-10T00:00:00+00:00"),
+            _make_tle_constellation(),
+            _make_tle_satellites(),
+            _make_gs_file(),
+            _make_resolved_stack(),
+        )
+
+        assert any(r.level == "error" and r.code == "E008" for r in results)
+        assert any("TLE age exceeds" in r.message for r in results)
+
+    def test_sgp4_accepts_fresh_tle(self):
+        results = validate_session_readiness(
+            _make_sgp4_session(),
+            _make_tle_constellation(),
+            _make_tle_satellites(),
+            _make_gs_file(),
+            _make_resolved_stack(),
+        )
+
+        errors = [r for r in results if r.level == "error"]
+        assert errors == []
 
 
 # ---------------------------------------------------------------------------

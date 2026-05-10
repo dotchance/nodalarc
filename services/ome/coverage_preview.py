@@ -94,7 +94,7 @@ def compute_coverage_preview(
     vis_params = _extract_visibility_params(constellation, gs_file)
 
     # Run timeline computation
-    events, _, _, _, _ = precompute_timeline_window(
+    window = precompute_timeline_window(
         satellites=satellites,
         addressing=addressing,
         gs_file=gs_file,
@@ -104,6 +104,7 @@ def compute_coverage_preview(
         step_seconds=_PREVIEW_STEP_SECONDS,
         **vis_params,
     )
+    events = window.events
 
     elapsed = time.monotonic() - t0
     log.info(

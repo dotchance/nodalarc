@@ -22,6 +22,7 @@ from pathlib import Path
 import yaml
 from nodalarc.constellation_loader import (
     expand_constellation,
+    isl_terminal_for_interface,
     load_constellation,
     load_ground_stations,
 )
@@ -32,7 +33,7 @@ from nodalarc.models.addressing import (
     topology_summary,
     unique_isl_pairs,
 )
-from nodalarc.models.constellation import ParametricConstellation
+from nodalarc.models.constellation import ParametricConstellation, TLEConstellation
 from nodalarc.models.coverage import (
     CoveragePreviewResult,
     GsPreview,
@@ -101,6 +102,9 @@ def compute_coverage_preview(
         neighbors=neighbors,
         epoch_unix=0.0,
         duration_s=period,
+        propagator_id="sgp4-tle"
+        if isinstance(constellation, TLEConstellation)
+        else "keplerian-circular",
         step_seconds=_PREVIEW_STEP_SECONDS,
         **vis_params,
     )
@@ -224,24 +228,12 @@ def _load_constellation(source, satellite_type_override):
 def _extract_visibility_params(constellation, gs_file) -> dict:
     """Extract OME visibility parameters from resolved constellation."""
     params = {
-        "max_range_km": 5016.0,
-        "max_tracking_rate_deg_s": 3.0,
-        "field_of_regard_deg": 360.0,
         "polar_seam_enabled": False,
         "latitude_threshold_deg": 70.0,
-        "default_min_elevation_deg": 25.0,
     }
-    if isinstance(constellation, ParametricConstellation):
-        if constellation.default_terminals and constellation.default_terminals.isl:
-            isl = constellation.default_terminals.isl[0]
-            params["max_range_km"] = isl.max_range_km
-            params["max_tracking_rate_deg_s"] = isl.max_tracking_rate_deg_s
-            params["field_of_regard_deg"] = isl.field_of_regard_deg
-        if constellation.polar_seam:
-            params["polar_seam_enabled"] = constellation.polar_seam.enabled
-            params["latitude_threshold_deg"] = constellation.polar_seam.latitude_threshold_deg
-    if gs_file and gs_file.default_min_elevation_deg:
-        params["default_min_elevation_deg"] = gs_file.default_min_elevation_deg
+    if isinstance(constellation, ParametricConstellation) and constellation.polar_seam:
+        params["polar_seam_enabled"] = constellation.polar_seam.enabled
+        params["latitude_threshold_deg"] = constellation.polar_seam.latitude_threshold_deg
     return params
 
 
@@ -374,9 +366,6 @@ def _scan_isl_failure_reasons(
     sat_map = {addressing.sat_id(s.plane, s.slot): s for s in satellites}
     sample_times = [period * i / _FAILURE_SCAN_SAMPLES for i in range(_FAILURE_SCAN_SAMPLES)]
 
-    max_range = vis_params["max_range_km"]
-    max_tracking = vis_params["max_tracking_rate_deg_s"]
-    fov = vis_params["field_of_regard_deg"]
     seam_enabled = vis_params["polar_seam_enabled"]
     lat_threshold = vis_params["latitude_threshold_deg"]
 
@@ -399,6 +388,35 @@ def _scan_isl_failure_reasons(
                 pos_a, vel_a, geo_a = positions[nid]
                 pos_b, vel_b, geo_b = positions[na.peer_node_id]
 
+                reverse = next(
+                    (
+                        assignment
+                        for assignment in by_node.get(na.peer_node_id, ())
+                        if assignment.peer_node_id == nid
+                    ),
+                    None,
+                )
+                if reverse is None:
+                    raise ValueError(
+                        "Coverage preview cannot evaluate ISL feasibility for "
+                        f"{pair}: missing reverse neighbor assignment"
+                    )
+                term_a = isl_terminal_for_interface(sat_map[nid].isl_terminals, na.interface)
+                term_b = isl_terminal_for_interface(
+                    sat_map[na.peer_node_id].isl_terminals,
+                    reverse.interface,
+                )
+                if str(term_a.type) != str(term_b.type):
+                    raise ValueError(
+                        "Coverage preview cannot represent mixed terminal-type ISL "
+                        f"{pair}: {term_a.type!r} vs {term_b.type!r}"
+                    )
+                max_range = min(float(term_a.max_range_km), float(term_b.max_range_km))
+                max_tracking = min(
+                    float(term_a.max_tracking_rate_deg_s),
+                    float(term_b.max_tracking_rate_deg_s),
+                )
+                fov = min(float(term_a.field_of_regard_deg), float(term_b.field_of_regard_deg))
                 is_cross = na.link_type == "cross_plane_isl"
                 result = check_isl_visibility(
                     pos_a,

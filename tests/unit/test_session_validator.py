@@ -33,7 +33,6 @@ from nodalarc.models.session import (
     RoutingConfig,
     SessionConfig,
     SessionMeta,
-    SimulationConfig,
     TimeConfig,
 )
 from nodalarc.orbital import elements_from_params
@@ -68,6 +67,7 @@ def _make_session(
         session=SessionMeta(name="test-session"),
         constellation="configs/constellations/demo-36.yaml",
         ground_stations="configs/ground-stations/sets/demo.yaml",
+        orbit=OrbitConfig(propagator="keplerian-circular"),
         routing=RoutingConfig(
             protocol=protocol,
             extensions=extensions or [],
@@ -215,7 +215,6 @@ def _make_sgp4_session(start_time: str = "2021-03-16T12:15:00+00:00") -> Session
     session = _make_session()
     return session.model_copy(
         update={
-            "simulation": SimulationConfig(schema_version=2, fidelity="sgp4-tle"),
             "orbit": OrbitConfig(propagator="sgp4-tle", tle_max_age_days=2.0),
             "time": TimeConfig(start_time=start_time, step_seconds=1),
         }

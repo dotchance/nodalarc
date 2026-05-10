@@ -59,6 +59,7 @@ class TestComputeStepMatchesWindow:
             neighbors=neighbors,
             epoch_unix=epoch_unix,
             duration_s=n_steps * step_seconds,
+            propagator_id=session.orbit.propagator,
             step_seconds=step_seconds,
         )
         window_events = window.events
@@ -69,6 +70,7 @@ class TestComputeStepMatchesWindow:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -109,6 +111,7 @@ class TestComputeStepMatchesWindow:
             neighbors=neighbors,
             epoch_unix=epoch_unix,
             duration_s=n_steps * step_seconds,
+            propagator_id=session.orbit.propagator,
             step_seconds=step_seconds,
         )
 
@@ -117,6 +120,7 @@ class TestComputeStepMatchesWindow:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -168,6 +172,7 @@ class TestComputeStepMatchesWindow:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -202,6 +207,7 @@ class TestComputeStepMatchesWindow:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
         isl_state: dict = {}
         gs_state: dict = {}

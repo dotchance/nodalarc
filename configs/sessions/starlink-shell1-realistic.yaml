@@ -4,9 +4,8 @@ constellation: configs/constellations/starlink-shell1-220.yaml
 ground_stations: configs/ground-stations/sets/shell1-realistic.yaml
 simulation:
   schema_version: 2
-  fidelity: synthetic-keplerian
 orbit:
-  propagator: keplerian-circular
+  propagator: j2-mean-elements
 scheduling:
   ground:
     policy: highest-elevation

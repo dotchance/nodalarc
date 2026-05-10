@@ -5,6 +5,7 @@
 from datetime import UTC, datetime
 
 from nodalarc.models.events import SchedulingCheckpoint, TeardownEntry
+from nodalarc.scheduling_checkpoint import decode_retained_scheduling_checkpoint
 
 
 def _teardown(
@@ -160,3 +161,27 @@ def test_checkpoint_frozen():
         assert False, "Should have raised"
     except Exception:
         pass
+
+
+def test_incompatible_retained_checkpoint_decodes_as_clean_start():
+    """Old retained checkpoint schemas must not crash a branch deployment."""
+    import gzip
+    import json
+
+    old_schema = {
+        "sim_time": "2025-01-01T00:00:00+00:00",
+        "epoch_id": 0,
+        "snapshot_seq": 99,
+        "step": 42,
+        "associations": {"gs-london": "sat-001"},
+        "pending_teardowns": {
+            "gs-london:sat-099": {
+                "remaining_ticks": 2,
+                "gs_id": "gs-london",
+                "sat_id": "sat-099",
+            }
+        },
+    }
+
+    payload = gzip.compress(json.dumps(old_schema).encode())
+    assert decode_retained_scheduling_checkpoint(payload) is None

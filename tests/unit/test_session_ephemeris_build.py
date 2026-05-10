@@ -46,6 +46,7 @@ def _load_test_ctx():
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
+        propagator_id=session.orbit.propagator,
     )
     return ctx, sats, gs_file
 
@@ -54,7 +55,7 @@ EPOCH = 1735689600.0  # 2025-01-01T00:00:00 UTC
 
 
 class TestBuildSessionEphemeris:
-    def test_satellite_mapped_to_keplerian(self):
+    def test_satellite_mapped_to_configured_mean_element_propagator(self):
         ctx, sats, _ = _load_test_ctx()
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
         # First satellite should be P00S00
@@ -64,7 +65,7 @@ class TestBuildSessionEphemeris:
         assert sat.plane == 0
         assert sat.slot == 0
         assert sat.altitude_km > 160  # must be a valid LEO altitude
-        assert sat.propagator == "keplerian-circular"
+        assert sat.propagator == ctx.propagator_id
 
     def test_j2_ephemeris_preserves_propagator_identity(self):
         ctx, sats, gs_file = _load_test_ctx()
@@ -176,6 +177,7 @@ class TestLinkStateSnapshotEpochId:
             isl_state={},
             gs_state={},
             interface_map={},
+            bandwidth_map={},
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             seq=1,
             interval_s=5.0,
@@ -188,6 +190,7 @@ class TestLinkStateSnapshotEpochId:
             isl_state={},
             gs_state={},
             interface_map={},
+            bandwidth_map={},
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
             seq=1,
             interval_s=5.0,

@@ -136,6 +136,7 @@ def test_build_node_positions_preserves_satellite_and_ground_states():
         addressing=addressing,
         epoch_unix=1735689600.0,
         dt=0.0,
+        propagator_id="keplerian-circular",
     )
     gs_geo = GeoPosition(64.1466, -21.9426, 0.05)
     gs_ecef = geodetic_to_ecef(gs_geo)

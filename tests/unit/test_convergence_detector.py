@@ -10,13 +10,12 @@ Tests:
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from nodalarc.models.link_events import LinkDown, LinkUp
-from nodalarc.models.session import ConvergenceConfig
-
 from measurement.convergence_detector import (
     _find_affected_flows,
     measure_convergence,
 )
+from nodalarc.models.link_events import LinkDown, LinkUp
+from nodalarc.models.session import ConvergenceConfig
 
 
 def _make_link_down(node_a="sat-P00S00", node_b="sat-P00S01"):
@@ -25,6 +24,7 @@ def _make_link_down(node_a="sat-P00S00", node_b="sat-P00S01"):
         wall_time=datetime.now(UTC),
         node_a=node_a,
         node_b=node_b,
+        link_type="isl",
         interface_a="isl0",
         interface_b="isl0",
         reason="vis_lost",
@@ -37,10 +37,12 @@ def _make_link_up(node_a="sat-P00S00", node_b="sat-P00S01"):
         wall_time=datetime.now(UTC),
         node_a=node_a,
         node_b=node_b,
+        link_type="isl",
         interface_a="isl0",
         interface_b="isl0",
         latency_ms=10.0,
         bandwidth_mbps=1000,
+        range_km=2997.92458,
         reason="vis_gained",
     )
 

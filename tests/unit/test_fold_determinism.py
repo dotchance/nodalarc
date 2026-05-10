@@ -54,6 +54,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             epoch_unix=epoch_unix,
             duration_s=n_steps * step_seconds,
+            propagator_id=session.orbit.propagator,
             step_seconds=step_seconds,
         )
         window_events = window.events
@@ -63,6 +64,7 @@ class TestFoldDeterminism:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -102,6 +104,7 @@ class TestFoldDeterminism:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
 
         # Run 10 ticks to build up association state
@@ -171,6 +174,7 @@ class TestFoldDeterminism:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
         seed_isl: dict = {}
         seed_gs: dict = {}
@@ -198,6 +202,7 @@ class TestFoldDeterminism:
             neighbors=neighbors,
             epoch_unix=seed_epoch,
             duration_s=n_steps * step_seconds,
+            propagator_id=session.orbit.propagator,
             step_seconds=step_seconds,
             initial_isl_state=dict(seed_isl),
             initial_gs_state=dict(seed_gs),
@@ -253,6 +258,7 @@ class TestFoldDeterminism:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
         )
 
         # --- Path A: continuous 60 ticks ---

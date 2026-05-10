@@ -4,6 +4,7 @@ Verifies destination node ID resolves to first IPv4 from terrestrial prefix.
 """
 
 import pytest
+from measurement.flow_manager import resolve_dst_ip
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
@@ -15,13 +16,12 @@ from nodalarc.models.session import (
     AddressingConfig,
     AreaAssignmentConfig,
     ConvergenceConfig,
+    OrbitConfig,
     RoutingConfig,
     SessionConfig,
     SessionMeta,
     TimeConfig,
 )
-
-from measurement.flow_manager import resolve_dst_ip
 
 
 def _make_session() -> SessionConfig:
@@ -29,6 +29,7 @@ def _make_session() -> SessionConfig:
         session=SessionMeta(name="test"),
         constellation="configs/constellations/custom-example.yaml",
         ground_stations="configs/ground-stations/sets/us-conus.yaml",
+        orbit=OrbitConfig(propagator="keplerian-circular"),
         addressing=AddressingConfig(),
         routing=RoutingConfig(
             protocol="isis",

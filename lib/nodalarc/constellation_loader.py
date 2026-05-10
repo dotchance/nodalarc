@@ -35,11 +35,20 @@ from nodalarc.models.ground_station import (
     GroundTerminalDef,
     TerrestrialPrefixTemplate,
 )
-from nodalarc.models.satellite_type import SatelliteTypeConfig
+from nodalarc.models.satellite_type import (
+    GroundTerminalDef as SatelliteGroundTerminalDef,
+)
+from nodalarc.models.satellite_type import (
+    IslTerminalDef,
+    SatelliteTypeConfig,
+)
 from nodalarc.orbital import OrbitalElements, elements_from_params
 from nodalarc.tle import tle_norad_id, validate_tle_pair
 
 adapter = TypeAdapter(ConstellationConfig)
+
+IslTerminalLike = IslTerminal | IslTerminalDef
+GroundTerminalLike = GroundTerminal | SatelliteGroundTerminalDef
 
 # Default search paths for config directories
 _SAT_TYPE_DIR: Path | None = None
@@ -270,10 +279,9 @@ def load_ground_station_individual(name: str) -> GroundStationConfig:
         station = GroundStationConfig.model_validate(data)
     if not station.terminals:
         log.warning(
-            "Ground station '%s' has no terminals defined — using set/code defaults. "
-            "Add a terminals: block to %s to make the model self-contained.",
+            "Ground station '%s' has no terminals defined. A containing station set "
+            "must provide explicit default_terminals or the session will fail validation.",
             name,
-            path,
         )
     return station
 
@@ -290,11 +298,8 @@ def load_ground_station_set(name: str) -> GroundStationSetConfig:
     return GroundStationSetConfig.model_validate(data)
 
 
-# Default terminal/elevation/policy values for individual station files
-# (stations in sets use the set's defaults; individual stations need sensible fallbacks)
-_DEFAULT_GS_TERMINALS = [
-    GroundTerminalDef(type="optical", count=1, bandwidth_mbps=1000, tracking_capacity=1)
-]
+# Default elevation/policy values for individual station files
+# (stations in sets use the set's defaults; individual stations need schema defaults)
 _DEFAULT_MIN_ELEVATION_DEG = 25.0
 _DEFAULT_SCHEDULING_POLICY = "highest-elevation"
 
@@ -314,9 +319,17 @@ def _build_gs_file_from_stations(
     defaults; per-station values override set-level defaults.
     """
     return GroundStationFile(
-        default_terminals=default_terminals or _DEFAULT_GS_TERMINALS,
-        default_min_elevation_deg=default_min_elevation_deg or _DEFAULT_MIN_ELEVATION_DEG,
-        default_scheduling_policy=default_scheduling_policy or _DEFAULT_SCHEDULING_POLICY,
+        default_terminals=default_terminals or [],
+        default_min_elevation_deg=(
+            default_min_elevation_deg
+            if default_min_elevation_deg is not None
+            else _DEFAULT_MIN_ELEVATION_DEG
+        ),
+        default_scheduling_policy=(
+            default_scheduling_policy
+            if default_scheduling_policy is not None
+            else _DEFAULT_SCHEDULING_POLICY
+        ),
         default_terrestrial_prefixes=default_terrestrial_prefixes,
         stations=stations,
     )
@@ -402,26 +415,6 @@ def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStation
 
     # Legacy monolithic format
     return GroundStationFile.model_validate(data)
-
-
-def _resolve_default_terminals(config) -> tuple[int, int]:
-    """Resolve default terminal counts from satellite_type or inline default_terminals."""
-    if config.satellite_type is not None:
-        sat_type = load_satellite_type(config.satellite_type)
-        return _terminal_counts_from_sat_type(sat_type)
-    if config.default_terminals is not None:
-        return _terminal_counts_from_inline(config.default_terminals)
-    raise ValueError("Constellation must specify satellite_type or default_terminals")
-
-
-def _resolve_plane_override(ovr) -> tuple[int, int]:
-    """Resolve terminal counts from a plane override."""
-    if ovr.satellite_type is not None:
-        sat_type = load_satellite_type(ovr.satellite_type)
-        return _terminal_counts_from_sat_type(sat_type)
-    if ovr.terminals is not None:
-        return _terminal_counts_from_inline(ovr.terminals)
-    raise ValueError("PlaneOverride must specify satellite_type or terminals")
 
 
 def expand_parametric(config: ParametricConstellation) -> list[SatelliteNode]:
@@ -640,7 +633,7 @@ def _terminals_for_node(
     config: ConstellationConfig,
     plane: int,
     slot: int,
-) -> tuple[list, list]:
+) -> tuple[list[IslTerminalLike], list[GroundTerminalLike]]:
     """Return (isl_terminals, ground_terminals) for the satellite at (plane, slot).
 
     Resolves per-satellite overrides (ExplicitConstellation.satellites[*].satellite_type),
@@ -683,7 +676,10 @@ def _terminals_for_node(
     raise ValueError(f"Satellite at plane={plane}, slot={slot} has no resolvable terminal config")
 
 
-def isl_terminal_bandwidth_mbps(isl_terminals: list, interface_name: str) -> float:
+def isl_terminal_bandwidth_mbps(
+    isl_terminals: list[IslTerminalLike] | tuple[IslTerminalLike, ...],
+    interface_name: str,
+) -> float:
     """Return the ISL terminal bandwidth for the given interface index.
 
     Interface naming maps to the flattened terminal index: `isl0` is the
@@ -716,7 +712,10 @@ def isl_terminal_bandwidth_mbps(isl_terminals: list, interface_name: str) -> flo
     )
 
 
-def isl_terminal_for_interface(isl_terminals: list | tuple, interface_name: str):
+def isl_terminal_for_interface(
+    isl_terminals: list[IslTerminalLike] | tuple[IslTerminalLike, ...],
+    interface_name: str,
+) -> IslTerminalLike:
     """Return the terminal block that owns an ISL interface.
 
     Interface names map to flattened terminal slots across ordered terminal
@@ -743,7 +742,9 @@ def isl_terminal_for_interface(isl_terminals: list | tuple, interface_name: str)
     )
 
 
-def satellite_ground_bandwidth_mbps(ground_terminals: list) -> float:
+def satellite_ground_bandwidth_mbps(
+    ground_terminals: list[GroundTerminalLike] | tuple[GroundTerminalLike, ...],
+) -> float:
     """Return the minimum bandwidth across a satellite's ground terminals.
 
     Satellites may declare multiple ground terminal types (optical + RF, for

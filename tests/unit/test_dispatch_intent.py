@@ -37,6 +37,7 @@ def _isl_info() -> ActiveLinkInfo:
         "isl1",
         3.0,
         1000.0,
+        link_type="isl",
         range_km=OME_RANGE_KM,
         authority_sim_time=SIM,
         authority_source="test",

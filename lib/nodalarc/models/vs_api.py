@@ -52,6 +52,31 @@ class LinkState(BaseModel):
     interface_b: str = ""
 
 
+class LinkDecisionTrace(BaseModel):
+    """Why an active link exists and which authority produced its values."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_a: str
+    node_b: str
+    link_type: str
+    state: str
+    interface_a: str
+    interface_b: str
+    reason: str | None = None
+    geometry_authority: str
+    authority_source: str
+    authority_sim_time: datetime
+    authority_sequence: int | None = None
+    authority_age_ms: float | None = None
+    range_km: float
+    orbital_one_way_ms: float
+    substrate_rtt_ms: float | None = None
+    substrate_one_way_ms: float | None = None
+    netem_one_way_ms: float | None = None
+    rtt_to_one_way_policy: str | None = None
+
+
 class TracedPath(BaseModel):
     """Forwarding path trace for a traffic flow."""
 

@@ -32,10 +32,15 @@ from scheduler.pod_locator import PodLocationMap
 
 
 def _make_vis(
-    node_a: str, node_b: str, visible: bool, scheduled: bool, link_type: str = "isl"
+    node_a: str,
+    node_b: str,
+    visible: bool,
+    scheduled: bool,
+    link_type: str = "isl",
+    sim_time: datetime | None = None,
 ) -> VisibilityEvent:
     return VisibilityEvent(
-        sim_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+        sim_time=sim_time or datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
         node_a=node_a,
         node_b=node_b,
         visible=visible,
@@ -54,6 +59,7 @@ def _make_link_state(
     admin: AdminState = AdminState.UP,
     carrier: CarrierState = CarrierState.UP,
     link_type: str = "isl",
+    sim_time: datetime | None = None,
 ) -> LinkState:
     return LinkState(
         node_a=node_a,
@@ -67,7 +73,7 @@ def _make_link_state(
         latency_ms=3.0 if carrier == CarrierState.UP else None,
         bandwidth_mbps=1000.0 if carrier == CarrierState.UP else None,
         link_type=link_type,
-        sim_time=datetime(2026, 1, 1, tzinfo=UTC),
+        sim_time=sim_time or datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 
@@ -225,6 +231,110 @@ class TestGsDeallocationSnapshot:
         # Old snapshot ignored — returns None, active_links unchanged
         assert desired is None
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
+
+
+class TestSnapshotDominatesStaleVisibility:
+    """Delayed VisibilityEvents must not override newer snapshot authority."""
+
+    def test_event_older_than_snapshot_is_ignored(self):
+        d = _make_dispatcher(
+            {
+                ("gs-ashburn", "sat-P00S00"): ("term0", "gnd0"),
+                ("gs-ashburn", "sat-P00S01"): ("term0", "gnd0"),
+            }
+        )
+        snapshot_time = datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)
+        snapshot = LinkStateSnapshot(
+            sim_time=snapshot_time,
+            snapshot_seq=1,
+            links=(
+                _make_link_state(
+                    "gs-ashburn",
+                    "sat-P00S00",
+                    link_type="ground",
+                    sim_time=snapshot_time,
+                ),
+            ),
+            interval_s=5.0,
+        )
+        d._build_desired_from_snapshot(snapshot)
+
+        stale_event = _make_vis(
+            "gs-ashburn",
+            "sat-P00S01",
+            True,
+            True,
+            link_type="ground",
+            sim_time=datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC),
+        )
+        desired = d._apply_events_to_desired([stale_event])
+
+        assert ("gs-ashburn", "sat-P00S00") in desired
+        assert ("gs-ashburn", "sat-P00S01") not in desired
+
+    def test_event_at_snapshot_sim_time_is_ignored(self):
+        d = _make_dispatcher()
+        snapshot_time = datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)
+        snapshot = LinkStateSnapshot(
+            sim_time=snapshot_time,
+            snapshot_seq=1,
+            links=(
+                _make_link_state(
+                    "sat-P00S00",
+                    "sat-P00S01",
+                    sim_time=snapshot_time,
+                ),
+            ),
+            interval_s=5.0,
+        )
+        d._build_desired_from_snapshot(snapshot)
+
+        stale_removal = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            False,
+            False,
+            sim_time=snapshot_time,
+        )
+        desired = d._apply_events_to_desired([stale_removal])
+
+        assert ("sat-P00S00", "sat-P00S01") in desired
+
+    def test_event_newer_than_snapshot_can_advance_desired_state(self):
+        d = _make_dispatcher(
+            {
+                ("gs-ashburn", "sat-P00S00"): ("term0", "gnd0"),
+                ("gs-ashburn", "sat-P00S01"): ("term0", "gnd0"),
+            }
+        )
+        snapshot_time = datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)
+        snapshot = LinkStateSnapshot(
+            sim_time=snapshot_time,
+            snapshot_seq=1,
+            links=(
+                _make_link_state(
+                    "gs-ashburn",
+                    "sat-P00S00",
+                    link_type="ground",
+                    sim_time=snapshot_time,
+                ),
+            ),
+            interval_s=5.0,
+        )
+        d._build_desired_from_snapshot(snapshot)
+
+        newer_event = _make_vis(
+            "gs-ashburn",
+            "sat-P00S01",
+            True,
+            True,
+            link_type="ground",
+            sim_time=datetime(2026, 1, 1, 0, 0, 11, tzinfo=UTC),
+        )
+        desired = d._apply_events_to_desired([newer_event])
+
+        assert ("gs-ashburn", "sat-P00S00") in desired
+        assert ("gs-ashburn", "sat-P00S01") in desired
 
 
 class TestGsDeallocationDispatchBatch:

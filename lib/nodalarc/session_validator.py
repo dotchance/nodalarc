@@ -11,11 +11,13 @@ from __future__ import annotations
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ParametricConstellation,
+    TLEConstellation,
 )
 from nodalarc.models.events import ValidationReport, ValidationResult
 from nodalarc.models.ground_station import GroundStationFile
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.session import SessionConfig, resolve_session_epoch
 from nodalarc.stack_resolver import ResolvedStack
+from nodalarc.tle import tle_age_days
 
 # Canonical list of valid scheduling policies. Checked by E005.
 VALID_SCHEDULING_POLICIES = frozenset(
@@ -53,6 +55,7 @@ def validate_session_readiness(
     results.extend(_check_e004(satellites, resolved_stack))
     results.extend(_check_e005(ground_stations))
     results.extend(_check_e007(session))
+    results.extend(_check_e008(session, constellation, satellites))
 
     results.extend(_check_w001(ground_stations))
     results.extend(_check_w002(ground_stations))
@@ -241,6 +244,105 @@ def _check_e007(session: SessionConfig) -> list[ValidationResult]:
                     "to be set, but it is None."
                 ),
                 remediation="Set placement.planes_per_group in the session YAML.",
+            )
+        )
+
+    return results
+
+
+def _check_e008(
+    session: SessionConfig,
+    constellation: ConstellationConfig,
+    satellites: list,
+) -> list[ValidationResult]:
+    """E008: Orbit propagator and constellation source must be coherent."""
+    results: list[ValidationResult] = []
+    is_tle_constellation = isinstance(constellation, TLEConstellation)
+    is_sgp4 = session.orbit.propagator == "sgp4-tle"
+
+    if is_sgp4 and not is_tle_constellation:
+        results.append(
+            ValidationResult(
+                level="error",
+                code="E008",
+                message=(
+                    "orbit.propagator is 'sgp4-tle' but constellation.mode is not 'tle'. "
+                    "SGP4 sessions require a TLE-backed constellation source."
+                ),
+                remediation="Use a constellation with mode: tle, or choose a non-SGP4 propagator.",
+            )
+        )
+
+    if is_tle_constellation and not is_sgp4:
+        results.append(
+            ValidationResult(
+                level="error",
+                code="E008",
+                message=(
+                    "constellation.mode is 'tle' but orbit.propagator is not 'sgp4-tle'. "
+                    "TLE sources must not be approximated by a lower-fidelity propagator."
+                ),
+                remediation="Set orbit.propagator and simulation.fidelity to 'sgp4-tle'.",
+            )
+        )
+
+    if not is_sgp4:
+        return results
+
+    max_age_days = session.orbit.tle_max_age_days
+    if max_age_days is None:
+        results.append(
+            ValidationResult(
+                level="error",
+                code="E008",
+                message="orbit.tle_max_age_days is required for SGP4/TLE sessions.",
+                remediation="Set orbit.tle_max_age_days to the accepted TLE age window.",
+            )
+        )
+        return results
+
+    missing_tle = [
+        f"P{sat.plane:02d}S{sat.slot:02d}"
+        for sat in satellites
+        if getattr(sat, "tle_line_1", None) is None or getattr(sat, "tle_line_2", None) is None
+    ]
+    if missing_tle:
+        results.append(
+            ValidationResult(
+                level="error",
+                code="E008",
+                message=(
+                    "SGP4/TLE propagator selected but expanded satellites are missing "
+                    f"TLE records: {', '.join(missing_tle[:5])}"
+                ),
+                remediation="Use a TLE constellation source for all SGP4 satellites.",
+            )
+        )
+        return results
+
+    sim_epoch_unix = resolve_session_epoch(session.time)
+    stale: list[str] = []
+    for sat in satellites:
+        age_days = tle_age_days(sat.tle_line_1, sim_epoch_unix)
+        if age_days > max_age_days:
+            stale.append(
+                f"P{sat.plane:02d}S{sat.slot:02d} "
+                f"NORAD {getattr(sat, 'norad_id', 'unknown')} age {age_days:.2f}d"
+            )
+
+    if stale:
+        results.append(
+            ValidationResult(
+                level="error",
+                code="E008",
+                message=(
+                    f"TLE age exceeds orbit.tle_max_age_days={max_age_days:g}: "
+                    f"{', '.join(stale[:5])}"
+                ),
+                remediation=(
+                    "Use fresher TLEs, set time.start_time near the TLE epoch, or explicitly "
+                    "increase orbit.tle_max_age_days if that error budget is acceptable."
+                ),
             )
         )
 

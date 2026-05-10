@@ -103,7 +103,7 @@ class SimulationConfig(BaseModel):
     """Simulation contract fields exposed to session YAML."""
 
     schema_version: int = 2
-    fidelity: Literal["synthetic-keplerian", "j2-mean-elements"] = "synthetic-keplerian"
+    fidelity: Literal["synthetic-keplerian", "j2-mean-elements", "sgp4-tle"] = "synthetic-keplerian"
 
     @field_validator("schema_version")
     @classmethod
@@ -116,7 +116,23 @@ class SimulationConfig(BaseModel):
 class OrbitConfig(BaseModel):
     """Orbit propagation model selection."""
 
-    propagator: Literal["keplerian-circular", "j2-mean-elements"] = "keplerian-circular"
+    propagator: Literal["keplerian-circular", "j2-mean-elements", "sgp4-tle"] = "keplerian-circular"
+    tle_max_age_days: float | None = None
+
+    @field_validator("tle_max_age_days")
+    @classmethod
+    def _positive_tle_age_window(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("orbit.tle_max_age_days must be > 0")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_tle_age_scope(self):
+        if self.propagator == "sgp4-tle" and self.tle_max_age_days is None:
+            raise ValueError("orbit.tle_max_age_days is required when propagator is 'sgp4-tle'")
+        if self.propagator != "sgp4-tle" and self.tle_max_age_days is not None:
+            raise ValueError("orbit.tle_max_age_days is only valid when propagator is 'sgp4-tle'")
+        return self
 
 
 class GroundSchedulingConfig(BaseModel):
@@ -334,6 +350,7 @@ class SessionConfig(BaseModel):
         expected = {
             "synthetic-keplerian": "keplerian-circular",
             "j2-mean-elements": "j2-mean-elements",
+            "sgp4-tle": "sgp4-tle",
         }[self.simulation.fidelity]
         if self.orbit.propagator != expected:
             raise ValueError(

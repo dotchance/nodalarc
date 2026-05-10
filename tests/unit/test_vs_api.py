@@ -12,6 +12,7 @@ from nodalarc.db.queries import (
     query_nearest_snapshot,
 )
 from nodalarc.db.schema import create_tables
+from nodalarc.models.events import EphemerisNodeTLE, SessionEphemeris
 from nodalarc.models.link_events import LinkUp
 from nodalarc.models.metrics import ConvergenceResult
 from nodalarc.models.vs_api import (
@@ -23,6 +24,10 @@ from nodalarc.models.vs_api import (
 )
 from nodalarc.nats_channels import STREAM_OME_EVENTS
 from vs_api.session_context import SessionContext, _link_key
+
+ISS_TLE_EPOCH = 1615896900.000275
+ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
+ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 
 
 def _make_provenance(**overrides):
@@ -365,6 +370,33 @@ class TestSessionContextInit:
         ctx = SessionContext.__new__(SessionContext)
         ctx._init_state_only()
         assert ctx.is_stale() is False
+
+
+class TestEphemerisPositionPropagation:
+    def test_tle_ephemeris_updates_satellite_position(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx.cached_ephemeris_obj = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime.fromtimestamp(ISS_TLE_EPOCH, UTC),
+            epoch_unix=ISS_TLE_EPOCH,
+            nodes={
+                "sat-P00S00": EphemerisNodeTLE(
+                    tle_line_1=ISS_TLE_LINE_1,
+                    tle_line_2=ISS_TLE_LINE_2,
+                    plane=0,
+                    slot=0,
+                    norad_id=25544,
+                )
+            },
+        )
+
+        ctx._propagate_positions_from_time(datetime.fromtimestamp(ISS_TLE_EPOCH, UTC).isoformat())
+
+        node = ctx.nodes["sat-P00S00"]
+        assert node.lat_deg == pytest.approx(44.4565, abs=1e-3)
+        assert node.lon_deg == pytest.approx(152.9363, abs=1e-3)
+        assert node.alt_km > 400.0
 
 
 class TestLinkDecisionTraceState:

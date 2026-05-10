@@ -18,10 +18,13 @@ from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.events import (
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
+    EphemerisNodeTLE,
     SessionEphemeris,
 )
 from nodalarc.models.session import SessionConfig
 from ome.event_stream import build_link_state_snapshot, build_session_ephemeris, build_step_context
+
+from tests.conftest import FIXTURES_DIR
 
 
 def _load_test_ctx():
@@ -61,6 +64,58 @@ class TestBuildSessionEphemeris:
         assert sat.plane == 0
         assert sat.slot == 0
         assert sat.altitude_km > 160  # must be a valid LEO altitude
+        assert sat.propagator == "keplerian-circular"
+
+    def test_j2_ephemeris_preserves_propagator_identity(self):
+        ctx, sats, gs_file = _load_test_ctx()
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=ctx.addressing,
+            gs_file=gs_file,
+            neighbors=frozenset(),
+            propagator_id="j2-mean-elements",
+        )
+        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
+        sat = eph.nodes["sat-P00S00"]
+        assert isinstance(sat, EphemerisNodeKeplerian)
+        assert sat.propagator == "j2-mean-elements"
+
+    def test_tle_satellite_mapped_to_tle_ephemeris(self):
+        cc = load_constellation(
+            {
+                "mode": "tle",
+                "name": "sample-tle",
+                "tle_file": str(FIXTURES_DIR / "tles/sample.tle"),
+                "filter": {"max_count": 1},
+                "default_terminals": {
+                    "isl": [
+                        {
+                            "type": "optical",
+                            "count": 2,
+                            "max_range_km": 5000,
+                            "bandwidth_mbps": 1000,
+                            "max_tracking_rate_deg_s": 3.0,
+                        }
+                    ],
+                    "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+                },
+            }
+        )
+        sats = expand_constellation(cc)
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=AddressingScheme(),
+            gs_file=None,
+            neighbors=frozenset(),
+            propagator_id="sgp4-tle",
+        )
+
+        eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
+        sat = eph.nodes["sat-P00S00"]
+        assert isinstance(sat, EphemerisNodeTLE)
+        assert sat.type == "tle"
+        assert sat.norad_id == 25544
+        assert sat.tle_line_1.startswith("1 25544")
 
     def test_ground_station_mapped_to_fixed(self):
         ctx, _, gs_file = _load_test_ctx()

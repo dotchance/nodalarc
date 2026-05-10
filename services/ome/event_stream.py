@@ -21,6 +21,7 @@ from nodalarc.models.events import (
     ClockTick,
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
+    EphemerisNodeTLE,
     NodePosition,
     SessionEphemeris,
 )
@@ -62,25 +63,40 @@ def build_session_ephemeris(
 ) -> SessionEphemeris:
     """Build SessionEphemeris from session context.
 
-    Maps satellites to EphemerisNodeKeplerian and ground stations to
-    EphemerisNodeFixed. Published once per epoch to NODALARC_SESSION.
+    Maps satellites to the ephemeris node type matching the selected
+    propagator and ground stations to EphemerisNodeFixed. Published once per
+    epoch to NODALARC_SESSION.
     """
     import math
 
     from nodalarc.constants import EARTH_RADIUS_KM
 
-    nodes: dict[str, EphemerisNodeKeplerian | EphemerisNodeFixed] = {}
+    nodes: dict[str, EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed] = {}
 
     for sat in ctx.satellites:
         node_id = ctx.addressing.sat_id(sat.plane, sat.slot)
-        nodes[node_id] = EphemerisNodeKeplerian(
-            altitude_km=sat.elements.semi_major_axis_km - EARTH_RADIUS_KM,
-            inclination_deg=math.degrees(sat.elements.inclination_rad),
-            raan_deg=math.degrees(sat.elements.raan_rad),
-            true_anomaly_deg=math.degrees(sat.elements.true_anomaly_rad),
-            plane=sat.plane,
-            slot=sat.slot,
-        )
+        if ctx.propagator_id == "sgp4-tle":
+            if sat.tle_line_1 is None or sat.tle_line_2 is None:
+                raise ValueError(
+                    f"Satellite {node_id} has no TLE lines; cannot build SGP4 ephemeris"
+                )
+            nodes[node_id] = EphemerisNodeTLE(
+                tle_line_1=sat.tle_line_1,
+                tle_line_2=sat.tle_line_2,
+                plane=sat.plane,
+                slot=sat.slot,
+                norad_id=sat.norad_id,
+            )
+        else:
+            nodes[node_id] = EphemerisNodeKeplerian(
+                propagator=ctx.propagator_id,
+                altitude_km=sat.elements.semi_major_axis_km - EARTH_RADIUS_KM,
+                inclination_deg=math.degrees(sat.elements.inclination_rad),
+                raan_deg=math.degrees(sat.elements.raan_rad),
+                true_anomaly_deg=math.degrees(sat.elements.true_anomaly_rad),
+                plane=sat.plane,
+                slot=sat.slot,
+            )
 
     for gs_id, (_ecef, geo) in ctx.gs_positions.items():
         nodes[gs_id] = EphemerisNodeFixed(

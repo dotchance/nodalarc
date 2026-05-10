@@ -33,7 +33,7 @@ from ome.ground_allocator import (
     MbbTeardownState,
     allocate_ground_links,
 )
-from ome.ground_visibility_engine import evaluate_ground_visibility
+from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
 from ome.isl_engine import (
     IslFeasibilityResult,
     IslTerminalConstraints,
@@ -156,6 +156,7 @@ class StepContext:
     latitude_threshold_deg: float
     mbb_overlap_ticks: int = 3
     mbb_reserve: int = 0
+    ground_policy_lookahead_horizon_ticks: int = 0
     propagator_id: str = "keplerian-circular"
 
 
@@ -214,6 +215,7 @@ def build_step_context(
     field_of_regard_deg: float = 360.0,
     mbb_overlap_ticks: int = 3,
     mbb_reserve: int = 0,
+    ground_policy_lookahead_horizon_ticks: int = 0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
@@ -285,6 +287,7 @@ def build_step_context(
         latitude_threshold_deg=latitude_threshold_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
+        ground_policy_lookahead_horizon_ticks=ground_policy_lookahead_horizon_ticks,
         propagator_id=propagator_id,
     )
 
@@ -369,6 +372,20 @@ def compute_step(
         sat_states=sat_states,
         gs_positions=ctx.gs_positions,
         gs_min_elevations=ctx.gs_min_elevations,
+        gs_policies=ctx.gs_policies,
+        pass_lookahead=(
+            GroundPassLookahead(
+                satellites=tuple(ctx.satellites),
+                addressing=ctx.addressing,
+                epoch_unix=epoch_unix,
+                step=step,
+                step_seconds=step_seconds,
+                horizon_ticks=ctx.ground_policy_lookahead_horizon_ticks,
+                propagator_id=ctx.propagator_id,
+            )
+            if "longest-remaining-pass" in set(ctx.gs_policies.values())
+            else None
+        ),
     )
 
     # 7. Scored, hysteresis-aware ground link allocation.
@@ -494,6 +511,7 @@ def precompute_timeline_window(
     field_of_regard_deg: float = 360.0,
     mbb_overlap_ticks: int = 3,
     mbb_reserve: int = 0,
+    ground_policy_lookahead_horizon_ticks: int = 0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
@@ -522,6 +540,7 @@ def precompute_timeline_window(
         field_of_regard_deg=field_of_regard_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
+        ground_policy_lookahead_horizon_ticks=ground_policy_lookahead_horizon_ticks,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation_deg,
@@ -555,6 +574,7 @@ def precompute_timeline(
     field_of_regard_deg: float = 360.0,
     mbb_overlap_ticks: int = 3,
     mbb_reserve: int = 0,
+    ground_policy_lookahead_horizon_ticks: int = 0,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_min_elevation_deg: float = 25.0,
@@ -578,6 +598,7 @@ def precompute_timeline(
         field_of_regard_deg=field_of_regard_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
+        ground_policy_lookahead_horizon_ticks=ground_policy_lookahead_horizon_ticks,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_min_elevation_deg=default_min_elevation_deg,

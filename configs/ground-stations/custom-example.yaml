@@ -18,7 +18,8 @@ default_min_elevation_deg: 25
 
 # Scheduling policy when multiple satellites are visible simultaneously.
 # Options: "highest-elevation" (prefer best signal), "lowest-elevation" (prefer
-# satellites lower on the horizon; this is not dwell-time prediction).
+# satellites lower on the horizon), "longest-remaining-pass" (uses OME pass
+# lookahead; requires scheduling.ground.lookahead_horizon_ticks in session YAML).
 default_scheduling_policy: highest-elevation
 
 # Default terrestrial prefix templates for ground station routing.

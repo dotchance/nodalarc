@@ -211,6 +211,9 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         field_of_regard_deg=cfg.field_of_regard_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
+        ground_policy_lookahead_horizon_ticks=(
+            cfg.session.scheduling.ground.lookahead_horizon_ticks
+        ),
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         default_min_elevation_deg=cfg.default_min_elevation_deg,
@@ -720,6 +723,7 @@ def _run_pacing(
         default_min_elevation_deg=cfg.default_min_elevation_deg,
         mbb_overlap_ticks=mbb_overlap_ticks,
         mbb_reserve=mbb_reserve,
+        ground_policy_lookahead_horizon_ticks=session.scheduling.ground.lookahead_horizon_ticks,
         propagator_id=cfg.propagator_id,
         default_ground_policy=session.scheduling.ground.policy,
     )

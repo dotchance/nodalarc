@@ -51,6 +51,7 @@ class LinkState(StrEnum):
 class SchedulingPolicy(StrEnum):
     HIGHEST_ELEVATION = "highest-elevation"
     LOWEST_ELEVATION = "lowest-elevation"
+    LONGEST_REMAINING_PASS = "longest-remaining-pass"
 
 
 class AreaStrategy(StrEnum):

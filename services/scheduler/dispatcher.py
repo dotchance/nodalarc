@@ -139,6 +139,7 @@ class Dispatcher:
         gs_terminal_capacities: dict[str, int] | None = None,
         sat_ground_terminal_capacities: dict[str, int] | None = None,
         mbb_dispatch: bool = False,
+        rtt_to_one_way_policy: Literal["half-rtt"] = "half-rtt",
     ) -> None:
         self._interface_map = interface_map
         self._bandwidth_map = bandwidth_map
@@ -150,6 +151,9 @@ class Dispatcher:
         self._compression = max(1, compression_factor)
         self._latency_interval = latency_update_interval_s
         self._epsilon_ms = epsilon_ms
+        if rtt_to_one_way_policy != "half-rtt":
+            raise ValueError(f"Unsupported RTT conversion policy: {rtt_to_one_way_policy!r}")
+        self._rtt_to_one_way_policy = rtt_to_one_way_policy
         if gs_terminal_capacities is None:
             log.error("FATAL: Dispatcher created with no gs_terminal_capacities")
             raise ValueError("gs_terminal_capacities is required")
@@ -1060,7 +1064,7 @@ class Dispatcher:
             return compensate_latency(
                 orbital_one_way_ms=orbital_one_way_ms,
                 substrate_rtt_ms=substrate_rtt_ms,
-                rtt_to_one_way_policy="half-rtt",
+                rtt_to_one_way_policy=self._rtt_to_one_way_policy,
             )
         except ValueError as exc:
             raise ValueError(f"Unrepresentable latency for {node_a}<->{node_b}: {exc}") from exc

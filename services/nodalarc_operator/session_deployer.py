@@ -24,6 +24,7 @@ from nodalarc.constellation_loader import (
     load_constellation,
     load_ground_stations,
 )
+from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
 from nodalarc.models.session import PlacementConfig, SessionConfig
 from nodalarc.platform_config import get_platform_config
@@ -755,13 +756,7 @@ def write_wiring_manifest(
             "isl_interfaces": [],
             "gnd_interfaces": [
                 {"name": f"term{t}"}
-                for t in range(
-                    sum(
-                        t.tracking_capacity
-                        for t in (station.terminals or gs_file.default_terminals)
-                    )
-                    or 1
-                )
+                for t in range(station_ground_terminal_capacity(gs_file, station))
             ],
             "terrestrial": {"addresses": addrs},
             "mpls_enable": True,

@@ -96,6 +96,19 @@ def _extract_ground_ifaces(iface) -> tuple[str, str]:
     return iface.peer_interface_name, iface.interface_name
 
 
+def _iface_key(iface) -> tuple[str, str]:
+    return (iface.node_id, iface.interface_name)
+
+
+def _interface_result(iface, error: str | None) -> node_agent_pb2.InterfaceResult:
+    return node_agent_pb2.InterfaceResult(
+        node_id=iface.node_id,
+        interface_name=iface.interface_name,
+        success=error is None,
+        error_message=error or "",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Per-link operation functions (called concurrently within batches)
 # ---------------------------------------------------------------------------
@@ -243,6 +256,7 @@ def handle_batch_link_down(
     """Handle BatchLinkDown — per-interface locality."""
     start = _time.monotonic()
     errors: list[str] = []
+    interface_errors: dict[tuple[str, str], str | None] = {}
     downed = 0
 
     # Submit all operations concurrently — each interface carries its own locality
@@ -290,13 +304,17 @@ def handle_batch_link_down(
             err = fut.result(timeout=10)
             if err is None:
                 downed += 1
+                interface_errors[_iface_key(iface)] = None
                 # Track VXLAN peer removal for substrate measurement
                 if iface.locality == node_agent_pb2.CROSS_NODE and iface.remote_node_ip:
                     substrate_monitor.remove_peer(iface.remote_node_ip)
             else:
+                interface_errors[_iface_key(iface)] = err
                 errors.append(err)
         except Exception as exc:
-            errors.append(f"Unexpected error for {iface.node_id}/{iface.interface_name}: {exc}")
+            err = f"Unexpected error for {iface.node_id}/{iface.interface_name}: {exc}"
+            interface_errors[_iface_key(iface)] = err
+            errors.append(err)
 
     elapsed = (_time.monotonic() - start) * 1000
     error_msg = "; ".join(errors) if errors else ""
@@ -319,6 +337,10 @@ def handle_batch_link_down(
         error_message=error_msg,
         interfaces_downed=downed,
         apply_time_ms=elapsed,
+        interface_results=[
+            _interface_result(iface, interface_errors.get(_iface_key(iface), "not attempted"))
+            for iface in request.interfaces
+        ],
     )
 
 
@@ -381,6 +403,7 @@ def handle_batch_link_up(
     """
     start = _time.monotonic()
     errors: list[str] = []
+    interface_errors: dict[tuple[str, str], str | None] = {}
     upped = 0
     if pid_map is None:
         raise ValueError("pid_map is None — wiring not complete?")
@@ -415,6 +438,7 @@ def handle_batch_link_up(
             error_message=msg,
             interfaces_upped=0,
             apply_time_ms=0,
+            interface_results=[_interface_result(iface, msg) for iface in request.interfaces],
         )
 
     # Phase 0: Create VXLAN tunnels for CROSS_NODE interfaces.
@@ -427,15 +451,19 @@ def handle_batch_link_up(
     #   exists from wiring. Same carrier model as LOCAL ground links.
     local_ip: str | None = None
     cross_node_ground: list[node_agent_pb2.InterfaceUp] = []
+    phase0_failed: set[tuple[str, str]] = set()
     for iface in request.interfaces:
         if iface.locality != node_agent_pb2.CROSS_NODE:
             continue
         if not iface.remote_node_ip or not iface.vni:
             link_desc = "GROUND" if iface.link_type == node_agent_pb2.GROUND else "ISL"
-            errors.append(
+            err = (
                 f"CROSS_NODE {link_desc} {iface.node_id}/{iface.interface_name}: "
                 f"missing remote_node_ip or vni"
             )
+            errors.append(err)
+            interface_errors[_iface_key(iface)] = err
+            phase0_failed.add(_iface_key(iface))
             continue
         if local_ip is None:
             local_ip = _discover_local_ip()
@@ -464,9 +492,10 @@ def handle_batch_link_up(
                 substrate_monitor.add_peer(iface.remote_node_ip)
                 cross_node_ground.append(iface)
             except Exception as exc:
-                errors.append(
-                    f"VXLAN ground attach failed {iface.node_id}/{iface.interface_name}: {exc}"
-                )
+                err = f"VXLAN ground attach failed {iface.node_id}/{iface.interface_name}: {exc}"
+                errors.append(err)
+                interface_errors[_iface_key(iface)] = err
+                phase0_failed.add(_iface_key(iface))
         else:
             # ISL: create full VXLAN + veth pair into pod namespace
             try:
@@ -482,7 +511,10 @@ def handle_batch_link_up(
 
                 substrate_monitor.add_peer(iface.remote_node_ip)
             except Exception as exc:
-                errors.append(f"VXLAN create failed {iface.node_id}/{iface.interface_name}: {exc}")
+                err = f"VXLAN create failed {iface.node_id}/{iface.interface_name}: {exc}"
+                errors.append(err)
+                interface_errors[_iface_key(iface)] = err
+                phase0_failed.add(_iface_key(iface))
 
     # Phase 1: Bring interfaces UP + apply shaping.
     # - LOCAL GROUND: bridge + mirred attach (_ground_link_up)
@@ -490,7 +522,10 @@ def handle_batch_link_up(
     # - LOCAL/CROSS_NODE ISL: UP + shaping (_isl_link_up_phase1)
     phase1_futures = {}
     for iface in request.interfaces:
+        if _iface_key(iface) in phase0_failed:
+            continue
         if iface in cross_node_ground:
+            interface_errors[_iface_key(iface)] = None
             continue  # Fully handled in Phase 0
         if iface.link_type == node_agent_pb2.GROUND and iface.locality == node_agent_pb2.LOCAL:
             phase1_futures[_BATCH_POOL.submit(_ground_link_up, iface, pm)] = iface
@@ -506,10 +541,14 @@ def handle_batch_link_up(
             err = fut.result(timeout=10)
             if err is None:
                 upped += 1
+                interface_errors[_iface_key(iface)] = None
             else:
+                interface_errors[_iface_key(iface)] = err
                 errors.append(err)
         except Exception as exc:
-            errors.append(f"Phase1 error for {iface.node_id}/{iface.interface_name}: {exc}")
+            err = f"Phase1 error for {iface.node_id}/{iface.interface_name}: {exc}"
+            interface_errors[_iface_key(iface)] = err
+            errors.append(err)
 
     # Count cross-node ground links handled in Phase 0
     upped += len(cross_node_ground)
@@ -535,6 +574,10 @@ def handle_batch_link_up(
         error_message=error_msg,
         interfaces_upped=upped,
         apply_time_ms=elapsed,
+        interface_results=[
+            _interface_result(iface, interface_errors.get(_iface_key(iface), "not attempted"))
+            for iface in request.interfaces
+        ],
     )
 
 

@@ -87,22 +87,41 @@ def _make_dispatcher(interface_map=None):
 
     pool = MagicMock()
     mock_stub = MagicMock()
-    mock_stub.async_batch_link_up = AsyncMock(
-        return_value=node_agent_pb2.BatchLinkUpResponse(
+
+    def up_resp(req):
+        return node_agent_pb2.BatchLinkUpResponse(
             success=True,
             error_message="",
-            interfaces_upped=1,
+            interfaces_upped=len(req.interfaces),
             apply_time_ms=0.0,
+            interface_results=[
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=True,
+                )
+                for iface in req.interfaces
+            ],
         )
-    )
-    mock_stub.async_batch_link_down = AsyncMock(
-        return_value=node_agent_pb2.BatchLinkDownResponse(
+
+    def down_resp(req):
+        return node_agent_pb2.BatchLinkDownResponse(
             success=True,
             error_message="",
-            interfaces_downed=1,
+            interfaces_downed=len(req.interfaces),
             apply_time_ms=0.0,
+            interface_results=[
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=True,
+                )
+                for iface in req.interfaces
+            ],
         )
-    )
+
+    mock_stub.async_batch_link_up = AsyncMock(side_effect=up_resp)
+    mock_stub.async_batch_link_down = AsyncMock(side_effect=down_resp)
     mock_stub.async_set_latency = AsyncMock(
         return_value=node_agent_pb2.SetLatencyResponse(success=True)
     )

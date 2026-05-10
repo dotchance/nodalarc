@@ -1127,6 +1127,42 @@ class Dispatcher:
         """Determine locality for a link pair. None if either pod unscheduled."""
         return self._loc.link_locality(node_a, node_b)
 
+    @staticmethod
+    def _successful_interface_acks(
+        *,
+        result,
+        requested_interfaces,
+        agent_addr: str,
+        operation: str,
+    ) -> set[tuple[str, str, str]]:
+        """Return exact successful (agent, node, interface) ACKs.
+
+        Aggregate counts are not enough to prove pair state. A batch can
+        contain multiple interfaces from multiple links; the Scheduler must
+        only mark a pair active/down when every interface it requested for
+        that pair was individually acknowledged by the responsible agent.
+        """
+        requested = {(iface.node_id, iface.interface_name) for iface in requested_interfaces}
+        returned = {(ack.node_id, ack.interface_name) for ack in result.interface_results}
+        if requested != returned:
+            raise RuntimeError(
+                f"{operation} response from {agent_addr} did not identify every requested "
+                f"interface: requested={sorted(requested)} returned={sorted(returned)}"
+            )
+
+        all_interface_success = all(ack.success for ack in result.interface_results)
+        if bool(result.success) != all_interface_success:
+            raise RuntimeError(
+                f"{operation} response from {agent_addr} has inconsistent aggregate success: "
+                f"success={result.success} per_interface_success={all_interface_success}"
+            )
+
+        return {
+            (agent_addr, ack.node_id, ack.interface_name)
+            for ack in result.interface_results
+            if ack.success
+        }
+
     async def _reconcile_links(
         self,
         desired: dict[tuple[str, str], ActiveLinkInfo],
@@ -1433,7 +1469,7 @@ class Dispatcher:
         if down_reasons is None:
             down_reasons = {}
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceDown]] = {}
-        pair_agents: dict[tuple[str, str], set[str]] = {}
+        pair_agent_ifaces: dict[tuple[str, str], set[tuple[str, str, str]]] = {}
 
         for pair in pairs:
             info = self._actual_links.get(pair)
@@ -1460,21 +1496,22 @@ class Dispatcher:
 
                 if locality == node_agent_pb2.LOCAL:
                     agent = self._loc.agent_addr(sat_id)
-                    agent_ifaces.setdefault(agent, []).append(
-                        node_agent_pb2.InterfaceDown(
-                            node_id=gs_id,
-                            interface_name=gs_iface,
-                            peer_node_id=sat_id,
-                            peer_interface_name=sat_iface,
-                            link_type=node_agent_pb2.GROUND,
-                            gs_id=gs_id,
-                            sat_id=sat_id,
-                            locality=locality,
-                            remote_node_ip="",
-                            vni=vni,
-                        )
+                    iface_msg = node_agent_pb2.InterfaceDown(
+                        node_id=gs_id,
+                        interface_name=gs_iface,
+                        peer_node_id=sat_id,
+                        peer_interface_name=sat_iface,
+                        link_type=node_agent_pb2.GROUND,
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                        locality=locality,
+                        remote_node_ip="",
+                        vni=vni,
                     )
-                    pair_agents.setdefault(pair, set()).add(agent)
+                    agent_ifaces.setdefault(agent, []).append(iface_msg)
+                    pair_agent_ifaces.setdefault(pair, set()).add(
+                        (agent, iface_msg.node_id, iface_msg.interface_name)
+                    )
                 else:
                     for nid, agent_addr in [
                         (sat_id, self._loc.agent_addr(sat_id)),
@@ -1483,21 +1520,22 @@ class Dispatcher:
                         iface = gs_iface if nid == gs_id else sat_iface
                         peer_nid = sat_id if nid == gs_id else gs_id
                         peer_iface = sat_iface if nid == gs_id else gs_iface
-                        agent_ifaces.setdefault(agent_addr, []).append(
-                            node_agent_pb2.InterfaceDown(
-                                node_id=nid,
-                                interface_name=iface,
-                                peer_node_id=peer_nid,
-                                peer_interface_name=peer_iface,
-                                link_type=node_agent_pb2.GROUND,
-                                gs_id=gs_id,
-                                sat_id=sat_id,
-                                locality=locality,
-                                remote_node_ip="",
-                                vni=vni,
-                            )
+                        iface_msg = node_agent_pb2.InterfaceDown(
+                            node_id=nid,
+                            interface_name=iface,
+                            peer_node_id=peer_nid,
+                            peer_interface_name=peer_iface,
+                            link_type=node_agent_pb2.GROUND,
+                            gs_id=gs_id,
+                            sat_id=sat_id,
+                            locality=locality,
+                            remote_node_ip="",
+                            vni=vni,
                         )
-                        pair_agents.setdefault(pair, set()).add(agent_addr)
+                        agent_ifaces.setdefault(agent_addr, []).append(iface_msg)
+                        pair_agent_ifaces.setdefault(pair, set()).add(
+                            (agent_addr, iface_msg.node_id, iface_msg.interface_name)
+                        )
             else:
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
@@ -1510,20 +1548,21 @@ class Dispatcher:
                     (node_b, info.interface_b, node_a, info.interface_a),
                 ]:
                     agent = self._loc.agent_addr(nid)
-                    agent_ifaces.setdefault(agent, []).append(
-                        node_agent_pb2.InterfaceDown(
-                            node_id=nid,
-                            interface_name=ifname,
-                            link_type=node_agent_pb2.ISL,
-                            locality=locality,
-                            vni=vni,
-                            peer_node_id=peer_nid,
-                            peer_interface_name=peer_ifname,
-                        )
+                    iface_msg = node_agent_pb2.InterfaceDown(
+                        node_id=nid,
+                        interface_name=ifname,
+                        link_type=node_agent_pb2.ISL,
+                        locality=locality,
+                        vni=vni,
+                        peer_node_id=peer_nid,
+                        peer_interface_name=peer_ifname,
                     )
-                    pair_agents.setdefault(pair, set()).add(agent)
+                    agent_ifaces.setdefault(agent, []).append(iface_msg)
+                    pair_agent_ifaces.setdefault(pair, set()).add(
+                        (agent, iface_msg.node_id, iface_msg.interface_name)
+                    )
 
-        successful_agents: set[str] = set()
+        successful_ifaces: set[tuple[str, str, str]] = set()
         agent_addrs = list(agent_ifaces.keys())
         if agent_addrs:
             tasks = []
@@ -1541,26 +1580,33 @@ class Dispatcher:
                 addr = agent_addrs[i]
                 if isinstance(result, Exception):
                     log.error("BatchLinkDown failed for agent %s: %s", addr, result)
-                elif not result.success:
-                    log.error(
-                        "BatchLinkDown partial failure on agent %s: %s",
-                        addr,
-                        result.error_message[:200],
-                    )
                 else:
-                    log.debug(
-                        "BatchLinkDown: %d downed in %.1fms",
-                        result.interfaces_downed,
-                        result.apply_time_ms,
+                    successful_ifaces.update(
+                        self._successful_interface_acks(
+                            result=result,
+                            requested_interfaces=agent_ifaces[addr],
+                            agent_addr=addr,
+                            operation="BatchLinkDown",
+                        )
                     )
-                    successful_agents.add(addr)
+                    if not result.success:
+                        log.error(
+                            "BatchLinkDown partial failure on agent %s: %s",
+                            addr,
+                            result.error_message[:200],
+                        )
+                    else:
+                        log.debug(
+                            "BatchLinkDown: %d downed in %.1fms",
+                            result.interfaces_downed,
+                            result.apply_time_ms,
+                        )
 
         removed: set[tuple[str, str]] = set()
         now = datetime.now(UTC)
         for pair in pairs:
-            agents = pair_agents.get(pair, set())
-            # ALL agents must succeed (see _send_batch_up for rationale)
-            if agents and agents <= successful_agents:
+            expected_ifaces = pair_agent_ifaces.get(pair, set())
+            if expected_ifaces and expected_ifaces <= successful_ifaces:
                 removed.add(pair)
                 info = self._actual_links.get(pair)
                 if info:
@@ -1594,7 +1640,7 @@ class Dispatcher:
     ) -> set[tuple[str, str]]:
         """Send BatchLinkUp to Node Agents. Returns successfully added pairs."""
         agent_ifaces: dict[str, list[node_agent_pb2.InterfaceUp]] = {}
-        pair_agents: dict[tuple[str, str], set[str]] = {}
+        pair_agent_ifaces: dict[tuple[str, str], set[tuple[str, str, str]]] = {}
         pair_compensation: dict[tuple[str, str], LatencyCompensation] = {}
 
         for pair in pairs:
@@ -1635,23 +1681,24 @@ class Dispatcher:
 
                 if locality == node_agent_pb2.LOCAL:
                     agent = self._loc.agent_addr(sat_id)
-                    agent_ifaces.setdefault(agent, []).append(
-                        node_agent_pb2.InterfaceUp(
-                            node_id=gs_id,
-                            interface_name=gs_iface,
-                            peer_node_id=sat_id,
-                            peer_interface_name=sat_iface,
-                            link_type=node_agent_pb2.GROUND,
-                            latency_ms=netem_ms,
-                            bandwidth_mbps=info.bandwidth_mbps,
-                            gs_id=gs_id,
-                            sat_id=sat_id,
-                            locality=locality,
-                            remote_node_ip="",
-                            vni=vni,
-                        )
+                    iface_msg = node_agent_pb2.InterfaceUp(
+                        node_id=gs_id,
+                        interface_name=gs_iface,
+                        peer_node_id=sat_id,
+                        peer_interface_name=sat_iface,
+                        link_type=node_agent_pb2.GROUND,
+                        latency_ms=netem_ms,
+                        bandwidth_mbps=info.bandwidth_mbps,
+                        gs_id=gs_id,
+                        sat_id=sat_id,
+                        locality=locality,
+                        remote_node_ip="",
+                        vni=vni,
                     )
-                    pair_agents.setdefault(pair, set()).add(agent)
+                    agent_ifaces.setdefault(agent, []).append(iface_msg)
+                    pair_agent_ifaces.setdefault(pair, set()).add(
+                        (agent, iface_msg.node_id, iface_msg.interface_name)
+                    )
                 else:
                     for nid, peer_nid in [(sat_id, gs_id), (gs_id, sat_id)]:
                         peer_k3s = self._loc.k3s_node(peer_nid)
@@ -1664,23 +1711,24 @@ class Dispatcher:
                         iface = gs_iface if nid == gs_id else sat_iface
                         peer_iface = sat_iface if nid == gs_id else gs_iface
                         agent_addr = self._loc.agent_addr(nid)
-                        agent_ifaces.setdefault(agent_addr, []).append(
-                            node_agent_pb2.InterfaceUp(
-                                node_id=nid,
-                                interface_name=iface,
-                                peer_node_id=peer_nid,
-                                peer_interface_name=peer_iface,
-                                link_type=node_agent_pb2.GROUND,
-                                latency_ms=netem_ms,
-                                bandwidth_mbps=info.bandwidth_mbps,
-                                gs_id=gs_id,
-                                sat_id=sat_id,
-                                locality=locality,
-                                remote_node_ip=remote_ip,
-                                vni=vni,
-                            )
+                        iface_msg = node_agent_pb2.InterfaceUp(
+                            node_id=nid,
+                            interface_name=iface,
+                            peer_node_id=peer_nid,
+                            peer_interface_name=peer_iface,
+                            link_type=node_agent_pb2.GROUND,
+                            latency_ms=netem_ms,
+                            bandwidth_mbps=info.bandwidth_mbps,
+                            gs_id=gs_id,
+                            sat_id=sat_id,
+                            locality=locality,
+                            remote_node_ip=remote_ip,
+                            vni=vni,
                         )
-                        pair_agents.setdefault(pair, set()).add(agent_addr)
+                        agent_ifaces.setdefault(agent_addr, []).append(iface_msg)
+                        pair_agent_ifaces.setdefault(pair, set()).add(
+                            (agent_addr, iface_msg.node_id, iface_msg.interface_name)
+                        )
             else:
                 vni = 0
                 if locality == node_agent_pb2.CROSS_NODE:
@@ -1702,23 +1750,24 @@ class Dispatcher:
                                 f"CROSS_NODE ISL LinkUp {node_a}<->{node_b}: "
                                 f"missing IP for Kubernetes node {peer_k3s}"
                             )
-                    agent_ifaces.setdefault(agent, []).append(
-                        node_agent_pb2.InterfaceUp(
-                            node_id=nid,
-                            interface_name=ifname,
-                            link_type=node_agent_pb2.ISL,
-                            latency_ms=netem_ms,
-                            bandwidth_mbps=info.bandwidth_mbps,
-                            locality=locality,
-                            remote_node_ip=remote_ip,
-                            vni=vni,
-                            peer_node_id=peer_nid,
-                            peer_interface_name=peer_ifname,
-                        )
+                    iface_msg = node_agent_pb2.InterfaceUp(
+                        node_id=nid,
+                        interface_name=ifname,
+                        link_type=node_agent_pb2.ISL,
+                        latency_ms=netem_ms,
+                        bandwidth_mbps=info.bandwidth_mbps,
+                        locality=locality,
+                        remote_node_ip=remote_ip,
+                        vni=vni,
+                        peer_node_id=peer_nid,
+                        peer_interface_name=peer_ifname,
                     )
-                    pair_agents.setdefault(pair, set()).add(agent)
+                    agent_ifaces.setdefault(agent, []).append(iface_msg)
+                    pair_agent_ifaces.setdefault(pair, set()).add(
+                        (agent, iface_msg.node_id, iface_msg.interface_name)
+                    )
 
-        successful_agents: set[str] = set()
+        successful_ifaces: set[tuple[str, str, str]] = set()
         agent_addrs = list(agent_ifaces.keys())
         if agent_addrs:
             tasks = []
@@ -1736,29 +1785,34 @@ class Dispatcher:
                 addr = agent_addrs[i]
                 if isinstance(result, Exception):
                     log.error("BatchLinkUp failed for agent %s: %s", addr, result)
-                elif not result.success:
-                    log.error(
-                        "BatchLinkUp partial failure on agent %s: %d upped: %s",
-                        addr,
-                        result.interfaces_upped,
-                        result.error_message[:200],
-                    )
                 else:
-                    log.debug(
-                        "BatchLinkUp: %d upped in %.1fms",
-                        result.interfaces_upped,
-                        result.apply_time_ms,
+                    successful_ifaces.update(
+                        self._successful_interface_acks(
+                            result=result,
+                            requested_interfaces=agent_ifaces[addr],
+                            agent_addr=addr,
+                            operation="BatchLinkUp",
+                        )
                     )
-                    successful_agents.add(addr)
+                    if not result.success:
+                        log.error(
+                            "BatchLinkUp partial failure on agent %s: %d upped: %s",
+                            addr,
+                            result.interfaces_upped,
+                            result.error_message[:200],
+                        )
+                    else:
+                        log.debug(
+                            "BatchLinkUp: %d upped in %.1fms",
+                            result.interfaces_upped,
+                            result.apply_time_ms,
+                        )
 
         added: set[tuple[str, str]] = set()
         now = datetime.now(UTC)
         for pair in pairs:
-            agents = pair_agents.get(pair, set())
-            # ALL agents for this pair must succeed. For LOCAL links (1 agent),
-            # this is the same as ANY. For CROSS_NODE links (2 agents), BOTH
-            # must succeed — a half-wired VXLAN tunnel does not forward traffic.
-            if agents and agents <= successful_agents:
+            expected_ifaces = pair_agent_ifaces.get(pair, set())
+            if expected_ifaces and expected_ifaces <= successful_ifaces:
                 added.add(pair)
                 info = desired[pair]
                 if sim_time is None:

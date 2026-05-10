@@ -13,6 +13,7 @@ import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
+from nodalarc.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 
 OME_RANGE_KM = 1000.0
@@ -54,16 +55,41 @@ def _make_dispatcher(
 
     pool = MagicMock()
     stub = MagicMock()
-    resp_down = MagicMock()
-    resp_down.success = True
-    resp_down.interfaces_downed = 1
-    resp_down.apply_time_ms = 1.0
-    stub.async_batch_link_down = AsyncMock(return_value=resp_down)
-    resp_up = MagicMock()
-    resp_up.success = True
-    resp_up.interfaces_upped = 1
-    resp_up.apply_time_ms = 1.0
-    stub.async_batch_link_up = AsyncMock(return_value=resp_up)
+
+    def resp_down(req):
+        return node_agent_pb2.BatchLinkDownResponse(
+            success=True,
+            error_message="",
+            interfaces_downed=len(req.interfaces),
+            apply_time_ms=1.0,
+            interface_results=[
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=True,
+                )
+                for iface in req.interfaces
+            ],
+        )
+
+    def resp_up(req):
+        return node_agent_pb2.BatchLinkUpResponse(
+            success=True,
+            error_message="",
+            interfaces_upped=len(req.interfaces),
+            apply_time_ms=1.0,
+            interface_results=[
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=True,
+                )
+                for iface in req.interfaces
+            ],
+        )
+
+    stub.async_batch_link_down = AsyncMock(side_effect=resp_down)
+    stub.async_batch_link_up = AsyncMock(side_effect=resp_up)
     pool.get_stub.return_value = stub
 
     d = Dispatcher(
@@ -182,11 +208,25 @@ class TestMBBRollback:
 
         # Make the up fail
         stub = d._pool.get_stub("agent-1")
-        resp_fail = MagicMock()
-        resp_fail.success = False
-        resp_fail.interfaces_upped = 0
-        resp_fail.error_message = "test failure"
-        stub.async_batch_link_up = AsyncMock(return_value=resp_fail)
+
+        def resp_fail(req):
+            return node_agent_pb2.BatchLinkUpResponse(
+                success=False,
+                error_message="test failure",
+                interfaces_upped=0,
+                apply_time_ms=1.0,
+                interface_results=[
+                    node_agent_pb2.InterfaceResult(
+                        node_id=iface.node_id,
+                        interface_name=iface.interface_name,
+                        success=False,
+                        error_message="test failure",
+                    )
+                    for iface in req.interfaces
+                ],
+            )
+
+        stub.async_batch_link_up = AsyncMock(side_effect=resp_fail)
 
         nc = AsyncMock()
         nc.publish = AsyncMock()

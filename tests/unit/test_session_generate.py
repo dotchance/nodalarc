@@ -113,6 +113,7 @@ class TestOrbitPropagatorGeneration:
 
         assert session.orbit.propagator == "j2-mean-elements"
         assert session.simulation.fidelity == "j2-mean-elements"
+        assert session.dispatch.substrate_compensation.rtt_to_one_way == "half-rtt"
 
     def test_unknown_propagator_rejected(self):
         with pytest.raises(ValueError, match="Unsupported orbit_propagator"):

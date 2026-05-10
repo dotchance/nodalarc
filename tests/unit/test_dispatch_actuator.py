@@ -1,0 +1,176 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+"""Unit tests for the Scheduler dispatch actuator boundary."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import UTC, datetime
+
+from nodalarc.models.link_events import LinkDecisionProvenance
+from nodalarc.proto import node_agent_pb2
+from scheduler.desired_state import ActiveLinkInfo
+from scheduler.dispatch_actuator import send_batch_up
+from scheduler.latency_compensator import LatencyCompensation
+
+PAIR = ("sat-a", "sat-b")
+SIM_TIME = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+class _Locator:
+    def link_locality(self, _node_a: str, _node_b: str) -> int:
+        return node_agent_pb2.LOCAL
+
+    def agent_addr(self, node_id: str) -> str:
+        return f"agent-{node_id}"
+
+    def k3s_node(self, node_id: str) -> str:
+        return f"k3s-{node_id}"
+
+    def node_ip(self, _k3s_node: str) -> str | None:
+        return None
+
+
+class _Stub:
+    def __init__(self, fail_node: str | None = None) -> None:
+        self.fail_node = fail_node
+        self.requests = []
+
+    async def async_batch_link_up(self, req):
+        self.requests.append(req)
+        results = []
+        for iface in req.interfaces:
+            success = iface.node_id != self.fail_node
+            results.append(
+                node_agent_pb2.InterfaceResult(
+                    node_id=iface.node_id,
+                    interface_name=iface.interface_name,
+                    success=success,
+                    error_message="" if success else "boom",
+                )
+            )
+        return node_agent_pb2.BatchLinkUpResponse(
+            success=all(result.success for result in results),
+            error_message="",
+            interfaces_upped=sum(1 for result in results if result.success),
+            apply_time_ms=1.0,
+            interface_results=results,
+        )
+
+
+class _Pool:
+    def __init__(self, fail_node: str | None = None) -> None:
+        self.stubs: dict[str, _Stub] = {}
+        self.fail_node = fail_node
+
+    def get_stub(self, agent_addr: str) -> _Stub:
+        self.stubs.setdefault(agent_addr, _Stub(self.fail_node))
+        return self.stubs[agent_addr]
+
+
+class _Js:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, dict]] = []
+
+    async def publish(self, subject: str, payload: bytes) -> None:
+        self.published.append((subject, json.loads(payload)))
+
+
+def _desired() -> dict[tuple[str, str], ActiveLinkInfo]:
+    return {
+        PAIR: ActiveLinkInfo(
+            interface_a="isl0",
+            interface_b="isl1",
+            latency_ms=10.0,
+            bandwidth_mbps=1000.0,
+            link_type="isl",
+            range_km=2997.92458,
+            authority_sim_time=SIM_TIME,
+            authority_source="snapshot",
+            authority_sequence=7,
+        )
+    }
+
+
+def _compensation(_node_a: str, _node_b: str, orbital_ms: float) -> LatencyCompensation:
+    return LatencyCompensation(
+        orbital_one_way_ms=orbital_ms,
+        substrate_rtt_ms=2.0,
+        substrate_one_way_ms=1.0,
+        netem_one_way_ms=9.0,
+        rtt_to_one_way_policy="half-rtt",
+    )
+
+
+def _validate(_pair, _info, _sim_time, *, operation: str) -> None:
+    assert operation == "LinkUp"
+
+
+def _provenance(info, compensation, sim_time):
+    return LinkDecisionProvenance(
+        authority_source=info.authority_source,
+        authority_sim_time=sim_time,
+        authority_sequence=info.authority_sequence,
+        authority_age_ms=0.0,
+        range_km=info.range_km,
+        orbital_one_way_ms=info.latency_ms,
+        substrate_rtt_ms=compensation.substrate_rtt_ms,
+        substrate_one_way_ms=compensation.substrate_one_way_ms,
+        netem_one_way_ms=compensation.netem_one_way_ms,
+        rtt_to_one_way_policy=compensation.rtt_to_one_way_policy,
+    )
+
+
+def test_send_batch_up_publishes_link_up_only_after_all_interface_acks():
+    pool = _Pool()
+    js = _Js()
+
+    added = asyncio.run(
+        send_batch_up(
+            pairs={PAIR},
+            desired=_desired(),
+            locator=_Locator(),
+            pool=pool,
+            js=js,
+            subj_link_up="links.up",
+            sim_iso=SIM_TIME.isoformat(),
+            sim_time=SIM_TIME,
+            gs_capacities={},
+            latency_compensation=_compensation,
+            validate_authority_freshness=_validate,
+            link_provenance=_provenance,
+        )
+    )
+
+    assert added == {PAIR}
+    assert len(js.published) == 1
+    subject, event = js.published[0]
+    assert subject == "links.up"
+    assert event["link_type"] == "isl"
+    assert event["provenance"]["netem_one_way_ms"] == 9.0
+
+
+def test_send_batch_up_requires_every_interface_ack_for_pair_success():
+    pool = _Pool(fail_node="sat-b")
+    js = _Js()
+
+    added = asyncio.run(
+        send_batch_up(
+            pairs={PAIR},
+            desired=_desired(),
+            locator=_Locator(),
+            pool=pool,
+            js=js,
+            subj_link_up="links.up",
+            sim_iso=SIM_TIME.isoformat(),
+            sim_time=SIM_TIME,
+            gs_capacities={},
+            latency_compensation=_compensation,
+            validate_authority_freshness=_validate,
+            link_provenance=_provenance,
+        )
+    )
+
+    assert added == set()
+    assert js.published == []

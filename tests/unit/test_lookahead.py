@@ -58,16 +58,17 @@ def test_lookahead_submit_and_get_result():
 
     session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
 
-    common_args = dict(
+    from ome.event_stream import build_step_context
+
+    step_context = build_step_context(
         satellites=sats,
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
-        step_seconds=session.time.step_seconds,
     )
 
     la.submit(
-        common_args=common_args,
+        step_context=step_context,
         epoch_unix=1704067200.0,
         duration_s=10.0,  # tiny window for speed
         initial_isl_state=None,
@@ -77,11 +78,11 @@ def test_lookahead_submit_and_get_result():
 
     result = la.get_result(timeout=10.0)
     assert result is not None, "Look-ahead should produce a result"
-    events, isl_state, gs_state, associations, _pending = result
-    assert len(events) > 0, "Should produce events"
-    assert isinstance(isl_state, dict)
-    assert isinstance(gs_state, dict)
-    assert isinstance(associations, dict)
+    assert result.predictive is True
+    assert len(result.events) > 0, "Should produce events"
+    assert isinstance(result.isl_state, dict)
+    assert isinstance(result.gs_state, dict)
+    assert isinstance(result.associations, dict)
 
 
 def test_lookahead_cancel_discards_result():
@@ -94,16 +95,17 @@ def test_lookahead_cancel_discards_result():
 
     session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
 
-    common_args = dict(
+    from ome.event_stream import build_step_context
+
+    step_context = build_step_context(
         satellites=sats,
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
-        step_seconds=session.time.step_seconds,
     )
 
     la.submit(
-        common_args=common_args,
+        step_context=step_context,
         epoch_unix=1704067200.0,
         duration_s=5730.0,  # full window — takes ~8s
         initial_isl_state=None,
@@ -129,18 +131,19 @@ def test_lookahead_is_ready():
 
     session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
 
-    common_args = dict(
+    from ome.event_stream import build_step_context
+
+    step_context = build_step_context(
         satellites=sats,
         addressing=addressing,
         gs_file=gs_file,
         neighbors=neighbors,
-        step_seconds=session.time.step_seconds,
     )
 
     assert not la.is_ready()
 
     la.submit(
-        common_args=common_args,
+        step_context=step_context,
         epoch_unix=1704067200.0,
         duration_s=5.0,  # very short
         initial_isl_state=None,

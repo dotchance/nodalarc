@@ -19,7 +19,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Session config bundle — shared between run() and _run_pacing()
 # ---------------------------------------------------------------------------
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import yaml
 from nodal.logging import configure as _configure_logging
@@ -37,6 +37,9 @@ from ome.event_stream import (
     write_timeline_jsonl,
 )
 from ome.propagator import orbital_period
+
+if TYPE_CHECKING:
+    from ome.event_stream import StepContext, TimelineWindowResult
 
 
 class _SessionBundle(NamedTuple):
@@ -225,7 +228,7 @@ def _start_health_server(port: int = 8081) -> None:
 class _LookAheadThread:
     """Background precomputation of future windows for NodalPath almanac.
 
-    Runs precompute_timeline_window() in a daemon thread, producing events
+    Runs precompute_timeline_window_from_context() in a daemon thread, producing events
     for the next orbital period. Results are stored for future consumption
     by NodalPath's proactive scheduling engine. Does NOT emit to the
     real-time event stream — that's the Pacemaker's job.
@@ -238,14 +241,14 @@ class _LookAheadThread:
         import threading
 
         self._thread: threading.Thread | None = None
-        self._result: tuple | None = None  # (events, isl_state, gs_state)
+        self._result: TimelineWindowResult | None = None
         self._ready = threading.Event()
         self._cancelled = threading.Event()
         self._lock = threading.Lock()
 
     def submit(
         self,
-        common_args: dict,
+        step_context: StepContext,
         epoch_unix: float,
         duration_s: float,
         initial_isl_state: dict | None,
@@ -257,7 +260,7 @@ class _LookAheadThread:
         """Start background window precomputation. Non-blocking."""
         import threading
 
-        from ome.event_stream import precompute_timeline_window
+        from ome.event_stream import precompute_timeline_window_from_context
 
         # Cancel any in-flight computation
         self.cancel()
@@ -269,8 +272,8 @@ class _LookAheadThread:
 
         def _compute():
             try:
-                result = precompute_timeline_window(
-                    **common_args,
+                result = precompute_timeline_window_from_context(
+                    step_context,
                     epoch_unix=epoch_unix,
                     duration_s=duration_s,
                     initial_isl_state=dict(initial_isl_state) if initial_isl_state else None,
@@ -278,6 +281,7 @@ class _LookAheadThread:
                     initial_associations=initial_associations,
                     initial_pending_teardowns=initial_pending_teardowns,
                     timestamp_offset=timestamp_offset,
+                    predictive=True,
                 )
                 if not self._cancelled.is_set():
                     with self._lock:
@@ -287,7 +291,7 @@ class _LookAheadThread:
                         "Look-ahead: window precomputed (%.0fs from epoch %s, %d events)",
                         duration_s,
                         datetime.fromtimestamp(epoch_unix, UTC).isoformat(),
-                        len(result[0]),
+                        len(result.events),
                     )
             except Exception:
                 logging.exception("Look-ahead computation failed")
@@ -295,7 +299,7 @@ class _LookAheadThread:
         self._thread = threading.Thread(target=_compute, name="ome-lookahead", daemon=True)
         self._thread.start()
 
-    def get_result(self, timeout: float | None = None) -> tuple | None:
+    def get_result(self, timeout: float | None = None) -> TimelineWindowResult | None:
         """Block until result ready or timeout. Returns None if cancelled/timeout."""
         if not self._ready.wait(timeout=timeout):
             return None
@@ -711,25 +715,12 @@ def _run_pacing(
                     session.routing.protocol if session.routing else "none",
                 )
 
-    # Look-ahead thread — background precomputation for NodalPath proactive scheduling.
+    # Lookahead uses the same StepContext object as the live pacing loop. That
+    # keeps predictive windows on the same propagation, visibility, allocation,
+    # hysteresis, and MBB settings as authoritative ticks.
     # Precomputes the next orbital period's events concurrently with real-time emission.
     # Results available for NodalPath almanac consumption.
     lookahead = _LookAheadThread()
-    _lookahead_common_args = dict(
-        satellites=cfg.satellites,
-        addressing=cfg.addressing,
-        gs_file=cfg.gs_file,
-        neighbors=cfg.neighbors,
-        step_seconds=step_seconds,
-        max_range_km=cfg.max_range_km,
-        max_tracking_rate_deg_s=cfg.max_tracking_rate_deg_s,
-        field_of_regard_deg=cfg.field_of_regard_deg,
-        polar_seam_enabled=cfg.polar_seam_enabled,
-        latitude_threshold_deg=cfg.latitude_threshold_deg,
-        default_min_elevation_deg=cfg.default_min_elevation_deg,
-        propagator_id=cfg.propagator_id,
-        default_ground_policy=session.scheduling.ground.policy,
-    )
     lookahead_launched_for_epoch: float | None = None
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
@@ -1039,7 +1030,7 @@ def _run_pacing(
             # --- Launch look-ahead if not already running for this epoch ---
             if lookahead_launched_for_epoch != epoch_unix:
                 lookahead.submit(
-                    common_args=_lookahead_common_args,
+                    step_context=step_ctx,
                     epoch_unix=epoch_unix,
                     duration_s=period,
                     initial_isl_state=isl_state if isl_state else None,

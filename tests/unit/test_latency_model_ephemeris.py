@@ -9,11 +9,15 @@ from datetime import UTC, datetime
 from nodalarc.models.events import (
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
+    EphemerisNodeTLE,
     SessionEphemeris,
 )
 from scheduler.latency_model import PositionTable
 
 EPOCH = 1735689600.0  # 2025-01-01T00:00:00 UTC
+ISS_TLE_EPOCH = 1615896900.000275
+ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
+ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 
 
 def _make_ephemeris() -> SessionEphemeris:
@@ -88,6 +92,51 @@ class TestComputeLinkLatency:
         lat = pt.compute_link_latency("sat-P00S00", "gs-ashburn", EPOCH)
         assert lat is not None
         assert lat > 0.0
+
+    def test_tle_ephemeris_latency_positive(self):
+        eph = SessionEphemeris(
+            epoch_id=0,
+            sim_time=datetime.fromtimestamp(ISS_TLE_EPOCH, UTC),
+            epoch_unix=ISS_TLE_EPOCH,
+            nodes={
+                "sat-P00S00": EphemerisNodeTLE(
+                    tle_line_1=ISS_TLE_LINE_1,
+                    tle_line_2=ISS_TLE_LINE_2,
+                    plane=0,
+                    slot=0,
+                    norad_id=25544,
+                ),
+                "gs-ashburn": EphemerisNodeFixed(
+                    lat_deg=39.04,
+                    lon_deg=-77.49,
+                    alt_km=0.095,
+                ),
+            },
+        )
+        pt = PositionTable()
+        pt.load_ephemeris(eph)
+        lat = pt.compute_link_latency("sat-P00S00", "gs-ashburn", ISS_TLE_EPOCH + 60.0)
+        assert lat is not None
+        assert lat > 0.0
+
+    def test_j2_ephemeris_uses_j2_propagator_identity(self):
+        kepler = _make_ephemeris()
+        j2_nodes = dict(kepler.nodes)
+        sat = j2_nodes["sat-P00S00"]
+        assert isinstance(sat, EphemerisNodeKeplerian)
+        j2_nodes["sat-P00S00"] = sat.model_copy(update={"propagator": "j2-mean-elements"})
+        j2 = kepler.model_copy(update={"nodes": j2_nodes})
+
+        pt_kepler = PositionTable()
+        pt_kepler.load_ephemeris(kepler)
+        pt_j2 = PositionTable()
+        pt_j2.load_ephemeris(j2)
+
+        lat_kepler = pt_kepler.compute_link_latency("sat-P00S00", "gs-ashburn", EPOCH + 86400)
+        lat_j2 = pt_j2.compute_link_latency("sat-P00S00", "gs-ashburn", EPOCH + 86400)
+        assert lat_kepler is not None
+        assert lat_j2 is not None
+        assert abs(lat_j2 - lat_kepler) > 0.01
 
     def test_unknown_node_returns_none(self):
         pt = PositionTable()

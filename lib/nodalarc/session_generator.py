@@ -147,6 +147,15 @@ def generate_session_yaml(
     else:
         raise ValueError("No constellation source: provide a preset name or custom_constellation")
 
+    if isinstance(constellation_value, dict):
+        constellation_mode = constellation_value.get("mode")
+    else:
+        constellation_mode = yaml.safe_load(Path(constellation_value).read_text()).get("mode")
+    if orbit_propagator == "sgp4-tle" and constellation_mode != "tle":
+        raise ValueError("orbit_propagator='sgp4-tle' requires a TLE constellation source")
+    if constellation_mode == "tle" and orbit_propagator != "sgp4-tle":
+        raise ValueError("TLE constellation sources require orbit_propagator='sgp4-tle'")
+
     # --- Resolve ground stations ---
     if custom_ground_stations is not None:
         gs_value: str | list[str] | dict = {
@@ -182,6 +191,7 @@ def generate_session_yaml(
     propagator_to_fidelity = {
         "keplerian-circular": "synthetic-keplerian",
         "j2-mean-elements": "j2-mean-elements",
+        "sgp4-tle": "sgp4-tle",
     }
     if orbit_propagator not in propagator_to_fidelity:
         raise ValueError(f"Unsupported orbit_propagator: {orbit_propagator!r}")
@@ -219,6 +229,8 @@ def generate_session_yaml(
             "extensions": extensions,
         },
     }
+    if orbit_propagator == "sgp4-tle":
+        session_dict["orbit"]["tle_max_age_days"] = 7.0
 
     if satellite_type:
         session_dict["satellite_type"] = satellite_type

@@ -19,6 +19,8 @@ services/ome/propagator.py re-exports everything from here.
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime
+from functools import lru_cache
 
 from nodalarc.constants import (
     EARTH_J2,
@@ -58,6 +60,7 @@ __all__ = [
     "eci_to_ecef_velocity",
     "propagate_keplerian",
     "propagate_j2_mean_elements",
+    "propagate_sgp4_tle",
     "distance_km",
 ]
 
@@ -330,6 +333,51 @@ def propagate_j2_mean_elements(
     current_time = epoch_unix + dt
     pos_ecef = eci_to_ecef(pos_eci, current_time)
     vel_ecef = eci_to_ecef_velocity(pos_eci, vel_eci, current_time)
+    geo = ecef_to_geodetic(pos_ecef)
+    return pos_ecef, vel_ecef, geo
+
+
+@lru_cache(maxsize=1)
+def _skyfield_timescale():
+    from skyfield.api import load
+
+    return load.timescale()
+
+
+@lru_cache(maxsize=4096)
+def _skyfield_satellite(tle_line_1: str, tle_line_2: str):
+    """Return a cached Skyfield EarthSatellite for a TLE pair."""
+    from skyfield.api import EarthSatellite
+
+    from nodalarc.tle import validate_tle_pair
+
+    validate_tle_pair(tle_line_1, tle_line_2)
+    timescale = _skyfield_timescale()
+    return EarthSatellite(tle_line_1, tle_line_2, None, timescale), timescale
+
+
+def propagate_sgp4_tle(
+    tle_line_1: str,
+    tle_line_2: str,
+    epoch_unix: float,
+    dt: float,
+) -> tuple[EcefVec3, EcefVec3, GeoPosition]:
+    """Propagate a TLE with SGP4 and return typed ECEF state.
+
+    SGP4's native output is TEME, not ECEF. Treating TEME as ECEF would make
+    range, visibility, and latency wrong while looking numerically plausible.
+    Skyfield owns the TEME-to-ITRS frame conversion here; the rest of NodalArc
+    receives the same typed ECEF/GeoPosition contract as the Keplerian engines.
+    """
+    from skyfield.framelib import itrs
+
+    unix_timestamp = epoch_unix + dt
+    sat, ts = _skyfield_satellite(tle_line_1, tle_line_2)
+    t = ts.from_datetime(datetime.fromtimestamp(unix_timestamp, UTC))
+    geocentric = sat.at(t)
+    position, velocity = geocentric.frame_xyz_and_velocity(itrs)
+    pos_ecef = EcefVec3(Vec3(*position.km))
+    vel_ecef = EcefVec3(Vec3(*velocity.km_per_s))
     geo = ecef_to_geodetic(pos_ecef)
     return pos_ecef, vel_ecef, geo
 

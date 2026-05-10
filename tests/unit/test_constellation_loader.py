@@ -2,7 +2,6 @@
 
 import math
 
-import pytest
 from nodalarc.constellation_loader import (
     expand_constellation,
     load_constellation,
@@ -14,7 +13,7 @@ from nodalarc.models.constellation import (
 )
 from pydantic import TypeAdapter
 
-from tests.conftest import CONFIGS_DIR
+from tests.conftest import CONFIGS_DIR, FIXTURES_DIR
 
 adapter = TypeAdapter(ConstellationConfig)
 
@@ -108,12 +107,12 @@ class TestExplicitExpansion:
             assert sat.ground_terminal_count == 1
 
 
-class TestTLEStub:
-    def test_tle_raises_not_implemented(self):
+class TestTLEExpansion:
+    def test_tle_expands_records_with_original_lines(self):
         data = {
             "mode": "tle",
             "name": "test-tle",
-            "tle_file": "tle.txt",
+            "tle_file": str(FIXTURES_DIR / "tles/sample.tle"),
             "default_terminals": {
                 "isl": [
                     {
@@ -123,12 +122,23 @@ class TestTLEStub:
                         "bandwidth_mbps": 1000,
                         "max_tracking_rate_deg_s": 3.0,
                     }
-                ]
+                ],
+                "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
             },
+            "filter": {"norad_ids": [25544, 23455]},
         }
         config = adapter.validate_python(data)
-        with pytest.raises(NotImplementedError):
-            expand_constellation(config)
+        sats = expand_constellation(config)
+
+        assert len(sats) == 2
+        assert [sat.norad_id for sat in sats] == [25544, 23455]
+        assert [sat.slot for sat in sats] == [0, 1]
+        assert all(sat.plane == 0 for sat in sats)
+        assert all(sat.tle_line_1 and sat.tle_line_1.startswith("1 ") for sat in sats)
+        assert all(sat.tle_line_2 and sat.tle_line_2.startswith("2 ") for sat in sats)
+        assert all(sat.isl_terminal_count == 2 for sat in sats)
+        assert all(sat.ground_terminal_count == 1 for sat in sats)
+        assert all(sat.elements.semi_major_axis_km > 6500 for sat in sats)
 
 
 class TestGroundStationLoading:

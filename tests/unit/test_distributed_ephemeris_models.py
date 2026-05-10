@@ -16,6 +16,7 @@ from nodalarc.models.events import (
     ClockTick,
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
+    EphemerisNodeTLE,
     PlaybackState,
     SessionEphemeris,
 )
@@ -41,6 +42,7 @@ class TestEphemerisNodeKeplerian:
         restored = EphemerisNodeKeplerian.model_validate(data)
         assert restored == node
         assert data["type"] == "keplerian"
+        assert data["propagator"] == "keplerian-circular"
 
     def test_frozen(self):
         node = EphemerisNodeKeplerian(
@@ -64,6 +66,50 @@ class TestEphemerisNodeKeplerian:
             slot=0,
         )
         assert node.type == "keplerian"
+        assert node.propagator == "keplerian-circular"
+
+    def test_j2_propagator_identity_round_trip(self):
+        node = EphemerisNodeKeplerian(
+            propagator="j2-mean-elements",
+            altitude_km=550.0,
+            inclination_deg=53.0,
+            raan_deg=0.0,
+            true_anomaly_deg=0.0,
+            plane=0,
+            slot=0,
+        )
+        restored = EphemerisNodeKeplerian.model_validate(node.model_dump(mode="json"))
+        assert restored.propagator == "j2-mean-elements"
+
+
+# ---------------------------------------------------------------------------
+# EphemerisNodeTLE
+# ---------------------------------------------------------------------------
+
+
+class TestEphemerisNodeTLE:
+    def test_round_trip(self):
+        node = EphemerisNodeTLE(
+            tle_line_1="1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993",
+            tle_line_2="2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145",
+            plane=0,
+            slot=0,
+            norad_id=25544,
+        )
+        data = node.model_dump(mode="json")
+        restored = EphemerisNodeTLE.model_validate(data)
+        assert restored == node
+        assert data["type"] == "tle"
+
+    def test_frozen(self):
+        node = EphemerisNodeTLE(
+            tle_line_1="1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993",
+            tle_line_2="2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145",
+            plane=0,
+            slot=0,
+        )
+        with pytest.raises(ValidationError):
+            node.plane = 1
 
 
 # ---------------------------------------------------------------------------

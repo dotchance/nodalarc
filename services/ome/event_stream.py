@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from nodalarc.constellation_loader import SatelliteNode, isl_terminal_for_interface
+from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
@@ -261,8 +262,7 @@ def build_step_context(
             gs_min_elevations[node_id] = (
                 station.min_elevation_deg or gs_file.default_min_elevation_deg or 25.0
             )
-            effective_terminals = station.terminals or gs_file.default_terminals
-            gs_terminal_counts[node_id] = sum(t.tracking_capacity for t in effective_terminals) or 1
+            gs_terminal_counts[node_id] = station_ground_terminal_capacity(gs_file, station)
             gs_policies[node_id] = station.scheduling_policy or default_gs_policy
             gs_hysteresis[node_id] = station.hysteresis
             gs_service_priorities[node_id] = station.service_priority

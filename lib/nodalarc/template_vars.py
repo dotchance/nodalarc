@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.addressing import (
     AddressingScheme,
     NeighborAssignment,
@@ -310,14 +311,9 @@ def build_template_vars(
         result["ipv4_loopback"] = addressing.gs_ipv4(gs_index)
         result["ipv6_loopback"] = addressing.gs_ipv6(gs_index)
         gs_station = next((s for s in ground_stations.stations if s.name == gs_name), None)
-        gs_terminal_count = (
-            sum(
-                t.tracking_capacity
-                for t in (gs_station.terminals or ground_stations.default_terminals)
-            )
-            if gs_station
-            else 1
-        ) or 1
+        if gs_station is None:
+            raise ValueError(f"Ground station {gs_name!r} not found in ground station file")
+        gs_terminal_count = station_ground_terminal_capacity(ground_stations, gs_station)
         result["gnd_interfaces"] = addressing.term_interfaces(gs_terminal_count)
         result["isl_interfaces"] = []
         result["isl_count"] = 0

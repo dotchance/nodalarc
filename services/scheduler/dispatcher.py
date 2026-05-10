@@ -191,6 +191,7 @@ class Dispatcher:
         self._current_sim_time: datetime | None = None
         self._running = False
         self._last_snapshot_seq: int = 0
+        self._last_snapshot_sim_time: datetime | None = None
         self._substrate_latency: dict[str, float] = {}  # "nodeA-nodeB" -> ms (legacy ConfigMap)
         self._substrate_by_ip: dict[str, float] = {}  # peer_ip -> ms (live from Node Agent)
 
@@ -709,6 +710,18 @@ class Dispatcher:
         """
         for vis in vis_events:
             pair = (vis.node_a, vis.node_b)
+            if (
+                self._last_snapshot_sim_time is not None
+                and vis.sim_time <= self._last_snapshot_sim_time
+            ):
+                log.debug(
+                    "Ignoring stale VisibilityEvent for %s at %s; "
+                    "LinkStateSnapshot authority is already at %s",
+                    pair,
+                    vis.sim_time.isoformat(),
+                    self._last_snapshot_sim_time.isoformat(),
+                )
+                continue
 
             if vis.visible and vis.scheduled:
                 sched_state = getattr(vis, "scheduling_state", "active")
@@ -771,6 +784,7 @@ class Dispatcher:
             return None
 
         self._last_snapshot_seq = snapshot.snapshot_seq
+        self._last_snapshot_sim_time = snapshot.sim_time
         desired: dict[tuple[str, str], ActiveLinkInfo] = {}
         self._teardown_pairs.clear()
 

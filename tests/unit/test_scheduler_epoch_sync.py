@@ -18,6 +18,7 @@ import asyncio
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
+import pytest
 from nodalarc.models.events import (
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
@@ -25,6 +26,7 @@ from nodalarc.models.events import (
 )
 from nodalarc.models.link_state import LinkStateSnapshot
 from scheduler.dispatcher import Dispatcher
+from scheduler.epoch_sync import EpochSyncState
 
 EPOCH = 1735689600.0
 
@@ -88,7 +90,45 @@ class TestStartupState:
     def test_deps_start_unmet(self):
         d = _make_dispatcher()
         assert d._epoch_deps_met == {"ephemeris": False, "snapshot": False}
-        assert d._playback_playing_received is False
+
+
+class TestEpochSyncState:
+    def test_begin_seek_resets_dependencies_and_buffers(self):
+        state = EpochSyncState()
+        old_snapshot = _make_snapshot(epoch_id=0)
+        state.buffered_snapshot = old_snapshot
+        state.deps_met = {"ephemeris": True, "snapshot": True}
+        state.playback_playing_received = True
+        state.stale = True
+
+        assert state.begin_seek(2) is True
+
+        assert state.suspended is True
+        assert state.expected_epoch_id == 2
+        assert state.deps_met == {"ephemeris": False, "snapshot": False}
+        assert state.playback_playing_received is False
+        assert state.buffered_snapshot is None
+        assert state.stale is False
+
+    def test_resume_requires_all_dependencies(self):
+        state = EpochSyncState(suspended=True, expected_epoch_id=7)
+        state.mark_playing(7)
+        state.mark_ephemeris(7)
+
+        assert state.missing_resume_dependencies() == ["LinkStateSnapshot"]
+        with pytest.raises(RuntimeError, match="missing dependencies"):
+            state.resume()
+
+    def test_resume_returns_buffered_snapshot_and_clears_suspended(self):
+        snapshot = _make_snapshot(epoch_id=3)
+        state = EpochSyncState(suspended=True, expected_epoch_id=3)
+        state.mark_playing(3)
+        state.mark_ephemeris(3)
+        state.buffer_snapshot(snapshot)
+
+        assert state.resume() == snapshot
+        assert state.suspended is False
+        assert state.buffered_snapshot is None
 
 
 class TestSeekEntersSuspended:

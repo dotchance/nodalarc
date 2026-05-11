@@ -23,8 +23,8 @@ from nodalarc.models.link_state import (
     RoutingState,
 )
 
-from ome.ground_allocator import MbbTeardownState
 from ome.propagation_engine import PropagatedState
+from ome.types import MbbTeardownState
 
 
 def build_link_state_snapshot(
@@ -119,7 +119,7 @@ def build_link_state_snapshot(
     for pair, state_tuple in gs_state.items():
         visible = state_tuple[0]
         scheduled = state_tuple[1]
-        sched_state = state_tuple[2] if len(state_tuple) > 2 else "active"
+        sched_state = state_tuple[2]
         if visible and scheduled:
             carrier = CarrierState.UP
         elif visible and not scheduled:
@@ -148,8 +148,9 @@ def build_link_state_snapshot(
         td_remaining = None
         successor = None
         if pair in td_state:
-            start_tick, successor = td_state[pair]
-            td_remaining = max(0, mbb_overlap_ticks - (current_step - start_tick))
+            teardown = td_state[pair]
+            successor = teardown.successor_pair
+            td_remaining = max(0, mbb_overlap_ticks - (current_step - teardown.start_step))
         links.append(
             LinkState(
                 node_a=pair[0],

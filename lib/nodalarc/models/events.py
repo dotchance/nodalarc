@@ -221,6 +221,31 @@ class PlaybackState(BaseModel):
     state: Literal["seeking", "playing", "paused"]
 
 
+class PlaybackControlCommand(BaseModel):
+    """Validated command payload for the OME playback-control subject."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    action: Literal["pause", "resume", "set_speed", "seek", "get_status"]
+    factor: float | None = None
+    target_sim_time: datetime | None = None
+
+    @model_validator(mode="after")
+    def _validate_action_payload(self):
+        if self.action == "set_speed":
+            if self.factor is None:
+                raise ValueError("set_speed requires factor")
+            if self.target_sim_time is not None:
+                raise ValueError("set_speed does not accept target_sim_time")
+            return self
+
+        if self.factor is not None:
+            raise ValueError(f"{self.action} does not accept factor")
+        if self.action != "seek" and self.target_sim_time is not None:
+            raise ValueError(f"{self.action} does not accept target_sim_time")
+        return self
+
+
 class ValidationResult(BaseModel):
     """Result from session pre-deployment validation.
 
@@ -262,6 +287,22 @@ class TeardownEntry(BaseModel):
     successor_node_b: str
 
 
+class CheckpointAssociation(BaseModel):
+    """Single ground association retained in a SchedulingCheckpoint.
+
+    A ground station can temporarily carry multiple concurrent associations
+    during MBB overlap. Keying only by gs_id loses state; terminal indices are
+    part of the scheduling contract and must survive recovery.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    gs_id: str
+    sat_id: str
+    gs_terminal_index: int
+    sat_terminal_index: int
+
+
 class SchedulingCheckpoint(BaseModel):
     """OME ground-scheduling state checkpoint.
 
@@ -271,7 +312,7 @@ class SchedulingCheckpoint(BaseModel):
     state for recovery after restart.
 
     snapshot_seq: last LinkStateSnapshot sequence published with this checkpoint
-    associations: gs_id → sat_id (current GS-to-satellite assignments)
+    associations: pair_key → association, preserving terminal assignments
     pending_teardowns: pair_key → TeardownEntry (MBB teardowns in progress)
     """
 
@@ -281,7 +322,7 @@ class SchedulingCheckpoint(BaseModel):
     epoch_id: int
     snapshot_seq: int
     step: int
-    associations: dict[str, str]  # gs_id → sat_id
+    associations: dict[str, CheckpointAssociation]  # pair_key → association
     pending_teardowns: dict[str, TeardownEntry]  # pair_key → entry
     paused: bool
     time_accel: float

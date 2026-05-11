@@ -12,12 +12,16 @@ from nodalarc.models.ground_station import TerrestrialPrefixTemplate
 class SessionMeta(BaseModel):
     """Session metadata."""
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     data_dir: str = "/var/nodalarc/sessions"
 
 
 class AddressingConfig(BaseModel):
     """Addressing scheme overrides — all have defaults."""
+
+    model_config = ConfigDict(extra="forbid")
 
     sat_id_template: str = "sat-P{plane:02d}S{slot:02d}"
     gs_id_template: str = "gs-{name}"
@@ -30,6 +34,8 @@ class AddressingConfig(BaseModel):
 class AreaMapping(BaseModel):
     """Area assignment for explicit strategy."""
 
+    model_config = ConfigDict(extra="forbid")
+
     planes: list[int] | None = None
     ground_stations: str | list[str] | None = None  # "all" or list of names
     area_id: str
@@ -37,6 +43,8 @@ class AreaMapping(BaseModel):
 
 class AreaAssignmentConfig(BaseModel):
     """Routing area assignment configuration."""
+
+    model_config = ConfigDict(extra="forbid")
 
     strategy: str  # "stripe", "per-plane", "flat", "explicit"
     planes_per_stripe: int | None = None  # Required for "stripe"
@@ -232,19 +240,17 @@ class DispatchConfig(BaseModel):
 class TimeConfig(BaseModel):
     """Time configuration."""
 
+    model_config = ConfigDict(extra="forbid")
+
     compression: int = 1
     start_time: str | None = None  # ISO 8601 (default: now per R-OME-005)
     step_seconds: int = 1
-    latency_update_interval_seconds: int = 10
 
-    @field_validator("compression", "step_seconds", "latency_update_interval_seconds")
+    @field_validator("compression", "step_seconds")
     @classmethod
     def _positive_time_values(cls, value: int) -> int:
         if value < 1:
-            raise ValueError(
-                "time.compression, time.step_seconds, and "
-                "time.latency_update_interval_seconds must be >= 1"
-            )
+            raise ValueError("time.compression and time.step_seconds must be >= 1")
         return value
 
 
@@ -267,6 +273,8 @@ def resolve_session_epoch(time_config: TimeConfig) -> float:
 class TrafficFlowConfig(BaseModel):
     """Traffic flow configuration."""
 
+    model_config = ConfigDict(extra="forbid")
+
     flow_id: str
     src: str
     dst: str
@@ -277,6 +285,8 @@ class TrafficFlowConfig(BaseModel):
 
 class ConvergenceConfig(BaseModel):
     """Convergence detection settings for MI probe measurement."""
+
+    model_config = ConfigDict(extra="forbid")
 
     stability_period_s: float = 2.0
     timeout_s: float = 30.0
@@ -291,6 +301,8 @@ class MiConfig(BaseModel):
     When disabled (default), no MI processes start and no MI ports bind.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = False
     adapter: str | None = None  # e.g. "frr_isis_adapter"
     convergence: ConvergenceConfig = ConvergenceConfig()
@@ -298,6 +310,8 @@ class MiConfig(BaseModel):
 
 class TerrestrialLinkConfig(BaseModel):
     """A static terrestrial link between two ground stations."""
+
+    model_config = ConfigDict(extra="forbid")
 
     station_a: str
     station_b: str
@@ -340,7 +354,7 @@ class PlacementConfig(BaseModel):
     planeGroupPerNode: multiple adjacent planes per node, round-robin.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     policy: str = "allOnOne"  # allOnOne | planePerNode | planeGroupPerNode
     planes_per_group: int | None = None  # For planeGroupPerNode
@@ -360,6 +374,8 @@ class SessionConfig(BaseModel):
     ``constellation`` is already an inline dict it is assumed to
     contain the intended satellite type and this field is ignored.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     session: SessionMeta
     constellation: str | dict  # Path to constellation file OR inline definition

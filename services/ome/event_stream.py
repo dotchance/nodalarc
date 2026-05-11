@@ -35,7 +35,6 @@ from nodalarc.models.ground_station import GroundStationFile
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import (
     GroundAllocationResult,
-    MbbTeardownState,
     allocate_ground_links,
 )
 from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
@@ -58,6 +57,7 @@ from ome.propagator import (
     geodetic_to_ecef,
 )
 from ome.snapshot_builder import build_link_state_snapshot as build_link_state_snapshot
+from ome.types import MbbTeardownState
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ class StepContext:
     gs_hysteresis: dict[str, HysteresisParameters]
     gs_service_priorities: dict[str, int]
     ground_pair_terminal_types: dict[tuple[str, str], str]
-    by_node: dict  # neighbors_by_node result
+    by_node: dict[str, list[NeighborAssignment]]
     sat_isl_terminals: dict[str, int]
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]]
     sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity

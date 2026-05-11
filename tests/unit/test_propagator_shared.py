@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import math
 
+from nodalarc.geo import compute_range_km
 from nodalarc.orbital import elements_from_params
 from nodalarc.propagator import (
     EcefVec3,
     GeoPosition,
     Vec3,
-    distance_km,
     ecef_to_geodetic,
     geodetic_to_ecef,
     gmst,
@@ -88,7 +88,7 @@ class TestPropagate:
         pos1, _, _ = propagate_keplerian(e1, EPOCH, 100.0)
         pos2, _, _ = propagate_keplerian(e2, EPOCH, 100.0)
 
-        d = distance_km(pos1, pos2)
+        d = compute_range_km(pos1, pos2)
         assert d > 100.0, f"Expected separation, got {d} km"
 
 

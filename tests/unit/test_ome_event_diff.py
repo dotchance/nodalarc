@@ -11,6 +11,7 @@ from nodalarc.geo import compute_latency_ms
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import GroundAllocationResult
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
+from ome.types import MbbTeardown
 
 SIM = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -103,7 +104,7 @@ def test_ground_event_diff_marks_mbb_teardown_state():
     successor = ("gs-den", "sat-new")
     allocation = GroundAllocationResult(
         associations={pair: (0, 0)},
-        pending_teardowns={pair: (10, successor)},
+        pending_teardowns={pair: MbbTeardown(10, successor)},
         scheduled_pairs=frozenset({pair, successor}),
     )
 

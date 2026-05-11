@@ -48,8 +48,12 @@ async def send_batch_down(
     gs_capacities: Mapping[str, int],
 ) -> set[LinkPair]:
     """Send BatchLinkDown to Node Agents and publish LinkDown proof events."""
+    # Sort for deterministic gRPC batch ordering and NATS event publication.
+    # Without this, set iteration order varies with PYTHONHASHSEED, producing
+    # different LinkDown event sequences from identical reconcile decisions.
+    sorted_pairs = sorted(pairs)
     plan = build_link_down_batch_plan(
-        pairs=pairs,
+        pairs=sorted_pairs,
         actual_links=actual_links,
         locator=locator,
         gs_capacities=gs_capacities,
@@ -99,7 +103,7 @@ async def send_batch_down(
 
     removed: set[LinkPair] = set()
     now = datetime.now(UTC)
-    for pair in pairs:
+    for pair in sorted_pairs:
         expected_ifaces = plan.pair_agent_ifaces.get(pair, set())
         if expected_ifaces and expected_ifaces <= successful_ifaces:
             removed.add(pair)
@@ -140,14 +144,15 @@ async def send_batch_up(
     link_provenance: LinkProvenanceBuilder,
 ) -> set[LinkPair]:
     """Send BatchLinkUp to Node Agents and publish LinkUp proof events."""
-    for pair in pairs:
+    sorted_pairs = sorted(pairs)
+    for pair in sorted_pairs:
         info = desired.get(pair)
         if info is None:
             raise RuntimeError(f"Dispatch planner requested LinkUp for missing desired pair {pair}")
         validate_authority_freshness(pair, info, sim_time, operation="LinkUp")
 
     plan = build_link_up_batch_plan(
-        pairs=pairs,
+        pairs=sorted_pairs,
         desired=desired,
         locator=locator,
         gs_capacities=gs_capacities,
@@ -197,7 +202,7 @@ async def send_batch_up(
 
     added: set[LinkPair] = set()
     now = datetime.now(UTC)
-    for pair in pairs:
+    for pair in sorted_pairs:
         expected_ifaces = plan.pair_agent_ifaces.get(pair, set())
         if expected_ifaces and expected_ifaces <= successful_ifaces:
             added.add(pair)
@@ -246,8 +251,9 @@ async def send_authoritative_latency_updates(
     agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
     pair_compensation: dict[LinkPair, LatencyCompensation] = {}
     now = datetime.now(UTC)
+    sorted_pairs = sorted(pairs)
 
-    for pair in pairs:
+    for pair in sorted_pairs:
         info = desired[pair]
         node_a, node_b = pair
         validate_authority_freshness(pair, info, sim_time, operation="LatencyUpdate")
@@ -318,7 +324,7 @@ async def send_authoritative_latency_updates(
                     f"SetLatency rejected by agent {agent_addrs[i]}: {result.error_message[:200]}"
                 )
 
-    for pair in pairs:
+    for pair in sorted_pairs:
         info = desired[pair]
         if info.range_km is None:
             raise ValueError(f"Desired latency update for {pair} has no range_km")

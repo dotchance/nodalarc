@@ -1296,23 +1296,32 @@ class Dispatcher:
                 forced_bbm_pairs,
             )
 
-        # TODO(trust-gap-closure#1): Refresh authority metadata on ALL active
-        # links that appear in the current desired state, not just those with
-        # changed numeric values. Currently dispatch_planner.diff_link_state
-        # only flags links where range_km or latency_ms changed numerically.
-        # Links that are stable (same floats) never get their authority_sim_time,
-        # authority_sequence, or authority_source updated — so a link active for
-        # 100 ticks has provenance from tick 1. An auditor asking "when was this
+        # Refresh authority metadata on all active links that appear in the
+        # current desired state. The numeric diff (dispatch_planner.diff_link_state)
+        # only gates tc/netem re-application — there is no point re-applying the
+        # same delay. But authority provenance (authority_sim_time, authority_source,
+        # authority_sequence) must advance on every accepted snapshot even when the
+        # physics values are unchanged. Without this, a link stable for 100 ticks
+        # retains provenance from tick 1, and an auditor asking "when was this
         # link's geometry last confirmed?" gets a stale answer.
         #
-        # Fix: after reconciliation, walk _actual_links and for every pair that
-        # also appears in desired, update authority metadata from desired[pair].
-        # Guard against authority regression: only update if
-        # desired[pair].authority_sim_time >= actual[pair].authority_sim_time
-        # (a stale retained snapshot from a pre-restart OME must not overwrite
-        # newer authority — that can only happen after an explicit lineage reset).
-        # The numeric diff still gates LatencyUpdate/tc dispatch — no point
-        # re-applying the same delay.
+        # Guard: authority_sim_time must not regress. A stale retained snapshot
+        # from a pre-restart OME must not overwrite newer authority — that can
+        # only happen after an explicit lineage reset.
+        for pair, actual_info in self._actual_links.items():
+            desired_info = desired.get(pair)
+            if desired_info is None:
+                continue
+            if desired_info.authority_sim_time is None:
+                continue
+            if (
+                actual_info.authority_sim_time is not None
+                and desired_info.authority_sim_time < actual_info.authority_sim_time
+            ):
+                continue
+            actual_info.authority_sim_time = desired_info.authority_sim_time
+            actual_info.authority_source = desired_info.authority_source
+            actual_info.authority_sequence = desired_info.authority_sequence
 
         if to_update_latency:
             await self._send_authoritative_latency_updates(to_update_latency, desired, sim_time)

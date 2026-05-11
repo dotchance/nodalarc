@@ -11,7 +11,7 @@ connection or a running dispatch worker.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -82,7 +82,7 @@ def _ground_ifaces(
 
 def build_link_down_batch_plan(
     *,
-    pairs: set[LinkPair],
+    pairs: Iterable[LinkPair],
     actual_links: Mapping[LinkPair, ActiveLinkInfo],
     locator: LinkLocator,
     gs_capacities: Mapping[str, int],
@@ -188,7 +188,7 @@ def build_link_down_batch_plan(
 
 def build_link_up_batch_plan(
     *,
-    pairs: set[LinkPair],
+    pairs: Iterable[LinkPair],
     desired: Mapping[LinkPair, ActiveLinkInfo],
     locator: LinkLocator,
     gs_capacities: Mapping[str, int],

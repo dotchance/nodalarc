@@ -97,17 +97,15 @@ class TestGroundAllocatorDeterminism:
 class TestAuthorityFreshnessOnStableLinks:
     """Active-link authority metadata must be refreshed on every accepted
     snapshot, even when numeric values (range_km, latency_ms) are unchanged.
+
+    These tests drive the real _reconcile_links production path, not an
+    inline copy of the refresh logic.
     """
 
-    def test_stable_link_authority_advances_with_each_reconcile(self):
-        """After reconciling 10 snapshots with identical range/latency,
-        _actual_links authority_sim_time must equal the 10th snapshot's
-        sim_time, not the 1st.
-        """
-        from datetime import UTC, datetime
+    @staticmethod
+    def _make_dispatcher():
         from unittest.mock import MagicMock
 
-        from scheduler.desired_state import ActiveLinkInfo
         from scheduler.dispatcher import Dispatcher
         from scheduler.pod_locator import PodLocationMap
 
@@ -116,6 +114,7 @@ class TestAuthorityFreshnessOnStableLinks:
         bw_map = {pair: 1000.0}
         loc = PodLocationMap()
         pool = MagicMock()
+        pool.set_nc = MagicMock()
 
         d = Dispatcher(
             interface_map=iface_map,
@@ -125,11 +124,24 @@ class TestAuthorityFreshnessOnStableLinks:
             session_id="test",
             gs_terminal_capacities={},
             sat_ground_terminal_capacities={},
-            max_latency_age_s=1.0,
+            max_latency_age_s=2.0,
         )
+        return d, pair
+
+    def test_stable_link_authority_advances_via_reconcile_links(self):
+        """_reconcile_links with identical range/latency but newer authority
+        must update _actual_links authority metadata. This is the production
+        path — the early return for no-change must NOT skip the refresh.
+        """
+        import asyncio
+        from datetime import UTC, datetime
+
+        from scheduler.desired_state import ActiveLinkInfo
+
+        d, pair = self._make_dispatcher()
 
         initial_sim = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
-        info = ActiveLinkInfo(
+        d._actual_links[pair] = ActiveLinkInfo(
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
@@ -140,13 +152,10 @@ class TestAuthorityFreshnessOnStableLinks:
             authority_source="snapshot",
             authority_sequence=1,
         )
-        d._actual_links[pair] = info
 
-        # Simulate 10 reconcile cycles with identical numeric values
-        # but advancing authority_sim_time
-        for tick in range(1, 11):
-            tick_sim = datetime(2026, 1, 1, 0, 0, tick, tzinfo=UTC)
-            desired_info = ActiveLinkInfo(
+        tick_sim = datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
                 interface_a="isl0",
                 interface_b="isl1",
                 latency_ms=5.0,
@@ -155,42 +164,28 @@ class TestAuthorityFreshnessOnStableLinks:
                 range_km=1500.0,
                 authority_sim_time=tick_sim,
                 authority_source="snapshot",
-                authority_sequence=tick + 1,
+                authority_sequence=2,
             )
-            desired = {pair: desired_info}
+        }
 
-            # Walk _actual_links and refresh authority (the code under test)
-            for p, actual_info in d._actual_links.items():
-                di = desired.get(p)
-                if di is None or di.authority_sim_time is None:
-                    continue
-                if (
-                    actual_info.authority_sim_time is not None
-                    and di.authority_sim_time < actual_info.authority_sim_time
-                ):
-                    continue
-                actual_info.authority_sim_time = di.authority_sim_time
-                actual_info.authority_source = di.authority_source
-                actual_info.authority_sequence = di.authority_sequence
+        asyncio.run(d._reconcile_links(desired, None, tick_sim))
 
-        # After 10 ticks, authority must be from tick 10, not tick 0
-        assert d._actual_links[pair].authority_sim_time == datetime(
-            2026, 1, 1, 0, 0, 10, tzinfo=UTC
-        )
-        assert d._actual_links[pair].authority_sequence == 11
+        assert d._actual_links[pair].authority_sim_time == tick_sim
+        assert d._actual_links[pair].authority_sequence == 2
 
-    def test_authority_never_regresses_without_lineage_reset(self):
-        """A stale retained snapshot with an older authority_sim_time must
-        not overwrite newer authority on an active link.
+    def test_authority_never_regresses_via_reconcile_links(self):
+        """_reconcile_links with older authority must not overwrite newer
+        authority on an active link.
         """
+        import asyncio
         from datetime import UTC, datetime
 
         from scheduler.desired_state import ActiveLinkInfo
 
-        newer_sim = datetime(2026, 1, 1, 0, 0, 50, tzinfo=UTC)
-        older_sim = datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)
+        d, pair = self._make_dispatcher()
 
-        actual_info = ActiveLinkInfo(
+        newer_sim = datetime(2026, 1, 1, 0, 0, 50, tzinfo=UTC)
+        d._actual_links[pair] = ActiveLinkInfo(
             interface_a="isl0",
             interface_b="isl1",
             latency_ms=5.0,
@@ -202,27 +197,22 @@ class TestAuthorityFreshnessOnStableLinks:
             authority_sequence=50,
         )
 
-        desired_info = ActiveLinkInfo(
-            interface_a="isl0",
-            interface_b="isl1",
-            latency_ms=5.0,
-            bandwidth_mbps=1000.0,
-            link_type="isl",
-            range_km=1500.0,
-            authority_sim_time=older_sim,
-            authority_source="snapshot",
-            authority_sequence=10,
-        )
+        older_sim = datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                interface_a="isl0",
+                interface_b="isl1",
+                latency_ms=5.0,
+                bandwidth_mbps=1000.0,
+                link_type="isl",
+                range_km=1500.0,
+                authority_sim_time=older_sim,
+                authority_source="snapshot",
+                authority_sequence=10,
+            )
+        }
 
-        # The freshness update logic must reject the regression
-        if (
-            desired_info.authority_sim_time is not None
-            and actual_info.authority_sim_time is not None
-            and desired_info.authority_sim_time < actual_info.authority_sim_time
-        ):
-            pass  # correctly skipped
-        else:
-            actual_info.authority_sim_time = desired_info.authority_sim_time
+        asyncio.run(d._reconcile_links(desired, None, older_sim))
 
-        assert actual_info.authority_sim_time == newer_sim
-        assert actual_info.authority_sequence == 50
+        assert d._actual_links[pair].authority_sim_time == newer_sim
+        assert d._actual_links[pair].authority_sequence == 50

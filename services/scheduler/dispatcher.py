@@ -1262,6 +1262,27 @@ class Dispatcher:
         to_add = diff.to_add
         to_update_latency = diff.to_update_latency
 
+        # Refresh authority metadata on all active links that appear in the
+        # current desired state, BEFORE the no-change early return. The numeric
+        # diff gates tc/netem re-application (no point re-applying identical
+        # delay), but authority provenance must advance on every accepted snapshot
+        # even when physics values are unchanged. Without this, a link stable for
+        # 100 ticks retains provenance from tick 1.
+        for pair, actual_info in self._actual_links.items():
+            desired_info = desired.get(pair)
+            if desired_info is None:
+                continue
+            if desired_info.authority_sim_time is None:
+                continue
+            if (
+                actual_info.authority_sim_time is not None
+                and desired_info.authority_sim_time < actual_info.authority_sim_time
+            ):
+                continue
+            actual_info.authority_sim_time = desired_info.authority_sim_time
+            actual_info.authority_source = desired_info.authority_source
+            actual_info.authority_sequence = desired_info.authority_sequence
+
         if not diff.has_changes:
             return
 
@@ -1295,33 +1316,6 @@ class Dispatcher:
                 down_reasons,
                 forced_bbm_pairs,
             )
-
-        # Refresh authority metadata on all active links that appear in the
-        # current desired state. The numeric diff (dispatch_planner.diff_link_state)
-        # only gates tc/netem re-application — there is no point re-applying the
-        # same delay. But authority provenance (authority_sim_time, authority_source,
-        # authority_sequence) must advance on every accepted snapshot even when the
-        # physics values are unchanged. Without this, a link stable for 100 ticks
-        # retains provenance from tick 1, and an auditor asking "when was this
-        # link's geometry last confirmed?" gets a stale answer.
-        #
-        # Guard: authority_sim_time must not regress. A stale retained snapshot
-        # from a pre-restart OME must not overwrite newer authority — that can
-        # only happen after an explicit lineage reset.
-        for pair, actual_info in self._actual_links.items():
-            desired_info = desired.get(pair)
-            if desired_info is None:
-                continue
-            if desired_info.authority_sim_time is None:
-                continue
-            if (
-                actual_info.authority_sim_time is not None
-                and desired_info.authority_sim_time < actual_info.authority_sim_time
-            ):
-                continue
-            actual_info.authority_sim_time = desired_info.authority_sim_time
-            actual_info.authority_source = desired_info.authority_source
-            actual_info.authority_sequence = desired_info.authority_sequence
 
         if to_update_latency:
             await self._send_authoritative_latency_updates(to_update_latency, desired, sim_time)

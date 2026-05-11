@@ -9,6 +9,11 @@ for the same resource and assert that the winner is always the same.
 
 from __future__ import annotations
 
+import asyncio
+import json
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
+
 from nodalarc.models.ground_station import HysteresisParameters
 from ome.ground_allocator import allocate_ground_links
 from ome.visibility import GroundVisibility
@@ -133,7 +138,6 @@ class TestAuthorityFreshnessOnStableLinks:
         must update _actual_links authority metadata. This is the production
         path — the early return for no-change must NOT skip the refresh.
         """
-        import asyncio
         from datetime import UTC, datetime
 
         from scheduler.desired_state import ActiveLinkInfo
@@ -177,7 +181,6 @@ class TestAuthorityFreshnessOnStableLinks:
         """_reconcile_links with older authority must not overwrite newer
         authority on an active link.
         """
-        import asyncio
         from datetime import UTC, datetime
 
         from scheduler.desired_state import ActiveLinkInfo
@@ -216,3 +219,211 @@ class TestAuthorityFreshnessOnStableLinks:
 
         assert d._actual_links[pair].authority_sim_time == newer_sim
         assert d._actual_links[pair].authority_sequence == 50
+
+
+class TestActuatorEventPublicationOrder:
+    """send_batch_down and send_batch_up must publish NATS events in sorted
+    pair order regardless of set insertion order. This proves determinism
+    at the wire boundary, not just inside the Dispatcher.
+    """
+
+    @staticmethod
+    def _locator():
+        from nodalarc.proto import node_agent_pb2
+
+        class _Loc:
+            def link_locality(self, _a, _b):
+                return node_agent_pb2.LOCAL
+
+            def agent_addr(self, node_id):
+                return "agent-local"
+
+            def k3s_node(self, node_id):
+                return "k3s-local"
+
+            def node_ip(self, k3s_node):
+                return "10.0.0.1"
+
+        return _Loc()
+
+    @staticmethod
+    def _mock_pool():
+        """Agent pool whose stubs report all-success for any batch."""
+        from nodalarc.proto import node_agent_pb2
+
+        pool = MagicMock()
+
+        async def _batch_down(req):
+            resp = node_agent_pb2.BatchLinkDownResponse(
+                success=True,
+                interfaces_downed=len(req.interfaces),
+                apply_time_ms=1.0,
+            )
+            for iface in req.interfaces:
+                resp.interface_results.append(
+                    node_agent_pb2.InterfaceResult(
+                        node_id=iface.node_id,
+                        interface_name=iface.interface_name,
+                        success=True,
+                    )
+                )
+            return resp
+
+        async def _batch_up(req):
+            resp = node_agent_pb2.BatchLinkUpResponse(
+                success=True,
+                interfaces_upped=len(req.interfaces),
+                apply_time_ms=1.0,
+            )
+            for iface in req.interfaces:
+                resp.interface_results.append(
+                    node_agent_pb2.InterfaceResult(
+                        node_id=iface.node_id,
+                        interface_name=iface.interface_name,
+                        success=True,
+                    )
+                )
+            return resp
+
+        stub = MagicMock()
+        stub.async_batch_link_down = MagicMock(side_effect=_batch_down)
+        stub.async_batch_link_up = MagicMock(side_effect=_batch_up)
+        pool.get_stub = MagicMock(return_value=stub)
+        return pool
+
+    def test_send_batch_down_publishes_events_in_sorted_order(self):
+        """Pass an unordered set of pairs to send_batch_down and verify
+        LinkDown events are published in lexicographic pair order.
+        """
+
+        from scheduler.desired_state import ActiveLinkInfo
+        from scheduler.dispatch_actuator import send_batch_down
+
+        pair_c = ("sat-P02S00", "sat-P02S01")
+        pair_a = ("sat-P00S00", "sat-P00S01")
+        pair_b = ("sat-P01S00", "sat-P01S01")
+
+        def _info(iface_a, iface_b):
+            return ActiveLinkInfo(
+                interface_a=iface_a,
+                interface_b=iface_b,
+                latency_ms=5.0,
+                bandwidth_mbps=1000.0,
+                link_type="isl",
+                range_km=1500.0,
+            )
+
+        actual = {
+            pair_c: _info("isl0", "isl1"),
+            pair_a: _info("isl0", "isl1"),
+            pair_b: _info("isl0", "isl1"),
+        }
+
+        published_pairs: list[tuple[str, str]] = []
+        js = MagicMock()
+
+        async def _capture_publish(subject, payload):
+            data = json.loads(payload)
+            published_pairs.append((data["node_a"], data["node_b"]))
+
+        js.publish = MagicMock(side_effect=_capture_publish)
+
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        # Deliberately unordered set
+        pairs = {pair_c, pair_a, pair_b}
+
+        asyncio.run(
+            send_batch_down(
+                pairs=pairs,
+                actual_links=actual,
+                locator=self._locator(),
+                pool=self._mock_pool(),
+                js=js,
+                subj_link_down="test.link.down",
+                sim_iso=sim_time.isoformat(),
+                sim_time=sim_time,
+                down_reasons={},
+                gs_capacities={},
+            )
+        )
+
+        assert published_pairs == [pair_a, pair_b, pair_c]
+
+    def test_send_batch_up_publishes_events_in_sorted_order(self):
+        """Pass an unordered set of pairs to send_batch_up and verify
+        LinkUp events are published in lexicographic pair order.
+        """
+
+        from scheduler.desired_state import ActiveLinkInfo
+        from scheduler.dispatch_actuator import send_batch_up
+        from scheduler.latency_compensator import LatencyCompensation
+
+        pair_c = ("sat-P02S00", "sat-P02S01")
+        pair_a = ("sat-P00S00", "sat-P00S01")
+        pair_b = ("sat-P01S00", "sat-P01S01")
+
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+
+        def _info(iface_a, iface_b):
+            return ActiveLinkInfo(
+                interface_a=iface_a,
+                interface_b=iface_b,
+                latency_ms=5.0,
+                bandwidth_mbps=1000.0,
+                link_type="isl",
+                range_km=1500.0,
+                authority_sim_time=sim_time,
+                authority_source="snapshot",
+                authority_sequence=1,
+            )
+
+        desired = {
+            pair_c: _info("isl0", "isl1"),
+            pair_a: _info("isl0", "isl1"),
+            pair_b: _info("isl0", "isl1"),
+        }
+
+        published_pairs: list[tuple[str, str]] = []
+        js = MagicMock()
+
+        async def _capture_publish(subject, payload):
+            data = json.loads(payload)
+            published_pairs.append((data["node_a"], data["node_b"]))
+
+        js.publish = MagicMock(side_effect=_capture_publish)
+
+        def _compensation(_a, _b, orbital_ms):
+            return LatencyCompensation(
+                orbital_one_way_ms=orbital_ms,
+                substrate_rtt_ms=0.0,
+                substrate_one_way_ms=0.0,
+                netem_one_way_ms=orbital_ms,
+                rtt_to_one_way_policy="half-rtt",
+            )
+
+        def _noop_freshness(*_args, **_kwargs):
+            pass
+
+        def _noop_provenance(*_args, **_kwargs):
+            return None
+
+        pairs = {pair_c, pair_a, pair_b}
+
+        asyncio.run(
+            send_batch_up(
+                pairs=pairs,
+                desired=desired,
+                locator=self._locator(),
+                pool=self._mock_pool(),
+                js=js,
+                subj_link_up="test.link.up",
+                sim_iso=sim_time.isoformat(),
+                sim_time=sim_time,
+                gs_capacities={},
+                latency_compensation=_compensation,
+                validate_authority_freshness=_noop_freshness,
+                link_provenance=_noop_provenance,
+            )
+        )
+
+        assert published_pairs == [pair_a, pair_b, pair_c]

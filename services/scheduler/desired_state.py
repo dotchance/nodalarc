@@ -16,7 +16,15 @@ from nodalarc.models.link_state import AdminState, CarrierState, LinkState
 
 
 class ActiveLinkInfo:
-    """Mutable internal state for a desired or active link."""
+    """Mutable internal state for a desired or active link.
+
+    TODO(trust-gap-closure#10): Make this a frozen dataclass. Mutability
+    exists only because latency updates on active links currently assign
+    latency_ms in place. Replace with dataclasses.replace() on a frozen
+    type — the mutation pattern is self._actual_links[pair] = replace(info,
+    latency_ms=new). This eliminates the mutable-value-in-frozen-intent
+    contract gap where DispatchIntent is frozen but its dict values are not.
+    """
 
     __slots__ = (
         "interface_a",

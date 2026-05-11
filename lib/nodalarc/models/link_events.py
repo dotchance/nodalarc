@@ -12,7 +12,18 @@ from pydantic import BaseModel, ConfigDict
 
 
 class LinkDecisionProvenance(BaseModel):
-    """Physics and substrate inputs that explain an applied link decision."""
+    """Physics and substrate inputs that explain an applied link decision.
+
+    TODO(trust-gap-closure#7): Extend to full audit-grade provenance.
+    Currently captures geometry and substrate values — enough to answer
+    "what latency?" but not "why does this link exist?" For commercial
+    audit, every LinkUp should also carry: terminal_role_a, terminal_role_b,
+    propagator_id, visibility_checks_applied (tuple of check names),
+    scheduling policy and score, dispatch_mode ("bbm" | "mbb_phase2" |
+    "mbb_phase3"), epoch_id, and snapshot_seq. Every LinkDown should carry
+    rejection_reason. This makes each event self-contained — an auditor
+    can reconstruct the decision from the event alone.
+    """
 
     model_config = ConfigDict(frozen=True)
 

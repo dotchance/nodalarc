@@ -75,7 +75,6 @@ def has_line_of_sight(pos_a: Vec3, pos_b: Vec3) -> bool:
 
     Uses closest approach of line segment to Earth center.
     Earth is modeled as an oblate spheroid (WGS84 semi-axes).
-    For simplicity, we use the mean Earth radius.
     """
     # Direction vector from A to B
     dx = pos_b.x - pos_a.x
@@ -103,11 +102,6 @@ def has_line_of_sight(pos_a: Vec3, pos_b: Vec3) -> bool:
     # (cx/a)² + (cy/a)² + (cz/b)² >= 1 means outside ellipsoid
     norm_sq = (cx / WGS84_A) ** 2 + (cy / WGS84_A) ** 2 + (cz / WGS84_B) ** 2
     return norm_sq >= 1.0
-
-
-def compute_range(pos_a: Vec3, pos_b: Vec3) -> float:
-    """Compute range (distance) in km between two ECEF positions."""
-    return compute_range_km(pos_a, pos_b)
 
 
 def compute_elevation_angle(
@@ -281,7 +275,7 @@ def check_isl_visibility(
 
     Returns IslVisibility with reason for failure if not visible.
     """
-    range_km = compute_range(pos_a, pos_b)
+    range_km = compute_range_km(pos_a, pos_b)
 
     # 1. Line of sight
     if not has_line_of_sight(pos_a, pos_b):
@@ -323,7 +317,7 @@ def check_ground_visibility(
 
     Checks LOS and elevation angle.
     """
-    range_km = compute_range(gs_ecef, sat_ecef)
+    range_km = compute_range_km(gs_ecef, sat_ecef)
 
     if not has_line_of_sight(gs_ecef, sat_ecef):
         return GroundVisibility("", False, -90.0, range_km)

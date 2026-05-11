@@ -4,7 +4,7 @@
 
 from datetime import UTC, datetime
 
-from nodalarc.models.events import SchedulingCheckpoint, TeardownEntry
+from nodalarc.models.events import CheckpointAssociation, SchedulingCheckpoint, TeardownEntry
 from nodalarc.scheduling_checkpoint import decode_retained_scheduling_checkpoint
 
 
@@ -42,6 +42,20 @@ def _checkpoint(**overrides) -> SchedulingCheckpoint:
     return SchedulingCheckpoint(**fields)
 
 
+def _association(
+    gs_id: str,
+    sat_id: str,
+    gs_terminal_index: int,
+    sat_terminal_index: int,
+) -> CheckpointAssociation:
+    return CheckpointAssociation(
+        gs_id=gs_id,
+        sat_id=sat_id,
+        gs_terminal_index=gs_terminal_index,
+        sat_terminal_index=sat_terminal_index,
+    )
+
+
 def test_checkpoint_serialization_roundtrip():
     """Create checkpoint, serialize to JSON, deserialize, verify identical."""
     ckpt = _checkpoint(
@@ -49,7 +63,10 @@ def test_checkpoint_serialization_roundtrip():
         epoch_id=3,
         snapshot_seq=99,
         step=42,
-        associations={"gs-london": "sat-001", "gs-tokyo": "sat-047"},
+        associations={
+            "gs-london:sat-001": _association("gs-london", "sat-001", 0, 1),
+            "gs-tokyo:sat-047": _association("gs-tokyo", "sat-047", 1, 0),
+        },
         pending_teardowns={
             "gs-london:sat-099": _teardown(2, "gs-london", "sat-099"),
         },
@@ -65,7 +82,9 @@ def test_checkpoint_serialization_roundtrip():
     assert restored.epoch_id == 3
     assert restored.snapshot_seq == 99
     assert restored.step == 42
-    assert restored.associations == {"gs-london": "sat-001", "gs-tokyo": "sat-047"}
+    assert restored.associations["gs-london:sat-001"].gs_terminal_index == 0
+    assert restored.associations["gs-london:sat-001"].sat_terminal_index == 1
+    assert restored.associations["gs-tokyo:sat-047"].gs_id == "gs-tokyo"
     assert restored.paused is True
     assert restored.time_accel == 25.0
     assert restored.written_at == 1_750_000_000.0
@@ -118,7 +137,10 @@ def test_checkpoint_with_teardowns():
         epoch_id=7,
         snapshot_seq=1234,
         step=1500,
-        associations={"gs-nyc": "sat-011", "gs-paris": "sat-021"},
+        associations={
+            "gs-nyc:sat-011": _association("gs-nyc", "sat-011", 0, 0),
+            "gs-paris:sat-021": _association("gs-paris", "sat-021", 1, 0),
+        },
         pending_teardowns=teardowns,
     )
 
@@ -151,6 +173,22 @@ def test_teardown_entry_frozen():
         assert False, "Should have raised"
     except Exception:
         pass
+
+
+def test_checkpoint_associations_preserve_parallel_mbb_links():
+    """MBB overlap can have multiple GS links; checkpoint keys by pair."""
+    ckpt = _checkpoint(
+        associations={
+            "gs-london:sat-old": _association("gs-london", "sat-old", 0, 0),
+            "gs-london:sat-new": _association("gs-london", "sat-new", 1, 0),
+        }
+    )
+
+    restored = SchedulingCheckpoint.model_validate_json(ckpt.model_dump_json())
+
+    assert set(restored.associations) == {"gs-london:sat-old", "gs-london:sat-new"}
+    assert restored.associations["gs-london:sat-old"].gs_terminal_index == 0
+    assert restored.associations["gs-london:sat-new"].gs_terminal_index == 1
 
 
 def test_checkpoint_frozen():

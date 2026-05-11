@@ -10,10 +10,10 @@ import math
 
 import pytest
 from nodalarc.constants import EARTH_RADIUS_KM
+from nodalarc.geo import compute_range_km
 from ome.propagator import (
     GeoPosition,
     Vec3,
-    distance_km,
     ecef_to_geodetic,
     eci_to_ecef_velocity,
     elements_from_params,
@@ -77,7 +77,7 @@ class TestReturnToStart:
         period = orbital_period(550.0)
         pos_start, _ = propagate_eci(starlink_elements, 0.0)
         pos_end, _ = propagate_eci(starlink_elements, period)
-        dist = distance_km(pos_start, pos_end)
+        dist = compute_range_km(pos_start, pos_end)
         # Should be < 1 km (circular orbit, exact return in ECI)
         assert dist < 0.01, f"ECI return error: {dist} km"
 
@@ -100,8 +100,8 @@ class TestJ2MeanElementPropagation:
         pos_k, vel_k, geo_k = propagate_keplerian(starlink_elements, EPOCH, 0.0)
         pos_j2, vel_j2, geo_j2 = propagate_j2_mean_elements(starlink_elements, EPOCH, 0.0)
 
-        assert distance_km(pos_k, pos_j2) < 1e-9
-        assert distance_km(vel_k, vel_j2) < 0.02
+        assert compute_range_km(pos_k, pos_j2) < 1e-9
+        assert compute_range_km(vel_k, vel_j2) < 0.02
         assert abs(geo_k.lat_deg - geo_j2.lat_deg) < 1e-9
         assert abs(geo_k.lon_deg - geo_j2.lon_deg) < 1e-9
 
@@ -117,7 +117,7 @@ class TestJ2MeanElementPropagation:
         pos_k, _, _ = propagate_keplerian(starlink_elements, EPOCH, 86400.0)
         pos_j2, vel_j2, _ = propagate_j2_mean_elements(starlink_elements, EPOCH, 86400.0)
 
-        assert distance_km(pos_k, pos_j2) > 100.0
+        assert compute_range_km(pos_k, pos_j2) > 100.0
         assert math.sqrt(vel_j2.x**2 + vel_j2.y**2 + vel_j2.z**2) > 7.0
 
     def test_j2_starlink_mean_element_golden_fixture(self, starlink_elements):
@@ -226,12 +226,12 @@ class TestAltitude:
 class TestDistance:
     def test_distance_same_point(self):
         a = Vec3(1000.0, 2000.0, 3000.0)
-        assert distance_km(a, a) == 0.0
+        assert compute_range_km(a, a) == 0.0
 
     def test_distance_known(self):
         a = Vec3(0.0, 0.0, 0.0)
         b = Vec3(3.0, 4.0, 0.0)
-        assert abs(distance_km(a, b) - 5.0) < 1e-10
+        assert abs(compute_range_km(a, b) - 5.0) < 1e-10
 
 
 class TestMultipleSatellites:
@@ -241,7 +241,7 @@ class TestMultipleSatellites:
         e2 = elements_from_params(550.0, 53.0, 30.0, 0.0)
         pos1, _, _ = propagate_keplerian(e1, EPOCH, 0.0)
         pos2, _, _ = propagate_keplerian(e2, EPOCH, 0.0)
-        dist = distance_km(pos1, pos2)
+        dist = compute_range_km(pos1, pos2)
         assert dist > 100.0  # Should be well separated
 
     def test_same_plane_different_anomaly(self):
@@ -250,7 +250,7 @@ class TestMultipleSatellites:
         e2 = elements_from_params(550.0, 53.0, 0.0, 180.0)
         pos1, _, _ = propagate_keplerian(e1, EPOCH, 0.0)
         pos2, _, _ = propagate_keplerian(e2, EPOCH, 0.0)
-        dist = distance_km(pos1, pos2)
+        dist = compute_range_km(pos1, pos2)
         # Opposite sides: should be ~2 * (R + alt) = ~13842 km
         expected = 2 * (EARTH_RADIUS_KM + 550.0)
         assert abs(dist - expected) < 10.0
@@ -303,5 +303,5 @@ class TestEcefVelocity:
         )
 
         # Prediction error should be small for 1s step
-        err = distance_km(pred, pos1)
+        err = compute_range_km(pred, pos1)
         assert err < 0.1  # Less than 100m error for 1s step

@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import math
 
+from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.models.coverage import CoverageInsight, GsStationPreview, IslFailureBreakdown
-
-EARTH_RADIUS_KM = 6371.0
 
 
 def generate_insights(

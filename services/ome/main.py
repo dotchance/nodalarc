@@ -24,13 +24,17 @@ from typing import TYPE_CHECKING, NamedTuple
 import yaml
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
+from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.constellation_loader import (
+    SatelliteNode,
     expand_constellation,
     load_constellation,
     load_ground_stations,
 )
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
+from nodalarc.models.constellation import ConstellationConfig
+from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig, resolve_session_epoch
 from nodalarc.tle import tle_age_days
 
@@ -39,6 +43,7 @@ from ome.event_stream import (
     write_timeline_jsonl,
 )
 from ome.propagator import orbital_period
+from ome.types import MbbTeardownState
 
 if TYPE_CHECKING:
     from ome.event_stream import StepContext, TimelineWindowResult
@@ -48,9 +53,9 @@ class _SessionBundle(NamedTuple):
     """All session-derived config needed by the OME pacing loop."""
 
     session: SessionConfig
-    constellation_config: object  # ConstellationConfig (discriminated union)
-    gs_file: object  # GroundStationFile
-    satellites: list
+    constellation_config: ConstellationConfig
+    gs_file: GroundStationFile
+    satellites: list[SatelliteNode]
     period: float
     addressing: AddressingScheme
     neighbors: frozenset
@@ -89,7 +94,7 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
             "OME will not downgrade TLEs into circular elements"
         )
 
-    first_alt = satellites[0].elements.semi_major_axis_km - 6371.0
+    first_alt = satellites[0].elements.semi_major_axis_km - EARTH_RADIUS_KM
     period = orbital_period(first_alt)
     addressing = AddressingScheme(session.addressing)
     neighbors = assign_isl_neighbors(constellation_config, addressing)
@@ -286,7 +291,7 @@ class _LookAheadThread:
         initial_isl_state: dict | None,
         initial_gs_state: dict | None,
         initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
-        initial_pending_teardowns: dict | None = None,
+        initial_pending_teardowns: MbbTeardownState | None = None,
         timestamp_offset: float = 0.0,
     ) -> None:
         """Start background window precomputation. Non-blocking."""
@@ -352,7 +357,12 @@ class _LookAheadThread:
         return self._ready.is_set()
 
 
-async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> None:
+async def _nats_publisher_loop(
+    event_queue,
+    shutdown_event,
+    session_id: str,
+    ready_event=None,
+) -> None:
     """NATS publisher — runs in its own async event loop in its own thread.
 
     Consumes (subject, payload) tuples from the queue and publishes to NATS.
@@ -369,7 +379,7 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
     import queue
 
     import nats
-    from nodalarc.models.events import PlaybackState
+    from nodalarc.models.events import PlaybackControlCommand, PlaybackState
     from nodalarc.nats_channels import (
         MAX_TIME_ACCEL,
         MIN_TIME_ACCEL,
@@ -401,8 +411,8 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
     async def _handle_playback(msg) -> None:
         global _time_accel, _paused, _seeking, _seek_target, _epoch_id
         try:
-            cmd = json.loads(msg.data)
-            action = cmd.get("action", "")
+            cmd = PlaybackControlCommand.model_validate_json(msg.data)
+            action = cmd.action
 
             # Seeking mutex: reject pause/set_speed during seek
             if _seeking and action in ("pause", "set_speed"):
@@ -423,7 +433,9 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
                 await _publish_playback_state("playing")
                 logging.info("Playback resumed (speed=%.1f)", _time_accel)
             elif action == "set_speed":
-                factor = float(cmd.get("factor", 1.0))
+                if cmd.factor is None:
+                    raise ValueError("set_speed requires factor")
+                factor = float(cmd.factor)
                 if factor < MIN_TIME_ACCEL or factor > MAX_TIME_ACCEL:
                     reply = {
                         "error": f"factor {factor} out of range [{MIN_TIME_ACCEL}, {MAX_TIME_ACCEL}]",
@@ -437,9 +449,8 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
             elif action == "seek":
                 _epoch_id += 1
                 _seeking = True
-                target_str = cmd.get("target_sim_time")
-                if target_str:
-                    _seek_target = datetime.fromisoformat(target_str).timestamp()
+                if cmd.target_sim_time:
+                    _seek_target = cmd.target_sim_time.timestamp()
                 else:
                     _seek_target = datetime.now(UTC).timestamp()
                 _paused = False
@@ -467,6 +478,8 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
 
     await nc.subscribe(SUBJECT_PLAYBACK_CONTROL, cb=_handle_playback)
     logging.debug("OME playback control active on %s", SUBJECT_PLAYBACK_CONTROL)
+    if ready_event is not None:
+        ready_event.set()
 
     # Per-message retry: exponential backoff 0.5s, 1s, 2s, 4s, 8s = 15.5s total.
     # Rationale: pacing thread produces at 1Hz (step_seconds=1). The queue
@@ -507,6 +520,9 @@ async def _nats_publisher_loop(event_queue, shutdown_event, session_id: str) -> 
                         exc,
                         backoff,
                     )
+                    # This is publisher-loop retry backoff, not pacing. The
+                    # wall-clock pacer never awaits and never depends on this
+                    # event loop for tick timing.
                     await asyncio.sleep(backoff)
 
             if not published:
@@ -547,7 +563,13 @@ def _run_pacing(
     import json as _json
     import queue
 
-    from nodalarc.models.events import ClockTick, PlaybackState, SchedulingCheckpoint, TeardownEntry
+    from nodalarc.models.events import (
+        CheckpointAssociation,
+        ClockTick,
+        PlaybackState,
+        SchedulingCheckpoint,
+        TeardownEntry,
+    )
     from nodalarc.nats_channels import (
         link_state_snapshot_subject,
         ome_clock_subject,
@@ -567,7 +589,7 @@ def _run_pacing(
         snapshot_seq: int,
         step: int,
         associations: dict[tuple[str, str], tuple[int, int]],
-        teardowns: dict[tuple[str, str], tuple[int, tuple[str, str]]],
+        teardowns: MbbTeardownState,
         mbb_overlap_ticks: int,
     ) -> SchedulingCheckpoint:
         """Convert OME internal association/teardown state to SchedulingCheckpoint."""
@@ -576,25 +598,29 @@ def _run_pacing(
         if step < 0:
             raise ValueError("SchedulingCheckpoint step must be non-negative")
 
-        # associations: (gs_id, sat_id) → (gs_ti, sat_ti) → flatten to gs_id → sat_id
-        assoc_flat: dict[str, str] = {}
-        for (gs_id, sat_id), _ in associations.items():
-            assoc_flat[gs_id] = sat_id
+        assoc_flat: dict[str, CheckpointAssociation] = {}
+        for (gs_id, sat_id), (gs_ti, sat_ti) in associations.items():
+            assoc_flat[f"{gs_id}:{sat_id}"] = CheckpointAssociation(
+                gs_id=gs_id,
+                sat_id=sat_id,
+                gs_terminal_index=gs_ti,
+                sat_terminal_index=sat_ti,
+            )
 
         # Internal teardown state stores the absolute start tick because the
         # allocator needs elapsed simulation ticks. The checkpoint also stores
         # remaining_ticks as an audit value so recovery tests can prove that a
         # no-time-advanced restart preserved MBB overlap semantics exactly.
         td_flat: dict[str, TeardownEntry] = {}
-        for (gs_id, sat_id), (start_tick, successor) in teardowns.items():
-            remaining_ticks = max(0, mbb_overlap_ticks - (step - start_tick))
+        for (gs_id, sat_id), teardown in teardowns.items():
+            remaining_ticks = max(0, mbb_overlap_ticks - (step - teardown.start_step))
             td_flat[f"{gs_id}:{sat_id}"] = TeardownEntry(
-                start_step=start_tick,
+                start_step=teardown.start_step,
                 remaining_ticks=remaining_ticks,
                 gs_id=gs_id,
                 sat_id=sat_id,
-                successor_node_a=successor[0],
-                successor_node_b=successor[1],
+                successor_node_a=teardown.successor_pair[0],
+                successor_node_b=teardown.successor_pair[1],
             )
 
         return SchedulingCheckpoint(
@@ -740,7 +766,7 @@ def _run_pacing(
     running_isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     running_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
     current_associations: dict[tuple[str, str], tuple[int, int]] = {}
-    mbb_pending_teardowns: dict[tuple[str, str], tuple[int, tuple[str, str]]] = {}
+    mbb_pending_teardowns: MbbTeardownState = {}
     step = 0
     snapshot_seq = 0
     last_snapshot_sim_s: float = -snapshot_interval_s  # force immediate on first step
@@ -1271,6 +1297,7 @@ def main() -> None:
 
     event_queue: queue.Queue = queue.Queue(maxsize=1000)
     shutdown_event = threading.Event()
+    publisher_ready = threading.Event()
 
     def _signal_handler(signum, frame):
         logging.info("Shutdown signal received (%d)", signum)
@@ -1281,13 +1308,24 @@ def main() -> None:
 
     # Thread 1: NATS publisher — async event loop, consumes from queue
     def _publisher_thread():
-        asyncio.run(_nats_publisher_loop(event_queue, shutdown_event, session_id))
+        asyncio.run(
+            _nats_publisher_loop(
+                event_queue,
+                shutdown_event,
+                session_id,
+                ready_event=publisher_ready,
+            )
+        )
 
     pub_thread = threading.Thread(target=_publisher_thread, name="nats-publisher", daemon=True)
     pub_thread.start()
 
-    # Give publisher time to connect before pacing starts
-    time.sleep(1)
+    if not publisher_ready.wait(timeout=30.0):
+        shutdown_event.set()
+        raise RuntimeError(
+            "OME NATS publisher did not signal readiness within 30s; "
+            "refusing to start pacing without a connected publisher"
+        )
 
     # Thread 2 (main thread): Pacing — synchronous, time.sleep(), produces to queue
     _run_pacing(args.session, args.output_dir, event_queue, shutdown_event, preloaded_cfg=pre_cfg)

@@ -201,7 +201,6 @@ def main() -> None:
         agent_pool=pool,
         max_latency_age_s=session.dispatch.max_latency_age_ticks * session.time.step_seconds,
         compression_factor=session.time.compression,
-        latency_update_interval_s=session.time.latency_update_interval_seconds,
         gs_terminal_capacities=gs_terminal_capacities,
         sat_ground_terminal_capacities=sat_ground_terminal_capacities,
         mbb_dispatch=mbb_dispatch,

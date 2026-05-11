@@ -15,6 +15,28 @@ LinkStateSnapshot is applied as replace-not-merge.
 
 INVARIANT: visible=True, scheduled=False for a GS pair MUST remove the
 pair from desired state. test_ome_scheduler_contract.py verifies this.
+
+TODO(trust-gap-closure#4): Structured failure telemetry. Every trust-relevant
+failure (schema incompatibility, wiring timeout, unrepresentable latency,
+missing OME geometry, authority freshness violation) should publish an
+OpsFailureEvent to NATS nodalarc.ops.* BEFORE raising/logging. This makes
+failures queryable from VS-API /api/v1/ops/events and visible to operator
+dashboards. Pre-NATS-connection failures (wiring gate timeout, checkpoint
+decode) must buffer to a local file and drain on first connection.
+
+TODO(trust-gap-closure#3): Complete dispatch extraction. The dispatch planner
+(dispatch_planner.py) classifies MBB changes but _reconcile_mbb still owns
+phase ordering, greedy reservation, and state mutation. The planner should
+return a DispatchPlan (ordered sequence of DispatchPhase objects) that the
+actuator executes. The Dispatcher should orchestrate, not plan. This makes
+the full BBM/MBB phase logic testable without constructing a Dispatcher.
+
+TODO(trust-gap-closure#6): Checkpoint lineage events. When the OME starts
+a new lineage (fresh start, stale checkpoint, incompatible checkpoint), it
+should publish a dedicated SessionLineageReset event before the first
+snapshot or tick. The Scheduler, on receiving the event, clears
+_last_snapshot_seq, _actual_links, and _desired_links, and re-enters
+SUSPENDED. This prevents sequence regressions from being silent.
 """
 
 from __future__ import annotations
@@ -551,7 +573,16 @@ class Dispatcher:
                 )
 
         async def _on_playback_state(msg):
-            ps = PlaybackState.model_validate_json(msg.data)
+            try:
+                ps = PlaybackState.model_validate_json(msg.data)
+            except ValidationError as exc:
+                log.warning(
+                    "Ignoring schema-incompatible retained PlaybackState on %s; "
+                    "waiting for OME to publish current playback state: %s",
+                    msg.subject,
+                    exc,
+                )
+                return
             if ps.state == "seeking" and ps.epoch_id > self._expected_epoch_id:
                 # New seek — enter SUSPENDED state
                 self._epoch_sync.begin_seek(ps.epoch_id)
@@ -611,7 +642,16 @@ class Dispatcher:
                     last_sim_time = tick_sim_time
 
         async def _on_link_state_snapshot(msg):
-            snapshot = LinkStateSnapshot.model_validate_json(msg.data)
+            try:
+                snapshot = LinkStateSnapshot.model_validate_json(msg.data)
+            except ValidationError as exc:
+                log.warning(
+                    "Ignoring schema-incompatible retained LinkStateSnapshot on %s; "
+                    "waiting for OME to publish current snapshot: %s",
+                    msg.subject,
+                    exc,
+                )
+                return
 
             if self._suspended:
                 # Buffer if matching epoch_id, discard otherwise
@@ -1228,19 +1268,19 @@ class Dispatcher:
         sim_iso = sim_time.isoformat()
 
         if not self._mbb_dispatch:
-            # Original two-phase BBM dispatch
+            # Two-phase BBM dispatch — sorted for deterministic replay
             if to_remove:
                 removed = await self._send_batch_down(
                     to_remove, sim_iso, sim_time, nc, down_reasons
                 )
-                for pair in removed:
+                for pair in sorted(removed):
                     info = self._actual_links.pop(pair, None)
                     self._last_latencies.pop(pair, None)
                     self._decrement_active_counts(pair, info)
 
             if to_add:
                 added = await self._send_batch_up(to_add, desired, sim_iso, sim_time, nc)
-                for pair in added:
+                for pair in sorted(added):
                     self._actual_links[pair] = desired[pair]
                     self._last_latencies[pair] = desired[pair].latency_ms
                     self._increment_active_counts(pair)
@@ -1255,6 +1295,24 @@ class Dispatcher:
                 down_reasons,
                 forced_bbm_pairs,
             )
+
+        # TODO(trust-gap-closure#1): Refresh authority metadata on ALL active
+        # links that appear in the current desired state, not just those with
+        # changed numeric values. Currently dispatch_planner.diff_link_state
+        # only flags links where range_km or latency_ms changed numerically.
+        # Links that are stable (same floats) never get their authority_sim_time,
+        # authority_sequence, or authority_source updated — so a link active for
+        # 100 ticks has provenance from tick 1. An auditor asking "when was this
+        # link's geometry last confirmed?" gets a stale answer.
+        #
+        # Fix: after reconciliation, walk _actual_links and for every pair that
+        # also appears in desired, update authority metadata from desired[pair].
+        # Guard against authority regression: only update if
+        # desired[pair].authority_sim_time >= actual[pair].authority_sim_time
+        # (a stale retained snapshot from a pre-restart OME must not overwrite
+        # newer authority — that can only happen after an explicit lineage reset).
+        # The numeric diff still gates LatencyUpdate/tc dispatch — no point
+        # re-applying the same delay.
 
         if to_update_latency:
             await self._send_authoritative_latency_updates(to_update_latency, desired, sim_time)
@@ -1346,14 +1404,16 @@ class Dispatcher:
         bbm_segments = classification.bbm_segments
 
         # --- PHASE 1: Free capacity (BBM downs + ISL downs) ---
+        # Sorted for deterministic dispatch ordering — two runs with different
+        # PYTHONHASHSEED must produce identical link-event sequences.
         phase1_downs: set[tuple[str, str]] = set(isl_downs)
-        for gs_id in bbm_segments:
+        for gs_id in sorted(bbm_segments):
             phase1_downs.update(gs_downs.get(gs_id, set()))
 
         if phase1_downs:
             removed = await self._send_batch_down(phase1_downs, sim_iso, sim_time, nc, down_reasons)
             failed_bbm_gs: set[str] = set()
-            for pair in phase1_downs:
+            for pair in sorted(phase1_downs):
                 gs_id = gs_id_for_pair(pair, self._gs_capacities)
                 if pair in removed:
                     info = self._actual_links.pop(pair, None)
@@ -1366,19 +1426,18 @@ class Dispatcher:
             failed_bbm_gs = set()
 
         # --- INTER-PHASE: Greedy reservation for Phase 2 ups ---
-        # Work with post-Phase-1 capacity (real, not projected)
+        # Work with post-Phase-1 capacity (real, not projected).
+        # Sorted iteration ensures greedy reservation winner is
+        # deterministic when multiple pairs compete for one terminal.
         phase2_ups: set[tuple[str, str]] = set(isl_ups)
 
-        # MBB ups (existing spare, no dependency on Phase 1 frees)
-        for gs_id in mbb_segments:
+        for gs_id in sorted(mbb_segments):
             phase2_ups.update(gs_ups.get(gs_id, set()))
 
-        # BBM ups (capacity freed in Phase 1) — skip if Phase 1 down failed
-        # Greedy reservation: walk ups in arbitrary order, check capacity
-        for gs_id in bbm_segments:
+        for gs_id in sorted(bbm_segments):
             if gs_id in failed_bbm_gs:
-                continue  # Phase 1 down failed — terminal still occupied
-            for pair in gs_ups.get(gs_id, set()):
+                continue
+            for pair in sorted(gs_ups.get(gs_id, set())):
                 sat_id = sat_id_for_gs_pair(pair, self._gs_capacities)
                 if sat_id is None:
                     raise ValueError(f"Ground segment {gs_id!r} includes non-ground pair {pair}")
@@ -1398,7 +1457,7 @@ class Dispatcher:
         # --- PHASE 2: All ups ---
         if phase2_ups:
             added = await self._send_batch_up(phase2_ups, desired, sim_iso, sim_time, nc)
-            for pair in added:
+            for pair in sorted(added):
                 self._actual_links[pair] = desired[pair]
                 self._last_latencies[pair] = desired[pair].latency_ms
                 self._increment_active_counts(pair)
@@ -1407,17 +1466,16 @@ class Dispatcher:
 
         # --- PHASE 3: MBB downs (only where Phase 2 up succeeded) ---
         phase3_downs: set[tuple[str, str]] = set()
-        for gs_id in mbb_segments:
+        for gs_id in sorted(mbb_segments):
             ups_for_gs = gs_ups.get(gs_id, set())
             if ups_for_gs & added:
-                # At least one up succeeded for this segment — safe to tear down old
                 phase3_downs.update(gs_downs.get(gs_id, set()))
 
         if phase3_downs:
             removed3 = await self._send_batch_down(
                 phase3_downs, sim_iso, sim_time, nc, down_reasons
             )
-            for pair in removed3:
+            for pair in sorted(removed3):
                 info = self._actual_links.pop(pair, None)
                 self._last_latencies.pop(pair, None)
                 self._decrement_active_counts(pair, info)

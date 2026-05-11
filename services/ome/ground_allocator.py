@@ -16,9 +16,8 @@ from dataclasses import dataclass
 
 from nodalarc.models.ground_station import HysteresisParameters
 
+from ome.types import MbbTeardown, MbbTeardownState
 from ome.visibility import GroundVisibility
-
-MbbTeardownState = dict[tuple[str, str], tuple[int, tuple[str, str]]]
 
 
 @dataclass(frozen=True)
@@ -165,18 +164,18 @@ def allocate_ground_links(
     # Expire/free MBB teardown occupancy before allocating new or overlapping
     # links. Remaining teardown entries still consume physical terminals.
     valid_teardowns: MbbTeardownState = {}
-    for pair, (start_tick, successor) in pending_teardowns.items():
+    for pair, teardown in pending_teardowns.items():
         if pair not in current_associations:
             continue
         gs_id_td, sat_id_td = _ground_and_satellite_ids(pair, ground_station_ids)
         gs_idx, sat_idx = current_associations[pair]
-        elapsed = step - start_tick
+        elapsed = step - teardown.start_step
 
         if elapsed >= mbb_overlap_ticks or pair not in visible_set:
             gs_occupied.setdefault(gs_id_td, set()).discard(gs_idx)
             sat_gnd_occupied.setdefault(sat_id_td, set()).discard(sat_idx)
         else:
-            valid_teardowns[pair] = (start_tick, successor)
+            valid_teardowns[pair] = teardown
 
     # Step B/C: merge continuing overlap and new candidates into one
     # deterministic walk. Overlap wins over brand-new candidates at equal
@@ -187,8 +186,10 @@ def allocate_ground_links(
         if pair in new_associations:
             continue
         if pair in valid_teardowns:
-            start_tick_td, successor_td = valid_teardowns[pair]
-            merged.append((prio, 1, -score, pair, "overlap", start_tick_td, successor_td))
+            teardown = valid_teardowns[pair]
+            merged.append(
+                (prio, 1, -score, pair, "overlap", teardown.start_step, teardown.successor_pair)
+            )
         else:
             merged.append((prio, 2, -score, pair, "new", 0, None))
 
@@ -204,7 +205,10 @@ def allocate_ground_links(
                 sat_capacity[sat_id_m] -= 1
                 if successor_m is None:
                     raise ValueError(f"MBB teardown {pair} is missing successor link")
-                new_pending_teardowns[pair] = (start_tick_m, successor_m)
+                new_pending_teardowns[pair] = MbbTeardown(
+                    start_step=start_tick_m,
+                    successor_pair=successor_m,
+                )
                 gs_scheduled[pair] = True
             else:
                 gs_occupied.setdefault(gs_id_m, set()).discard(gs_idx)
@@ -258,13 +262,16 @@ def allocate_ground_links(
                         gs_occupied.setdefault(gs_id_m, set()).add(gs_idx)
                         sat_gnd_occupied.setdefault(sat_id_m, set()).add(sat_idx)
                         sat_capacity[sat_id_m] -= 1
-                        new_pending_teardowns[worst_pair] = (step, pair)
+                        new_pending_teardowns[worst_pair] = MbbTeardown(
+                            start_step=step,
+                            successor_pair=pair,
+                        )
                         gs_scheduled[pair] = True
 
     # Successor-aware abort check: if the replacement link did not survive the
     # allocation walk, the old link cannot remain in teardown state.
     for pair in list(new_pending_teardowns.keys()):
-        _start, successor = new_pending_teardowns[pair]
+        successor = new_pending_teardowns[pair].successor_pair
         if successor not in new_associations or successor in new_pending_teardowns:
             del new_pending_teardowns[pair]
 

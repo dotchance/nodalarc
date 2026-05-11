@@ -10,6 +10,7 @@ Verifies:
 
 import math
 
+from nodalarc.constants import EARTH_RADIUS_KM
 from ome.propagator import Vec3
 from ome.visibility import check_field_of_regard, check_isl_visibility
 
@@ -30,7 +31,7 @@ def _polar_orbit_state(raan_deg: float, true_anomaly_deg: float, altitude_km: fl
     - vel = v(-sin(ν)cos(Ω), -sin(ν)sin(Ω), cos(ν))
     where ν = true anomaly.
     """
-    R = 6371.0 + altitude_km
+    R = EARTH_RADIUS_KM + altitude_km
     v = math.sqrt(398600.4418 / R)  # vis-viva for circular orbit
     raan = math.radians(raan_deg)
     nu = math.radians(true_anomaly_deg)

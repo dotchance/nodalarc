@@ -20,6 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import yaml
+from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.constellation_loader import (
     expand_constellation,
     isl_terminal_for_interface,
@@ -88,7 +89,7 @@ def compute_coverage_preview(
     addressing = AddressingScheme(AddressingConfig())
     neighbors = assign_isl_neighbors(constellation, addressing)
 
-    first_alt = satellites[0].elements.semi_major_axis_km - 6371.0
+    first_alt = satellites[0].elements.semi_major_axis_km - EARTH_RADIUS_KM
     period = orbital_period(first_alt)
 
     # Extract visibility parameters from resolved constellation

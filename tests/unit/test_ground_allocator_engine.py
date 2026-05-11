@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from nodalarc.models.ground_station import HysteresisParameters
 from ome.ground_allocator import allocate_ground_links
+from ome.types import MbbTeardown
 from ome.visibility import GroundVisibility
 
 
@@ -13,7 +14,7 @@ def _allocate(
     visible: list[GroundVisibility],
     *,
     current: dict[tuple[str, str], tuple[int, int]] | None = None,
-    pending: dict[tuple[str, str], tuple[int, tuple[str, str]]] | None = None,
+    pending: dict[tuple[str, str], MbbTeardown] | None = None,
     policy: str = "highest-elevation",
     gs_terminals: int = 1,
     sat_terminals: dict[str, int] | None = None,
@@ -82,7 +83,7 @@ def test_mbb_replacement_starts_teardown_when_challenger_beats_hysteresis():
         old_pair: (0, 0),
         new_pair: (1, 0),
     }
-    assert result.pending_teardowns == {old_pair: (10, new_pair)}
+    assert result.pending_teardowns == {old_pair: MbbTeardown(10, new_pair)}
     assert result.scheduled_pairs == frozenset({old_pair, new_pair})
 
 
@@ -118,7 +119,7 @@ def test_pending_teardown_expires_after_overlap_window():
         },
         ground_station_ids={"gs-A"},
         current_associations={old_pair: (0, 0), new_pair: (1, 0)},
-        pending_teardowns={old_pair: (10, new_pair)},
+        pending_teardowns={old_pair: MbbTeardown(10, new_pair)},
         gs_terminal_counts={"gs-A": 2},
         gs_policies={"gs-A": "highest-elevation"},
         gs_min_elevations={"gs-A": 25.0},

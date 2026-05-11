@@ -61,7 +61,6 @@ __all__ = [
     "propagate_keplerian",
     "propagate_j2_mean_elements",
     "propagate_sgp4_tle",
-    "distance_km",
 ]
 
 # Earth's rotation rate (rad/s)
@@ -380,14 +379,3 @@ def propagate_sgp4_tle(
     vel_ecef = EcefVec3(Vec3(*velocity.km_per_s))
     geo = ecef_to_geodetic(pos_ecef)
     return pos_ecef, vel_ecef, geo
-
-
-def distance_km(a: Vec3, b: Vec3) -> float:
-    """Euclidean distance between two 3D points.
-
-    Compatibility wrapper around the single geometry contract in
-    ``nodalarc.geo``. Keep callers working while avoiding a second formula.
-    """
-    from nodalarc.geo import compute_range_km
-
-    return compute_range_km(a, b)

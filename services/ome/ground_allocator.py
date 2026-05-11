@@ -126,7 +126,13 @@ def allocate_ground_links(
             scored_pairs.append((priority, score, gs_id, gv.sat_id, gv.range_km, sat_gnd_cap))
             score_lookup[pair] = (score, priority)
 
-    scored_pairs.sort(key=lambda x: (x[0], -x[1], x[5]))
+    # Final tiebreaker (gs_id, sat_id) ensures deterministic allocation when
+    # priority, score, and satellite capacity are equal. Without this, dict
+    # iteration order from upstream (hash-seed-dependent in older Pythons,
+    # insertion-order in 3.7+ but still input-dependent) decides which pair
+    # wins a contested terminal — producing different VisibilityEvent sequences
+    # from identical session configs.
+    scored_pairs.sort(key=lambda x: (x[0], -x[1], x[5], x[2], x[3]))
 
     visible_set: set[tuple[str, str]] = {
         (min(gs, sat), max(gs, sat)) for _, _, gs, sat, _, _ in scored_pairs

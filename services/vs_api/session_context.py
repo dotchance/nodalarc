@@ -59,6 +59,7 @@ from nodalarc.nats_channels import (
     playback_state_subject,
     session_ephemeris_subject,
 )
+from pydantic import ValidationError
 
 log = logging.getLogger(__name__)
 
@@ -370,7 +371,16 @@ class SessionContext:
     async def _on_session_ephemeris(self, msg) -> None:
         from nodalarc.models.events import SessionEphemeris
 
-        eph = SessionEphemeris.model_validate_json(msg.data)
+        try:
+            eph = SessionEphemeris.model_validate_json(msg.data)
+        except ValidationError as exc:
+            log.warning(
+                "Ignoring schema-incompatible retained SessionEphemeris on %s; "
+                "waiting for OME to publish the current ephemeris: %s",
+                msg.subject,
+                exc,
+            )
+            return
         self.cached_ephemeris_obj = eph
         eph_dict = json.loads(msg.data.decode())
         eph_dict["msg_type"] = "session_ephemeris"

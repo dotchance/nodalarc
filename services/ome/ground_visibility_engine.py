@@ -12,9 +12,8 @@ from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.models.addressing import AddressingScheme
 
 from ome.propagation_engine import PropagatedState, propagate_satellites
+from ome.types import GroundVisibilityDetails
 from ome.visibility import GroundVisibility, check_ground_visibility
-
-GroundVisibilityDetails = dict[tuple[str, str], tuple[bool, float, float | None]]
 
 
 @dataclass(frozen=True)

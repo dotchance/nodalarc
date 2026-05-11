@@ -1,5 +1,6 @@
 """Test visibility computation — LOS, range, elevation, scheduling."""
 
+from nodalarc.geo import compute_range_km
 from ome.propagator import (
     GeoPosition,
     Vec3,
@@ -14,7 +15,6 @@ from ome.visibility import (
     check_isl_visibility,
     compute_angular_velocity,
     compute_elevation_angle,
-    compute_range,
     enforce_symmetric_scheduling,
     has_line_of_sight,
     schedule_isl_terminals,
@@ -61,7 +61,7 @@ class TestRange:
         e2 = elements_from_params(550.0, 53.0, 0.0, 36.0)
         pos1, _, _ = propagate_keplerian(e1, EPOCH, 0.0)
         pos2, _, _ = propagate_keplerian(e2, EPOCH, 0.0)
-        r = compute_range(pos1, pos2)
+        r = compute_range_km(pos1, pos2)
         # 2 * (R+h) * sin(θ/2) ≈ 2 * 6921 * sin(18°) ≈ 4278 km
         assert 4000.0 < r < 4600.0
 
@@ -70,7 +70,7 @@ class TestRange:
         e2 = elements_from_params(550.0, 53.0, 0.0, 36.0)
         pos1, _, _ = propagate_keplerian(e1, EPOCH, 0.0)
         pos2, _, _ = propagate_keplerian(e2, EPOCH, 0.0)
-        r = compute_range(pos1, pos2)
+        r = compute_range_km(pos1, pos2)
         assert r < 5016.0  # starlink-early-44 max range
 
 

@@ -48,6 +48,7 @@ from nodalarc.nats_channels import (
     session_ephemeris_subject,
     substrate_latency_subject,
 )
+from pydantic import ValidationError
 
 from scheduler.agent_pool import AgentPool
 from scheduler.desired_state import (
@@ -68,7 +69,6 @@ from scheduler.dispatch_planner import (
 )
 from scheduler.epoch_sync import EpochSyncState
 from scheduler.latency_compensator import LatencyCompensation, compensate_latency
-from scheduler.latency_model import PositionTable
 from scheduler.node_agent_batches import successful_interface_acks
 from scheduler.pod_locator import PodLocationMap
 from scheduler.substrate_latency import resolve_substrate_rtt_ms
@@ -136,7 +136,6 @@ class Dispatcher:
         session_id: str,
         max_latency_age_s: float,
         compression_factor: int = 1,
-        latency_update_interval_s: int = 10,
         epsilon_ms: float = 100.0,
         gs_terminal_capacities: dict[str, int] | None = None,
         sat_ground_terminal_capacities: dict[str, int] | None = None,
@@ -151,7 +150,6 @@ class Dispatcher:
             raise ValueError("max_latency_age_s must be > 0")
         self._max_latency_age_s = max_latency_age_s
         self._compression = max(1, compression_factor)
-        self._latency_interval = latency_update_interval_s
         self._epsilon_ms = epsilon_ms
         if rtt_to_one_way_policy != "half-rtt":
             raise ValueError(f"Unsupported RTT conversion policy: {rtt_to_one_way_policy!r}")
@@ -180,8 +178,6 @@ class Dispatcher:
         self._subj_latency = latency_update_subject(session_id)
         self._subj_substrate = substrate_latency_subject(session_id)
 
-        self._position_table = PositionTable()
-
         # Decision engine state: what SHOULD be active (based on OME events).
         # Written ONLY by callbacks. Snapshots replace entirely. Events modify
         # incrementally. The queue carries copies to the dispatch worker.
@@ -197,8 +193,6 @@ class Dispatcher:
         self._sat_active_count: dict[str, int] = {}
 
         self._last_latencies: dict[tuple[str, str], float] = {}
-        self._steps_since_latency_update = 0
-        self._latency_update_pending = False
         self._current_sim_time: datetime | None = None
         self._running = False
         self._last_snapshot_seq: int = 0
@@ -477,7 +471,16 @@ class Dispatcher:
         async def _on_visibility(msg):
             nonlocal last_sim_time
             data = json.loads(msg.data)
-            vis = VisibilityEvent.model_validate(data)
+            try:
+                vis = VisibilityEvent.model_validate(data)
+            except ValidationError as exc:
+                log.warning(
+                    "Ignoring schema-incompatible retained VisibilityEvent on %s; "
+                    "waiting for a current OME event: %s",
+                    msg.subject,
+                    exc,
+                )
+                return
 
             if self._suspended:
                 log.debug(
@@ -522,9 +525,17 @@ class Dispatcher:
             last_sim_time = snap_sim
 
         async def _on_session_ephemeris(msg):
-            eph = SessionEphemeris.model_validate_json(msg.data)
+            try:
+                eph = SessionEphemeris.model_validate_json(msg.data)
+            except ValidationError as exc:
+                log.warning(
+                    "Ignoring schema-incompatible retained SessionEphemeris on %s; "
+                    "waiting for OME to publish the current ephemeris: %s",
+                    msg.subject,
+                    exc,
+                )
+                return
             if eph.epoch_id == self._expected_epoch_id:
-                self._position_table.load_ephemeris(eph)
                 self._epoch_sync.mark_ephemeris(eph.epoch_id)
                 log.debug(
                     "SessionEphemeris epoch_id=%d loaded: %d nodes",
@@ -544,8 +555,6 @@ class Dispatcher:
             if ps.state == "seeking" and ps.epoch_id > self._expected_epoch_id:
                 # New seek — enter SUSPENDED state
                 self._epoch_sync.begin_seek(ps.epoch_id)
-                self._latency_update_pending = False
-                self._steps_since_latency_update = 0
                 # Start watchdog
                 if self._watchdog_task and not self._watchdog_task.done():
                     self._watchdog_task.cancel()
@@ -600,11 +609,6 @@ class Dispatcher:
                     await self._dispatch_queue.put(intent)
                     pending_vis.clear()
                     last_sim_time = tick_sim_time
-
-            self._steps_since_latency_update += 1
-            if self._steps_since_latency_update >= self._latency_interval:
-                self._latency_update_pending = True
-                self._steps_since_latency_update = 0
 
         async def _on_link_state_snapshot(msg):
             snapshot = LinkStateSnapshot.model_validate_json(msg.data)
@@ -964,10 +968,6 @@ class Dispatcher:
                 intent.down_reasons,
                 intent.forced_bbm_pairs,
             )
-
-            if self._latency_update_pending:
-                await self._update_latencies(nc)
-                self._latency_update_pending = False
 
         log.debug("Dispatch worker stopped")
 
@@ -1469,19 +1469,6 @@ class Dispatcher:
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
         )
-
-    # ------------------------------------------------------------------
-    # Latency updates
-    # ------------------------------------------------------------------
-
-    async def _update_latencies(self, to_pub) -> None:
-        """Legacy hook retained for the dispatch loop.
-
-        The Scheduler no longer computes orbital latency. OME-owned snapshots
-        and visibility events carry authoritative range/latency, and
-        _reconcile_links applies changes to already-active links. Keeping this
-        hook as a no-op avoids a competing geometry authority.
-        """
 
     # ------------------------------------------------------------------
     # Epoch synchronization state machine (PRD v0.71)

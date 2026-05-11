@@ -13,13 +13,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from nodalarc.geo import compute_latency_ms
+from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.models.addressing import NeighborAssignment
 
 from ome.propagation_engine import PropagatedState
 from ome.visibility import (
     check_isl_visibility,
-    compute_range,
     enforce_symmetric_scheduling,
     schedule_isl_terminals,
 )
@@ -150,7 +149,7 @@ def evaluate_isl_feasibility(
             terminal_type = constraints_a.terminal_type
 
             if constraints_a.terminal_type != constraints_b.terminal_type:
-                range_km = compute_range(state_a.position_ecef_km, state_b.position_ecef_km)
+                range_km = compute_range_km(state_a.position_ecef_km, state_b.position_ecef_km)
                 results[pair] = IslFeasibilityResult(
                     pair=pair,
                     link_type=assignment_a.link_type,
@@ -172,7 +171,7 @@ def evaluate_isl_feasibility(
             if not _role_allows_link(
                 constraints_a.role, assignment_a.link_type
             ) or not _role_allows_link(constraints_b.role, assignment_a.link_type):
-                range_km = compute_range(state_a.position_ecef_km, state_b.position_ecef_km)
+                range_km = compute_range_km(state_a.position_ecef_km, state_b.position_ecef_km)
                 results[pair] = IslFeasibilityResult(
                     pair=pair,
                     link_type=assignment_a.link_type,

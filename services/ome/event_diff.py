@@ -19,10 +19,10 @@ from nodalarc.models.events import VisibilityEvent
 
 from ome.ground_allocator import GroundAllocationResult
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
+from ome.types import GroundVisibilityDetails
 
 IslVisibilityState = dict[tuple[str, str], tuple[bool, bool]]
 GroundVisibilityState = dict[tuple[str, str], tuple[bool, bool, str]]
-GroundVisibilityDetails = Mapping[tuple[str, str], tuple[bool, float, float | None]]
 
 
 @dataclass(frozen=True)

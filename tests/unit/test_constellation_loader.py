@@ -2,6 +2,7 @@
 
 import math
 
+from nodalarc.constants import EARTH_RADIUS_KM
 from nodalarc.constellation_loader import (
     expand_constellation,
     load_constellation,
@@ -37,7 +38,7 @@ class TestParametricExpansion:
         config = load_constellation(CONFIGS_DIR / "constellations/starlink-early-44.yaml")
         sats = expand_constellation(config)
         for sat in sats:
-            alt = sat.elements.semi_major_axis_km - 6371.0
+            alt = sat.elements.semi_major_axis_km - EARTH_RADIUS_KM
             assert abs(alt - 550.0) < 0.01
 
     def test_starlink_early_raan_spacing(self):
@@ -94,7 +95,7 @@ class TestExplicitExpansion:
         config = load_constellation(CONFIGS_DIR / "constellations/custom-example.yaml")
         sats = expand_constellation(config)
         p0s0 = next(s for s in sats if s.plane == 0 and s.slot == 0)
-        assert abs(p0s0.elements.semi_major_axis_km - (6371.0 + 550.0)) < 0.01
+        assert abs(p0s0.elements.semi_major_axis_km - (EARTH_RADIUS_KM + 550.0)) < 0.01
         assert abs(p0s0.elements.inclination_rad - math.radians(53.0)) < 1e-10
         assert abs(p0s0.elements.raan_rad) < 1e-10
         assert abs(p0s0.elements.true_anomaly_rad) < 1e-10

@@ -19,16 +19,9 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
-from nodalarc.models.events import (
-    EphemerisNodeFixed,
-    EphemerisNodeKeplerian,
-    SessionEphemeris,
-)
 from nodalarc.models.link_state import LinkStateSnapshot
 from scheduler.dispatcher import Dispatcher
 from scheduler.epoch_sync import EpochSyncState
-
-EPOCH = 1735689600.0
 
 
 def _make_dispatcher(**overrides) -> Dispatcher:
@@ -45,26 +38,6 @@ def _make_dispatcher(**overrides) -> Dispatcher:
     )
     defaults.update(overrides)
     return Dispatcher(**defaults)
-
-
-def _make_ephemeris(epoch_id: int = 0) -> SessionEphemeris:
-    return SessionEphemeris(
-        epoch_id=epoch_id,
-        sim_time=datetime(2025, 1, 1, tzinfo=UTC),
-        epoch_unix=EPOCH,
-        nodes={
-            "sat-P00S00": EphemerisNodeKeplerian(
-                propagator="keplerian-circular",
-                altitude_km=550.0,
-                inclination_deg=53.0,
-                raan_deg=0.0,
-                true_anomaly_deg=0.0,
-                plane=0,
-                slot=0,
-            ),
-            "gs-ashburn": EphemerisNodeFixed(lat_deg=39.04, lon_deg=-77.49, alt_km=0.095),
-        },
-    )
 
 
 def _make_snapshot(epoch_id: int = 0, seq: int = 1) -> LinkStateSnapshot:
@@ -187,7 +160,6 @@ class TestSeekResume:
     def test_resume_requires_all_four_conditions(self):
         d = self._suspended_dispatcher(epoch_id=1)
         d._playback_playing_received = True
-        d._position_table.load_ephemeris(_make_ephemeris(1))
         d._epoch_deps_met["ephemeris"] = True
         d._buffered_snapshot = _make_snapshot(epoch_id=1)
         d._epoch_deps_met["snapshot"] = True
@@ -212,7 +184,6 @@ class TestSeekResume:
 
     def test_no_resume_without_playing(self):
         d = self._suspended_dispatcher()
-        d._position_table.load_ephemeris(_make_ephemeris(1))
         d._epoch_deps_met["ephemeris"] = True
         d._buffered_snapshot = _make_snapshot(epoch_id=1)
         d._epoch_deps_met["snapshot"] = True
@@ -224,7 +195,6 @@ class TestSeekResume:
     def test_no_resume_without_snapshot(self):
         d = self._suspended_dispatcher()
         d._playback_playing_received = True
-        d._position_table.load_ephemeris(_make_ephemeris(1))
         d._epoch_deps_met["ephemeris"] = True
 
         tick_data = {"sim_time": "2025-01-01T00:00:00+00:00", "epoch_id": 1}
@@ -234,7 +204,6 @@ class TestSeekResume:
     def test_resume_sets_sim_time(self):
         d = self._suspended_dispatcher(epoch_id=0)
         d._playback_playing_received = True
-        d._position_table.load_ephemeris(_make_ephemeris(0))
         d._epoch_deps_met = {"ephemeris": True, "snapshot": True}
         d._buffered_snapshot = _make_snapshot(0)
 

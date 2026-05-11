@@ -137,9 +137,6 @@ def _make_dispatcher(interface_map=None, stub_success=True):
     )
     d._js = AsyncMock()
     d._nc = MagicMock()
-    d._position_table = MagicMock()
-    d._position_table.compute_link_latency = MagicMock(return_value=3.0)
-    d._position_table.compute_link_range = MagicMock(return_value=1500.0)
     return d, pool
 
 

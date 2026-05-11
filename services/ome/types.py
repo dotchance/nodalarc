@@ -16,4 +16,8 @@ class MbbTeardown:
 
 
 MbbTeardownState = dict[tuple[str, str], MbbTeardown]
+# TODO(trust-gap-closure#10): Replace this positional tuple with a frozen
+# dataclass (visible: bool, range_km: float, elevation_deg: float | None)
+# so field access is by name, not position. This type crosses OME engine
+# boundaries (ground_visibility_engine -> event_diff -> snapshot_builder).
 GroundVisibilityDetails = dict[tuple[str, str], tuple[bool, float, float | None]]

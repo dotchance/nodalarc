@@ -5,6 +5,21 @@ namespace_ops functions used by BatchLinkUp/SetLatency must leave an
 auditable tc/netem qdisc in the target namespace. The test is marked
 requires_root because Linux network namespaces and qdisc mutation require
 CAP_NET_ADMIN.
+
+TODO(trust-gap-closure#8): E2E substrate proof (Gate C). This test verifies
+tc/netem application in an isolated namespace. The full authority chain —
+OME computes orbital_one_way_ms, Scheduler derives netem_one_way_ms via
+half-RTT substrate compensation, Node Agent applies tc — is not yet tested
+end-to-end in a single test. Add an integration test that runs the full
+chain from OME compute_step through latency compensator to namespace_ops
+to tc qdisc verification to ping RTT measurement. Assert tc qdisc state
+deterministically; treat ping RTT as informational with documented jitter.
+
+TODO(trust-gap-closure#9): Scale characterization (Gate D). Add benchmark
+fixtures (separate from unit tests) for 176-sat and 1k-sat OME ticks
+measuring P50/P95/P99 compute_step time. Add Scheduler reconcile benchmark
+with mock agent pool. Tie budgets to a named reference machine or express
+as ratio of sim step interval.
 """
 
 from __future__ import annotations

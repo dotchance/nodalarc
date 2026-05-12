@@ -19,6 +19,13 @@ from typing import Any
 
 import kubernetes.client
 import kubernetes.config
+from nodalarc.substrate.manifest_contract import WiringManifest
+from nodalarc.substrate.wiring_status import (
+    NodeWiringStatus,
+    failed_status,
+    ready_status,
+    status_configmap_data,
+)
 from pydantic import ValidationError
 from pyroute2 import IPRoute
 
@@ -27,7 +34,6 @@ from node_agent.ground_bridge import (
     create_mediated_isl,
     create_satellite_ground_veth,
 )
-from node_agent.manifest_contract import WiringManifest
 from node_agent.namespace_ops import (
     _in_namespace,
     _write_sysctl_in_netns,
@@ -36,12 +42,6 @@ from node_agent.namespace_ops import (
     enable_mpls_input,
 )
 from node_agent.pid_discovery import discover_local_pod_pids
-from node_agent.wiring_status import (
-    NodeWiringStatus,
-    failed_status,
-    ready_status,
-    status_configmap_data,
-)
 
 _IPTABLES_RULES = (
     "*filter\n"

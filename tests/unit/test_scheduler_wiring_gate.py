@@ -7,8 +7,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from node_agent.manifest_contract import REQUIRED_WIRING_PHASES
-from node_agent.wiring_status import NodeWiringStatus, WiringPhaseResult
+from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES
+from nodalarc.substrate.wiring_status import NodeWiringStatus, WiringPhaseResult
 from scheduler.__main__ import wait_for_wiring_gate
 
 SESSION_ID = "test-session"

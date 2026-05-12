@@ -9,7 +9,7 @@ on its own node.
 IMPORTANT — node ID case sensitivity:
   The node_id returned here comes from the K8s label "nodalarc.io/node-id",
   which uses the canonical case from the AddressingScheme (e.g., "sat-P01S02").
-  All gRPC messages must use this canonical case because ground bridge naming
+  All Node Agent protobuf messages must use this canonical case because ground bridge naming
   helpers derive host veth names from the node ID, and Linux interface names
   are case-sensitive. K8s pod names are lowercase; node IDs are not.
 """

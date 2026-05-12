@@ -1,13 +1,13 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Node Agent RPC handler implementations.
+"""Node Agent NATS command handler implementations.
 
 Executes kernel operations dispatched by scheduler/dispatcher.py via
 NATS request/reply. Uses namespace_ops.py and ground_bridge.py for
 all netlink operations (setns-based, no fork).
 
 IMPORTANT — node ID case sensitivity:
-  Node IDs in gRPC messages MUST use the canonical case from the
+  Node IDs in Node Agent protobuf messages MUST use the canonical case from the
   AddressingScheme (e.g., "sat-P01S02" not "sat-p01s02"). The ground
   bridge naming helpers derive host veth names from the node ID
   (e.g., "_gnd_P01S02"), and Linux interface names are case-sensitive.
@@ -17,7 +17,7 @@ IMPORTANT — node ID case sensitivity:
 Error handling: every per-link operation is wrapped in try/except.
 A single failing link does not prevent other links in the batch from
 being processed. Failures are logged with full context and returned
-in the gRPC response error field.
+in the protobuf response error field.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ from node_agent.operation_plan import OperationPlan, OperationStep
 
 log = logging.getLogger(__name__)
 
-# Thread pool for concurrent batch execution within a single RPC.
+# Thread pool for concurrent batch execution within a single NATS command.
 # Bounded to avoid resource exhaustion on large batches.
 _BATCH_POOL = ThreadPoolExecutor(max_workers=8)
 
@@ -536,7 +536,7 @@ def _update_latency_entry(
 
 
 # ---------------------------------------------------------------------------
-# RPC handler functions (called from server.py servicer)
+# NATS command handler functions (called from server.py)
 # ---------------------------------------------------------------------------
 
 
@@ -756,7 +756,7 @@ def handle_batch_link_up(
     pid_map: dict[str, int] | None = None,
     fence: RuntimeFence | None = None,
 ) -> node_agent_pb2.BatchLinkUpResponse:
-    """Handle BatchLinkUp RPC.
+    """Handle BatchLinkUp command.
 
     Phase 0 (sequential): Create VXLAN tunnels for CROSS_NODE interfaces.
     Phase 1 (concurrent): Bring host-side veth carrier UP and apply
@@ -1040,7 +1040,7 @@ def handle_set_latency(
     pid_map: dict[str, int] | None = None,
     fence: RuntimeFence | None = None,
 ) -> node_agent_pb2.SetLatencyResponse:
-    """Handle SetLatency RPC.
+    """Handle SetLatency command.
 
     Updates tc netem delay on existing qdisc chains. Does NOT change
     admin state, re-add qdiscs, or touch anything other than the netem

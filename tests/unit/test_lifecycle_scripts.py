@@ -230,3 +230,12 @@ def test_load_next_step_is_state_aware() -> None:
     assert "[load] Next: make upgrade" in script
     assert "make reinstall && make session" in script
     assert "make install will refuse the existing namespace" in script
+
+
+def test_install_passes_node_agent_host_network_cidrs_to_helm() -> None:
+    script = (ROOT / "tools/na-install-platform.sh").read_text()
+    assert "nodalarc.io/node-agent=true" in script
+    assert "nats.networkPolicy.hostNetworkCIDRs[$idx]" in script
+    assert "nats.hostNetworkHost=$nats_host" in script
+    assert "/32" in script
+    assert "/128" in script

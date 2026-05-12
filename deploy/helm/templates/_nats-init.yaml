@@ -3,6 +3,11 @@
      Ensures streams are created by the OME init container before
      any consumer starts subscribing. */}}
 {{- define "nodalarc.nats-wait-init" }}
+{{- $hostNetwork := .hostNetwork | default false }}
+{{- $natsHost := "nodalarc-nats" }}
+{{- if and $hostNetwork .Values.nats.hostNetworkHost }}
+{{- $natsHost = .Values.nats.hostNetworkHost }}
+{{- end }}
 - name: wait-nats-streams
   image: {{ required "images.natsBox is required" .Values.images.natsBox | quote }}
   imagePullPolicy: {{ .Values.imagePullPolicy }}
@@ -11,9 +16,9 @@
     - |
       echo "Waiting for NATS streams..."
 {{- if .Values.nats.auth.enabled }}
-      NATS_URL="nats://{{ .Values.nats.auth.users.admin.username }}:{{ .Values.nats.auth.users.admin.password }}@nodalarc-nats:4222"
+      NATS_URL="nats://{{ .Values.nats.auth.users.admin.username }}:{{ .Values.nats.auth.users.admin.password }}@{{ $natsHost }}:{{ .Values.nats.clientPort }}"
 {{- else }}
-      NATS_URL="nats://nodalarc-nats:4222"
+      NATS_URL="nats://{{ $natsHost }}:{{ .Values.nats.clientPort }}"
 {{- end }}
       DEADLINE=$(($(date +%s) + 30))
       until nats stream info NODALARC_OME --server="$NATS_URL" 2>/dev/null && \

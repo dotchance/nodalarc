@@ -94,3 +94,35 @@ def test_helm_templates_do_not_have_duplicate_env_blocks_or_nats_box_latest() ->
         p.read_text() for p in (ROOT / "deploy/helm/templates").glob("*.yaml")
     )
     assert "natsio/nats-box:latest" not in rendered_templates
+
+
+def test_nats_networkpolicy_allows_host_network_node_cidrs() -> None:
+    template = (ROOT / "deploy/helm/templates/nats-networkpolicy.yaml").read_text()
+    values = (ROOT / "deploy/helm/values.yaml").read_text()
+
+    assert "hostNetworkCIDRs" in values
+    assert ".Values.nats.networkPolicy.hostNetworkCIDRs" in template
+    assert "ipBlock:" in template
+
+
+def test_host_network_node_agents_use_host_reachable_nats_endpoint() -> None:
+    values = (ROOT / "deploy/helm/values.yaml").read_text()
+    nats = (ROOT / "deploy/helm/templates/nats-deployment.yaml").read_text()
+    node_agent = (ROOT / "deploy/helm/templates/node-agent-daemonset.yaml").read_text()
+    nats_init = (ROOT / "deploy/helm/templates/_nats-init.yaml").read_text()
+
+    assert "hostNetworkHost" in values
+    assert "hostPort: {{ .Values.nats.clientPort }}" in nats
+    assert '"hostNetwork" true' in node_agent
+    assert "NODALARC_NATS_URL" in node_agent
+    assert "$natsHost" in nats_init
+
+
+def test_required_nats_streams_are_persistent() -> None:
+    ome = (ROOT / "deploy/helm/templates/ome-deployment.yaml").read_text()
+
+    assert "nats stream add NODALARC_OPS" in ome
+    assert "nats stream add NODALARC_DEBUG" in ome
+    assert "nats stream add NODALARC_SESSION \\" in ome
+    assert ome.count("nats stream add NODALARC_SESSION") == 1
+    assert "--storage=memory" not in ome

@@ -65,7 +65,15 @@ class TerrestrialSpec(_StrictModel):
 
 
 class GroundBridgeSpec(_StrictModel):
-    pass
+    """Ground station bridge declaration marker.
+
+    The manifest does not carry mutable bridge configuration here. The key is
+    the ground-station node_id, and concrete host/pod interface names are
+    derived deterministically from that node_id plus the station's
+    ``NodeSpec.gnd_interfaces``. Keeping this model fieldless and strict makes
+    accidental bridge payloads fail validation while still requiring every
+    ground station to be declared in ``ground_bridges``.
+    """
 
 
 class NodeSpec(_StrictModel):

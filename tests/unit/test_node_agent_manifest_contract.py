@@ -1,5 +1,5 @@
 import pytest
-from node_agent.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from pydantic import ValidationError
 
 

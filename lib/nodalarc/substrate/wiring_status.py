@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from node_agent.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 
 PhaseState = Literal["pending_pid", "wiring", "ready", "failed", "dirty_kernel"]
 

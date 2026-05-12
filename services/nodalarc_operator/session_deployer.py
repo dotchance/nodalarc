@@ -639,7 +639,10 @@ def write_wiring_manifest(
     import json as _json
 
     from nodalarc.nats_channels import sanitize_session_id
-    from node_agent.manifest_contract import REQUIRED_WIRING_PHASES, derive_wiring_generation
+    from nodalarc.substrate.manifest_contract import (
+        REQUIRED_WIRING_PHASES,
+        derive_wiring_generation,
+    )
 
     v1 = _get_v1()
 

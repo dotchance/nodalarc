@@ -13,10 +13,9 @@ from __future__ import annotations
 
 import logging
 
+from nodalarc.substrate.manifest_contract import WiringManifest
+from nodalarc.substrate.wiring_status import parse_status_configmap
 from pyroute2 import IPRoute
-
-from node_agent.manifest_contract import WiringManifest
-from node_agent.wiring_status import parse_status_configmap
 
 log = logging.getLogger(__name__)
 

@@ -110,10 +110,36 @@ else
     helm_args=("${extra_args[@]}" "${image_args[@]}")
 fi
 
+mapfile -t node_agent_ips < <(
+    kubectl get nodes -l nodalarc.io/node-agent=true \
+        -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' \
+        2>/dev/null | sed '/^[[:space:]]*$/d'
+)
+if [ "${#node_agent_ips[@]}" -gt 0 ]; then
+    echo "[$ACTION] Allowing NATS ingress from ${#node_agent_ips[@]} Node Agent host-network node IP(s)."
+    for idx in "${!node_agent_ips[@]}"; do
+        ip="${node_agent_ips[$idx]}"
+        if [[ "$ip" == *:* ]]; then
+            cidr="${ip}/128"
+        else
+            cidr="${ip}/32"
+        fi
+        helm_args+=("--set-string=nats.networkPolicy.hostNetworkCIDRs[$idx]=$cidr")
+    done
+fi
+
 nodal_node="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
 if [ -n "$nodal_node" ]; then
     echo "[$ACTION] Auto-detected node: $nodal_node"
     helm_args+=("--set-string=controlPlaneNode=$nodal_node" "--set-string=sessionNodeName=$nodal_node")
+    nats_host="$(
+        kubectl get node "$nodal_node" \
+            -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true
+    )"
+    if [ -n "$nats_host" ]; then
+        echo "[$ACTION] Exposing NATS host-network endpoint at ${nats_host}:4222."
+        helm_args+=("--set-string=nats.hostNetworkHost=$nats_host")
+    fi
 fi
 
 if [ "$ACTION" = "install" ]; then

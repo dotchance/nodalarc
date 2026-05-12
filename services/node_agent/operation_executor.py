@@ -49,8 +49,10 @@ def execute_plan(plan: OperationPlan) -> OperationExecutionResult:
     completed: list[OperationStep] = []
     executed: list[StepExecution] = []
     proofs: list[Proof] = []
+    failed_step: OperationStep | None = None
     try:
         for step in plan.steps:
+            failed_step = step
             step.action()
             proof = _verify_step(step)
             if proof is not None:
@@ -67,7 +69,7 @@ def execute_plan(plan: OperationPlan) -> OperationExecutionResult:
         error_message = f"{plan.operation_kind} step failed for {plan.target}: {exc}"
         log.warning("%s", error_message)
         rollback_results: list[StepExecution] = []
-        dirty = False
+        dirty = bool(failed_step and failed_step.dirty_on_failure)
         for step in reversed(completed):
             if step.rollback is None:
                 dirty = dirty or step.dirty_on_failure
@@ -91,8 +93,6 @@ def execute_plan(plan: OperationPlan) -> OperationExecutionResult:
                 rollback_results.append(
                     StepExecution(step_name=step.name, error_message=str(rollback_exc))
                 )
-        if not completed and any(step.dirty_on_failure for step in plan.steps):
-            dirty = True
         return OperationExecutionResult(
             success=False,
             dirty_kernel=dirty,

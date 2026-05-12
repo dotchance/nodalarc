@@ -138,6 +138,34 @@ def read_wiring_manifest_identity(k8s_v1: Any, namespace: str) -> WiringManifest
     return WiringManifest.model_validate(json.loads(manifest_json))
 
 
+def wait_for_wiring_manifest_identity(
+    *,
+    k8s_v1: Any,
+    namespace: str,
+    timeout_s: float = 120.0,
+    poll_s: float = 2.0,
+    monotonic: Callable[[], float] = _time.monotonic,
+    sleep: Callable[[float], None] = _time.sleep,
+) -> WiringManifest:
+    """Block Scheduler startup until the Operator publishes the wiring manifest.
+
+    Session ConfigMap creation and topology-wiring ConfigMap creation are
+    separate Kubernetes writes. A missing ConfigMap is only tolerated during
+    that bounded creation window. Malformed manifest content remains an
+    immediate fatal error because the Scheduler cannot safely infer substrate
+    identity without the exact session/generation contract.
+    """
+    deadline = monotonic() + timeout_s
+    while monotonic() < deadline:
+        try:
+            return read_wiring_manifest_identity(k8s_v1, namespace)
+        except Exception as exc:
+            if getattr(exc, "status", None) != 404:
+                raise
+        sleep(poll_s)
+    raise RuntimeError(f"nodalarc-topology-wiring ConfigMap not found after {timeout_s:.0f}s")
+
+
 def main() -> None:
     _configure_logging("nodal.arc.scheduler", nats_level=logging.INFO)
     parser = argparse.ArgumentParser(description="Nodal Arc Scheduler")
@@ -189,7 +217,7 @@ def main() -> None:
     k8s_v1 = kubernetes.client.CoreV1Api()
     expected_nodes = set(loc.node_ids)
     ns = get_platform_config().kubernetes_namespace
-    wiring_manifest = read_wiring_manifest_identity(k8s_v1, ns)
+    wiring_manifest = wait_for_wiring_manifest_identity(k8s_v1=k8s_v1, namespace=ns)
     if wiring_manifest.session_id != session_id:
         raise RuntimeError(
             "Wiring manifest session mismatch: "

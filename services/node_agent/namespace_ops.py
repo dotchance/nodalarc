@@ -21,6 +21,8 @@ from typing import TypeVar
 
 from pyroute2 import IPRoute
 
+from node_agent.tc_units import delay_ms_to_netem_us
+
 log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
@@ -163,7 +165,7 @@ def apply_link_shaping(
     if burst > 0xFFFFFFFF:
         burst = 0xFFFFFFFF
     latency_us = 50000  # 50ms buffer
-    delay_us = int(delay_ms * 1000)
+    delay_us = delay_ms_to_netem_us(delay_ms)
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=ifname)
@@ -199,7 +201,7 @@ def update_delay(pid: int, ifname: str, delay_ms: float) -> None:
     Uses tc "change" — NOT "add" or "replace". The qdisc must already
     exist from apply_link_shaping(). This only modifies the delay parameter.
     """
-    delay_us = int(delay_ms * 1000)
+    delay_us = delay_ms_to_netem_us(delay_ms)
 
     def _op(ipr: IPRoute) -> None:
         links = ipr.link_lookup(ifname=ifname)

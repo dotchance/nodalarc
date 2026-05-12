@@ -1,5 +1,6 @@
 from node_agent import kernel_verifier
 from node_agent.kernel_constants import TC_H_INGRESS
+from node_agent.tc_units import delay_ms_to_netem_us, netem_us_to_ticks
 from pyroute2.netlink.rtnl.tcmsg import common as tc_common
 
 
@@ -36,6 +37,28 @@ def test_verify_qdisc_compares_netem_delay_in_tc_scheduler_ticks(monkeypatch):
 
     assert proof.verified is True
     assert f"delay_ticks={expected_ticks}" in proof.evidence
+
+
+def test_verify_qdisc_uses_shared_fractional_delay_normalization(monkeypatch):
+    delay_ms = 3.2466744768292792
+    expected_us = delay_ms_to_netem_us(delay_ms)
+    expected_ticks = netem_us_to_ticks(expected_us)
+
+    def _fake_run_in_pod_namespace(pid, fn):
+        assert pid == 1234
+        return _qdisc_rows(delay_ticks=expected_ticks)
+
+    monkeypatch.setattr(kernel_verifier, "run_in_pod_namespace", _fake_run_in_pod_namespace)
+
+    proof = kernel_verifier.verify_qdisc(
+        1234,
+        "term0",
+        delay_ms=delay_ms,
+        rate_mbps=1000.0,
+    )
+
+    assert proof.verified is True
+    assert f"delay_us={expected_us}" in proof.evidence
 
 
 def test_verify_qdisc_rejects_unconverted_microsecond_delay(monkeypatch):

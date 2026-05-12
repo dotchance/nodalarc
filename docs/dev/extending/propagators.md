@@ -55,9 +55,13 @@ def propagate_batch(
 
 `services/ome/event_stream.py` calls the propagator at discrete time steps to compute all satellite positions, then checks visibility between pairs. Replace the propagator call here.
 
-### Scheduler (latency updates)
+### Scheduler (latency authority)
 
-`services/scheduler/latency.py` propagates active link endpoints locally on a 10-second interval to compute ranges and latencies. Uses the same propagator interface.
+The live Scheduler does not recompute geometry for dispatch latency. OME
+VisibilityEvents and LinkStateSnapshots carry authoritative `range_km` and
+`latency_ms`; the Scheduler preserves them and applies substrate compensation
+before sending Node Agent requests. Keep any new propagator reflected in the OME
+snapshot/event payloads.
 
 ### VS-API and VF (position display)
 

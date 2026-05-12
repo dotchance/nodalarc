@@ -45,7 +45,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 import nats
@@ -93,7 +93,11 @@ from scheduler.epoch_sync import EpochSyncState
 from scheduler.latency_compensator import LatencyCompensation, compensate_latency
 from scheduler.node_agent_batches import successful_interface_acks
 from scheduler.pod_locator import PodLocationMap
-from scheduler.substrate_latency import resolve_substrate_rtt_ms
+from scheduler.substrate_latency import (
+    LiveSubstrateMeasurement,
+    parse_substrate_measurement_event,
+    resolve_substrate_rtt_ms,
+)
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +160,7 @@ class Dispatcher:
         pod_locator: PodLocationMap,
         agent_pool: AgentPool,
         session_id: str,
+        wiring_generation: str,
         max_latency_age_s: float,
         compression_factor: int = 1,
         epsilon_ms: float = 100.0,
@@ -186,6 +191,9 @@ class Dispatcher:
         self._sat_capacities = sat_ground_terminal_capacities
         self._mbb_dispatch = mbb_dispatch
         self._session_id = session_id
+        if not wiring_generation:
+            raise ValueError("wiring_generation is required")
+        self._wiring_generation = wiring_generation
 
         # Session-scoped NATS subjects
         self._subj_visibility = ome_visibility_subject(session_id)
@@ -220,7 +228,8 @@ class Dispatcher:
         self._last_snapshot_seq: int = 0
         self._last_snapshot_sim_time: datetime | None = None
         self._substrate_latency: dict[str, float] = {}  # "nodeA-nodeB" -> ms (legacy ConfigMap)
-        self._substrate_by_ip: dict[str, float] = {}  # peer_ip -> ms (live from Node Agent)
+        self._substrate_by_ip: dict[str, LiveSubstrateMeasurement] = {}
+        self._dispatch_blocked_reason: str | None = None
 
         # Control plane state: scenario overrides. Values are reason strings.
         # Mutated only by _on_scenario_command on the main event loop.
@@ -681,15 +690,41 @@ class Dispatcher:
         async def _on_substrate_latency(msg):
             """Update substrate latency from live Node Agent measurements."""
             data = json.loads(msg.data)
-            source = data.get("source_node", "")
-            peers = data.get("peers", {})
-            for peer_ip, latency_ms in peers.items():
-                self._substrate_by_ip[peer_ip] = latency_ms
-            if peers:
+            try:
+                measurements = parse_substrate_measurement_event(data)
+            except ValueError as exc:
+                log.warning("Ignoring invalid substrate measurement event: %s", exc)
+                return
+            source = str(data.get("source_node", ""))
+            accepted: dict[str, LiveSubstrateMeasurement] = {}
+            for peer_ip, measurement in measurements.items():
+                if measurement.session_id != self._session_id:
+                    log.warning(
+                        "Ignoring substrate measurement for wrong session: peer=%s "
+                        "measurement=%s expected=%s",
+                        peer_ip,
+                        measurement.session_id,
+                        self._session_id,
+                    )
+                    continue
+                if measurement.wiring_generation != self._wiring_generation:
+                    log.warning(
+                        "Ignoring substrate measurement for stale generation: peer=%s "
+                        "measurement=%s expected=%s",
+                        peer_ip,
+                        measurement.wiring_generation,
+                        self._wiring_generation,
+                    )
+                    continue
+                self._substrate_by_ip[peer_ip] = measurement
+                accepted[peer_ip] = measurement
+            if accepted:
                 log.debug(
                     "Substrate update from %s: %s",
                     source,
-                    ", ".join(f"{ip}={ms}ms" for ip, ms in peers.items()),
+                    ", ".join(
+                        f"{ip}={m.median_rtt_ms}ms status={m.status}" for ip, m in accepted.items()
+                    ),
                 )
 
         subs = []
@@ -1001,13 +1036,24 @@ class Dispatcher:
                 len(self._actual_links),
             )
 
-            await self._reconcile_links(
-                intent.desired,
-                nc,
-                intent.sim_time,
-                intent.down_reasons,
-                intent.forced_bbm_pairs,
-            )
+            try:
+                await self._reconcile_links(
+                    intent.desired,
+                    nc,
+                    intent.sim_time,
+                    intent.down_reasons,
+                    intent.forced_bbm_pairs,
+                )
+            except Exception as exc:
+                self._dispatch_blocked_reason = str(exc)
+                self._running = False
+                log.critical(
+                    "Dispatch worker stopped for session=%s generation=%s: %s",
+                    self._session_id,
+                    self._wiring_generation,
+                    exc,
+                )
+                raise
 
         log.debug("Dispatch worker stopped")
 
@@ -1119,6 +1165,9 @@ class Dispatcher:
             configured_rtt_by_node_pair=self._substrate_latency,
             node_a=node_a,
             node_b=node_b,
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
+            now=datetime.now(UTC),
         )
 
     def _latency_compensation(
@@ -1358,6 +1407,8 @@ class Dispatcher:
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
         )
         for pair in updated:
             info = desired[pair]
@@ -1505,6 +1556,8 @@ class Dispatcher:
             sim_time=sim_time,
             down_reasons=down_reasons,
             gs_capacities=self._gs_capacities,
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
         )
 
     async def _send_batch_up(
@@ -1529,6 +1582,8 @@ class Dispatcher:
             latency_compensation=self._latency_compensation,
             validate_authority_freshness=self._validate_authority_freshness,
             link_provenance=self._link_provenance,
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
         )
 
     # ------------------------------------------------------------------

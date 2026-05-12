@@ -24,6 +24,27 @@ from nodalarc.models.link_state import (
 from nodalarc.proto import node_agent_pb2
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
+from scheduler.substrate_latency import LiveSubstrateMeasurement
+
+WIRING_GENERATION = "sha256:" + "a" * 64
+
+
+def _substrate_measurement(remote_ip: str, rtt_ms: float) -> LiveSubstrateMeasurement:
+    now = datetime.now(UTC)
+    return LiveSubstrateMeasurement(
+        remote_ip=remote_ip,
+        session_id="test-session",
+        wiring_generation=WIRING_GENERATION,
+        source_node="node-a",
+        measured_at=now,
+        stale_after=now + timedelta(seconds=60),
+        status="ok",
+        sample_count=10,
+        success_count=10,
+        median_rtt_ms=rtt_ms,
+        min_rtt_ms=rtt_ms,
+        max_rtt_ms=rtt_ms,
+    )
 
 
 def _make_vis(
@@ -95,6 +116,7 @@ def _make_dispatcher(interface_map=None, stub_success=True):
                     node_id=iface.node_id,
                     interface_name=iface.interface_name,
                     success=stub_success,
+                    verified=stub_success,
                     error_message="" if stub_success else "mock failure",
                 )
                 for iface in req.interfaces
@@ -112,6 +134,7 @@ def _make_dispatcher(interface_map=None, stub_success=True):
                     node_id=iface.node_id,
                     interface_name=iface.interface_name,
                     success=stub_success,
+                    verified=stub_success,
                     error_message="" if stub_success else "mock failure",
                 )
                 for iface in req.interfaces
@@ -120,9 +143,23 @@ def _make_dispatcher(interface_map=None, stub_success=True):
 
     mock_stub.async_batch_link_up = AsyncMock(side_effect=up_resp)
     mock_stub.async_batch_link_down = AsyncMock(side_effect=down_resp)
-    mock_stub.async_set_latency = AsyncMock(
-        return_value=node_agent_pb2.SetLatencyResponse(success=True)
-    )
+
+    def latency_resp(req):
+        return node_agent_pb2.SetLatencyResponse(
+            success=True,
+            entries_updated=len(req.entries),
+            entry_results=[
+                node_agent_pb2.LatencyResult(
+                    node_id=entry.node_id,
+                    interface_name=entry.interface_name,
+                    success=True,
+                    verified=True,
+                )
+                for entry in req.entries
+            ],
+        )
+
+    mock_stub.async_set_latency = AsyncMock(side_effect=latency_resp)
     pool.get_stub.return_value = mock_stub
 
     d = Dispatcher(
@@ -131,6 +168,7 @@ def _make_dispatcher(interface_map=None, stub_success=True):
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",
+        wiring_generation=WIRING_GENERATION,
         max_latency_age_s=1.0,
         gs_terminal_capacities={"gs-ashburn": 1},
         sat_ground_terminal_capacities={"sat-P00S00": 1},
@@ -394,6 +432,7 @@ class TestDispatcherLiveDispatch:
                         node_id=req.interfaces[0].node_id,
                         interface_name=req.interfaces[0].interface_name,
                         success=True,
+                        verified=True,
                     ),
                     node_agent_pb2.InterfaceResult(
                         node_id=req.interfaces[1].node_id,
@@ -456,7 +495,7 @@ class TestDispatcherLiveDispatch:
         d._loc._agent_addrs["node-a"] = "agent-a"
         d._loc._agent_addrs["node-b"] = "agent-b"
         d._loc._node_ips["node-b"] = "10.0.0.2"
-        d._substrate_by_ip["10.0.0.2"] = 4.0
+        d._substrate_by_ip["10.0.0.2"] = _substrate_measurement("10.0.0.2", 4.0)
 
         assert d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0) == 8.0
 
@@ -467,7 +506,7 @@ class TestDispatcherLiveDispatch:
         d._loc._agent_addrs["node-a"] = "agent-a"
         d._loc._agent_addrs["node-b"] = "agent-b"
         d._loc._node_ips["node-b"] = "10.0.0.2"
-        d._substrate_by_ip["10.0.0.2"] = 4.0
+        d._substrate_by_ip["10.0.0.2"] = _substrate_measurement("10.0.0.2", 4.0)
 
         with pytest.raises(ValueError, match="Unrepresentable latency"):
             d._netem_delay_ms("sat-P00S00", "sat-P00S01", 1.0)

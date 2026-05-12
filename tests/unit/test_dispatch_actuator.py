@@ -16,11 +16,13 @@ from scheduler.latency_compensator import LatencyCompensation
 
 PAIR = ("sat-a", "sat-b")
 SIM_TIME = datetime(2026, 1, 1, tzinfo=UTC)
+SESSION_ID = "test-session"
+WIRING_GENERATION = "sha256:" + "a" * 64
 
 
 class _Locator:
     def link_locality(self, _node_a: str, _node_b: str) -> int:
-        return node_agent_pb2.LOCAL
+        return node_agent_pb2.LOCALITY_LOCAL
 
     def agent_addr(self, node_id: str) -> str:
         return f"agent-{node_id}"
@@ -47,6 +49,7 @@ class _Stub:
                     node_id=iface.node_id,
                     interface_name=iface.interface_name,
                     success=success,
+                    verified=success,
                     error_message="" if success else "boom",
                 )
             )
@@ -64,6 +67,15 @@ class _Stub:
             success=True,
             error_message="",
             entries_updated=len(req.entries),
+            entry_results=[
+                node_agent_pb2.LatencyResult(
+                    node_id=entry.node_id,
+                    interface_name=entry.interface_name,
+                    success=True,
+                    verified=True,
+                )
+                for entry in req.entries
+            ],
         )
 
 
@@ -148,6 +160,8 @@ def test_send_batch_up_publishes_link_up_only_after_all_interface_acks():
             latency_compensation=_compensation,
             validate_authority_freshness=_validate,
             link_provenance=_provenance,
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
         )
     )
 
@@ -157,6 +171,10 @@ def test_send_batch_up_publishes_link_up_only_after_all_interface_acks():
     assert subject == "links.up"
     assert event["link_type"] == "isl"
     assert event["provenance"]["netem_one_way_ms"] == 9.0
+    req = pool.stubs["agent-sat-a"].requests[0]
+    assert req.envelope.session_id == SESSION_ID
+    assert req.envelope.wiring_generation == WIRING_GENERATION
+    assert req.envelope.operation_kind == "BatchLinkUp"
 
 
 def test_send_batch_up_requires_every_interface_ack_for_pair_success():
@@ -177,6 +195,8 @@ def test_send_batch_up_requires_every_interface_ack_for_pair_success():
             latency_compensation=_compensation,
             validate_authority_freshness=_validate,
             link_provenance=_provenance,
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
         )
     )
 
@@ -215,12 +235,17 @@ def test_ground_latency_update_updates_both_local_shaped_interfaces():
             latency_compensation=_compensation,
             validate_authority_freshness=_validate,
             link_provenance=_provenance,
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
         )
     )
 
     assert updated == {pair}
     stub = pool.stubs["agent-sat-a"]
     req = stub.requests[0]
+    assert req.envelope.session_id == SESSION_ID
+    assert req.envelope.wiring_generation == WIRING_GENERATION
+    assert req.envelope.operation_kind == "SetLatency"
     assert {(entry.node_id, entry.interface_name) for entry in req.entries} == {
         ("gs-den", "term0"),
         ("sat-a", "gnd0"),

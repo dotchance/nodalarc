@@ -40,7 +40,7 @@ gathers what happened. VF shows it to a human.
               +------------+    +----||----+  +------------+
                                      ||
                               NATS request/reply
-                              (BatchLinkUp/Down)
+                              (fenced BatchLinkUp/Down/SetLatency)
                                      ||
                     +----------------||----------------+
                     |         Node Agent (DaemonSet)   |
@@ -81,11 +81,13 @@ The full cycle looks like this:
 
 2. **Scheduler** consumes visibility and snapshot state, builds desired link
    state, reconciles it against active link state, and dispatches
-   `BatchLinkUp`, `BatchLinkDown`, and `SetLatency` requests to Node Agents.
+   fenced `BatchLinkUp`, `BatchLinkDown`, and `SetLatency` requests to Node
+   Agents. It updates active state only after exact verified ACKs.
 
 3. **Node Agent** performs kernel operations on the host: veth creation, VXLAN
    tunnel setup, carrier changes, `tc netem` latency, `tc tbf` bandwidth
-   shaping, and ground bridge attachment.
+   shaping, and ground bridge attachment. It reports success only after
+   checking the kernel postcondition for each requested entry.
 
 4. **FRR** inside each session pod reacts to interface state. IS-IS sends
    hellos, OSPF floods LSAs, BGP updates neighbors, MPLS labels enter the
@@ -107,7 +109,7 @@ component to reach through another component's boundary, stop and rethink it.
 | --- | --- | --- | --- |
 | OME | Orbital state, visibility, clock | VisibilityEvent, ClockTick, HeartbeatTick, LinkStateSnapshot, SessionEphemeris, PlaybackState | Playback control requests |
 | Scheduler | Desired links, active links, dispatch ordering | LinkUp, LinkDown, LatencyUpdate | VisibilityEvent, LinkStateSnapshot, SessionEphemeris |
-| Node Agent | Host kernel network state | Request replies, wiring progress | Scheduler requests, wiring manifest |
+| Node Agent | Host kernel network state | Request replies, wiring progress, substrate measurements, OpsEvents | Scheduler requests, wiring manifest |
 | VS-API | Aggregated state for clients | WebSocket broadcasts | OME, link, session, ops, and debug streams |
 | Operator | Session pod lifecycle and generated configs | Kubernetes resources | ConstellationSpec CR watch |
 | VF | Rendering and user interaction | None | VS-API WebSocket |
@@ -153,7 +155,7 @@ playback state. JetStream gives those facts a shelf life without making
 application code invent replay logic.
 
 Request/reply still uses core NATS. A Node Agent command is an operation, not
-history. It should succeed, fail, or time out.
+history. It should succeed with proof, fail loudly, or time out.
 
 ### Why reconcile-based dispatch
 
@@ -166,6 +168,9 @@ desired state does nothing.
 
 The dispatch worker is the actuator. It is the only writer of active link state
 and the only code path that sends link up/down operations to Node Agents.
+If a Node Agent reports a stale generation, unverified success, or dirty kernel,
+the worker stops dispatching that generation instead of manufacturing active
+state from partial evidence.
 
 ### Why host-mediated networking
 
@@ -205,10 +210,11 @@ The Node Agent does not query the cluster to decide what to build. The Scheduler
 already resolved placement and put the answer in the dispatch message.
 
 Physical lab networks still have latency. NodalArc compensates for it. Node
-Agents measure substrate latency between Kubernetes nodes. The Scheduler
-subtracts that substrate delay from the orbital delay before setting `tc netem`.
-The packet sees the orbital delay, not orbital delay plus whatever the lab
-switch happened to add.
+Agents measure substrate latency for exact active VXLAN peer refs scoped by
+`session_id` and `wiring_generation`. The Scheduler rejects stale, failed, or
+generation-mismatched measurements and subtracts the verified substrate delay
+from the orbital delay before setting `tc netem`. Unknown cross-node substrate
+latency is a dispatch blocker, not a zero-delay default.
 
 ## Session Lifecycle
 
@@ -224,8 +230,9 @@ User clicks Deploy in the wizard
     -> Operator renders FRR configs from templates
     -> Operator writes the topology wiring manifest
     -> Node Agent detects the manifest and wires interfaces
-    -> Node Agent signals wiring complete
+    -> Node Agent writes typed wiring status for the same session/generation
     -> Operator advances the session to Ready
+    -> Scheduler opens its wiring gate for that session/generation
     -> OME begins publishing orbital events
     -> Scheduler activates visible links
     -> FRR forms adjacencies and converges

@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import gzip
+import json
 import logging
 import os
 import time as _time
@@ -30,6 +33,8 @@ from nodalarc.models.addressing import (
     AddressingScheme,
 )
 from nodalarc.models.session import SessionConfig
+from node_agent.manifest_contract import WiringManifest
+from node_agent.wiring_status import parse_status_configmap
 
 from scheduler.agent_pool import AgentPool
 from scheduler.dispatcher import Dispatcher
@@ -52,6 +57,8 @@ def wait_for_wiring_gate(
     k8s_v1: Any,
     namespace: str,
     expected_nodes: set[str],
+    session_id: str,
+    wiring_generation: str,
     timeout_s: float = 120.0,
     poll_s: float = 2.0,
     monotonic: Callable[[], float] = _time.monotonic,
@@ -69,12 +76,21 @@ def wait_for_wiring_gate(
     while monotonic() < deadline:
         try:
             cm = k8s_v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
-            wired = set(cm.data.keys()) if cm.data else set()
-            if len(wired) >= expected_count:
-                log.info("Wiring gate passed: %d/%d nodes wired", len(wired), expected_count)
+            _status_session, _status_generation, statuses = parse_status_configmap(cm.data)
+            ready = {
+                node_id
+                for node_id, status in statuses.items()
+                if status.session_id == session_id
+                and status.wiring_generation == wiring_generation
+                and status.status == "ready"
+                and not status.dirty_kernel
+                and all(phase.status == "ready" for phase in status.phases)
+            }
+            if expected_nodes.issubset(ready):
+                log.info("Wiring gate passed: %d/%d nodes ready", len(ready), expected_count)
                 return
             if int(monotonic()) % 10 < 2:
-                log.debug("Wiring in progress: %d/%d", len(wired), expected_count)
+                log.debug("Wiring in progress: %d/%d", len(ready), expected_count)
         except Exception as exc:
             status = getattr(exc, "status", None)
             if status != 404:
@@ -83,7 +99,16 @@ def wait_for_wiring_gate(
 
     try:
         cm = k8s_v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
-        wired = set(cm.data.keys()) if cm.data else set()
+        _status_session, _status_generation, statuses = parse_status_configmap(cm.data)
+        wired = {
+            node_id
+            for node_id, status in statuses.items()
+            if status.session_id == session_id
+            and status.wiring_generation == wiring_generation
+            and status.status == "ready"
+            and not status.dirty_kernel
+            and all(phase.status == "ready" for phase in status.phases)
+        }
     except Exception as exc:
         log.warning("Failed to read wiring status after timeout: %s", exc)
         wired = set()
@@ -100,6 +125,17 @@ def wait_for_wiring_gate(
     raise RuntimeError(
         f"Wiring gate timeout: {len(wired)}/{expected_count} nodes wired; missing={missing[:20]}"
     )
+
+
+def read_wiring_manifest_identity(k8s_v1: Any, namespace: str) -> WiringManifest:
+    cm = k8s_v1.read_namespaced_config_map("nodalarc-topology-wiring", namespace)
+    if not cm.data:
+        raise RuntimeError("nodalarc-topology-wiring ConfigMap has no data")
+    compressed = cm.data.get("manifest.json.gz.b64")
+    if not compressed:
+        raise RuntimeError("nodalarc-topology-wiring missing manifest.json.gz.b64")
+    manifest_json = gzip.decompress(base64.b64decode(compressed)).decode()
+    return WiringManifest.model_validate(json.loads(manifest_json))
 
 
 def main() -> None:
@@ -128,6 +164,9 @@ def main() -> None:
     addressing = AddressingScheme(session.addressing)
     interface_map, bandwidth_map = _build_interface_map(session, addressing)
     log.debug("Interface map: %d link pairs", len(interface_map))
+    from nodalarc.nats_channels import sanitize_session_id
+
+    session_id = sanitize_session_id(session.session.name)
 
     # Pod location map — canonical node IDs from K8s labels
     # agent_port is legacy — PodLocationMap builds "host:port" strings but
@@ -150,8 +189,24 @@ def main() -> None:
     k8s_v1 = kubernetes.client.CoreV1Api()
     expected_nodes = set(loc.node_ids)
     ns = get_platform_config().kubernetes_namespace
-    log.debug("Wiring gate: waiting for %d nodes", len(expected_nodes))
-    wait_for_wiring_gate(k8s_v1=k8s_v1, namespace=ns, expected_nodes=expected_nodes)
+    wiring_manifest = read_wiring_manifest_identity(k8s_v1, ns)
+    if wiring_manifest.session_id != session_id:
+        raise RuntimeError(
+            "Wiring manifest session mismatch: "
+            f"manifest={wiring_manifest.session_id!r} scheduler={session_id!r}"
+        )
+    log.debug(
+        "Wiring gate: waiting for %d nodes generation=%s",
+        len(expected_nodes),
+        wiring_manifest.wiring_generation,
+    )
+    wait_for_wiring_gate(
+        k8s_v1=k8s_v1,
+        namespace=ns,
+        expected_nodes=expected_nodes,
+        session_id=session_id,
+        wiring_generation=wiring_manifest.wiring_generation,
+    )
 
     # Agent pool
     pool = AgentPool()
@@ -178,10 +233,6 @@ def main() -> None:
         session.routing.protocol,
     )
 
-    # Session ID for NATS subject scoping
-    from nodalarc.nats_channels import sanitize_session_id
-
-    session_id = sanitize_session_id(session.session.name)
     from nodal.logging import set_session
 
     set_session(session_id)
@@ -206,6 +257,7 @@ def main() -> None:
         mbb_dispatch=mbb_dispatch,
         rtt_to_one_way_policy=session.dispatch.substrate_compensation.rtt_to_one_way,
         session_id=session_id,
+        wiring_generation=wiring_manifest.wiring_generation,
     )
 
     try:

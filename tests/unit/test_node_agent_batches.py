@@ -56,7 +56,7 @@ def test_cross_node_isl_link_up_plan_builds_two_remote_interfaces():
         )
     }
     locator = _Locator(
-        node_agent_pb2.CROSS_NODE,
+        node_agent_pb2.LOCALITY_CROSS_NODE,
         node_ips={
             "k3s-sat-a": "10.0.0.1",
             "k3s-sat-b": "10.0.0.2",
@@ -99,7 +99,9 @@ def test_cross_node_link_up_missing_remote_ip_fails_loudly():
         build_link_up_batch_plan(
             pairs={pair},
             desired=desired,
-            locator=_Locator(node_agent_pb2.CROSS_NODE, node_ips={"k3s-sat-a": "10.0.0.1"}),
+            locator=_Locator(
+                node_agent_pb2.LOCALITY_CROSS_NODE, node_ips={"k3s-sat-a": "10.0.0.1"}
+            ),
             gs_capacities={},
             compensation_for_pair=_compensation,
         )
@@ -121,7 +123,7 @@ def test_local_ground_link_down_plan_preserves_single_agent_bridge_operation():
     plan = build_link_down_batch_plan(
         pairs={pair},
         actual_links=actual,
-        locator=_Locator(node_agent_pb2.LOCAL),
+        locator=_Locator(node_agent_pb2.LOCALITY_LOCAL),
         gs_capacities={"gs-den": 1},
     )
 
@@ -131,7 +133,7 @@ def test_local_ground_link_down_plan_preserves_single_agent_bridge_operation():
     assert iface.interface_name == "term0"
     assert iface.peer_node_id == "sat-a"
     assert iface.peer_interface_name == "gnd0"
-    assert iface.link_type == node_agent_pb2.GROUND
+    assert iface.link_type == node_agent_pb2.LINK_TYPE_GROUND
 
 
 def test_successful_interface_acks_require_exact_identity_and_consistent_aggregate():
@@ -142,8 +144,18 @@ def test_successful_interface_acks_require_exact_identity_and_consistent_aggrega
     ok = node_agent_pb2.BatchLinkUpResponse(
         success=True,
         interface_results=[
-            node_agent_pb2.InterfaceResult(node_id="sat-a", interface_name="isl0", success=True),
-            node_agent_pb2.InterfaceResult(node_id="sat-b", interface_name="isl1", success=True),
+            node_agent_pb2.InterfaceResult(
+                node_id="sat-a",
+                interface_name="isl0",
+                success=True,
+                verified=True,
+            ),
+            node_agent_pb2.InterfaceResult(
+                node_id="sat-b",
+                interface_name="isl1",
+                success=True,
+                verified=True,
+            ),
         ],
     )
 

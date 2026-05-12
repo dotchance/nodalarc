@@ -30,15 +30,22 @@ Communication: decision engine / control plane → dispatch queue → actuator.
   forced BBM classification at enqueue time.
 - **LinkStateSnapshot** is applied as replace-not-merge — eliminates window
   boundary drift. Clears `_teardown_pairs` before rebuild.
-- **Latency** computed via local Keplerian propagation from SessionEphemeris
-  orbital elements. The Scheduler loads ephemeris once per epoch, propagates
-  active link endpoints on its 10-second update interval, and applies tc
-  netem via SetLatency.
+- **Latency** is OME-authoritative in the live dispatch path. VisibilityEvents
+  and LinkStateSnapshots carry `range_km` and one-way `latency_ms`; the
+  Scheduler preserves those values, applies substrate compensation for
+  cross-node links, and uses SetLatency when authoritative desired latency
+  changes on an active link. Stale or missing live substrate measurements block
+  cross-node dispatch.
+- **Node Agent ACKs** are exact and verified. Scheduler requires a fenced
+  request envelope, one response entry per requested interface/latency entry,
+  `verified=true` for successes, and `dirty_kernel=false`.
+- **Wiring gate** checks typed session/generation status and all required
+  wiring phases. Matching node names alone are not readiness.
 - **Scenario overrides** are declarative future suppressions. Node-level
   overrides suppress all pairs involving that node. Forced BBM escalates
   to GS-segment level for ground links.
 
 ## Published Events
 
-- **LinkUp / LinkDown** — dispatched after Node Agent confirms
-- **LatencyUpdate** — periodic tc netem updates
+- **LinkUp / LinkDown** — published after verified Node Agent ACKs
+- **LatencyUpdate** — published after per-entry verified tc netem updates

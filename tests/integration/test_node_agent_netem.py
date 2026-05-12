@@ -103,3 +103,71 @@ def test_namespace_ops_apply_and_update_netem_kernel_state():
                 proc.wait(timeout=2)
         subprocess.run(["ip", "link", "del", host_if], capture_output=True, check=False)
         subprocess.run(["ip", "netns", "del", namespace], capture_output=True, check=False)
+
+
+def test_handle_set_latency_proves_kernel_qdisc_state():
+    _require_netns_tools()
+
+    from nodalarc.proto import node_agent_pb2
+    from node_agent import namespace_ops
+    from node_agent.command_contract import RuntimeFence
+    from node_agent.handlers import handle_set_latency
+
+    suffix = uuid.uuid4().hex[:8]
+    namespace = f"na-handler-{suffix}"
+    host_if = f"na-h-{suffix[:6]}"
+    peer_if = f"na-p-{suffix[:6]}"
+    proc: subprocess.Popen[str] | None = None
+
+    try:
+        _run("ip", "netns", "add", namespace)
+        _run("ip", "link", "add", host_if, "type", "veth", "peer", "name", peer_if)
+        _run("ip", "link", "set", peer_if, "netns", namespace)
+        _run("ip", "netns", "exec", namespace, "ip", "link", "set", peer_if, "name", "isl0")
+        _run("ip", "netns", "exec", namespace, "ip", "link", "set", "isl0", "up")
+        proc = subprocess.Popen(["ip", "netns", "exec", namespace, "sleep", "60"], text=True)
+        time.sleep(0.1)
+        if proc.poll() is not None:
+            raise RuntimeError("namespace keeper process exited before handler test")
+
+        namespace_ops.apply_link_shaping(proc.pid, "isl0", delay_ms=12.0, rate_mbps=1000.0)
+        generation = "sha256:" + "a" * 64
+        request = node_agent_pb2.SetLatencyRequest(
+            envelope=node_agent_pb2.CommandEnvelope(
+                operation_id="root-set-latency",
+                session_id="root-test",
+                wiring_generation=generation,
+                operation_kind="SetLatency",
+            ),
+            entries=[
+                node_agent_pb2.LatencyEntry(
+                    node_id="sat-a",
+                    interface_name="isl0",
+                    latency_ms=7.0,
+                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                )
+            ],
+        )
+
+        response = handle_set_latency(
+            request,
+            pid_map={"sat-a": proc.pid},
+            fence=RuntimeFence(session_id="root-test", wiring_generation=generation),
+        )
+
+        assert response.success is True
+        assert response.entry_results[0].verified is True
+        qdisc = _qdisc_text(namespace, "isl0")
+        assert "netem" in qdisc
+        assert "delay 7ms" in qdisc or "delay 7.0ms" in qdisc
+
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
+        subprocess.run(["ip", "link", "del", host_if], capture_output=True, check=False)
+        subprocess.run(["ip", "netns", "del", namespace], capture_output=True, check=False)

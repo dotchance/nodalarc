@@ -47,7 +47,6 @@ scheduler:
 # Node Agent DaemonSet runs on each K3s node.
 # Executes privileged netlink operations on behalf of the Scheduler.
 nodeAgent:
-  grpcPort: 50100
   memoryLimit: 4Gi
   cpuLimit: "8"
 
@@ -63,6 +62,23 @@ nats:
   memoryRequest: 256Mi
   cpuLimit: "8"
   cpuRequest: 250m
+  auth:
+    enabled: false
+    users:
+      admin:
+        username: nodalarc-admin
+        password: nodalarc-admin-dev
+      scheduler:
+        username: nodalarc-scheduler
+        password: nodalarc-scheduler-dev
+      nodeAgent:
+        username: nodalarc-node-agent
+        password: nodalarc-node-agent-dev
+      service:
+        username: nodalarc-service
+        password: nodalarc-service-dev
+  networkPolicy:
+    enabled: true
   # Storage — local-path for single-node, switch to Longhorn/Rook for multi-node
   storageClass: "local-path"
   storageSize: "4Gi"

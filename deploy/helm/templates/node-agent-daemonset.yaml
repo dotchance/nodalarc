@@ -35,17 +35,15 @@ spec:
           securityContext:
             privileged: true
           args:
-            - "--port"
-            - "{{ .Values.nodeAgent.grpcPort | default 50100 }}"
             - "--platform-config"
             - "/etc/nodalarc/platform.yaml"
-          ports:
-            - containerPort: {{ .Values.nodeAgent.grpcPort | default 50100 }}
-              hostPort: {{ .Values.nodeAgent.grpcPort | default 50100 }}
-              name: grpc
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+{{- if .Values.nats.auth.enabled }}
+            - name: NODALARC_NATS_URL
+              value: "nats://{{ .Values.nats.auth.users.nodeAgent.username }}:{{ .Values.nats.auth.users.nodeAgent.password }}@nodalarc-nats:4222"
+{{- end }}
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
@@ -56,6 +54,8 @@ spec:
                   fieldPath: status.hostIP
             - name: CONTAINER_RUNTIME_ENDPOINT
               value: unix:///run/k3s/containerd/containerd.sock
+            - name: NODE_AGENT_OPS_SPOOL
+              value: /var/lib/nodalarc/node-agent/ops-events.jsonl
           resources:
             limits:
               memory: {{ .Values.nodeAgent.memoryLimit | default "256Mi" }}
@@ -67,6 +67,8 @@ spec:
             - name: containerd-sock
               mountPath: /run/k3s/containerd/containerd.sock
               readOnly: true
+            - name: node-agent-spool
+              mountPath: /var/lib/nodalarc/node-agent
       volumes:
         - name: platform-config
           configMap:
@@ -75,3 +77,7 @@ spec:
           hostPath:
             path: /run/k3s/containerd/containerd.sock
             type: Socket
+        - name: node-agent-spool
+          hostPath:
+            path: /var/lib/nodalarc/node-agent
+            type: DirectoryOrCreate

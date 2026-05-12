@@ -24,6 +24,10 @@ spec:
                   - nodalarc-node-agent
                   - nodalarc-vs-api
                   - nodalarc-operator
+{{- range .Values.nats.networkPolicy.hostNetworkCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+{{- end }}
       ports:
         - protocol: TCP
           port: 4222

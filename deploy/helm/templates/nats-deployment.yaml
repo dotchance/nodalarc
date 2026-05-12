@@ -31,6 +31,9 @@ spec:
           ports:
             - containerPort: 4222
               name: client
+{{- if .Values.nats.hostNetworkHost }}
+              hostPort: {{ .Values.nats.clientPort }}
+{{- end }}
             - containerPort: 8222
               name: monitoring
           resources:

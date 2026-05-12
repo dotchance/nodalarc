@@ -27,7 +27,7 @@ spec:
       tolerations:
         - operator: Exists
       initContainers:
-        {{- include "nodalarc.nats-wait-init" . | nindent 8 }}
+        {{- include "nodalarc.nats-wait-init" (dict "Values" .Values "hostNetwork" true) | nindent 8 }}
       containers:
         - name: node-agent
           image: {{ required "images.nodeAgent is required" .Values.images.nodeAgent | quote }}
@@ -40,9 +40,17 @@ spec:
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+{{- if .Values.nats.hostNetworkHost }}
 {{- if .Values.nats.auth.enabled }}
             - name: NODALARC_NATS_URL
-              value: "nats://{{ .Values.nats.auth.users.nodeAgent.username }}:{{ .Values.nats.auth.users.nodeAgent.password }}@nodalarc-nats:4222"
+              value: "nats://{{ .Values.nats.auth.users.nodeAgent.username }}:{{ .Values.nats.auth.users.nodeAgent.password }}@{{ .Values.nats.hostNetworkHost }}:{{ .Values.nats.clientPort }}"
+{{- else }}
+            - name: NODALARC_NATS_URL
+              value: "nats://{{ .Values.nats.hostNetworkHost }}:{{ .Values.nats.clientPort }}"
+{{- end }}
+{{- else if .Values.nats.auth.enabled }}
+            - name: NODALARC_NATS_URL
+              value: "nats://{{ .Values.nats.auth.users.nodeAgent.username }}:{{ .Values.nats.auth.users.nodeAgent.password }}@nodalarc-nats:{{ .Values.nats.clientPort }}"
 {{- end }}
             - name: NODE_NAME
               valueFrom:

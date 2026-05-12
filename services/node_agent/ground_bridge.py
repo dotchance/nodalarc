@@ -215,7 +215,7 @@ def _attach_to_ground_bridge_unlocked(
     _tc_mirred_redirect(gs_port, host_veth)
     _tc_mirred_redirect(host_veth, gs_port)
 
-    log.info(f"Attached {sat_id} to {gs_id} (tc redirect)")
+    log.info("Attached %s to %s (tc redirect)", sat_id, gs_id)
 
 
 def detach_from_ground_bridge(
@@ -272,7 +272,7 @@ def _detach_from_ground_bridge_unlocked(
     finally:
         ipr.close()
 
-    log.info(f"Detached {sat_id} from {gs_id}")
+    log.info("Detached %s from %s", sat_id, gs_id)
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +321,7 @@ def attach_isl(
     finally:
         ipr.close()
 
-    log.info(f"Attached ISL: {host_a} <-> {host_b}")
+    log.info("Attached ISL: %s <-> %s", host_a, host_b)
 
 
 def detach_isl(
@@ -349,7 +349,7 @@ def detach_isl(
     finally:
         ipr.close()
 
-    log.info(f"Detached ISL: {host_a} <-> {host_b}")
+    log.info("Detached ISL: %s <-> %s", host_a, host_b)
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +386,7 @@ def create_ground_bridge(
     ipr = IPRoute()
     try:
         if ipr.link_lookup(ifname=gs_port):
-            log.debug(f"GS port {gs_port} already exists")
+            log.debug("GS port %s already exists", gs_port)
             return gs_port
 
         _target_ifname = ifname
@@ -395,7 +395,7 @@ def create_ground_bridge(
             return bool(ns_ipr.link_lookup(ifname=_target_ifname))
 
         if _in_namespace(gs_pid, _check_iface):
-            log.debug(f"{ifname} already exists in GS ns({gs_pid})")
+            log.debug("%s already exists in GS ns(%s)", ifname, gs_pid)
             return gs_port
 
         rand = os.urandom(3).hex()
@@ -423,7 +423,7 @@ def create_ground_bridge(
 
         _in_namespace(gs_pid, _rename_iface)
 
-        log.info(f"Created GS port {gs_port} → {ifname} in ns({gs_pid})")
+        log.info("Created GS port %s → %s in ns(%s)", gs_port, ifname, gs_pid)
     finally:
         ipr.close()
 
@@ -450,7 +450,7 @@ def create_satellite_ground_veth(
     ipr = IPRoute()
     try:
         if ipr.link_lookup(ifname=host_name):
-            log.debug(f"Satellite ground veth {host_name} already exists")
+            log.debug("Satellite ground veth %s already exists", host_name)
             return (host_name, ifname)
 
         _target_ifname = ifname
@@ -459,7 +459,7 @@ def create_satellite_ground_veth(
             return bool(ns_ipr.link_lookup(ifname=_target_ifname))
 
         if _in_namespace(sat_pid, _check_iface):
-            log.debug(f"{ifname} already exists in sat ns({sat_pid})")
+            log.debug("%s already exists in sat ns(%s)", ifname, sat_pid)
             return (host_name, ifname)
 
         rand = os.urandom(3).hex()
@@ -489,7 +489,7 @@ def create_satellite_ground_veth(
     finally:
         ipr.close()
 
-    log.info(f"Created satellite ground veth {host_name} ↔ {ifname} in ns({sat_pid})")
+    log.info("Created satellite ground veth %s ↔ %s in ns(%s)", host_name, ifname, sat_pid)
     return (host_name, ifname)
 
 
@@ -536,7 +536,7 @@ def create_mediated_isl(
         try:
             # Idempotent: skip if host side already exists
             if ipr.link_lookup(ifname=host_name):
-                log.debug(f"ISL host veth {host_name} already exists, skipping")
+                log.debug("ISL host veth %s already exists, skipping", host_name)
                 continue
 
             # Create veth pair with temp names in host namespace
@@ -582,7 +582,12 @@ def create_mediated_isl(
     _tc_mirred_redirect(host_b, host_a)
 
     log.info(
-        f"Created mediated ISL: ns({pid_a})/{ifname_a} [{host_a}] "
-        f"↔ [{host_b}] ns({pid_b})/{ifname_b} (mirred installed)"
+        "Created mediated ISL: ns(%s)/%s [%s] ↔ [%s] ns(%s)/%s (mirred installed)",
+        pid_a,
+        ifname_a,
+        host_a,
+        host_b,
+        pid_b,
+        ifname_b,
     )
     return (host_a, host_b)

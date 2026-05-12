@@ -4,12 +4,19 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from pyroute2.netlink.rtnl.tcmsg import common as tc_common
 
 from node_agent import vxlan
+from node_agent.kernel_constants import (
+    IFF_UP,
+    NETEM_TICK_TOLERANCE,
+    TBF_RATE32_MAX_BPS,
+    TC_H_INGRESS,
+)
 from node_agent.namespace_runner import run_in_host_namespace, run_in_pod_namespace
 
 
@@ -62,7 +69,7 @@ def verify_host_interface_state(ifname: str, *, admin_up: bool | None = None) ->
     if not rows:
         return Proof.fail(f"host interface {ifname} missing")
     flags = rows[0]["flags"]
-    is_up = bool(flags & 0x1)
+    is_up = bool(flags & IFF_UP)
     if admin_up is not None and is_up != admin_up:
         want = "UP" if admin_up else "DOWN"
         got = "UP" if is_up else "DOWN"
@@ -106,6 +113,9 @@ def _walk_values(obj: Any):
         for key, value in obj.items():
             yield str(key), value
             yield from _walk_values(value)
+    elif isinstance(obj, tuple) and len(obj) == 2 and isinstance(obj[0], str):
+        yield obj[0], obj[1]
+        yield from _walk_values(obj[1])
     elif isinstance(obj, list | tuple):
         for item in obj:
             yield from _walk_values(item)
@@ -171,7 +181,7 @@ def verify_qdisc(
     actual_delay_ticks = _extract_delay_ticks(rows)
     if actual_delay_ticks is None:
         return Proof.fail(f"cannot parse netem delay for {ifname}", *evidence)
-    if abs(actual_delay_ticks - expected_delay_ticks) > 1:
+    if abs(actual_delay_ticks - expected_delay_ticks) > NETEM_TICK_TOLERANCE:
         return Proof.fail(
             f"netem delay mismatch on {ifname}",
             f"expected_us={expected_delay_us}",
@@ -182,8 +192,8 @@ def verify_qdisc(
 
     if rate_mbps is not None:
         expected_rate = int(rate_mbps * 1_000_000)
-        if expected_rate > 0xFFFFFFFF:
-            expected_rate = 0xFFFFFFFF
+        if expected_rate > TBF_RATE32_MAX_BPS:
+            expected_rate = TBF_RATE32_MAX_BPS
         actual_rate = _extract_rate_bps(rows)
         if actual_rate is None:
             return Proof.fail(f"cannot parse tbf rate for {ifname}", *evidence)
@@ -199,7 +209,7 @@ def verify_qdisc(
         f"qdisc verified on {ifname}",
         f"delay_us={expected_delay_us}",
         f"delay_ticks={actual_delay_ticks}",
-        *(evidence[:4]),
+        *evidence,
     )
 
 
@@ -266,19 +276,56 @@ def verify_mirred(src_ifname: str, dst_ifname: str) -> Proof:
         src = ipr.link_lookup(ifname=src_ifname)
         dst = ipr.link_lookup(ifname=dst_ifname)
         if not src:
-            return "missing-src", []
+            return "missing-src", None, []
         if not dst:
-            return "missing-dst", []
+            return "missing-dst", None, []
+        dst_index = dst[0]
         try:
-            filters = ipr.get_filters(index=src[0], parent=0xFFFF0000)
+            filters = ipr.get_filters(index=src[0], parent=TC_H_INGRESS)
         except Exception as exc:
-            return f"filter-read-error:{exc}", []
-        return "ok", [repr(f) for f in filters]
+            return f"filter-read-error:{exc}", None, []
+        rows = []
+        for filt in filters:
+            attrs = dict(filt.get("attrs", []))
+            options = attrs.get("TCA_OPTIONS")
+            mirred = False
+            redirect_indexes: list[int] = []
+            for key, value in _walk_values(options):
+                if key == "TCA_ACT_KIND" and value == "mirred":
+                    mirred = True
+                if key == "ifindex" and isinstance(value, int):
+                    redirect_indexes.append(value)
+            raw = repr(filt)
+            if not mirred and re.search(r"['\"]TCA_ACT_KIND['\"],\s*['\"]mirred['\"]", raw):
+                mirred = True
+            if not redirect_indexes:
+                redirect_indexes.extend(
+                    int(match.group(1)) for match in re.finditer(r"['\"]ifindex['\"]:\s*(\d+)", raw)
+                )
+            rows.append(
+                {
+                    "mirred": mirred,
+                    "redirect_indexes": redirect_indexes,
+                    "raw": raw,
+                }
+            )
+        return "ok", dst_index, rows
 
-    status, filters = run_in_host_namespace(_op)
+    status, dst_index, filters = run_in_host_namespace(_op)
     if status != "ok":
         return Proof.fail(f"mirred proof failed {src_ifname}->{dst_ifname}", status)
-    joined = "\n".join(filters)
-    if "mirred" not in joined:
+    joined = "\n".join(row["raw"] for row in filters)
+    if not any(row["mirred"] for row in filters):
         return Proof.fail(f"missing mirred filter {src_ifname}->{dst_ifname}", joined)
-    return Proof.ok(f"mirred verified {src_ifname}->{dst_ifname}", joined[:1000])
+    if not any(dst_index in row["redirect_indexes"] for row in filters if row["mirred"]):
+        return Proof.fail(
+            f"mirred destination mismatch {src_ifname}->{dst_ifname}",
+            f"expected_ifindex={dst_index}",
+            f"actual_ifindexes={sorted({idx for row in filters for idx in row['redirect_indexes']})}",
+            joined,
+        )
+    return Proof.ok(
+        f"mirred verified {src_ifname}->{dst_ifname}",
+        f"dst_ifindex={dst_index}",
+        joined,
+    )

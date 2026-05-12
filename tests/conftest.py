@@ -56,3 +56,9 @@ def _init_platform_config():
     init_platform_config(cfg)
     yield
     reset_platform_config()
+
+
+@pytest.fixture(autouse=True)
+def _node_agent_ops_spool_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Keep Node Agent pre-init OpsEvent spooling inside the test temp dir."""
+    monkeypatch.setenv("NODE_AGENT_OPS_SPOOL", str(tmp_path / "node-agent-ops-events.jsonl"))

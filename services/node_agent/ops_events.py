@@ -59,7 +59,7 @@ def spool_event(event: dict[str, Any], *, path: Path | None = None) -> None:
     target = path or spool_path()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
+        line = _event_line(event)
         with _lock, target.open("a", encoding="utf-8") as fh:
             fh.write(line)
             fh.flush()
@@ -67,6 +67,10 @@ def spool_event(event: dict[str, Any], *, path: Path | None = None) -> None:
     except Exception:
         log.critical("FATAL: could not write Node Agent OpsEvent spool at %s", target)
         raise
+
+
+def _event_line(event: dict[str, Any]) -> str:
+    return json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
 
 
 def spool_failure(
@@ -98,18 +102,28 @@ async def _publish_event(js: Any, event: dict[str, Any]) -> None:
 async def drain_spool(js: Any, *, path: Path | None = None) -> int:
     """Publish all spooled OpsEvents and truncate the spool on success."""
     target = path or spool_path()
-    if not target.exists():
-        return 0
-    lines = target.read_text(encoding="utf-8").splitlines()
-    count = 0
-    for line in lines:
-        if not line.strip():
-            continue
-        event = json.loads(line)
-        await _publish_event(js, event)
-        count += 1
     with _lock:
-        target.write_text("", encoding="utf-8")
+        if not target.exists():
+            return 0
+        with target.open("r+", encoding="utf-8") as fh:
+            lines = [line for line in fh.read().splitlines() if line.strip()]
+            fh.seek(0)
+            fh.truncate()
+            fh.flush()
+            os.fsync(fh.fileno())
+    count = 0
+    for index, line in enumerate(lines):
+        try:
+            event = json.loads(line)
+            await _publish_event(js, event)
+            count += 1
+        except Exception:
+            with _lock, target.open("a", encoding="utf-8") as fh:
+                for remaining in lines[index:]:
+                    fh.write(remaining.rstrip("\n") + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            raise
     if count:
         log.info("Drained %d Node Agent OpsEvent(s) from %s", count, target)
     return count
@@ -143,11 +157,7 @@ def publish(
     session_id: str = "",
     details: dict[str, Any] | None = None,
 ) -> None:
-    """Publish an OpsEvent after NATS init.
-
-    Startup paths that run before NATS must call ``spool_failure`` directly.
-    Handler unit tests and offline direct calls do not create spool files.
-    """
+    """Publish an OpsEvent or durably spool it when NATS is not initialized."""
     event = build_event(
         level=level,
         code=code,
@@ -156,7 +166,7 @@ def publish(
         details=details,
     )
     if _loop is None:
-        log.debug("Node Agent OpsEvent dropped before NATS init: %s", code)
+        spool_event(event)
         return
     try:
         asyncio.run_coroutine_threadsafe(_publish_or_spool(event), _loop)

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from node_agent import vxlan
+from node_agent.kernel_constants import IFF_UP
 from node_agent.namespace_runner import run_in_host_namespace, run_in_pod_namespace
 
 
@@ -72,7 +73,7 @@ def _link_inventory(ipr, *, namespace: str, ifname: str) -> InterfaceInventory:
         ifname=ifname,
         exists=True,
         index=idxs[0],
-        admin_up=bool(flags & 0x1),
+        admin_up=bool(flags & IFF_UP),
         operstate=attrs.get("IFLA_OPERSTATE"),
         mtu=attrs.get("IFLA_MTU"),
         mac=attrs.get("IFLA_ADDRESS"),

@@ -50,3 +50,40 @@ def test_drain_spool_publishes_and_truncates(monkeypatch: pytest.MonkeyPatch, tm
     assert count == 1
     assert spool.read_text() == ""
     assert js.published[0][0] == "nodalarc.ops._infra.node_agent.manifest_validation_failed"
+
+
+def test_publish_before_nats_init_spools_event(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    spool = tmp_path / "ops-events.jsonl"
+    monkeypatch.setenv("NODE_AGENT_OPS_SPOOL", str(spool))
+
+    ops_events.publish(
+        level="warning",
+        code="COMMAND_REJECTED",
+        message="bad command",
+        session_id="demo",
+    )
+
+    payload = json.loads(spool.read_text().strip())
+    assert payload["code"] == "COMMAND_REJECTED"
+    assert payload["session_id"] == "demo"
+
+
+def test_drain_spool_preserves_events_written_during_publish(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    spool = tmp_path / "ops-events.jsonl"
+    monkeypatch.setenv("NODE_AGENT_OPS_SPOOL", str(spool))
+    ops_events.spool_failure(code="STARTUP_NATS_FAILED", message="first")
+
+    class _Js:
+        async def publish(self, _subject: str, _payload: bytes) -> None:
+            ops_events.spool_failure(
+                code="DURING_DRAIN",
+                message="written while old spool is publishing",
+            )
+
+    count = asyncio.run(ops_events.drain_spool(_Js()))
+
+    assert count == 1
+    remaining = [json.loads(line) for line in spool.read_text().splitlines()]
+    assert [event["code"] for event in remaining] == ["DURING_DRAIN"]

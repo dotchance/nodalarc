@@ -36,10 +36,10 @@ from nodalarc.nats_channels import (
     node_agent_subject,
     wiring_progress_subject,
 )
+from nodalarc.substrate.manifest_contract import WiringManifest
 
 from node_agent import ops_events
 from node_agent.command_contract import RuntimeFence
-from node_agent.manifest_contract import WiringManifest
 from node_agent.reconcile import (
     clean_nodalarc_kernel_state,
     get_actual_nodalarc_interfaces,

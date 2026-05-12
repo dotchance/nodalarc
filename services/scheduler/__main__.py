@@ -33,8 +33,8 @@ from nodalarc.models.addressing import (
     AddressingScheme,
 )
 from nodalarc.models.session import SessionConfig
-from node_agent.manifest_contract import WiringManifest
-from node_agent.wiring_status import parse_status_configmap
+from nodalarc.substrate.manifest_contract import WiringManifest
+from nodalarc.substrate.wiring_status import parse_status_configmap
 
 from scheduler.agent_pool import AgentPool
 from scheduler.dispatcher import Dispatcher

@@ -20,6 +20,7 @@ REGISTRY_PREFIX ?= $(if $(filter single-node,$(MODE)),,$(if $(REGISTRY_HOST),$(R
 DEFAULT_SESSION ?= configs/sessions/demo-36-ospf.yaml
 NAMESPACE       ?= nodalarc
 HELM_EXTRA_ARGS ?=
+TEST_ROOT_PYTHON ?= .venv/bin/python
 
 export KUBECONFIG
 
@@ -434,8 +435,12 @@ test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NE
 		echo "FATAL: test-root requires root/CAP_NET_ADMIN. Run: sudo make test-root"; \
 		exit 1; \
 	fi
+	@if [ ! -x "$(TEST_ROOT_PYTHON)" ]; then \
+		echo "FATAL: $(TEST_ROOT_PYTHON) not found or not executable. Run: uv sync --extra dev"; \
+		exit 1; \
+	fi
 	@echo "[test-root] Running privileged Node Agent substrate proof tests"
-	uv run pytest -m requires_root tests/integration/test_node_agent_netem.py --tb=short -q
+	$(TEST_ROOT_PYTHON) -m pytest -m requires_root tests/integration/test_node_agent_netem.py --tb=short -q
 
 # ---------------------------------------------------------------------------
 # Reset and teardown

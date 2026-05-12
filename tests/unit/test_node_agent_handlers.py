@@ -106,6 +106,38 @@ class TestBatchLinkDown:
         with pytest.raises(ValueError, match="pid_map is None"):
             handle_batch_link_down(req, pid_map=None, fence=FENCE)
 
+    def test_cross_node_ground_cleanup_failure_marks_dirty(self, monkeypatch):
+        from node_agent import vxlan
+
+        def _fail_cleanup(*_args, **_kwargs):
+            raise RuntimeError("cleanup failed")
+
+        monkeypatch.setattr(vxlan, "detach_cross_node_ground", _fail_cleanup)
+        req = node_agent_pb2.BatchLinkDownRequest(
+            envelope=_env("BatchLinkDown", "test-cross-ground-cleanup-dirty"),
+            interfaces=[
+                node_agent_pb2.InterfaceDown(
+                    node_id="sat-P00S00",
+                    interface_name="gnd0",
+                    link_type=node_agent_pb2.LINK_TYPE_GROUND,
+                    locality=node_agent_pb2.LOCALITY_CROSS_NODE,
+                    gs_id="gs-den",
+                    sat_id="sat-P00S00",
+                    peer_node_id="gs-den",
+                    peer_interface_name="term0",
+                    remote_node_ip="10.0.0.2",
+                    vni=1001,
+                )
+            ],
+        )
+
+        resp = handle_batch_link_down(req, pid_map={"sat-P00S00": 1234}, fence=FENCE)
+
+        assert resp.success is False
+        assert resp.dirty_kernel is True
+        assert resp.interface_results[0].dirty_kernel is True
+        assert resp.interface_results[0].error_code == node_agent_pb2.NODE_AGENT_CLEANUP_FAILED
+
 
 class TestBatchLinkUp:
     def test_cross_node_empty_batch_succeeds(self):

@@ -7,6 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from pyroute2.netlink.rtnl.tcmsg import common as tc_common
+
 from node_agent import vxlan
 from node_agent.namespace_runner import run_in_host_namespace, run_in_pod_namespace
 
@@ -109,7 +111,7 @@ def _walk_values(obj: Any):
             yield from _walk_values(item)
 
 
-def _extract_delay_us(rows: list[dict[str, Any]]) -> int | None:
+def _extract_delay_ticks(rows: list[dict[str, Any]]) -> int | None:
     for row in rows:
         if row["kind"] != "netem":
             continue
@@ -161,15 +163,20 @@ def verify_qdisc(
     if "netem" not in kinds:
         return Proof.fail(f"missing netem qdisc on {ifname}", *evidence)
 
+    # Netem delay is configured in microseconds, but the kernel reports it in
+    # tc scheduler ticks. Mirror pyroute2's encoder so postcondition proof
+    # compares the exact representation the kernel stores.
     expected_delay_us = int(round(delay_ms * 1000))
-    actual_delay_us = _extract_delay_us(rows)
-    if actual_delay_us is None:
+    expected_delay_ticks = int(tc_common.time2tick(expected_delay_us))
+    actual_delay_ticks = _extract_delay_ticks(rows)
+    if actual_delay_ticks is None:
         return Proof.fail(f"cannot parse netem delay for {ifname}", *evidence)
-    if abs(actual_delay_us - expected_delay_us) > 1:
+    if abs(actual_delay_ticks - expected_delay_ticks) > 1:
         return Proof.fail(
             f"netem delay mismatch on {ifname}",
             f"expected_us={expected_delay_us}",
-            f"actual_us={actual_delay_us}",
+            f"expected_ticks={expected_delay_ticks}",
+            f"actual_ticks={actual_delay_ticks}",
             *evidence,
         )
 
@@ -190,7 +197,8 @@ def verify_qdisc(
 
     return Proof.ok(
         f"qdisc verified on {ifname}",
-        f"delay_us={actual_delay_us}",
+        f"delay_us={expected_delay_us}",
+        f"delay_ticks={actual_delay_ticks}",
         *(evidence[:4]),
     )
 

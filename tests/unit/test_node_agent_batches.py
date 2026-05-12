@@ -197,3 +197,39 @@ def test_successful_interface_acks_require_exact_identity_and_consistent_aggrega
             agent_addr="agent-a",
             operation="BatchLinkUp",
         )
+
+
+def test_successful_interface_acks_reject_stale_generation_response():
+    requested = [
+        node_agent_pb2.InterfaceUp(node_id="sat-a", interface_name="isl0"),
+        node_agent_pb2.InterfaceUp(node_id="sat-b", interface_name="isl1"),
+    ]
+    stale = node_agent_pb2.BatchLinkUpResponse(
+        success=False,
+        error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
+        error_message="stale generation",
+        interface_results=[
+            node_agent_pb2.InterfaceResult(
+                node_id="sat-a",
+                interface_name="isl0",
+                success=False,
+                error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
+                error_message="stale generation",
+            ),
+            node_agent_pb2.InterfaceResult(
+                node_id="sat-b",
+                interface_name="isl1",
+                success=False,
+                error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
+                error_message="stale generation",
+            ),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="rejected command fence"):
+        successful_interface_acks(
+            result=stale,
+            requested_interfaces=requested,
+            agent_addr="agent-a",
+            operation="BatchLinkUp",
+        )

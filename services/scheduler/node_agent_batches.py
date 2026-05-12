@@ -342,6 +342,29 @@ def successful_interface_acks(
     Aggregate counts are not proof. Every requested interface must be named in
     the response, and aggregate success must agree with per-interface success.
     """
+    stale_or_fenced_codes = {
+        node_agent_pb2.NODE_AGENT_STALE_SESSION,
+        node_agent_pb2.NODE_AGENT_STALE_GENERATION,
+        node_agent_pb2.NODE_AGENT_INVALID_ENVELOPE,
+    }
+    aggregate_code = getattr(result, "error_code", node_agent_pb2.NODE_AGENT_ERROR_UNSPECIFIED)
+    entry_fence_codes = {
+        ack.error_code
+        for ack in result.interface_results
+        if ack.error_code in stale_or_fenced_codes
+    }
+    if aggregate_code in stale_or_fenced_codes or entry_fence_codes:
+        codes = sorted(
+            {
+                node_agent_pb2.NodeAgentErrorCode.Name(code)
+                for code in ({aggregate_code} | entry_fence_codes)
+                if code in stale_or_fenced_codes
+            }
+        )
+        raise RuntimeError(
+            f"{operation} response from {agent_addr} rejected command fence: {', '.join(codes)}"
+        )
+
     requested = {(iface.node_id, iface.interface_name) for iface in requested_interfaces}
     returned = {(ack.node_id, ack.interface_name) for ack in result.interface_results}
     if requested != returned:

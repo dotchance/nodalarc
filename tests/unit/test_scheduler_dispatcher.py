@@ -477,6 +477,47 @@ class TestDispatcherLiveDispatch:
         with pytest.raises(RuntimeError, match="did not identify every requested interface"):
             asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
 
+    def test_batch_up_stale_generation_response_blocks_dispatch(self):
+        d, pool = _make_dispatcher()
+        pair = ("sat-P00S00", "sat-P00S01")
+        sim_time = datetime(2026, 1, 1, tzinfo=UTC)
+        desired = {
+            pair: ActiveLinkInfo(
+                "isl0",
+                "isl1",
+                3.0,
+                1000.0,
+                link_type="isl",
+                range_km=900.0,
+                authority_sim_time=sim_time,
+                authority_source="test",
+            )
+        }
+
+        def stale_up(req):
+            return node_agent_pb2.BatchLinkUpResponse(
+                success=False,
+                error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
+                error_message="stale generation",
+                interface_results=[
+                    node_agent_pb2.InterfaceResult(
+                        node_id=iface.node_id,
+                        interface_name=iface.interface_name,
+                        success=False,
+                        error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
+                        error_message="stale generation",
+                    )
+                    for iface in req.interfaces
+                ],
+            )
+
+        pool.get_stub.return_value.async_batch_link_up = AsyncMock(side_effect=stale_up)
+
+        with pytest.raises(RuntimeError, match="rejected command fence"):
+            asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+
+        assert not d._js.publish.called
+
     def test_cross_node_missing_substrate_measurement_fails_loudly(self):
         d, _ = _make_dispatcher()
         d._loc._node_of["sat-P00S00"] = "node-a"

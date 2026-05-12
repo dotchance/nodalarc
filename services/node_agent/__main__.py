@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import logging
+import os
 import signal
 import socket
 from pathlib import Path
@@ -47,6 +49,70 @@ from node_agent.server import dispatch
 from node_agent.wiring import execute_wiring, write_wiring_status
 
 log = logging.getLogger(__name__)
+
+
+def _running_in_k8s() -> bool:
+    return bool(os.environ.get("KUBERNETES_SERVICE_HOST") or os.environ.get("NODE_NAME"))
+
+
+def _require_host_ip_for_vxlan_capable_startup() -> None:
+    """Validate the downward-API host IP before accepting any work."""
+    if not _running_in_k8s():
+        return
+    host_ip = os.environ.get("HOST_IP", "").strip()
+    if not host_ip:
+        ops_events.spool_failure(
+            code="STARTUP_HOST_IP_MISSING",
+            message="HOST_IP env var is required for VXLAN-capable Node Agent startup",
+            details={"node_name": os.environ.get("NODE_NAME", "")},
+            session_id="",
+        )
+        raise RuntimeError("HOST_IP env var is required for VXLAN-capable Node Agent startup")
+    try:
+        ipaddress.ip_address(host_ip)
+    except ValueError as exc:
+        ops_events.spool_failure(
+            code="STARTUP_HOST_IP_INVALID",
+            message=f"HOST_IP env var is not a valid IP address: {host_ip!r}",
+            details={"node_name": os.environ.get("NODE_NAME", ""), "host_ip": host_ip},
+            session_id="",
+        )
+        raise RuntimeError(f"HOST_IP env var is not a valid IP address: {host_ip!r}") from exc
+
+
+def _explicit_fence_from_env() -> RuntimeFence | None:
+    session_id = os.environ.get("NODE_AGENT_SESSION_ID", "").strip()
+    wiring_generation = os.environ.get("NODE_AGENT_WIRING_GENERATION", "").strip()
+    if not session_id and not wiring_generation:
+        return None
+    if not session_id or not wiring_generation:
+        raise RuntimeError(
+            "NODE_AGENT_SESSION_ID and NODE_AGENT_WIRING_GENERATION must be provided together"
+        )
+    if not wiring_generation.startswith("sha256:") or len(wiring_generation) != len("sha256:") + 64:
+        raise RuntimeError("NODE_AGENT_WIRING_GENERATION must be sha256:<64 hex chars>")
+    from nodalarc.nats_channels import sanitize_session_id
+
+    return RuntimeFence(
+        session_id=sanitize_session_id(session_id),
+        wiring_generation=wiring_generation,
+    )
+
+
+def _require_ready_fence(fence: RuntimeFence) -> None:
+    if fence.session_id and fence.wiring_generation:
+        return
+    ops_events.publish(
+        level="critical",
+        code="STARTUP_WIRING_IDENTITY_MISSING",
+        message="Node Agent has no session_id/wiring_generation; refusing NATS command subscription",
+        session_id="",
+        details={
+            "session_id_present": bool(fence.session_id),
+            "wiring_generation_present": bool(fence.wiring_generation),
+        },
+    )
+    raise RuntimeError("Node Agent wiring identity unavailable; refusing NATS command subscription")
 
 
 async def main() -> None:
@@ -83,11 +149,12 @@ async def main() -> None:
             session_id="",
         )
         raise
-    import os as _os
+
+    _require_host_ip_for_vxlan_capable_startup()
 
     log.info(
         "Node Agent starting [build=%s, node=%s]",
-        _os.environ.get("NODAL_BUILD", "dev"),
+        os.environ.get("NODAL_BUILD", "dev"),
         hostname,
     )
 
@@ -133,7 +200,25 @@ async def main() -> None:
 
     # If --pid-map provided, skip wiring discovery
     if args.pid_map:
+        explicit_fence = _explicit_fence_from_env()
+        if explicit_fence is None:
+            ops_events.spool_failure(
+                code="STARTUP_WIRING_IDENTITY_MISSING",
+                message="--pid-map requires NODE_AGENT_SESSION_ID and NODE_AGENT_WIRING_GENERATION",
+                details={"pid_map": args.pid_map},
+                session_id="",
+            )
+            raise RuntimeError(
+                "--pid-map requires NODE_AGENT_SESSION_ID and NODE_AGENT_WIRING_GENERATION"
+            )
         shared_pid_map.update(json.loads(Path(args.pid_map).read_text()))
+        current_fence = explicit_fence
+        from node_agent import substrate_monitor as _substrate_monitor
+
+        _substrate_monitor.set_identity(
+            current_fence.session_id,
+            current_fence.wiring_generation,
+        )
         log.info("Loaded pid_map from %s (%d entries)", args.pid_map, len(shared_pid_map))
         first_wiring_done.set()
 
@@ -306,6 +391,7 @@ async def main() -> None:
     log.debug("Waiting for wiring to complete before accepting NATS requests...")
     await first_wiring_done.wait()
     log.debug("Wiring ready — pid_map has %d entries", len(shared_pid_map))
+    _require_ready_fence(current_fence)
 
     # -----------------------------------------------------------------------
     # NATS request/reply server — subscribes AFTER wiring (pid_map gate)
@@ -390,7 +476,7 @@ def _retry_missed_nodes(
 
     from node_agent.namespace_ops import _write_sysctl_in_netns
     from node_agent.pid_discovery import discover_local_pod_pids
-    from node_agent.wiring import finalize_pod
+    from node_agent.wiring import finalize_pod_phases
 
     nodes = manifest.get("nodes", {})
     remaining = set(missed)
@@ -412,9 +498,14 @@ def _retry_missed_nodes(
                 err = _write_sysctl_in_netns(pid, key, str(value))
                 if err:
                     log.warning("Retry sysctl %s=%s failed for %s: %s", key, value, node_id, err)
-            err = finalize_pod(pid, node_id)
-            if err:
-                log.warning("Retry finalization failed for %s: %s", node_id, err)
+            route_err, security_err = finalize_pod_phases(pid, node_id)
+            if route_err or security_err:
+                log.warning(
+                    "Retry finalization failed for %s: route=%s security=%s",
+                    node_id,
+                    route_err or "ok",
+                    security_err or "ok",
+                )
                 continue
             resolved.append(node_id)
             remaining.discard(node_id)

@@ -180,4 +180,4 @@ def envelope(
 
 def worst_error_code(codes: Iterable[int]) -> int:
     non_ok = [code for code in codes if code != node_agent_pb2.NODE_AGENT_OK]
-    return non_ok[0] if non_ok else node_agent_pb2.NODE_AGENT_OK
+    return max(non_ok) if non_ok else node_agent_pb2.NODE_AGENT_OK

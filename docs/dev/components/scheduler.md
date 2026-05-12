@@ -57,9 +57,14 @@ ScenarioCommand   --> _on_scenario_command() mutates overrides --> _build_dispat
 All paths converge at the dispatch worker, which calls `_reconcile_links`. This function:
 1. Computes links to remove: `actual - desired`
 2. Computes links to add: `desired - actual`
-3. Dispatches `BatchLinkDown` for removals (with `down_reasons`)
-4. Dispatches `BatchLinkUp` for additions
-5. Updates `_actual_links` and capacity counters
+3. Dispatches fenced `BatchLinkDown` for removals (with `down_reasons`)
+4. Dispatches fenced `BatchLinkUp` for additions
+5. Updates `_actual_links` and capacity counters only after exact verified ACKs
+
+If the Node Agent reports `dirty_kernel`, a stale generation, or an
+unverified success, dispatch fails loudly. The worker records the block reason
+and stops processing the affected generation instead of manufacturing active
+state.
 
 ## Queue Drain
 
@@ -76,7 +81,11 @@ For each link pair, the Scheduler determines whether both endpoints are on the s
 
 ## Latency Updates
 
-The Scheduler loads `SessionEphemeris` orbital elements once per epoch and propagates active link endpoints locally via Keplerian propagation on a 10-second interval. For each active link:
+Live dispatch latency is OME-authoritative. The OME includes `range_km` and
+one-way `latency_ms` on `VisibilityEvent` and active `LinkStateSnapshot` links.
+The Scheduler preserves those values in `ActiveLinkInfo`, refuses to dispatch
+when they are missing, and sends `SetLatency` when an authoritative snapshot or
+visibility event changes the desired latency for an already-active link.
 
 ```
 latency_ms = range_km / 299792.458 * 1000
@@ -87,7 +96,12 @@ For CROSS_NODE links, substrate compensation applies:
 netem_ms = max(0, orbital_latency_ms - substrate_latency_ms)
 ```
 
-Substrate latency is measured by the Node Agent and published on NATS.
+Substrate latency is measured by the Node Agent and published on NATS as
+session/generation-scoped measurement events. The Scheduler rejects stale,
+failed, or generation-mismatched live measurements. Missing cross-node
+substrate RTT is unrepresentable and blocks dispatch.
+`SessionEphemeris` is consumed for epoch synchronization and edge propagation
+contracts; it is not the live Scheduler's latency authority.
 
 ## Scenario Override
 
@@ -101,12 +115,26 @@ Override-caused removals are forced BBM (escalated to GS-segment level for groun
 
 NATS request/reply (not JetStream). Each node has subject `nodalarc.agent.{hostname}`. Messages are protobuf-encoded (`lib/nodalarc/proto/node_agent.proto`).
 
+Every request carries `CommandEnvelope(operation_id, session_id,
+wiring_generation, operation_kind)`. Scheduler builds those fields from the
+validated wiring manifest identity read at startup. Node Agent responses must
+name every requested interface or latency entry, must have `verified=true` for
+successes, and must not report `dirty_kernel`.
+
 Request types:
 - `BatchLinkUp` - activate a set of links
 - `BatchLinkDown` - deactivate a set of links
 - `SetLatency` - update tc netem on active links
 
 Timeout: 60 seconds (accommodates cold-start VXLAN batch).
+
+## Wiring Gate
+
+Startup reads the Operator-generated wiring manifest, validates the
+`session_id` and `wiring_generation`, then waits for typed Node Agent wiring
+status. A matching node set is not enough: every expected node must be `ready`,
+must match the same session/generation, must report all required phases ready,
+and must not be dirty.
 
 ## What It Subscribes To
 
@@ -133,7 +161,7 @@ Timeout: 60 seconds (accommodates cold-start VXLAN batch).
 | `dispatcher.py` | `Dispatcher`, `DispatchIntent`, `_reconcile_links`, `_build_dispatch_intent`, `_on_scenario_command` |
 | `__main__.py` | Entry point, session config loading, wiring gate, K8s setup |
 | `scenario_handler.py` | `parse_scenario_command` - pure command parsing |
-| `latency_model.py` | `PositionTable` - Keplerian propagation for latency |
+| `latency_model.py` | `PositionTable` - retained on-demand ephemeris propagation helper for diagnostics/tests, not live dispatch authority |
 | `pod_locator.py` | `PodLocationMap` - node ID to K3s node + NATS subject |
 | `agent_pool.py` | `AgentPool` - NATS client pool for Node Agents |
 | `node_agent_client.py` | `NodeAgentClient` - NATS request/reply to one agent |

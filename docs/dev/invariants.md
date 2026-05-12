@@ -18,7 +18,9 @@ IGP sessions and NodalPath sessions share the OME, Scheduler, and Node Agent wir
 - FRR owns forwarding state entirely
 - Scheduler dispatches BatchLinkUp/Down to Node Agent via NATS request/reply
 - Node Agent manipulates kernel interfaces via pyroute2
-- No gRPC. No NETCONF. No `agent_pool`. No `GetTopology`. No `load_interface_inventory`.
+- No Node Agent gRPC. No NETCONF. No `GetTopology`.
+- `scheduler.agent_pool.AgentPool` is allowed: it is the NATS request/reply
+  client pool for Node Agents, not a forwarding-plane agent inventory.
 - If you find any of these in an IGP code path, it is wrong. Remove it.
 
 **NodalPath sessions:**
@@ -54,6 +56,22 @@ behavior there and do not treat it as a production path.
 This invariant keeps the actuator honest. `_actual_links`, capacity counters,
 Node Agent I/O, and LinkUp/LinkDown publication all stay behind one door.
 
+## Node Agent Truth Contract
+
+Node Agent commands are fenced by `session_id` and `wiring_generation`.
+Malformed frames, stale generations, missing PIDs, missing `HOST_IP`, missing
+peer identity, and protobuf enum zero values fail before mutation.
+
+Node Agent success means the MVP kernel proof passed. Batch replies name every
+requested interface, SetLatency replies name every requested entry, and
+successful entries have `verified=true`. A cleanup/proof/rollback failure sets
+`dirty_kernel=true`; the Scheduler must stop dispatch for that generation
+instead of treating aggregate counts as truth.
+
+Wiring readiness is typed. The Scheduler gate checks manifest session,
+manifest generation, expected nodes, required phase status, and dirty-kernel
+state. Node-set equality alone is never readiness.
+
 ## NATS Subject Centralization
 
 All NATS subjects are defined in `lib/nodalarc/nats_channels.py`. No literal subject strings anywhere else. This ensures:
@@ -76,7 +94,7 @@ The pacing thread must never be converted to async. `asyncio.sleep()` does not p
 
 Never use `pyroute2.NetNS()`. It forks a child process that:
 - Inherits signal handlers (SIGTERM handler runs in the child)
-- Inherits socket file descriptors (child holds port 50100 after parent exits)
+- Inherits socket file descriptors and NATS connections
 - Creates orphaned processes that prevent clean restart
 
 Use `_in_namespace(pid, fn)` from `namespace_ops.py` - a single `setns()` syscall. Enter the namespace, perform the operation, return. No fork, no child process, no fd leakage.

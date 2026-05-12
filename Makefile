@@ -44,7 +44,7 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 # Phony targets
 # ---------------------------------------------------------------------------
 
-.PHONY: help all deps build load install reinstall upgrade session test test-integration \
+.PHONY: help all deps build load install reinstall upgrade session test test-integration test-root \
         teardown force-teardown reset-platform restart clean clean-deps clean-images \
         clean-registry purge-containerd nuke status check-registry test-backend test-frontend \
         build-frontends build-images ensure-base-images build-base-images \
@@ -87,6 +87,7 @@ help: ## Show this help
 	@echo "  install refuses existing platform state; use upgrade or reinstall instead."
 	@echo "  nuke removes NodalArc state, images, build artifacts, and dependencies; K3s remains."
 	@echo "  force-teardown skips deterministic host cleanup and may leave kernel/container state behind."
+	@echo "  sudo make test-root runs privileged Node Agent kernel proof tests on this host."
 	@echo ""
 	@echo "Settings:  copy config.mk.example to config.mk"
 	@echo "  MODE            = $(MODE)"
@@ -427,6 +428,14 @@ test-frontend: ## Run frontend unit tests (vitest)
 
 test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q
+
+test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NET_ADMIN)
+	@if [ "$$(id -u)" != "0" ]; then \
+		echo "FATAL: test-root requires root/CAP_NET_ADMIN. Run: sudo make test-root"; \
+		exit 1; \
+	fi
+	@echo "[test-root] Running privileged Node Agent substrate proof tests"
+	uv run pytest -m requires_root tests/integration/test_node_agent_netem.py --tb=short -q
 
 # ---------------------------------------------------------------------------
 # Reset and teardown

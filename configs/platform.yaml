@@ -78,11 +78,6 @@ platform:
   # Protocol: UDP (custom binary — sequence number + timestamp).
   probe_daemon_udp_data_port: 19100
 
-  # gRPC server port for the Node Agent DaemonSet.
-  # Each Node Agent listens on this port on the host network (hostPort).
-  # The Scheduler connects to <node-ip>:50100.
-  node_agent_grpc_port: 50100
-
   # ── Deploy Daemon ───────────────────────────────────────────────────
 
   # Unix domain socket path for the deploy daemon process. The daemon

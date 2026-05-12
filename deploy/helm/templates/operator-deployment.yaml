@@ -35,6 +35,10 @@ spec:
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+{{- if .Values.nats.auth.enabled }}
+            - name: NODALARC_NATS_URL
+              value: "nats://{{ .Values.nats.auth.users.service.username }}:{{ .Values.nats.auth.users.service.password }}@nodalarc-nats:4222"
+{{- end }}
             # Fallback if no nodes have nodalarc.io/node-agent=true label.
             # The Operator discovers nodes automatically via the K8s API.
             - name: SESSION_NODE_NAME

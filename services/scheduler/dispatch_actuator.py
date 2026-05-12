@@ -46,6 +46,8 @@ async def send_batch_down(
     sim_time: datetime,
     down_reasons: Mapping[LinkPair, str],
     gs_capacities: Mapping[str, int],
+    session_id: str,
+    wiring_generation: str,
 ) -> set[LinkPair]:
     """Send BatchLinkDown to Node Agents and publish LinkDown proof events."""
     # Sort for deterministic gRPC batch ordering and NATS event publication.
@@ -68,7 +70,12 @@ async def send_batch_down(
         for addr in agent_addrs:
             stub = pool.get_stub(addr)
             req = node_agent_pb2.BatchLinkDownRequest(
-                batch_id=f"{sim_iso}-down",
+                envelope=node_agent_pb2.CommandEnvelope(
+                    operation_id=f"{sim_iso}-down-{addr}",
+                    session_id=session_id,
+                    wiring_generation=wiring_generation,
+                    operation_kind="BatchLinkDown",
+                ),
                 target_sim_time=sim_iso,
                 interfaces=plan.agent_ifaces[addr],
             )
@@ -142,6 +149,8 @@ async def send_batch_up(
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
+    session_id: str,
+    wiring_generation: str,
 ) -> set[LinkPair]:
     """Send BatchLinkUp to Node Agents and publish LinkUp proof events."""
     sorted_pairs = sorted(pairs)
@@ -166,7 +175,12 @@ async def send_batch_up(
         for addr in agent_addrs:
             stub = pool.get_stub(addr)
             req = node_agent_pb2.BatchLinkUpRequest(
-                batch_id=f"{sim_iso}-up",
+                envelope=node_agent_pb2.CommandEnvelope(
+                    operation_id=f"{sim_iso}-up-{addr}",
+                    session_id=session_id,
+                    wiring_generation=wiring_generation,
+                    operation_kind="BatchLinkUp",
+                ),
                 target_sim_time=sim_iso,
                 interfaces=plan.agent_ifaces[addr],
             )
@@ -246,6 +260,8 @@ async def send_authoritative_latency_updates(
     latency_compensation: LatencyCompensationFn,
     validate_authority_freshness: AuthorityFreshnessValidator,
     link_provenance: LinkProvenanceBuilder,
+    session_id: str,
+    wiring_generation: str,
 ) -> set[LinkPair]:
     """Apply OME-authoritative latency changes for already-active links."""
     agent_entries: dict[str, list[node_agent_pb2.LatencyEntry]] = {}
@@ -276,7 +292,7 @@ async def send_authoritative_latency_updates(
             # updates must therefore update both qdiscs as well; updating only
             # the satellite side leaves stale delay on the GS namespace.
             endpoint_agents = [(sat_id, sat_iface, locator.agent_addr(sat_id))]
-            if locality == node_agent_pb2.LOCAL:
+            if locality == node_agent_pb2.LOCALITY_LOCAL:
                 endpoint_agents.append((gs_id, gs_iface, locator.agent_addr(sat_id)))
             else:
                 endpoint_agents.append((gs_id, gs_iface, locator.agent_addr(gs_id)))
@@ -287,7 +303,7 @@ async def send_authoritative_latency_updates(
                         node_id=endpoint_id,
                         interface_name=endpoint_iface,
                         latency_ms=netem_ms,
-                        link_type=node_agent_pb2.GROUND,
+                        link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         gs_id=gs_id,
                         sat_id=sat_id,
                     )
@@ -303,7 +319,7 @@ async def send_authoritative_latency_updates(
                         node_id=nid,
                         interface_name=ifname,
                         latency_ms=netem_ms,
-                        link_type=node_agent_pb2.ISL,
+                        link_type=node_agent_pb2.LINK_TYPE_ISL,
                     )
                 )
 
@@ -311,7 +327,15 @@ async def send_authoritative_latency_updates(
     agent_addrs = list(agent_entries.keys())
     for agent_addr in agent_addrs:
         stub = pool.get_stub(agent_addr)
-        req = node_agent_pb2.SetLatencyRequest(entries=agent_entries[agent_addr])
+        req = node_agent_pb2.SetLatencyRequest(
+            envelope=node_agent_pb2.CommandEnvelope(
+                operation_id=f"{sim_time.isoformat()}-latency-{agent_addr}",
+                session_id=session_id,
+                wiring_generation=wiring_generation,
+                operation_kind="SetLatency",
+            ),
+            entries=agent_entries[agent_addr],
+        )
         tasks.append(stub.async_set_latency(req))
 
     if tasks:
@@ -322,6 +346,22 @@ async def send_authoritative_latency_updates(
             if not result.success:
                 raise RuntimeError(
                     f"SetLatency rejected by agent {agent_addrs[i]}: {result.error_message[:200]}"
+                )
+            requested = {
+                (entry.node_id, entry.interface_name) for entry in agent_entries[agent_addrs[i]]
+            }
+            returned = {(entry.node_id, entry.interface_name) for entry in result.entry_results}
+            if requested != returned:
+                raise RuntimeError(
+                    f"SetLatency response from {agent_addrs[i]} did not identify every entry: "
+                    f"requested={sorted(requested)} returned={sorted(returned)}"
+                )
+            if not all(
+                entry.success and entry.verified and not entry.dirty_kernel
+                for entry in result.entry_results
+            ):
+                raise RuntimeError(
+                    f"SetLatency proof failed for agent {agent_addrs[i]}: {result.error_message[:200]}"
                 )
 
     for pair in sorted_pairs:

@@ -184,7 +184,13 @@ def apply_link_shaping(
         )
 
     _in_namespace(pid, _op)
-    log.info(f"Applied shaping on ns({pid})/{ifname}: {delay_ms}ms, {rate_mbps}Mbps")
+    log.info(
+        "Applied shaping on ns(%s)/%s: %sms, %sMbps",
+        pid,
+        ifname,
+        delay_ms,
+        rate_mbps,
+    )
 
 
 def update_delay(pid: int, ifname: str, delay_ms: float) -> None:

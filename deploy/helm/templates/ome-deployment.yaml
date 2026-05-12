@@ -60,18 +60,10 @@ spec:
                 --max-age=3h12m \
                 --max-bytes=67108864 \
                 --defaults 2>/dev/null || true
-              nats stream add NODALARC_SESSION \
-                --server="$NATS_URL" \
-                --subjects="nodalarc.session.>" \
-                --storage=memory --retention=limits \
-                --max-msgs-per-subject=1 \
-                --max-age=3h12m \
-                --max-bytes=1048576 \
-                --defaults 2>/dev/null || true
               nats stream add NODALARC_OPS \
                 --server="$NATS_URL" \
                 --subjects="nodalarc.ops.>" \
-                --storage=memory --retention=limits \
+                --storage=file --retention=limits \
                 --max-msgs-per-subject=-1 \
                 --max-age=4h \
                 --max-bytes=134217728 \
@@ -79,7 +71,7 @@ spec:
               nats stream add NODALARC_DEBUG \
                 --server="$NATS_URL" \
                 --subjects="nodalarc.debug.>" \
-                --storage=memory --retention=limits \
+                --storage=file --retention=limits \
                 --max-msgs-per-subject=500 \
                 --max-age=5m \
                 --max-bytes=67108864 \

@@ -11,7 +11,7 @@ spec:
     app: nodalarc-nats
   ports:
     - name: client
-      port: 4222
+      port: {{ .Values.nats.clientPort }}
       targetPort: 4222
       protocol: TCP
     - name: monitoring

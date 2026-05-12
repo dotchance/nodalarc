@@ -58,6 +58,11 @@ vsApi:
 # NATS JetStream messaging server
 nats:
   replicas: 1
+  clientPort: 4222
+  # Host-network Node Agent pods cannot rely on ClusterIP reachability from
+  # every node. tools/na-install-platform.sh sets this to the control-plane
+  # node InternalIP and enables a matching NATS hostPort.
+  hostNetworkHost: ""
   memoryLimit: 2Gi
   memoryRequest: 256Mi
   cpuLimit: "8"
@@ -79,6 +84,10 @@ nats:
         password: nodalarc-service-dev
   networkPolicy:
     enabled: true
+    # Node Agent pods run with hostNetwork; NetworkPolicy engines see their
+    # NATS traffic as node-IP traffic. tools/na-install-platform.sh populates
+    # this with exact /32 or /128 node IP CIDRs at install/upgrade time.
+    hostNetworkCIDRs: []
   # Storage — local-path for single-node, switch to Longhorn/Rook for multi-node
   storageClass: "local-path"
   storageSize: "4Gi"

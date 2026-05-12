@@ -127,6 +127,7 @@ class TestAuthorityFreshnessOnStableLinks:
             pod_locator=loc,
             agent_pool=pool,
             session_id="test",
+            wiring_generation="sha256:" + "a" * 64,
             gs_terminal_capacities={},
             sat_ground_terminal_capacities={},
             max_latency_age_s=2.0,
@@ -233,7 +234,7 @@ class TestActuatorEventPublicationOrder:
 
         class _Loc:
             def link_locality(self, _a, _b):
-                return node_agent_pb2.LOCAL
+                return node_agent_pb2.LOCALITY_LOCAL
 
             def agent_addr(self, node_id):
                 return "agent-local"
@@ -265,6 +266,7 @@ class TestActuatorEventPublicationOrder:
                         node_id=iface.node_id,
                         interface_name=iface.interface_name,
                         success=True,
+                        verified=True,
                     )
                 )
             return resp
@@ -281,6 +283,7 @@ class TestActuatorEventPublicationOrder:
                         node_id=iface.node_id,
                         interface_name=iface.interface_name,
                         success=True,
+                        verified=True,
                     )
                 )
             return resp
@@ -344,6 +347,8 @@ class TestActuatorEventPublicationOrder:
                 sim_time=sim_time,
                 down_reasons={},
                 gs_capacities={},
+                session_id="test-session",
+                wiring_generation="test-generation",
             )
         )
 
@@ -423,6 +428,8 @@ class TestActuatorEventPublicationOrder:
                 latency_compensation=_compensation,
                 validate_authority_freshness=_noop_freshness,
                 link_provenance=_noop_provenance,
+                session_id="test-session",
+                wiring_generation="test-generation",
             )
         )
 

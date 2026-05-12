@@ -35,6 +35,9 @@ from nodalarc.nats_channels import (
     wiring_progress_subject,
 )
 
+from node_agent import ops_events
+from node_agent.command_contract import RuntimeFence
+from node_agent.manifest_contract import WiringManifest
 from node_agent.reconcile import (
     clean_nodalarc_kernel_state,
     get_actual_nodalarc_interfaces,
@@ -53,9 +56,6 @@ async def main() -> None:
 
     parser = argparse.ArgumentParser(description="Nodal Arc Node Agent")
     parser.add_argument(
-        "--port", type=int, default=50100, help="Deprecated — NATS transport. Ignored."
-    )
-    parser.add_argument(
         "--platform-config",
         default="configs/platform.yaml",
         help="Path to platform configuration YAML",
@@ -66,17 +66,29 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
+    hostname = socket.gethostname()
+
     # Init platform config — required for NATS URL and namespace resolution.
-    # If this fails, the Node Agent cannot function. Let it crash.
+    # If this fails, the Node Agent cannot function. Spool durable evidence
+    # before re-raising so pre-NATS startup failures are not logs-only.
     from nodalarc.platform_config import init_platform_config
 
-    init_platform_config(Path(args.platform_config))
+    try:
+        init_platform_config(Path(args.platform_config))
+    except Exception as exc:
+        ops_events.spool_failure(
+            code="STARTUP_CONFIG_FAILED",
+            message=f"Node Agent platform config failed: {exc}",
+            details={"platform_config": args.platform_config},
+            session_id="",
+        )
+        raise
     import os as _os
 
     log.info(
         "Node Agent starting [build=%s, node=%s]",
         _os.environ.get("NODAL_BUILD", "dev"),
-        socket.gethostname(),
+        hostname,
     )
 
     # -----------------------------------------------------------------------
@@ -84,13 +96,22 @@ async def main() -> None:
     # This connection is used for wiring progress, request/reply, and
     # substrate monitoring. One connection for the lifetime of the process.
     # -----------------------------------------------------------------------
-    nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+    try:
+        nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
+    except Exception as exc:
+        ops_events.spool_failure(
+            code="STARTUP_NATS_FAILED",
+            message=f"Node Agent NATS connection failed: {exc}",
+            details={"nats_url": nats_url()},
+            session_id="",
+        )
+        raise
     from nodal.logging import connect as _connect_logging
 
     await _connect_logging(nc)
-    hostname = socket.gethostname()
     progress_subject = wiring_progress_subject(hostname)
     loop = asyncio.get_running_loop()
+    await ops_events.init(nc, hostname=hostname, loop=loop)
     log.debug("NATS connected to %s as %s", nats_url(), hostname)
 
     # Synchronous progress publisher for the wiring thread.
@@ -107,6 +128,7 @@ async def main() -> None:
     # Shared state between wiring and request/reply server
     # -----------------------------------------------------------------------
     shared_pid_map: dict[str, int] = {}
+    current_fence = RuntimeFence(session_id="", wiring_generation="")
     first_wiring_done = asyncio.Event()
 
     # If --pid-map provided, skip wiring discovery
@@ -120,6 +142,7 @@ async def main() -> None:
     # Watches nodalarc-topology-wiring ConfigMap, executes wiring on change.
     # -----------------------------------------------------------------------
     def _wiring_watcher() -> None:
+        nonlocal current_fence
         import time
 
         from node_agent import substrate_monitor as _substrate_monitor
@@ -163,21 +186,34 @@ async def main() -> None:
                 else:
                     manifest_json = cm.data.get("manifest.json", "{}")
                 manifest = json.loads(manifest_json)
-                nodes = manifest.get("nodes", {})
+                manifest_model = WiringManifest.model_validate(manifest)
+                nodes = manifest_model.nodes
 
                 # Extract session_id for NATS subject scoping
-                manifest_session_id = manifest.get("session_id", "")
+                manifest_session_id = manifest_model.session_id
                 if not manifest_session_id:
                     log.error(
                         "FATAL: Wiring manifest has no session_id — cannot scope NATS subjects"
                     )
                     raise ValueError("Wiring manifest missing session_id")
+                wiring_generation = manifest_model.wiring_generation
+                if not wiring_generation:
+                    log.error(
+                        "FATAL: Wiring manifest has no wiring_generation — cannot fence commands"
+                    )
+                    raise ValueError("Wiring manifest missing wiring_generation")
                 from nodalarc.nats_channels import sanitize_session_id
 
-                _substrate_monitor._session_id = sanitize_session_id(manifest_session_id)
+                monitor_session_id = sanitize_session_id(manifest_session_id)
+                _substrate_monitor.set_identity(monitor_session_id, wiring_generation)
+                current_fence = RuntimeFence(
+                    session_id=monitor_session_id,
+                    wiring_generation=wiring_generation,
+                )
                 log.info(
-                    "Node Agent session_id=%s (from wiring manifest)",
-                    _substrate_monitor._session_id,
+                    "Node Agent session_id=%s generation=%s (from wiring manifest)",
+                    monitor_session_id,
+                    wiring_generation,
                 )
 
                 if not nodes:
@@ -186,7 +222,7 @@ async def main() -> None:
                     continue
 
                 # Case B: wiring-status exists and covers all manifest nodes
-                if wiring_status_is_current(v1, ns, nodes):
+                if wiring_status_is_current(v1, ns, manifest_model):
                     log.info(
                         "Wiring verified — status matches manifest (%d nodes), no-op",
                         len(nodes),
@@ -209,28 +245,40 @@ async def main() -> None:
                     cleaned = clean_nodalarc_kernel_state()
                     log.info("Cleaned %d stale kernel interfaces", cleaned)
 
-                wired = execute_wiring(manifest, namespace=ns, progress_fn=_publish_progress)
+                statuses = execute_wiring(
+                    manifest_model, namespace=ns, progress_fn=_publish_progress
+                )
 
-                if not wired:
+                if not statuses:
                     # No local pods on this node — nothing to wire, nothing
                     # to report. Advance cursor and move on silently.
                     loop.call_soon_threadsafe(first_wiring_done.set)
                     last_resource_version = rv
                 else:
-                    log.info("Wiring complete: %d nodes wired", len(wired))
+                    ready_count = sum(1 for s in statuses.values() if s.status == "ready")
+                    failed_count = len(statuses) - ready_count
+                    log.info(
+                        "Wiring complete: %d ready, %d failed",
+                        ready_count,
+                        failed_count,
+                    )
 
                     # Refresh pid_map BEFORE writing wiring status. Once the
                     # status is written, the Operator advances to Ready and
                     # the Scheduler dispatches immediately.
                     _refresh_pids(shared_pid_map)
-                    write_wiring_status(wired, namespace=ns)
+                    write_wiring_status(statuses, manifest_model, namespace=ns)
+                    if failed_count:
+                        raise RuntimeError(
+                            f"wiring failed for {failed_count} local node(s); not accepting requests"
+                        )
                     loop.call_soon_threadsafe(first_wiring_done.set)
                     last_resource_version = rv
 
                     # If some pods were skipped (no PID at wiring time),
                     # retry sysctls and finalization in the background.
-                    all_local = {n for n in nodes if n in shared_pid_map or n in wired}
-                    missed = all_local - set(wired.keys())
+                    all_local = {n for n in nodes if n in shared_pid_map or n in statuses}
+                    missed = all_local - set(statuses.keys())
                     if missed:
                         log.warning(
                             "Wiring partial: %d nodes skipped, retrying in background: %s",
@@ -266,11 +314,22 @@ async def main() -> None:
 
     async def _handle_request(msg):
         try:
-            response_bytes = await loop.run_in_executor(None, dispatch, msg.data, shared_pid_map)
+            response_bytes = await loop.run_in_executor(
+                None, dispatch, msg.data, shared_pid_map, current_fence
+            )
             await msg.respond(response_bytes)
         except Exception as exc:
             log.error("Handler error: %s", exc, exc_info=True)
-            await msg.respond(b"")
+            from nodalarc.proto import node_agent_pb2
+
+            await msg.respond(
+                node_agent_pb2.CommandFailureResponse(
+                    success=False,
+                    error_code=node_agent_pb2.NODE_AGENT_INTERNAL_ERROR,
+                    error_message=f"handler error: {exc}",
+                    dirty_kernel=True,
+                ).SerializeToString()
+            )
 
     sub = await nc.subscribe(agent_subject, cb=_handle_request)
     log.debug("NodeAgent NATS listening on subject %s", agent_subject)

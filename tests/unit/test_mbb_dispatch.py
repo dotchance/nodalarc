@@ -67,6 +67,7 @@ def _make_dispatcher(
                     node_id=iface.node_id,
                     interface_name=iface.interface_name,
                     success=True,
+                    verified=True,
                 )
                 for iface in req.interfaces
             ],
@@ -83,6 +84,7 @@ def _make_dispatcher(
                     node_id=iface.node_id,
                     interface_name=iface.interface_name,
                     success=True,
+                    verified=True,
                 )
                 for iface in req.interfaces
             ],
@@ -98,6 +100,7 @@ def _make_dispatcher(
         pod_locator=loc,
         agent_pool=pool,
         session_id="test-session",
+        wiring_generation="sha256:" + "a" * 64,
         max_latency_age_s=60.0,
         gs_terminal_capacities=gs_caps or {},
         sat_ground_terminal_capacities=sat_caps or {},

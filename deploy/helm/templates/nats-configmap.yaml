@@ -12,6 +12,45 @@ data:
     listen: 0.0.0.0:4222
     http_port: 8222
     max_payload: 8MB
+{{- if .Values.nats.auth.enabled }}
+
+    authorization {
+      users = [
+        {
+          user: {{ .Values.nats.auth.users.admin.username | quote }}
+          password: {{ .Values.nats.auth.users.admin.password | quote }}
+          permissions: {
+            publish: ["$JS.API.>", "_INBOX.>", "nodalarc.>"],
+            subscribe: ["$JS.API.>", "_INBOX.>", "nodalarc.>"]
+          }
+        },
+        {
+          user: {{ .Values.nats.auth.users.scheduler.username | quote }}
+          password: {{ .Values.nats.auth.users.scheduler.password | quote }}
+          permissions: {
+            publish: ["$JS.API.>", "_INBOX.>", "nodalarc.agent.*", "nodalarc.links.>", "nodalarc.ops.>"],
+            subscribe: ["$JS.API.>", "_INBOX.>", "nodalarc.ome.>", "nodalarc.session.>", "nodalarc.links.>", "nodalarc.scheduler.>"]
+          }
+        },
+        {
+          user: {{ .Values.nats.auth.users.nodeAgent.username | quote }}
+          password: {{ .Values.nats.auth.users.nodeAgent.password | quote }}
+          permissions: {
+            publish: ["_INBOX.>", "nodalarc.agent.progress.*", "nodalarc.links.*.substrate", "nodalarc.ops.>"],
+            subscribe: ["nodalarc.agent.*"]
+          }
+        },
+        {
+          user: {{ .Values.nats.auth.users.service.username | quote }}
+          password: {{ .Values.nats.auth.users.service.password | quote }}
+          permissions: {
+            publish: ["$JS.API.>", "_INBOX.>", "nodalarc.ome.>", "nodalarc.ome_control.>", "nodalarc.scheduler.>", "nodalarc.session.>", "nodalarc.mi.>", "nodalarc.nodalpath.>", "nodalarc.debug.>", "nodalarc.ops.>"],
+            subscribe: ["$JS.API.>", "_INBOX.>", "nodalarc.ome.>", "nodalarc.session.>", "nodalarc.links.>", "nodalarc.mi.>", "nodalarc.nodalpath.>", "nodalarc.debug.>", "nodalarc.ops.>", "nodalarc.agent.progress.*", "nodalarc.ome_control.>", "nodalarc.mi.>"]
+          }
+        }
+      ]
+    }
+{{- end }}
 
     jetstream {
       store_dir: /data/jetstream

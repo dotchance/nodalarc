@@ -1,11 +1,9 @@
-"""Integration test: Node Agent ground link wiring.
+"""Integration tests for Node Agent ground link wiring.
 
-This file previously tested ground link BatchLinkDown/BatchLinkUp through
-the gRPC-based NodeAgentServicer. The Node Agent was migrated from gRPC
-to NATS request/reply dispatch. The test harness needs to be rewritten
-against the NATS dispatch interface.
-
-Placeholder for future ground link integration tests.
+Ground proof now targets the NATS request/reply production handlers and the
+kernel verifier contract. Cross-node ground shaping is covered by unit handler
+tests with mocked netlink, while privileged tc/netem proof runs through
+``tests/integration/test_node_agent_netem.py`` and ``sudo make test-root``.
 """
 
 import pytest

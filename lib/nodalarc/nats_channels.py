@@ -282,9 +282,17 @@ def nodalpath_console_port() -> int:
 def nats_url() -> str:
     """Get NATS server URL from platform config.
 
+    ``NODALARC_NATS_URL`` may be set by deployment templates to provide
+    service-specific NATS credentials for subject authorization.
+
     Falls back to localhost if platform config is not initialized
     (test environment, development).
     """
+    import os
+
+    env_url = os.environ.get("NODALARC_NATS_URL", "").strip()
+    if env_url:
+        return env_url
     try:
         from nodalarc.platform_config import get_platform_config
 

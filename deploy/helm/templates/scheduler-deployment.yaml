@@ -29,6 +29,10 @@ spec:
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+{{- if .Values.nats.auth.enabled }}
+            - name: NODALARC_NATS_URL
+              value: "nats://{{ .Values.nats.auth.users.scheduler.username }}:{{ .Values.nats.auth.users.scheduler.password }}@nodalarc-nats:4222"
+{{- end }}
           args:
             - "--session"
             - "/etc/nodalarc/session.yaml"

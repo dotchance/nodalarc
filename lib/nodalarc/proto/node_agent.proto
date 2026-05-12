@@ -4,38 +4,60 @@ syntax = "proto3";
 
 package nodalarc.node_agent;
 
-// The Node Agent runs as a DaemonSet on each K3s node.
-// It executes privileged netlink operations against local pod namespaces.
-// The Scheduler sends batched commands; the agent executes them concurrently.
-// PIDs are never supplied by the Scheduler — the Node Agent looks them up
-// internally from its own pid_map (populated during wiring).
-service NodeAgentService {
-  // Bring down a batch of interfaces atomically.
-  // All operations execute concurrently. ACK returned when all complete.
-  rpc BatchLinkDown(BatchLinkDownRequest) returns (BatchLinkDownResponse);
+// The Node Agent runs as a DaemonSet on each K3s node. It executes
+// privileged netlink operations against local pod namespaces. The Scheduler
+// sends these protobuf payloads over NATS request/reply; this file intentionally
+// declares messages only, not a gRPC service.
 
-  // Bring up a batch of interfaces with tc shaping.
-  // All operations execute concurrently. ACK returned when all complete.
-  // Layer 3 neighbor resolution (NDP) is NOT the Node Agent's responsibility:
-  // FRR hello packets (IGP sessions) and the kernel NDP state machine
-  // (NodalPath sessions) own neighbor resolution. See PRD §13.22.6.
-  rpc BatchLinkUp(BatchLinkUpRequest) returns (BatchLinkUpResponse);
+message CommandEnvelope {
+  string operation_id = 1;
+  string session_id = 2;
+  string wiring_generation = 3;
+  string operation_kind = 4;
+}
 
-  // Update netem delay on active interfaces.
-  rpc SetLatency(SetLatencyRequest) returns (SetLatencyResponse);
+enum NodeAgentErrorCode {
+  NODE_AGENT_ERROR_UNSPECIFIED = 0;
+  NODE_AGENT_OK = 1;
+  NODE_AGENT_MALFORMED_FRAME = 2;
+  NODE_AGENT_UNKNOWN_MESSAGE_TYPE = 3;
+  NODE_AGENT_BAD_PROTOBUF = 4;
+  NODE_AGENT_INVALID_ENVELOPE = 5;
+  NODE_AGENT_STALE_SESSION = 6;
+  NODE_AGENT_STALE_GENERATION = 7;
+  NODE_AGENT_INVALID_FIELD = 8;
+  NODE_AGENT_PID_NOT_FOUND = 9;
+  NODE_AGENT_KERNEL_MUTATION_FAILED = 10;
+  NODE_AGENT_KERNEL_PROOF_FAILED = 11;
+  NODE_AGENT_CLEANUP_FAILED = 12;
+  NODE_AGENT_HOST_IP_MISSING = 13;
+  NODE_AGENT_DIRTY_KERNEL = 14;
+  NODE_AGENT_INTERNAL_ERROR = 15;
+  NODE_AGENT_UNAUTHORIZED = 16;
+  NODE_AGENT_DEPENDENCY_MISSING = 17;
+  NODE_AGENT_MANIFEST_INVALID = 18;
 }
 
 enum LinkType {
-  ISL = 0;
-  GROUND = 1;
+  LINK_TYPE_UNSPECIFIED = 0;
+  LINK_TYPE_ISL = 1;
+  LINK_TYPE_GROUND = 2;
 }
 
 // Per-interface locality — carried in each InterfaceUp/InterfaceDown entry,
 // not on the batch request. The Node Agent decides per-interface whether to
 // use local veth or VXLAN.
 enum Locality {
-  LOCAL = 0;        // Both pods on this node — direct veth operations
-  CROSS_NODE = 1;   // Pods on different nodes — VXLAN tunnel
+  LOCALITY_UNSPECIFIED = 0;
+  LOCALITY_LOCAL = 1;        // Both pods on this node — direct veth operations
+  LOCALITY_CROSS_NODE = 2;   // Pods on different nodes — VXLAN tunnel
+}
+
+message CommandFailureResponse {
+  bool success = 1;
+  NodeAgentErrorCode error_code = 2;
+  string error_message = 3;
+  bool dirty_kernel = 4;
 }
 
 // --- BatchLinkDown ---
@@ -59,7 +81,7 @@ message InterfaceDown {
 }
 
 message BatchLinkDownRequest {
-  string batch_id = 1;
+  CommandEnvelope envelope = 1;
   string target_sim_time = 2;
   // field 3 removed — locality moved to per-interface (M10)
   repeated InterfaceDown interfaces = 4;
@@ -69,7 +91,12 @@ message InterfaceResult {
   string node_id = 1;
   string interface_name = 2;
   bool success = 3;
-  string error_message = 4;
+  NodeAgentErrorCode error_code = 4;
+  string error_message = 5;
+  bool verified = 6;
+  bool dirty_kernel = 7;
+  string proof_summary = 8;
+  repeated string proof_evidence = 9;
 }
 
 message BatchLinkDownResponse {
@@ -78,6 +105,8 @@ message BatchLinkDownResponse {
   int32 interfaces_downed = 3;
   float apply_time_ms = 4;
   repeated InterfaceResult interface_results = 5;
+  NodeAgentErrorCode error_code = 6;
+  bool dirty_kernel = 7;
 }
 
 // --- BatchLinkUp ---
@@ -106,7 +135,7 @@ message InterfaceUp {
 }
 
 message BatchLinkUpRequest {
-  string batch_id = 1;
+  CommandEnvelope envelope = 1;
   string target_sim_time = 2;
   // field 3 removed — locality moved to per-interface (M10)
   repeated InterfaceUp interfaces = 4;
@@ -118,6 +147,8 @@ message BatchLinkUpResponse {
   int32 interfaces_upped = 3;
   float apply_time_ms = 4;
   repeated InterfaceResult interface_results = 5;
+  NodeAgentErrorCode error_code = 6;
+  bool dirty_kernel = 7;
 }
 
 // --- SetLatency ---
@@ -134,11 +165,27 @@ message LatencyEntry {
 }
 
 message SetLatencyRequest {
-  repeated LatencyEntry entries = 1;
+  CommandEnvelope envelope = 1;
+  repeated LatencyEntry entries = 2;
+}
+
+message LatencyResult {
+  string node_id = 1;
+  string interface_name = 2;
+  bool success = 3;
+  NodeAgentErrorCode error_code = 4;
+  string error_message = 5;
+  bool verified = 6;
+  bool dirty_kernel = 7;
+  string proof_summary = 8;
+  repeated string proof_evidence = 9;
 }
 
 message SetLatencyResponse {
   bool success = 1;
   string error_message = 2;
   int32 entries_updated = 3;
+  repeated LatencyResult entry_results = 4;
+  NodeAgentErrorCode error_code = 5;
+  bool dirty_kernel = 6;
 }

@@ -639,6 +639,7 @@ def write_wiring_manifest(
     import json as _json
 
     from nodalarc.nats_channels import sanitize_session_id
+    from node_agent.manifest_contract import REQUIRED_WIRING_PHASES, derive_wiring_generation
 
     v1 = _get_v1()
 
@@ -783,16 +784,18 @@ def write_wiring_manifest(
 
     manifest = {
         "session_id": manifest_session_id,
-        "generation": int(datetime.now(UTC).timestamp()),
+        "wiring_generation": "",
+        "required_phases": list(REQUIRED_WIRING_PHASES),
         "nodes": nodes,
         "ground_bridges": ground_bridges,
         "isl_link_count": len(isl_pairs),
     }
+    manifest["wiring_generation"] = derive_wiring_generation(manifest)
 
     import base64 as _base64
     import gzip as _gzip
 
-    raw_json = _json.dumps(manifest).encode()
+    raw_json = _json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
     compressed = _base64.b64encode(_gzip.compress(raw_json)).decode()
 
     _create_or_update_configmap(

@@ -8,8 +8,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from pyroute2.netlink.rtnl.tcmsg import common as tc_common
-
 from node_agent import vxlan
 from node_agent.kernel_constants import (
     IFF_UP,
@@ -18,6 +16,7 @@ from node_agent.kernel_constants import (
     TC_H_INGRESS,
 )
 from node_agent.namespace_runner import run_in_host_namespace, run_in_pod_namespace
+from node_agent.tc_units import delay_ms_to_netem_us, netem_us_to_ticks
 
 
 @dataclass(frozen=True)
@@ -173,11 +172,11 @@ def verify_qdisc(
     if "netem" not in kinds:
         return Proof.fail(f"missing netem qdisc on {ifname}", *evidence)
 
-    # Netem delay is configured in microseconds, but the kernel reports it in
-    # tc scheduler ticks. Mirror pyroute2's encoder so postcondition proof
-    # compares the exact representation the kernel stores.
-    expected_delay_us = int(round(delay_ms * 1000))
-    expected_delay_ticks = int(tc_common.time2tick(expected_delay_us))
+    # Netem delay is configured in integer microseconds, but the kernel reports
+    # it in tc scheduler ticks. Use the same normalization as the mutator, then
+    # mirror pyroute2's encoder so proof compares the exact kernel value.
+    expected_delay_us = delay_ms_to_netem_us(delay_ms)
+    expected_delay_ticks = netem_us_to_ticks(expected_delay_us)
     actual_delay_ticks = _extract_delay_ticks(rows)
     if actual_delay_ticks is None:
         return Proof.fail(f"cannot parse netem delay for {ifname}", *evidence)

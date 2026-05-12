@@ -51,10 +51,8 @@ _IPTABLES_RULES = (
 )
 
 
-def finalize_pod(pid: int, node_id: str) -> str | None:
-    """Remove default route and lock down cni0. Returns error string or None."""
-    import subprocess
-
+def remove_default_route(pid: int, node_id: str) -> str | None:
+    """Remove the pod default IPv4 route. Returns error string or None."""
     try:
 
         def _remove_default(ipr: IPRoute) -> bool:
@@ -65,7 +63,16 @@ def finalize_pod(pid: int, node_id: str) -> str | None:
             return False
 
         _in_namespace(pid, _remove_default)
+        return None
+    except Exception as exc:
+        return f"{node_id}: {exc}"
 
+
+def lock_down_cni0(pid: int, node_id: str) -> str | None:
+    """Apply cni0 egress lockdown rules. Returns error string or None."""
+    import subprocess
+
+    try:
         subprocess.run(
             ["nsenter", f"--net=/proc/{pid}/ns/net", "iptables-restore", "--noflush"],
             input=_IPTABLES_RULES,
@@ -76,6 +83,19 @@ def finalize_pod(pid: int, node_id: str) -> str | None:
         return None
     except Exception as exc:
         return f"{node_id}: {exc}"
+
+
+def finalize_pod_phases(pid: int, node_id: str) -> tuple[str | None, str | None]:
+    """Run Phase 7 route finalization and Phase 8 cni0 security."""
+    route_err = remove_default_route(pid, node_id)
+    security_err = lock_down_cni0(pid, node_id)
+    return route_err, security_err
+
+
+def finalize_pod(pid: int, node_id: str) -> str | None:
+    """Remove default route and lock down cni0. Returns combined error or None."""
+    errors = [err for err in finalize_pod_phases(pid, node_id) if err]
+    return "; ".join(errors) if errors else None
 
 
 log = logging.getLogger(__name__)
@@ -115,7 +135,7 @@ def _phase0_cleanup(
     finally:
         ipr.close()
     if host_cleaned:
-        log.info(f"Phase 0: cleaned {host_cleaned} stale host interfaces")
+        log.info("Phase 0: cleaned %d stale host interfaces", host_cleaned)
 
     # Pod namespaces: remove stale isl* and gnd0 interfaces
     pod_cleaned = 0
@@ -142,7 +162,11 @@ def _phase0_cleanup(
         with contextlib.suppress(Exception):
             pod_cleaned += _in_namespace(pid, _clean_stale_pod_ifaces)
     if pod_cleaned:
-        log.info(f"Phase 0: cleaned {pod_cleaned} stale pod interfaces across {len(pid_map)} pods")
+        log.info(
+            "Phase 0: cleaned %d stale pod interfaces across %d pods",
+            pod_cleaned,
+            len(pid_map),
+        )
 
 
 def execute_wiring(
@@ -315,11 +339,21 @@ def execute_wiring(
                 continue
             pid_b = pid_map.get(peer_node, 0)
             if pid_b == 0:
-                log.warning(f"No PID for peer {peer_node}, skipping ISL {node_id}<->{peer_node}")
+                log.warning(
+                    "No PID for peer %s, skipping ISL %s<->%s",
+                    peer_node,
+                    node_id,
+                    peer_node,
+                )
                 continue
             peer_iface = iface.get("peer_iface", "")
             if not peer_iface:
-                log.warning(f"No peer_iface for {node_id}:{iface['name']}<->{peer_node}")
+                log.warning(
+                    "No peer_iface for %s:%s<->%s",
+                    node_id,
+                    iface["name"],
+                    peer_node,
+                )
                 continue
             isl_tasks.append((pid_a, pid_b, iface["name"], peer_iface, node_id, peer_node))
             seen_pairs.add(pair)
@@ -351,7 +385,7 @@ def execute_wiring(
             except Exception as exc:
                 _record_failure(nid_a, "isl_interfaces", f"mediated ISL to {nid_b}: {exc}")
                 _record_failure(nid_b, "isl_interfaces", f"mediated ISL to {nid_a}: {exc}")
-    log.info(f"Phase 2: created {len(created_links)} host-mediated ISL pairs")
+    log.info("Phase 2: created %d host-mediated ISL pairs", len(created_links))
     _write_progress(f"Created {len(created_links)} ISL pairs. Enabling MPLS...")
 
     # Phase 3: Enable MPLS input on ISL interfaces (parallelized)
@@ -374,7 +408,7 @@ def execute_wiring(
                 fut.result()
             except Exception as exc:
                 _record_failure(nid, "mpls", f"MPLS enable failed {ifname}: {exc}")
-    log.info(f"Phase 3: MPLS input enabled on {len(mpls_tasks)} ISL interfaces")
+    log.info("Phase 3: MPLS input enabled on %d ISL interfaces", len(mpls_tasks))
     _write_progress(
         f"MPLS enabled on {len(mpls_tasks)} interfaces. Creating ground infrastructure..."
     )
@@ -406,7 +440,7 @@ def execute_wiring(
         for gs_id, _bridge_spec in ground_bridges.items():
             gs_pid = pid_map.get(gs_id, 0)
             if gs_pid == 0:
-                log.warning(f"No PID for ground station {gs_id}")
+                log.warning("No PID for ground station %s", gs_id)
                 continue
             gs_node = nodes.get(gs_id, {})
             gs_ifaces = gs_node["gnd_interfaces"]
@@ -439,7 +473,11 @@ def execute_wiring(
                     sat_gnd_created += 1
             except Exception as exc:
                 _record_failure(nid, "ground_infrastructure", str(exc))
-    log.info(f"Phase 4+5: {gs_created} ground bridges, {sat_gnd_created} satellite ground veths")
+    log.info(
+        "Phase 4+5: %d ground bridges, %d satellite ground veths",
+        gs_created,
+        sat_gnd_created,
+    )
     _write_progress(
         f"Ground infrastructure ready: {gs_created} GS, {sat_gnd_created} satellites. Creating terrestrial interfaces..."
     )
@@ -467,7 +505,7 @@ def execute_wiring(
                 fut.result()
             except Exception as exc:
                 _record_failure(nid, "terrestrial_interfaces", f"terr0 creation failed: {exc}")
-    log.info(f"Phase 6: {len(terr0_tasks)} terr0 dummy interfaces created")
+    log.info("Phase 6: %d terr0 dummy interfaces created", len(terr0_tasks))
     _write_progress(
         f"Terrestrial interfaces created. Finalizing {total_nodes} pods (routes + security)..."
     )
@@ -480,23 +518,25 @@ def execute_wiring(
             pid = pid_map.get(node_id, 0)
             if pid == 0:
                 continue
-            fin_futures[pool.submit(finalize_pod, pid, node_id)] = node_id
+            fin_futures[pool.submit(finalize_pod_phases, pid, node_id)] = node_id
         total_to_finalize = len(fin_futures)
         for fut in as_completed(fin_futures):
             nid = fin_futures[fut]
             try:
-                err = fut.result()
-                if err:
-                    _record_failure(nid, "pod_finalization", err)
-                else:
+                route_err, security_err = fut.result()
+                if route_err:
+                    _record_failure(nid, "pod_route_finalization", route_err)
+                if security_err:
+                    _record_failure(nid, "pod_security", security_err)
+                if not route_err and not security_err:
                     finalized += 1
                 if finalized % 10 == 0 or finalized == total_to_finalize:
                     _write_progress(
                         f"Finalizing pods: {finalized}/{total_to_finalize} (default route removal)"
                     )
             except Exception as exc:
-                _record_failure(nid, "pod_finalization", str(exc))
-    log.info(f"Phase 7+8: finalized {finalized} pods (default route + cni0 lockdown)")
+                _record_failure(nid, "pod_security", str(exc))
+    log.info("Phase 7+8: finalized %d pods (default route + cni0 lockdown)", finalized)
     _write_progress(f"Finalized {finalized}/{total_nodes} pods. Wiring complete.")
 
     # Mark only nodes with all required phases successful as ready.

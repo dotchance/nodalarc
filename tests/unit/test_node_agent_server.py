@@ -66,6 +66,31 @@ def test_stale_envelope_is_rejected_before_mutation() -> None:
     assert response.error_code == node_agent_pb2.NODE_AGENT_STALE_GENERATION
 
 
+def test_unspecified_enum_is_rejected_through_full_dispatch_path() -> None:
+    request = node_agent_pb2.BatchLinkUpRequest(
+        envelope=_env("BatchLinkUp"),
+        interfaces=[
+            node_agent_pb2.InterfaceUp(
+                node_id="sat-a",
+                interface_name="isl0",
+                locality=node_agent_pb2.LOCALITY_LOCAL,
+                latency_ms=1.0,
+                bandwidth_mbps=1000.0,
+                peer_node_id="sat-b",
+                peer_interface_name="isl1",
+            )
+        ],
+    )
+
+    raw = dispatch(_frame(b"BatchLinkUp", request), {"sat-a": 1234}, FENCE)
+    response = node_agent_pb2.BatchLinkUpResponse()
+    response.ParseFromString(raw)
+
+    assert response.success is False
+    assert response.error_code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
+    assert "LINK_TYPE_UNSPECIFIED" in response.error_message
+
+
 def test_valid_set_latency_request_dispatches_to_handler() -> None:
     request = node_agent_pb2.SetLatencyRequest(envelope=_env("SetLatency"))
 

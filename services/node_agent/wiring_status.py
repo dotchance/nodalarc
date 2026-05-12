@@ -74,11 +74,21 @@ def failed_status(
     dirty_kernel: bool = False,
 ) -> NodeWiringStatus:
     phases = []
+    if phase not in REQUIRED_WIRING_PHASES:
+        raise ValueError(f"unknown wiring failure phase: {phase}")
+    failed_index = REQUIRED_WIRING_PHASES.index(phase)
     for required in REQUIRED_WIRING_PHASES:
+        phase_index = REQUIRED_WIRING_PHASES.index(required)
+        if required == phase:
+            phase_status: PhaseState = "dirty_kernel" if dirty_kernel else "failed"
+        elif phase_index < failed_index:
+            phase_status = "ready"
+        else:
+            phase_status = "pending_pid"
         phases.append(
             WiringPhaseResult(
                 phase=required,
-                status="failed" if required == phase else "wiring",
+                status=phase_status,
                 error_message=error_message if required == phase else "",
             )
         )

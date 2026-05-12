@@ -1,4 +1,5 @@
 from node_agent import kernel_verifier
+from node_agent.kernel_constants import TC_H_INGRESS
 from pyroute2.netlink.rtnl.tcmsg import common as tc_common
 
 
@@ -55,3 +56,83 @@ def test_verify_qdisc_rejects_unconverted_microsecond_delay(monkeypatch):
     assert proof.summary == "netem delay mismatch on isl0"
     assert any(evidence.startswith("expected_ticks=") for evidence in proof.evidence)
     assert "actual_ticks=6000" in proof.evidence
+
+
+def _mirred_filter(ifindex: int):
+    return {
+        "attrs": [
+            ("TCA_KIND", "u32"),
+            (
+                "TCA_OPTIONS",
+                {
+                    "attrs": [
+                        (
+                            "TCA_U32_ACT",
+                            {
+                                "attrs": [
+                                    (
+                                        "TCA_ACT_PRIO_1",
+                                        {
+                                            "attrs": [
+                                                ("TCA_ACT_KIND", "mirred"),
+                                                (
+                                                    "TCA_ACT_OPTIONS",
+                                                    {
+                                                        "attrs": [
+                                                            (
+                                                                "TCA_MIRRED_PARMS",
+                                                                {"ifindex": ifindex},
+                                                            )
+                                                        ]
+                                                    },
+                                                ),
+                                            ]
+                                        },
+                                    )
+                                ]
+                            },
+                        )
+                    ]
+                },
+            ),
+        ]
+    }
+
+
+class _MirredIpr:
+    def __init__(self, *, redirect_ifindex: int) -> None:
+        self.redirect_ifindex = redirect_ifindex
+
+    def link_lookup(self, *, ifname: str):
+        return {"src0": [10], "dst0": [20]}.get(ifname, [])
+
+    def get_filters(self, *, index: int, parent: int):
+        assert index == 10
+        assert parent == TC_H_INGRESS
+        return [_mirred_filter(self.redirect_ifindex)]
+
+
+def test_verify_mirred_requires_exact_destination_ifindex(monkeypatch):
+    def _fake_run_in_host_namespace(fn):
+        return fn(_MirredIpr(redirect_ifindex=20))
+
+    monkeypatch.setattr(kernel_verifier, "run_in_host_namespace", _fake_run_in_host_namespace)
+
+    proof = kernel_verifier.verify_mirred("src0", "dst0")
+
+    assert proof.verified is True
+    assert "dst_ifindex=20" in proof.evidence
+
+
+def test_verify_mirred_rejects_stale_redirect_to_wrong_destination(monkeypatch):
+    def _fake_run_in_host_namespace(fn):
+        return fn(_MirredIpr(redirect_ifindex=99))
+
+    monkeypatch.setattr(kernel_verifier, "run_in_host_namespace", _fake_run_in_host_namespace)
+
+    proof = kernel_verifier.verify_mirred("src0", "dst0")
+
+    assert proof.verified is False
+    assert proof.summary == "mirred destination mismatch src0->dst0"
+    assert "expected_ifindex=20" in proof.evidence
+    assert "actual_ifindexes=[99]" in proof.evidence

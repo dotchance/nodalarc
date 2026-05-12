@@ -8,7 +8,7 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 REQUIRED_WIRING_PHASES: tuple[str, ...] = (
     "phase0_cleanup",
@@ -17,7 +17,8 @@ REQUIRED_WIRING_PHASES: tuple[str, ...] = (
     "mpls",
     "ground_infrastructure",
     "terrestrial_interfaces",
-    "pod_finalization",
+    "pod_route_finalization",
+    "pod_security",
 )
 
 
@@ -63,6 +64,10 @@ class TerrestrialSpec(_StrictModel):
     addresses: list[str] = Field(default_factory=list)
 
 
+class GroundBridgeSpec(_StrictModel):
+    pass
+
+
 class NodeSpec(_StrictModel):
     node_type: Literal["satellite", "ground_station"]
     sysctls: dict[str, str]
@@ -88,9 +93,34 @@ class NodeSpec(_StrictModel):
     @field_validator("gnd_interfaces")
     @classmethod
     def _ground_interfaces_explicit(cls, value: list[InterfaceName]) -> list[InterfaceName]:
-        if value is None:
-            raise ValueError("gnd_interfaces must be explicit")
+        names = [iface.name for iface in value]
+        if len(set(names)) != len(names):
+            raise ValueError("gnd_interfaces must not contain duplicate names")
         return value
+
+    @field_validator("isl_interfaces")
+    @classmethod
+    def _isl_interfaces_unique(cls, value: list[IslInterface]) -> list[IslInterface]:
+        names = [iface.name for iface in value]
+        if len(set(names)) != len(names):
+            raise ValueError("isl_interfaces must not contain duplicate names")
+        return value
+
+    @model_validator(mode="after")
+    def _node_type_fields(self) -> NodeSpec:
+        if self.node_type == "satellite":
+            if self.plane is None or self.slot is None:
+                raise ValueError("satellite nodes require plane and slot")
+            if self.gs_name is not None or self.gs_index is not None:
+                raise ValueError("satellite nodes must not set gs_name or gs_index")
+        if self.node_type == "ground_station":
+            if not self.gs_name or self.gs_index is None:
+                raise ValueError("ground_station nodes require gs_name and gs_index")
+            if self.plane is not None or self.slot is not None:
+                raise ValueError("ground_station nodes must not set plane or slot")
+            if not self.gnd_interfaces:
+                raise ValueError("ground_station nodes require at least one gnd_interface")
+        return self
 
 
 class WiringManifest(_StrictModel):
@@ -98,7 +128,7 @@ class WiringManifest(_StrictModel):
     wiring_generation: str
     required_phases: list[str]
     nodes: dict[str, NodeSpec]
-    ground_bridges: dict[str, dict[str, Any]]
+    ground_bridges: dict[str, GroundBridgeSpec]
     isl_link_count: int
 
     @field_validator("session_id", "wiring_generation")
@@ -121,6 +151,9 @@ class WiringManifest(_StrictModel):
         missing = set(REQUIRED_WIRING_PHASES) - set(value)
         if missing:
             raise ValueError(f"required_phases missing: {', '.join(sorted(missing))}")
+        unknown = set(value) - set(REQUIRED_WIRING_PHASES)
+        if unknown:
+            raise ValueError(f"required_phases unknown: {', '.join(sorted(unknown))}")
         return value
 
     @field_validator("nodes")
@@ -129,3 +162,17 @@ class WiringManifest(_StrictModel):
         if not value:
             raise ValueError("manifest nodes must be non-empty")
         return value
+
+    @model_validator(mode="after")
+    def _ground_bridges_match_ground_stations(self) -> WiringManifest:
+        ground_station_nodes = {
+            node_id for node_id, node in self.nodes.items() if node.node_type == "ground_station"
+        }
+        bridge_ids = set(self.ground_bridges)
+        if bridge_ids != ground_station_nodes:
+            raise ValueError(
+                "ground_bridges must exactly match ground_station nodes: "
+                f"missing={sorted(ground_station_nodes - bridge_ids)} "
+                f"extra={sorted(bridge_ids - ground_station_nodes)}"
+            )
+        return self

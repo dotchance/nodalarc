@@ -1,6 +1,6 @@
 import pytest
-from node_agent.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
-from node_agent.wiring_status import failed_status
+from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+from nodalarc.substrate.wiring_status import failed_status
 
 
 def _manifest() -> WiringManifest:

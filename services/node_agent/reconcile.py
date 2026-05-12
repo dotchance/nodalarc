@@ -15,6 +15,9 @@ import logging
 
 from pyroute2 import IPRoute
 
+from node_agent.manifest_contract import WiringManifest
+from node_agent.wiring_status import parse_status_configmap
+
 log = logging.getLogger(__name__)
 
 _PATTERNS = ("_isl_", "_gnd_", "_gbr-", "br-gnd-")
@@ -48,19 +51,26 @@ def clean_nodalarc_kernel_state() -> int:
 def wiring_status_is_current(
     v1,
     namespace: str,
-    manifest_nodes: dict,
+    manifest: WiringManifest,
 ) -> bool:
     """Check if nodalarc-wiring-status reflects the current manifest.
 
-    Returns True (Case B) if wiring-status exists and its node set
-    covers all nodes in the manifest. Returns False otherwise.
+    Returns True (Case B) if wiring-status exists, matches session and
+    generation, and every manifest node has a ready phase-complete status.
     """
     try:
         cm = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
         if not cm.data:
             return False
-        wired_nodes = set(cm.data.keys())
-        expected_nodes = set(manifest_nodes.keys())
-        return expected_nodes.issubset(wired_nodes)
-    except Exception:
+        session_id, generation, statuses = parse_status_configmap(cm.data)
+        if session_id != manifest.session_id:
+            return False
+        if generation != manifest.wiring_generation:
+            return False
+        expected_nodes = set(manifest.nodes.keys())
+        if not expected_nodes.issubset(statuses.keys()):
+            return False
+        return all(statuses[node_id].ready_for(manifest) for node_id in expected_nodes)
+    except Exception as exc:
+        log.warning("wiring-status validation failed: %s", exc)
         return False

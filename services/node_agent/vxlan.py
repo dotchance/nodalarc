@@ -214,8 +214,7 @@ def destroy_vxlan_link(pid: int, ifname: str, vni: int) -> None:
         ret = _libc.setns(host_fd, _CLONE_NEWNET)
         if ret != 0:
             errno = ctypes.get_errno()
-            log.warning("setns to host failed during VXLAN cleanup: %s", os.strerror(errno))
-            return
+            raise OSError(errno, f"setns to host failed during VXLAN cleanup: {os.strerror(errno)}")
 
         try:
             from pyroute2 import IPRoute
@@ -239,6 +238,7 @@ def destroy_vxlan_link(pid: int, ifname: str, vni: int) -> None:
                 ipr.close()
         except Exception as exc:
             log.warning("VXLAN link cleanup failed (VNI=%d): %s", vni, exc)
+            raise
 
     log.info("Destroyed VXLAN link VNI=%d [%s + %s]", vni, vxlan_if, veth_host)
 
@@ -368,14 +368,14 @@ def detach_cross_node_ground(
             _in_namespace(sat_pid, _down_sat_iface)
         except Exception as exc:
             log.warning("Failed to down %s in ns(%d): %s", sat_ifname, sat_pid, exc)
+            raise
 
     with _ns_lock:
         host_fd = _get_host_ns_fd()
         ret = _libc.setns(host_fd, _CLONE_NEWNET)
         if ret != 0:
             errno = ctypes.get_errno()
-            log.warning("setns to host failed: %s", os.strerror(errno))
-            return
+            raise OSError(errno, f"setns to host failed: {os.strerror(errno)}")
 
         try:
             # Remove tc mirred
@@ -399,5 +399,6 @@ def detach_cross_node_ground(
                 ipr.close()
         except Exception as exc:
             log.warning("Cross-node ground detach failed (VNI=%d): %s", vni, exc)
+            raise
 
     log.info("Detached cross-node ground: %s, VNI=%d", local_host_ifname, vni)

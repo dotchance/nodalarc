@@ -78,7 +78,7 @@ Use Python's standard `logging` module. Log levels:
 | Level | Use |
 |-------|-----|
 | ERROR | Something broke and needs human attention |
-| WARNING | Unexpected but handled (retry succeeded, fallback used) |
+| WARNING | Unexpected but handled without changing truth semantics |
 | INFO | State transitions, lifecycle events, batch summaries |
 | DEBUG | Per-item details, useful during development only |
 

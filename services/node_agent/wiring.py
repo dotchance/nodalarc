@@ -15,9 +15,11 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import Callable
+from typing import Any
 
 import kubernetes.client
 import kubernetes.config
+from pydantic import ValidationError
 from pyroute2 import IPRoute
 
 from node_agent.ground_bridge import (
@@ -25,6 +27,7 @@ from node_agent.ground_bridge import (
     create_mediated_isl,
     create_satellite_ground_veth,
 )
+from node_agent.manifest_contract import WiringManifest
 from node_agent.namespace_ops import (
     _in_namespace,
     _write_sysctl_in_netns,
@@ -33,6 +36,12 @@ from node_agent.namespace_ops import (
     enable_mpls_input,
 )
 from node_agent.pid_discovery import discover_local_pod_pids
+from node_agent.wiring_status import (
+    NodeWiringStatus,
+    failed_status,
+    ready_status,
+    status_configmap_data,
+)
 
 _IPTABLES_RULES = (
     "*filter\n"
@@ -137,10 +146,10 @@ def _phase0_cleanup(
 
 
 def execute_wiring(
-    manifest: dict,
+    manifest: dict[str, Any] | WiringManifest,
     namespace: str,
     progress_fn: Callable[[str], None] | None = None,
-) -> dict[str, str]:
+) -> dict[str, NodeWiringStatus]:
     """Execute all data plane wiring operations from a topology manifest.
 
     Args:
@@ -149,10 +158,24 @@ def execute_wiring(
         progress_fn: Optional callback for real-time progress via NATS.
 
     Returns:
-        Dict of {node_id: "wired"} for successfully wired nodes.
+        Dict of {node_id: NodeWiringStatus} for local pods that completed or
+        failed required wiring phases.
     """
-    nodes = manifest.get("nodes", {})
-    ground_bridges = manifest.get("ground_bridges", {})
+    try:
+        manifest_model = (
+            manifest
+            if isinstance(manifest, WiringManifest)
+            else WiringManifest.model_validate(manifest)
+        )
+    except ValidationError:
+        log.exception("Wiring manifest validation failed")
+        raise
+
+    nodes = {
+        node_id: node.model_dump(exclude_none=True)
+        for node_id, node in manifest_model.nodes.items()
+    }
+    ground_bridges = manifest_model.ground_bridges
 
     if not nodes:
         log.warning("Empty wiring manifest — nothing to wire")
@@ -204,8 +227,13 @@ def execute_wiring(
         )
     log.info("PID discovery: %d local pods found", len(pid_map))
 
-    wired: dict[str, str] = {}
+    statuses: dict[str, NodeWiringStatus] = {}
+    node_failures: dict[str, tuple[str, str]] = {}
     total_nodes = len([n for n in nodes if pid_map.get(n, 0) > 0])
+
+    def _record_failure(node_id: str, phase: str, message: str) -> None:
+        node_failures.setdefault(node_id, (phase, message))
+        log.warning("%s failed for %s: %s", phase, node_id, message)
 
     # K8s client — ONE instance, reused for all ConfigMap writes.
     # No per-call load_incluster_config() or client instantiation.
@@ -258,7 +286,7 @@ def execute_wiring(
         for key, value in node_spec.get("sysctls", {}).items():
             err = _write_sysctl_in_netns(pid, key, str(value))
             if err:
-                log.warning("sysctl %s=%s failed in %s: %s", key, value, node_id, err)
+                _record_failure(node_id, "sysctls", f"sysctl {key}={value} failed: {err}")
         sysctl_ok += 1
     if sysctl_skipped:
         log.warning(
@@ -321,7 +349,8 @@ def execute_wiring(
                         f"Creating ISL interfaces: {len(created_links)}/{total_isls} pairs"
                     )
             except Exception as exc:
-                log.warning(f"Failed to create mediated ISL {nid_a}<->{nid_b}: {exc}")
+                _record_failure(nid_a, "isl_interfaces", f"mediated ISL to {nid_b}: {exc}")
+                _record_failure(nid_b, "isl_interfaces", f"mediated ISL to {nid_a}: {exc}")
     log.info(f"Phase 2: created {len(created_links)} host-mediated ISL pairs")
     _write_progress(f"Created {len(created_links)} ISL pairs. Enabling MPLS...")
 
@@ -344,7 +373,7 @@ def execute_wiring(
             try:
                 fut.result()
             except Exception as exc:
-                log.warning(f"MPLS enable failed {nid}:{ifname}: {exc}")
+                _record_failure(nid, "mpls", f"MPLS enable failed {ifname}: {exc}")
     log.info(f"Phase 3: MPLS input enabled on {len(mpls_tasks)} ISL interfaces")
     _write_progress(
         f"MPLS enabled on {len(mpls_tasks)} interfaces. Creating ground infrastructure..."
@@ -380,7 +409,7 @@ def execute_wiring(
                 log.warning(f"No PID for ground station {gs_id}")
                 continue
             gs_node = nodes.get(gs_id, {})
-            gs_ifaces = gs_node.get("gnd_interfaces", [{"name": "term0"}])
+            gs_ifaces = gs_node["gnd_interfaces"]
             gs_mpls = gs_node.get("mpls_enable", False)
             gnd_futures[
                 pool.submit(_create_ground_bridge_task, gs_id, gs_pid, gs_ifaces, gs_mpls)
@@ -392,7 +421,7 @@ def execute_wiring(
             pid = pid_map.get(node_id, 0)
             if pid == 0:
                 continue
-            sat_ifaces = node_spec.get("gnd_interfaces", [{"name": "gnd0"}])
+            sat_ifaces = node_spec["gnd_interfaces"]
             sat_mpls = node_spec.get("mpls_enable", False)
             gnd_futures[
                 pool.submit(_create_sat_ground_task, node_id, pid, sat_ifaces, sat_mpls)
@@ -409,7 +438,7 @@ def execute_wiring(
                 else:
                     sat_gnd_created += 1
             except Exception as exc:
-                log.warning(f"Ground setup failed for {nid}: {exc}")
+                _record_failure(nid, "ground_infrastructure", str(exc))
     log.info(f"Phase 4+5: {gs_created} ground bridges, {sat_gnd_created} satellite ground veths")
     _write_progress(
         f"Ground infrastructure ready: {gs_created} GS, {sat_gnd_created} satellites. Creating terrestrial interfaces..."
@@ -437,7 +466,7 @@ def execute_wiring(
             try:
                 fut.result()
             except Exception as exc:
-                log.warning(f"terr0 creation failed for {nid}: {exc}")
+                _record_failure(nid, "terrestrial_interfaces", f"terr0 creation failed: {exc}")
     log.info(f"Phase 6: {len(terr0_tasks)} terr0 dummy interfaces created")
     _write_progress(
         f"Terrestrial interfaces created. Finalizing {total_nodes} pods (routes + security)..."
@@ -458,7 +487,7 @@ def execute_wiring(
             try:
                 err = fut.result()
                 if err:
-                    log.warning(f"Pod finalization failed: {err}")
+                    _record_failure(nid, "pod_finalization", err)
                 else:
                     finalized += 1
                 if finalized % 10 == 0 or finalized == total_to_finalize:
@@ -466,20 +495,41 @@ def execute_wiring(
                         f"Finalizing pods: {finalized}/{total_to_finalize} (default route removal)"
                     )
             except Exception as exc:
-                log.warning(f"Pod finalization error for {nid}: {exc}")
+                _record_failure(nid, "pod_finalization", str(exc))
     log.info(f"Phase 7+8: finalized {finalized} pods (default route + cni0 lockdown)")
     _write_progress(f"Finalized {finalized}/{total_nodes} pods. Wiring complete.")
 
-    # Mark all nodes as wired
+    # Mark only nodes with all required phases successful as ready.
     for node_id in nodes:
         if pid_map.get(node_id, 0) > 0:
-            wired[node_id] = "wired"
+            if node_id in node_failures:
+                phase, message = node_failures[node_id]
+                statuses[node_id] = failed_status(
+                    node_id,
+                    manifest_model,
+                    phase=phase,
+                    error_message=message,
+                    dirty_kernel=True,
+                )
+            else:
+                statuses[node_id] = ready_status(node_id, manifest_model)
 
-    log.info(f"Wiring complete: {len(wired)}/{len(nodes)} nodes wired")
-    return wired
+    ready_count = sum(1 for status in statuses.values() if status.status == "ready")
+    failed_count = sum(1 for status in statuses.values() if status.status != "ready")
+    log.info(
+        "Wiring complete: %d ready, %d failed, %d manifest nodes",
+        ready_count,
+        failed_count,
+        len(nodes),
+    )
+    return statuses
 
 
-def write_wiring_status(wired: dict[str, str], namespace: str) -> None:
+def write_wiring_status(
+    statuses: dict[str, NodeWiringStatus],
+    manifest: WiringManifest,
+    namespace: str,
+) -> None:
     """Write per-node wiring status to nodalarc-wiring-status ConfigMap.
 
     Uses JSON Merge Patch (application/merge-patch+json) so multiple
@@ -494,7 +544,7 @@ def write_wiring_status(wired: dict[str, str], namespace: str) -> None:
         v1.patch_namespaced_config_map(
             "nodalarc-wiring-status",
             namespace,
-            {"data": wired},
+            {"data": status_configmap_data(statuses, manifest)},
         )
     except kubernetes.client.rest.ApiException as e:
         if e.status == 404:
@@ -505,9 +555,11 @@ def write_wiring_status(wired: dict[str, str], namespace: str) -> None:
                     namespace=namespace,
                     labels={"nodalarc.io/managed-by": "node-agent"},
                 ),
-                data=wired,
+                data=status_configmap_data(statuses, manifest),
             )
             v1.create_namespaced_config_map(namespace, body)
         else:
             raise
-    log.info(f"Wrote wiring status: {len(wired)} nodes wired")
+    ready_count = sum(1 for status in statuses.values() if status.status == "ready")
+    failed_count = sum(1 for status in statuses.values() if status.status != "ready")
+    log.info("Wrote wiring status: %d ready, %d failed", ready_count, failed_count)

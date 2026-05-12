@@ -62,6 +62,10 @@ spec:
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+{{- if .Values.nats.auth.enabled }}
+            - name: NODALARC_NATS_URL
+              value: "nats://{{ .Values.nats.auth.users.service.username }}:{{ .Values.nats.auth.users.service.password }}@nodalarc-nats:4222"
+{{- end }}
             - name: NODAL_API_KEY
               valueFrom:
                 configMapKeyRef:

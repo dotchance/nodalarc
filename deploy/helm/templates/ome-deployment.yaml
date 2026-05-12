@@ -27,12 +27,17 @@ spec:
           args:
             - |
               echo "Waiting for NATS..."
-              until nats server check connection -s nats://nodalarc-nats:4222 2>/dev/null; do
+{{- if .Values.nats.auth.enabled }}
+              NATS_URL="nats://{{ .Values.nats.auth.users.admin.username }}:{{ .Values.nats.auth.users.admin.password }}@nodalarc-nats:4222"
+{{- else }}
+              NATS_URL="nats://nodalarc-nats:4222"
+{{- end }}
+              until nats server check connection -s "$NATS_URL" 2>/dev/null; do
                 sleep 1
               done
               echo "NATS ready. Creating streams..."
               nats stream add NODALARC_OME \
-                --server=nats://nodalarc-nats:4222 \
+                --server="$NATS_URL" \
                 --subjects="nodalarc.ome.>" \
                 --storage=file --retention=limits \
                 --max-msgs-per-subject=-1 \
@@ -40,7 +45,7 @@ spec:
                 --max-bytes=134217728 \
                 --defaults 2>/dev/null || true
               nats stream add NODALARC_LINKS \
-                --server=nats://nodalarc-nats:4222 \
+                --server="$NATS_URL" \
                 --subjects="nodalarc.links.>" \
                 --storage=file --retention=limits \
                 --max-msgs-per-subject=1 \
@@ -48,7 +53,7 @@ spec:
                 --max-bytes=67108864 \
                 --defaults 2>/dev/null || true
               nats stream add NODALARC_SESSION \
-                --server=nats://nodalarc-nats:4222 \
+                --server="$NATS_URL" \
                 --subjects="nodalarc.session.>" \
                 --storage=file --retention=limits \
                 --max-msgs-per-subject=1 \
@@ -56,7 +61,7 @@ spec:
                 --max-bytes=67108864 \
                 --defaults 2>/dev/null || true
               nats stream add NODALARC_SESSION \
-                --server=nats://nodalarc-nats:4222 \
+                --server="$NATS_URL" \
                 --subjects="nodalarc.session.>" \
                 --storage=memory --retention=limits \
                 --max-msgs-per-subject=1 \
@@ -64,7 +69,7 @@ spec:
                 --max-bytes=1048576 \
                 --defaults 2>/dev/null || true
               nats stream add NODALARC_OPS \
-                --server=nats://nodalarc-nats:4222 \
+                --server="$NATS_URL" \
                 --subjects="nodalarc.ops.>" \
                 --storage=memory --retention=limits \
                 --max-msgs-per-subject=-1 \
@@ -72,7 +77,7 @@ spec:
                 --max-bytes=134217728 \
                 --defaults 2>/dev/null || true
               nats stream add NODALARC_DEBUG \
-                --server=nats://nodalarc-nats:4222 \
+                --server="$NATS_URL" \
                 --subjects="nodalarc.debug.>" \
                 --storage=memory --retention=limits \
                 --max-msgs-per-subject=500 \
@@ -87,6 +92,10 @@ spec:
           env:
             - name: NODAL_BUILD
               value: {{ .Values.buildTag | quote }}
+{{- if .Values.nats.auth.enabled }}
+            - name: NODALARC_NATS_URL
+              value: "nats://{{ .Values.nats.auth.users.service.username }}:{{ .Values.nats.auth.users.service.password }}@nodalarc-nats:4222"
+{{- end }}
           args:
             - "--continuous"
             - "--platform-config"

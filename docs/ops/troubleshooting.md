@@ -64,6 +64,8 @@ Common causes:
 - Node Agent can't find pod PIDs (container runtime issue)
 - Kernel modules not loaded (`mpls_router`, `mpls_iptunnel`)
 - Missing permissions (hostPID, hostNetwork not enabled)
+- Typed wiring status reports a failed phase or dirty kernel
+- Required `HOST_IP` is missing from the Node Agent pod environment
 
 **Fix:**
 ```bash
@@ -73,6 +75,16 @@ lsmod | grep mpls
 # Load if missing
 sudo modprobe mpls_router mpls_iptunnel
 ```
+
+Check the typed wiring gate and Node Agent evidence:
+```bash
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get configmap nodalarc-wiring-status -n nodalarc -o yaml
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec -n nodalarc -l app=nodalarc-node-agent -- \
+  tail -100 /var/lib/nodalarc/node-agent/ops-events.jsonl
+```
+
+Any failed phase or `dirty_kernel=true` is authoritative. Fix the reported
+kernel or manifest problem before expecting the Scheduler gate to open.
 
 ## No Routing Adjacencies
 
@@ -87,7 +99,9 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c
 
 - ISL interfaces should show `UP` state
 - `gnd0` shows `UP` when a ground link is active, `LOWERLAYERDOWN` when no satellite overhead
-- If interfaces show `DOWN`, the Node Agent hasn't brought them up yet - check Node Agent logs
+- If interfaces show `DOWN`, check Scheduler logs first. A stale substrate
+  measurement, unverified ACK, or dirty Node Agent response stops dispatch by
+  design.
 
 ### Check FRR is Running
 
@@ -178,7 +192,15 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-scheduler
   grep -i "timeout\|slow\|backlog"
 ```
 
-The Scheduler dispatches to the Node Agent via NATS request/reply with a 60-second timeout. If Node Agent operations are slow (large VXLAN batches on cold start), the Scheduler may timeout and retry.
+The Scheduler dispatches to the Node Agent via NATS request/reply with a
+60-second timeout. It does not paper over dirty or unverified state with
+retries. If the dispatch worker reports a block reason, fix that cause before
+expecting link state to advance.
+
+Cross-node dispatch also requires a current generation-scoped substrate
+measurement from the Node Agent. Logs mentioning stale, missing, or wrong
+generation substrate measurements mean the Scheduler is refusing to apply an
+unproven netem value.
 
 ### Visualization Slow
 

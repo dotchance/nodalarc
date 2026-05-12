@@ -40,9 +40,6 @@ class PlatformConfig(BaseModel):
     probe_daemon_http_api_port: int
     probe_daemon_udp_data_port: int
 
-    # Node Agent gRPC port (DaemonSet)
-    node_agent_grpc_port: int = 50100
-
     # Deploy daemon
     deploy_daemon_unix_socket_path: str
 

@@ -65,8 +65,8 @@ class PodLocationMap:
         if not k3s_a or not k3s_b:
             return None
         if k3s_a != k3s_b:
-            return node_agent_pb2.CROSS_NODE
-        return node_agent_pb2.LOCAL
+            return node_agent_pb2.LOCALITY_CROSS_NODE
+        return node_agent_pb2.LOCALITY_LOCAL
 
     def all_agent_addrs(self) -> list[str]:
         """All unique Node Agent NATS subjects."""

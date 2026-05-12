@@ -113,18 +113,18 @@ def build_link_down_batch_plan(
             gs_iface, sat_iface = _ground_ifaces(pair, info, gs_capacities)
             vni = (
                 compute_vni(gs_id, sat_id, gs_iface, sat_iface)
-                if locality == node_agent_pb2.CROSS_NODE
+                if locality == node_agent_pb2.LOCALITY_CROSS_NODE
                 else 0
             )
 
-            if locality == node_agent_pb2.LOCAL:
+            if locality == node_agent_pb2.LOCALITY_LOCAL:
                 agent = locator.agent_addr(sat_id)
                 iface_msg = node_agent_pb2.InterfaceDown(
                     node_id=gs_id,
                     interface_name=gs_iface,
                     peer_node_id=sat_id,
                     peer_interface_name=sat_iface,
-                    link_type=node_agent_pb2.GROUND,
+                    link_type=node_agent_pb2.LINK_TYPE_GROUND,
                     gs_id=gs_id,
                     sat_id=sat_id,
                     locality=locality,
@@ -141,16 +141,23 @@ def build_link_down_batch_plan(
                     iface = gs_iface if nid == gs_id else sat_iface
                     peer_nid = sat_id if nid == gs_id else gs_id
                     peer_iface = sat_iface if nid == gs_id else gs_iface
+                    peer_k3s = locator.k3s_node(peer_nid)
+                    remote_ip = locator.node_ip(peer_k3s)
+                    if not remote_ip:
+                        raise RuntimeError(
+                            f"CROSS_NODE GS LinkDown {gs_id}<->{sat_id}: "
+                            f"missing IP for Kubernetes node {peer_k3s}"
+                        )
                     iface_msg = node_agent_pb2.InterfaceDown(
                         node_id=nid,
                         interface_name=iface,
                         peer_node_id=peer_nid,
                         peer_interface_name=peer_iface,
-                        link_type=node_agent_pb2.GROUND,
+                        link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         gs_id=gs_id,
                         sat_id=sat_id,
                         locality=locality,
-                        remote_node_ip="",
+                        remote_node_ip=remote_ip,
                         vni=vni,
                     )
                     agent_ifaces.setdefault(agent_addr, []).append(iface_msg)
@@ -159,7 +166,7 @@ def build_link_down_batch_plan(
 
         vni = (
             compute_vni(node_a, node_b, info.interface_a, info.interface_b)
-            if locality == node_agent_pb2.CROSS_NODE
+            if locality == node_agent_pb2.LOCALITY_CROSS_NODE
             else 0
         )
         for nid, ifname, peer_nid, peer_ifname in [
@@ -167,12 +174,22 @@ def build_link_down_batch_plan(
             (node_b, info.interface_b, node_a, info.interface_a),
         ]:
             agent = locator.agent_addr(nid)
+            remote_ip = ""
+            if locality == node_agent_pb2.LOCALITY_CROSS_NODE:
+                peer_k3s = locator.k3s_node(peer_nid)
+                remote_ip = locator.node_ip(peer_k3s)
+                if not remote_ip:
+                    raise RuntimeError(
+                        f"CROSS_NODE ISL LinkDown {node_a}<->{node_b}: "
+                        f"missing IP for Kubernetes node {peer_k3s}"
+                    )
             iface_msg = node_agent_pb2.InterfaceDown(
                 node_id=nid,
                 interface_name=ifname,
-                link_type=node_agent_pb2.ISL,
+                link_type=node_agent_pb2.LINK_TYPE_ISL,
                 locality=locality,
                 vni=vni,
+                remote_node_ip=remote_ip,
                 peer_node_id=peer_nid,
                 peer_interface_name=peer_ifname,
             )
@@ -220,18 +237,18 @@ def build_link_up_batch_plan(
             gs_iface, sat_iface = _ground_ifaces(pair, info, gs_capacities)
             vni = (
                 compute_vni(gs_id, sat_id, gs_iface, sat_iface)
-                if locality == node_agent_pb2.CROSS_NODE
+                if locality == node_agent_pb2.LOCALITY_CROSS_NODE
                 else 0
             )
 
-            if locality == node_agent_pb2.LOCAL:
+            if locality == node_agent_pb2.LOCALITY_LOCAL:
                 agent = locator.agent_addr(sat_id)
                 iface_msg = node_agent_pb2.InterfaceUp(
                     node_id=gs_id,
                     interface_name=gs_iface,
                     peer_node_id=sat_id,
                     peer_interface_name=sat_iface,
-                    link_type=node_agent_pb2.GROUND,
+                    link_type=node_agent_pb2.LINK_TYPE_GROUND,
                     latency_ms=netem_ms,
                     bandwidth_mbps=info.bandwidth_mbps,
                     gs_id=gs_id,
@@ -259,7 +276,7 @@ def build_link_up_batch_plan(
                         interface_name=iface,
                         peer_node_id=peer_nid,
                         peer_interface_name=peer_iface,
-                        link_type=node_agent_pb2.GROUND,
+                        link_type=node_agent_pb2.LINK_TYPE_GROUND,
                         latency_ms=netem_ms,
                         bandwidth_mbps=info.bandwidth_mbps,
                         gs_id=gs_id,
@@ -274,7 +291,7 @@ def build_link_up_batch_plan(
 
         vni = (
             compute_vni(node_a, node_b, info.interface_a, info.interface_b)
-            if locality == node_agent_pb2.CROSS_NODE
+            if locality == node_agent_pb2.LOCALITY_CROSS_NODE
             else 0
         )
         for nid, ifname, peer_nid, peer_ifname in [
@@ -283,7 +300,7 @@ def build_link_up_batch_plan(
         ]:
             agent = locator.agent_addr(nid)
             remote_ip = ""
-            if locality == node_agent_pb2.CROSS_NODE:
+            if locality == node_agent_pb2.LOCALITY_CROSS_NODE:
                 peer_k3s = locator.k3s_node(peer_nid)
                 remote_ip = locator.node_ip(peer_k3s)
                 if not remote_ip:
@@ -294,7 +311,7 @@ def build_link_up_batch_plan(
             iface_msg = node_agent_pb2.InterfaceUp(
                 node_id=nid,
                 interface_name=ifname,
-                link_type=node_agent_pb2.ISL,
+                link_type=node_agent_pb2.LINK_TYPE_ISL,
                 latency_ms=netem_ms,
                 bandwidth_mbps=info.bandwidth_mbps,
                 locality=locality,
@@ -338,6 +355,20 @@ def successful_interface_acks(
         raise RuntimeError(
             f"{operation} response from {agent_addr} has inconsistent aggregate success: "
             f"success={result.success} per_interface_success={all_interface_success}"
+        )
+    if any(ack.dirty_kernel for ack in result.interface_results) or getattr(
+        result, "dirty_kernel", False
+    ):
+        raise RuntimeError(f"{operation} response from {agent_addr} reported dirty kernel")
+    unverified = [
+        (ack.node_id, ack.interface_name)
+        for ack in result.interface_results
+        if ack.success and not ack.verified
+    ]
+    if unverified:
+        raise RuntimeError(
+            f"{operation} response from {agent_addr} claimed success without proof: "
+            f"{sorted(unverified)}"
         )
 
     return {

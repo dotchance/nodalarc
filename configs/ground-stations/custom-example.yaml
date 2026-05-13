@@ -58,13 +58,13 @@ stations:
     min_elevation_deg: 10
     # Use the low-elevation heuristic since passes are shorter at high latitudes
     scheduling_policy: lowest-elevation
-    # Override terminal type (RF for Arctic weather reliability)
+    # Override terminal capacity while preserving compatibility with the
+    # optical satellite ground terminals in configs/constellations/custom-example.yaml.
     terminals:
-      - type: rf
+      - type: optical
         count: 1
         bandwidth_mbps: 500
         tracking_capacity: 1
-        frequency_band: Ka
     # Override terrestrial prefixes for this specific station
     terrestrial_prefixes:
       - prefix: "172.16.100.0/24"

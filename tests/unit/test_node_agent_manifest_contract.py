@@ -36,6 +36,7 @@ def _manifest():
             },
         },
         "ground_bridges": {"gs-den": {}},
+        "required_substrate_pairs": [],
         "isl_link_count": 0,
     }
 
@@ -84,4 +85,23 @@ def test_manifest_contract_ground_bridges_match_ground_station_nodes() -> None:
     data["ground_bridges"] = {}
 
     with pytest.raises(ValidationError, match="ground_bridges must exactly match"):
+        WiringManifest.model_validate(data)
+
+
+def test_manifest_contract_requires_unique_substrate_pair_directions() -> None:
+    data = _manifest()
+    pair = {
+        "source_node": "node-a",
+        "source_ip": "10.0.0.1",
+        "target_node": "node-b",
+        "target_ip": "10.0.0.2",
+        "reasons": ["isl"],
+        "pair_key": "node-a<->node-b",
+        "directional_key": "node-a->node-b",
+    }
+    data["required_substrate_pairs"] = [pair, dict(pair)]
+
+    with pytest.raises(
+        ValidationError, match="required_substrate_pairs must not contain duplicate directions"
+    ):
         WiringManifest.model_validate(data)

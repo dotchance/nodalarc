@@ -298,6 +298,14 @@ class TestReconcileStateMachine:
             )
             _run(_reconcile(h, phase="Wiring"))
 
+    def test_invalid_wiring_status_sets_error_phase(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("check_wiring").side_effect = ValueError("unknown node entries")
+            _run(_reconcile(h, phase="Wiring"))
+            status = _last_status(h)
+            assert status["phase"] == "Error"
+            assert "unknown node entries" in status["message"]
+
     def test_ensure_pipeline_failure_sets_error_phase(self):
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("check_ready").return_value = (0, 0)

@@ -489,6 +489,23 @@ async def _reconcile_session(spec, name, namespace, meta, status):
     except kubernetes.client.rest.ApiException as e:
         log.warning("Reconcile: wiring status check error: %s", e)
         return
+    except ValueError as e:
+        log.error("Reconcile: wiring status invalid: %s", e)
+        _update_status(
+            name,
+            namespace,
+            _with_observed_generation(
+                meta,
+                {
+                    "phase": "Error",
+                    "readyPods": ready,
+                    "podCount": expected_count,
+                    "wiredPods": 0,
+                    "message": f"Wiring status invalid: {e}",
+                },
+            ),
+        )
+        return
 
     if not complete:
         if wired_count == 0 and progress_msg is None:

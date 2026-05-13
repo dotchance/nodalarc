@@ -206,7 +206,7 @@ build-frontends: ## Build VF and NodalPath console frontends
 		cd nodalpath/console/frontend && npm run build; \
 	fi
 
-build-images: ensure-base-images _clear-build-cache build-ome build-scheduler build-node-agent \
+build-images: _clear-build-cache build-base-images build-ome build-scheduler build-node-agent \
               build-vs-api build-operator build-vf build-nodalpath
 
 _clear-build-cache:

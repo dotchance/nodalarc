@@ -4,7 +4,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
+from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+from nodalarc.substrate.measurement_contract import (
+    RequiredSubstratePair,
+    SubstrateMeasurement,
+    decode_status_configmap_data,
+)
 from node_agent import substrate_monitor
 
 SESSION_ID = "test-session"
@@ -69,3 +77,119 @@ def test_peer_ref_requires_exact_identity_fields() -> None:
 
     with pytest.raises(ValueError, match="remote_ip"):
         substrate_monitor.add_peer_ref(ref)
+
+
+def _manifest() -> WiringManifest:
+    pair = RequiredSubstratePair.build(
+        source_node="node-a",
+        source_ip="10.0.0.1",
+        target_node="node-b",
+        target_ip="10.0.0.2",
+        reasons=["isl"],
+    )
+    return WiringManifest.model_validate(
+        {
+            "session_id": SESSION_ID,
+            "wiring_generation": WIRING_GENERATION,
+            "required_phases": list(REQUIRED_WIRING_PHASES),
+            "nodes": {
+                "sat-a": {
+                    "node_type": "satellite",
+                    "plane": 0,
+                    "slot": 0,
+                    "sysctls": {"net.ipv6.conf.all.forwarding": "1"},
+                    "isl_interfaces": [],
+                    "gnd_interfaces": [],
+                    "mpls_enable": True,
+                    "segment_routing": False,
+                    "mtu": 9000,
+                    "remove_default_route": True,
+                }
+            },
+            "ground_bridges": {},
+            "required_substrate_pairs": [pair.model_dump(mode="json")],
+            "isl_link_count": 0,
+        }
+    )
+
+
+def _measurement(pair: RequiredSubstratePair, *, status: str = "ok") -> SubstrateMeasurement:
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    return SubstrateMeasurement(
+        session_id=SESSION_ID,
+        wiring_generation=WIRING_GENERATION,
+        source_node=pair.source_node,
+        source_ip=pair.source_ip,
+        target_node=pair.target_node,
+        target_ip=pair.target_ip,
+        measured_at=now,
+        stale_after=now + timedelta(seconds=120),
+        status=status,
+        sample_count=10,
+        success_count=10 if status == "ok" else 0,
+        median_rtt_ms=1.25 if status == "ok" else None,
+        min_rtt_ms=1.0 if status == "ok" else None,
+        max_rtt_ms=1.5 if status == "ok" else None,
+        error_message="" if status == "ok" else "ping failed",
+    )
+
+
+def test_manifest_required_measurements_write_status_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+    v1 = MagicMock()
+
+    document = substrate_monitor.configure_required_measurements(
+        v1=v1,
+        namespace="nodalarc",
+        hostname="node-a",
+        manifest=_manifest(),
+        measure_fn=lambda pair: _measurement(pair),
+    )
+
+    assert document is not None
+    assert document.measurements["node-b"].median_rtt_ms == 1.25
+    body = v1.create_namespaced_config_map.call_args.args[1]
+    decoded = decode_status_configmap_data(body.data)
+    assert decoded == document
+
+
+def test_failed_required_measurement_is_written_then_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+    v1 = MagicMock()
+
+    with pytest.raises(RuntimeError, match="required substrate measurements failed"):
+        substrate_monitor.configure_required_measurements(
+            v1=v1,
+            namespace="nodalarc",
+            hostname="node-a",
+            manifest=_manifest(),
+            measure_fn=lambda pair: _measurement(pair, status="failed"),
+        )
+
+    body = v1.create_namespaced_config_map.call_args.args[1]
+    decoded = decode_status_configmap_data(body.data)
+    assert decoded.measurements["node-b"].status == "failed"
+
+
+def test_required_measurement_rejects_host_ip_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.99")
+    v1 = MagicMock()
+
+    with pytest.raises(RuntimeError, match="HOST_IP mismatch"):
+        substrate_monitor.configure_required_measurements(
+            v1=v1,
+            namespace="nodalarc",
+            hostname="node-a",
+            manifest=_manifest(),
+            measure_fn=lambda pair: _measurement(pair),
+        )
+
+    assert not v1.create_namespaced_config_map.called

@@ -630,7 +630,7 @@ def handle_batch_link_down(
                 outcome = _ok(proof)
             if outcome.success:
                 downed += 1
-                # Track VXLAN peer removal for substrate measurement
+                # Track exact VXLAN peer lifecycle for diagnostics.
                 if iface.locality == node_agent_pb2.LOCALITY_CROSS_NODE and iface.remote_node_ip:
                     substrate_monitor.remove_peer_ref(
                         substrate_monitor.PeerRef(
@@ -843,6 +843,19 @@ def handle_batch_link_up(
             phase0_failed.add(_iface_key(iface))
             continue
 
+        try:
+            from node_agent import substrate_monitor
+
+            substrate_monitor.require_fresh_measurement_for_remote_ip(iface.remote_node_ip)
+        except Exception as exc:
+            outcomes[_iface_key(iface)] = _fail(
+                node_agent_pb2.NODE_AGENT_DEPENDENCY_MISSING,
+                f"Substrate measurement unavailable for {iface.remote_node_ip}: {exc}",
+                dirty_kernel=False,
+            )
+            phase0_failed.add(_iface_key(iface))
+            continue
+
         if iface.link_type == node_agent_pb2.LINK_TYPE_GROUND:
             try:
                 gs_ifname, sat_ifname = _extract_ground_ifaces(iface)
@@ -868,8 +881,6 @@ def handle_batch_link_up(
                     iface.latency_ms,
                     iface.bandwidth_mbps,
                 )
-                from node_agent import substrate_monitor
-
                 substrate_monitor.add_peer_ref(
                     substrate_monitor.PeerRef(
                         session_id=fence.session_id,
@@ -915,8 +926,6 @@ def handle_batch_link_up(
                     remote_ip=iface.remote_node_ip,
                     vni=iface.vni,
                 )
-                from node_agent import substrate_monitor
-
                 substrate_monitor.add_peer_ref(
                     substrate_monitor.PeerRef(
                         session_id=fence.session_id,

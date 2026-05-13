@@ -96,10 +96,12 @@ For CROSS_NODE links, substrate compensation applies:
 netem_ms = max(0, orbital_latency_ms - substrate_latency_ms)
 ```
 
-Substrate latency is measured by the Node Agent and published on NATS as
-session/generation-scoped measurement events. The Scheduler rejects stale,
-failed, or generation-mismatched live measurements. Missing cross-node
-substrate RTT is unrepresentable and blocks dispatch.
+Substrate latency is measured by Node Agents from manifest-required
+Kubernetes-node pairs and written to generation-scoped
+`nodalarc-substrate-status-<node>` ConfigMaps. The Scheduler validates every
+required directional measurement before dispatch and reloads status while
+running. Missing, stale, failed, or generation-mismatched cross-node substrate
+RTT is unrepresentable and blocks dispatch.
 `SessionEphemeris` is consumed for epoch synchronization and edge propagation
 contracts; it is not the live Scheduler's latency authority.
 
@@ -143,7 +145,6 @@ and must not be dirty.
 | `nodalarc.ome.{session_id}.>` | JetStream | OME visibility + clock events |
 | `nodalarc.links.{session_id}.state` | JetStream | Complete link state snapshot |
 | `nodalarc.session.{session_id}.ephemeris` | JetStream | Orbital elements |
-| `nodalarc.links.{session_id}.substrate` | JetStream | Physical inter-node latency |
 | `nodalarc.scheduler.{session_id}.scenario` | Core NATS | Scenario injection commands |
 
 ## What It Publishes

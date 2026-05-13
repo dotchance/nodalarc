@@ -348,15 +348,16 @@ class ObservabilityConfig(BaseModel):
 class PlacementConfig(BaseModel):
     """Pod placement policy for multi-node deployment.
 
-    allOnOne: all pods on a single node (default, backward compatible).
+    allOnOne: all pods on the first available node; explicit single-node/debug policy.
     planePerNode: one orbital plane per K3s node. Intra-plane ISLs are
-        LOCAL (direct veth), cross-plane ISLs are CROSS_NODE (VXLAN).
+        LOCAL (direct veth), cross-plane ISLs are CROSS_NODE (VXLAN). This is
+        the default so multi-node deployments exercise the real substrate.
     planeGroupPerNode: multiple adjacent planes per node, round-robin.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    policy: str = "allOnOne"  # allOnOne | planePerNode | planeGroupPerNode
+    policy: str = "planePerNode"  # allOnOne | planePerNode | planeGroupPerNode
     planes_per_group: int | None = None  # For planeGroupPerNode
 
 

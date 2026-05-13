@@ -231,6 +231,10 @@ def test_session_readiness_requires_expected_generation_and_pod_counts() -> None
     assert '[ "$pod_count" = "$expected_pods" ]' in script
     assert "live pod count is stale" in script
     assert "Waiting for platform rollout to settle" in script
+    assert "Computing placement policy" in script
+    assert "verify_session_placement" in script
+    assert "expected session pods on" in script
+    assert "Placement verified" in script
     assert 'grep -E "nodalarc-|nodalpath-|ome-"' in script
 
 

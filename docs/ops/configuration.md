@@ -39,7 +39,7 @@ time:
 | `routing.area_assignment.strategy` | no | `flat` | `flat`, `per-plane`, or `stripe` |
 | `routing.area_assignment.planes_per_stripe` | no | - | Required for `stripe` strategy |
 | `routing.config_overrides` | no | none | Key-value overrides for FRR templates |
-| `placement.policy` | no | `allOnOne` | `allOnOne`, `planePerNode`, `planeGroupPerNode` |
+| `placement.policy` | no | `planePerNode` | `allOnOne`, `planePerNode`, `planeGroupPerNode` |
 | `time.step_seconds` | no | 1 | Simulation time step in seconds |
 | `satellite_type` | no | from constellation | Override the constellation's satellite type |
 

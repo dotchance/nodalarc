@@ -113,19 +113,27 @@ def _manifest() -> WiringManifest:
     )
 
 
-def _measurement(pair: RequiredSubstratePair, *, status: str = "ok") -> SubstrateMeasurement:
+def _measurement(
+    pair: RequiredSubstratePair,
+    *,
+    status: str = "ok",
+    wiring_generation: str = WIRING_GENERATION,
+    stale: bool = False,
+) -> SubstrateMeasurement:
     from datetime import UTC, datetime, timedelta
 
-    now = datetime(2026, 1, 1, tzinfo=UTC)
+    now = datetime.now(UTC)
+    measured_at = now - timedelta(seconds=120) if stale else now
+    stale_after = now - timedelta(seconds=1) if stale else now + timedelta(seconds=120)
     return SubstrateMeasurement(
         session_id=SESSION_ID,
-        wiring_generation=WIRING_GENERATION,
+        wiring_generation=wiring_generation,
         source_node=pair.source_node,
         source_ip=pair.source_ip,
         target_node=pair.target_node,
         target_ip=pair.target_ip,
-        measured_at=now,
-        stale_after=now + timedelta(seconds=120),
+        measured_at=measured_at,
+        stale_after=stale_after,
         status=status,
         sample_count=10,
         success_count=10 if status == "ok" else 0,
@@ -193,3 +201,82 @@ def test_required_measurement_rejects_host_ip_mismatch(
         )
 
     assert not v1.create_namespaced_config_map.called
+
+
+def test_cross_node_mutation_defense_requires_fresh_local_measurement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+    v1 = MagicMock()
+    substrate_monitor.configure_required_measurements(
+        v1=v1,
+        namespace="nodalarc",
+        hostname="node-a",
+        manifest=_manifest(),
+        measure_fn=lambda pair: _measurement(pair),
+    )
+
+    substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")
+
+
+def test_cross_node_mutation_defense_rejects_missing_measurement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+
+    with pytest.raises(RuntimeError, match="has not been measured"):
+        substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")
+
+
+def test_cross_node_mutation_defense_rejects_failed_measurement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+    v1 = MagicMock()
+    with pytest.raises(RuntimeError, match="failed"):
+        substrate_monitor.configure_required_measurements(
+            v1=v1,
+            namespace="nodalarc",
+            hostname="node-a",
+            manifest=_manifest(),
+            measure_fn=lambda pair: _measurement(pair, status="failed"),
+        )
+
+    with pytest.raises(ValueError, match="failed"):
+        substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")
+
+
+def test_cross_node_mutation_defense_rejects_stale_measurement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+    v1 = MagicMock()
+    with pytest.raises(RuntimeError, match="stale"):
+        substrate_monitor.configure_required_measurements(
+            v1=v1,
+            namespace="nodalarc",
+            hostname="node-a",
+            manifest=_manifest(),
+            measure_fn=lambda pair: _measurement(pair, stale=True),
+        )
+
+    with pytest.raises(ValueError, match="stale"):
+        substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")
+
+
+def test_cross_node_mutation_defense_rejects_wrong_generation_measurement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOST_IP", "10.0.0.1")
+    v1 = MagicMock()
+    substrate_monitor.configure_required_measurements(
+        v1=v1,
+        namespace="nodalarc",
+        hostname="node-a",
+        manifest=_manifest(),
+        measure_fn=lambda pair: _measurement(pair),
+    )
+    substrate_monitor.set_identity(SESSION_ID, "sha256:" + "b" * 64)
+
+    with pytest.raises(ValueError, match="wiring_generation"):
+        substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")

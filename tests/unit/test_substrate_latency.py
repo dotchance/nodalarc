@@ -7,10 +7,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from nodalarc.substrate.measurement_contract import (
+    RequiredSubstratePair,
+    SubstrateMeasurement,
+    SubstrateStatusDocument,
+)
 from scheduler.substrate_latency import (
-    LiveSubstrateMeasurement,
-    parse_substrate_measurement_event,
     resolve_substrate_rtt_ms,
+    validate_required_substrate_measurements,
 )
 
 SESSION_ID = "test-session"
@@ -31,18 +35,19 @@ class _Locator:
 
 
 def _measurement(
-    remote_ip: str,
     rtt_ms: float | None = 4.0,
     *,
     status: str = "ok",
     generation: str = WIRING_GENERATION,
     stale_after: datetime | None = None,
-) -> LiveSubstrateMeasurement:
-    return LiveSubstrateMeasurement(
-        remote_ip=remote_ip,
+) -> SubstrateMeasurement:
+    return SubstrateMeasurement(
         session_id=SESSION_ID,
         wiring_generation=generation,
         source_node="node-a",
+        source_ip="10.0.0.1",
+        target_node="node-b",
+        target_ip="10.0.0.2",
         measured_at=NOW,
         stale_after=stale_after or NOW + timedelta(seconds=60),
         status=status,
@@ -55,6 +60,16 @@ def _measurement(
     )
 
 
+def _required_pair() -> RequiredSubstratePair:
+    return RequiredSubstratePair.build(
+        source_node="node-a",
+        source_ip="10.0.0.1",
+        target_node="node-b",
+        target_ip="10.0.0.2",
+        reasons=["isl"],
+    )
+
+
 def test_local_links_have_zero_substrate_rtt() -> None:
     loc = _Locator()
     loc.nodes.update({"sat-a": "node-1", "sat-b": "node-1"})
@@ -62,8 +77,7 @@ def test_local_links_have_zero_substrate_rtt() -> None:
     assert (
         resolve_substrate_rtt_ms(
             locator=loc,
-            live_rtt_by_peer_ip={},
-            configured_rtt_by_node_pair={},
+            measurements_by_direction={},
             node_a="sat-a",
             node_b="sat-b",
             session_id=SESSION_ID,
@@ -74,16 +88,16 @@ def test_local_links_have_zero_substrate_rtt() -> None:
     )
 
 
-def test_cross_node_prefers_live_peer_ip_measurement() -> None:
+def test_cross_node_uses_directional_substrate_measurement() -> None:
     loc = _Locator()
     loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc.ips["node-a"] = "10.0.0.1"
     loc.ips["node-b"] = "10.0.0.2"
 
     assert (
         resolve_substrate_rtt_ms(
             locator=loc,
-            live_rtt_by_peer_ip={"10.0.0.2": _measurement("10.0.0.2", 4.0)},
-            configured_rtt_by_node_pair={"node-a-node-b": 9.0},
+            measurements_by_direction={"node-a->node-b": _measurement(4.0)},
             node_a="sat-a",
             node_b="sat-b",
             session_id=SESSION_ID,
@@ -94,34 +108,34 @@ def test_cross_node_prefers_live_peer_ip_measurement() -> None:
     )
 
 
-def test_cross_node_accepts_explicit_reverse_configured_measurement() -> None:
+def test_cross_node_does_not_accept_reverse_direction_as_proof() -> None:
     loc = _Locator()
     loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc.ips["node-a"] = "10.0.0.1"
+    loc.ips["node-b"] = "10.0.0.2"
 
-    assert (
+    with pytest.raises(ValueError, match="No substrate RTT measurement"):
         resolve_substrate_rtt_ms(
             locator=loc,
-            live_rtt_by_peer_ip={},
-            configured_rtt_by_node_pair={"node-b-node-a": 7.0},
+            measurements_by_direction={"node-b->node-a": _measurement(4.0)},
             node_a="sat-a",
             node_b="sat-b",
             session_id=SESSION_ID,
             wiring_generation=WIRING_GENERATION,
             now=NOW,
         )
-        == 7.0
-    )
 
 
 def test_cross_node_missing_measurement_fails_loudly() -> None:
     loc = _Locator()
     loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc.ips["node-a"] = "10.0.0.1"
+    loc.ips["node-b"] = "10.0.0.2"
 
     with pytest.raises(ValueError, match="No substrate RTT measurement"):
         resolve_substrate_rtt_ms(
             locator=loc,
-            live_rtt_by_peer_ip={},
-            configured_rtt_by_node_pair={},
+            measurements_by_direction={},
             node_a="sat-a",
             node_b="sat-b",
             session_id=SESSION_ID,
@@ -137,8 +151,7 @@ def test_missing_placement_is_not_treated_as_local() -> None:
     with pytest.raises(ValueError, match="Missing Kubernetes node placement"):
         resolve_substrate_rtt_ms(
             locator=loc,
-            live_rtt_by_peer_ip={},
-            configured_rtt_by_node_pair={},
+            measurements_by_direction={},
             node_a="sat-a",
             node_b="sat-b",
             session_id=SESSION_ID,
@@ -147,21 +160,18 @@ def test_missing_placement_is_not_treated_as_local() -> None:
         )
 
 
-def test_stale_live_measurement_blocks_static_fallback() -> None:
+def test_stale_measurement_blocks_dispatch() -> None:
     loc = _Locator()
     loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc.ips["node-a"] = "10.0.0.1"
     loc.ips["node-b"] = "10.0.0.2"
 
     with pytest.raises(ValueError, match="stale"):
         resolve_substrate_rtt_ms(
             locator=loc,
-            live_rtt_by_peer_ip={
-                "10.0.0.2": _measurement(
-                    "10.0.0.2",
-                    stale_after=NOW - timedelta(seconds=1),
-                )
+            measurements_by_direction={
+                "node-a->node-b": _measurement(stale_after=NOW - timedelta(seconds=1))
             },
-            configured_rtt_by_node_pair={"node-a-node-b": 9.0},
             node_a="sat-a",
             node_b="sat-b",
             session_id=SESSION_ID,
@@ -170,21 +180,18 @@ def test_stale_live_measurement_blocks_static_fallback() -> None:
         )
 
 
-def test_generation_mismatched_live_measurement_blocks_dispatch() -> None:
+def test_generation_mismatched_measurement_blocks_dispatch() -> None:
     loc = _Locator()
     loc.nodes.update({"sat-a": "node-a", "sat-b": "node-b"})
+    loc.ips["node-a"] = "10.0.0.1"
     loc.ips["node-b"] = "10.0.0.2"
 
-    with pytest.raises(ValueError, match="generation mismatch"):
+    with pytest.raises(ValueError, match="identity mismatch"):
         resolve_substrate_rtt_ms(
             locator=loc,
-            live_rtt_by_peer_ip={
-                "10.0.0.2": _measurement(
-                    "10.0.0.2",
-                    generation="sha256:" + "b" * 64,
-                )
+            measurements_by_direction={
+                "node-a->node-b": _measurement(generation="sha256:" + "b" * 64)
             },
-            configured_rtt_by_node_pair={},
             node_a="sat-a",
             node_b="sat-b",
             session_id=SESSION_ID,
@@ -193,47 +200,49 @@ def test_generation_mismatched_live_measurement_blocks_dispatch() -> None:
         )
 
 
-def test_parse_substrate_event_requires_structured_generation_scoped_measurements() -> None:
-    event = {
-        "source_node": "node-a",
-        "session_id": SESSION_ID,
-        "wiring_generation": WIRING_GENERATION,
-        "timestamp": NOW.isoformat(),
-        "measurements": {
-            "10.0.0.2": {
-                "timestamp": NOW.isoformat(),
-                "stale_after": (NOW + timedelta(seconds=60)).isoformat(),
-                "status": "ok",
-                "sample_count": 10,
-                "success_count": 10,
-                "median_rtt_ms": 4.0,
-                "min_rtt_ms": 3.5,
-                "max_rtt_ms": 4.5,
-                "refs": [
-                    {
-                        "session_id": SESSION_ID,
-                        "wiring_generation": WIRING_GENERATION,
-                        "remote_ip": "10.0.0.2",
-                        "vni": 1001,
-                        "local_ifname": "isl0",
-                    }
-                ],
-            }
+def test_validate_required_measurements_indexes_complete_status() -> None:
+    indexed = validate_required_substrate_measurements(
+        required_pairs=[_required_pair()],
+        documents_by_source={
+            "node-a": SubstrateStatusDocument(
+                session_id=SESSION_ID,
+                wiring_generation=WIRING_GENERATION,
+                source_node="node-a",
+                measurements={"node-b": _measurement()},
+            )
         },
-    }
+        session_id=SESSION_ID,
+        wiring_generation=WIRING_GENERATION,
+        now=NOW,
+    )
 
-    parsed = parse_substrate_measurement_event(event)
-
-    assert parsed["10.0.0.2"].median_rtt_ms == 4.0
-    assert parsed["10.0.0.2"].wiring_generation == WIRING_GENERATION
+    assert indexed["node-a->node-b"].median_rtt_ms == 4.0
 
 
-def test_parse_substrate_event_rejects_legacy_peer_map() -> None:
-    with pytest.raises(ValueError, match="measurements map"):
-        parse_substrate_measurement_event(
-            {
-                "source_node": "node-a",
-                "peers": {"10.0.0.2": 4.0},
-                "timestamp": NOW.isoformat(),
-            }
+def test_validate_required_measurements_rejects_missing_document() -> None:
+    with pytest.raises(ValueError, match="missing source status document"):
+        validate_required_substrate_measurements(
+            required_pairs=[_required_pair()],
+            documents_by_source={},
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
+            now=NOW,
+        )
+
+
+def test_validate_required_measurements_rejects_failed_status() -> None:
+    with pytest.raises(ValueError, match="failed"):
+        validate_required_substrate_measurements(
+            required_pairs=[_required_pair()],
+            documents_by_source={
+                "node-a": SubstrateStatusDocument(
+                    session_id=SESSION_ID,
+                    wiring_generation=WIRING_GENERATION,
+                    source_node="node-a",
+                    measurements={"node-b": _measurement(status="failed", rtt_ms=None)},
+                )
+            },
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
+            now=NOW,
         )

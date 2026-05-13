@@ -1,9 +1,11 @@
 """Tests for session manager — recovery, orphan cleanup, stale directory cleanup."""
 
+import asyncio
 import json
 import os
 import signal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -305,3 +307,90 @@ routing:
         mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
         dirs = mgr._collect_data_dirs()
         assert len(dirs) == 1
+
+
+class _SwitchApi:
+    def __init__(self, *, old_cr_gets_before_404: int | None = 0) -> None:
+        self.old_cr_gets_before_404 = old_cr_gets_before_404
+        self.old_cr_get_count = 0
+        self.created = False
+
+    def delete_namespaced_custom_object(self, **_kwargs):
+        return {}
+
+    def get_namespaced_custom_object(self, **_kwargs):
+        from kubernetes.client.rest import ApiException
+
+        if not self.created:
+            self.old_cr_get_count += 1
+            if self.old_cr_gets_before_404 is None:
+                return {"metadata": {"name": "current-session"}}
+            if self.old_cr_get_count <= self.old_cr_gets_before_404:
+                return {"metadata": {"name": "current-session"}}
+            raise ApiException(status=404, reason="Not Found")
+
+        return {
+            "status": {
+                "phase": "Ready",
+                "message": "ready",
+            }
+        }
+
+    def create_namespaced_custom_object(self, **_kwargs):
+        self.created = True
+        return {}
+
+
+class _SwitchCoreV1:
+    def __init__(self, pod_counts: list[int] | None = None) -> None:
+        self.pod_counts = pod_counts or [0]
+        self.calls = 0
+
+    def list_namespaced_pod(self, *_args, **_kwargs):
+        idx = min(self.calls, len(self.pod_counts) - 1)
+        self.calls += 1
+        return SimpleNamespace(items=[object() for _ in range(self.pod_counts[idx])])
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+def _patch_switch_k8s(monkeypatch, api: _SwitchApi, core: _SwitchCoreV1) -> None:
+    import kubernetes.client
+    import kubernetes.config
+
+    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
+    monkeypatch.setattr(kubernetes.client, "CustomObjectsApi", lambda: api)
+    monkeypatch.setattr(kubernetes.client, "CoreV1Api", lambda: core)
+    monkeypatch.setattr(
+        "vs_api.session_manager.get_platform_config",
+        lambda: SimpleNamespace(kubernetes_namespace="nodalarc"),
+    )
+    monkeypatch.setattr("vs_api.session_manager.asyncio.sleep", _no_sleep)
+
+
+class TestSwitchFailLoud:
+    def test_switch_fails_if_old_cr_does_not_finalize(self, tmp_sessions, monkeypatch):
+        api = _SwitchApi(old_cr_gets_before_404=None)
+        core = _SwitchCoreV1([0])
+        _patch_switch_k8s(monkeypatch, api, core)
+        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+
+        with pytest.raises(TimeoutError, match="Old ConstellationSpec did not finalize"):
+            asyncio.run(mgr.switch(str(tmp_sessions["session_yaml"])))
+
+        assert api.created is False
+        assert mgr.status == "error"
+
+    def test_switch_fails_if_old_session_pods_remain(self, tmp_sessions, monkeypatch):
+        api = _SwitchApi(old_cr_gets_before_404=0)
+        core = _SwitchCoreV1([2])
+        _patch_switch_k8s(monkeypatch, api, core)
+        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+
+        with pytest.raises(TimeoutError, match="old session pod"):
+            asyncio.run(mgr.switch(str(tmp_sessions["session_yaml"])))
+
+        assert api.created is False
+        assert mgr.status == "error"

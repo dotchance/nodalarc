@@ -365,6 +365,7 @@ class SessionManager:
                 log.info("Deleted existing ConstellationSpec CR")
 
                 await _progress("Waiting for old session to finalize")
+                old_cr_deleted = False
                 for _ in range(60):
                     try:
                         await loop.run_in_executor(
@@ -380,11 +381,18 @@ class SessionManager:
                         await asyncio.sleep(2)
                     except kubernetes.client.rest.ApiException as get_e:
                         if get_e.status == 404:
+                            old_cr_deleted = True
                             break
                         raise
+                if not old_cr_deleted:
+                    raise TimeoutError(
+                        "Old ConstellationSpec did not finalize within 120 seconds; "
+                        "refusing to deploy a new session over stale control-plane state"
+                    )
 
                 await _progress("Waiting for old session pods to terminate")
                 v1 = kubernetes.client.CoreV1Api()
+                remaining = 0
                 for _ in range(60):
                     pods = await loop.run_in_executor(
                         None,
@@ -395,6 +403,11 @@ class SessionManager:
                         break
                     await _progress(f"Waiting for {remaining} old pods to terminate")
                     await asyncio.sleep(2)
+                if remaining != 0:
+                    raise TimeoutError(
+                        f"{remaining} old session pod(s) still exist after 120 seconds; "
+                        "refusing to deploy a new session over stale data-plane state"
+                    )
             except kubernetes.client.rest.ApiException as e:
                 if e.status != 404:
                     raise

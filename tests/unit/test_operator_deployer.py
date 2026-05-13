@@ -20,8 +20,11 @@ import kubernetes.client
 import pytest
 import yaml
 from nodalarc.models.session import PlacementConfig
+from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+from nodalarc.substrate.wiring_status import ready_status, status_configmap_data
 from nodalarc_operator.session_deployer import (
     _deterministic_node,
+    check_wiring_complete,
     compute_expected_pod_count,
     compute_platform_hash,
     compute_pod_placement,
@@ -87,6 +90,54 @@ def _make_session_yaml(
     if placement_policy:
         d["placement"] = {"policy": placement_policy}
     return yaml.dump(d, default_flow_style=False)
+
+
+def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
+    nodes = {}
+    for index, node_id in enumerate(node_ids):
+        nodes[node_id] = {
+            "node_type": "satellite",
+            "sysctls": {"net.ipv4.ip_forward": "1"},
+            "isl_interfaces": [],
+            "gnd_interfaces": [],
+            "mpls_enable": False,
+            "segment_routing": False,
+            "mtu": 1500,
+            "remove_default_route": False,
+            "plane": 0,
+            "slot": index,
+        }
+    return WiringManifest.model_validate(
+        {
+            "session_id": "test-session",
+            "wiring_generation": "sha256:" + "a" * 64,
+            "required_phases": list(REQUIRED_WIRING_PHASES),
+            "nodes": nodes,
+            "ground_bridges": {},
+            "isl_link_count": 0,
+        }
+    )
+
+
+def _manifest_configmap(manifest: WiringManifest):
+    payload = manifest.model_dump(mode="json")
+    encoded = base64.b64encode(
+        gzip.compress(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+    ).decode()
+    cm = MagicMock()
+    cm.data = {
+        "manifest.json.gz.b64": encoded,
+        "session_id": manifest.session_id,
+        "wiring_generation": manifest.wiring_generation,
+        "node_count": str(len(manifest.nodes)),
+    }
+    return cm
+
+
+def _status_configmap(data: dict[str, str]):
+    cm = MagicMock()
+    cm.data = data
+    return cm
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +294,63 @@ class TestDeterministicNode:
 
 
 # ---------------------------------------------------------------------------
-# Class 3: TestPlatformHash
+# Class 3: TestWiringCompletion
+# ---------------------------------------------------------------------------
+
+
+class TestWiringCompletion:
+    """Tests check_wiring_complete() against typed wiring status data."""
+
+    def test_metadata_keys_are_not_counted_as_wired_nodes(self):
+        manifest = _make_wiring_manifest()
+        statuses = {node_id: ready_status(node_id, manifest) for node_id in manifest.nodes}
+        status_data = status_configmap_data(statuses, manifest)
+        status_data["_progress"] = "Finalized 2/2 pods. Wiring complete."
+
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+
+        def read_cm(name, namespace):
+            assert namespace == "nodalarc"
+            if name == "nodalarc-topology-wiring":
+                return _manifest_configmap(manifest)
+            if name == "nodalarc-wiring-status":
+                return _status_configmap(status_data)
+            raise AssertionError(f"unexpected ConfigMap read: {name}")
+
+        mock_v1.read_namespaced_config_map.side_effect = read_cm
+
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            complete, wired_count, progress = check_wiring_complete("nodalarc", 2)
+
+        assert complete is True
+        assert wired_count == 2
+        assert progress is None
+
+    def test_unknown_status_node_fails_loudly(self):
+        manifest = _make_wiring_manifest()
+        statuses = {node_id: ready_status(node_id, manifest) for node_id in manifest.nodes}
+        statuses["sat-P99S99"] = ready_status("sat-P99S99", manifest)
+        status_data = status_configmap_data(statuses, manifest)
+
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+
+        def read_cm(name, namespace):
+            assert namespace == "nodalarc"
+            if name == "nodalarc-topology-wiring":
+                return _manifest_configmap(manifest)
+            if name == "nodalarc-wiring-status":
+                return _status_configmap(status_data)
+            raise AssertionError(f"unexpected ConfigMap read: {name}")
+
+        mock_v1.read_namespaced_config_map.side_effect = read_cm
+
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            with pytest.raises(ValueError, match="unknown node entries"):
+                check_wiring_complete("nodalarc", 2)
+
+
+# ---------------------------------------------------------------------------
+# Class 4: TestPlatformHash
 # ---------------------------------------------------------------------------
 
 

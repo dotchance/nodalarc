@@ -223,6 +223,17 @@ def test_lifecycle_scripts_print_next_steps() -> None:
         assert marker in (ROOT / rel).read_text()
 
 
+def test_session_readiness_requires_expected_generation_and_pod_counts() -> None:
+    script = (ROOT / "tools/na-session.sh").read_text()
+    assert "compute_expected_pod_count" in script
+    assert '{.status.phase}{"|"}{.status.observedGeneration}' in script
+    assert '[ "$ready_pods" = "$expected_pods" ]' in script
+    assert '[ "$pod_count" = "$expected_pods" ]' in script
+    assert "live pod count is stale" in script
+    assert "Waiting for platform rollout to settle" in script
+    assert 'grep -E "nodalarc-|nodalpath-|ome-"' in script
+
+
 def test_load_next_step_is_state_aware() -> None:
     script = (ROOT / "tools/na-load-images.sh").read_text()
     assert "helm status" in script

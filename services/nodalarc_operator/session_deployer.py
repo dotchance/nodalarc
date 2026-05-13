@@ -805,13 +805,21 @@ def write_wiring_manifest(
         v1,
         "nodalarc-topology-wiring",
         namespace,
-        {"manifest.json.gz.b64": compressed},
+        {
+            "manifest.json.gz.b64": compressed,
+            "session_id": manifest_session_id,
+            "platform_hash": compute_platform_hash(spec),
+            "wiring_generation": manifest["wiring_generation"],
+            "node_count": str(len(nodes)),
+        },
         owner_ref,
     )
     log.info(
-        f"Wrote topology wiring manifest: {len(nodes)} nodes, "
-        f"{len(isl_pairs)} ISL links "
-        f"({len(raw_json)} bytes raw, {len(compressed)} bytes compressed)"
+        "Wrote topology wiring manifest: %d nodes, %d ISL links (%d bytes raw, %d bytes compressed)",
+        len(nodes),
+        len(isl_pairs),
+        len(raw_json),
+        len(compressed),
     )
     return len(isl_pairs)
 

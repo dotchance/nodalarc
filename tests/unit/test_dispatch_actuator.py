@@ -11,7 +11,11 @@ from datetime import UTC, datetime
 from nodalarc.models.link_events import LinkDecisionProvenance
 from nodalarc.proto import node_agent_pb2
 from scheduler.desired_state import ActiveLinkInfo
-from scheduler.dispatch_actuator import send_authoritative_latency_updates, send_batch_up
+from scheduler.dispatch_actuator import (
+    MAX_NODE_AGENT_INTERFACES_PER_COMMAND,
+    send_authoritative_latency_updates,
+    send_batch_up,
+)
 from scheduler.latency_compensator import LatencyCompensation
 
 PAIR = ("sat-a", "sat-b")
@@ -32,6 +36,11 @@ class _Locator:
 
     def node_ip(self, _k3s_node: str) -> str | None:
         return None
+
+
+class _SingleAgentLocator(_Locator):
+    def agent_addr(self, _node_id: str) -> str:
+        return "agent-one"
 
 
 class _Stub:
@@ -111,6 +120,24 @@ def _desired() -> dict[tuple[str, str], ActiveLinkInfo]:
             authority_sequence=7,
         )
     }
+
+
+def _many_desired(pair_count: int) -> dict[tuple[str, str], ActiveLinkInfo]:
+    desired: dict[tuple[str, str], ActiveLinkInfo] = {}
+    for idx in range(pair_count):
+        pair = (f"sat-a-{idx:03d}", f"sat-b-{idx:03d}")
+        desired[pair] = ActiveLinkInfo(
+            interface_a="isl0",
+            interface_b="isl1",
+            latency_ms=10.0,
+            bandwidth_mbps=1000.0,
+            link_type="isl",
+            range_km=2997.92458,
+            authority_sim_time=SIM_TIME,
+            authority_source="snapshot",
+            authority_sequence=7,
+        )
+    return desired
 
 
 def _compensation(_node_a: str, _node_b: str, orbital_ms: float) -> LatencyCompensation:
@@ -202,6 +229,40 @@ def test_send_batch_up_requires_every_interface_ack_for_pair_success():
 
     assert added == set()
     assert js.published == []
+
+
+def test_send_batch_up_chunks_large_single_agent_batches():
+    pair_count = MAX_NODE_AGENT_INTERFACES_PER_COMMAND // 2 + 2
+    desired = _many_desired(pair_count)
+    pool = _Pool()
+    js = _Js()
+
+    added = asyncio.run(
+        send_batch_up(
+            pairs=set(desired),
+            desired=desired,
+            locator=_SingleAgentLocator(),
+            pool=pool,
+            js=js,
+            subj_link_up="links.up",
+            sim_iso=SIM_TIME.isoformat(),
+            sim_time=SIM_TIME,
+            gs_capacities={},
+            latency_compensation=_compensation,
+            validate_authority_freshness=_validate,
+            link_provenance=_provenance,
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
+        )
+    )
+
+    requests = pool.stubs["agent-one"].requests
+    assert added == set(desired)
+    assert len(requests) == 2
+    assert all(len(req.interfaces) <= MAX_NODE_AGENT_INTERFACES_PER_COMMAND for req in requests)
+    assert requests[0].envelope.operation_id.endswith("-part001of002")
+    assert requests[1].envelope.operation_id.endswith("-part002of002")
+    assert len(js.published) == pair_count
 
 
 def test_ground_latency_update_updates_both_local_shaped_interfaces():

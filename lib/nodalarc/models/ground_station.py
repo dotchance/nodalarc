@@ -10,6 +10,8 @@ Three formats are supported:
 
 from pydantic import BaseModel, field_validator, model_validator
 
+MAX_GROUND_TERMINAL_COUNT = 128
+
 
 class HysteresisParameters(BaseModel):
     """Parameters for ground segment handover dampening (hysteresis)."""
@@ -114,8 +116,8 @@ class GroundTerminalDef(BaseModel):
     @field_validator("count")
     @classmethod
     def _count_range(cls, v: int) -> int:
-        if not 1 <= v <= 32:
-            raise ValueError(f"terminal count must be 1-32, got {v}")
+        if not 1 <= v <= MAX_GROUND_TERMINAL_COUNT:
+            raise ValueError(f"terminal count must be 1-{MAX_GROUND_TERMINAL_COUNT}, got {v}")
         return v
 
 

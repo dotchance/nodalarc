@@ -5,7 +5,7 @@ ground_station:
   alt_m: 520
   min_elevation_deg: 25
   terminals:
-    - type: optical
+    - type: rf
       count: 2
       bandwidth_mbps: 1000
       tracking_capacity: 1

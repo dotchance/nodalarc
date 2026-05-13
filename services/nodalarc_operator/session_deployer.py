@@ -1068,30 +1068,91 @@ def check_all_pods_running(namespace: str, expected_count: int) -> tuple[bool, i
 def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, int, str | None]:
     """Check whether Node Agent wiring is complete.
 
-    Reads the nodalarc-wiring-status ConfigMap and counts wired nodes
-    (excludes the _progress key used for display messages).
+    Reads the topology manifest and the nodalarc-wiring-status ConfigMap,
+    then counts only typed node status entries that are ready for the active
+    session and wiring generation. Metadata keys such as _session_id and
+    _wiring_generation are not node status entries.
 
     Returns (complete, wired_count, progress_msg) where:
-      - complete: True if wired_count >= expected_count
-      - wired_count: number of wired node entries
-      - progress_msg: the _progress value from the ConfigMap, or None
+      - complete: True if wired_count == expected_count
+      - wired_count: number of current-generation ready node entries
+      - progress_msg: a global progress message, or None
 
     Returns (False, 0, None) if the ConfigMap does not exist (404).
-    Raises on other API errors.
+    Raises on malformed, dirty, failed, or impossible status.
 
     Pure query — no side effects.
     """
+    import base64
+    import gzip
+
+    from nodalarc.substrate.manifest_contract import WiringManifest
+    from nodalarc.substrate.wiring_status import parse_status_configmap
+
     v1 = _get_v1()
+    manifest_cm = v1.read_namespaced_config_map("nodalarc-topology-wiring", namespace)
+    manifest_data = manifest_cm.data or {}
+    encoded_manifest = manifest_data.get("manifest.json.gz.b64")
+    if not encoded_manifest:
+        raise ValueError("topology wiring manifest payload is missing")
+    try:
+        manifest_payload = json.loads(gzip.decompress(base64.b64decode(encoded_manifest)))
+        manifest = WiringManifest.model_validate(manifest_payload)
+    except Exception as exc:
+        raise ValueError(f"topology wiring manifest payload is invalid: {exc}") from exc
+
+    if len(manifest.nodes) != expected_count:
+        raise ValueError(
+            f"topology wiring manifest has {len(manifest.nodes)} nodes, expected {expected_count}"
+        )
+
     try:
         cm = v1.read_namespaced_config_map("nodalarc-wiring-status", namespace)
         data = dict(cm.data) if cm.data else {}
-        progress_msg = data.pop("_progress", None)
-        wired_count = len(data)
-        return wired_count >= expected_count, wired_count, progress_msg
+        status_session_id, status_generation, statuses = parse_status_configmap(data)
     except kubernetes.client.rest.ApiException as e:
         if e.status == 404:
             return False, 0, None
         raise
+
+    if not statuses:
+        return False, 0, None
+
+    if status_session_id != manifest.session_id or status_generation != manifest.wiring_generation:
+        return (
+            False,
+            0,
+            "Wiring status belongs to an old session or generation; waiting for current Node Agent status",
+        )
+
+    manifest_node_ids = set(manifest.nodes)
+    status_node_ids = set(statuses)
+    unknown = status_node_ids - manifest_node_ids
+    if unknown:
+        raise ValueError(
+            "wiring status contains unknown node entries: " + ", ".join(sorted(unknown)[:10])
+        )
+
+    failed = [
+        node_id
+        for node_id, status in statuses.items()
+        if status.status in {"failed", "dirty_kernel"} or status.dirty_kernel
+    ]
+    if failed:
+        raise ValueError("wiring failed for nodes: " + ", ".join(sorted(failed)[:10]))
+
+    mismatched = [node_id for node_id, status in statuses.items() if status.node_id != node_id]
+    if mismatched:
+        raise ValueError(
+            "wiring status node_id/key mismatch for: " + ", ".join(sorted(mismatched)[:10])
+        )
+
+    ready_count = sum(
+        1
+        for node_id in manifest.nodes
+        if (status := statuses.get(node_id)) is not None and status.ready_for(manifest)
+    )
+    return ready_count == expected_count, ready_count, None
 
 
 def compute_platform_hash(spec: dict) -> str:

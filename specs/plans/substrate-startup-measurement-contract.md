@@ -81,6 +81,9 @@ Rules:
 8. Delete stale substrate status ConfigMaps when writing a new manifest, but do
    not rely on deletion for correctness. Generation validation remains the
    safety mechanism.
+9. Deployment RBAC must give the Scheduler service account namespace-scoped
+   `list` access to ConfigMaps, because substrate status documents are selected
+   by label. A missing permission must fail startup rather than bypass the gate.
 
 Tests:
 

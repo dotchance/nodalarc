@@ -390,7 +390,7 @@ class TestDispatcherLiveDispatch:
         published_subject = d._js.publish.call_args_list[0][0][0]
         assert "down" in published_subject
 
-    def test_link_up_not_published_if_node_agent_exception(self):
+    def test_link_up_fails_loudly_if_node_agent_exception(self):
         d, pool = _make_dispatcher()
         stub = pool.get_stub.return_value
         stub.async_batch_link_up = AsyncMock(side_effect=Exception("agent unreachable"))
@@ -398,7 +398,8 @@ class TestDispatcherLiveDispatch:
         vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=True)
         pub = MockNats()
 
-        asyncio.run(d._dispatch_batch([vis], [], pub))
+        with pytest.raises(Exception, match="agent unreachable"):
+            asyncio.run(d._dispatch_batch([vis], [], pub))
 
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
         link_up_msgs = [m for m in pub.messages if m[0] == "nodalarc.links.up"]

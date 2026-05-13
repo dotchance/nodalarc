@@ -121,6 +121,7 @@ def _make_satellites(
     planes: int = 1,
     isl_terminals: int = 4,
     ground_terminals: int = 1,
+    ground_terminal_type: str = "rf",
 ) -> list[SatelliteNode]:
     sats = []
     sats_per_plane = count // planes
@@ -139,6 +140,26 @@ def _make_satellites(
                     elements=elems,
                     isl_terminal_count=isl_terminals,
                     ground_terminal_count=ground_terminals,
+                    isl_terminals=(
+                        IslTerminal(
+                            type="optical",
+                            count=isl_terminals,
+                            max_range_km=5000.0,
+                            bandwidth_mbps=100000.0,
+                            max_tracking_rate_deg_s=5.0,
+                        ),
+                    )
+                    if isl_terminals > 0
+                    else (),
+                    ground_terminals=(
+                        GroundTerminal(
+                            type=ground_terminal_type,
+                            count=ground_terminals,
+                            bandwidth_mbps=1000.0,
+                        ),
+                    )
+                    if ground_terminals > 0
+                    else (),
                 )
             )
     return sats
@@ -664,6 +685,55 @@ class TestE010:
         results = validate_session_readiness(session, constellation, sats, gs, stack)
 
         assert [r for r in results if r.code == "E010"] == []
+
+
+# ---------------------------------------------------------------------------
+# E011: Satellite / ground terminal type compatibility
+# ---------------------------------------------------------------------------
+
+
+class TestE011:
+    def test_matching_ground_terminal_types_pass(self):
+        session = _make_session()
+        gs = _make_gs_file()
+        sats = _make_satellites(ground_terminal_type="rf")
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        assert [r for r in results if r.code == "E011"] == []
+
+    def test_mismatched_ground_terminal_types_fail_before_deploy(self):
+        session = _make_session()
+        gs = _make_gs_file(
+            stations=[
+                GroundStationConfig(
+                    name="optical-gs",
+                    lat_deg=34.0,
+                    lon_deg=-118.0,
+                    terminals=[
+                        GroundTerminalDef(
+                            type="optical",
+                            count=1,
+                            bandwidth_mbps=1000,
+                            tracking_capacity=1,
+                        )
+                    ],
+                )
+            ]
+        )
+        sats = _make_satellites(ground_terminal_type="rf")
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E011"]
+        assert len(errors) == 1
+        assert "Ground terminal type mismatch" in errors[0].message
+        assert "ground station uses 'optical'" in errors[0].message
+        assert "satellite uses 'rf'" in errors[0].message
 
 
 # ---------------------------------------------------------------------------

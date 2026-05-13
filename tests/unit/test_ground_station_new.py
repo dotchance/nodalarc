@@ -9,6 +9,7 @@ from nodalarc.constellation_loader import (
     load_ground_stations_from_set,
     set_ground_station_dirs,
 )
+from nodalarc.ground_terminals import station_ground_terminal_type
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
@@ -21,6 +22,7 @@ from tests.conftest import CONFIGS_DIR
 
 STATIONS_DIR = CONFIGS_DIR / "ground-stations" / "stations"
 SETS_DIR = CONFIGS_DIR / "ground-stations" / "sets"
+GROUND_FILES_DIR = CONFIGS_DIR / "ground-stations"
 
 
 @pytest.fixture(autouse=True)
@@ -203,6 +205,46 @@ class TestLoadFromList:
     def test_list_preserves_order(self):
         gs_file = load_ground_stations_from_list(["tokyo", "london", "hawthorne"])
         assert [s.name for s in gs_file.stations] == ["tokyo", "london", "hawthorne"]
+
+
+class TestGroundStationCatalog:
+    @pytest.mark.parametrize(
+        "ground_path",
+        sorted(GROUND_FILES_DIR.glob("*.yaml")),
+        ids=lambda path: path.stem,
+    )
+    def test_direct_ground_station_files_use_one_terminal_type(self, ground_path):
+        gs_file = load_ground_stations(ground_path)
+
+        terminal_types = {
+            station_ground_terminal_type(gs_file, station) for station in gs_file.stations
+        }
+
+        assert len(terminal_types) == 1
+
+    @pytest.mark.parametrize(
+        "station_path",
+        sorted(STATIONS_DIR.glob("*.yaml")),
+        ids=lambda path: path.stem,
+    )
+    def test_all_individual_station_files_load(self, station_path):
+        gs_file = load_ground_stations(station_path)
+
+        assert len(gs_file.stations) == 1
+
+    @pytest.mark.parametrize(
+        "set_path",
+        sorted(SETS_DIR.glob("*.yaml")),
+        ids=lambda path: path.stem,
+    )
+    def test_station_sets_use_one_terminal_type(self, set_path):
+        gs_file = load_ground_stations(set_path)
+
+        terminal_types = {
+            station_ground_terminal_type(gs_file, station) for station in gs_file.stations
+        }
+
+        assert len(terminal_types) == 1
 
 
 class TestFormatDetection:

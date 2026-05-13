@@ -2,6 +2,12 @@
 
 import pytest
 import yaml
+from nodalarc.constellation_loader import (
+    expand_constellation,
+    load_constellation,
+    load_ground_stations,
+)
+from nodalarc.ground_terminals import ground_terminal_type, station_ground_terminal_type
 from nodalarc.models.session import SessionConfig
 from nodalarc.session_generator import (
     generate_session_yaml,
@@ -25,6 +31,25 @@ class TestLoadPresets:
         assert p.satellite_count == 66
         assert "iridium-66.yaml" in p.constellation
         assert p.ground_stations.endswith(".yaml")
+
+    def test_preset_ground_terminal_types_match_satellite_models(self):
+        presets = load_constellation_presets()
+
+        for name, preset in presets.items():
+            constellation = load_constellation(preset.constellation)
+            satellites = expand_constellation(constellation)
+            satellite_types = {ground_terminal_type(sat.ground_terminals) for sat in satellites}
+
+            ground_stations = load_ground_stations(preset.ground_stations)
+            station_types = {
+                station_ground_terminal_type(ground_stations, station)
+                for station in ground_stations.stations
+            }
+
+            assert station_types == satellite_types, (
+                f"Preset {name} has satellite ground terminals {satellite_types} "
+                f"but ground station terminals {station_types}"
+            )
 
 
 class TestGenerateSessionYaml:

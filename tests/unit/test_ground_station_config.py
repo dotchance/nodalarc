@@ -64,12 +64,13 @@ class TestPolarStationOverrides:
         assert polar.min_elevation_deg == 10
         assert polar.scheduling_policy == "lowest-elevation"
 
-        # RF terminal override
+        # Per-station terminal override preserves the example's optical
+        # satellite/ground compatibility while changing capacity.
         assert polar.terminals is not None
         assert len(polar.terminals) == 1
-        assert polar.terminals[0].type == "rf"
+        assert polar.terminals[0].type == "optical"
         assert polar.terminals[0].bandwidth_mbps == 500
-        assert polar.terminals[0].frequency_band == "Ka"
+        assert polar.terminals[0].frequency_band is None
 
         # Per-station prefix override
         assert polar.terrestrial_prefixes is not None

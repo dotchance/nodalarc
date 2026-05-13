@@ -19,6 +19,7 @@ import os
 import secrets
 import sqlite3
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,7 @@ from nodalarc.nats_channels import (
     STREAM_OPS_EVENTS,
     debug_ctrl_subject,
     nats_url,
+    sanitize_session_id,
 )
 from nodalarc.platform_config import get_platform_config
 
@@ -195,6 +197,12 @@ _nats_connection: nats.NATS | None = None
 _main_event_loop: asyncio.AbstractEventLoop | None = None
 _terminal_manager = TerminalManager()
 _initial_session_file: str = ""  # Set by main() before uvicorn starts
+_active_cr_generation: int | None = None
+_cr_monitor_task: asyncio.Task | None = None
+_session_transition_lock = asyncio.Lock()
+
+_CR_MONITOR_INTERVAL_SECONDS = 2.0
+_CR_CONTEXT_READY_TIMEOUT_SECONDS = 60.0
 
 # System OpsEvents — meta-session, not cleared on switch
 from collections import deque
@@ -452,6 +460,255 @@ _pending_cr_poll: bool = False
 _ws_clients: set = set()  # Active WebSocket connections for instant broadcast
 
 
+@dataclass(frozen=True)
+class ReadyCRSession:
+    """Authoritative ready session identity from the ConstellationSpec CR."""
+
+    session_id: str
+    session_yaml: str
+    session: SessionConfig
+    generation: int
+
+
+def _as_positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _parse_session_yaml(session_yaml: str) -> tuple[str, SessionConfig]:
+    raw = yaml.safe_load(session_yaml)
+    if not raw:
+        raise ValueError("sessionYaml is empty")
+    session = SessionConfig.model_validate(raw)
+    return sanitize_session_id(session.session.name), session
+
+
+def _extract_ready_cr_session(cr: dict[str, Any]) -> ReadyCRSession | None:
+    """Return the CR session only when its Ready state is generation-consistent."""
+
+    metadata = cr.get("metadata") or {}
+    status = cr.get("status") or {}
+    spec = cr.get("spec") or {}
+
+    generation = _as_positive_int(metadata.get("generation"))
+    observed_generation = _as_positive_int(status.get("observedGeneration"))
+    ready_pods = _as_positive_int(status.get("readyPods"))
+    pod_count = _as_positive_int(status.get("podCount"))
+
+    if status.get("phase") != "Ready":
+        return None
+    if generation is None or observed_generation != generation:
+        return None
+    if pod_count is None or ready_pods != pod_count:
+        return None
+
+    session_yaml = str(spec.get("sessionYaml") or "")
+    if not session_yaml.strip():
+        raise ValueError("Ready ConstellationSpec is missing spec.sessionYaml")
+
+    session_id, session = _parse_session_yaml(session_yaml)
+    return ReadyCRSession(
+        session_id=session_id,
+        session_yaml=session_yaml,
+        session=session,
+        generation=generation,
+    )
+
+
+def _write_cr_session_file(ready: ReadyCRSession) -> Path:
+    path = Path(f"/tmp/_session-{ready.session_id}.yaml")
+    path.write_text(ready.session_yaml, encoding="utf-8")
+    return path
+
+
+def _mark_session_manager_ready(session: SessionConfig, session_path: Path) -> None:
+    if not _session_manager:
+        return
+    with contextlib.suppress(Exception):
+        _session_manager.rescan()
+    for available in _session_manager._available:
+        if available.get("name") == session.session.name:
+            _session_manager.set_active(available["file"])
+            break
+    else:
+        _session_manager.set_active(str(session_path))
+    _session_manager._status = "ready"
+    _session_manager.status_detail = ""
+
+
+async def _activate_session_context_from_cr(ready: ReadyCRSession, source: str) -> None:
+    """Replace VS-API state with the authoritative ready CR session."""
+
+    global _active_context, _active_cr_generation
+
+    if _nats_connection is None:
+        raise RuntimeError("No NATS connection available for CR session activation")
+
+    old_ctx = _active_context
+    if (
+        old_ctx is not None
+        and old_ctx.session_id == ready.session_id
+        and _active_cr_generation == ready.generation
+    ):
+        session_path = _write_cr_session_file(ready)
+        _mark_session_manager_ready(ready.session, session_path)
+        return
+
+    old_session = old_ctx.session_id if old_ctx else None
+    session_path = _write_cr_session_file(ready)
+
+    await _publish_system_ops_event(
+        "info",
+        "SESSION_CR_ACTIVATION_INITIATED",
+        f"Activating CR session {ready.session_id}",
+        {
+            "old_session": old_session,
+            "new_session": ready.session_id,
+            "generation": ready.generation,
+            "source": source,
+        },
+    )
+
+    _active_context = None
+    _active_cr_generation = None
+    await _broadcast_to_all(
+        json.dumps(
+            {
+                "msg_type": "session_transitioning",
+                "detail": f"Activating session {ready.session_id}",
+            }
+        )
+    )
+    await _terminal_manager.close_all("Session switched")
+    if old_ctx is not None:
+        await old_ctx.stop()
+
+    new_ctx = SessionContext(ready.session_id, str(session_path))
+    await new_ctx.start(_nats_connection, mode="recovery")
+
+    try:
+        await asyncio.wait_for(new_ctx._ready.wait(), timeout=_CR_CONTEXT_READY_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        await new_ctx.stop()
+        if _session_manager:
+            _session_manager._status = "error"
+            _session_manager.status_detail = (
+                f"VS-API did not receive live state for {ready.session_id}"
+            )
+        await _publish_system_ops_event(
+            "error",
+            "SESSION_CR_ACTIVATION_TIMEOUT",
+            f"CR session {ready.session_id} did not become ready in VS-API",
+            {
+                "session_id": ready.session_id,
+                "generation": ready.generation,
+                "timeout_seconds": _CR_CONTEXT_READY_TIMEOUT_SECONDS,
+            },
+        )
+        await _broadcast_to_all(
+            json.dumps(
+                {
+                    "msg_type": "session_failed",
+                    "error": f"Session {ready.session_id} did not publish live state",
+                }
+            )
+        )
+        raise TimeoutError(f"VS-API context did not become ready for {ready.session_id}") from exc
+
+    _active_context = new_ctx
+    _active_cr_generation = ready.generation
+
+    from nodal.logging import set_session as _set_log_session
+
+    _set_log_session(ready.session_id)
+    _mark_session_manager_ready(ready.session, session_path)
+
+    await _publish_system_ops_event(
+        "info",
+        "SESSION_CR_ACTIVATION_COMPLETE",
+        f"CR session activation complete: {ready.session_id}",
+        {
+            "session_id": ready.session_id,
+            "generation": ready.generation,
+            "links": len(new_ctx.links),
+            "source": source,
+        },
+    )
+
+    if new_ctx.cached_ephemeris:
+        await _broadcast_to_all(json.dumps(new_ctx.cached_ephemeris))
+    await _broadcast_to_all(
+        json.dumps({"msg_type": "session_ready", "snapshot": _build_snapshot()})
+    )
+    log.info(
+        "CR session activation complete: session_id=%s generation=%s source=%s",
+        ready.session_id,
+        ready.generation,
+        source,
+    )
+
+
+async def _monitor_cr_session(api: Any, namespace: str) -> None:
+    """Continuously reconcile VS-API SessionContext with the authoritative CR."""
+
+    global _active_cr_generation
+
+    log.info("CR session monitor started")
+    while True:
+        await asyncio.sleep(_CR_MONITOR_INTERVAL_SECONDS)
+        try:
+            cr = api.get_namespaced_custom_object(
+                group="nodalarc.io",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="constellationspecs",
+                name="current-session",
+            )
+            ready = _extract_ready_cr_session(cr)
+            if ready is None:
+                continue
+
+            ctx = _active_context
+            if (
+                ctx is not None
+                and ctx.session_id == ready.session_id
+                and _active_cr_generation in (None, ready.generation)
+            ):
+                _active_cr_generation = ready.generation
+                _mark_session_manager_ready(ready.session, _write_cr_session_file(ready))
+                continue
+
+            if _session_transition_lock.locked():
+                continue
+
+            async with _session_transition_lock:
+                ctx = _active_context
+                if (
+                    ctx is not None
+                    and ctx.session_id == ready.session_id
+                    and _active_cr_generation in (None, ready.generation)
+                ):
+                    _active_cr_generation = ready.generation
+                    _mark_session_manager_ready(ready.session, _write_cr_session_file(ready))
+                    continue
+
+                log.info(
+                    "CR Ready session differs from active context: active=%s/%s cr=%s/%s",
+                    ctx.session_id if ctx else None,
+                    _active_cr_generation,
+                    ready.session_id,
+                    ready.generation,
+                )
+                await _activate_session_context_from_cr(ready, source="cr-monitor")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("CR session monitor tick failed: %s", exc)
+
+
 async def _broadcast_to_all(frame: str) -> None:
     """Push a text frame to all connected WebSocket clients."""
     for ws in list(_ws_clients):
@@ -469,6 +726,7 @@ async def _nats_subscriber() -> None:
     Also subscribes to wiring progress (core NATS, not session-scoped).
     """
     global _nats_connection, _active_context, _main_event_loop
+    global _active_cr_generation, _cr_monitor_task
 
     _main_event_loop = asyncio.get_running_loop()
     nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
@@ -543,6 +801,7 @@ async def _nats_subscriber() -> None:
     session_yaml_from_cr = None
     _cr_phase = ""
     _cr_message = ""
+    _cr_generation: int | None = None
     try:
         _cr = _cr_api.get_namespaced_custom_object(
             group="nodalarc.io",
@@ -554,6 +813,7 @@ async def _nats_subscriber() -> None:
         session_yaml_from_cr = _cr.get("spec", {}).get("sessionYaml", "")
         _cr_phase = _cr.get("status", {}).get("phase", "")
         _cr_message = _cr.get("status", {}).get("message", "")
+        _cr_generation = _as_positive_int((_cr.get("metadata") or {}).get("generation"))
     except Exception:
         pass
 
@@ -575,24 +835,18 @@ async def _nats_subscriber() -> None:
             session_yaml_from_cr = _cr.get("spec", {}).get("sessionYaml", "")
             _cr_phase = _cr.get("status", {}).get("phase", "")
             _cr_message = _cr.get("status", {}).get("message", "")
+            _cr_generation = _as_positive_int((_cr.get("metadata") or {}).get("generation"))
         except Exception:
             pass
 
     try:
-        from nodalarc.nats_channels import sanitize_session_id
-
-        raw = yaml.safe_load(session_yaml_from_cr)
-        if not raw:
-            log.error("FATAL: CR sessionYaml is empty")
-            raise ValueError("CR sessionYaml is empty")
-        session = SessionConfig.model_validate(raw)
-        session_id = sanitize_session_id(session.session.name)
+        session_id, session = _parse_session_yaml(session_yaml_from_cr)
     except Exception as exc:
         log.error("FATAL: Failed to parse session from CR: %s", exc)
         raise
 
     _tmp_session = Path(f"/tmp/_session-{session_id}.yaml")
-    _tmp_session.write_text(session_yaml_from_cr)
+    _tmp_session.write_text(session_yaml_from_cr, encoding="utf-8")
 
     log.info("Bootstrapping session %s from CR (phase=%s)", session_id, _cr_phase)
 
@@ -607,6 +861,7 @@ async def _nats_subscriber() -> None:
     ctx = SessionContext(session_id, str(_tmp_session))
     await ctx.start(nc, mode="recovery")
     _active_context = ctx
+    _active_cr_generation = _cr_generation
     await _publish_system_ops_event(
         "info",
         "SESSION_BOOTSTRAP",
@@ -616,6 +871,10 @@ async def _nats_subscriber() -> None:
 
     if _cr_phase in ("Creating", "Wiring"):
         asyncio.ensure_future(_poll_cr_until_ready())
+    if _cr_monitor_task is None or _cr_monitor_task.done():
+        _cr_monitor_task = asyncio.create_task(
+            _monitor_cr_session(_cr_api, _cr_ns), name="cr-session-monitor"
+        )
 
     # Keep alive until cancelled
     try:
@@ -633,9 +892,15 @@ async def _nats_subscriber() -> None:
     except asyncio.CancelledError:
         log.info("NATS subscriber cancelled")
     finally:
+        if _cr_monitor_task is not None:
+            _cr_monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await _cr_monitor_task
+            _cr_monitor_task = None
         if _active_context:
             await _active_context.stop()
             _active_context = None
+            _active_cr_generation = None
         await nc.close()
 
 
@@ -2232,6 +2497,11 @@ def introspect(body: dict) -> dict:
 
 
 async def _run_switch(session_path: str) -> None:
+    async with _session_transition_lock:
+        await _run_switch_locked(session_path)
+
+
+async def _run_switch_locked(session_path: str) -> None:
     """Run session switch — linear async chain on the main event loop.
 
     All pointer writes to _active_context happen here, on the main
@@ -2248,7 +2518,7 @@ async def _run_switch(session_path: str) -> None:
     h. Set _active_context = new context
     i. Push ephemeris + session_ready
     """
-    global _active_context
+    global _active_context, _active_cr_generation
 
     try:
         old_ctx = _active_context
@@ -2263,6 +2533,7 @@ async def _run_switch(session_path: str) -> None:
 
         # (a) Null context — broadcast loop stops immediately
         _active_context = None
+        _active_cr_generation = None
 
         # (b) Notify VF
         await _broadcast_to_all(json.dumps({"msg_type": "session_transitioning"}))
@@ -2332,6 +2603,7 @@ async def _run_switch(session_path: str) -> None:
 
         # (h) Atomic pointer swap — only place _active_context is written
         _active_context = new_ctx
+        _active_cr_generation = None
         from nodal.logging import set_session as _set_log_session
 
         _set_log_session(session_id)
@@ -2390,7 +2662,7 @@ async def _poll_cr_until_ready() -> None:
     session_manager.switch() so the frontend sees progress messages
     regardless of deploy path.
     """
-    global _active_context
+    global _active_context, _active_cr_generation
     log.info("_poll_cr_until_ready: starting background CR polling task")
     import kubernetes.client
     import kubernetes.config
@@ -2420,34 +2692,38 @@ async def _poll_cr_until_ready() -> None:
                 # Only update from CR for non-Wiring phases.
                 _session_manager.status_detail = message or f"Phase: {phase}"
             if phase == "Ready":
-                # Check if the session changed (make session deployed a different constellation)
-                cr_session_yaml = cr.get("spec", {}).get("sessionYaml", "")
-                if cr_session_yaml:
-                    try:
-                        from nodalarc.nats_channels import sanitize_session_id as _sanitize
-
-                        cr_session = SessionConfig.model_validate(yaml.safe_load(cr_session_yaml))
-                        cr_session_id = _sanitize(cr_session.session.name)
+                ready = _extract_ready_cr_session(cr)
+                if ready is None:
+                    log.info("CR phase is Ready but generation/pod status is not consistent yet")
+                    continue
+                ctx = _active_context
+                needs_activation = (
+                    ctx is None
+                    or ctx.session_id != ready.session_id
+                    or _active_cr_generation not in (None, ready.generation)
+                )
+                if needs_activation:
+                    if _session_transition_lock.locked():
+                        continue
+                    async with _session_transition_lock:
                         ctx = _active_context
-                        if ctx and ctx.session_id != cr_session_id:
+                        if (
+                            ctx is None
+                            or ctx.session_id != ready.session_id
+                            or _active_cr_generation not in (None, ready.generation)
+                        ):
                             log.info(
-                                "CR session_id changed: %s → %s — triggering internal switch",
-                                ctx.session_id,
-                                cr_session_id,
+                                "CR Ready session changed during wiring poll: active=%s/%s cr=%s/%s",
+                                ctx.session_id if ctx else None,
+                                _active_cr_generation,
+                                ready.session_id,
+                                ready.generation,
                             )
-                            if _initial_session_file and Path(_initial_session_file).is_file():
-                                await _run_switch(_initial_session_file)
-                                return
-                        elif not ctx:
-                            if _initial_session_file and Path(_initial_session_file).is_file():
-                                log.info("No active context but CR is Ready — bootstrapping")
-                                new_ctx = SessionContext(cr_session_id, _initial_session_file)
-                                nc = _nats_connection
-                                if nc:
-                                    await new_ctx.start(nc, mode="recovery")
-                                    _active_context = new_ctx
-                    except Exception as exc:
-                        log.warning("Failed to check CR session_id: %s", exc)
+                            await _activate_session_context_from_cr(ready, source="cr-ready-poll")
+                            return
+                elif ctx is not None and ctx.session_id == ready.session_id:
+                    _active_cr_generation = ready.generation
+                    _mark_session_manager_ready(ready.session, _write_cr_session_file(ready))
 
                 ctx = _active_context
                 if ctx:

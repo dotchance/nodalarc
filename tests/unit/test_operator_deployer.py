@@ -361,7 +361,7 @@ _INLINE_CONSTELLATION = {
 # Ground stations with inline station definitions.
 _INLINE_GROUND_STATIONS = {
     "default_terminals": [
-        {"type": "optical", "count": 1, "bandwidth_mbps": 1000, "tracking_capacity": 1}
+        {"type": "rf", "count": 1, "bandwidth_mbps": 1000, "tracking_capacity": 1}
     ],
     "stations": [
         {"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20},

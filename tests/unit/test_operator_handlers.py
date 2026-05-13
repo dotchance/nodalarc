@@ -10,7 +10,7 @@ Uses create_autospec for K8s client mocks to catch signature drift.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import create_autospec, patch
+from unittest.mock import AsyncMock, create_autospec, patch
 
 import kubernetes.client
 import nodalarc_operator.handlers as handlers_mod
@@ -76,7 +76,9 @@ class _ReconcilerHarness:
             return_value=(True, self.expected_count, None),
         )
         self._p(
-            "has_manifest", "nodalarc_operator.handlers._has_wiring_manifest", return_value=True
+            "manifest_current",
+            "nodalarc_operator.handlers._wiring_manifest_matches_spec",
+            return_value=True,
         )
         self._p(
             "platform_hash",
@@ -162,6 +164,7 @@ class TestReconcileStateMachine:
             _run(_reconcile(h, phase="Creating"))
             h.mock("ensure_cm").assert_called_once()
             h.mock("ensure_pods").assert_called_once()
+            h.mock("restart").assert_not_called()
 
     def test_more_pods_triggers_scale_down(self):
         with _ReconcilerHarness(expected_count=7) as h:
@@ -178,10 +181,24 @@ class TestReconcileStateMachine:
 
     def test_all_running_writes_wiring(self):
         with _ReconcilerHarness(expected_count=7) as h:
-            h.mock("has_manifest").return_value = False
+            h.mock("manifest_current").return_value = False
             _run(_reconcile(h, phase="Creating"))
             h.mock("write_wiring").assert_called_once()
             h.mock("write_ips").assert_called_once()
+            h.mock("restart").assert_called_once_with("nodalarc", "abc123")
+            status = _last_status(h)
+            assert status["platformHash"] == "abc123"
+
+    def test_stale_wiring_manifest_is_rewritten(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            h.mock("manifest_current").return_value = False
+            _run(_reconcile(h, phase="Wiring"))
+            h.mock("write_wiring").assert_called_once()
+            h.mock("write_ips").assert_called_once()
+            h.mock("restart").assert_called_once_with("nodalarc", "abc123")
+            status = _last_status(h)
+            assert status["phase"] == "Wiring"
+            assert status["observedGeneration"] == 1
 
     def test_wiring_complete_sets_ready(self):
         with _ReconcilerHarness(expected_count=7) as h:
@@ -196,6 +213,45 @@ class TestReconcileStateMachine:
             status = _last_status(h)
             assert status["phase"] == "Error"
             assert "Bad constellation" in status["message"]
+
+    def test_platform_hash_bootstrap_does_not_claim_observed_generation(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            with patch(
+                "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
+            ) as mock_reconcile:
+                _run(
+                    handlers_mod.on_update(
+                        {"sessionYaml": "session:\n  name: test\n"},
+                        "current-session",
+                        "nodalarc",
+                        {"name": "current-session", "uid": "test-uid", "generation": 2},
+                        {"phase": "Ready"},
+                    )
+                )
+            status = _last_status(h)
+            assert status == {"platformHash": "abc123"}
+            mock_reconcile.assert_awaited_once()
+
+    def test_platform_hash_change_defers_restart_until_manifest_publication(self):
+        with _ReconcilerHarness(expected_count=7) as h:
+            with patch(
+                "nodalarc_operator.handlers._reconcile_session", new_callable=AsyncMock
+            ) as mock_reconcile:
+                _run(
+                    handlers_mod.on_update(
+                        {"sessionYaml": "session:\n  name: test\n"},
+                        "current-session",
+                        "nodalarc",
+                        {"name": "current-session", "uid": "test-uid", "generation": 2},
+                        {"phase": "Ready", "platformHash": "old"},
+                    )
+                )
+            status = _last_status(h)
+            assert status["phase"] == "Creating"
+            assert status["message"] == "Session config changed — reconciling session resources"
+            assert "platformHash" not in status
+            h.mock("restart").assert_not_called()
+            mock_reconcile.assert_awaited_once()
 
     def test_idempotent_on_ready_zero_writes(self):
         with _ReconcilerHarness(expected_count=7) as h:

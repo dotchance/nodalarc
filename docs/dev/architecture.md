@@ -209,10 +209,13 @@ The Scheduler marks every interface operation with locality:
 The Node Agent does not query the cluster to decide what to build. The Scheduler
 already resolved placement and put the answer in the dispatch message.
 
-Physical lab networks still have latency. NodalArc compensates for it. Node
-Agents measure substrate latency for exact active VXLAN peer refs scoped by
-`session_id` and `wiring_generation`. The Scheduler rejects stale, failed, or
-generation-mismatched measurements and subtracts the verified substrate delay
+Physical lab networks still have latency. NodalArc compensates for it. The
+Operator declares manifest-required Kubernetes-node substrate pairs from actual
+pod placement. Each Node Agent measures its local required pairs before serving
+commands, writes a generation-scoped `nodalarc-substrate-status-<node>`
+ConfigMap, and refreshes it periodically. The Scheduler gates startup and
+runtime dispatch on those durable status documents, rejects stale, failed, or
+generation-mismatched measurements, and subtracts the verified substrate delay
 from the orbital delay before setting `tc netem`. Unknown cross-node substrate
 latency is a dispatch blocker, not a zero-delay default.
 

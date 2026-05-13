@@ -201,6 +201,11 @@ class TestBatchLinkUp:
         )
         monkeypatch.setattr(
             substrate_monitor,
+            "require_fresh_measurement_for_remote_ip",
+            lambda remote_ip: calls.append(("substrate_check", remote_ip)),
+        )
+        monkeypatch.setattr(
+            substrate_monitor,
             "add_peer_ref",
             lambda ref: calls.append(("peer_ref", ref.remote_ip, ref.vni, ref.local_ifname)),
         )
@@ -244,8 +249,62 @@ class TestBatchLinkUp:
 
         assert resp.success is True
         assert resp.interface_results[0].verified is True
+        assert ("substrate_check", "10.0.0.2") in calls
         assert ("shape", 1234, "gnd0", 4.5, 100.0) in calls
         assert ("peer_ref", "10.0.0.2", 1001, "gnd0") in calls
+
+    def test_cross_node_isl_requires_substrate_evidence_before_mutation(self, monkeypatch):
+        from node_agent import handlers, substrate_monitor, vxlan
+
+        calls: list[tuple] = []
+
+        def _missing_substrate(remote_ip: str) -> None:
+            raise RuntimeError("no local substrate status")
+
+        monkeypatch.setenv("HOST_IP", "10.0.0.1")
+        monkeypatch.setattr(handlers, "_local_ip", None)
+        monkeypatch.setattr(
+            substrate_monitor,
+            "require_fresh_measurement_for_remote_ip",
+            _missing_substrate,
+        )
+        monkeypatch.setattr(
+            vxlan,
+            "create_vxlan_link",
+            lambda *args, **kwargs: calls.append(("create", args, kwargs)),
+        )
+        monkeypatch.setattr(
+            substrate_monitor,
+            "add_peer_ref",
+            lambda ref: calls.append(("peer_ref", ref.remote_ip, ref.vni, ref.local_ifname)),
+        )
+
+        req = node_agent_pb2.BatchLinkUpRequest(
+            envelope=_env("BatchLinkUp", "test-cross-isl-substrate-missing"),
+            interfaces=[
+                node_agent_pb2.InterfaceUp(
+                    node_id="sat-P00S00",
+                    interface_name="isl0",
+                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                    locality=node_agent_pb2.LOCALITY_CROSS_NODE,
+                    latency_ms=4.5,
+                    bandwidth_mbps=100.0,
+                    peer_node_id="sat-P00S01",
+                    peer_interface_name="isl1",
+                    remote_node_ip="10.0.0.2",
+                    vni=1001,
+                )
+            ],
+        )
+
+        resp = handle_batch_link_up(req, pid_map={"sat-P00S00": 1234}, fence=FENCE)
+
+        assert resp.success is False
+        assert resp.dirty_kernel is False
+        assert calls == []
+        assert resp.interface_results[0].success is False
+        assert resp.interface_results[0].error_code == node_agent_pb2.NODE_AGENT_DEPENDENCY_MISSING
+        assert "Substrate measurement unavailable" in resp.interface_results[0].error_message
 
 
 class TestSetLatency:

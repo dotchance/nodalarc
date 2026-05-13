@@ -1,38 +1,26 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
-"""Peer-only substrate latency measurement.
+"""Manifest-driven substrate latency measurement.
 
-Measures physical network latency between this K8s node and its active
-VXLAN peers. Publishes measurements to NATS for Scheduler consumption.
+The Node Agent DaemonSet runs with hostNetwork, so ICMP ping measures RTT over
+the physical Kubernetes-node network. Required measurements are declared in the
+wiring manifest, written as durable ConfigMaps, and validated by the Scheduler
+before dispatch. Missing, stale, failed, or generation-mismatched substrate
+evidence is a control-plane fault.
 
-The Node Agent DaemonSet runs with hostNetwork — ICMP ping goes through
-the physical network, giving accurate substrate latency measurements.
-Median of 10 samples rejects outliers (ARP cold-start, CPU spikes).
-
-Measurement triggers:
-1. On first VXLAN tunnel to a new peer (immediate, synchronous)
-2. Periodically every 60 seconds (background asyncio task)
-
-Peer-only: only measures to nodes with active VXLAN tunnels. Scales
-with O(active_peers) not O(N²). At 10K sats with planePerNode across
-100 nodes, each node has ~4-6 peers, not 99.
-
-Peer references are exact and generation fenced. A node may have many VXLAN
-tunnels to the same remote IP, but each active reference records the session,
-wiring generation, VNI, and local interface that caused measurement. We
-measure each remote IP once while at least one exact reference is active.
+VXLAN peer references remain as exact lifecycle diagnostics. They do not drive
+measurement and are not dispatch authority.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import subprocess
 import threading
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import kubernetes.client
@@ -100,12 +88,8 @@ class MeasurementResult:
 _peer_refs: set[PeerRef] = set()
 _peers_lock = threading.Lock()
 
-# Module-level references for cross-thread communication.
-# Set by init() from the async server context.
-_nc = None  # NATS connection
-_js = None  # JetStream context
+# Module-level runtime state.
 _hostname: str = ""
-_event_loop = None  # asyncio event loop for scheduling from threads
 # Session ID for NATS subject scoping. Set from the wiring manifest
 # by __main__.py before init() is called.
 _session_id: str = ""
@@ -129,40 +113,22 @@ def set_identity(session_id: str, wiring_generation: str) -> None:
     _wiring_generation = wiring_generation
 
 
-def init(nc, hostname: str, event_loop) -> None:
-    """Initialize module-level references for cross-thread communication.
-
-    Called once from the async server context before handlers start.
-    """
-    global _nc, _js, _hostname, _event_loop
+def init(hostname: str) -> None:
+    """Initialize module-level runtime identity after wiring has completed."""
+    global _hostname
     if not _session_id or not _wiring_generation:
         raise ValueError(
             "substrate_monitor identity must be set before init() — wiring manifest not processed?"
         )
-    _nc = nc
-    _js = nc.jetstream()
     _hostname = hostname
-    _event_loop = event_loop
 
 
 def _active_remote_ips_locked() -> set[str]:
     return {ref.remote_ip for ref in _peer_refs}
 
 
-def _refs_for_ip(remote_ip: str) -> list[PeerRef]:
-    with _peers_lock:
-        return sorted(
-            (ref for ref in _peer_refs if ref.remote_ip == remote_ip),
-            key=lambda ref: (ref.session_id, ref.wiring_generation, ref.vni, ref.local_ifname),
-        )
-
-
 def add_peer_ref(ref: PeerRef) -> None:
-    """Register one exact VXLAN peer reference.
-
-    Triggers immediate measurement only when this is the first active
-    reference for the remote IP.
-    """
+    """Register one exact VXLAN peer reference for diagnostics."""
     ref.validate()
     if ref.session_id != _session_id or ref.wiring_generation != _wiring_generation:
         raise ValueError(
@@ -175,12 +141,7 @@ def add_peer_ref(ref: PeerRef) -> None:
         _peer_refs.add(ref)
         is_new = ref.remote_ip not in before
     if is_new:
-        log.info("New VXLAN peer: %s — scheduling immediate measurement", ref.remote_ip)
-        if _event_loop and _nc:
-            asyncio.run_coroutine_threadsafe(
-                measure_and_publish(_nc, _hostname, ref.remote_ip),
-                _event_loop,
-            )
+        log.info("New VXLAN peer diagnostic ref: %s", ref.remote_ip)
 
 
 def remove_peer_ref(ref: PeerRef) -> bool:
@@ -224,14 +185,11 @@ def get_active_refs() -> list[PeerRef]:
 
 def _reset_for_tests() -> None:
     """Reset module state for isolated unit tests."""
-    global _nc, _js, _hostname, _event_loop, _session_id, _wiring_generation
+    global _hostname, _session_id, _wiring_generation
     global _required_pairs, _latest_status, _k8s_v1, _namespace, _current_manifest
     with _peers_lock:
         _peer_refs.clear()
-    _nc = None
-    _js = None
     _hostname = ""
-    _event_loop = None
     _session_id = ""
     _wiring_generation = ""
     _required_pairs = []
@@ -448,16 +406,27 @@ def configure_required_measurements(
         _write_status_document(v1, namespace, document)
         _latest_status = document
 
-    failed = [
-        f"{measurement.target_node}: {measurement.error_message or measurement.status}"
-        for measurement in measurements.values()
-        if measurement.status != "ok"
-    ]
-    if failed:
+    validation_now = datetime.now(UTC)
+    validation_errors: list[str] = []
+    for pair in sorted(pairs, key=lambda required: required.directional_key):
+        measurement = measurements[pair.target_node]
+        try:
+            measurement.rtt_ms(
+                now=validation_now,
+                session_id=manifest.session_id,
+                wiring_generation=manifest.wiring_generation,
+                source_node=pair.source_node,
+                source_ip=pair.source_ip,
+                target_node=pair.target_node,
+                target_ip=pair.target_ip,
+            )
+        except ValueError as exc:
+            validation_errors.append(f"{pair.directional_key}: {exc}")
+    if validation_errors:
         raise RuntimeError(
-            "required substrate measurements failed for " + "; ".join(sorted(failed))
+            "required substrate measurements failed for " + "; ".join(sorted(validation_errors))
         )
-    log.info("Published substrate status for %s (%d targets)", hostname, len(measurements))
+    log.info("Wrote substrate status for %s (%d targets)", hostname, len(measurements))
     return document
 
 
@@ -474,59 +443,34 @@ def read_local_status_document(
     return decode_status_configmap_data(cm.data)
 
 
-async def measure_and_publish(
-    nc,
-    hostname: str,
-    remote_ip: str,
-    *,
-    stale_after_s: float = DEFAULT_STALE_AFTER_S,
-) -> None:
-    """Measure one peer and publish structured evidence.
-
-    Runs ping in executor (non-blocking asyncio). Publishes result to NATS.
-    Called when the first VXLAN tunnel to a new peer is created.
-    """
-    from nodalarc.nats_channels import substrate_latency_subject
-
-    measurement = await asyncio.get_running_loop().run_in_executor(
-        None,
-        lambda: measure_one_detail(remote_ip, stale_after_s=stale_after_s),
+def require_fresh_measurement_for_remote_ip(remote_ip: str) -> None:
+    """Fail unless local durable status proves a fresh RTT to ``remote_ip``."""
+    if not remote_ip:
+        raise ValueError("remote_ip is required for substrate measurement verification")
+    document = _latest_status
+    if document is None:
+        raise RuntimeError("local substrate status has not been measured")
+    host_ip = os.environ.get("HOST_IP", "").strip()
+    matches = [
+        measurement
+        for measurement in document.measurements.values()
+        if measurement.target_ip == remote_ip
+    ]
+    if not matches:
+        raise RuntimeError(f"no local substrate measurement for remote IP {remote_ip}")
+    measurement = matches[0]
+    measurement.rtt_ms(
+        now=datetime.now(UTC),
+        session_id=_session_id,
+        wiring_generation=_wiring_generation,
+        source_node=document.source_node,
+        source_ip=host_ip,
+        target_node=measurement.target_node,
+        target_ip=remote_ip,
     )
-    refs = _refs_for_ip(remote_ip)
-    if not refs:
-        log.debug("Dropping substrate measurement for inactive peer %s", remote_ip)
-        return
-    measurement_payload = asdict(measurement)
-    measurement_payload["refs"] = [asdict(ref) for ref in refs]
-    payload = {
-        "source_node": hostname,
-        "session_id": _session_id,
-        "wiring_generation": _wiring_generation,
-        "timestamp": measurement.timestamp,
-        "measurements": {remote_ip: measurement_payload},
-    }
-    try:
-        await _js.publish(substrate_latency_subject(_session_id), json.dumps(payload).encode())
-    except Exception as exc:
-        log.error("Failed to publish substrate latency for %s: %s", remote_ip, exc)
-        raise
-    if measurement.status == "ok":
-        log.info(
-            "Published substrate latency: %s -> %s = %.3fms",
-            hostname,
-            remote_ip,
-            measurement.median_rtt_ms,
-        )
-    else:
-        log.warning(
-            "Published substrate latency failure: %s -> %s: %s",
-            hostname,
-            remote_ip,
-            measurement.error_message,
-        )
 
 
-async def monitor_loop(nc, hostname: str, interval_s: float = 60.0) -> None:
+async def monitor_loop(hostname: str, interval_s: float = 60.0) -> None:
     """Background task: refresh manifest-required substrate measurements."""
 
     log.info(

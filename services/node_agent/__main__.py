@@ -427,12 +427,12 @@ async def main() -> None:
     sub = await nc.subscribe(agent_subject, cb=_handle_request)
     log.debug("NodeAgent NATS listening on subject %s", agent_subject)
 
-    # Start substrate latency monitor
+    # Start substrate status refresh monitor.
     from node_agent import substrate_monitor
 
     stop = asyncio.Event()
-    substrate_monitor.init(nc, hostname, loop)
-    monitor_task = asyncio.create_task(substrate_monitor.monitor_loop(nc, hostname))
+    substrate_monitor.init(hostname)
+    monitor_task = asyncio.create_task(substrate_monitor.monitor_loop(hostname))
 
     def _monitor_done(task: asyncio.Task) -> None:
         if task.cancelled():

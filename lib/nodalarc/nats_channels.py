@@ -110,11 +110,6 @@ def latency_update_subject(session_id: str) -> str:
     return f"nodalarc.links.{session_id}.latency"
 
 
-def substrate_latency_subject(session_id: str) -> str:
-    """Substrate latency subject for a specific session."""
-    return f"nodalarc.links.{session_id}.substrate"
-
-
 def session_ephemeris_subject(session_id: str) -> str:
     """Session ephemeris subject for a specific session."""
     return f"nodalarc.session.{session_id}.ephemeris"
@@ -176,7 +171,6 @@ SUBJECT_LINK_STATE_SNAPSHOT = link_state_snapshot_subject(_DEFAULT_SESSION_ID)
 SUBJECT_LINK_UP = link_up_subject(_DEFAULT_SESSION_ID)
 SUBJECT_LINK_DOWN = link_down_subject(_DEFAULT_SESSION_ID)
 SUBJECT_LATENCY_UPDATE = latency_update_subject(_DEFAULT_SESSION_ID)
-SUBJECT_SUBSTRATE_LATENCY = substrate_latency_subject(_DEFAULT_SESSION_ID)
 
 # Session-level state (JetStream — MaxMsgsPerSubject=1 on NODALARC_SESSION)
 SUBJECT_SESSION_EPHEMERIS = session_ephemeris_subject(_DEFAULT_SESSION_ID)

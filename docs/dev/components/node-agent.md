@@ -125,16 +125,20 @@ FRR detects carrier loss immediately (no hold timer), tears adjacency, forms new
 
 ## Substrate Monitoring
 
-The `substrate_monitor` measures physical latency between this node and each VXLAN peer:
-- First measurement on first VXLAN tunnel to each new peer
-- Refreshed every 60 seconds
-- Median of 10 ICMP samples on the K8s management network
-- Published to `nodalarc.links.{session_id}.substrate` on NATS
+The `substrate_monitor` measures physical latency for the manifest-required
+Kubernetes-node pairs owned by this Node Agent:
 
-Peer refs are exact: `session_id`, `wiring_generation`, `remote_ip`, `vni`,
-and local interface name. Removed refs stop measurement when the last ref for
-a peer is gone. Measurement events include sample count, success count,
-min/median/max RTT, status, and a `stale_after` deadline.
+- Required pairs come from `required_substrate_pairs` in the typed wiring
+  manifest.
+- `HOST_IP` must match the manifest source IP before measurement starts.
+- Median RTT is measured with ICMP samples on the K8s management network.
+- Results are written to `nodalarc-substrate-status-<source-node>` ConfigMaps.
+- The status document is scoped by `session_id` and `wiring_generation` and
+  includes sample counts, min/median/max RTT, status, and `stale_after`.
+- Failed measurements are written as evidence and then fail startup or refresh.
+
+Exact VXLAN peer refs remain as lifecycle diagnostics only. They do not trigger
+measurement, publish dispatch inputs, or act as substrate truth.
 
 ## Ops Evidence
 
@@ -165,4 +169,4 @@ The Node Agent is stateless across restarts. On startup, it diffs desired state 
 | `namespace_ops.py` | `setns()`-based namespace entry, `_HOST_NS_FD` |
 | `vxlan.py` | VXLAN tunnel creation/destruction |
 | `wiring.py` | Initial pod interface wiring from manifest |
-| `substrate_monitor.py` | Inter-node latency measurement |
+| `substrate_monitor.py` | Manifest-required inter-node substrate measurement |

@@ -306,6 +306,13 @@ async def main() -> None:
                     time.sleep(5)
                     continue
 
+                _substrate_monitor.configure_required_measurements(
+                    v1=v1,
+                    namespace=ns,
+                    hostname=hostname,
+                    manifest=manifest_model,
+                )
+
                 # Case B: wiring-status exists and covers all manifest nodes
                 if wiring_status_is_current(v1, ns, manifest_model):
                     log.info(
@@ -423,13 +430,27 @@ async def main() -> None:
     # Start substrate latency monitor
     from node_agent import substrate_monitor
 
+    stop = asyncio.Event()
     substrate_monitor.init(nc, hostname, loop)
     monitor_task = asyncio.create_task(substrate_monitor.monitor_loop(nc, hostname))
+
+    def _monitor_done(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.critical(
+                "Substrate monitor stopped unexpectedly: %s",
+                exc,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            stop.set()
+
+    monitor_task.add_done_callback(_monitor_done)
 
     # -----------------------------------------------------------------------
     # Serve until signal
     # -----------------------------------------------------------------------
-    stop = asyncio.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
 

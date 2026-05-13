@@ -24,6 +24,7 @@ from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringM
 from nodalarc.substrate.wiring_status import ready_status, status_configmap_data
 from nodalarc_operator.session_deployer import (
     _deterministic_node,
+    _required_substrate_pairs,
     check_wiring_complete,
     compute_expected_pod_count,
     compute_platform_hash,
@@ -114,6 +115,7 @@ def _make_wiring_manifest(node_ids=("sat-P00S00", "sat-P00S01")):
             "required_phases": list(REQUIRED_WIRING_PHASES),
             "nodes": nodes,
             "ground_bridges": {},
+            "required_substrate_pairs": [],
             "isl_link_count": 0,
         }
     )
@@ -544,7 +546,17 @@ class TestWiringManifest:
             "name": "current-session",
             "uid": "test-uid",
         }
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer._discover_session_pod_placement",
+                side_effect=lambda _v1, _ns, expected: {nid: "node01" for nid in expected},
+            ),
+            patch(
+                "nodalarc_operator.session_deployer._node_internal_ips",
+                side_effect=lambda _v1, required: {node: "10.0.0.1" for node in required},
+            ),
+        ):
             write_wiring_manifest(spec, "nodalarc", owner_ref)
         return _extract_manifest(mock_v1)
 
@@ -554,6 +566,8 @@ class TestWiringManifest:
         assert isinstance(manifest["session_id"], str)
         assert "isl_link_count" in manifest
         assert isinstance(manifest["isl_link_count"], int)
+        assert "required_substrate_pairs" in manifest
+        assert isinstance(manifest["required_substrate_pairs"], list)
         assert "nodes" in manifest
         assert "ground_bridges" in manifest
         for node_id, node in manifest["nodes"].items():
@@ -627,7 +641,17 @@ class TestWiringManifest:
             "name": "current-session",
             "uid": "test-uid",
         }
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer._discover_session_pod_placement",
+                side_effect=lambda _v1, _ns, expected: {nid: "node01" for nid in expected},
+            ),
+            patch(
+                "nodalarc_operator.session_deployer._node_internal_ips",
+                side_effect=lambda _v1, required: {node: "10.0.0.1" for node in required},
+            ),
+        ):
             write_wiring_manifest(spec, "nodalarc", owner_ref)
         manifest = _extract_manifest(mock_v1)
         assert isinstance(manifest, dict)
@@ -652,7 +676,17 @@ class TestWiringManifest:
             "name": "current-session",
             "uid": "test-uid",
         }
-        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer._discover_session_pod_placement",
+                side_effect=lambda _v1, _ns, expected: {nid: "node01" for nid in expected},
+            ),
+            patch(
+                "nodalarc_operator.session_deployer._node_internal_ips",
+                side_effect=lambda _v1, required: {node: "10.0.0.1" for node in required},
+            ),
+        ):
             write_wiring_manifest(spec, "nodalarc", owner_ref)
         manifest = _extract_manifest(mock_v1)
         assert len(manifest["nodes"]) == 1602
@@ -662,6 +696,66 @@ class TestWiringManifest:
         assert size_bytes < 1_048_576, (
             f"Compressed manifest is {size_bytes} bytes ({size_bytes / 1024:.0f} KB), exceeds 1 MiB K8s ConfigMap limit"
         )
+
+
+# ---------------------------------------------------------------------------
+# Class 6: TestRequiredSubstratePairs
+# ---------------------------------------------------------------------------
+
+
+class TestRequiredSubstratePairs:
+    """Tests Operator computation of pre-dispatch substrate node pairs."""
+
+    def test_single_node_requires_no_substrate_pairs(self):
+        nodes = {
+            "sat-a": {"node_type": "satellite"},
+            "sat-b": {"node_type": "satellite"},
+            "gs-den": {"node_type": "ground_station"},
+        }
+        pairs = _required_substrate_pairs(
+            nodes=nodes,
+            isl_pairs={("sat-a", "sat-b")},
+            pod_placement={"sat-a": "node01", "sat-b": "node01", "gs-den": "node01"},
+            node_ips={"node01": "10.0.0.1"},
+        )
+
+        assert pairs == []
+
+    def test_isl_pairs_emit_both_directions(self):
+        nodes = {
+            "sat-a": {"node_type": "satellite"},
+            "sat-b": {"node_type": "satellite"},
+        }
+        pairs = _required_substrate_pairs(
+            nodes=nodes,
+            isl_pairs={("sat-a", "sat-b")},
+            pod_placement={"sat-a": "node01", "sat-b": "node02"},
+            node_ips={"node01": "10.0.0.1", "node02": "10.0.0.2"},
+        )
+
+        assert {pair["directional_key"] for pair in pairs} == {
+            "node01->node02",
+            "node02->node01",
+        }
+        assert all(pair["reasons"] == ["isl"] for pair in pairs)
+
+    def test_ground_pairs_emit_both_directions_and_merge_reasons(self):
+        nodes = {
+            "sat-a": {"node_type": "satellite"},
+            "sat-b": {"node_type": "satellite"},
+            "gs-den": {"node_type": "ground_station"},
+        }
+        pairs = _required_substrate_pairs(
+            nodes=nodes,
+            isl_pairs={("sat-a", "sat-b")},
+            pod_placement={"sat-a": "node01", "sat-b": "node02", "gs-den": "node02"},
+            node_ips={"node01": "10.0.0.1", "node02": "10.0.0.2"},
+        )
+
+        by_key = {pair["directional_key"]: pair for pair in pairs}
+        assert set(by_key) == {"node01->node02", "node02->node01"}
+        assert by_key["node01->node02"]["reasons"] == ["ground", "isl"]
+        assert by_key["node02->node01"]["reasons"] == ["ground", "isl"]
 
 
 # ---------------------------------------------------------------------------

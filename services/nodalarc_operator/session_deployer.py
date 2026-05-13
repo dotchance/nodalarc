@@ -146,10 +146,125 @@ def compute_pod_placement(
     raise ValueError(f"Unknown placement policy: {placement.policy}")
 
 
-# NOTE: Substrate latency measurement moved to Node Agent substrate_monitor.
-# Each Node Agent measures latency to its active VXLAN peers (peer-only,
-# continuous) and publishes to NATS. The Scheduler consumes live measurements.
-# See services/node_agent/substrate_monitor.py.
+def _node_internal_ips(
+    v1: kubernetes.client.CoreV1Api,
+    required_nodes: set[str],
+) -> dict[str, str]:
+    """Return InternalIP for every required Kubernetes node."""
+    ips: dict[str, str] = {}
+    for node in v1.list_node().items:
+        name = node.metadata.name
+        if name not in required_nodes:
+            continue
+        for addr in node.status.addresses or []:
+            if addr.type == "InternalIP":
+                ips[name] = addr.address
+                break
+    missing = sorted(required_nodes - set(ips))
+    if missing:
+        raise ValueError("missing InternalIP for Kubernetes nodes: " + ", ".join(missing))
+    return ips
+
+
+def _discover_session_pod_placement(
+    v1: kubernetes.client.CoreV1Api,
+    namespace: str,
+    expected_node_ids: set[str],
+) -> dict[str, str]:
+    """Read actual session pod placement from Running pod specs."""
+    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+    placement: dict[str, str] = {}
+    duplicates: list[str] = []
+    for pod in pods.items:
+        labels = pod.metadata.labels or {}
+        node_id = labels.get("nodalarc.io/node-id", "")
+        if node_id not in expected_node_ids:
+            continue
+        k8s_node = pod.spec.node_name or ""
+        if not k8s_node:
+            raise ValueError(f"session pod {pod.metadata.name} has no Kubernetes node assignment")
+        if node_id in placement and placement[node_id] != k8s_node:
+            duplicates.append(node_id)
+        placement[node_id] = k8s_node
+    if duplicates:
+        raise ValueError("duplicate session pod placement for: " + ", ".join(sorted(duplicates)))
+    missing = sorted(expected_node_ids - set(placement))
+    if missing:
+        raise ValueError(
+            "missing session pod placement for manifest nodes: " + ", ".join(missing[:20])
+        )
+    return placement
+
+
+def _required_substrate_pairs(
+    *,
+    nodes: dict[str, dict[str, Any]],
+    isl_pairs: set[tuple[str, str]],
+    pod_placement: dict[str, str],
+    node_ips: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Collapse possible cross-node links into required directional node pairs."""
+    from nodalarc.substrate.measurement_contract import RequiredSubstratePair
+
+    reasons_by_direction: dict[tuple[str, str], set[str]] = {}
+
+    def _add_reason(node_a: str, node_b: str, reason: str) -> None:
+        k8s_a = pod_placement[node_a]
+        k8s_b = pod_placement[node_b]
+        if k8s_a == k8s_b:
+            return
+        reasons_by_direction.setdefault((k8s_a, k8s_b), set()).add(reason)
+        reasons_by_direction.setdefault((k8s_b, k8s_a), set()).add(reason)
+
+    for node_a, node_b in isl_pairs:
+        _add_reason(node_a, node_b, "isl")
+
+    satellite_ids = sorted(
+        node_id for node_id, spec in nodes.items() if spec["node_type"] == "satellite"
+    )
+    ground_ids = sorted(
+        node_id for node_id, spec in nodes.items() if spec["node_type"] == "ground_station"
+    )
+    for gs_id in ground_ids:
+        for sat_id in satellite_ids:
+            _add_reason(gs_id, sat_id, "ground")
+
+    pairs = [
+        RequiredSubstratePair.build(
+            source_node=source,
+            source_ip=node_ips[source],
+            target_node=target,
+            target_ip=node_ips[target],
+            reasons=sorted(reasons),
+        ).model_dump(mode="json")
+        for (source, target), reasons in reasons_by_direction.items()
+    ]
+    return sorted(pairs, key=lambda pair: pair["directional_key"])
+
+
+def _delete_stale_substrate_status_configmaps(
+    v1: kubernetes.client.CoreV1Api,
+    namespace: str,
+) -> None:
+    """Remove old substrate status documents before publishing a new manifest."""
+    from nodalarc.substrate.measurement_contract import (
+        STATUS_CONFIGMAP_LABEL_KEY,
+        STATUS_CONFIGMAP_LABEL_VALUE,
+    )
+
+    try:
+        cms = v1.list_namespaced_config_map(
+            namespace,
+            label_selector=f"{STATUS_CONFIGMAP_LABEL_KEY}={STATUS_CONFIGMAP_LABEL_VALUE}",
+        )
+        for cm in getattr(cms, "items", []) or []:
+            name = cm.metadata.name
+            if name:
+                v1.delete_namespaced_config_map(name, namespace)
+                log.debug("Deleted stale substrate status ConfigMap %s", name)
+    except kubernetes.client.rest.ApiException as exc:
+        if exc.status != 404:
+            raise
 
 
 # All known FRR daemons — used to generate the daemons file
@@ -777,6 +892,17 @@ def write_wiring_manifest(
         for na in assignments:
             isl_pairs.add((min(node_id, na.peer_node_id), max(node_id, na.peer_node_id)))
 
+    pod_placement = _discover_session_pod_placement(v1, namespace, set(nodes))
+    k8s_nodes = set(pod_placement.values())
+    node_ips = _node_internal_ips(v1, k8s_nodes)
+    required_substrate_pairs = _required_substrate_pairs(
+        nodes=nodes,
+        isl_pairs=isl_pairs,
+        pod_placement=pod_placement,
+        node_ips=node_ips,
+    )
+    _delete_stale_substrate_status_configmaps(v1, namespace)
+
     try:
         manifest_session_id = sanitize_session_id(session.session.name)
     except Exception as exc:
@@ -791,6 +917,7 @@ def write_wiring_manifest(
         "required_phases": list(REQUIRED_WIRING_PHASES),
         "nodes": nodes,
         "ground_bridges": ground_bridges,
+        "required_substrate_pairs": required_substrate_pairs,
         "isl_link_count": len(isl_pairs),
     }
     manifest["wiring_generation"] = derive_wiring_generation(manifest)
@@ -815,9 +942,11 @@ def write_wiring_manifest(
         owner_ref,
     )
     log.info(
-        "Wrote topology wiring manifest: %d nodes, %d ISL links (%d bytes raw, %d bytes compressed)",
+        "Wrote topology wiring manifest: %d nodes, %d ISL links, %d substrate pairs "
+        "(%d bytes raw, %d bytes compressed)",
         len(nodes),
         len(isl_pairs),
+        len(required_substrate_pairs),
         len(raw_json),
         len(compressed),
     )

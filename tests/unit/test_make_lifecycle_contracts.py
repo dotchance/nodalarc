@@ -82,6 +82,14 @@ def test_lifecycle_targets_print_next_steps() -> None:
         assert expected in makefile
 
 
+def test_build_images_builds_every_image_load_requires_for_current_tag() -> None:
+    body = _target_body("build-images")
+    assert "build-base-images" in body
+    assert "build-frr" in _target_body("build-base-images")
+    assert "build-probe" in _target_body("build-base-images")
+    assert "build-fwd" in _target_body("build-base-images")
+
+
 def test_helm_templates_do_not_have_duplicate_env_blocks_or_nats_box_latest() -> None:
     for rel in (
         "deploy/helm/templates/operator-deployment.yaml",

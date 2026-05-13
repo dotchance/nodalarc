@@ -17,6 +17,7 @@ import logging
 import os
 import time as _time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,10 @@ from nodalarc.substrate.wiring_status import parse_status_configmap
 from scheduler.agent_pool import AgentPool
 from scheduler.dispatcher import Dispatcher
 from scheduler.pod_locator import PodLocationMap
+from scheduler.substrate_latency import (
+    load_substrate_status_documents,
+    validate_required_substrate_measurements,
+)
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +129,51 @@ def wait_for_wiring_gate(
     )
     raise RuntimeError(
         f"Wiring gate timeout: {len(wired)}/{expected_count} nodes wired; missing={missing[:20]}"
+    )
+
+
+def wait_for_substrate_gate(
+    *,
+    k8s_v1: Any,
+    namespace: str,
+    manifest: WiringManifest,
+    timeout_s: float = 120.0,
+    poll_s: float = 2.0,
+    monotonic: Callable[[], float] = _time.monotonic,
+    sleep: Callable[[float], None] = _time.sleep,
+):
+    """Block Scheduler startup until all required substrate RTTs are proven."""
+    if not manifest.required_substrate_pairs:
+        log.info("Substrate gate passed: no cross-node substrate pairs required")
+        return {}
+
+    deadline = monotonic() + timeout_s
+    last_error = ""
+    while monotonic() < deadline:
+        try:
+            documents = load_substrate_status_documents(k8s_v1=k8s_v1, namespace=namespace)
+            measurements = validate_required_substrate_measurements(
+                required_pairs=manifest.required_substrate_pairs,
+                documents_by_source=documents,
+                session_id=manifest.session_id,
+                wiring_generation=manifest.wiring_generation,
+                now=datetime.now(UTC),
+            )
+            log.info(
+                "Substrate gate passed: %d/%d directional measurements ready",
+                len(measurements),
+                len(manifest.required_substrate_pairs),
+            )
+            return measurements
+        except Exception as exc:
+            last_error = str(exc)
+            log.debug("Substrate gate waiting: %s", last_error)
+        sleep(poll_s)
+
+    raise RuntimeError(
+        "Substrate gate timeout: "
+        f"{len(manifest.required_substrate_pairs)} directional measurements required; "
+        f"last_error={last_error}"
     )
 
 
@@ -235,6 +285,11 @@ def main() -> None:
         session_id=session_id,
         wiring_generation=wiring_manifest.wiring_generation,
     )
+    substrate_measurements = wait_for_substrate_gate(
+        k8s_v1=k8s_v1,
+        namespace=ns,
+        manifest=wiring_manifest,
+    )
 
     # Agent pool
     pool = AgentPool()
@@ -286,6 +341,8 @@ def main() -> None:
         rtt_to_one_way_policy=session.dispatch.substrate_compensation.rtt_to_one_way,
         session_id=session_id,
         wiring_generation=wiring_manifest.wiring_generation,
+        required_substrate_pairs=wiring_manifest.required_substrate_pairs,
+        substrate_measurements=substrate_measurements,
     )
 
     try:

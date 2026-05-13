@@ -8,7 +8,11 @@ No K8s, no NATS, no file system access, no imports from services/.
 
 from __future__ import annotations
 
-from nodalarc.ground_terminals import station_ground_terminal_capacity
+from nodalarc.ground_terminals import (
+    ground_terminal_type,
+    station_ground_terminal_capacity,
+    station_ground_terminal_type,
+)
 from nodalarc.models.constellation import (
     ConstellationConfig,
     ParametricConstellation,
@@ -60,6 +64,7 @@ def validate_session_readiness(
     results.extend(_check_e008(session, constellation, satellites))
     results.extend(_check_e009(session, ground_stations))
     results.extend(_check_e010(session, ground_stations))
+    results.extend(_check_e011(satellites, ground_stations))
 
     results.extend(_check_w001(ground_stations))
     results.extend(_check_w002(ground_stations))
@@ -426,6 +431,93 @@ def _check_e010(
         )
 
     return results
+
+
+def _check_e011(
+    satellites: list,
+    ground_stations: GroundStationFile,
+) -> list[ValidationResult]:
+    """E011: Satellite and ground-station ground terminal types must match."""
+    if not ground_stations.stations:
+        return []
+
+    sat_types: dict[str, object] = {}
+    for sat in satellites:
+        if not getattr(sat, "ground_terminals", None):
+            continue
+        try:
+            sat_type = ground_terminal_type(sat.ground_terminals)
+        except ValueError as exc:
+            return [
+                ValidationResult(
+                    level="error",
+                    code="E011",
+                    message=(
+                        f"Satellite P{sat.plane:02d}S{sat.slot:02d} has invalid ground "
+                        f"terminal definitions: {exc}"
+                    ),
+                    remediation=(
+                        "Use a single ground terminal type per satellite until "
+                        "terminal-block-aware allocation is implemented."
+                    ),
+                    field_path="constellation",
+                )
+            ]
+        sat_types.setdefault(sat_type, sat)
+
+    if not sat_types:
+        return []
+
+    station_types: dict[str, object] = {}
+    for station in ground_stations.stations:
+        try:
+            gs_type = station_ground_terminal_type(ground_stations, station)
+        except ValueError as exc:
+            return [
+                ValidationResult(
+                    level="error",
+                    code="E011",
+                    message=(
+                        f"Ground station '{station.name}' has invalid terminal definitions: {exc}"
+                    ),
+                    remediation=(
+                        "Use a single ground terminal type per station until "
+                        "terminal-block-aware allocation is implemented."
+                    ),
+                    field_path="ground_stations",
+                )
+            ]
+        station_types.setdefault(gs_type, station)
+
+    if set(station_types) == set(sat_types):
+        return []
+
+    mismatch = next(
+        (
+            (gs_type, station, sat_type, sat)
+            for gs_type, station in station_types.items()
+            for sat_type, sat in sat_types.items()
+            if gs_type != sat_type
+        )
+    )
+    gs_type, station, sat_type, sat = mismatch
+    return [
+        ValidationResult(
+            level="error",
+            code="E011",
+            message=(
+                f"Ground terminal type mismatch for gs-{station.name}<->"
+                f"sat-P{sat.plane:02d}S{sat.slot:02d}: ground station uses "
+                f"{gs_type!r}, satellite uses {sat_type!r}. Mixed terminal types "
+                "require an explicit compatibility model."
+            ),
+            remediation=(
+                "Select a ground station set whose terminal type matches the "
+                "satellite ground terminals, or update the YAML hardware model."
+            ),
+            field_path="ground_stations",
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------

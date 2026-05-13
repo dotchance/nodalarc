@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from nodalarc.db.queries import (
@@ -28,6 +29,31 @@ from vs_api.session_context import SessionContext, _link_key
 ISS_TLE_EPOCH = 1615896900.000275
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
+
+
+def _session_yaml_text(name: str = "demo-36-ospf.yaml") -> str:
+    return Path("configs/sessions", name).read_text(encoding="utf-8")
+
+
+def _constellation_cr(
+    *,
+    phase: str = "Ready",
+    generation: int = 2,
+    observed_generation: int = 2,
+    ready_pods: int = 43,
+    pod_count: int = 43,
+    session_yaml: str | None = None,
+) -> dict:
+    return {
+        "metadata": {"generation": generation},
+        "spec": {"sessionYaml": session_yaml if session_yaml is not None else _session_yaml_text()},
+        "status": {
+            "phase": phase,
+            "observedGeneration": observed_generation,
+            "readyPods": ready_pods,
+            "podCount": pod_count,
+        },
+    }
 
 
 def _make_provenance(**overrides):
@@ -90,6 +116,47 @@ class TestLinkKey:
 
     def test_reversed_produces_same_key(self):
         assert _link_key("b", "a") == "a:b"
+
+
+class TestConstellationCRReadiness:
+    """VS-API only trusts ready, generation-consistent session CR state."""
+
+    def test_extract_ready_cr_session_accepts_current_ready_generation(self):
+        import vs_api.main as m
+
+        ready = m._extract_ready_cr_session(_constellation_cr())
+
+        assert ready is not None
+        assert ready.session_id == "demo-36-ospf"
+        assert ready.generation == 2
+        assert ready.session.session.name == "demo-36-ospf"
+
+    def test_extract_ready_cr_session_rejects_observed_generation_mismatch(self):
+        import vs_api.main as m
+
+        ready = m._extract_ready_cr_session(_constellation_cr(generation=3, observed_generation=2))
+
+        assert ready is None
+
+    def test_extract_ready_cr_session_rejects_non_ready_phase(self):
+        import vs_api.main as m
+
+        ready = m._extract_ready_cr_session(_constellation_cr(phase="Wiring"))
+
+        assert ready is None
+
+    def test_extract_ready_cr_session_rejects_incomplete_pod_status(self):
+        import vs_api.main as m
+
+        ready = m._extract_ready_cr_session(_constellation_cr(ready_pods=42, pod_count=43))
+
+        assert ready is None
+
+    def test_extract_ready_cr_session_fails_loudly_without_session_yaml(self):
+        import vs_api.main as m
+
+        with pytest.raises(ValueError, match="sessionYaml"):
+            m._extract_ready_cr_session(_constellation_cr(session_yaml=""))
 
 
 class TestStateSnapshot:

@@ -10,7 +10,7 @@ ground_station:
     - type: rf
       count: 32
       bandwidth_mbps: 10000
-      tracking_capacity: 32
+      tracking_capacity: 1
   antennas: 32
   antenna_diameter_m: 1.85
   band: Ka+E

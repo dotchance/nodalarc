@@ -33,6 +33,167 @@ LatencyCompensationFn = Callable[[str, str, float], LatencyCompensation]
 AuthorityFreshnessValidator = Callable[..., None]
 LinkProvenanceBuilder = Callable[..., object]
 
+# NATS request/reply is the transport envelope, not the proof store. Keep each
+# proof-bearing Node Agent command well below the default NATS max_payload while
+# preserving exact per-interface ACK validation.
+MAX_NODE_AGENT_INTERFACES_PER_COMMAND = 64
+
+
+def _chunks(items: list, size: int = MAX_NODE_AGENT_INTERFACES_PER_COMMAND):
+    for start in range(0, len(items), size):
+        yield start // size, items[start : start + size]
+
+
+def _chunked_operation_id(base: str, chunk_index: int, chunk_count: int) -> str:
+    if chunk_count == 1:
+        return base
+    return f"{base}-part{chunk_index + 1:03d}of{chunk_count:03d}"
+
+
+async def _send_batch_down_to_agent(
+    *,
+    addr: str,
+    interfaces: list[node_agent_pb2.InterfaceDown],
+    pool: Any,
+    sim_iso: str,
+    session_id: str,
+    wiring_generation: str,
+) -> set[tuple[str, str, str]]:
+    successful_ifaces: set[tuple[str, str, str]] = set()
+    chunks = list(_chunks(interfaces))
+    stub = pool.get_stub(addr)
+    for chunk_index, chunk in chunks:
+        req = node_agent_pb2.BatchLinkDownRequest(
+            envelope=node_agent_pb2.CommandEnvelope(
+                operation_id=_chunked_operation_id(
+                    f"{sim_iso}-down-{addr}", chunk_index, len(chunks)
+                ),
+                session_id=session_id,
+                wiring_generation=wiring_generation,
+                operation_kind="BatchLinkDown",
+            ),
+            target_sim_time=sim_iso,
+            interfaces=chunk,
+        )
+        result = await stub.async_batch_link_down(req)
+        successful_ifaces.update(
+            successful_interface_acks(
+                result=result,
+                requested_interfaces=chunk,
+                agent_addr=addr,
+                operation="BatchLinkDown",
+            )
+        )
+        if not result.success:
+            log.error(
+                "BatchLinkDown partial failure on agent %s: %s",
+                addr,
+                result.error_message[:200],
+            )
+        else:
+            log.debug(
+                "BatchLinkDown: %d downed in %.1fms",
+                result.interfaces_downed,
+                result.apply_time_ms,
+            )
+    return successful_ifaces
+
+
+async def _send_batch_up_to_agent(
+    *,
+    addr: str,
+    interfaces: list[node_agent_pb2.InterfaceUp],
+    pool: Any,
+    sim_iso: str,
+    session_id: str,
+    wiring_generation: str,
+) -> set[tuple[str, str, str]]:
+    successful_ifaces: set[tuple[str, str, str]] = set()
+    chunks = list(_chunks(interfaces))
+    stub = pool.get_stub(addr)
+    for chunk_index, chunk in chunks:
+        req = node_agent_pb2.BatchLinkUpRequest(
+            envelope=node_agent_pb2.CommandEnvelope(
+                operation_id=_chunked_operation_id(
+                    f"{sim_iso}-up-{addr}", chunk_index, len(chunks)
+                ),
+                session_id=session_id,
+                wiring_generation=wiring_generation,
+                operation_kind="BatchLinkUp",
+            ),
+            target_sim_time=sim_iso,
+            interfaces=chunk,
+        )
+        result = await stub.async_batch_link_up(req)
+        successful_ifaces.update(
+            successful_interface_acks(
+                result=result,
+                requested_interfaces=chunk,
+                agent_addr=addr,
+                operation="BatchLinkUp",
+            )
+        )
+        if not result.success:
+            log.error(
+                "BatchLinkUp partial failure on agent %s: %d upped: %s",
+                addr,
+                result.interfaces_upped,
+                result.error_message[:200],
+            )
+        else:
+            log.debug(
+                "BatchLinkUp: %d upped in %.1fms",
+                result.interfaces_upped,
+                result.apply_time_ms,
+            )
+    return successful_ifaces
+
+
+async def _send_latency_to_agent(
+    *,
+    agent_addr: str,
+    entries: list[node_agent_pb2.LatencyEntry],
+    pool: Any,
+    sim_time: datetime,
+    session_id: str,
+    wiring_generation: str,
+) -> None:
+    chunks = list(_chunks(entries))
+    stub = pool.get_stub(agent_addr)
+    for chunk_index, chunk in chunks:
+        req = node_agent_pb2.SetLatencyRequest(
+            envelope=node_agent_pb2.CommandEnvelope(
+                operation_id=_chunked_operation_id(
+                    f"{sim_time.isoformat()}-latency-{agent_addr}",
+                    chunk_index,
+                    len(chunks),
+                ),
+                session_id=session_id,
+                wiring_generation=wiring_generation,
+                operation_kind="SetLatency",
+            ),
+            entries=chunk,
+        )
+        result = await stub.async_set_latency(req)
+        if not result.success:
+            raise RuntimeError(
+                f"SetLatency rejected by agent {agent_addr}: {result.error_message[:200]}"
+            )
+        requested = {(entry.node_id, entry.interface_name) for entry in chunk}
+        returned = {(entry.node_id, entry.interface_name) for entry in result.entry_results}
+        if requested != returned:
+            raise RuntimeError(
+                f"SetLatency response from {agent_addr} did not identify every entry: "
+                f"requested={sorted(requested)} returned={sorted(returned)}"
+            )
+        if not all(
+            entry.success and entry.verified and not entry.dirty_kernel
+            for entry in result.entry_results
+        ):
+            raise RuntimeError(
+                f"SetLatency proof failed for agent {agent_addr}: {result.error_message[:200]}"
+            )
+
 
 async def send_batch_down(
     *,
@@ -66,47 +227,21 @@ async def send_batch_down(
     successful_ifaces: set[tuple[str, str, str]] = set()
     agent_addrs = list(plan.agent_ifaces.keys())
     if agent_addrs:
-        tasks = []
-        for addr in agent_addrs:
-            stub = pool.get_stub(addr)
-            req = node_agent_pb2.BatchLinkDownRequest(
-                envelope=node_agent_pb2.CommandEnvelope(
-                    operation_id=f"{sim_iso}-down-{addr}",
+        results = await asyncio.gather(
+            *[
+                _send_batch_down_to_agent(
+                    addr=addr,
+                    interfaces=plan.agent_ifaces[addr],
+                    pool=pool,
+                    sim_iso=sim_iso,
                     session_id=session_id,
                     wiring_generation=wiring_generation,
-                    operation_kind="BatchLinkDown",
-                ),
-                target_sim_time=sim_iso,
-                interfaces=plan.agent_ifaces[addr],
-            )
-            tasks.append(stub.async_batch_link_down(req))
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            addr = agent_addrs[i]
-            if isinstance(result, Exception):
-                log.error("BatchLinkDown failed for agent %s: %s", addr, result)
-            else:
-                successful_ifaces.update(
-                    successful_interface_acks(
-                        result=result,
-                        requested_interfaces=plan.agent_ifaces[addr],
-                        agent_addr=addr,
-                        operation="BatchLinkDown",
-                    )
                 )
-                if not result.success:
-                    log.error(
-                        "BatchLinkDown partial failure on agent %s: %s",
-                        addr,
-                        result.error_message[:200],
-                    )
-                else:
-                    log.debug(
-                        "BatchLinkDown: %d downed in %.1fms",
-                        result.interfaces_downed,
-                        result.apply_time_ms,
-                    )
+                for addr in agent_addrs
+            ]
+        )
+        for result in results:
+            successful_ifaces.update(result)
 
     removed: set[LinkPair] = set()
     now = datetime.now(UTC)
@@ -171,48 +306,21 @@ async def send_batch_up(
     successful_ifaces: set[tuple[str, str, str]] = set()
     agent_addrs = list(plan.agent_ifaces.keys())
     if agent_addrs:
-        tasks = []
-        for addr in agent_addrs:
-            stub = pool.get_stub(addr)
-            req = node_agent_pb2.BatchLinkUpRequest(
-                envelope=node_agent_pb2.CommandEnvelope(
-                    operation_id=f"{sim_iso}-up-{addr}",
+        results = await asyncio.gather(
+            *[
+                _send_batch_up_to_agent(
+                    addr=addr,
+                    interfaces=plan.agent_ifaces[addr],
+                    pool=pool,
+                    sim_iso=sim_iso,
                     session_id=session_id,
                     wiring_generation=wiring_generation,
-                    operation_kind="BatchLinkUp",
-                ),
-                target_sim_time=sim_iso,
-                interfaces=plan.agent_ifaces[addr],
-            )
-            tasks.append(stub.async_batch_link_up(req))
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            addr = agent_addrs[i]
-            if isinstance(result, Exception):
-                log.error("BatchLinkUp failed for agent %s: %s", addr, result)
-            else:
-                successful_ifaces.update(
-                    successful_interface_acks(
-                        result=result,
-                        requested_interfaces=plan.agent_ifaces[addr],
-                        agent_addr=addr,
-                        operation="BatchLinkUp",
-                    )
                 )
-                if not result.success:
-                    log.error(
-                        "BatchLinkUp partial failure on agent %s: %d upped: %s",
-                        addr,
-                        result.interfaces_upped,
-                        result.error_message[:200],
-                    )
-                else:
-                    log.debug(
-                        "BatchLinkUp: %d upped in %.1fms",
-                        result.interfaces_upped,
-                        result.apply_time_ms,
-                    )
+                for addr in agent_addrs
+            ]
+        )
+        for result in results:
+            successful_ifaces.update(result)
 
     added: set[LinkPair] = set()
     now = datetime.now(UTC)
@@ -326,43 +434,19 @@ async def send_authoritative_latency_updates(
     tasks = []
     agent_addrs = list(agent_entries.keys())
     for agent_addr in agent_addrs:
-        stub = pool.get_stub(agent_addr)
-        req = node_agent_pb2.SetLatencyRequest(
-            envelope=node_agent_pb2.CommandEnvelope(
-                operation_id=f"{sim_time.isoformat()}-latency-{agent_addr}",
+        tasks.append(
+            _send_latency_to_agent(
+                agent_addr=agent_addr,
+                entries=agent_entries[agent_addr],
+                pool=pool,
+                sim_time=sim_time,
                 session_id=session_id,
                 wiring_generation=wiring_generation,
-                operation_kind="SetLatency",
-            ),
-            entries=agent_entries[agent_addr],
+            )
         )
-        tasks.append(stub.async_set_latency(req))
 
     if tasks:
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                raise RuntimeError(f"SetLatency failed for agent {agent_addrs[i]}: {result}")
-            if not result.success:
-                raise RuntimeError(
-                    f"SetLatency rejected by agent {agent_addrs[i]}: {result.error_message[:200]}"
-                )
-            requested = {
-                (entry.node_id, entry.interface_name) for entry in agent_entries[agent_addrs[i]]
-            }
-            returned = {(entry.node_id, entry.interface_name) for entry in result.entry_results}
-            if requested != returned:
-                raise RuntimeError(
-                    f"SetLatency response from {agent_addrs[i]} did not identify every entry: "
-                    f"requested={sorted(requested)} returned={sorted(returned)}"
-                )
-            if not all(
-                entry.success and entry.verified and not entry.dirty_kernel
-                for entry in result.entry_results
-            ):
-                raise RuntimeError(
-                    f"SetLatency proof failed for agent {agent_addrs[i]}: {result.error_message[:200]}"
-                )
+        await asyncio.gather(*tasks)
 
     for pair in sorted_pairs:
         info = desired[pair]

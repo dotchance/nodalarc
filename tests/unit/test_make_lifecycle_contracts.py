@@ -104,6 +104,20 @@ def test_helm_templates_do_not_have_duplicate_env_blocks_or_nats_box_latest() ->
     assert "natsio/nats-box:latest" not in rendered_templates
 
 
+def test_orchestrator_rbac_can_list_substrate_status_configmaps() -> None:
+    template = (ROOT / "deploy/helm/templates/management-network.yaml").read_text()
+    match = re.search(
+        r'resources:\s+\["configmaps"\]\s+'
+        r"# Scheduler gates startup on substrate status ConfigMaps selected by label\.\s+"
+        r"verbs:\s+\[([^\]]+)\]",
+        template,
+    )
+    assert match, "orchestrator ConfigMap RBAC rule not found"
+
+    verbs = {verb.strip().strip('"') for verb in match.group(1).split(",")}
+    assert {"get", "list", "create", "update", "patch"}.issubset(verbs)
+
+
 def test_nats_networkpolicy_allows_host_network_node_cidrs() -> None:
     template = (ROOT / "deploy/helm/templates/nats-networkpolicy.yaml").read_text()
     values = (ROOT / "deploy/helm/values.yaml").read_text()

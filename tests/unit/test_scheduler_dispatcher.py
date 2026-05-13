@@ -22,20 +22,22 @@ from nodalarc.models.link_state import (
     RoutingState,
 )
 from nodalarc.proto import node_agent_pb2
+from nodalarc.substrate.measurement_contract import SubstrateMeasurement
 from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 from scheduler.pod_locator import PodLocationMap
-from scheduler.substrate_latency import LiveSubstrateMeasurement
 
 WIRING_GENERATION = "sha256:" + "a" * 64
 
 
-def _substrate_measurement(remote_ip: str, rtt_ms: float) -> LiveSubstrateMeasurement:
+def _substrate_measurement(rtt_ms: float) -> SubstrateMeasurement:
     now = datetime.now(UTC)
-    return LiveSubstrateMeasurement(
-        remote_ip=remote_ip,
+    return SubstrateMeasurement(
         session_id="test-session",
         wiring_generation=WIRING_GENERATION,
         source_node="node-a",
+        source_ip="10.0.0.1",
+        target_node="node-b",
+        target_ip="10.0.0.2",
         measured_at=now,
         stale_after=now + timedelta(seconds=60),
         status="ok",
@@ -525,6 +527,7 @@ class TestDispatcherLiveDispatch:
         d._loc._node_of["sat-P00S01"] = "node-b"
         d._loc._agent_addrs["node-a"] = "agent-a"
         d._loc._agent_addrs["node-b"] = "agent-b"
+        d._loc._node_ips["node-a"] = "10.0.0.1"
         d._loc._node_ips["node-b"] = "10.0.0.2"
 
         with pytest.raises(ValueError, match="No substrate RTT measurement"):
@@ -536,8 +539,9 @@ class TestDispatcherLiveDispatch:
         d._loc._node_of["sat-P00S01"] = "node-b"
         d._loc._agent_addrs["node-a"] = "agent-a"
         d._loc._agent_addrs["node-b"] = "agent-b"
+        d._loc._node_ips["node-a"] = "10.0.0.1"
         d._loc._node_ips["node-b"] = "10.0.0.2"
-        d._substrate_by_ip["10.0.0.2"] = _substrate_measurement("10.0.0.2", 4.0)
+        d._substrate_by_direction["node-a->node-b"] = _substrate_measurement(4.0)
 
         assert d._netem_delay_ms("sat-P00S00", "sat-P00S01", 10.0) == 8.0
 
@@ -547,8 +551,9 @@ class TestDispatcherLiveDispatch:
         d._loc._node_of["sat-P00S01"] = "node-b"
         d._loc._agent_addrs["node-a"] = "agent-a"
         d._loc._agent_addrs["node-b"] = "agent-b"
+        d._loc._node_ips["node-a"] = "10.0.0.1"
         d._loc._node_ips["node-b"] = "10.0.0.2"
-        d._substrate_by_ip["10.0.0.2"] = _substrate_measurement("10.0.0.2", 4.0)
+        d._substrate_by_direction["node-a->node-b"] = _substrate_measurement(4.0)
 
         with pytest.raises(ValueError, match="Unrepresentable latency"):
             d._netem_delay_ms("sat-P00S00", "sat-P00S01", 1.0)
@@ -567,7 +572,6 @@ class TestDispatcherLiveDispatch:
         d._loc._node_of["sat-P00S01"] = "node-b"
         d._loc._agent_addrs["node-a"] = "agent-a"
         d._loc._agent_addrs["node-b"] = "agent-b"
-        d._substrate_latency["node-a-node-b"] = 1.0
         desired = {
             pair: ActiveLinkInfo(
                 "isl0",
@@ -581,7 +585,7 @@ class TestDispatcherLiveDispatch:
             )
         }
 
-        with pytest.raises(RuntimeError, match="missing IP"):
+        with pytest.raises(ValueError, match="Missing Kubernetes node IP"):
             asyncio.run(
                 d._send_batch_up({pair}, desired, "sim", datetime(2026, 1, 1, tzinfo=UTC), d._nc)
             )

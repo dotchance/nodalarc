@@ -68,8 +68,8 @@ from nodalarc.nats_channels import (
     scenario_inject_subject,
     scheduling_checkpoint_subject,
     session_ephemeris_subject,
-    substrate_latency_subject,
 )
+from nodalarc.substrate.measurement_contract import RequiredSubstratePair, SubstrateMeasurement
 from pydantic import ValidationError
 
 from scheduler.agent_pool import AgentPool
@@ -94,9 +94,9 @@ from scheduler.latency_compensator import LatencyCompensation, compensate_latenc
 from scheduler.node_agent_batches import successful_interface_acks
 from scheduler.pod_locator import PodLocationMap
 from scheduler.substrate_latency import (
-    LiveSubstrateMeasurement,
-    parse_substrate_measurement_event,
+    load_substrate_status_documents,
     resolve_substrate_rtt_ms,
+    validate_required_substrate_measurements,
 )
 
 log = logging.getLogger(__name__)
@@ -162,6 +162,8 @@ class Dispatcher:
         session_id: str,
         wiring_generation: str,
         max_latency_age_s: float,
+        required_substrate_pairs: list[RequiredSubstratePair] | None = None,
+        substrate_measurements: dict[str, SubstrateMeasurement] | None = None,
         compression_factor: int = 1,
         epsilon_ms: float = 100.0,
         gs_terminal_capacities: dict[str, int] | None = None,
@@ -206,7 +208,6 @@ class Dispatcher:
         self._subj_link_up = link_up_subject(session_id)
         self._subj_link_down = link_down_subject(session_id)
         self._subj_latency = latency_update_subject(session_id)
-        self._subj_substrate = substrate_latency_subject(session_id)
 
         # Decision engine state: what SHOULD be active (based on OME events).
         # Written ONLY by callbacks. Snapshots replace entirely. Events modify
@@ -227,8 +228,11 @@ class Dispatcher:
         self._running = False
         self._last_snapshot_seq: int = 0
         self._last_snapshot_sim_time: datetime | None = None
-        self._substrate_latency: dict[str, float] = {}  # "nodeA-nodeB" -> ms (legacy ConfigMap)
-        self._substrate_by_ip: dict[str, LiveSubstrateMeasurement] = {}
+        self._required_substrate_pairs = list(required_substrate_pairs or [])
+        self._substrate_by_direction: dict[str, SubstrateMeasurement] = dict(
+            substrate_measurements or {}
+        )
+        self._last_substrate_reload: datetime | None = None
         self._dispatch_blocked_reason: str | None = None
 
         # Control plane state: scenario overrides. Values are reason strings.
@@ -464,8 +468,8 @@ class Dispatcher:
                 "SchedulingCheckpoint recovery failed; refusing to start from unknown state"
             ) from exc
 
-        # Load substrate latency for cross-node compensation
-        self._load_substrate_latency()
+        # Load durable substrate measurement status for cross-node compensation.
+        self._reload_substrate_status()
 
         # Scenario injection — core NATS request/reply (not JetStream).
         # Single-owner per session: if Scheduler replicas go above 1, this
@@ -687,46 +691,6 @@ class Dispatcher:
                 )
                 await self._dispatch_queue.put(intent)
 
-        async def _on_substrate_latency(msg):
-            """Update substrate latency from live Node Agent measurements."""
-            data = json.loads(msg.data)
-            try:
-                measurements = parse_substrate_measurement_event(data)
-            except ValueError as exc:
-                log.warning("Ignoring invalid substrate measurement event: %s", exc)
-                return
-            source = str(data.get("source_node", ""))
-            accepted: dict[str, LiveSubstrateMeasurement] = {}
-            for peer_ip, measurement in measurements.items():
-                if measurement.session_id != self._session_id:
-                    log.warning(
-                        "Ignoring substrate measurement for wrong session: peer=%s "
-                        "measurement=%s expected=%s",
-                        peer_ip,
-                        measurement.session_id,
-                        self._session_id,
-                    )
-                    continue
-                if measurement.wiring_generation != self._wiring_generation:
-                    log.warning(
-                        "Ignoring substrate measurement for stale generation: peer=%s "
-                        "measurement=%s expected=%s",
-                        peer_ip,
-                        measurement.wiring_generation,
-                        self._wiring_generation,
-                    )
-                    continue
-                self._substrate_by_ip[peer_ip] = measurement
-                accepted[peer_ip] = measurement
-            if accepted:
-                log.debug(
-                    "Substrate update from %s: %s",
-                    source,
-                    ", ".join(
-                        f"{ip}={m.median_rtt_ms}ms status={m.status}" for ip, m in accepted.items()
-                    ),
-                )
-
         subs = []
 
         subscriptions = [
@@ -748,7 +712,6 @@ class Dispatcher:
                 DeliverPolicy.LAST_PER_SUBJECT,
                 _on_link_state_snapshot,
             ),
-            (self._subj_substrate, STREAM_LINK_EVENTS, DeliverPolicy.NEW, _on_substrate_latency),
         ]
         for subj, stream, policy, cb in subscriptions:
             try:
@@ -1119,8 +1082,11 @@ class Dispatcher:
     # Reconcile-based dispatch — single path to Node Agent
     # ------------------------------------------------------------------
 
-    def _load_substrate_latency(self) -> None:
-        """Load substrate latency from ConfigMap (created by Operator)."""
+    def _reload_substrate_status(self) -> None:
+        """Load and validate durable substrate status documents."""
+        if not self._required_substrate_pairs:
+            log.debug("No required substrate pairs for this session")
+            return
         try:
             import kubernetes
             import kubernetes.client
@@ -1135,21 +1101,22 @@ class Dispatcher:
 
             ns = get_platform_config().kubernetes_namespace
             v1 = kubernetes.client.CoreV1Api()
-            cm = v1.read_namespaced_config_map("nodalarc-substrate-latency", ns)
-            if cm.data:
-                for key, val in cm.data.items():
-                    self._substrate_latency[key] = float(val)
-                log.debug(
-                    "Loaded substrate latency: %s",
-                    ", ".join(f"{k}={v}ms" for k, v in sorted(self._substrate_latency.items())),
-                )
-        except kubernetes.client.rest.ApiException as exc:
-            if exc.status == 404:
-                log.info("No substrate latency ConfigMap — single-node deployment")
-            else:
-                log.warning("Failed to read substrate latency ConfigMap: %s", exc)
+            documents = load_substrate_status_documents(k8s_v1=v1, namespace=ns)
+            self._substrate_by_direction = validate_required_substrate_measurements(
+                required_pairs=self._required_substrate_pairs,
+                documents_by_source=documents,
+                session_id=self._session_id,
+                wiring_generation=self._wiring_generation,
+                now=datetime.now(UTC),
+            )
+            self._last_substrate_reload = datetime.now(UTC)
+            log.debug(
+                "Loaded substrate status: %d/%d directions",
+                len(self._substrate_by_direction),
+                len(self._required_substrate_pairs),
+            )
         except Exception as exc:
-            log.warning("Substrate latency load failed: %s", exc)
+            raise RuntimeError(f"Substrate status load failed: {exc}") from exc
 
     def _get_substrate_rtt_ms(self, node_a: str, node_b: str) -> float:
         """Get measured substrate RTT for a link pair in ms.
@@ -1159,15 +1126,20 @@ class Dispatcher:
         emulator from looking healthy while silently ignoring physical
         substrate latency.
         """
+        now = datetime.now(UTC)
+        if self._required_substrate_pairs and (
+            self._last_substrate_reload is None
+            or (now - self._last_substrate_reload).total_seconds() >= 10.0
+        ):
+            self._reload_substrate_status()
         return resolve_substrate_rtt_ms(
             locator=self._loc,
-            live_rtt_by_peer_ip=self._substrate_by_ip,
-            configured_rtt_by_node_pair=self._substrate_latency,
+            measurements_by_direction=self._substrate_by_direction,
             node_a=node_a,
             node_b=node_b,
             session_id=self._session_id,
             wiring_generation=self._wiring_generation,
-            now=datetime.now(UTC),
+            now=now,
         )
 
     def _latency_compensation(

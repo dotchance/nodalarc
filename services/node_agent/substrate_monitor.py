@@ -28,10 +28,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+
+import kubernetes.client
+from nodalarc.substrate.manifest_contract import WiringManifest
+from nodalarc.substrate.measurement_contract import (
+    RequiredSubstratePair,
+    SubstrateMeasurement,
+    SubstrateStatusDocument,
+    decode_status_configmap_data,
+    status_document_configmap_data,
+    substrate_status_configmap_name,
+    substrate_status_labels,
+)
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +110,12 @@ _event_loop = None  # asyncio event loop for scheduling from threads
 # by __main__.py before init() is called.
 _session_id: str = ""
 _wiring_generation: str = ""
+_required_pairs: list[RequiredSubstratePair] = []
+_latest_status: SubstrateStatusDocument | None = None
+_k8s_v1: kubernetes.client.CoreV1Api | None = None
+_namespace: str = ""
+_current_manifest: WiringManifest | None = None
+_measure_lock = threading.Lock()
 
 
 def set_identity(session_id: str, wiring_generation: str) -> None:
@@ -205,6 +225,7 @@ def get_active_refs() -> list[PeerRef]:
 def _reset_for_tests() -> None:
     """Reset module state for isolated unit tests."""
     global _nc, _js, _hostname, _event_loop, _session_id, _wiring_generation
+    global _required_pairs, _latest_status, _k8s_v1, _namespace, _current_manifest
     with _peers_lock:
         _peer_refs.clear()
     _nc = None
@@ -213,6 +234,11 @@ def _reset_for_tests() -> None:
     _event_loop = None
     _session_id = ""
     _wiring_generation = ""
+    _required_pairs = []
+    _latest_status = None
+    _k8s_v1 = None
+    _namespace = ""
+    _current_manifest = None
 
 
 def measure_one_detail(
@@ -301,6 +327,153 @@ def measure_one(remote_ip: str, count: int = 10) -> float | None:
     return measure_one_detail(remote_ip, count).median_rtt_ms
 
 
+def measure_required_pair(
+    pair: RequiredSubstratePair,
+    *,
+    count: int = 10,
+    stale_after_s: float = DEFAULT_STALE_AFTER_S,
+) -> SubstrateMeasurement:
+    """Measure one manifest-required substrate pair from this host."""
+    result = measure_one_detail(pair.target_ip, count=count, stale_after_s=stale_after_s)
+    return SubstrateMeasurement(
+        session_id=_session_id,
+        wiring_generation=_wiring_generation,
+        source_node=pair.source_node,
+        source_ip=pair.source_ip,
+        target_node=pair.target_node,
+        target_ip=pair.target_ip,
+        measured_at=datetime.fromisoformat(result.timestamp),
+        stale_after=datetime.fromisoformat(result.stale_after),
+        status=result.status,
+        sample_count=result.sample_count,
+        success_count=result.success_count,
+        median_rtt_ms=result.median_rtt_ms,
+        min_rtt_ms=result.min_rtt_ms,
+        max_rtt_ms=result.max_rtt_ms,
+        error_message=result.error_message,
+    )
+
+
+MeasurePairFn = Callable[[RequiredSubstratePair], SubstrateMeasurement]
+
+
+def _write_status_document(
+    v1: kubernetes.client.CoreV1Api,
+    namespace: str,
+    document: SubstrateStatusDocument,
+) -> None:
+    """Create or replace this source node's durable substrate status document."""
+    name = substrate_status_configmap_name(document.source_node)
+    body = kubernetes.client.V1ConfigMap(
+        metadata=kubernetes.client.V1ObjectMeta(
+            name=name,
+            namespace=namespace,
+            labels=substrate_status_labels(),
+        ),
+        data=status_document_configmap_data(document),
+    )
+    try:
+        v1.create_namespaced_config_map(namespace, body)
+    except kubernetes.client.rest.ApiException as exc:
+        if exc.status == 409:
+            v1.replace_namespaced_config_map(name, namespace, body)
+        else:
+            raise
+
+
+def _local_required_pairs(hostname: str, manifest: WiringManifest) -> list[RequiredSubstratePair]:
+    return [pair for pair in manifest.required_substrate_pairs if pair.source_node == hostname]
+
+
+def configure_required_measurements(
+    *,
+    v1: kubernetes.client.CoreV1Api,
+    namespace: str,
+    hostname: str,
+    manifest: WiringManifest,
+    measure_fn: MeasurePairFn | None = None,
+) -> SubstrateStatusDocument | None:
+    """Measure and publish durable status for manifest-required local pairs.
+
+    This runs before the Node Agent subscribes to command requests. A failed
+    measurement is still written as evidence, then surfaced as a fatal startup
+    condition so the Scheduler cannot dispatch into unknown substrate truth.
+    """
+    if manifest.session_id != _session_id or manifest.wiring_generation != _wiring_generation:
+        raise ValueError(
+            "substrate monitor identity does not match manifest: "
+            f"monitor=({_session_id}, {_wiring_generation}) "
+            f"manifest=({manifest.session_id}, {manifest.wiring_generation})"
+        )
+
+    pairs = _local_required_pairs(hostname, manifest)
+    global _required_pairs, _latest_status, _k8s_v1, _namespace, _hostname, _current_manifest
+    _required_pairs = list(pairs)
+    _k8s_v1 = v1
+    _namespace = namespace
+    _hostname = hostname
+    _current_manifest = manifest
+
+    if not pairs:
+        _latest_status = None
+        log.info("No required substrate measurements for %s", hostname)
+        return None
+
+    host_ip = os.environ.get("HOST_IP", "").strip()
+    source_ips = {pair.source_ip for pair in pairs}
+    if len(source_ips) != 1:
+        raise RuntimeError(
+            "required substrate pairs for this node contain multiple source IPs: "
+            + ", ".join(sorted(source_ips))
+        )
+    expected_host_ip = next(iter(source_ips))
+    if host_ip != expected_host_ip:
+        raise RuntimeError(
+            f"HOST_IP mismatch for substrate measurement: env={host_ip!r} "
+            f"manifest={expected_host_ip!r} node={hostname}"
+        )
+
+    measurement_fn = measure_fn or measure_required_pair
+    with _measure_lock:
+        measurements = {
+            pair.target_node: measurement_fn(pair)
+            for pair in sorted(pairs, key=lambda required: required.directional_key)
+        }
+        document = SubstrateStatusDocument(
+            session_id=manifest.session_id,
+            wiring_generation=manifest.wiring_generation,
+            source_node=hostname,
+            measurements=measurements,
+        )
+        _write_status_document(v1, namespace, document)
+        _latest_status = document
+
+    failed = [
+        f"{measurement.target_node}: {measurement.error_message or measurement.status}"
+        for measurement in measurements.values()
+        if measurement.status != "ok"
+    ]
+    if failed:
+        raise RuntimeError(
+            "required substrate measurements failed for " + "; ".join(sorted(failed))
+        )
+    log.info("Published substrate status for %s (%d targets)", hostname, len(measurements))
+    return document
+
+
+def latest_status_document() -> SubstrateStatusDocument | None:
+    return _latest_status
+
+
+def read_local_status_document(
+    v1: kubernetes.client.CoreV1Api,
+    namespace: str,
+    source_node: str,
+) -> SubstrateStatusDocument:
+    cm = v1.read_namespaced_config_map(substrate_status_configmap_name(source_node), namespace)
+    return decode_status_configmap_data(cm.data)
+
+
 async def measure_and_publish(
     nc,
     hostname: str,
@@ -354,29 +527,38 @@ async def measure_and_publish(
 
 
 async def monitor_loop(nc, hostname: str, interval_s: float = 60.0) -> None:
-    """Background task: re-measure all active peers periodically.
+    """Background task: refresh manifest-required substrate measurements."""
 
-    Runs forever. Sleeps for interval_s, then measures all active peers
-    and publishes results. Catches all exceptions to prevent task death.
-    """
-    from nodalarc.nats_channels import substrate_latency_subject
-
-    log.info("Substrate monitor started (interval=%.0fs, session_id=%s)", interval_s, _session_id)
+    log.info(
+        "Substrate monitor started (interval=%.0fs, session_id=%s, required_pairs=%d)",
+        interval_s,
+        _session_id,
+        len(_required_pairs),
+    )
     while True:
-        try:
-            await asyncio.sleep(interval_s)
-            _subj = substrate_latency_subject(_session_id)
-            peers = get_active_peers()
-            if not peers:
-                continue
-            published = 0
-            stale_after_s = max(interval_s * 2.0, DEFAULT_STALE_AFTER_S)
-            for ip in peers:
-                await measure_and_publish(nc, hostname, ip, stale_after_s=stale_after_s)
-                published += 1
-            if published:
-                log.debug("Published %d substrate measurement event(s) on %s", published, _subj)
-        except asyncio.CancelledError:
-            break
-        except Exception as exc:
-            log.warning("Substrate monitor error: %s", exc)
+        await asyncio.sleep(interval_s)
+        if not _required_pairs:
+            continue
+        if _k8s_v1 is None or not _namespace:
+            raise RuntimeError("substrate monitor missing Kubernetes status writer")
+        if _current_manifest is None:
+            raise RuntimeError("substrate monitor missing current wiring manifest")
+        stale_after_s = max(interval_s * 2.0, DEFAULT_STALE_AFTER_S)
+
+        def _measure(
+            pair: RequiredSubstratePair,
+            *,
+            _stale_after_s: float = stale_after_s,
+        ) -> SubstrateMeasurement:
+            return measure_required_pair(pair, stale_after_s=_stale_after_s)
+
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: configure_required_measurements(
+                v1=_k8s_v1,
+                namespace=_namespace,
+                hostname=hostname,
+                manifest=_current_manifest,
+                measure_fn=_measure,
+            ),
+        )

@@ -35,6 +35,8 @@ import type { LinkState } from "../types";
 // --- Bowing geometry for ISL arcs ---
 
 const SEGMENTS_PER_ISL = 16;
+const MIN_ISL_SLOTS = 200;
+const MIN_GROUND_SLOTS = 100;
 // Buffer math: SEGMENTS_PER_ISL * 6 floats per ISL link, 6 floats per ground link
 
 const _mid = new THREE.Vector3();
@@ -125,6 +127,80 @@ let maxGndSlots = 0;
 let usedIslSlots = 0;
 let usedGndSlots = 0;
 
+function createGeometry(
+  positions: Float32Array,
+  colors: Float32Array,
+): LineSegmentsGeometry {
+  const nextGeometry = new LineSegmentsGeometry();
+  // Prevent NaN-initialized hidden segments from poisoning computed bounds.
+  // The mesh is not frustum culled, but Three.js still tries to compute bounds
+  // when positions are set unless these methods are overridden.
+  nextGeometry.computeBoundingSphere = () => {};
+  nextGeometry.computeBoundingBox = () => {};
+  nextGeometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 50000);
+  nextGeometry.boundingBox = new THREE.Box3(
+    new THREE.Vector3(-50000, -50000, -50000),
+    new THREE.Vector3(50000, 50000, 50000),
+  );
+  nextGeometry.setPositions(positions);
+  nextGeometry.setColors(colors);
+  return nextGeometry;
+}
+
+function reassignLinkSlots(): void {
+  usedIslSlots = 0;
+  usedGndSlots = 0;
+  for (const entry of links.values()) {
+    if (entry.isGround) {
+      if (usedGndSlots >= maxGndSlots) {
+        throw new Error(
+          `Ground link buffer capacity under-sized during rebuild: required>${maxGndSlots}`,
+        );
+      }
+      entry.bufferIndex = islSegmentEnd + usedGndSlots++;
+    } else {
+      if (usedIslSlots >= maxIslSlots) {
+        throw new Error(`ISL buffer capacity under-sized during rebuild: required>${maxIslSlots}`);
+      }
+      entry.bufferIndex = usedIslSlots++ * SEGMENTS_PER_ISL;
+    }
+  }
+}
+
+function growBuffers(requiredIslSlots: number, requiredGndSlots: number): void {
+  if (!initialized || !batch || !geometry) {
+    throw new Error(
+      `Link renderer capacity requested before initialization: isl=${requiredIslSlots}, ground=${requiredGndSlots}`,
+    );
+  }
+
+  const nextMaxIslSlots = Math.max(requiredIslSlots, maxIslSlots * 2, MIN_ISL_SLOTS);
+  const nextMaxGndSlots = Math.max(requiredGndSlots, maxGndSlots * 2, MIN_GROUND_SLOTS);
+  const nextIslSegmentEnd = nextMaxIslSlots * SEGMENTS_PER_ISL;
+  const nextTotalSegments = nextIslSegmentEnd + nextMaxGndSlots;
+
+  maxIslSlots = nextMaxIslSlots;
+  maxGndSlots = nextMaxGndSlots;
+  islSegmentEnd = nextIslSegmentEnd;
+  totalSegments = nextTotalSegments;
+
+  positionBuffer = new Float32Array(totalSegments * 6);
+  colorBuffer = new Float32Array(totalSegments * 6);
+  positionBuffer.fill(NaN);
+  colorBuffer.fill(0);
+  reassignLinkSlots();
+
+  const oldGeometry = geometry;
+  geometry = createGeometry(positionBuffer, colorBuffer);
+  batch.geometry = geometry;
+  oldGeometry.dispose();
+}
+
+function ensureCapacity(requiredIslSlots: number, requiredGndSlots: number): void {
+  if (requiredIslSlots <= maxIslSlots && requiredGndSlots <= maxGndSlots) return;
+  growBuffers(requiredIslSlots, requiredGndSlots);
+}
+
 function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
   // Count ISL and ground links from initial snapshot
   const islKeys = new Set<string>();
@@ -138,9 +214,10 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
     }
   }
 
-  // Allocate 2x headroom for links that appear after first snapshot
-  maxIslSlots = Math.max(islKeys.size * 2, 200);
-  maxGndSlots = Math.max(gndKeys.size * 2, 100);
+  // Allocate 2x headroom for links that appear after first snapshot; grow
+  // deterministically if a later snapshot exceeds that initial estimate.
+  maxIslSlots = Math.max(islKeys.size * 2, MIN_ISL_SLOTS);
+  maxGndSlots = Math.max(gndKeys.size * 2, MIN_GROUND_SLOTS);
   islSegmentEnd = maxIslSlots * SEGMENTS_PER_ISL;
   totalSegments = islSegmentEnd + maxGndSlots;
 
@@ -164,19 +241,7 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
   // Set bounding sphere BEFORE setPositions to prevent NaN computation
   // errors from the NaN-initialized buffer. frustumCulled=false means
   // bounding sphere isn't used for culling — this is purely cosmetic.
-  geometry = new LineSegmentsGeometry();
-  // Override computeBoundingSphere to prevent NaN errors from NaN-initialized
-  // buffers. The real bounding sphere is set manually below. frustumCulled=false
-  // means Three.js never uses it for culling.
-  geometry.computeBoundingSphere = () => {};
-  geometry.computeBoundingBox = () => {};
-  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 50000);
-  geometry.boundingBox = new THREE.Box3(
-    new THREE.Vector3(-50000, -50000, -50000),
-    new THREE.Vector3(50000, 50000, 50000),
-  );
-  geometry.setPositions(positionBuffer);
-  geometry.setColors(colorBuffer);
+  geometry = createGeometry(positionBuffer, colorBuffer);
 
   const lineWidth = Math.max(LINK_ISL_WIDTH, LINK_GROUND_WIDTH);
   material = new LineMaterial({
@@ -201,7 +266,7 @@ function initBatch(linkStates: LinkState[], earthFrame: THREE.Object3D): void {
   initialized = true;
 }
 
-function addLinkEntry(nodeA: string, nodeB: string): LinkEntry | undefined {
+function addLinkEntry(nodeA: string, nodeB: string): LinkEntry {
   const key = linkKey(nodeA, nodeB);
   if (links.has(key)) return links.get(key)!;
 
@@ -209,10 +274,14 @@ function addLinkEntry(nodeA: string, nodeB: string): LinkEntry | undefined {
   let bi: number;
 
   if (ground) {
-    if (usedGndSlots >= maxGndSlots) return undefined;
+    if (usedGndSlots >= maxGndSlots) {
+      ensureCapacity(usedIslSlots, usedGndSlots + 1);
+    }
     bi = islSegmentEnd + usedGndSlots++;
   } else {
-    if (usedIslSlots >= maxIslSlots) return undefined;
+    if (usedIslSlots >= maxIslSlots) {
+      ensureCapacity(usedIslSlots + 1, usedGndSlots);
+    }
     bi = usedIslSlots++ * SEGMENTS_PER_ISL;
   }
 
@@ -249,7 +318,6 @@ export function updateLinks(
     let entry = links.get(key);
     if (!entry) {
       entry = addLinkEntry(ls.node_a, ls.node_b);
-      if (!entry) continue; // buffer full
     }
 
     if (entry.state !== "active" && ls.state === "active") {
@@ -358,7 +426,6 @@ export function animateLinks(showIslLinks: boolean = true, showGroundLinks: bool
     (colAttr.data.array as Float32Array).set(colorBuffer);
     colAttr.data.needsUpdate = true;
   }
-
 }
 
 function writeNaN(buffer: Float32Array, segmentIndex: number, segmentCount: number): void {

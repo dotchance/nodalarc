@@ -11,8 +11,18 @@ from types import SimpleNamespace
 
 import pytest
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES
+from nodalarc.substrate.measurement_contract import (
+    RequiredSubstratePair,
+    SubstrateMeasurement,
+    SubstrateStatusDocument,
+    status_document_configmap_data,
+)
 from nodalarc.substrate.wiring_status import NodeWiringStatus, WiringPhaseResult
-from scheduler.__main__ import wait_for_wiring_gate, wait_for_wiring_manifest_identity
+from scheduler.__main__ import (
+    wait_for_substrate_gate,
+    wait_for_wiring_gate,
+    wait_for_wiring_manifest_identity,
+)
 
 SESSION_ID = "test-session"
 WIRING_GENERATION = "sha256:" + "a" * 64
@@ -111,6 +121,7 @@ def _manifest_configmap() -> SimpleNamespace:
             }
         },
         "ground_bridges": {},
+        "required_substrate_pairs": [],
         "isl_link_count": 0,
     }
     encoded = base64.b64encode(gzip.compress(json.dumps(manifest).encode())).decode()
@@ -228,3 +239,127 @@ def test_wiring_gate_rejects_incomplete_phase_status() -> None:
             phase_overrides={"pod_security": "pending_pid"},
         )
     )
+
+
+def _substrate_pair() -> RequiredSubstratePair:
+    return RequiredSubstratePair.build(
+        source_node="node-a",
+        source_ip="10.0.0.1",
+        target_node="node-b",
+        target_ip="10.0.0.2",
+        reasons=["isl"],
+    )
+
+
+def _substrate_manifest(required_pairs: list[RequiredSubstratePair]):
+    from nodalarc.substrate.manifest_contract import WiringManifest
+
+    return WiringManifest.model_validate(
+        {
+            "session_id": SESSION_ID,
+            "wiring_generation": WIRING_GENERATION,
+            "required_phases": list(REQUIRED_WIRING_PHASES),
+            "nodes": {
+                "sat-a": {
+                    "node_type": "satellite",
+                    "sysctls": {"net.ipv4.ip_forward": "1"},
+                    "isl_interfaces": [],
+                    "gnd_interfaces": [],
+                    "mpls_enable": True,
+                    "segment_routing": False,
+                    "mtu": 1500,
+                    "remove_default_route": True,
+                    "plane": 0,
+                    "slot": 0,
+                }
+            },
+            "ground_bridges": {},
+            "required_substrate_pairs": [pair.model_dump(mode="json") for pair in required_pairs],
+            "isl_link_count": 0,
+        }
+    )
+
+
+def _substrate_measurement(status: str = "ok") -> SubstrateMeasurement:
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    return SubstrateMeasurement(
+        session_id=SESSION_ID,
+        wiring_generation=WIRING_GENERATION,
+        source_node="node-a",
+        source_ip="10.0.0.1",
+        target_node="node-b",
+        target_ip="10.0.0.2",
+        measured_at=now,
+        stale_after=now + timedelta(days=365),
+        status=status,
+        sample_count=10,
+        success_count=10 if status == "ok" else 0,
+        median_rtt_ms=1.0 if status == "ok" else None,
+        min_rtt_ms=0.9 if status == "ok" else None,
+        max_rtt_ms=1.1 if status == "ok" else None,
+        error_message="" if status == "ok" else "ping failed",
+    )
+
+
+class _SubstrateK8s:
+    def __init__(self, documents: list[SubstrateStatusDocument]) -> None:
+        self.documents = documents
+
+    def list_namespaced_config_map(self, _namespace: str, label_selector: str):
+        assert "substrate-status" in label_selector
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(data=status_document_configmap_data(document))
+                for document in self.documents
+            ]
+        )
+
+
+def test_substrate_gate_passes_with_no_required_pairs() -> None:
+    assert (
+        wait_for_substrate_gate(
+            k8s_v1=_SubstrateK8s([]),
+            namespace="nodalarc",
+            manifest=_substrate_manifest([]),
+            timeout_s=1.0,
+            poll_s=0.0,
+        )
+        == {}
+    )
+
+
+def test_substrate_gate_passes_with_complete_measurement() -> None:
+    pair = _substrate_pair()
+    document = SubstrateStatusDocument(
+        session_id=SESSION_ID,
+        wiring_generation=WIRING_GENERATION,
+        source_node="node-a",
+        measurements={"node-b": _substrate_measurement()},
+    )
+
+    result = wait_for_substrate_gate(
+        k8s_v1=_SubstrateK8s([document]),
+        namespace="nodalarc",
+        manifest=_substrate_manifest([pair]),
+        timeout_s=1.0,
+        poll_s=0.0,
+    )
+
+    assert result["node-a->node-b"].median_rtt_ms == 1.0
+
+
+def test_substrate_gate_fails_closed_on_missing_measurement() -> None:
+    clock = _Clock()
+
+    with pytest.raises(RuntimeError, match="Substrate gate timeout"):
+        wait_for_substrate_gate(
+            k8s_v1=_SubstrateK8s([]),
+            namespace="nodalarc",
+            manifest=_substrate_manifest([_substrate_pair()]),
+            timeout_s=2.0,
+            poll_s=0.0,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )

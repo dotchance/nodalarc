@@ -18,7 +18,8 @@ rules:
     verbs: ["create", "get"]
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get", "create", "update", "patch"]
+    # Scheduler gates startup on substrate status ConfigMaps selected by label.
+    verbs: ["get", "list", "create", "update", "patch"]
   # Secrets — read SSH private key for terminal proxy (nodalarc-terminal-keys)
   - apiGroups: [""]
     resources: ["secrets"]

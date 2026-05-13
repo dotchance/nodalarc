@@ -67,13 +67,13 @@ placement:
   policy: planePerNode
 ```
 
-### allOnOne (default)
+### allOnOne
 
-All session pods on a single node. No cross-node traffic. This is the default and works identically to a single-node deployment - use it when you have multiple nodes but don't need cross-node testing.
+All session pods on a single node. No cross-node traffic. This must be requested explicitly and is intended for single-node debugging or isolating cross-node behavior.
 
 ### planePerNode
 
-Each orbital plane assigned to a separate K8s node. This is the recommended policy for multi-node deployments:
+Each orbital plane assigned to a separate K8s node. This is the default and recommended policy for multi-node deployments:
 
 - **Intra-plane ISLs** (isl0, isl1) - pod-to-pod on the same node. Fast, no encapsulation.
 - **Cross-plane ISLs** (isl2, isl3) - traverse VXLAN tunnels between nodes. Adds real network traversal.

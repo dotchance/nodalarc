@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from nodalarc.substrate.measurement_contract import RequiredSubstratePair
+
 REQUIRED_WIRING_PHASES: tuple[str, ...] = (
     "phase0_cleanup",
     "sysctls",
@@ -137,6 +139,7 @@ class WiringManifest(_StrictModel):
     required_phases: list[str]
     nodes: dict[str, NodeSpec]
     ground_bridges: dict[str, GroundBridgeSpec]
+    required_substrate_pairs: list[RequiredSubstratePair]
     isl_link_count: int
 
     @field_validator("session_id", "wiring_generation")
@@ -184,3 +187,13 @@ class WiringManifest(_StrictModel):
                 f"extra={sorted(bridge_ids - ground_station_nodes)}"
             )
         return self
+
+    @field_validator("required_substrate_pairs")
+    @classmethod
+    def _substrate_pairs_unique(
+        cls, value: list[RequiredSubstratePair]
+    ) -> list[RequiredSubstratePair]:
+        keys = [pair.directional_key for pair in value]
+        if len(set(keys)) != len(keys):
+            raise ValueError("required_substrate_pairs must not contain duplicate directions")
+        return value

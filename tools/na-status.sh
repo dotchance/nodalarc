@@ -174,7 +174,7 @@ else
         echo "  Run: make session"
         echo "  Override: make session DEFAULT_SESSION=configs/sessions/<name>.yaml"
     else
-        SESSION_NAME=$(echo "$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('sessionId','unknown'))" 2>/dev/null || echo "unknown")
+        SESSION_NAME=$(echo "$SESSION" | python3 -c "import json,sys,yaml; d=json.load(sys.stdin); status=d.get('status',{}); name=status.get('sessionId') or yaml.safe_load(d.get('spec',{}).get('sessionYaml','{}')).get('session',{}).get('name','unknown'); print(name)" 2>/dev/null || echo "unknown")
         PHASE=$(echo "$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('phase','Unknown'))" 2>/dev/null || echo "Unknown")
         WIRED=$(echo "$SESSION" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('status',{}).get('wiredPods',0))" 2>/dev/null || echo "0")
         SATS=$(kubectl get pods -n "$NAMESPACE" -l nodalarc.io/role=satellite --no-headers 2>/dev/null | grep -c Running || echo 0)

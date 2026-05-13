@@ -267,6 +267,7 @@ export function GlobeView({
       if (snap && snap.constellation_name !== lastConstellationName) {
         if (lastConstellationName !== null) {
           flushTrails();
+          clearLinks();
           clearOrbitPins(scene);
           clearAllOrbits(scene);
           resetSimClock();

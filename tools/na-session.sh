@@ -24,6 +24,17 @@ if ! [[ "$expected_pods" =~ ^[0-9]+$ ]]; then
 fi
 echo "[session] Expected session pods: $expected_pods"
 
+echo "[session] Computing placement policy..."
+if ! placement_policy="$(PYTHONPATH=lib uv run python -c 'import sys, yaml; from pathlib import Path; from nodalarc.models.session import SessionConfig; session = SessionConfig.model_validate(yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))); print(session.placement.policy)' "$DEFAULT_SESSION")"; then
+    echo "[session] ERROR: failed to compute placement policy for $DEFAULT_SESSION" >&2
+    exit 1
+fi
+if [ -z "$placement_policy" ]; then
+    echo "[session] ERROR: placement policy was empty for $DEFAULT_SESSION" >&2
+    exit 1
+fi
+echo "[session] Placement policy: $placement_policy"
+
 wait_platform_ready() {
     local timeout="${1:-120}"
     local elapsed=0 total avail ds_desired ds_ready not_running
@@ -130,6 +141,86 @@ print("{}|{}|{}|{}".format(
     exit 1
 }
 
+verify_session_placement() {
+    local policy="$1"
+    local expected_pods="$2"
+    local ready_node_csv expected_placement_nodes actual_placement_nodes distribution
+
+    ready_node_csv="$(
+        kubectl get nodes -l nodalarc.io/node-agent=true --no-headers 2>/dev/null \
+            | awk '$2 == "Ready" {print $1}' \
+            | sort \
+            | paste -sd, -
+    )"
+    if [ -z "$ready_node_csv" ]; then
+        echo "[session] ERROR: no Ready nodes with label nodalarc.io/node-agent=true; cannot verify placement" >&2
+        exit 1
+    fi
+
+    if ! expected_placement_nodes="$(
+        PYTHONPATH=lib uv run python -c '
+import sys
+import yaml
+import importlib.util
+from pathlib import Path
+
+from nodalarc.constellation_loader import expand_constellation, load_constellation, load_ground_stations
+from nodalarc.models.addressing import AddressingScheme
+from nodalarc.models.session import SessionConfig
+
+spec = importlib.util.spec_from_file_location("session_deployer", "services/nodalarc_operator/session_deployer.py")
+session_deployer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(session_deployer)
+
+session = SessionConfig.model_validate(yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")))
+available_nodes = [n for n in sys.argv[2].split(",") if n]
+constellation = load_constellation(session.constellation)
+ground_stations = load_ground_stations(session.ground_stations)
+addressing = AddressingScheme(session.addressing)
+node_vars = {}
+for sat in expand_constellation(constellation):
+    node_vars[addressing.sat_id(sat.plane, sat.slot)] = {
+        "node_type": "satellite",
+        "plane": sat.plane,
+    }
+for index, station in enumerate(ground_stations.stations):
+    node_vars[addressing.gs_id(station.name)] = {
+        "node_type": "ground_station",
+        "gs_name": station.name,
+        "gs_index": index,
+    }
+placement = session_deployer.compute_pod_placement(session.placement, node_vars, available_nodes)
+print(len(set(placement.values())))
+' "$DEFAULT_SESSION" "$ready_node_csv"
+    )"; then
+        echo "[session] ERROR: failed to compute expected placement for $DEFAULT_SESSION" >&2
+        exit 1
+    fi
+    if ! [[ "$expected_placement_nodes" =~ ^[0-9]+$ ]] || [ "$expected_placement_nodes" -le 0 ]; then
+        echo "[session] ERROR: expected placement node count was invalid: $expected_placement_nodes" >&2
+        exit 1
+    fi
+
+    actual_placement_nodes="$(
+        kubectl get pods -n "$NAMESPACE" -l nodalarc.io/node-id -o wide --no-headers 2>/dev/null \
+            | awk '{seen[$7] = 1} END {print length(seen)+0}'
+    )"
+    distribution="$(
+        kubectl get pods -n "$NAMESPACE" -l nodalarc.io/node-id -o wide --no-headers 2>/dev/null \
+            | awk '{counts[$7]++} END {for (node in counts) print node "=" counts[node]}' \
+            | sort \
+            | tr '\n' ',' \
+            | sed 's/,$//; s/,/, /g'
+    )"
+
+    if [ "$actual_placement_nodes" != "$expected_placement_nodes" ]; then
+        echo "[session] ERROR: placement policy $policy expected session pods on $expected_placement_nodes node(s), but live pods are on $actual_placement_nodes: ${distribution:-unknown}" >&2
+        exit 1
+    fi
+
+    echo "[session] Placement verified: policy=$policy nodes=$actual_placement_nodes distribution=${distribution:-unknown}"
+}
+
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
     echo "[session] ERROR: namespace $NAMESPACE does not exist. Run: make install" >&2
     exit 1
@@ -231,6 +322,7 @@ while [ "$elapsed" -lt 300 ]; do
             exit 1
         fi
         wait_platform_ready 120
+        verify_session_placement "$placement_policy" "$expected_pods"
         wait_vs_api_session_state "$expected_pods" 120
         echo "[session] Session ready. $running/$pods session pods running."
         echo "[session] Next: make status"

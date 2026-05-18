@@ -29,7 +29,7 @@ dev = [
     "pytest-cov",
     "pytest-timeout>=2.4.0",
     "mypy",
-    "ruff>=0.4.4",
+    "ruff>=0.15.13",
     "pre-commit>=3.7.0",
     "vulture>=2.14",
     "kopf>=1.37",

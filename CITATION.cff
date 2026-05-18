@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use NodalArc in research, experiments, or publications, please cite the software repository."
+type: software
+title: "NodalArc"
+abstract: "NodalArc is a satellite network emulator for testing real routing stacks against moving orbital topology."
+authors:
+  - name: ".chance (dotchance)"
+repository-code: "https://github.com/dotchance/nodalarc"
+url: "https://nodal.asmolab.net"
+license: "NodalArc Source Available License 1.0"
+version: "0.1.0"
+date-released: "2026-05-18"
+keywords:
+  - satellite networking
+  - orbital routing
+  - network emulation
+  - routing
+  - Kubernetes
+  - FRR
+  - NodalPath

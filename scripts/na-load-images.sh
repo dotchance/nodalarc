@@ -15,7 +15,7 @@ else
     SUDO_CTR_CMD=()
 fi
 
-record="$(bash "$ROOT_DIR/tools/na-mode.sh")"
+record="$(bash "$ROOT_DIR/scripts/na-mode.sh")"
 IFS=$'\t' read -r MODE_RESOLVED REGISTRY_HOST_RESOLVED REGISTRY_PREFIX_RESOLVED NODE_COUNT MIRROR_THIRD_PARTY_RESOLVED <<< "$record"
 
 ensure_local_image() {
@@ -59,7 +59,7 @@ if [ "$MODE_RESOLVED" = "single-node" ]; then
             docker image inspect "$image" >/dev/null 2>&1 || docker pull "$image"
         fi
         import_image "$image"
-    done < <(bash "$ROOT_DIR/tools/na-images.sh" list-all-runtime-images)
+    done < <(bash "$ROOT_DIR/scripts/na-images.sh" list-all-runtime-images)
 else
     echo "[load] Pushing NodalArc runtime images to $REGISTRY_HOST_RESOLVED..."
     if ! curl -sf --max-time 5 "http://$REGISTRY_HOST_RESOLVED/v2/" >/dev/null 2>&1; then
@@ -71,7 +71,7 @@ else
         [ "$kind" = "nodalarc" ] || continue
         ensure_local_image "$image"
         push_image "$image"
-    done < <(bash "$ROOT_DIR/tools/na-images.sh" list-nodalarc-runtime-images)
+    done < <(bash "$ROOT_DIR/scripts/na-images.sh" list-nodalarc-runtime-images)
     echo "[load] Third-party runtime images remain upstream references in current multi-node mode."
 fi
 

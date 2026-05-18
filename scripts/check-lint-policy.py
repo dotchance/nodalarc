@@ -15,6 +15,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
+SCRIPTS_DIR = ROOT / "scripts"
+TOOLS_DIR = ROOT / "tools"
 
 REQUIRED_RUFF_SELECT = {"E", "F", "I", "UP", "B", "SIM", "C4", "W"}
 FORBIDDEN_GLOBAL_IGNORES = {
@@ -71,6 +73,7 @@ def _failures() -> list[str]:
             failures.append(f"per-file ignore for {pattern!r} weakens required checks: {forbidden}")
 
     failures.extend(_scan_noqa())
+    failures.extend(_check_repo_layout())
     return failures
 
 
@@ -99,6 +102,28 @@ def _scan_noqa() -> list[str]:
             forbidden = sorted(FORBIDDEN_NOQA_CODES & codes)
             if forbidden:
                 failures.append(f"{rel}:{lineno}: noqa may not suppress {forbidden}")
+
+    return failures
+
+
+def _check_repo_layout() -> list[str]:
+    failures: list[str] = []
+
+    for path in sorted(SCRIPTS_DIR.iterdir()):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(ROOT)
+        first_line = path.read_text(errors="replace").splitlines()[0:1]
+        has_shebang = bool(first_line and first_line[0].startswith("#!"))
+        is_executable = bool(path.stat().st_mode & 0o111)
+        if has_shebang and not is_executable:
+            failures.append(f"{rel}: scripts with shebangs must be executable")
+        if is_executable and not has_shebang:
+            failures.append(f"{rel}: executable scripts must start with a shebang")
+
+    for path in sorted(TOOLS_DIR.glob("*.sh")):
+        rel = path.relative_to(ROOT)
+        failures.append(f"{rel}: shell lifecycle scripts belong in scripts/, not tools/")
 
     return failures
 

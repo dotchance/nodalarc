@@ -41,7 +41,7 @@ clean_deps() {
 }
 
 clean_docker_images() {
-    bash "$ROOT_DIR/tools/na-clean-images.sh"
+    bash "$ROOT_DIR/scripts/na-clean-images.sh"
 }
 
 verify_square_one() {
@@ -75,10 +75,10 @@ verify_square_one() {
     return "$errors"
 }
 
-run_phase "registry-delete" bash "$ROOT_DIR/tools/clean-registry.sh"
-run_phase "remote-containerd-purge" env PURGE_SCOPE=remote REMOTE_REQUIRED=auto bash "$ROOT_DIR/tools/na-purge-containerd.sh"
-run_phase "teardown" bash "$ROOT_DIR/tools/na-teardown.sh"
-run_phase "local-containerd-purge" env PURGE_SCOPE=local REMOTE_REQUIRED=0 bash "$ROOT_DIR/tools/na-purge-containerd.sh"
+run_phase "registry-delete" bash "$ROOT_DIR/scripts/clean-registry.sh"
+run_phase "remote-containerd-purge" env PURGE_SCOPE=remote REMOTE_REQUIRED=auto bash "$ROOT_DIR/scripts/na-purge-containerd.sh"
+run_phase "teardown" bash "$ROOT_DIR/scripts/na-teardown.sh"
+run_phase "local-containerd-purge" env PURGE_SCOPE=local REMOTE_REQUIRED=0 bash "$ROOT_DIR/scripts/na-purge-containerd.sh"
 run_phase "local-docker-image-clean" clean_docker_images
 run_phase "build-artifact-clean" clean_artifacts
 run_phase "dependency-clean" clean_deps

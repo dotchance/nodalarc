@@ -19,7 +19,7 @@ managed_key_pattern='(^|[[:space:]])--set(-string)?[=[:space:]]*(images\.|imageP
 if [ -n "$HELM_EXTRA_ARGS" ] && [[ "$HELM_EXTRA_ARGS" =~ $managed_key_pattern ]]; then
     if [ "$ALLOW_IMAGE_ARG_OVERRIDE" != "1" ]; then
         echo "[install] ERROR: HELM_EXTRA_ARGS overrides managed runtime image values." >&2
-        echo "[install] Runtime images are owned by tools/na-images.sh. Set ALLOW_IMAGE_ARG_OVERRIDE=1 only for explicit diagnostics." >&2
+        echo "[install] Runtime images are owned by scripts/na-images.sh. Set ALLOW_IMAGE_ARG_OVERRIDE=1 only for explicit diagnostics." >&2
         exit 2
     fi
     echo "[install] Runtime image contract bypassed by ALLOW_IMAGE_ARG_OVERRIDE=1." >&2
@@ -77,7 +77,7 @@ wait_platform_ready() {
 
 if [ "$ACTION" = "reinstall" ]; then
     echo "[reinstall] Running official teardown before install..."
-    NAMESPACE="$NAMESPACE" bash "$ROOT_DIR/tools/na-teardown.sh"
+    NAMESPACE="$NAMESPACE" bash "$ROOT_DIR/scripts/na-teardown.sh"
     ACTION="install"
 fi
 
@@ -95,9 +95,9 @@ elif [ "$ACTION" = "upgrade" ]; then
     fi
 fi
 
-bash "$ROOT_DIR/tools/na-image-preflight.sh"
+bash "$ROOT_DIR/scripts/na-image-preflight.sh"
 
-mapfile -t image_args < <(bash "$ROOT_DIR/tools/na-images.sh" helm-image-args)
+mapfile -t image_args < <(bash "$ROOT_DIR/scripts/na-images.sh" helm-image-args)
 extra_args=()
 if [ -n "$HELM_EXTRA_ARGS" ]; then
     read -r -a extra_args <<< "$HELM_EXTRA_ARGS"

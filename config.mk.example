@@ -23,7 +23,7 @@ MODE ?= auto
 DEFAULT_SESSION ?= configs/sessions/starlink-176-isis-te.yaml
 
 # Extra Helm arguments for non-image chart values.
-# Runtime image values are generated from tools/na-images.sh. Do not put
+# Runtime image values are generated from scripts/na-images.sh. Do not put
 # images.*, imagePullPolicy, or buildTag overrides here unless explicitly
 # running with ALLOW_IMAGE_ARG_OVERRIDE=1 for diagnostics.
 HELM_EXTRA_ARGS ?=
@@ -34,7 +34,7 @@ HELM_EXTRA_ARGS ?=
 #
 # Empty REGISTRY_HOST means single-node direct import.
 # Non-empty REGISTRY_HOST means registry-backed image distribution.
-# tools/detect-registry.sh is used as a fallback when REGISTRY_HOST is empty
+# scripts/detect-registry.sh is used as a fallback when REGISTRY_HOST is empty
 # and /etc/rancher/k3s/registries.yaml declares a registry mirror.
 #
 # Example:

@@ -108,7 +108,8 @@ nodalpath/              NodalPath engine (self-contained)
 images/                 Base container images (FRR, probe, forwarding sidecar)
 deploy/helm/            Helm chart (templates, values)
 configs/                Runtime configs (constellations, sessions, FRR templates)
-tools/                  Operational tools (teardown, scenario inject)
+scripts/                Lifecycle and operational scripts
+tools/                  Python report, scenario, compare, and reconfig CLIs
 tests/unit/             Unit tests
 tests/integration/      Integration tests
 ```

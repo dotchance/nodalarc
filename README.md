@@ -219,8 +219,8 @@ deploy/         Helm chart and deployment tooling
 configs/        Constellations, ground stations, satellite types, sessions
 tests/          Unit and integration tests
 docs/           User, operations, and developer documentation
-tools/          Lifecycle and operational tooling
-scripts/        Host bootstrap and infrastructure scripts
+scripts/        Lifecycle, host bootstrap, and operational scripts
+tools/          Python report, scenario, compare, and reconfig CLIs
 ```
 
 ## Documentation

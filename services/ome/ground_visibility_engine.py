@@ -61,7 +61,7 @@ def _estimate_remaining_visible_seconds(
     if lookahead.step_seconds <= 0:
         raise ValueError("Ground pass lookahead requires step_seconds > 0")
 
-    remaining = {pair: lookahead.horizon_ticks * lookahead.step_seconds for pair in candidates}
+    remaining = dict.fromkeys(candidates, lookahead.horizon_ticks * lookahead.step_seconds)
     open_pairs = set(candidates)
     if not open_pairs:
         return remaining

@@ -104,7 +104,7 @@ class PushScheduler:
     def push_entry(
         self,
         entry: AlmanacEntry,
-        previous_entry: AlmanacEntry | None = None,
+        _previous_entry: AlmanacEntry | None = None,
     ) -> PushResult:
         """Push forwarding tables from an almanac entry to nodes.
 
@@ -281,13 +281,10 @@ class PushScheduler:
         grpc_tasks: list[tuple[str, str, object]] = []
         for node_id in nodes_to_push:
             table = next(t for t in entry.forwarding_tables if t.node_id == node_id)
-            own_lo = self._node_loopback.get(node_id, "")
             update = build_forwarding_update(
                 table,
                 topology_state_id=entry.topology_state_id,
                 sim_time=entry.sim_time,
-                iface_to_peer_loopback=self._iface_to_peer_loopback,
-                own_loopback=own_lo,
                 iface_to_peer_info=self._iface_to_peer_info,
             )
             pod_ip = self._pod_ip_map.get(node_id, "")

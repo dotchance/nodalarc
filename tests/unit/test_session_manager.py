@@ -121,7 +121,7 @@ class TestRecoverSession:
         my_pid = os.getpid()
 
         # Create older session (also "live" via our PID)
-        d1 = _make_session_dir(
+        _make_session_dir(
             tmp_sessions["data_dir"],
             "session-older",
             mi_pid=my_pid,
@@ -129,7 +129,7 @@ class TestRecoverSession:
         time.sleep(0.05)  # Ensure different mtime
 
         # Create newer session
-        d2 = _make_session_dir(
+        _make_session_dir(
             tmp_sessions["data_dir"],
             "session-newer",
             orch_pid=my_pid,
@@ -266,6 +266,7 @@ class TestCleanupOldSessions:
         removed = mgr.cleanup_old_sessions(keep=2)
 
         # Should remove 1 dead one (session-dead-000) but keep session-live-old
+        assert removed == 1
         remaining = [d.name for d in tmp_sessions["data_dir"].iterdir() if d.is_dir()]
         assert "session-live-old" in remaining
 

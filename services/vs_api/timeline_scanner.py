@@ -41,7 +41,7 @@ class TimelineScanner:
                         break
                     try:
                         record = json.loads(line)
-                    except (json.JSONDecodeError, ValueError):
+                    except json.JSONDecodeError, ValueError:
                         continue
                     if record.get("event_type") != "VisibilityEvent":
                         continue

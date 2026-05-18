@@ -111,8 +111,6 @@ def build_forwarding_update(
     table: ForwardingTable,
     topology_state_id: str,
     sim_time: str,
-    iface_to_peer_loopback: dict[tuple[str, str], str] | None = None,
-    own_loopback: str = "",
     iface_to_peer_info: dict[tuple[str, str], tuple[str, str]] | None = None,
 ) -> ForwardingTableUpdate:
     """Convert a ForwardingTable to a gRPC ForwardingTableUpdate message.
@@ -123,10 +121,7 @@ def build_forwarding_update(
         Used to compute the peer's deterministic MAC and IPv6 link-local
         for PERMANENT neighbor entries and ``via inet6`` MPLS nexthops.
 
-    iface_to_peer_loopback: maps (node_id, interface_name) → peer loopback IP.
-    own_loopback: this node's own loopback IP (for node SID POP → local delivery).
     """
-    peer_map = iface_to_peer_loopback or {}
     peer_info = iface_to_peer_info or {}
     node_id = table.node_id
 

@@ -121,7 +121,7 @@ class TestHysteresisDiscount:
 
         hyst = HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0)
 
-        ctx = StepContext(
+        StepContext(
             satellites=sat_nodes,
             addressing=addressing,
             gs_positions={gs_id: (gs_ecef, gs_geo)},
@@ -132,9 +132,9 @@ class TestHysteresisDiscount:
             gs_service_priorities={gs_id: 10},
             ground_pair_terminal_types={(gs_id, sid): "rf" for sid in sat_ids},
             by_node={},
-            sat_isl_terminals={sid: 2 for sid in sat_ids},
+            sat_isl_terminals=dict.fromkeys(sat_ids, 2),
             sat_isl_terminal_constraints={sid: {} for sid in sat_ids},
-            sat_ground_terminals={sid: 1 for sid in sat_ids},
+            sat_ground_terminals=dict.fromkeys(sat_ids, 1),
             propagator_id="keplerian-circular",
             polar_seam_enabled=False,
             latitude_threshold_deg=70.0,

@@ -86,7 +86,7 @@ def cleanup_deployment(session_id: str, namespace: str = "nodalarc") -> None:
                             )
                         except ProcessLookupError:
                             pass
-            except (json.JSONDecodeError, OSError):
+            except json.JSONDecodeError, OSError:
                 pass
 
     subprocess.run(

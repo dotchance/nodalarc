@@ -473,7 +473,7 @@ class ReadyCRSession:
 def _as_positive_int(value: Any) -> int | None:
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return parsed if parsed > 0 else None
 
@@ -961,7 +961,6 @@ class SecurityHeadersMiddleware:
 
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
-                headers = dict(message.get("headers", []))
                 extra = [
                     (b"x-content-type-options", b"nosniff"),
                     (b"x-frame-options", b"DENY"),
@@ -1304,7 +1303,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
                         await asyncio.sleep(0.05)
                         continue
                     await websocket.send_json({"type": "output", "data": output})
-            except (WebSocketDisconnect, asyncio.CancelledError):
+            except WebSocketDisconnect, asyncio.CancelledError:
                 pass
 
         # Run both directions concurrently; when either exits, cancel the other
@@ -1317,7 +1316,7 @@ async def ws_terminal(websocket: WebSocket, node_id: str) -> None:
 
     except asyncssh.misc.DisconnectError as e:
         log.warning("SSH disconnect for %s: %s", node_id, e)
-    except Exception as exc:
+    except Exception:
         log.exception("Terminal session error for %s", node_id)
     finally:
         if _term_conn_id is not None:
@@ -1395,7 +1394,7 @@ async def _fetch_nodalpath_status() -> dict | None:
             r = await client.get(f"{_nodalpath_base_url()}/api/status")
             r.raise_for_status()
             return r.json()
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
+    except httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError:
         return None
 
 
@@ -1570,7 +1569,6 @@ def _live_trace_grpc(src: str, dst: str, nodes: list, links: list) -> dict | Non
     grpc_port = cfg.nodalpath_fwd_grpc_port
 
     # Build node_id -> pod_ip map via K8s API
-    node_ids = {n["node_id"] for n in nodes}
     prefix_by_node: dict[str, str] = {}
     for n in nodes:
         if n.get("prefix"):
@@ -2366,7 +2364,7 @@ async def deploy_generated_session(body: dict) -> dict:
         )
 
         constellation = load_constellation(session.constellation)
-        gs_file = load_ground_stations(session.ground_stations)
+        load_ground_stations(session.ground_stations)
         satellites = expand_constellation(constellation)
         if not satellites:
             return JSONResponse(
@@ -2807,7 +2805,7 @@ def main() -> None:
         else:
             session_data = yaml.safe_load(session_path.read_text())
         if session_data:
-            session = SessionConfig.model_validate(session_data)
+            SessionConfig.model_validate(session_data)
             # Mark session active
             _active_path = args.session
             try:

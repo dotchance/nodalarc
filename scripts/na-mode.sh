@@ -55,7 +55,7 @@ if [ -n "$REGISTRY_PREFIX" ] && [ -z "$REGISTRY_HOST" ]; then
 fi
 
 if [ -z "$REGISTRY_HOST" ] && [ "$MODE" = "auto" ]; then
-    detected="$(bash "$ROOT_DIR/tools/detect-registry.sh" 2>/dev/null || true)"
+    detected="$(bash "$ROOT_DIR/scripts/detect-registry.sh" 2>/dev/null || true)"
     if [ -n "$detected" ]; then
         REGISTRY_HOST="$detected"
         echo "na-mode: inferred REGISTRY_HOST=$REGISTRY_HOST from K3s registries.yaml" >&2

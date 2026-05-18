@@ -19,8 +19,8 @@ fi
 
 logical_name="$1"
 resource="$2"
-image="$(bash "$ROOT_DIR/tools/na-images.sh" image-for "$logical_name")"
-record="$(bash "$ROOT_DIR/tools/na-mode.sh")"
+image="$(bash "$ROOT_DIR/scripts/na-images.sh" image-for "$logical_name")"
+record="$(bash "$ROOT_DIR/scripts/na-mode.sh")"
 IFS=$'\t' read -r MODE_RESOLVED REGISTRY_HOST_RESOLVED REGISTRY_PREFIX_RESOLVED NODE_COUNT MIRROR_THIRD_PARTY_RESOLVED <<< "$record"
 
 if ! kubectl get "$resource" -n "$NAMESPACE" >/dev/null 2>&1; then

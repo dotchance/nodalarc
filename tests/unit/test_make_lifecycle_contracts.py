@@ -38,12 +38,12 @@ def test_install_and_upgrade_delegate_to_platform_script() -> None:
     install = _target_body("install")
     upgrade = _target_body("upgrade")
 
-    assert "tools/na-install-platform.sh" in install
+    assert "scripts/na-install-platform.sh" in install
     assert "ACTION=install" in install
     assert "helm uninstall" not in install
     assert "kubectl delete namespace" not in install
 
-    assert "tools/na-install-platform.sh" in upgrade
+    assert "scripts/na-install-platform.sh" in upgrade
     assert "ACTION=upgrade" in upgrade
     assert "helm upgrade --install" not in upgrade
 
@@ -65,10 +65,10 @@ def test_cleanup_scopes_are_separate() -> None:
     purge_containerd = _target_body("purge-containerd")
     nuke = _target_body("nuke")
 
-    assert "tools/clean-registry.sh" in clean_registry
+    assert "scripts/clean-registry.sh" in clean_registry
     assert "na-purge-containerd" not in clean_registry
-    assert "tools/na-purge-containerd.sh" in purge_containerd
-    assert "tools/na-nuke.sh" in nuke
+    assert "scripts/na-purge-containerd.sh" in purge_containerd
+    assert "scripts/na-nuke.sh" in nuke
 
 
 def test_lifecycle_targets_print_next_steps() -> None:

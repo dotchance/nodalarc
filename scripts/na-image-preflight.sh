@@ -11,7 +11,7 @@ else
     SUDO_CTR_CMD=()
 fi
 
-record="$(bash "$ROOT_DIR/tools/na-mode.sh")"
+record="$(bash "$ROOT_DIR/scripts/na-mode.sh")"
 IFS=$'\t' read -r MODE_RESOLVED REGISTRY_HOST_RESOLVED REGISTRY_PREFIX_RESOLVED NODE_COUNT MIRROR_THIRD_PARTY_RESOLVED <<< "$record"
 
 image_available_in_containerd() {
@@ -44,7 +44,7 @@ if [ "$MODE_RESOLVED" = "single-node" ]; then
             echo "[preflight] missing from K3s containerd: $image" >&2
             missing=1
         fi
-    done < <(bash "$ROOT_DIR/tools/na-images.sh" list-all-runtime-images)
+    done < <(bash "$ROOT_DIR/scripts/na-images.sh" list-all-runtime-images)
 else
     if ! curl -sf --max-time 5 "http://$REGISTRY_HOST_RESOLVED/v2/" >/dev/null 2>&1; then
         echo "[preflight] registry not reachable: $REGISTRY_HOST_RESOLVED" >&2
@@ -57,7 +57,7 @@ else
             echo "[preflight] missing from registry: $image" >&2
             missing=1
         fi
-    done < <(bash "$ROOT_DIR/tools/na-images.sh" list-nodalarc-runtime-images)
+    done < <(bash "$ROOT_DIR/scripts/na-images.sh" list-nodalarc-runtime-images)
 fi
 
 if [ "$missing" -ne 0 ]; then

@@ -119,7 +119,7 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
         gs_min_elevations={"gs-equator": 25.0},
         gs_policies={"gs-equator": "longest-remaining-pass"},
         pass_lookahead=GroundPassLookahead(
-            satellites=tuple(),
+            satellites=(),
             addressing=object(),
             epoch_unix=0.0,
             step=0,

@@ -162,7 +162,7 @@ def _diff_ingress(
 def interrogate_node(
     node_id: str,
     pod_ip: str,
-    expected_topology_state_id: str,
+    _expected_topology_state_id: str,
     planned_table: ForwardingTable,
     port: int | None = None,
     timeout: float | None = None,

@@ -45,7 +45,8 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 # Phony targets
 # ---------------------------------------------------------------------------
 
-.PHONY: help all deps build load install reinstall upgrade session test test-integration test-root \
+.PHONY: help all deps build load install reinstall upgrade session lint lint-policy dead-code \
+        test test-integration test-root \
         teardown force-teardown reset-platform restart clean clean-deps clean-images \
         clean-registry purge-containerd nuke status check-registry test-backend test-frontend \
         build-frontends build-images ensure-base-images build-base-images \
@@ -405,6 +406,21 @@ deploy-measurement: build-measurement ## Build + load + restart MI
 
 status: ## Show cluster status (pods, phase, links)
 	@MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' DEFAULT_SESSION='$(DEFAULT_SESSION)' TAG='$(TAG)' bash tools/na-status.sh
+
+# ---------------------------------------------------------------------------
+# Lint and static analysis
+# ---------------------------------------------------------------------------
+
+lint: lint-policy ## Run lint, formatting, and high-confidence dead-code checks
+	uv run --extra dev ruff check .
+	uv run --extra dev ruff format --check .
+	$(MAKE) dead-code
+
+lint-policy: ## Verify lint policy was not weakened
+	uv run --extra dev python tools/check_lint_policy.py
+
+dead-code: ## Report high-confidence unused code findings
+	uv run --extra dev vulture lib services nodalpath tools images --min-confidence 80
 
 # ---------------------------------------------------------------------------
 # Tests

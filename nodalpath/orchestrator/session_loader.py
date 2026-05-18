@@ -377,7 +377,6 @@ def _daemon_request(
             if b"\n" in buf:
                 line = buf[: buf.index(b"\n")]
                 return json.loads(line)
-        return None
     except Exception as exc:
         log.warning("Deploy daemon request failed: %s", exc)
         return None

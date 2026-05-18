@@ -27,7 +27,6 @@ from nodalarc.constellation_loader import (
 from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
 from nodalarc.models.session import PlacementConfig, SessionConfig
-from nodalarc.platform_config import get_platform_config
 from nodalarc.stack_resolver import resolve_stack
 from nodalarc.template_vars import build_template_vars
 
@@ -119,7 +118,7 @@ def compute_pod_placement(
 
     if placement.policy == "allOnOne":
         target = available_nodes[0]
-        return {nid: target for nid in node_vars}
+        return dict.fromkeys(node_vars, target)
 
     if placement.policy == "planePerNode":
         result: dict[str, str] = {}
@@ -409,7 +408,7 @@ def ensure_session_configmaps(
         raise ValueError("No satellites in constellation")
 
     addressing = AddressingScheme(session.addressing)
-    neighbors = assign_isl_neighbors(constellation, addressing)
+    assign_isl_neighbors(constellation, addressing)
 
     # --- Step 3: Resolve routing stack ---
     _progress(f"Resolving routing stack: {session.routing.protocol}")
@@ -1569,8 +1568,6 @@ def _create_session_pod(
     target_node: str | None = None,
 ) -> None:
     """Create a single session pod (satellite or ground station)."""
-    cfg = get_platform_config()
-
     labels: dict[str, str] = {
         "nodalarc.io/session": "true",
         "nodalarc.io/node-id": node_id,

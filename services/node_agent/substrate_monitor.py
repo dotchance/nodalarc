@@ -227,7 +227,7 @@ def measure_one_detail(
                 try:
                     t = float(line.split("time=")[1].split()[0])
                     rtts.append(t)
-                except (IndexError, ValueError):
+                except IndexError, ValueError:
                     pass
         if not rtts:
             log.warning("No RTT samples from ping to %s", remote_ip)

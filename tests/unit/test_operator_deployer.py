@@ -284,7 +284,7 @@ class TestDeterministicNode:
 
     def test_distribution_uniform(self):
         nodes = ["node01", "node02", "node03", "node04"]
-        counts = {n: 0 for n in nodes}
+        counts = dict.fromkeys(nodes, 0)
         for i in range(1000):
             result = _deterministic_node(f"pod-{i}", nodes)
             counts[result] += 1
@@ -550,11 +550,11 @@ class TestWiringManifest:
             patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
             patch(
                 "nodalarc_operator.session_deployer._discover_session_pod_placement",
-                side_effect=lambda _v1, _ns, expected: {nid: "node01" for nid in expected},
+                side_effect=lambda _v1, _ns, expected: dict.fromkeys(expected, "node01"),
             ),
             patch(
                 "nodalarc_operator.session_deployer._node_internal_ips",
-                side_effect=lambda _v1, required: {node: "10.0.0.1" for node in required},
+                side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
         ):
             write_wiring_manifest(spec, "nodalarc", owner_ref)
@@ -645,11 +645,11 @@ class TestWiringManifest:
             patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
             patch(
                 "nodalarc_operator.session_deployer._discover_session_pod_placement",
-                side_effect=lambda _v1, _ns, expected: {nid: "node01" for nid in expected},
+                side_effect=lambda _v1, _ns, expected: dict.fromkeys(expected, "node01"),
             ),
             patch(
                 "nodalarc_operator.session_deployer._node_internal_ips",
-                side_effect=lambda _v1, required: {node: "10.0.0.1" for node in required},
+                side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
         ):
             write_wiring_manifest(spec, "nodalarc", owner_ref)
@@ -680,11 +680,11 @@ class TestWiringManifest:
             patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
             patch(
                 "nodalarc_operator.session_deployer._discover_session_pod_placement",
-                side_effect=lambda _v1, _ns, expected: {nid: "node01" for nid in expected},
+                side_effect=lambda _v1, _ns, expected: dict.fromkeys(expected, "node01"),
             ),
             patch(
                 "nodalarc_operator.session_deployer._node_internal_ips",
-                side_effect=lambda _v1, required: {node: "10.0.0.1" for node in required},
+                side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
         ):
             write_wiring_manifest(spec, "nodalarc", owner_ref)

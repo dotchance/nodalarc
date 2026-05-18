@@ -63,7 +63,7 @@ def _make_dispatcher(mbb=False):
         ("gs-ashburn", "sat-P00S01"): ("term0", "gnd0"),
         ("sat-P00S00", "sat-P00S01"): ("isl0", "isl1"),
     }
-    bandwidth_map = {k: 1000.0 for k in interface_map}
+    bandwidth_map = dict.fromkeys(interface_map, 1000.0)
 
     loc = PodLocationMap()
     for pair in interface_map:

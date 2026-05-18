@@ -239,32 +239,6 @@ NodalArc is source-available and welcomes useful contributions. Bugs, routing st
 - **Pull Requests** - read the [Developer Guide](docs/dev/) before opening one
 - **Discussions** - architecture proposals, use cases, and experiments
 
-## Repository Metadata
-
-Recommended GitHub About description:
-
-```text
-Satellite network emulator for orbital routing, handoffs, and moving topology.
-```
-
-Recommended GitHub topics:
-
-```text
-networking satellite satcom emulation emulator routing orbital space leo kubernetes frr ospf isis bgp mpls segment-routing traffic-engineering linux-networking vxlan network-visualization
-```
-
-Recommended website:
-
-```text
-https://nodal.asmolab.net
-```
-
-Suggested social preview image:
-
-```text
-docs/images/github-social-preview.png
-```
-
 ## License
 
 NodalArc Source Available License 1.0. You can use, modify, and distribute it subject to the license terms. You cannot offer it as a hosted or managed service that provides access to a substantial set of NodalArc features. See [LICENSE](LICENSE) for full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party notices.

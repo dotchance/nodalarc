@@ -245,7 +245,7 @@ class SessionManager:
                             os.kill(pid, signal.SIGTERM)
                             log.info(f"Killed orphan {key}={pid} from {subdir.name}")
                             killed += 1
-                        except (ProcessLookupError, PermissionError):
+                        except ProcessLookupError, PermissionError:
                             pass
         return killed
 

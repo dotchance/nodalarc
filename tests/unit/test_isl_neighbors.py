@@ -108,7 +108,6 @@ class TestStarlinkEarlyAssignment:
         # Plane 0: should only have 3 assignments (no cross-left)
         p0s0 = by_node["sat-P00S00"]
         assert len(p0s0) == 3
-        link_types = [na.link_type for na in p0s0]
         priorities = [na.priority for na in p0s0]
         assert 0 in priorities  # intra-fwd
         assert 1 in priorities  # intra-aft

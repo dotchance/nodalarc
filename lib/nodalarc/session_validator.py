@@ -161,10 +161,6 @@ def _check_e004(
 
     tv = resolved_stack.template_variables
     gs_sid_offset = tv.get("gs_sid_offset")
-    srgb_start = tv.get("srgb_start", 0)
-    srgb_end = tv.get("srgb_end", 0)
-    srgb_size = srgb_end - srgb_start + 1
-
     if gs_sid_offset is None:
         return results  # No SR variables to check
 
@@ -186,13 +182,6 @@ def _check_e004(
                 remediation="Increase SRGB range or reduce constellation size.",
             )
         )
-
-    # Check GS SID overflow (we don't have gs count here but we know srgb_size)
-    # We'd need ground_stations for this — but the spec says to check it.
-    # The caller passes ground_stations separately, but _check_e004 only gets
-    # satellites and resolved_stack. We'll add the GS overflow check here
-    # by accepting a gs_count parameter from the caller.
-    # Actually, let's keep the signature simple and just check what we can.
 
     return results
 

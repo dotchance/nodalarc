@@ -164,7 +164,6 @@ class TestPushForwardingTable:
         mock_grpc_mod.channel_ready_future.return_value = mock_future
 
         # Stub service responds
-        mock_stub_cls = MagicMock()
         mock_response = PushResponse(
             success=True,
             error_message="",

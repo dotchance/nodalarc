@@ -103,7 +103,7 @@ def _build_owner_ref(name: str, meta: dict) -> dict:
 
 
 @lru_cache(maxsize=4)
-def _compute_expected_node_ids_cached(spec_hash: str, session_yaml: str) -> frozenset[str]:
+def _compute_expected_node_ids_cached(_spec_hash: str, session_yaml: str) -> frozenset[str]:
     """Compute expected pod names from session YAML. Memoized by spec hash.
 
     Cached to avoid re-expanding the constellation on every 10-second
@@ -606,7 +606,6 @@ async def on_update(spec, name, namespace, meta, status, **_):
         log.debug("on_update: session in Error state, skipping")
         return
 
-    loop = asyncio.get_running_loop()
     new_hash = compute_platform_hash(dict(spec))
     old_hash = status.get("platformHash", "")
 

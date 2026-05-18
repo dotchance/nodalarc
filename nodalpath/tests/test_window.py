@@ -158,15 +158,12 @@ class TestSlidingWindow:
         assert len(entries) >= 2
         # First entry: all 6 links up
         # Second entry: 5 links (one cross-plane ISL down)
-        first_edge_count = len(entries[0].forwarding_tables[0].sim_time) > 0  # sanity
         # Compare edge counts via the stored snapshots (indirectly via forwarding tables)
         # The first entry has 6 links, after link_down we have 5
         first_ft = entries[0]
-        second_ft = entries[1]
         # The forwarding tables will differ — second entry should have fewer paths
         # since sat-P00S01<->sat-P01S01 ISL is down
         first_paths = len(first_ft.computed_paths)
-        second_paths = len(second_ft.computed_paths)
         # With 6 links, gs-alpha and gs-beta are connected → paths exist
         assert first_paths > 0
         # With 5 links, still might be connected via alternate route

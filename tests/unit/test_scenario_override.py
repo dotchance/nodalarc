@@ -15,17 +15,17 @@ from scheduler.dispatcher import ActiveLinkInfo, Dispatcher
 
 
 def _make_dispatcher(**overrides) -> Dispatcher:
-    defaults = dict(
-        interface_map={},
-        bandwidth_map={},
-        pod_locator=MagicMock(),
-        agent_pool=MagicMock(),
-        session_id="test-session",
-        wiring_generation="sha256:" + "a" * 64,
-        max_latency_age_s=1.0,
-        gs_terminal_capacities={},
-        sat_ground_terminal_capacities={},
-    )
+    defaults = {
+        "interface_map": {},
+        "bandwidth_map": {},
+        "pod_locator": MagicMock(),
+        "agent_pool": MagicMock(),
+        "session_id": "test-session",
+        "wiring_generation": "sha256:" + "a" * 64,
+        "max_latency_age_s": 1.0,
+        "gs_terminal_capacities": {},
+        "sat_ground_terminal_capacities": {},
+    }
     defaults.update(overrides)
     return Dispatcher(**defaults)
 

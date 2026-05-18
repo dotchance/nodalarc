@@ -31,6 +31,7 @@ dev = [
     "mypy",
     "ruff>=0.4.4",
     "pre-commit>=3.7.0",
+    "vulture>=2.14",
     "kopf>=1.37",
 ]
 
@@ -57,12 +58,12 @@ dev = [
 ]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = ["E501", "B008", "E402", "E741", "E701", "E702", "F841", "SIM115"]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "W"]
+ignore = ["E501", "B008", "E402", "E741", "E701", "E702", "SIM115", "UP047"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B", "SIM"]

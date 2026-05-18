@@ -12,7 +12,7 @@ from nodalpath.console.state import (
 
 
 def _make_state(**kw) -> ConsoleState:
-    defaults = dict(session_path="/tmp/test", transport="grpc", dry_run=False)
+    defaults = {"session_path": "/tmp/test", "transport": "grpc", "dry_run": False}
     defaults.update(kw)
     return ConsoleState(**defaults)
 

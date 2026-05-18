@@ -391,8 +391,8 @@ async def main() -> None:
                     log.warning("Wiring watcher error: %s", exc)
             time.sleep(5)
 
-    # Start wiring watcher in thread pool
-    wiring_task = loop.run_in_executor(None, _wiring_watcher)
+    # Start wiring watcher in thread pool.
+    loop.run_in_executor(None, _wiring_watcher)
 
     # Wait for first wiring pass to complete before accepting requests
     log.debug("Waiting for wiring to complete before accepting NATS requests...")

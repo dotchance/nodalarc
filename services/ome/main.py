@@ -676,12 +676,10 @@ def _run_pacing(
 
     # Optional file output
     out_path = None
-    sentinel = None
     if output_dir:
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{session.session.name}-timeline.jsonl"
-        sentinel = out_path.with_suffix(".ready")
 
     def _enqueue(subject: str, payload: bytes) -> None:
         """Put event on queue. If the queue is full after 10 seconds, the

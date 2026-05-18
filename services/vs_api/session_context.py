@@ -211,7 +211,7 @@ class SessionContext:
             self._subscriber_task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(self._subscriber_task), timeout=15.0)
-            except (asyncio.CancelledError, TimeoutError):
+            except asyncio.CancelledError, TimeoutError:
                 log.warning(
                     "SessionContext stop timed out after 15s — %d subscriptions may be orphaned",
                     len(self._subscriptions),
@@ -625,7 +625,7 @@ class SessionContext:
 
         try:
             sim_time_unix = datetime.fromisoformat(sim_time_iso).timestamp()
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return
 
         with self.state_lock:

@@ -2,10 +2,71 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+DRY_RUN_TARGETS = (
+    "help",
+    "all",
+    "deps",
+    "check-deps",
+    "check-registry",
+    "build",
+    "build-frontends",
+    "build-images",
+    "_clear-build-cache",
+    "ensure-base-images",
+    "build-base-images",
+    "build-base",
+    "build-frr",
+    "build-probe",
+    "build-fwd",
+    "build-ome",
+    "build-scheduler",
+    "build-node-agent",
+    "build-vs-api",
+    "build-operator",
+    "build-vf",
+    "build-nodalpath",
+    "build-measurement",
+    "load",
+    "install",
+    "reinstall",
+    "session",
+    "restart",
+    "upgrade",
+    "deploy-all",
+    "deploy-ome",
+    "deploy-scheduler",
+    "deploy-node-agent",
+    "deploy-vs-api",
+    "deploy-operator",
+    "deploy-vf",
+    "deploy-nodalpath",
+    "deploy-measurement",
+    "status",
+    "lint",
+    "lint-policy",
+    "dead-code",
+    "test",
+    "test-backend",
+    "test-frontend",
+    "test-integration",
+    "test-root",
+    "teardown",
+    "force-teardown",
+    "reset-platform",
+    "clean",
+    "clean-deps",
+    "clean-images",
+    "clean-registry",
+    "purge-containerd",
+    "nuke",
+)
 
 
 def _makefile() -> str:
@@ -17,6 +78,33 @@ def _target_body(name: str) -> str:
     match = re.search(rf"^{re.escape(name)}:.*?(?=^[A-Za-z0-9_-]+:|\Z)", text, re.M | re.S)
     assert match, f"target not found: {name}"
     return match.group(0)
+
+
+def test_make_targets_dry_run_cleanly() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "KUBECONFIG": str(ROOT / ".does-not-exist"),
+            "MODE": "single-node",
+            "REGISTRY_HOST": "",
+        }
+    )
+
+    stale_tool_script = re.compile(r"tools/(?:na-|clean-|detect-|check_lint_policy)|tools/.*\.sh")
+    for target in DRY_RUN_TARGETS:
+        result = subprocess.run(
+            ["make", "-n", "--no-print-directory", target],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        output = result.stdout + result.stderr
+        assert result.returncode == 0, f"{target} dry-run failed:\n{output}"
+        assert not stale_tool_script.search(output), (
+            f"{target} uses stale tools/ script path:\n{output}"
+        )
 
 
 def test_all_preserves_user_environment_and_loads_before_install() -> None:

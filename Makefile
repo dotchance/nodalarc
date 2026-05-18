@@ -3,7 +3,7 @@
 #
 # The Makefile is a facade over lifecycle scripts. Keep Make responsible for
 # the public command surface and simple dependency wiring; put stateful cluster
-# orchestration in tools/ scripts where it can be tested directly.
+# orchestration in scripts/ where it can be tested directly.
 
 -include config.mk
 
@@ -15,7 +15,7 @@ KUBECONFIG      ?= /etc/rancher/k3s/k3s.yaml
 K3S_NODE        ?= nodal
 SUDO_CTR        ?= sudo
 MODE            ?= auto
-REGISTRY_HOST   ?= $(shell bash tools/detect-registry.sh 2>/dev/null)
+REGISTRY_HOST   ?= $(shell bash scripts/detect-registry.sh 2>/dev/null)
 REGISTRY_PREFIX ?= $(if $(filter single-node,$(MODE)),,$(if $(REGISTRY_HOST),$(REGISTRY_HOST)/,))
 DEFAULT_SESSION ?= configs/sessions/demo-36-ospf.yaml
 NAMESPACE       ?= nodalarc
@@ -38,8 +38,8 @@ TAG     ?= $(GIT_SHA)
 # Image names
 # ---------------------------------------------------------------------------
 
-IMAGE_REF = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash tools/na-images.sh image-for $(1))
-IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash tools/na-images.sh image-for-tag $(1) $(2))
+IMAGE_REF = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash scripts/na-images.sh image-for $(1))
+IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash scripts/na-images.sh image-for-tag $(1) $(2))
 
 # ---------------------------------------------------------------------------
 # Phony targets
@@ -215,7 +215,7 @@ _clear-build-cache:
 
 ensure-base-images:
 	@for logical in base frr probe nodalpath-fwd; do \
-		img=$$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash tools/na-images.sh image-for-tag $$logical latest); \
+		img=$$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash scripts/na-images.sh image-for-tag $$logical latest); \
 		if ! docker image inspect $$img >/dev/null 2>&1; then \
 			echo "[build] Base image $$img not found — building base images..."; \
 			$(MAKE) build-base-images; \
@@ -269,7 +269,7 @@ build-vf: build-frontends ## Build VF (visualization) image
 # single-node imports into K3s containerd; multi-node pushes to REGISTRY_HOST.
 
 load: ## Import images into K3s (single-node) or push to registry (multi-node)
-	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash tools/na-load-images.sh
+	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-load-images.sh
 
 # ---------------------------------------------------------------------------
 # Platform lifecycle
@@ -286,10 +286,10 @@ load: ## Import images into K3s (single-node) or push to registry (multi-node)
 # common footgun where no nodes carry the nodalarc.io/node-agent=true
 # label and the DaemonSet silently schedules zero pods.
 install: ## Helm install the platform chart; refuses existing platform state
-	@ACTION=install MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash tools/na-install-platform.sh
+	@ACTION=install MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
 
 reinstall: ## Explicit destructive reinstall through official teardown
-	@ACTION=reinstall MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash tools/na-install-platform.sh
+	@ACTION=reinstall MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
 
 # ---------------------------------------------------------------------------
 # Session lifecycle and platform restarts
@@ -300,7 +300,7 @@ reinstall: ## Explicit destructive reinstall through official teardown
 # platform pods; it does not change Helm values or session state.
 
 session: ## Start a session (DEFAULT_SESSION=path/to/session.yaml)
-	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' bash tools/na-session.sh
+	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' DEFAULT_SESSION='$(DEFAULT_SESSION)' bash scripts/na-session.sh
 
 restart: ## Rolling restart all platform pods (forces image re-pull)
 	@echo "[restart] Rolling restart of all platform deployments and daemonsets..."
@@ -331,7 +331,7 @@ restart: ## Rolling restart all platform pods (forces image re-pull)
 #   git commit → make build && make load && make upgrade
 
 upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
-	@ACTION=upgrade MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash tools/na-install-platform.sh
+	@ACTION=upgrade MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
 
 # ---------------------------------------------------------------------------
 # Iterative service deploys
@@ -364,7 +364,7 @@ upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
 # This updates Helm with the new SHA tags (post-commit permanent state).
 
 define _deploy-service
-	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash tools/na-deploy-service.sh $1 $2
+	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-deploy-service.sh $1 $2
 endef
 
 deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf build-nodalpath ## Build + load + restart all platform services
@@ -405,7 +405,7 @@ deploy-measurement: build-measurement ## Build + load + restart MI
 # ---------------------------------------------------------------------------
 
 status: ## Show cluster status (pods, phase, links)
-	@MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' DEFAULT_SESSION='$(DEFAULT_SESSION)' TAG='$(TAG)' bash tools/na-status.sh
+	@MODE='$(MODE)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' REGISTRY_HOST='$(REGISTRY_HOST)' DEFAULT_SESSION='$(DEFAULT_SESSION)' TAG='$(TAG)' bash scripts/na-status.sh
 
 # ---------------------------------------------------------------------------
 # Lint and static analysis
@@ -417,10 +417,10 @@ lint: lint-policy ## Run lint, formatting, and high-confidence dead-code checks
 	$(MAKE) dead-code
 
 lint-policy: ## Verify lint policy was not weakened
-	uv run --extra dev python tools/check_lint_policy.py
+	uv run --extra dev python scripts/check-lint-policy.py
 
 dead-code: ## Report high-confidence unused code findings
-	uv run --extra dev vulture lib services nodalpath tools images --min-confidence 80
+	uv run --extra dev vulture lib services nodalpath tools scripts images --min-confidence 80
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -467,7 +467,7 @@ test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NE
 # it intentionally warns because it can leave host/container state behind.
 
 teardown: ## Full teardown — pods, namespace, cluster resources, kernel state
-	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash tools/na-teardown.sh
+	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-teardown.sh
 
 force-teardown: ## Break-glass Kubernetes removal only; does not verify host cleanup
 	@echo "[force-teardown] BREAK-GLASS: deterministic cleanup will not be performed."
@@ -502,17 +502,17 @@ clean-deps: ## Remove installed dependencies (.venv, node_modules)
 	@echo "[clean-deps] Dependencies removed."
 
 clean-images: ## Remove all nodalarc Docker images
-	@bash tools/na-clean-images.sh
+	@bash scripts/na-clean-images.sh
 
 # clean-registry owns only external registry contents. K3s containerd cache
 # cleanup belongs to purge-containerd so nuke can preserve required ordering.
 clean-registry: ## Purge nodalarc images from REGISTRY_HOST
-	@REGISTRY_HOST='$(REGISTRY_HOST)' bash tools/clean-registry.sh
+	@REGISTRY_HOST='$(REGISTRY_HOST)' bash scripts/clean-registry.sh
 
 purge-containerd: ## Purge nodalarc images from K3s containerd caches
-	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' SUDO_CTR='$(SUDO_CTR)' bash tools/na-purge-containerd.sh
+	@KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' SUDO_CTR='$(SUDO_CTR)' bash scripts/na-purge-containerd.sh
 
 # Ordering matters: remote containerd purge needs Node Agent pods alive, so
 # nuke runs registry cleanup and remote cache purge before teardown.
 nuke: ## Remove everything — registry + teardown + images + deps + artifacts
-	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' SUDO_CTR='$(SUDO_CTR)' bash tools/na-nuke.sh
+	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' SUDO_CTR='$(SUDO_CTR)' bash scripts/na-nuke.sh

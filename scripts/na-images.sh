@@ -29,7 +29,7 @@ resolve_mode() {
         NODE_COUNT=0
         MIRROR_THIRD_PARTY_RESOLVED="${MIRROR_THIRD_PARTY:-0}"
     else
-        record="$(bash "$ROOT_DIR/tools/na-mode.sh")"
+        record="$(bash "$ROOT_DIR/scripts/na-mode.sh")"
         IFS=$'\t' read -r MODE_RESOLVED REGISTRY_HOST_RESOLVED REGISTRY_PREFIX_RESOLVED NODE_COUNT MIRROR_THIRD_PARTY_RESOLVED <<< "$record"
     fi
 }

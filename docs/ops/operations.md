@@ -24,7 +24,7 @@ When you need to fully stop the platform:
 make teardown
 ```
 
-This runs `tools/na-teardown.sh` - a 9-step sequence that handles every failure mode:
+This runs `scripts/na-teardown.sh` - a 9-step sequence that handles every failure mode:
 
 1. Strip finalizers from session resources, delete ConstellationSpec CRs
 2. Wait for session pods to terminate (force-deletes after 60s timeout)

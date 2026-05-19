@@ -33,6 +33,8 @@ endif
 # Image tag: git short SHA for reproducibility
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 TAG     ?= $(GIT_SHA)
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)
+DOCKER_BUILD_METADATA_ARGS = --build-arg VCS_REF=$(GIT_SHA) --build-arg BUILD_DATE=$(BUILD_DATE)
 
 # ---------------------------------------------------------------------------
 # Image names
@@ -65,6 +67,8 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 
 help: ## Show this help
 	@echo "NodalArc Build System"
+	@echo "Copyright 2024-2026 .chance (dotchance)"
+	@echo "Official source: https://github.com/dotchance/nodalarc"
 	@echo ""
 	@echo "Quick start from a clean checkout/K3s state:"
 	@echo "  sudo scripts/bootstrap-host.sh"
@@ -218,34 +222,34 @@ ensure-base-images:
 build-base-images: build-base build-frr build-probe ## Build infrastructure images (base, FRR, probe)
 
 build-base:
-	docker build -t "$(call IMAGE_REF,base)" -t "$(call IMAGE_REF_TAG,base,latest)" images/base/
+	docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$(call IMAGE_REF,base)" -t "$(call IMAGE_REF_TAG,base,latest)" images/base/
 
 build-frr: ## Build FRR image (official FRR base + our entrypoint)
-	docker build -t "$(call IMAGE_REF,frr)" -t "$(call IMAGE_REF_TAG,frr,latest)" -t "$(call IMAGE_REF_TAG,frr,10)" images/frr/
+	docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$(call IMAGE_REF,frr)" -t "$(call IMAGE_REF_TAG,frr,latest)" -t "$(call IMAGE_REF_TAG,frr,10)" images/frr/
 
 build-probe:
-	docker build -t "$(call IMAGE_REF,probe)" -t "$(call IMAGE_REF_TAG,probe,latest)" -f images/probe/Dockerfile .
+	docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$(call IMAGE_REF,probe)" -t "$(call IMAGE_REF_TAG,probe,latest)" -f images/probe/Dockerfile .
 
 build-ome: ## Build OME image
-	docker build -f services/ome/Dockerfile -t "$(call IMAGE_REF,ome)" -t "$(call IMAGE_REF_TAG,ome,latest)" .
+	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/ome/Dockerfile -t "$(call IMAGE_REF,ome)" -t "$(call IMAGE_REF_TAG,ome,latest)" .
 
 build-scheduler: ## Build Scheduler image
-	docker build -f services/scheduler/Dockerfile -t "$(call IMAGE_REF,scheduler)" -t "$(call IMAGE_REF_TAG,scheduler,latest)" .
+	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/scheduler/Dockerfile -t "$(call IMAGE_REF,scheduler)" -t "$(call IMAGE_REF_TAG,scheduler,latest)" .
 
 build-node-agent: ## Build Node Agent image
-	docker build -f services/node_agent/Dockerfile -t "$(call IMAGE_REF,node-agent)" -t "$(call IMAGE_REF_TAG,node-agent,latest)" .
+	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/node_agent/Dockerfile -t "$(call IMAGE_REF,node-agent)" -t "$(call IMAGE_REF_TAG,node-agent,latest)" .
 
 build-vs-api: ## Build VS-API image
-	docker build -f services/vs_api/Dockerfile -t "$(call IMAGE_REF,vs-api)" -t "$(call IMAGE_REF_TAG,vs-api,latest)" .
+	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/vs_api/Dockerfile -t "$(call IMAGE_REF,vs-api)" -t "$(call IMAGE_REF_TAG,vs-api,latest)" .
 
 build-operator: ## Build Operator image
-	docker build -f services/nodalarc_operator/Dockerfile -t "$(call IMAGE_REF,operator)" -t "$(call IMAGE_REF_TAG,operator,latest)" .
+	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/nodalarc_operator/Dockerfile -t "$(call IMAGE_REF,operator)" -t "$(call IMAGE_REF_TAG,operator,latest)" .
 
 build-measurement: ## Build MI (Measurement) image
-	docker build -f services/measurement/Dockerfile -t "$(call IMAGE_REF,measurement)" -t "$(call IMAGE_REF_TAG,measurement,latest)" .
+	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/measurement/Dockerfile -t "$(call IMAGE_REF,measurement)" -t "$(call IMAGE_REF_TAG,measurement,latest)" .
 
 build-vf: build-frontends ## Build VF (visualization) image
-	docker build --build-arg BUILD_HASH=$(GIT_SHA) -t "$(call IMAGE_REF,vf)" -t "$(call IMAGE_REF_TAG,vf,latest)" frontend/
+	docker build $(DOCKER_BUILD_METADATA_ARGS) --build-arg BUILD_HASH=$(GIT_SHA) -t "$(call IMAGE_REF,vf)" -t "$(call IMAGE_REF_TAG,vf,latest)" frontend/
 
 # ---------------------------------------------------------------------------
 # Image transport

@@ -52,10 +52,10 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
         build-frontends build-images ensure-base-images build-base-images \
         _clear-build-cache build-base build-frr build-probe build-fwd \
         build-ome build-scheduler build-node-agent build-vs-api \
-        build-operator build-vf build-nodalpath build-measurement \
+        build-operator build-vf build-measurement \
         check-deps \
         deploy-all deploy-ome deploy-scheduler deploy-node-agent deploy-measurement \
-        deploy-vs-api deploy-operator deploy-vf deploy-nodalpath
+        deploy-vs-api deploy-operator deploy-vf
 
 .DEFAULT_GOAL := help
 
@@ -82,7 +82,7 @@ help: ## Show this help
 	@echo "  From scratch proof:   make nuke && make all"
 	@echo "  Existing platform:    make build && make load && make upgrade"
 	@echo "  Destructive refresh:  make build && make load && make reinstall && make session"
-	@echo "  Session switch:       make session DEFAULT_SESSION=configs/sessions/starlink-176-nodalpath.yaml"
+	@echo "  Session switch:       make session DEFAULT_SESSION=configs/sessions/starlink-176-isis.yaml"
 	@echo "  Emergency only:       make force-teardown"
 	@echo ""
 	@echo "Notes:"
@@ -142,10 +142,6 @@ deps: check-deps ## Install Python + Node.js dependencies (idempotent)
 			npm audit 2>&1; \
 			exit 1; \
 		fi
-	@if [ -d nodalpath/console/frontend ]; then \
-		echo "[deps] Installing NodalPath console dependencies..."; \
-		cd nodalpath/console/frontend && npm ci; \
-	fi
 	@echo "[deps] Done."
 
 check-deps:
@@ -199,22 +195,18 @@ build: deps build-frontends build-images ## Build frontend dist + all Docker ima
 	@echo "[build] All images built with tag $(TAG)."
 	@echo "[build] Next: make load"
 
-build-frontends: ## Build VF and NodalPath console frontends
+build-frontends: ## Build VF frontend
 	@echo "[build] Building VF frontend..."
 	cd frontend && npm run build
-	@if [ -d nodalpath/console/frontend ]; then \
-		echo "[build] Building NodalPath console frontend..."; \
-		cd nodalpath/console/frontend && npm run build; \
-	fi
 
 build-images: _clear-build-cache build-base-images build-ome build-scheduler build-node-agent \
-              build-vs-api build-operator build-vf build-nodalpath
+              build-vs-api build-operator build-vf
 
 _clear-build-cache:
 	@docker builder prune --filter type=source.local -f >/dev/null 2>&1 || true
 
 ensure-base-images:
-	@for logical in base frr probe nodalpath-fwd; do \
+	@for logical in base frr probe; do \
 		img=$$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' NA_IMAGES_NO_CLUSTER=1 bash scripts/na-images.sh image-for-tag $$logical latest); \
 		if ! docker image inspect $$img >/dev/null 2>&1; then \
 			echo "[build] Base image $$img not found — building base images..."; \
@@ -223,10 +215,7 @@ ensure-base-images:
 		fi; \
 	done
 
-build-base-images: build-base build-frr build-probe build-fwd ## Build infrastructure images (base, FRR, probe)
-
-proto-stubs: ## Generate NodalPath gRPC Python stubs
-	uv run --extra dev bash nodalpath/proto/generate.sh
+build-base-images: build-base build-frr build-probe ## Build infrastructure images (base, FRR, probe)
 
 build-base:
 	docker build -t "$(call IMAGE_REF,base)" -t "$(call IMAGE_REF_TAG,base,latest)" images/base/
@@ -237,9 +226,6 @@ build-frr: ## Build FRR image (official FRR base + our entrypoint)
 build-probe:
 	docker build -t "$(call IMAGE_REF,probe)" -t "$(call IMAGE_REF_TAG,probe,latest)" -f images/probe/Dockerfile .
 
-build-fwd:
-	docker build -t "$(call IMAGE_REF,nodalpath-fwd)" -t "$(call IMAGE_REF_TAG,nodalpath-fwd,latest)" images/nodalpath-fwd/
-
 build-ome: ## Build OME image
 	docker build -f services/ome/Dockerfile -t "$(call IMAGE_REF,ome)" -t "$(call IMAGE_REF_TAG,ome,latest)" .
 
@@ -249,14 +235,11 @@ build-scheduler: ## Build Scheduler image
 build-node-agent: ## Build Node Agent image
 	docker build -f services/node_agent/Dockerfile -t "$(call IMAGE_REF,node-agent)" -t "$(call IMAGE_REF_TAG,node-agent,latest)" .
 
-build-vs-api: proto-stubs ## Build VS-API image
+build-vs-api: ## Build VS-API image
 	docker build -f services/vs_api/Dockerfile -t "$(call IMAGE_REF,vs-api)" -t "$(call IMAGE_REF_TAG,vs-api,latest)" .
 
 build-operator: ## Build Operator image
 	docker build -f services/nodalarc_operator/Dockerfile -t "$(call IMAGE_REF,operator)" -t "$(call IMAGE_REF_TAG,operator,latest)" .
-
-build-nodalpath: proto-stubs ## Build NodalPath image
-	docker build -f nodalpath/Dockerfile -t "$(call IMAGE_REF,nodalpath)" -t "$(call IMAGE_REF_TAG,nodalpath,latest)" .
 
 build-measurement: ## Build MI (Measurement) image
 	docker build -f services/measurement/Dockerfile -t "$(call IMAGE_REF,measurement)" -t "$(call IMAGE_REF_TAG,measurement,latest)" .
@@ -307,7 +290,7 @@ session: ## Start a session (DEFAULT_SESSION=path/to/session.yaml)
 
 restart: ## Rolling restart all platform pods (forces image re-pull)
 	@echo "[restart] Rolling restart of all platform deployments and daemonsets..."
-	@for dep in ome nodalarc-scheduler nodalarc-vs-api nodalarc-operator nodalarc-vf nodalpath; do \
+	@for dep in ome nodalarc-scheduler nodalarc-vs-api nodalarc-operator nodalarc-vf; do \
 		kubectl get deployment/$$dep -n $(NAMESPACE) >/dev/null; \
 		kubectl rollout restart deployment/$$dep -n $(NAMESPACE); \
 		echo "  Restarted deployment/$$dep"; \
@@ -316,7 +299,7 @@ restart: ## Rolling restart all platform pods (forces image re-pull)
 	@kubectl rollout restart daemonset/nodalarc-node-agent -n $(NAMESPACE)
 	@echo "  Restarted daemonset/nodalarc-node-agent"
 	@echo "[restart] Waiting for rollout..."
-	@for dep in ome nodalarc-scheduler nodalarc-vs-api nodalarc-operator nodalarc-vf nodalpath; do \
+	@for dep in ome nodalarc-scheduler nodalarc-vs-api nodalarc-operator nodalarc-vf; do \
 		kubectl rollout status deployment/$$dep -n $(NAMESPACE) --timeout=60s; \
 	done
 	@kubectl rollout status daemonset/nodalarc-node-agent -n $(NAMESPACE) --timeout=60s
@@ -370,14 +353,13 @@ define _deploy-service
 	@MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' bash scripts/na-deploy-service.sh $1 $2
 endef
 
-deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf build-nodalpath ## Build + load + restart all platform services
+deploy-all: build-ome build-scheduler build-node-agent build-vs-api build-operator build-vf ## Build + load + restart all platform services
 	$(call _deploy-service,ome,deployment/ome)
 	$(call _deploy-service,scheduler,deployment/nodalarc-scheduler)
 	$(call _deploy-service,node-agent,daemonset/nodalarc-node-agent)
 	$(call _deploy-service,vs-api,deployment/nodalarc-vs-api)
 	$(call _deploy-service,operator,deployment/nodalarc-operator)
 	$(call _deploy-service,vf,deployment/nodalarc-vf)
-	$(call _deploy-service,nodalpath,deployment/nodalpath)
 
 deploy-ome: build-ome ## Build + load + restart OME
 	$(call _deploy-service,ome,deployment/ome)
@@ -397,9 +379,6 @@ deploy-operator: build-operator ## Build + load + restart Operator
 deploy-vf: build-vf ## Build + load + restart VF
 	$(call _deploy-service,vf,deployment/nodalarc-vf)
 
-deploy-nodalpath: build-nodalpath ## Build + load + restart NodalPath
-	$(call _deploy-service,nodalpath,deployment/nodalpath)
-
 deploy-measurement: build-measurement ## Build + load + restart MI
 	$(call _deploy-service,measurement,deployment/nodalarc-measurement)
 
@@ -414,7 +393,7 @@ status: ## Show cluster status (pods, phase, links)
 # Lint and static analysis
 # ---------------------------------------------------------------------------
 
-lint: proto-stubs lint-policy ## Run lint, formatting, and high-confidence dead-code checks
+lint: lint-policy ## Run lint, formatting, and high-confidence dead-code checks
 	uv run --extra dev ruff check .
 	uv run --extra dev ruff format --check .
 	$(MAKE) dead-code
@@ -423,7 +402,7 @@ lint-policy: ## Verify lint policy was not weakened
 	uv run --extra dev python scripts/check-lint-policy.py
 
 dead-code: ## Report high-confidence unused code findings
-	uv run --extra dev vulture lib services nodalpath tools scripts images --min-confidence 80
+	uv run --extra dev vulture lib services tools scripts images --min-confidence 80
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -432,7 +411,7 @@ dead-code: ## Report high-confidence unused code findings
 # Unit tests should not require a live cluster. Integration tests are explicit
 # because they assume a running platform or cluster-adjacent services.
 
-test: proto-stubs ## Run all unit tests (no sudo needed)
+test: ## Run all unit tests (no sudo needed)
 	@backend=0; frontend=0; \
 	uv run pytest --ignore=tests/integration --tb=short -q || backend=$$?; \
 	cd frontend && npx vitest run || frontend=$$?; \
@@ -440,13 +419,13 @@ test: proto-stubs ## Run all unit tests (no sudo needed)
 		echo ""; echo "[test] FAILURES: backend=$$backend frontend=$$frontend"; exit 1; \
 	fi
 
-test-backend: proto-stubs ## Run Python unit tests
+test-backend: ## Run Python unit tests
 	uv run pytest --ignore=tests/integration --tb=short -q
 
 test-frontend: ## Run frontend unit tests (vitest)
 	cd frontend && npx vitest run
 
-test-integration: proto-stubs ## Run integration tests (requires running cluster)
+test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q
 
 test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NET_ADMIN)
@@ -494,14 +473,14 @@ reset-platform: ## Teardown platform and runtime caches but keep dependencies
 # running cluster.
 
 clean: ## Remove build artifacts (dist/, caches)
-	rm -rf frontend/dist nodalpath/console/frontend/dist
+	rm -rf frontend/dist
 	find . -type d -name __pycache__ ! -path ./.venv/\* -exec rm -rf {} + 2>/dev/null || true
 	rm -rf .pytest_cache .ruff_cache
 	@echo "[clean] Build artifacts removed."
 
 clean-deps: ## Remove installed dependencies (.venv, node_modules)
 	rm -rf .venv lib/nodalarc.egg-info
-	rm -rf frontend/node_modules nodalpath/console/frontend/node_modules
+	rm -rf frontend/node_modules
 	@echo "[clean-deps] Dependencies removed."
 
 clean-images: ## Remove all nodalarc Docker images

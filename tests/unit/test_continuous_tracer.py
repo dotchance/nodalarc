@@ -1,9 +1,9 @@
 """Tests for vs_api/continuous_tracer.py — unit tests for helper methods."""
 
+from types import SimpleNamespace
+
 from nodalarc.models.path import LiveTraceLink, PathHop, TracepathHop, TracepathResult
 from vs_api.continuous_tracer import ContinuousTracer
-
-from nodalpath.models.topology import TopologyNode
 
 
 def _make_tracer(
@@ -14,13 +14,13 @@ def _make_tracer(
     """Create a ContinuousTracer with minimal config for unit testing."""
     if node_registry is None:
         node_registry = {
-            "gs-alpha": TopologyNode(
+            "gs-alpha": SimpleNamespace(
                 node_id="gs-alpha",
                 node_type="ground_station",
                 sid=24000,
                 loopback_ipv4="10.2.0.1",
             ),
-            "sat-P00S00": TopologyNode(
+            "sat-P00S00": SimpleNamespace(
                 node_id="sat-P00S00",
                 node_type="satellite",
                 sid=16001,
@@ -28,7 +28,7 @@ def _make_tracer(
                 plane=0,
                 slot=0,
             ),
-            "sat-P00S01": TopologyNode(
+            "sat-P00S01": SimpleNamespace(
                 node_id="sat-P00S01",
                 node_type="satellite",
                 sid=16002,
@@ -36,7 +36,7 @@ def _make_tracer(
                 plane=0,
                 slot=1,
             ),
-            "gs-beta": TopologyNode(
+            "gs-beta": SimpleNamespace(
                 node_id="gs-beta",
                 node_type="ground_station",
                 sid=24001,
@@ -241,18 +241,14 @@ def test_extract_rtt_empty():
     assert ContinuousTracer._extract_rtt(parsed) == 0.0
 
 
-def test_load_session_context_returns_5_tuple():
-    """Verify load_session_context return type has 5 elements.
-
-    The VS-API _create_continuous_tracer() indexes into the result
-    tuple as ctx[0] and ctx[1]. This test catches regressions if
-    the return type changes.
-    """
-    import typing
-
-    from nodalpath.orchestrator.session_loader import load_session_context
-
-    hints = typing.get_type_hints(load_session_context)
-    ret = hints["return"]
-    args = typing.get_args(ret)
-    assert len(args) == 5, f"load_session_context should return 5-tuple, got {len(args)}"
+def test_tracer_accepts_dict_node_registry():
+    """External path engines may provide plain dict node records."""
+    tracer = _make_tracer(
+        node_registry={
+            "gs-alpha": {"node_id": "gs-alpha", "loopback_ipv4": "10.2.0.1"},
+            "gs-beta": {"node_id": "gs-beta", "loopback_ipv4": "10.2.1.1"},
+        },
+        interface_map={},
+        pid_map={},
+    )
+    assert tracer._ip_to_node["10.2.0.1"] == "gs-alpha"

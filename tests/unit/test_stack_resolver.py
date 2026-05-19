@@ -84,19 +84,12 @@ class TestOSPFSR:
 
 
 class TestNodalPath:
-    def test_nodalpath(self):
-        r = resolve_stack("nodalpath", [])
-        assert r.daemons == ["zebra", "staticd"]
-        assert len(r.template_files) == 2
-        assert r.image == "nodalpath-fwd"
-        assert r.transport == "grpc"
-        assert r.mi_adapter is None
-        assert r.host_modules == ["mpls_router", "mpls_iptunnel"]
-        assert len(r.env) == 3
-        assert r.security_context_capabilities == ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+    def test_nodalpath_is_external(self):
+        with pytest.raises(ValueError, match="distributed separately"):
+            resolve_stack("nodalpath", [])
 
     def test_nodalpath_no_extensions(self):
-        with pytest.raises(ValueError, match="does not accept extensions"):
+        with pytest.raises(ValueError, match="distributed separately"):
             resolve_stack("nodalpath", ["sr"])
 
 
@@ -105,11 +98,11 @@ class TestNodalPath:
 
 class TestInvalid:
     def test_nodalpath_rejects_extensions(self):
-        with pytest.raises(ValueError, match="does not accept extensions"):
+        with pytest.raises(ValueError, match="distributed separately"):
             resolve_stack("nodalpath", ["sr"])
 
     def test_nodalpath_rejects_te(self):
-        with pytest.raises(ValueError, match="does not accept extensions"):
+        with pytest.raises(ValueError, match="distributed separately"):
             resolve_stack("nodalpath", ["te"])
 
     def test_mpls_requires_te_isis(self):

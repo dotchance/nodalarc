@@ -54,14 +54,12 @@ list_build_images() {
     emit_record build nodalarc base "$(prefix_ref base "$TAG")" required built
     emit_record build nodalarc frr "$(prefix_ref frr "$TAG")" required built
     emit_record build nodalarc probe "$(prefix_ref probe "$TAG")" required built
-    emit_record build nodalarc nodalpath-fwd "$(prefix_ref nodalpath-fwd "$TAG")" required built
     emit_record build nodalarc ome "$(prefix_ref ome "$TAG")" required built
     emit_record build nodalarc scheduler "$(prefix_ref scheduler "$TAG")" required built
     emit_record build nodalarc node-agent "$(prefix_ref node-agent "$TAG")" required built
     emit_record build nodalarc vs-api "$(prefix_ref vs-api "$TAG")" required built
     emit_record build nodalarc operator "$(prefix_ref operator "$TAG")" required built
     emit_record build nodalarc vf "$(prefix_ref vf "$TAG")" required built
-    emit_record build nodalarc nodalpath "$(prefix_ref nodalpath "$TAG")" required built
 }
 
 list_platform_runtime_images() {
@@ -71,13 +69,11 @@ list_platform_runtime_images() {
     emit_record platform nodalarc vs-api "$(prefix_ref vs-api "$TAG")" required built
     emit_record platform nodalarc operator "$(prefix_ref operator "$TAG")" required built
     emit_record platform nodalarc vf "$(prefix_ref vf "$TAG")" required built
-    emit_record platform nodalarc nodalpath "$(prefix_ref nodalpath "$TAG")" required built
 }
 
 list_session_runtime_images() {
     emit_record session nodalarc frr "$(prefix_ref frr "$TAG")" required built
     emit_record session nodalarc probe "$(prefix_ref probe "$TAG")" required built
-    emit_record session nodalarc nodalpath-fwd "$(prefix_ref nodalpath-fwd "$TAG")" required built
 }
 
 list_third_party_runtime_images() {
@@ -103,7 +99,7 @@ image_for_tag() {
     local name="$1"
     local tag="$2"
     case "$name" in
-        base|frr|probe|nodalpath-fwd|ome|scheduler|node-agent|vs-api|operator|vf|nodalpath|measurement)
+        base|frr|probe|ome|scheduler|node-agent|vs-api|operator|vf|measurement)
             prefix_ref "$name" "$tag"
             ;;
         nats)
@@ -135,14 +131,12 @@ helm_image_args() {
     printf '%s\n' "--set-string=imagePullPolicy=$pull_policy"
     printf '%s\n' "--set-string=images.frr=$(image_for frr)"
     printf '%s\n' "--set-string=images.probe=$(image_for probe)"
-    printf '%s\n' "--set-string=images.nodalpathFwd=$(image_for nodalpath-fwd)"
     printf '%s\n' "--set-string=images.ome=$(image_for ome)"
     printf '%s\n' "--set-string=images.scheduler=$(image_for scheduler)"
     printf '%s\n' "--set-string=images.nodeAgent=$(image_for node-agent)"
     printf '%s\n' "--set-string=images.vsApi=$(image_for vs-api)"
     printf '%s\n' "--set-string=images.operator=$(image_for operator)"
     printf '%s\n' "--set-string=images.vf=$(image_for vf)"
-    printf '%s\n' "--set-string=images.nodalpath=$(image_for nodalpath)"
     printf '%s\n' "--set-string=images.nats=$(image_for nats)"
     printf '%s\n' "--set-string=images.natsBox=$(image_for nats-box)"
 }

@@ -7,7 +7,6 @@ images:
   nodalpathFwd: nodalarc/nodalpath-fwd:dev
   ome: nodalarc/ome:dev
   vf: nodalarc/vf:dev
-  nodalpath: nodalarc/nodalpath:dev
   scheduler: nodalarc/scheduler:dev
   nodeAgent: nodalarc/node-agent:dev
   vsApi: nodalarc/vs-api:dev
@@ -32,12 +31,6 @@ vf:
   memoryLimit: 1Gi
   cpuLimit: "4"
   vsApiHost: ""  # Set to host IP (e.g., 192.168.10.202) for external access
-
-nodalpath:
-  mode: console
-  transport: grpc
-  memoryLimit: 2Gi
-  cpuLimit: "8"
 
 # Scheduler consumes OME events and dispatches topology changes to Node Agents.
 scheduler:

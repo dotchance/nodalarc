@@ -63,7 +63,6 @@ The routing protocol runs inside every satellite and ground station, computing f
 | IS-IS | Intermediate System to Intermediate System. Preferred for large networks | Large constellations, multi-area designs, production-like testing |
 | IS-IS + TE | IS-IS with traffic engineering extensions | Traffic engineering, bandwidth-aware routing |
 | IS-IS + SR-MPLS | IS-IS with segment routing over MPLS | Label-switched paths, service chaining |
-| NodalPath | Centralized path computation (not distributed routing) | NEBULA-aligned architectures, PCE testing |
 
 For your first session, OSPF or IS-IS with a flat area strategy is simplest. For larger constellations (100+ satellites), IS-IS with per-plane areas is recommended - it keeps the routing database manageable by limiting flooding scope to each orbital plane.
 

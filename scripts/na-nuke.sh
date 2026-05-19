@@ -30,14 +30,14 @@ run_phase() {
 }
 
 clean_artifacts() {
-    rm -rf "$ROOT_DIR/frontend/dist" "$ROOT_DIR/nodalpath/console/frontend/dist"
+    rm -rf "$ROOT_DIR/frontend/dist"
     find "$ROOT_DIR" -type d -name __pycache__ ! -path "$ROOT_DIR/.venv/*" -exec rm -rf {} + 2>/dev/null || true
     rm -rf "$ROOT_DIR/.pytest_cache" "$ROOT_DIR/.ruff_cache"
 }
 
 clean_deps() {
     rm -rf "$ROOT_DIR/.venv" "$ROOT_DIR/lib/nodalarc.egg-info"
-    rm -rf "$ROOT_DIR/frontend/node_modules" "$ROOT_DIR/nodalpath/console/frontend/node_modules"
+    rm -rf "$ROOT_DIR/frontend/node_modules"
 }
 
 clean_docker_images() {
@@ -66,7 +66,7 @@ verify_square_one() {
         echo "[nuke] ERROR: local Docker still has NodalArc images" >&2
         errors=$((errors + 1))
     fi
-    for path in "$ROOT_DIR/frontend/dist" "$ROOT_DIR/nodalpath/console/frontend/dist" "$ROOT_DIR/.venv" "$ROOT_DIR/frontend/node_modules"; do
+    for path in "$ROOT_DIR/frontend/dist" "$ROOT_DIR/.venv" "$ROOT_DIR/frontend/node_modules"; do
         if [ -e "$path" ]; then
             echo "[nuke] ERROR: generated/dependency path still exists: ${path#$ROOT_DIR/}" >&2
             errors=$((errors + 1))

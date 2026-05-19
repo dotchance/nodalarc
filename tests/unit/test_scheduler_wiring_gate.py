@@ -217,7 +217,17 @@ def _assert_gate_timeout(status_json: str) -> None:
 
 
 def test_wiring_gate_rejects_dirty_kernel_status() -> None:
-    _assert_gate_timeout(_node_status("sat-a", dirty_kernel=True))
+    with pytest.raises(RuntimeError, match="Wiring gate failed"):
+        wait_for_wiring_gate(
+            k8s_v1=_K8s(statuses={"sat-a": _node_status("sat-a", dirty_kernel=True)}),
+            namespace="nodalarc",
+            expected_nodes={"sat-a"},
+            session_id=SESSION_ID,
+            wiring_generation=WIRING_GENERATION,
+            timeout_s=2.0,
+            poll_s=0.0,
+            sleep=lambda _seconds: None,
+        )
 
 
 def test_wiring_gate_rejects_generation_mismatch() -> None:

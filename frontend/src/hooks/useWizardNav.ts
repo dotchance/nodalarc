@@ -13,7 +13,7 @@
 import { useCallback } from "react";
 import type {
   WizardState,
-  LegacyWizardState,
+  WizardRuntimeState,
   WizardStep,
 } from "../catalog/wizardTypes";
 
@@ -29,7 +29,7 @@ export function canPreview(state: WizardState): boolean {
 
 /** Pure function: can the user proceed to review?
  *  True when protocol is selected (extensions are optional). */
-export function canReview(state: LegacyWizardState): boolean {
+export function canReview(state: WizardRuntimeState): boolean {
   return state.protocol !== null;
 }
 
@@ -42,7 +42,7 @@ const PREV_STEP: Partial<Record<WizardStep, WizardStep>> = {
 
 /** Hook providing navigation actions for the wizard. */
 export function useWizardNav(
-  setState: React.Dispatch<React.SetStateAction<LegacyWizardState>>,
+  setState: React.Dispatch<React.SetStateAction<WizardRuntimeState>>,
 ) {
   const goToStep = useCallback(
     (step: WizardStep) => {

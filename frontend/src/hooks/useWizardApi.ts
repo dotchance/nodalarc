@@ -8,7 +8,7 @@
 
 import { useState, useCallback } from "react";
 import { REST_URL, authHeaders } from "../config";
-import type { LegacyWizardState, CoveragePreviewResult } from "../catalog/wizardTypes";
+import type { WizardRuntimeState, CoveragePreviewResult } from "../catalog/wizardTypes";
 
 /** If the constellation field is a JSON string (custom), parse it to a dict.
  *  Otherwise return the file path string as-is. */
@@ -41,7 +41,7 @@ export function useWizardApi() {
   const clearPreview = useCallback(() => setCoveragePreview(null), []);
 
   const generate = useCallback(
-    async (state: LegacyWizardState) => {
+    async (state: WizardRuntimeState) => {
       if (!state.constellation || !state.protocol) return;
       setGenerating(true);
       setError(null);
@@ -56,6 +56,7 @@ export function useWizardApi() {
             protocol: state.protocol,
             extensions: state.extensions,
             area_strategy: state.areaStrategy,
+            orbit_propagator: state.orbitPropagator,
             ground_stations: state.groundStationSet?.file
               ? state.groundStationSet.file
               : state.groundStationSet?.stations ?? undefined,
@@ -106,7 +107,7 @@ export function useWizardApi() {
   );
 
   const previewCoverage = useCallback(
-    async (state: LegacyWizardState) => {
+    async (state: WizardRuntimeState) => {
       if (!state.constellation || !state.satelliteType || !state.groundStationSet) return;
       setPreviewing(true);
       setError(null);

@@ -34,6 +34,7 @@ from node_agent.ground_bridge import (
     create_mediated_isl,
     create_satellite_ground_veth,
 )
+from node_agent.mpls import load_mpls_kernel_modules
 from node_agent.namespace_ops import (
     _in_namespace,
     _write_sysctl_in_netns,
@@ -386,7 +387,12 @@ def execute_wiring(
                 _record_failure(nid_a, "isl_interfaces", f"mediated ISL to {nid_b}: {exc}")
                 _record_failure(nid_b, "isl_interfaces", f"mediated ISL to {nid_a}: {exc}")
     log.info("Phase 2: created %d host-mediated ISL pairs", len(created_links))
-    _write_progress(f"Created {len(created_links)} ISL pairs. Enabling MPLS...")
+    requires_mpls = any(bool(node_spec.get("mpls_enable")) for node_spec in nodes.values())
+    if requires_mpls:
+        load_mpls_kernel_modules()
+        _write_progress(f"Created {len(created_links)} ISL pairs. Enabling MPLS...")
+    else:
+        _write_progress(f"Created {len(created_links)} ISL pairs. MPLS not requested.")
 
     # Phase 3: Enable MPLS input on ISL interfaces (parallelized)
     mpls_tasks = []
@@ -409,9 +415,12 @@ def execute_wiring(
             except Exception as exc:
                 _record_failure(nid, "mpls", f"MPLS enable failed {ifname}: {exc}")
     log.info("Phase 3: MPLS input enabled on %d ISL interfaces", len(mpls_tasks))
-    _write_progress(
-        f"MPLS enabled on {len(mpls_tasks)} interfaces. Creating ground infrastructure..."
-    )
+    if requires_mpls:
+        _write_progress(
+            f"MPLS enabled on {len(mpls_tasks)} interfaces. Creating ground infrastructure..."
+        )
+    else:
+        _write_progress("Creating ground infrastructure...")
 
     # Phase 4+5: Create ground infrastructure (parallelized)
     # Ground bridges (GS-side) and satellite ground veths are independent

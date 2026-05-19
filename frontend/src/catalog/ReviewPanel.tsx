@@ -2,13 +2,14 @@
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** Review & Deploy panel — session summary, YAML preview, deploy/download.
  *
- * Extracted from SessionWizard.tsx step 6 with zero behavior change.
+ * Session summary, YAML preview, deploy, and download controls.
  */
 
-import type { LegacyWizardState } from "./wizardTypes";
+import type { WizardRuntimeState } from "./wizardTypes";
+import { ORBIT_MODEL_OPTIONS } from "./orbitModels";
 
 interface ReviewPanelProps {
-  state: LegacyWizardState;
+  state: WizardRuntimeState;
   generatedYaml: string | null;
   generating: boolean;
   deploying: boolean;
@@ -28,6 +29,9 @@ export function ReviewPanel({
   onDownload,
   onReset,
 }: ReviewPanelProps) {
+  const orbitModelLabel =
+    ORBIT_MODEL_OPTIONS.find((o) => o.id === state.orbitPropagator)?.label ?? state.orbitPropagator;
+
   return (
     <div className="wizard-panel">
       <h2 className="wizard-panel-title">Review &amp; Deploy</h2>
@@ -47,6 +51,10 @@ export function ReviewPanel({
         <div className="wizard-review-row">
           <span className="wizard-review-label">Satellites</span>
           <span className="wizard-review-value">{state.constellation?.satellite_count ?? "-"}</span>
+        </div>
+        <div className="wizard-review-row">
+          <span className="wizard-review-label">Orbit Model</span>
+          <span className="wizard-review-value">{orbitModelLabel}</span>
         </div>
         <div className="wizard-review-row">
           <span className="wizard-review-label">Protocol</span>

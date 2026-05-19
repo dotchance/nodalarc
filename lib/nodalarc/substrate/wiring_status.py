@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -119,6 +120,38 @@ def status_configmap_data(
     }
     data.update({node_id: encode_status(status) for node_id, status in statuses.items()})
     return data
+
+
+def failed_status_summary(
+    statuses: Mapping[str, NodeWiringStatus],
+    *,
+    node_ids: Iterable[str] | None = None,
+    limit: int = 10,
+) -> str:
+    """Summarize failed or dirty wiring status with the first concrete cause."""
+    candidates = set(node_ids) if node_ids is not None else set(statuses)
+    failed = sorted(
+        node_id
+        for node_id in candidates
+        if (status := statuses.get(node_id)) is not None
+        and (status.status in {"failed", "dirty_kernel"} or status.dirty_kernel)
+    )
+    if not failed:
+        return ""
+
+    displayed = ", ".join(failed[:limit])
+    if len(failed) > limit:
+        displayed += f" ... and {len(failed) - limit} more"
+
+    first = failed[0]
+    detail = ""
+    for phase in statuses[first].phases:
+        if phase.status in {"failed", "dirty_kernel"} or phase.error_message:
+            reason = phase.error_message or phase.status
+            detail = f"; first failure: {first} {phase.phase}: {reason}"
+            break
+
+    return f"wiring failed for nodes: {displayed}{detail}"
 
 
 def parse_status_configmap(

@@ -6,6 +6,7 @@ from node_agent.__main__ import (
     _require_ready_fence,
 )
 from node_agent.command_contract import RuntimeFence
+from node_agent.mpls import load_mpls_kernel_modules
 
 
 def test_startup_rejects_missing_host_ip_in_k8s(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -37,6 +38,43 @@ def test_startup_accepts_valid_host_ip_in_k8s(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("HOST_IP", "10.0.0.10")
 
     _require_host_ip_for_vxlan_capable_startup()
+
+
+def test_loads_mpls_kernel_modules_in_k8s(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setenv("NODE_NAME", "k3s-a")
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    def run(cmd, **_kwargs):
+        calls.append(cmd)
+        return Result()
+
+    monkeypatch.setattr("node_agent.mpls.subprocess.run", run)
+
+    load_mpls_kernel_modules()
+
+    assert calls == [["modprobe", "mpls_router"], ["modprobe", "mpls_iptunnel"]]
+
+
+def test_reports_unavailable_mpls_kernel_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    published: list[dict] = []
+    monkeypatch.setenv("NODE_NAME", "k3s-a")
+
+    class Result:
+        returncode = 1
+        stderr = "module not found"
+
+    monkeypatch.setattr("node_agent.mpls.subprocess.run", lambda *_args, **_kwargs: Result())
+    monkeypatch.setattr(ops_events, "publish", lambda **kwargs: published.append(kwargs))
+
+    load_mpls_kernel_modules()
+
+    assert published
+    assert published[0]["code"] == "STARTUP_KERNEL_MODULE_UNAVAILABLE"
+    assert published[0]["details"]["module"] == "mpls_router"
 
 
 def test_explicit_pid_map_fence_requires_both_identity_fields(

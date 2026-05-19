@@ -8,8 +8,6 @@ authors:
 repository-code: "https://github.com/dotchance/nodalarc"
 url: "https://nodal.asmolab.net"
 license: "Apache-2.0"
-version: "0.1.0"
-date-released: "2026-05-18"
 keywords:
   - satellite networking
   - orbital routing

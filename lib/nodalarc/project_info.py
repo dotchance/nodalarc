@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
-import tomllib
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -35,25 +35,62 @@ def _installed_project_version() -> str | None:
     return None
 
 
-def _source_tree_project_version() -> str | None:
-    pyproject = _repo_root() / "pyproject.toml"
-    if not pyproject.exists():
+def _version_from_git_describe(described: str) -> str | None:
+    value = described.strip()
+    if not value:
         return None
 
-    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    project = data.get("project")
-    if not isinstance(project, dict):
+    value = value.removeprefix("nodalarc-")
+    dirty_suffix = ""
+    if value.endswith("-dirty"):
+        dirty_suffix = ".dirty"
+        value = value.removesuffix("-dirty")
+
+    if re.fullmatch(r"[0-9]+(?:[.][0-9A-Za-z]+)*", value):
+        return f"{value}+dirty" if dirty_suffix else value
+
+    if match := re.fullmatch(r"(.+)-([0-9]+)-g([0-9a-f]+)", value):
+        base, commits, revision = match.groups()
+        return f"{base}+{commits}.g{revision}{dirty_suffix}"
+
+    if re.fullmatch(r"[0-9a-f]{7,40}", value):
+        return f"0+g{value}{dirty_suffix}"
+
+    return None
+
+
+def _git_described_project_version() -> str | None:
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(_repo_root()),
+                "describe",
+                "--tags",
+                "--match",
+                "nodalarc-[0-9]*",
+                "--match",
+                "[0-9]*",
+                "--dirty",
+                "--always",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except FileNotFoundError, subprocess.SubprocessError:
         return None
 
-    project_version = project.get("version")
-    return project_version if isinstance(project_version, str) and project_version else None
+    return _version_from_git_describe(result.stdout)
 
 
 def project_version() -> str:
     return (
         os.environ.get("NODALARC_VERSION")
+        or _git_described_project_version()
         or _installed_project_version()
-        or _source_tree_project_version()
         or UNKNOWN_VERSION
     )
 

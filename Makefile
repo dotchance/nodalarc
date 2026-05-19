@@ -33,7 +33,7 @@ endif
 # Image tag: git short SHA for reproducibility
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 TAG     ?= $(GIT_SHA)
-PROJECT_VERSION ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1)
+PROJECT_VERSION ?= $(shell bash scripts/na-project-version.sh)
 ifeq ($(strip $(PROJECT_VERSION)),)
 PROJECT_VERSION := 0+unknown
 endif

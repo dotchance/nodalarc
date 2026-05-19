@@ -2006,7 +2006,8 @@ def _create_continuous_tracer() -> ContinuousTracer:
         Path(_sf).exists() if _sf else False,
     )
     if _sf and Path(_sf).exists():
-        # Ensure NodalPath config is initialized (load_session_context needs SID ranges)
+        # NodalPath is optional and may be installed as a separate package.
+        # Keep VS-API usable when the external path engine is not present.
         try:
             from nodalpath.platform import get_nodalpath_config
 
@@ -2020,6 +2021,8 @@ def _create_continuous_tracer() -> ContinuousTracer:
                 log.info("Initialized NodalPath config from configs/nodalpath.yaml")
             except Exception as exc:
                 log.error("Failed to init NodalPath config: %s", exc)
+        except Exception as exc:
+            log.debug("NodalPath package unavailable for continuous tracer: %s", exc)
         try:
             from nodalpath.orchestrator.session_loader import load_session_context
 
@@ -2031,6 +2034,8 @@ def _create_continuous_tracer() -> ContinuousTracer:
                 len(node_registry),
                 len(interface_map),
             )
+        except ModuleNotFoundError as exc:
+            log.debug("NodalPath session loader unavailable for continuous tracer: %s", exc)
         except Exception as exc:
             log.error("Failed to load session context: %s", exc, exc_info=True)
 
@@ -2256,7 +2261,6 @@ def wizard_extension_rules() -> dict:
         "protocols": {
             "ospf": {"extensions": ["sr", "te", "mpls"], "constraints": {"mpls": ["te"]}},
             "isis": {"extensions": ["sr", "te", "mpls"], "constraints": {"mpls": ["te"]}},
-            "nodalpath": {"extensions": [], "constraints": {}},
         },
         "area_strategies": ["flat", "stripe", "per-plane"],
     }

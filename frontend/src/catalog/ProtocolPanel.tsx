@@ -14,7 +14,7 @@ const PROTOCOL_INFO: Record<string, { label: string; description: string; disabl
   ospf: { label: "OSPF", description: "Open Shortest Path First. Distributed link-state routing." },
   isis: { label: "IS-IS", description: "Intermediate System to Intermediate System. Native CLNS routing." },
   bgp: { label: "BGP", description: "Border Gateway Protocol.", disabled: true, disabledReason: "Coming Soon" },
-  nodalpath: { label: "NodalPath", description: "Centralized MPLS path computation (NEBULA model). No FRR routing daemon." },
+  nodalpath: { label: "NodalPath", description: "External path computation engine.", disabled: true, disabledReason: "Separate Package" },
 };
 
 const EXTENSION_INFO: Record<string, { label: string; description: string }> = {

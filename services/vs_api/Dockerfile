@@ -44,9 +44,6 @@ COPY services/vs_api/ services/vs_api/
 # Copy OME service (coverage_preview used by wizard)
 COPY services/ome/ services/ome/
 
-# Copy nodalpath (session_loader, live path tracer, console state)
-COPY nodalpath/ nodalpath/
-
 # Bake in all config files
 COPY configs/ configs/
 

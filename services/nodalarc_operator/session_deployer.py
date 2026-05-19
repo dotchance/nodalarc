@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Session deployer — renders configs, creates pods and ConfigMaps.
 
 Replicates na_deploy.py Steps 3-5 using the K8s Python client.

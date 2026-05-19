@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Project attribution and build metadata shared by API and tooling surfaces."""
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ PROJECT_AUTHOR = ".chance (dotchance)"
 PROJECT_COPYRIGHT = "Copyright 2024-2026 .chance (dotchance)"
 PROJECT_SOURCE_URL = "https://github.com/dotchance/nodalarc"
 PROJECT_URL = "https://nodal.asmolab.net"
-PROJECT_LICENSE = "NodalArc Source Available License 1.0"
+PROJECT_LICENSE = "Apache-2.0"
 PROJECT_NOTICE = "See NOTICE and THIRD_PARTY_NOTICES.md."
 UNKNOWN_VERSION = "0+unknown"
 UNKNOWN_BUILD_VALUE = "unknown"

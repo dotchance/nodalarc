@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Scheduler dispatch loop — event-driven architecture with async queue.
 
 Decision callbacks consume NATS events and produce desired link state

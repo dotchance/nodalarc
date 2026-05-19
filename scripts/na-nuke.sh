@@ -15,6 +15,10 @@ fi
 failures=0
 summary=()
 
+echo "=== NodalArc Nuke ==="
+echo "Copyright 2024-2026 .chance (dotchance)"
+echo "Official source: https://github.com/dotchance/nodalarc"
+
 run_phase() {
     local name="$1"
     shift

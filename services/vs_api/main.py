@@ -59,7 +59,7 @@ from nodalarc.nats_channels import (
     sanitize_session_id,
 )
 from nodalarc.platform_config import get_platform_config
-from nodalarc.project_info import project_attribution
+from nodalarc.project_info import project_attribution, project_version
 
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
@@ -1000,7 +1000,7 @@ async def lifespan(app: FastAPI):
     broadcast_task.cancel()
 
 
-app = FastAPI(title="Nodal Arc VS-API", version="1.0", lifespan=lifespan)
+app = FastAPI(title="Nodal Arc VS-API", version=project_version(), lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     # NODAL_CORS_ORIGIN restricts origins in production (e.g. "https://nodal.example.com").

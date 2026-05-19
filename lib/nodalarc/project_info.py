@@ -18,7 +18,7 @@ PROJECT_SOURCE_URL = "https://github.com/dotchance/nodalarc"
 PROJECT_URL = "https://nodal.asmolab.net"
 PROJECT_LICENSE = "Apache-2.0"
 PROJECT_NOTICE = "See NOTICE and THIRD_PARTY_NOTICES.md."
-UNKNOWN_VERSION = "0+unknown"
+UNKNOWN_VERSION = "0.0.0+unknown"
 UNKNOWN_BUILD_VALUE = "unknown"
 
 
@@ -54,7 +54,7 @@ def _version_from_git_describe(described: str) -> str | None:
         return f"{base}+{commits}.g{revision}{dirty_suffix}"
 
     if re.fullmatch(r"[0-9a-f]{7,40}", value):
-        return f"0+g{value}{dirty_suffix}"
+        return f"0.0.0+g{value}{dirty_suffix}"
 
     return None
 

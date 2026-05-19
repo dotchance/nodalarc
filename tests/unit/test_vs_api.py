@@ -131,12 +131,12 @@ class TestApiAttribution:
 
     def test_about_returns_project_attribution(self):
         import vs_api.main as m
+        from nodalarc.project_info import project_version
 
         payload = m.about()
 
         assert payload["name"] == "NodalArc"
-        assert payload["version"]
-        assert payload["version"] != "0.1.0"
+        assert payload["version"] == project_version()
         assert payload["revision"]
         assert payload["build_date"]
         assert payload["author"] == ".chance (dotchance)"

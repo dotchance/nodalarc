@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
+PYTHON_VERSION_FILE = ROOT / ".python-version"
 SCRIPTS_DIR = ROOT / "scripts"
 TOOLS_DIR = ROOT / "tools"
 
@@ -47,9 +48,8 @@ def _failures() -> list[str]:
     data = tomllib.loads(PYPROJECT.read_text())
     failures: list[str] = []
 
-    project = data.get("project", {})
-    if project.get("requires-python") != ">=3.14":
-        failures.append("project.requires-python must stay at >=3.14")
+    if PYTHON_VERSION_FILE.read_text(encoding="utf-8").strip() != "3.14":
+        failures.append(".python-version must stay at 3.14")
 
     ruff = data.get("tool", {}).get("ruff", {})
     if ruff.get("target-version") != "py314":

@@ -419,20 +419,20 @@ frontend/node_modules/.bin/vitest: frontend/package.json frontend/package-lock.j
 
 test: ensure-frontend-deps ## Run all unit tests (no sudo needed)
 	@backend=0; frontend=0; \
-	uv run pytest --ignore=tests/integration --tb=short -q || backend=$$?; \
+	uv run --extra dev pytest --ignore=tests/integration --tb=short -q || backend=$$?; \
 	cd frontend && npm test || frontend=$$?; \
 	if [ $$backend -ne 0 ] || [ $$frontend -ne 0 ]; then \
 		echo ""; echo "[test] FAILURES: backend=$$backend frontend=$$frontend"; exit 1; \
 	fi
 
 test-backend: ## Run Python unit tests
-	uv run pytest --ignore=tests/integration --tb=short -q
+	uv run --extra dev pytest --ignore=tests/integration --tb=short -q
 
 test-frontend: ensure-frontend-deps ## Run frontend unit tests (vitest)
 	cd frontend && npm test
 
 test-integration: ## Run integration tests (requires running cluster)
-	uv run pytest tests/integration --tb=short -q
+	uv run --extra dev pytest tests/integration --tb=short -q
 
 test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NET_ADMIN)
 	@if [ "$$(id -u)" != "0" ]; then \

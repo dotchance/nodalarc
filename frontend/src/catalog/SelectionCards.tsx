@@ -17,7 +17,6 @@ import type {
   ActiveCard,
   OrbitPropagator,
 } from "./wizardTypes";
-import type { SessionInfo } from "../types";
 import { SatelliteTypePanel } from "./SatelliteTypePanel";
 import { GroundStationPanel } from "./GroundStationPanel";
 import { ConstellationPanel } from "./ConstellationPanel";
@@ -46,10 +45,6 @@ interface SelectionCardsProps {
   // Preview state
   canPreview: boolean;
   previewing: boolean;
-  // Fallback (passed through to ConstellationPanel)
-  fallbackSessions: SessionInfo[];
-  deploying: boolean;
-  onFallbackDeploy: (id: string) => void;
 }
 
 type CardId = "constellation" | "satellite-type" | "ground-stations" | "orbit-model";
@@ -117,9 +112,6 @@ export function SelectionCards(props: SelectionCardsProps) {
             presets={props.presets}
             selected={props.constellation}
             onSelect={(p) => { props.onSelectConstellation(p); setActiveCard(null); }}
-            fallbackSessions={props.fallbackSessions}
-            deploying={props.deploying}
-            onFallbackDeploy={props.onFallbackDeploy}
           />
         </div>
       )}

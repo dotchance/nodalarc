@@ -6,6 +6,7 @@ import {
   DEFAULT_ORBIT_PROPAGATOR,
   constellationSupportsSgp4Tle,
   defaultOrbitPropagatorForConstellation,
+  supportedOrbitModelsForConstellation,
 } from "../orbitModels";
 
 function preset(mode: string | null, constellation = "configs/constellations/starlink-176.yaml"): ConstellationPreset {
@@ -36,5 +37,12 @@ describe("orbit model helpers", () => {
 
     expect(constellationSupportsSgp4Tle(inline)).toBe(true);
     expect(defaultOrbitPropagatorForConstellation(inline)).toBe("sgp4-tle");
+  });
+
+  it("lists supported orbit models by constellation source", () => {
+    expect(supportedOrbitModelsForConstellation(preset("parametric")).map((option) => option.id))
+      .toEqual(["j2-mean-elements", "keplerian-circular"]);
+    expect(supportedOrbitModelsForConstellation(preset("tle")).map((option) => option.id))
+      .toEqual(["sgp4-tle"]);
   });
 });

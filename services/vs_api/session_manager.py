@@ -31,6 +31,18 @@ log = logging.getLogger(__name__)
 _MAX_KEPT_SESSIONS = 5
 
 
+def _cr_status_observes_current_generation(cr: dict) -> bool:
+    """Return true when CR status belongs to the current spec generation."""
+    metadata = cr.get("metadata") or {}
+    status = cr.get("status") or {}
+    try:
+        generation = int(metadata.get("generation", 0))
+        observed_generation = int(status.get("observedGeneration", 0))
+    except TypeError, ValueError:
+        return False
+    return generation > 0 and observed_generation == generation
+
+
 def _pid_alive(pid: int) -> bool:
     """Check if a process with the given PID is still running."""
     if pid <= 0:
@@ -308,7 +320,7 @@ class SessionManager:
 
         return removed
 
-    async def switch(self, session_path: str, progress_fn=None) -> None:
+    async def switch(self, session_path: str, progress_fn=None) -> dict:
         """Tear down current session and deploy new one via ConstellationSpec CRD.
 
         Fully async — uses asyncio.sleep for polling, runs K8s API calls
@@ -450,11 +462,15 @@ class SessionManager:
                 )
                 phase = cr.get("status", {}).get("phase", "")
                 message = cr.get("status", {}).get("message", "")
+                if not _cr_status_observes_current_generation(cr):
+                    await _progress("Waiting for operator to observe new session spec")
+                    await asyncio.sleep(1)
+                    continue
                 if message:
                     await _progress(message)
                 if phase == "Ready":
                     self._current_session_file = session_path
-                    return
+                    return cr
                 if phase == "Error":
                     raise RuntimeError(f"Deploy failed: {message}")
                 await asyncio.sleep(1)

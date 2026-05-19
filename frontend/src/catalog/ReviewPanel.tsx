@@ -2,14 +2,14 @@
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** Review & Deploy panel — session summary, YAML preview, deploy/download.
  *
- * Extracted from SessionWizard.tsx step 6 with zero behavior change.
+ * Session summary, YAML preview, deploy, and download controls.
  */
 
-import type { LegacyWizardState } from "./wizardTypes";
+import type { WizardRuntimeState } from "./wizardTypes";
 import { ORBIT_MODEL_OPTIONS } from "./orbitModels";
 
 interface ReviewPanelProps {
-  state: LegacyWizardState;
+  state: WizardRuntimeState;
   generatedYaml: string | null;
   generating: boolean;
   deploying: boolean;

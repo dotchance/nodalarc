@@ -61,7 +61,7 @@ function AppInner() {
     }
   }, [select]);
 
-  const { sessions, switching, switchSession } = useSessionSwitcher(snapshot?.session_status ?? null);
+  const { switching } = useSessionSwitcher(snapshot?.session_status ?? null);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
 
   const appState = useAppState({
@@ -73,7 +73,7 @@ function AppInner() {
 
   const {
     showCatalog, hasEverDeployed, setHasEverDeployed, setShowCatalog,
-    openCatalog, closeCatalog, hasActiveSession, activeSessionName, sessionStatus,
+    openCatalog, closeCatalog, activeSessionName, sessionStatus,
     viewMode, setViewMode, colorMode, setColorMode,
     showGroundLinks, setShowGroundLinks, showIslLinks, setShowIslLinks,
     showSatPaths, setShowSatPaths, setShowTrails,
@@ -82,16 +82,6 @@ function AppInner() {
     filterOpen, setFilterOpen,
     simTimeAdvanced, followNode, setFollowNode,
   } = appState;
-
-  const handleDeploy = useCallback((sessionId: string) => {
-    if (hasActiveSession) {
-      setShowCatalog(false);
-      return;
-    }
-    switchSession(`configs/sessions/${sessionId}.yaml`);
-    setShowCatalog(false);
-    setHasEverDeployed(true);
-  }, [switchSession, hasActiveSession, setShowCatalog, setHasEverDeployed]);
 
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
@@ -176,8 +166,7 @@ function AppInner() {
   const handleFlyToNode = useCallback((nodeId: string) => { globeActionsRef.current?.flyToNode(nodeId); }, []);
   const handleVisualizationFatalError = useCallback((message: string) => {
     setVisualizationError(message);
-    setShowCatalog(true);
-  }, [setShowCatalog]);
+  }, []);
 
   const keyboardActions = useMemo(
     () => ({
@@ -449,8 +438,6 @@ function AppInner() {
       onDeployStarted={() => { setShowCatalog(false); setHasEverDeployed(true); }}
       onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
       deploying={switching}
-      fallbackSessions={sessions}
-      onFallbackDeploy={handleDeploy}
       systemNotice={visualizationError ?? undefined}
     />
   ) : undefined;

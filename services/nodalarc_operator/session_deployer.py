@@ -27,10 +27,20 @@ from nodalarc.constellation_loader import (
 from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
 from nodalarc.models.session import PlacementConfig, SessionConfig
+from nodalarc.nats_channels import sanitize_session_id
+from nodalarc.session_identity import require_session_run_id
 from nodalarc.stack_resolver import resolve_stack
 from nodalarc.template_vars import build_template_vars
 
 log = logging.getLogger(__name__)
+
+SESSION_POD_SELECTOR = "nodalarc.io/node-id"
+POD_SESSION_RUN_LABEL = "nodalarc.io/session-run-id"
+POD_OWNER_UID_LABEL = "nodalarc.io/owner-uid"
+
+
+class RetryableSessionDependency(RuntimeError):
+    """Raised when Kubernetes has not finished deleting a prior runtime object."""
 
 
 def _require_env(name: str) -> str:
@@ -62,6 +72,149 @@ def _get_apps_v1() -> kubernetes.client.AppsV1Api:
         kubernetes.config.load_incluster_config()
         _apps_v1 = kubernetes.client.AppsV1Api()
     return _apps_v1
+
+
+def _metadata(obj: Any) -> Any:
+    return getattr(obj, "metadata", None)
+
+
+def _labels(obj: Any) -> dict[str, str]:
+    metadata = _metadata(obj)
+    return dict(getattr(metadata, "labels", None) or {})
+
+
+def _pod_node_id(pod: Any) -> str:
+    labels = _labels(pod)
+    node_id = str(labels.get("nodalarc.io/node-id") or "")
+    if node_id:
+        return node_id.lower()
+    metadata = _metadata(pod)
+    return str(getattr(metadata, "name", "") or "").lower()
+
+
+def _pod_deleting(pod: Any) -> bool:
+    metadata = _metadata(pod)
+    return bool(getattr(metadata, "deletion_timestamp", None))
+
+
+def _owner_ref_field(ref: Any, field: str) -> str:
+    if isinstance(ref, dict):
+        return str(ref.get(field) or "")
+    return str(getattr(ref, field, "") or "")
+
+
+def _pod_owned_by(pod: Any, owner_ref: dict | None) -> bool:
+    if owner_ref is None:
+        return False
+    expected_uid = str(owner_ref.get("uid") or "")
+    expected_name = str(owner_ref.get("name") or "")
+    if not expected_uid or not expected_name:
+        return False
+    metadata = _metadata(pod)
+    for ref in getattr(metadata, "owner_references", None) or []:
+        if (
+            _owner_ref_field(ref, "uid") == expected_uid
+            and _owner_ref_field(ref, "name") == expected_name
+        ):
+            return True
+    return False
+
+
+def _pod_current_for_runtime(pod: Any, session_id: str, owner_ref: dict | None) -> bool:
+    labels = _labels(pod)
+    return (
+        not _pod_deleting(pod)
+        and labels.get(POD_SESSION_RUN_LABEL) == session_id
+        and _pod_owned_by(pod, owner_ref)
+    )
+
+
+def _list_session_pods(v1: kubernetes.client.CoreV1Api, namespace: str) -> list[Any]:
+    return list(v1.list_namespaced_pod(namespace, label_selector=SESSION_POD_SELECTOR).items)
+
+
+def _patch_pod_runtime_identity(
+    v1: kubernetes.client.CoreV1Api,
+    pod: Any,
+    namespace: str,
+    session_id: str,
+    owner_ref: dict,
+) -> None:
+    metadata = _metadata(pod)
+    pod_name = str(getattr(metadata, "name", "") or "")
+    if not pod_name:
+        raise ValueError("Cannot patch unnamed session pod")
+    body = {
+        "metadata": {
+            "labels": {
+                POD_SESSION_RUN_LABEL: session_id,
+                POD_OWNER_UID_LABEL: str(owner_ref.get("uid") or ""),
+            }
+        }
+    }
+    v1.patch_namespaced_pod(pod_name, namespace, body)
+
+
+def ensure_session_pod_identity(
+    namespace: str,
+    expected_ids: set[str] | frozenset[str],
+    session_id: str,
+    owner_ref: dict,
+) -> int:
+    """Stamp same-CR session pods with the current runtime identity.
+
+    A CR generation change may intentionally reuse running pods while refreshing
+    ConfigMaps and rewiring. Pods from a different CR UID are never adopted.
+    """
+    v1 = _get_v1()
+    expected = {node_id.lower() for node_id in expected_ids}
+    patched = 0
+    for pod in _list_session_pods(v1, namespace):
+        if _pod_node_id(pod) not in expected:
+            continue
+        if _pod_deleting(pod) or not _pod_owned_by(pod, owner_ref):
+            continue
+        labels = _labels(pod)
+        if labels.get(POD_SESSION_RUN_LABEL) != session_id or labels.get(
+            POD_OWNER_UID_LABEL
+        ) != str(owner_ref.get("uid") or ""):
+            _patch_pod_runtime_identity(v1, pod, namespace, session_id, owner_ref)
+            patched += 1
+    if patched:
+        log.info("Stamped %d session pods with runtime identity %s", patched, session_id)
+    return patched
+
+
+def current_session_pod_node_ids(
+    namespace: str,
+    session_id: str,
+    owner_ref: dict,
+) -> set[str]:
+    """Return node IDs for pods owned by this CR and stamped with this run ID."""
+    v1 = _get_v1()
+    return {
+        _pod_node_id(pod)
+        for pod in _list_session_pods(v1, namespace)
+        if _pod_current_for_runtime(pod, session_id, owner_ref)
+    }
+
+
+def count_stale_session_pods(
+    namespace: str,
+    expected_ids: set[str] | frozenset[str],
+    session_id: str,
+    owner_ref: dict,
+) -> int:
+    """Count expected-name pods that cannot belong to the active runtime."""
+    v1 = _get_v1()
+    expected = {node_id.lower() for node_id in expected_ids}
+    stale = 0
+    for pod in _list_session_pods(v1, namespace):
+        if _pod_node_id(pod) not in expected:
+            continue
+        if not _pod_current_for_runtime(pod, session_id, owner_ref):
+            stale += 1
+    return stale
 
 
 def discover_available_nodes() -> list[str]:
@@ -311,6 +464,7 @@ def ensure_session_configmaps(
     namespace: str,
     owner_ref: dict,
     progress_fn: Any | None = None,
+    session_run_id: str | None = None,
 ) -> dict:
     """Create/update all ConfigMaps and SSH keys for a session.
 
@@ -323,13 +477,13 @@ def ensure_session_configmaps(
 
     Args:
         spec: The CR's .spec dict.
-        name: CR metadata.name (used for session_id).
+        name: CR metadata.name.
         namespace: K8s namespace.
         owner_ref: ownerReferences entry for garbage collection.
         progress_fn: Optional callback(message: str) for status updates.
 
     Returns:
-        Context dict with keys: session_id, session, constellation,
+        Context dict with keys: session_id, session_run_id, session, constellation,
         satellites, gs_file, resolved_stack, node_vars, pod_placement,
         available_nodes. Passed to ensure_session_pods().
     """
@@ -340,8 +494,6 @@ def ensure_session_configmaps(
             progress_fn(msg)
 
     v1 = _get_v1()
-
-    session_id = f"{name}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
 
     # Discover available K8s nodes for pod placement.
     _progress("Discovering available K8s nodes")
@@ -359,7 +511,13 @@ def ensure_session_configmaps(
     session_yaml = spec.get("sessionYaml")
     if not session_yaml:
         raise ValueError("spec.sessionYaml is required")
-    session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
+    raw_session = yaml.safe_load(session_yaml)
+    session = SessionConfig.model_validate(raw_session)
+    if session.session.run_id:
+        raise ValueError("session.run_id is operator-managed and must not be set in session YAML")
+    if not session_run_id:
+        raise ValueError("session_run_id is required to create runtime session ConfigMaps")
+    session_id = sanitize_session_id(session_run_id)
 
     # --- Step 2: Load constellation and ground stations ---
     _progress("Loading constellation and ground station definitions")
@@ -436,9 +594,7 @@ def ensure_session_configmaps(
     for w in val_warnings:
         log.warning("Session validation %s: %s", w.code, w.message)
     if validation_results:
-        _publish_validation_ops_events(
-            validation_results, namespace, session_id=session.session.name
-        )
+        _publish_validation_ops_events(validation_results, namespace, session_id=session_run_id)
     if val_errors:
         import kopf
 
@@ -546,10 +702,11 @@ def ensure_session_configmaps(
         gs_source if isinstance(gs_source, str) else None,
         namespace,
         owner_ref,
+        session_run_id,
     )
 
-    # --- Step 7b: Generate SSH keypair for terminal access ---
-    _progress("Generating SSH keypair for terminal access")
+    # --- Step 7b: Ensure SSH keypair for terminal access ---
+    _progress("Ensuring SSH keypair for terminal access")
     _create_terminal_ssh_keys(v1, namespace, owner_ref)
 
     # --- Step 8: Compute pod placement ---
@@ -568,6 +725,7 @@ def ensure_session_configmaps(
 
     return {
         "session_id": session_id,
+        "session_run_id": session_run_id,
         "session": session,
         "constellation": constellation,
         "satellites": satellites,
@@ -612,6 +770,7 @@ def ensure_session_pods(
     node_vars = context["node_vars"]
     pod_placement = context["pod_placement"]
     session = context["session"]
+    session_id = context["session_id"]
     resolved = context["resolved_stack"]
 
     total_pods = len(node_vars)
@@ -680,6 +839,7 @@ def ensure_session_pods(
                 probe_enabled=ps["probe_enabled"],
                 target_node=ps["target_node"],
                 owner_ref=owner_ref,
+                session_id=session_id,
             )
             futures[fut] = ps["node_id"]
 
@@ -697,6 +857,10 @@ def ensure_session_pods(
 
     if errors:
         log.error("Pod creation: %d failures out of %d", len(errors), total_pods)
+        displayed = "; ".join(errors[:10])
+        if len(errors) > 10:
+            displayed += f"; ... and {len(errors) - 10} more"
+        raise RuntimeError(f"Pod creation failed: {displayed}")
     log.info("Created %d session pods (total expected: %d)", created_pods, total_pods)
 
     return total_pods
@@ -708,6 +872,7 @@ def deploy_session(
     namespace: str,
     owner_ref: dict,
     progress_fn: Any | None = None,
+    session_run_id: str | None = None,
 ) -> dict:
     """Deploy a full session from a ConstellationSpec CR spec.
 
@@ -724,7 +889,9 @@ def deploy_session(
     Returns:
         Status dict with phase, podCount, readyPods, sessionId, message.
     """
-    context = ensure_session_configmaps(spec, name, namespace, owner_ref, progress_fn)
+    context = ensure_session_configmaps(
+        spec, name, namespace, owner_ref, progress_fn, session_run_id
+    )
     total_pods = ensure_session_pods(context, namespace, owner_ref, progress_fn)
 
     return {
@@ -741,6 +908,7 @@ def write_wiring_manifest(
     spec: dict,
     namespace: str,
     owner_ref: dict | None = None,
+    session_run_id: str | None = None,
 ) -> int:
     """Generate and write the topology wiring manifest ConfigMap.
 
@@ -758,6 +926,14 @@ def write_wiring_manifest(
         derive_wiring_generation,
     )
 
+    # Parse session from CRD spec
+    session_yaml = spec.get("sessionYaml", "")
+    session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
+    if session.session.run_id:
+        raise ValueError("session.run_id is operator-managed and must not be set in session YAML")
+    if not session_run_id:
+        raise ValueError("session_run_id is required to write topology wiring manifest")
+
     v1 = _get_v1()
 
     # Delete stale wiring-status before writing new manifest.
@@ -769,10 +945,6 @@ def write_wiring_manifest(
     except kubernetes.client.rest.ApiException as e:
         if e.status != 404:
             raise
-
-    # Parse session from CRD spec
-    session_yaml = spec.get("sessionYaml", "")
-    session = SessionConfig.model_validate(yaml.safe_load(session_yaml))
     constellation = load_constellation(session.constellation)
     gs_file = load_ground_stations(session.ground_stations)
     satellites = expand_constellation(constellation)
@@ -782,6 +954,7 @@ def write_wiring_manifest(
 
     resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
     segment_routing = resolved.segment_routing
+    mpls_enable = any(name.startswith("net.mpls.") for name in resolved.sysctls)
 
     # Validate stack × constellation constraints before building manifest
     from nodalarc.stack_resolver import validate_constellation_constraints
@@ -837,7 +1010,7 @@ def write_wiring_manifest(
             "sysctls": dict(node_sysctls),
             "isl_interfaces": isl_interfaces,
             "gnd_interfaces": [{"name": f"gnd{g}"} for g in range(sat.ground_terminal_count)],
-            "mpls_enable": True,
+            "mpls_enable": mpls_enable,
             "segment_routing": segment_routing,
             "mtu": 9000,
             "remove_default_route": True,
@@ -877,7 +1050,7 @@ def write_wiring_manifest(
                 for t in range(station_ground_terminal_capacity(gs_file, station))
             ],
             "terrestrial": {"addresses": addrs},
-            "mpls_enable": True,
+            "mpls_enable": mpls_enable,
             "segment_routing": segment_routing,
             "mtu": 9000,
             "remove_default_route": True,
@@ -903,10 +1076,12 @@ def write_wiring_manifest(
     _delete_stale_substrate_status_configmaps(v1, namespace)
 
     try:
-        manifest_session_id = sanitize_session_id(session.session.name)
+        manifest_session_id = sanitize_session_id(session_run_id)
     except Exception as exc:
         log.error(
-            "FATAL: Cannot derive session_id from session.name=%r: %s", session.session.name, exc
+            "FATAL: Cannot derive runtime session_id from session_run_id=%r: %s",
+            session_run_id,
+            exc,
         )
         raise
 
@@ -1057,13 +1232,13 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
             cm = v1.read_namespaced_config_map("nodalarc-session", namespace)
             if cm.data and "session.yaml" in cm.data:
                 raw = yaml.safe_load(cm.data["session.yaml"])
-                session_name = raw.get("session", {}).get("name", "")
-                if not session_name:
+                session_run_id = raw.get("session", {}).get("run_id", "")
+                if not session_run_id:
                     log.error(
-                        "FATAL: nodalarc-session ConfigMap has no session.name — cannot purge JetStream subjects"
+                        "FATAL: nodalarc-session ConfigMap has no session.run_id — cannot purge JetStream subjects"
                     )
-                    raise ValueError("session.name missing from nodalarc-session ConfigMap")
-                session_id = sanitize_session_id(session_name)
+                    raise ValueError("session.run_id missing from nodalarc-session ConfigMap")
+                session_id = sanitize_session_id(session_run_id)
             else:
                 log.error(
                     "FATAL: nodalarc-session ConfigMap has no session.yaml data — cannot determine session_id for teardown"
@@ -1073,6 +1248,11 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
             log.error("FATAL: Cannot derive session_id for teardown: %s", exc)
             raise
     log.info("Teardown session_id: %s", session_id)
+
+    # Purge retained runtime state before deleting the ConfigMaps that can be
+    # used to rediscover the session identity on retry. If NATS is unavailable,
+    # the delete finalizer must be retryable with the same session_id.
+    purge_session_runtime_state(namespace, session_id)
 
     # Delete session-level ConfigMaps
     for cm_name in [
@@ -1110,19 +1290,46 @@ def teardown_session(namespace: str, session_id: str | None = None) -> None:
             Path(f).unlink(missing_ok=True)
     log.debug("Cleaned up ephemeral config files")
 
-    # Purge session-scoped JetStream subjects to prevent cross-session
-    # checkpoint contamination on session name reuse. Without this, a new
-    # session with the same name (e.g., "current-session") would read the
-    # stale SchedulingCheckpoint from the previous instance.
-    _purge_session_jetstream_subjects(namespace, session_id)
+
+def session_runtime_purge_targets(session_id: str) -> tuple[tuple[str, str], ...]:
+    """Return retained JetStream stream/subject filters for one session.
+
+    Current subjects are session-scoped. Future tenant support must add the
+    tenant segment in this one place before multiple tenants can share NATS.
+    Until then, callers must never purge a stream without a session filter.
+    """
+    from nodalarc.nats_channels import (
+        STREAM_DEBUG_EVENTS,
+        STREAM_LINK_EVENTS,
+        STREAM_MI_EVENTS,
+        STREAM_OME_EVENTS,
+        STREAM_OPS_EVENTS,
+        STREAM_SESSION_EVENTS,
+        sanitize_session_id,
+    )
+
+    sid = sanitize_session_id(session_id)
+    return (
+        (STREAM_OME_EVENTS, f"nodalarc.ome.{sid}.>"),
+        (STREAM_LINK_EVENTS, f"nodalarc.links.{sid}.>"),
+        (STREAM_SESSION_EVENTS, f"nodalarc.session.{sid}.>"),
+        (STREAM_MI_EVENTS, f"nodalarc.mi.{sid}.>"),
+        (STREAM_OPS_EVENTS, f"nodalarc.ops.{sid}.>"),
+        (STREAM_DEBUG_EVENTS, f"nodalarc.debug.{sid}.>"),
+    )
 
 
-def _purge_session_jetstream_subjects(namespace: str, session_id: str) -> None:
-    """Purge retained JetStream messages for the torn-down session.
+def _is_missing_stream_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return "stream not found" in text or "stream not found" in repr(exc).lower()
 
-    Best-effort — failure doesn't block teardown. Uses session-scoped
-    subject filter so concurrent sessions are not affected. The session_id
-    must be passed by the caller BEFORE ConfigMaps are deleted.
+
+def purge_session_runtime_state(namespace: str, session_id: str) -> None:
+    """Purge retained JetStream messages for a fresh session lineage.
+
+    This is required cleanup. If NATS cannot confirm the purge, the operator
+    must fail the session transition instead of letting OME or Scheduler start
+    against retained state from an earlier run.
     """
     try:
         import asyncio
@@ -1130,9 +1337,6 @@ def _purge_session_jetstream_subjects(namespace: str, session_id: str) -> None:
         import nats
         from nodalarc.nats_channels import (
             NATS_CONNECT_OPTIONS,
-            STREAM_DEBUG_EVENTS,
-            STREAM_OPS_EVENTS,
-            STREAM_SESSION_EVENTS,
             nats_url,
         )
 
@@ -1140,48 +1344,81 @@ def _purge_session_jetstream_subjects(namespace: str, session_id: str) -> None:
             nc = await nats.connect(nats_url(), **NATS_CONNECT_OPTIONS)
             try:
                 js = nc.jetstream()
-                for stream, subject_filter in [
-                    (STREAM_SESSION_EVENTS, f"nodalarc.session.{session_id}.>"),
-                    (STREAM_OPS_EVENTS, f"nodalarc.ops.{session_id}.>"),
-                    (STREAM_DEBUG_EVENTS, f"nodalarc.debug.{session_id}.>"),
-                ]:
+                failures: list[str] = []
+                for stream, subject_filter in session_runtime_purge_targets(session_id):
                     try:
                         await js.purge_stream(stream, subject=subject_filter)
-                        log.debug("Purged %s: %s", stream, subject_filter)
+                        log.debug("Purged %s in %s: %s", stream, namespace, subject_filter)
                     except Exception as exc:
-                        log.warning("Failed to purge %s: %s", stream, exc)
+                        if _is_missing_stream_error(exc):
+                            log.debug(
+                                "Skipping absent JetStream stream %s while purging %s",
+                                stream,
+                                subject_filter,
+                            )
+                            continue
+                        failures.append(f"{stream} {subject_filter}: {exc}")
+                if failures:
+                    raise RuntimeError("; ".join(failures))
             finally:
                 await nc.close()
 
         asyncio.run(_purge())
     except Exception as exc:
-        log.warning("Failed to purge JetStream session subjects: %s", exc)
+        log.error("FATAL: Failed to purge JetStream session subjects for %s: %s", session_id, exc)
+        raise
 
 
-def check_pods_ready(namespace: str) -> tuple[int, int]:
-    """Count total and ready session pods. Returns (total, ready).
+def check_pods_ready(
+    namespace: str,
+    session_id: str | None = None,
+    owner_ref: dict | None = None,
+    expected_ids: set[str] | frozenset[str] | None = None,
+) -> tuple[int, int]:
+    """Count total and running session pods. Returns (total, running).
 
-    Matches pods with nodalarc.io/node-id label (present on both
-    Operator-created and na_deploy-created session pods).
+    When session_id/owner_ref are supplied, only pods owned by the active CR and
+    stamped with the active runtime identity are counted.
     """
     v1 = _get_v1()
-    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
-    total = len(pods.items)
-    ready = sum(1 for p in pods.items if p.status and p.status.phase == "Running")
+    expected = {node_id.lower() for node_id in expected_ids} if expected_ids else None
+    pods = _list_session_pods(v1, namespace)
+    filtered = []
+    for pod in pods:
+        if expected is not None and _pod_node_id(pod) not in expected:
+            continue
+        if session_id is not None and not _pod_current_for_runtime(pod, session_id, owner_ref):
+            continue
+        filtered.append(pod)
+    total = len(filtered)
+    ready = sum(1 for p in filtered if p.status and p.status.phase == "Running")
     return total, ready
 
 
-def check_old_pods_terminated(namespace: str) -> bool:
-    """Return True if zero session pods exist in the namespace.
+def check_old_pods_terminated(
+    namespace: str,
+    session_id: str | None = None,
+    owner_ref: dict | None = None,
+    expected_ids: set[str] | frozenset[str] | None = None,
+) -> bool:
+    """Return True when no stale expected-name session pods remain.
 
     Pure query — no side effects. Used before deploying a new session
     to ensure the previous session's pods have fully terminated.
     """
-    total, _ = check_pods_ready(namespace)
-    return total == 0
+    if session_id is None or owner_ref is None or expected_ids is None:
+        total, _ = check_pods_ready(namespace)
+        return total == 0
+    return count_stale_session_pods(namespace, expected_ids, session_id, owner_ref) == 0
 
 
-def check_all_pods_running(namespace: str, expected_count: int) -> tuple[bool, int, int]:
+def check_all_pods_running(
+    namespace: str,
+    expected_count: int,
+    session_id: str | None = None,
+    owner_ref: dict | None = None,
+    expected_ids: set[str] | frozenset[str] | None = None,
+) -> tuple[bool, int, int]:
     """Check whether all expected session pods are Running.
 
     Returns (all_ready, total, ready) where all_ready is True
@@ -1189,7 +1426,7 @@ def check_all_pods_running(namespace: str, expected_count: int) -> tuple[bool, i
 
     Pure query — no side effects.
     """
-    total, ready = check_pods_ready(namespace)
+    total, ready = check_pods_ready(namespace, session_id, owner_ref, expected_ids)
     return ready >= expected_count, total, ready
 
 
@@ -1215,7 +1452,7 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
     import gzip
 
     from nodalarc.substrate.manifest_contract import WiringManifest
-    from nodalarc.substrate.wiring_status import parse_status_configmap
+    from nodalarc.substrate.wiring_status import failed_status_summary, parse_status_configmap
 
     v1 = _get_v1()
     manifest_cm = v1.read_namespaced_config_map("nodalarc-topology-wiring", namespace)
@@ -1267,7 +1504,7 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
         if status.status in {"failed", "dirty_kernel"} or status.dirty_kernel
     ]
     if failed:
-        raise ValueError("wiring failed for nodes: " + ", ".join(sorted(failed)[:10]))
+        raise ValueError(failed_status_summary(statuses, node_ids=manifest_node_ids))
 
     mismatched = [node_id for node_id, status in statuses.items() if status.node_id != node_id]
     if mismatched:
@@ -1312,6 +1549,15 @@ def compute_platform_hash(spec: dict) -> str:
     except Exception as exc:
         log.warning("Platform hash YAML parse failed, falling back to raw hash: %s", exc)
         return hashlib.sha256(session_yaml.encode()).hexdigest()
+
+
+def compute_runtime_hash(platform_hash: str, session_run_id: str) -> str:
+    """Hash platform config plus immutable runtime lineage for pod restarts."""
+    if not platform_hash:
+        raise ValueError("platform_hash is required")
+    if not session_run_id:
+        raise ValueError("session_run_id is required")
+    return hashlib.sha256(f"{platform_hash}:{session_run_id}".encode()).hexdigest()
 
 
 def compute_expected_pod_count(spec: dict) -> int:
@@ -1361,16 +1607,26 @@ def check_pods_ready_condition(namespace: str) -> tuple[int, int]:
     return total, ready
 
 
-def write_pod_ips_configmap(namespace: str) -> None:
+def write_pod_ips_configmap(
+    namespace: str,
+    session_id: str | None = None,
+    owner_ref: dict | None = None,
+    expected_ids: set[str] | frozenset[str] | None = None,
+) -> None:
     """Write nodalarc-pod-ips ConfigMap from running session pods.
 
     Stores the IP map as a single 'pod-ips.json' key so it can be
     volume-mounted directly as a JSON file by the NodalPath Deployment.
     """
     v1 = _get_v1()
-    pods = v1.list_namespaced_pod(namespace, label_selector="nodalarc.io/node-id")
+    expected = {node_id.lower() for node_id in expected_ids} if expected_ids else None
+    pods = _list_session_pods(v1, namespace)
     ip_map = {}
-    for pod in pods.items:
+    for pod in pods:
+        if expected is not None and _pod_node_id(pod) not in expected:
+            continue
+        if session_id is not None and not _pod_current_for_runtime(pod, session_id, owner_ref):
+            continue
         node_id = pod.metadata.labels.get("nodalarc.io/node-id", "")
         if node_id and pod.status and pod.status.pod_ip:
             ip_map[node_id] = pod.status.pod_ip
@@ -1391,15 +1647,32 @@ def _create_terminal_ssh_keys(
     namespace: str,
     owner_ref: dict | None,
 ) -> None:
-    """Generate an ED25519 SSH keypair and store in a K8s Secret.
+    """Ensure an ED25519 SSH keypair exists in a K8s Secret.
 
     The public key is mounted into session pods for SSH authorized_keys.
     The private key is read by the VS-API to SSH into pods for terminal proxy.
     Owner reference ties the Secret lifecycle to the ConstellationSpec CR —
     teardown deletes the Secret automatically.
+
+    This function is intentionally create-if-missing. Reconciliation may refresh
+    ConfigMaps for an already-running session, and that must not rotate terminal
+    credentials underneath existing pods.
     """
     import subprocess
     import tempfile
+
+    try:
+        existing = v1.read_namespaced_secret(TERMINAL_SSH_SECRET_NAME, namespace)
+        if _terminal_secret_reusable(existing, owner_ref):
+            log.debug("Terminal SSH keypair already exists (Secret: %s)", TERMINAL_SSH_SECRET_NAME)
+            return
+        raise RetryableSessionDependency(
+            f"Existing {TERMINAL_SSH_SECRET_NAME} Secret is not owned by the current "
+            "ConstellationSpec or is already deleting; waiting for Kubernetes garbage collection"
+        )
+    except kubernetes.client.rest.ApiException as e:
+        if e.status != 404:
+            raise
 
     with tempfile.TemporaryDirectory() as tmpdir:
         key_path = f"{tmpdir}/id_ed25519"
@@ -1426,11 +1699,42 @@ def _create_terminal_ssh_keys(
         v1.create_namespaced_secret(namespace, body)
         log.info("Terminal SSH keypair created (Secret: %s)", TERMINAL_SSH_SECRET_NAME)
     except kubernetes.client.rest.ApiException as e:
-        if e.status == 409:  # Already exists — replace
-            v1.replace_namespaced_secret(TERMINAL_SSH_SECRET_NAME, namespace, body)
-            log.info("Terminal SSH keypair updated (Secret: %s)", TERMINAL_SSH_SECRET_NAME)
+        if e.status == 409:
+            log.debug(
+                "Terminal SSH keypair already exists after create race (Secret: %s)",
+                TERMINAL_SSH_SECRET_NAME,
+            )
         else:
             raise
+
+
+def _terminal_secret_reusable(secret: Any, owner_ref: dict | None) -> bool:
+    """Return True when an existing terminal Secret belongs to this CR.
+
+    Reusing a still-owned Secret avoids rotating SSH keys during an ordinary
+    reconcile. Reusing a Secret owned by a deleted/replaced CR is not safe: the
+    Kubernetes garbage collector can remove it after new pods have already
+    mounted the key.
+    """
+    metadata = getattr(secret, "metadata", None)
+    if metadata is None:
+        return False
+    if getattr(metadata, "deletion_timestamp", None):
+        return False
+    if owner_ref is None:
+        return True
+
+    expected_uid = str(owner_ref.get("uid") or "")
+    expected_name = str(owner_ref.get("name") or "")
+    if not expected_uid or not expected_name:
+        return False
+
+    for ref in getattr(metadata, "owner_references", None) or []:
+        ref_uid = str(getattr(ref, "uid", "") or "")
+        ref_name = str(getattr(ref, "name", "") or "")
+        if ref_uid == expected_uid and ref_name == expected_name:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1480,18 +1784,27 @@ def _create_session_configmaps(
     gs_path: str | None,
     namespace: str,
     owner_ref: dict,
+    session_run_id: str,
 ) -> None:
     """Create session-level ConfigMaps (session, constellation, ground-stations)."""
     # Session YAML — rewrite paths for container mounts
     raw = yaml.safe_load(session_yaml)
+    raw.setdefault("session", {})
+    raw["session"]["run_id"] = session_run_id
     raw["constellation"] = "/etc/nodalarc/constellation.yaml"
     if isinstance(raw.get("ground_stations"), str):
         raw["ground_stations"] = "/etc/nodalarc/ground-stations.yaml"
+    runtime_session = SessionConfig.model_validate(raw)
+    runtime_run_id = require_session_run_id(runtime_session)
     _create_or_update_configmap(
         v1,
         "nodalarc-session",
         namespace,
-        {"session.yaml": yaml.dump(raw, default_flow_style=False)},
+        {
+            "session.yaml": yaml.dump(raw, default_flow_style=False),
+            "session_name": session.session.name,
+            "session_run_id": runtime_run_id,
+        },
         owner_ref,
     )
 
@@ -1565,6 +1878,7 @@ def _create_session_pod(
     sidecar_env: list[dict] | None,
     probe_enabled: bool,
     owner_ref: dict,
+    session_id: str,
     target_node: str | None = None,
 ) -> None:
     """Create a single session pod (satellite or ground station)."""
@@ -1572,6 +1886,8 @@ def _create_session_pod(
         "nodalarc.io/session": "true",
         "nodalarc.io/node-id": node_id,
         "nodalarc.io/role": node_type.replace("_", "-"),
+        POD_SESSION_RUN_LABEL: session_id,
+        POD_OWNER_UID_LABEL: str(owner_ref.get("uid") or ""),
     }
     if plane is not None:
         labels["nodalarc.io/plane"] = str(plane)
@@ -1741,6 +2057,15 @@ def _create_session_pod(
         v1.create_namespaced_pod(namespace, pod)
     except kubernetes.client.rest.ApiException as e:
         if e.status == 409:  # Already exists
-            log.debug("Pod %s already exists, skipping", pod_name)
+            existing = v1.read_namespaced_pod(pod_name, namespace)
+            if not _pod_owned_by(existing, owner_ref):
+                raise RuntimeError(
+                    f"Pod {pod_name} already exists but is not owned by the current ConstellationSpec"
+                ) from e
+            if _pod_deleting(existing):
+                raise RuntimeError(f"Pod {pod_name} already exists and is deleting") from e
+            if not _pod_current_for_runtime(existing, session_id, owner_ref):
+                _patch_pod_runtime_identity(v1, existing, namespace, session_id, owner_ref)
+            log.debug("Pod %s already exists for current runtime, skipping", pod_name)
         else:
             raise

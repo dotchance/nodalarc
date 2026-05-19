@@ -71,7 +71,7 @@ NodalArc's differentiators are:
 - Kubernetes-native deployment with pod-per-node network namespaces.
 - Real routing implementations for current IGP modes: OSPF and IS-IS through
   FRR. BGP is not implemented today; the frontend marks it as "Coming Soon" and
-  `stack_resolver.py` resolves only `ospf`, `isis`, and `nodalpath`.
+  `stack_resolver.py` resolves only `ospf` and `isis`.
 - OME, Scheduler, and Node Agent separation. Orbital mechanics, topology
   reconciliation, and kernel mutation are separate services.
 - Proof-oriented dispatch. The Scheduler advances active state only after exact
@@ -117,12 +117,10 @@ veths, VXLAN, carrier state, `tc netem`, `tc tbf`, namespace entry, ground
 bridge attachment, and proof checks.
 
 Routing is real for the supported distributed modes. In OSPF or IS-IS mode,
-FRR inside the pod reacts to real Linux interface state. NodalPath is a
-different mode: a sidecar owns FIB programming through a centralized path
-controller model, while FRR is not the distributed route authority.
+FRR inside the pod reacts to real Linux interface state.
 
-Current routing protocol support is OSPF, IS-IS, and NodalPath. BGP is visible
-in the UI as disabled future work, but is not accepted by the current resolver.
+Current routing protocol support is OSPF and IS-IS. BGP is visible in the UI as
+disabled future work, but is not accepted by the current resolver.
 
 ### bLEO
 

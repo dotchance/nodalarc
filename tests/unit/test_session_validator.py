@@ -382,27 +382,6 @@ class TestE003:
         assert len(errors) == 1
         assert "0 ISL terminals" in errors[0].message
 
-    def test_satellite_no_isl_with_nodalpath_ok(self):
-        """NodalPath sessions don't require ISL terminals for this check."""
-        session = _make_session(protocol="nodalpath")
-        gs = _make_gs_file()
-        sats = _make_satellites(isl_terminals=0)
-        constellation = _make_constellation()
-        stack = resolve_stack("nodalpath", [])
-
-        results = validate_session_readiness(
-            session,
-            constellation,
-            sats,
-            gs,
-            stack,
-        )
-
-        e003_errors = [r for r in results if r.level == "error" and r.code == "E003"]
-        # No ISL terminal error for nodalpath (only isis/ospf trigger)
-        isl_errors = [e for e in e003_errors if "ISL" in e.message]
-        assert len(isl_errors) == 0
-
     def test_valid_terminals_no_e003(self):
         """Valid terminal counts produce no E003 errors."""
         session = _make_session()

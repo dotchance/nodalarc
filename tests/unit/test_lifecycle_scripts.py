@@ -78,10 +78,6 @@ def test_image_inventory_generates_runtime_helm_args_without_cluster() -> None:
     output = result.stdout
     assert "--set-string=images.frr=registry.local:5000/nodalarc/frr:abc123" in output
     assert "--set-string=images.probe=registry.local:5000/nodalarc/probe:abc123" in output
-    assert (
-        "--set-string=images.nodalpathFwd=registry.local:5000/nodalarc/nodalpath-fwd:abc123"
-        in output
-    )
     assert "--set-string=images.natsBox=natsio/nats-box:0.19.3" in output
     assert "--set-string=imagePullPolicy=Always" in output
 

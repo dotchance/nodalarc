@@ -10,6 +10,7 @@ NAMESPACE="${NAMESPACE:-nodalarc}"
 HELM_RELEASE="${HELM_RELEASE:-nodalarc}"
 HELM_CHART="${HELM_CHART:-deploy/helm}"
 HELM_EXTRA_ARGS="${HELM_EXTRA_ARGS:-}"
+PROJECT_VERSION="${PROJECT_VERSION:-}"
 ALLOW_IMAGE_ARG_OVERRIDE="${ALLOW_IMAGE_ARG_OVERRIDE:-0}"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
@@ -39,6 +40,22 @@ release_exists() {
 
 namespace_exists() {
     kubectl get namespace "$NAMESPACE" >/dev/null 2>&1
+}
+
+render_chart_if_needed() {
+    local chart="$1"
+    local chart_dir="$chart"
+
+    if [[ "$chart_dir" != /* ]]; then
+        chart_dir="$ROOT_DIR/$chart_dir"
+    fi
+
+    if [ -f "$chart_dir/Chart.yaml.in" ]; then
+        PROJECT_VERSION="$PROJECT_VERSION" bash "$ROOT_DIR/scripts/na-render-helm-chart.sh" "$chart"
+        return 0
+    fi
+
+    printf '%s\n' "$chart"
 }
 
 wait_platform_ready() {
@@ -96,6 +113,7 @@ elif [ "$ACTION" = "upgrade" ]; then
 fi
 
 bash "$ROOT_DIR/scripts/na-image-preflight.sh"
+HELM_CHART="$(render_chart_if_needed "$HELM_CHART")"
 
 mapfile -t image_args < <(bash "$ROOT_DIR/scripts/na-images.sh" helm-image-args)
 extra_args=()

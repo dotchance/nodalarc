@@ -30,6 +30,7 @@ Describe any impact on existing clusters, images, registries, sessions, kernel s
 
 ## Checklist
 
+- [ ] I have read the [NodalArc Contributor License Agreement](../CLA.md) and will sign it if the CLA check asks me to.
 - [ ] I ran the relevant tests and included the output above.
 - [ ] I updated documentation for user-visible behavior or workflow changes.
 - [ ] I kept public docs/source free of local scratch notes, tool signatures, and generated footer lines.

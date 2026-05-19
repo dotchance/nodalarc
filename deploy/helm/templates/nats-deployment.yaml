@@ -9,6 +9,8 @@ metadata:
     app: nodalarc-nats
 spec:
   replicas: {{ .Values.nats.replicas | default 1 }}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: nodalarc-nats

@@ -83,7 +83,7 @@ class PodLocationMap:
             return []
         return [nid for nid, k3s in self._node_of.items() if k3s == target_k3s]
 
-    def load_from_pid_map_file(self, path: str, _agent_port: int = 50100) -> None:
+    def load_from_pid_map_file(self, path: str) -> None:
         """Load from na_deploy's pid_map.json.
 
         The pid_map.json is keyed by canonical node IDs (from discover_pod_pids
@@ -110,7 +110,6 @@ class PodLocationMap:
     def load_from_k8s_api(
         self,
         namespace: str | None = None,
-        _agent_port: int = 50100,
     ) -> None:
         """Load pod locations from K8s API.
 

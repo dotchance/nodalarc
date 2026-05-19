@@ -83,7 +83,7 @@ def test_image_inventory_generates_runtime_helm_args_without_cluster() -> None:
         in output
     )
     assert "--set-string=images.natsBox=natsio/nats-box:0.19.3" in output
-    assert "--set-string=imagePullPolicy=IfNotPresent" in output
+    assert "--set-string=imagePullPolicy=Always" in output
 
 
 def test_registry_catalog_failure_is_not_treated_as_empty(tmp_path: Path) -> None:

@@ -128,7 +128,7 @@ helm_image_args() {
     if [ "$MODE_RESOLVED" = "single-node" ]; then
         pull_policy="Never"
     else
-        pull_policy="IfNotPresent"
+        pull_policy="Always"
     fi
 
     printf '%s\n' "--set-string=buildTag=$TAG"

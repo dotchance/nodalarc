@@ -60,3 +60,16 @@ before it says how it is built.
 Do not add `simulation` as a topic unless the project intentionally wants that
 search traffic. NodalArc's useful distinction is emulation: real routers living
 inside moving orbital geometry.
+
+## Branch Protection
+
+Require these checks before merging to `main`:
+
+```text
+Quality / Lint
+CLA
+```
+
+The `CLA` status is set by `.github/workflows/cla.yml`. The workflow does not
+check out pull request code; it only reads pull request metadata and comments,
+then writes a commit status on the pull request head SHA.

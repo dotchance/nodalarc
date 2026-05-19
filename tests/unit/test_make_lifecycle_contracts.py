@@ -149,15 +149,20 @@ def test_help_documents_valid_lifecycle_transitions() -> None:
 
 def test_install_and_upgrade_delegate_to_platform_script() -> None:
     install = _target_body("install")
+    reinstall = _target_body("reinstall")
     upgrade = _target_body("upgrade")
 
     assert "scripts/na-install-platform.sh" in install
     assert "ACTION=install" in install
+    assert "PROJECT_VERSION='$(PROJECT_VERSION)'" in install
     assert "helm uninstall" not in install
     assert "kubectl delete namespace" not in install
 
+    assert "PROJECT_VERSION='$(PROJECT_VERSION)'" in reinstall
+
     assert "scripts/na-install-platform.sh" in upgrade
     assert "ACTION=upgrade" in upgrade
+    assert "PROJECT_VERSION='$(PROJECT_VERSION)'" in upgrade
     assert "helm upgrade --install" not in upgrade
 
 
@@ -232,6 +237,7 @@ def test_docker_builds_pass_oci_metadata_args() -> None:
     assert "PROJECT_VERSION ?=" in makefile
     assert "bash scripts/na-project-version.sh" in makefile
     assert "sed -n 's/^version = \"\\(.*\\)\"/\\1/p' pyproject.toml" not in makefile
+    assert "uv pip install -e lib/" not in makefile
     assert "DOCKER_BUILD_METADATA_ARGS" in makefile
     assert "--build-arg PROJECT_VERSION=$(PROJECT_VERSION)" in makefile
     assert "--build-arg VCS_REF=$(GIT_SHA)" in makefile
@@ -358,6 +364,18 @@ def test_required_nats_streams_are_persistent() -> None:
     assert "nats stream add NODALARC_SESSION \\" in ome
     assert ome.count("nats stream add NODALARC_SESSION") == 1
     assert "--storage=memory" not in ome
+
+
+def test_platform_install_renders_versioned_helm_chart() -> None:
+    script = (ROOT / "scripts/na-install-platform.sh").read_text()
+    renderer = (ROOT / "scripts/na-render-helm-chart.sh").read_text()
+    chart_template = (ROOT / "deploy/helm/Chart.yaml.in").read_text()
+
+    assert "render_chart_if_needed" in script
+    assert "scripts/na-render-helm-chart.sh" in script
+    assert "Chart.yaml.in" in renderer
+    assert "PROJECT_VERSION" in renderer
+    assert "version: @PROJECT_VERSION@" in chart_template
 
 
 def test_constellationspec_status_schema_preserves_runtime_identity_fields() -> None:

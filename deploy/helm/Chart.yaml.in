@@ -2,5 +2,5 @@ apiVersion: v2
 name: nodalarc
 description: Nodal Arc orbital network emulation lab
 type: application
-version: 0.1.0
-appVersion: "1.0"
+version: @PROJECT_VERSION@
+appVersion: "@PROJECT_VERSION@"

@@ -39,12 +39,20 @@ spec:
                   type: string
                 sessionId:
                   type: string
+                sessionName:
+                  type: string
+                sessionRunId:
+                  type: string
                 podCount:
                   type: integer
                 readyPods:
                   type: integer
                 wiredPods:
                   type: integer
+                platformHash:
+                  type: string
+                runtimeHash:
+                  type: string
                 lastTransitionTime:
                   type: string
                 observedGeneration:

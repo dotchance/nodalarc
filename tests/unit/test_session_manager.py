@@ -311,9 +311,25 @@ routing:
 
 
 class _SwitchApi:
-    def __init__(self, *, old_cr_gets_before_404: int | None = 0) -> None:
+    def __init__(
+        self,
+        *,
+        old_cr_gets_before_404: int | None = 0,
+        post_create_statuses: list[dict] | None = None,
+    ) -> None:
         self.old_cr_gets_before_404 = old_cr_gets_before_404
         self.old_cr_get_count = 0
+        self.post_create_get_count = 0
+        self.post_create_statuses = post_create_statuses or [
+            {
+                "metadata": {"generation": 1},
+                "status": {
+                    "phase": "Ready",
+                    "message": "ready",
+                    "observedGeneration": 1,
+                },
+            }
+        ]
         self.created = False
 
     def delete_namespaced_custom_object(self, **_kwargs):
@@ -330,12 +346,9 @@ class _SwitchApi:
                 return {"metadata": {"name": "current-session"}}
             raise ApiException(status=404, reason="Not Found")
 
-        return {
-            "status": {
-                "phase": "Ready",
-                "message": "ready",
-            }
-        }
+        idx = min(self.post_create_get_count, len(self.post_create_statuses) - 1)
+        self.post_create_get_count += 1
+        return self.post_create_statuses[idx]
 
     def create_namespaced_custom_object(self, **_kwargs):
         self.created = True
@@ -395,3 +408,36 @@ class TestSwitchFailLoud:
 
         assert api.created is False
         assert mgr.status == "error"
+
+    def test_switch_ignores_stale_error_until_operator_observes_generation(
+        self, tmp_sessions, monkeypatch
+    ):
+        api = _SwitchApi(
+            old_cr_gets_before_404=0,
+            post_create_statuses=[
+                {
+                    "metadata": {"generation": 2},
+                    "status": {
+                        "phase": "Error",
+                        "message": "old wiring failure",
+                        "observedGeneration": 1,
+                    },
+                },
+                {
+                    "metadata": {"generation": 2},
+                    "status": {
+                        "phase": "Ready",
+                        "message": "ready",
+                        "observedGeneration": 2,
+                    },
+                },
+            ],
+        )
+        core = _SwitchCoreV1([0])
+        _patch_switch_k8s(monkeypatch, api, core)
+        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+
+        asyncio.run(mgr.switch(str(tmp_sessions["session_yaml"])))
+
+        assert mgr.status_detail == "ready"
+        assert mgr._current_session_file == str(tmp_sessions["session_yaml"])

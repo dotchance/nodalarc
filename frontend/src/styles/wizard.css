@@ -108,6 +108,35 @@
   margin-bottom: var(--space-3);
 }
 
+.wizard-card-orbit-support {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.wizard-card-orbit-label {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  padding: 3px 0;
+  text-transform: uppercase;
+}
+
+.wizard-card-orbit-badge {
+  border: 1px solid rgba(85, 190, 120, 0.36);
+  border-radius: var(--radius-sm);
+  color: var(--accent-green);
+  font-size: 9px;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  padding: 2px var(--space-3);
+  text-transform: uppercase;
+}
+
 .wizard-card-desc {
   font-size: var(--font-size-xs);
   color: var(--text-secondary);
@@ -452,6 +481,18 @@
   width: 100%;
 }
 
+.wizard-warning {
+  background: rgba(200, 160, 40, 0.12);
+  border: 1px solid rgba(200, 160, 40, 0.35);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-6);
+  font-size: var(--font-size-sm);
+  color: var(--accent-orange);
+  margin-bottom: var(--space-8);
+  max-width: 800px;
+  width: 100%;
+}
+
 .wizard-loading {
   color: var(--text-secondary);
   font-size: var(--font-size-md);
@@ -750,6 +791,72 @@
   color: var(--text-secondary);
   font-style: italic;
   margin: 0;
+}
+
+.wizard-orbit-models {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-6);
+}
+
+.wizard-orbit-model {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.wizard-orbit-model:hover:not(:disabled) {
+  border-color: var(--text-secondary);
+}
+
+.wizard-orbit-model:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.wizard-orbit-model--selected {
+  border-color: var(--accent-blue);
+}
+
+.wizard-orbit-model-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.wizard-orbit-model-title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.wizard-orbit-model-badge {
+  font-size: 9px;
+  font-weight: var(--font-weight-bold);
+  color: var(--accent-green);
+  border: 1px solid rgba(85, 190, 120, 0.4);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.wizard-orbit-model-desc,
+.wizard-orbit-model-disabled {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.wizard-orbit-model-disabled {
+  color: var(--accent-orange);
+  margin-top: var(--space-4);
 }
 
 /* --- Coverage Preview --- */

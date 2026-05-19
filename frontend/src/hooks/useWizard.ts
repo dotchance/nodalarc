@@ -12,13 +12,20 @@ import { useState, useCallback } from "react";
 import type {
   ConstellationPreset,
   Protocol,
+  OrbitPropagator,
   RoutingTimers,
   SatelliteTypePreset,
   GroundStationSet,
-  LegacyWizardState,
+  WizardRuntimeState,
   WizardStep,
 } from "../catalog/wizardTypes";
 import { DEFAULT_ROUTING_TIMERS } from "../catalog/wizardTypes";
+import {
+  DEFAULT_ORBIT_PROPAGATOR,
+  constellationSupportsSgp4Tle,
+  defaultOrbitPropagatorForConstellation,
+  supportedOrbitModelsForConstellation,
+} from "../catalog/orbitModels";
 import { useWizardData } from "./useWizardData";
 import { useWizardNav } from "./useWizardNav";
 import { useWizardApi } from "./useWizardApi";
@@ -27,11 +34,12 @@ export function useWizard() {
   const data = useWizardData();
   const api = useWizardApi();
 
-  const [state, setState] = useState<LegacyWizardState>({
+  const [state, setState] = useState<WizardRuntimeState>({
     step: "selections" as WizardStep,
     satelliteType: null,
     groundStationSet: null,
     constellation: null,
+    orbitPropagator: DEFAULT_ORBIT_PROPAGATOR,
     protocol: null,
     extensions: [],
     areaStrategy: "flat",
@@ -67,7 +75,28 @@ export function useWizard() {
   }, [api]);
 
   const selectConstellation = useCallback((preset: ConstellationPreset) => {
-    setState((s) => ({ ...s, constellation: preset }));
+    setState((s) => {
+      const orbitPropagator = constellationSupportsSgp4Tle(preset)
+        ? defaultOrbitPropagatorForConstellation(preset)
+        : s.orbitPropagator === "sgp4-tle"
+          ? DEFAULT_ORBIT_PROPAGATOR
+          : s.orbitPropagator;
+      return { ...s, constellation: preset, orbitPropagator };
+    });
+    api.clearYaml();
+    api.clearError();
+  }, [api]);
+
+  const selectOrbitPropagator = useCallback((orbitPropagator: OrbitPropagator) => {
+    setState((s) => {
+      const supported = supportedOrbitModelsForConstellation(s.constellation).map(
+        (option) => option.id,
+      );
+      if (!supported.includes(orbitPropagator)) {
+        return s;
+      }
+      return { ...s, orbitPropagator };
+    });
     api.clearYaml();
     api.clearError();
   }, [api]);
@@ -150,6 +179,7 @@ export function useWizard() {
       satelliteType: null,
       groundStationSet: null,
       constellation: null,
+      orbitPropagator: DEFAULT_ORBIT_PROPAGATOR,
       protocol: null,
       extensions: [],
       areaStrategy: "flat",
@@ -177,6 +207,7 @@ export function useWizard() {
     selectGroundStationSet,
     selectCustomGroundStations,
     selectConstellation,
+    selectOrbitPropagator,
     selectProtocol,
     toggleExtension,
     setAreaStrategy,

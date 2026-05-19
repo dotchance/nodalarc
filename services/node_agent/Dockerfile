@@ -12,8 +12,10 @@ FROM python:3.14-slim@sha256:5b3879b6f3cb77e712644d50262d05a7c146b7312d784a18eff
 # Install iproute2 (tc command for ground link mirred redirect)
 # Install iptables (cni0 egress lockdown for session pod security)
 # Install iputils-ping (substrate latency measurement to VXLAN peers)
+# Install kmod so the privileged Node Agent can load MPLS kernel modules
+# Install util-linux for nsenter used by namespace wiring helpers
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    iproute2 iptables iputils-ping \
+    iproute2 iptables iputils-ping kmod util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 # Install crictl for container PID discovery

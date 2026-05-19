@@ -2,7 +2,7 @@
   "name": "nodalarc-visualization",
   "version": "1.0.0",
   "private": true,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

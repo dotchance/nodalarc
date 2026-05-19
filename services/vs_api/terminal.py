@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """SSH-over-WebSocket terminal proxy for interactive vtysh access.
 
 Bridges browser WebSocket connections to dropbear SSH sessions in

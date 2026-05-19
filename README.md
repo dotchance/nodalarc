@@ -231,7 +231,7 @@ The docs are split by the work you are trying to do.
 
 ## Community
 
-NodalArc is source-available and welcomes useful contributions. Bugs, routing stacks, constellation models, visualization improvements, documentation fixes, and operational reports all help, as long as they respect the architecture.
+NodalArc is open source under the Apache License 2.0 and welcomes useful contributions. Bugs, routing stacks, constellation models, visualization improvements, documentation fixes, and operational reports all help, as long as they respect the architecture.
 
 - **Issues** - bug reports, feature requests, and questions
 - **Pull Requests** - read [CONTRIBUTING.md](CONTRIBUTING.md), the [Developer Guide](docs/dev/), and the [Contributor License Agreement](CLA.md) before opening one
@@ -239,6 +239,6 @@ NodalArc is source-available and welcomes useful contributions. Bugs, routing st
 
 ## License
 
-NodalArc Source Available License 1.0. You can use, modify, and distribute it subject to the license terms. You cannot offer it as a hosted or managed service that provides access to a substantial set of NodalArc features. See [LICENSE](LICENSE) for full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party notices.
+NodalArc is licensed under the Apache License 2.0. You can use, modify, and distribute it under the Apache License, Version 2.0. See [LICENSE](LICENSE) for full terms and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled third-party notices.
 
 Copyright 2024-2026 .chance (dotchance)

@@ -6,6 +6,55 @@ resolution-markers = [
     "python_full_version < '3.15'",
 ]
 
+[manifest]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "asyncssh", specifier = ">=2.23.0" },
+    { name = "fastapi" },
+    { name = "grpcio", specifier = ">=1.74" },
+    { name = "grpcio-tools", specifier = ">=1.80.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "jinja2" },
+    { name = "kopf", specifier = ">=1.37" },
+    { name = "kubernetes" },
+    { name = "mypy" },
+    { name = "nats-py", specifier = ">=2.7.0" },
+    { name = "numpy" },
+    { name = "pre-commit", specifier = ">=3.7.0" },
+    { name = "protobuf", specifier = ">=6.31.1,<7" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "pyroute2" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout", specifier = ">=2.4.0" },
+    { name = "pyyaml" },
+    { name = "ruff", specifier = ">=0.15.13" },
+    { name = "sgp4" },
+    { name = "skyfield" },
+    { name = "uvicorn" },
+    { name = "vulture", specifier = ">=2.14" },
+    { name = "websockets", specifier = ">=16.0" },
+]
+runtime = [
+    { name = "asyncssh", specifier = ">=2.23.0" },
+    { name = "fastapi" },
+    { name = "grpcio", specifier = ">=1.74" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "jinja2" },
+    { name = "kubernetes" },
+    { name = "nats-py", specifier = ">=2.7.0" },
+    { name = "numpy" },
+    { name = "protobuf", specifier = ">=6.31.1,<7" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "pyroute2" },
+    { name = "pyyaml" },
+    { name = "sgp4" },
+    { name = "skyfield" },
+    { name = "uvicorn" },
+    { name = "websockets", specifier = ">=16.0" },
+]
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
@@ -797,82 +846,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c3/f8/b956c4621ba88748ed707c52e69f95b7a50c8914e750edca59a5bef84a76/nats_py-2.14.0.tar.gz", hash = "sha256:4ed02cb8e3b55c68074a063aa2687087115d805d1513297da90cb2068fb07bed", size = 120751, upload-time = "2026-02-23T22:44:58.988Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/39/0e87753df1072254bac190b33ed34b264f28f6aa9bea0f01b7e818071756/nats_py-2.14.0-py3-none-any.whl", hash = "sha256:4116f5d2233ce16e63c3d5538fa40a5e207f75fcf42a741773929ddf1e29d19d", size = 82259, upload-time = "2026-02-23T22:45:00.152Z" },
-]
-
-[[package]]
-name = "nodal"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "asyncssh" },
-    { name = "fastapi" },
-    { name = "grpcio" },
-    { name = "httpx" },
-    { name = "jinja2" },
-    { name = "kubernetes" },
-    { name = "nats-py" },
-    { name = "numpy" },
-    { name = "protobuf" },
-    { name = "pydantic" },
-    { name = "pyroute2" },
-    { name = "pyyaml" },
-    { name = "sgp4" },
-    { name = "skyfield" },
-    { name = "uvicorn" },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "kopf" },
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pytest-timeout" },
-    { name = "ruff" },
-    { name = "vulture" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "grpcio-tools" },
-    { name = "pytest-timeout" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "asyncssh", specifier = ">=2.23.0" },
-    { name = "fastapi" },
-    { name = "grpcio", specifier = ">=1.74" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "jinja2" },
-    { name = "kopf", marker = "extra == 'dev'", specifier = ">=1.37" },
-    { name = "kubernetes" },
-    { name = "mypy", marker = "extra == 'dev'" },
-    { name = "nats-py", specifier = ">=2.7.0" },
-    { name = "numpy" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.7.0" },
-    { name = "protobuf", specifier = ">=6.31.1,<7" },
-    { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "pyroute2" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
-    { name = "pyyaml" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.13" },
-    { name = "sgp4" },
-    { name = "skyfield" },
-    { name = "uvicorn" },
-    { name = "vulture", marker = "extra == 'dev'", specifier = ">=2.14" },
-    { name = "websockets", specifier = ">=16.0" },
-]
-provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "grpcio-tools", specifier = ">=1.80.0" },
-    { name = "pytest-timeout", specifier = ">=2.4.0" },
 ]
 
 [[package]]

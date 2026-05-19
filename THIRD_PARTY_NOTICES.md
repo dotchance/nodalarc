@@ -76,7 +76,7 @@ by the Apache License 2.0 unless a file says otherwise.
 NodalArc resolves third-party package dependencies through standard package
 manifests and lockfiles:
 
-- Python: `pyproject.toml`, `lib/pyproject.toml`, `uv.lock`
+- Python: `pyproject.toml`, `uv.lock`
 - Frontend: `frontend/package.json`, `frontend/package-lock.json`
 
 These package dependencies are not vendored into the source tree, but built

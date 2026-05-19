@@ -20,6 +20,6 @@ repos:
     hooks:
       - id: lint-policy
         name: lint policy
-        entry: uv run --extra dev python scripts/check-lint-policy.py
+        entry: uv run python scripts/check-lint-policy.py
         language: system
         pass_filenames: false

@@ -8,9 +8,8 @@ on:
 
 permissions:
   contents: read
-  issues: write
+  issues: read
   pull-requests: read
-  statuses: write
 
 jobs:
   cla:
@@ -126,32 +125,10 @@ jobs:
               )
 
           def set_status(state: str, description: str):
-              request(
-                  "POST",
-                  f"/statuses/{head_sha}",
-                  {
-                      "state": state,
-                      "context": "CLA",
-                      "description": description[:140],
-                      "target_url": cla_url,
-                  },
-              )
+              print(f"CLA status: {state} — {description[:140]}")
 
           def upsert_comment(body: str):
-              bot_comment = next(
-                  (
-                      comment
-                      for comment in comments
-                      if comment.get("body", "").startswith(marker)
-                      and comment.get("user", {}).get("type") == "Bot"
-                  ),
-                  None,
-              )
-              payload = {"body": body}
-              if bot_comment:
-                  request("PATCH", f"/issues/comments/{bot_comment['id']}", payload)
-              else:
-                  request("POST", f"/issues/{pr_number}/comments", payload)
+              print(body)
 
           if missing:
               quoted_phrase = f"> {sign_phrase}"

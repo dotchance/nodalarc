@@ -11,6 +11,8 @@ KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
 echo "=== NodalArc Teardown ==="
+echo "Copyright 2024-2026 .chance (dotchance)"
+echo "Official source: https://github.com/dotchance/nodalarc"
 
 cleanup_local_kernel_state() {
     ip link show 2>/dev/null | grep -oE 'vx[0-9]{5}' | \

@@ -13,6 +13,8 @@
 set -euo pipefail
 
 echo "=== NodalArc Host Bootstrap ==="
+echo "Copyright 2024-2026 .chance (dotchance)"
+echo "Official source: https://github.com/dotchance/nodalarc"
 
 # ---------------------------------------------------------------------------
 # Detect OS

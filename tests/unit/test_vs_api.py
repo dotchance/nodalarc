@@ -126,6 +126,20 @@ class TestLinkKey:
         assert _link_key("b", "a") == "a:b"
 
 
+class TestApiAttribution:
+    """Public API exposes project provenance."""
+
+    def test_about_returns_project_attribution(self):
+        import vs_api.main as m
+
+        payload = m.about()
+
+        assert payload["name"] == "NodalArc"
+        assert payload["author"] == ".chance (dotchance)"
+        assert payload["source"] == "https://github.com/dotchance/nodalarc"
+        assert payload["notice"] == "See NOTICE and THIRD_PARTY_NOTICES.md."
+
+
 class TestConstellationCRReadiness:
     """VS-API only trusts ready, generation-consistent session CR state."""
 

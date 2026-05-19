@@ -93,6 +93,21 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
           Logs
         </button>
       )}
+      <a
+        href="https://github.com/dotchance/nodalarc"
+        target="_blank"
+        rel="noreferrer"
+        title="Official NodalArc source"
+        style={{
+          color: "var(--text-dim)",
+          fontSize: 10,
+          fontFamily: "var(--font-family)",
+          textDecoration: "none",
+          whiteSpace: "nowrap",
+        }}
+      >
+        NodalArc by .chance
+      </a>
       <span style={{ color: "var(--accent-blue)", fontSize: 11, fontFamily: "var(--font-family)" }}>
         build: {typeof __BUILD_HASH__ !== "undefined" ? __BUILD_HASH__ : "dev"}
       </span>

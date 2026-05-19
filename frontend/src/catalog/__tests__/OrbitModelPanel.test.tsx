@@ -37,19 +37,26 @@ describe("OrbitModelPanel", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("enables SGP4 when the selected constellation is TLE-backed", () => {
+  it("requires SGP4 when the selected constellation is TLE-backed", () => {
     const onSelect = vi.fn();
     render(
       <OrbitModelPanel
         constellation={preset("tle")}
-        selected="j2-mean-elements"
+        selected="sgp4-tle"
         onSelect={onSelect}
       />,
     );
 
+    const j2 = screen.getByRole("button", { name: /J2 Mean Elements/ }) as HTMLButtonElement;
+    const kepler = screen.getByRole("button", { name: /Keplerian Circular/ }) as HTMLButtonElement;
     const sgp4 = screen.getByRole("button", { name: /SGP4 \/ TLE/ }) as HTMLButtonElement;
+    expect(j2.disabled).toBe(true);
+    expect(kepler.disabled).toBe(true);
     expect(sgp4.disabled).toBe(false);
+    expect(screen.getByText("Default")).toBeTruthy();
 
+    fireEvent.click(j2);
+    expect(onSelect).not.toHaveBeenCalled();
     fireEvent.click(sgp4);
     expect(onSelect).toHaveBeenCalledWith("sgp4-tle");
   });

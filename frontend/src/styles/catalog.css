@@ -293,11 +293,3 @@
   color: var(--text-dim);
   font-size: var(--font-size-md);
 }
-
-.catalog-fallback-warning {
-  color: var(--accent-amber);
-  font-size: var(--font-size-sm);
-  margin-bottom: var(--space-8);
-  max-width: 1200px;
-  width: 100%;
-}

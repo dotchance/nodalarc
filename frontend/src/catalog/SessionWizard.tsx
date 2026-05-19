@@ -9,7 +9,6 @@
 import { useState, useCallback, useRef } from "react";
 import { useWizard } from "../hooks/useWizard";
 import type { WizardStep } from "./wizardTypes";
-import type { SessionInfo } from "../types";
 import { SelectionCards } from "./SelectionCards";
 import { CoveragePreview } from "./CoveragePreview";
 import { ProtocolSelection, ExtensionsPanel } from "./ProtocolPanel";
@@ -19,8 +18,6 @@ interface SessionWizardProps {
   onDeployStarted: () => void;
   onClose: (() => void) | undefined;
   deploying: boolean;
-  fallbackSessions: SessionInfo[];
-  onFallbackDeploy: (id: string) => void;
   systemNotice?: string;
 }
 
@@ -34,8 +31,6 @@ export function SessionWizard({
   onDeployStarted,
   onClose,
   deploying,
-  fallbackSessions,
-  onFallbackDeploy,
   systemNotice,
 }: SessionWizardProps) {
   const wizard = useWizard();
@@ -154,9 +149,6 @@ export function SessionWizard({
           onContinueWithoutPreview={wizard.continueToProtocol}
           canPreview={allGroupASelected}
           previewing={wizard.previewing}
-          fallbackSessions={fallbackSessions}
-          deploying={deploying}
-          onFallbackDeploy={onFallbackDeploy}
         />
       )}
 

@@ -170,12 +170,6 @@ export interface WizardState {
   routingTimers: RoutingTimers;
 }
 
-// --- Backward compatibility during refactor ---
-// The old linear wizard used WizardStep and a different WizardState shape.
-// These aliases keep existing code compiling during the panel extraction.
-// They will be removed when the refactor is complete.
-
-/** @deprecated Use WizardPhase instead. */
 export type WizardStep =
   | "selections"
   | "satellite-type"
@@ -185,8 +179,7 @@ export type WizardStep =
   | "extensions"
   | "review";
 
-/** @deprecated Use WizardState instead. */
-export interface LegacyWizardState {
+export interface WizardRuntimeState {
   step: WizardStep;
   satelliteType: SatelliteTypePreset | null;
   groundStationSet: GroundStationSet | null;

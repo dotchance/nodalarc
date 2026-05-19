@@ -7,6 +7,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 
 DRY_RUN_TARGETS = (
@@ -234,6 +236,31 @@ def test_host_network_node_agents_use_host_reachable_nats_endpoint() -> None:
     assert "$natsHost" in nats_init
 
 
+def test_node_agent_can_load_host_mpls_kernel_modules() -> None:
+    node_agent = (ROOT / "deploy/helm/templates/node-agent-daemonset.yaml").read_text()
+    dockerfile = (ROOT / "services/node_agent/Dockerfile").read_text()
+
+    assert "kmod" in dockerfile
+    assert "util-linux" in dockerfile
+    assert "name: host-modules" in node_agent
+    assert "mountPath: /lib/modules" in node_agent
+    assert "path: /lib/modules" in node_agent
+
+
+def test_remote_containerd_purge_uses_node_agent_runtime_socket_contract() -> None:
+    script = (ROOT / "scripts/na-purge-containerd.sh").read_text()
+    node_agent = (ROOT / "deploy/helm/templates/node-agent-daemonset.yaml").read_text()
+    dockerfile = (ROOT / "services/node_agent/Dockerfile").read_text()
+
+    assert "CONTAINER_RUNTIME_ENDPOINT" in node_agent
+    assert "/run/k3s/containerd/containerd.sock" in node_agent
+    assert 'crictl --runtime-endpoint "$runtime" images' in script
+    assert 'crictl --runtime-endpoint "$runtime" rmi' in script
+    assert "k3s crictl" not in script
+    assert "nsenter --target 1" not in script
+    assert "crictl-${CRICTL_VERSION}" in dockerfile
+
+
 def test_required_nats_streams_are_persistent() -> None:
     ome = (ROOT / "deploy/helm/templates/ome-deployment.yaml").read_text()
 
@@ -242,3 +269,13 @@ def test_required_nats_streams_are_persistent() -> None:
     assert "nats stream add NODALARC_SESSION \\" in ome
     assert ome.count("nats stream add NODALARC_SESSION") == 1
     assert "--storage=memory" not in ome
+
+
+def test_constellationspec_status_schema_preserves_runtime_identity_fields() -> None:
+    crd = yaml.safe_load((ROOT / "deploy/helm/crds/constellationspec.yaml").read_text())
+    status_props = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["status"][
+        "properties"
+    ]
+
+    for field in ("sessionName", "sessionRunId", "platformHash", "runtimeHash"):
+        assert status_props[field]["type"] == "string"

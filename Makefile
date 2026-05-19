@@ -33,8 +33,12 @@ endif
 # Image tag: git short SHA for reproducibility
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 TAG     ?= $(GIT_SHA)
+PROJECT_VERSION ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml | head -n 1)
+ifeq ($(strip $(PROJECT_VERSION)),)
+PROJECT_VERSION := 0+unknown
+endif
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)
-DOCKER_BUILD_METADATA_ARGS = --build-arg VCS_REF=$(GIT_SHA) --build-arg BUILD_DATE=$(BUILD_DATE)
+DOCKER_BUILD_METADATA_ARGS = --build-arg PROJECT_VERSION=$(PROJECT_VERSION) --build-arg VCS_REF=$(GIT_SHA) --build-arg BUILD_DATE=$(BUILD_DATE)
 
 # ---------------------------------------------------------------------------
 # Image names

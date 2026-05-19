@@ -8,7 +8,6 @@ NODE_IP=${1:?Usage: $0 <node-ip>}
 
 IMAGES=(
   "docker.io/nodalarc/ome:latest"
-  "docker.io/nodalarc/nodalpath:latest"
   "docker.io/nodalarc/scheduler:latest"
   "docker.io/nodalarc/node-agent:latest"
   "docker.io/nodalarc/vs-api:latest"
@@ -16,7 +15,6 @@ IMAGES=(
   "docker.io/nodalarc/operator:latest"
   "docker.io/nodalarc/frr:10"
   "docker.io/nodalarc/probe:1"
-  "docker.io/library/nodalpath-fwd:latest"
 )
 
 for IMAGE in "${IMAGES[@]}"; do

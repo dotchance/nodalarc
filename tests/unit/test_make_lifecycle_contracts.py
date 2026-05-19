@@ -230,6 +230,8 @@ def test_docker_builds_pass_oci_metadata_args() -> None:
 
     assert "BUILD_DATE ?=" in makefile
     assert "PROJECT_VERSION ?=" in makefile
+    assert "bash scripts/na-project-version.sh" in makefile
+    assert "sed -n 's/^version = \"\\(.*\\)\"/\\1/p' pyproject.toml" not in makefile
     assert "DOCKER_BUILD_METADATA_ARGS" in makefile
     assert "--build-arg PROJECT_VERSION=$(PROJECT_VERSION)" in makefile
     assert "--build-arg VCS_REF=$(GIT_SHA)" in makefile

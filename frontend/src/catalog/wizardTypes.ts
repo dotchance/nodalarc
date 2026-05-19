@@ -14,6 +14,7 @@ export interface ConstellationPreset {
   satellite_count: number;
   constellation: string; // file path — used by generate endpoint
   ground_stations: string; // preset default GS — NOT used for wizard selection
+  mode?: ConstellationMode | string | null;
 }
 
 export interface SatelliteTypePreset {
@@ -66,6 +67,8 @@ export interface ExtensionRules {
 }
 
 export type Protocol = "ospf" | "isis" | "nodalpath";
+export type ConstellationMode = "parametric" | "explicit" | "tle";
+export type OrbitPropagator = "keplerian-circular" | "j2-mean-elements" | "sgp4-tle";
 
 // --- Coverage preview (returned by POST /api/v1/session/preview-coverage) ---
 
@@ -105,7 +108,7 @@ export interface CoveragePreviewResult {
 export type WizardPhase = "selections" | "preview" | "protocol" | "extensions" | "review";
 
 /** Which selection card is currently expanded in group A. */
-export type ActiveCard = "constellation" | "satellite-type" | "ground-stations" | null;
+export type ActiveCard = "constellation" | "satellite-type" | "ground-stations" | "orbit-model" | null;
 
 export interface RoutingTimers {
   bfd: boolean;
@@ -157,6 +160,9 @@ export interface WizardState {
   // Coverage preview result (null = not yet run)
   coveragePreview: CoveragePreviewResult | null;
 
+  // Orbit propagation model
+  orbitPropagator: OrbitPropagator;
+
   // Group B — after preview
   protocol: Protocol | null;
   extensions: string[];
@@ -185,6 +191,7 @@ export interface LegacyWizardState {
   satelliteType: SatelliteTypePreset | null;
   groundStationSet: GroundStationSet | null;
   constellation: ConstellationPreset | null;
+  orbitPropagator: OrbitPropagator;
   protocol: Protocol | null;
   extensions: string[];
   areaStrategy: string;

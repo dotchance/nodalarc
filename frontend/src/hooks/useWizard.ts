@@ -12,6 +12,7 @@ import { useState, useCallback } from "react";
 import type {
   ConstellationPreset,
   Protocol,
+  OrbitPropagator,
   RoutingTimers,
   SatelliteTypePreset,
   GroundStationSet,
@@ -19,6 +20,11 @@ import type {
   WizardStep,
 } from "../catalog/wizardTypes";
 import { DEFAULT_ROUTING_TIMERS } from "../catalog/wizardTypes";
+import {
+  DEFAULT_ORBIT_PROPAGATOR,
+  constellationSupportsSgp4Tle,
+  defaultOrbitPropagatorForConstellation,
+} from "../catalog/orbitModels";
 import { useWizardData } from "./useWizardData";
 import { useWizardNav } from "./useWizardNav";
 import { useWizardApi } from "./useWizardApi";
@@ -32,6 +38,7 @@ export function useWizard() {
     satelliteType: null,
     groundStationSet: null,
     constellation: null,
+    orbitPropagator: DEFAULT_ORBIT_PROPAGATOR,
     protocol: null,
     extensions: [],
     areaStrategy: "flat",
@@ -67,7 +74,20 @@ export function useWizard() {
   }, [api]);
 
   const selectConstellation = useCallback((preset: ConstellationPreset) => {
-    setState((s) => ({ ...s, constellation: preset }));
+    setState((s) => {
+      const orbitPropagator = constellationSupportsSgp4Tle(preset)
+        ? defaultOrbitPropagatorForConstellation(preset)
+        : s.orbitPropagator === "sgp4-tle"
+          ? DEFAULT_ORBIT_PROPAGATOR
+          : s.orbitPropagator;
+      return { ...s, constellation: preset, orbitPropagator };
+    });
+    api.clearYaml();
+    api.clearError();
+  }, [api]);
+
+  const selectOrbitPropagator = useCallback((orbitPropagator: OrbitPropagator) => {
+    setState((s) => ({ ...s, orbitPropagator }));
     api.clearYaml();
     api.clearError();
   }, [api]);
@@ -150,6 +170,7 @@ export function useWizard() {
       satelliteType: null,
       groundStationSet: null,
       constellation: null,
+      orbitPropagator: DEFAULT_ORBIT_PROPAGATOR,
       protocol: null,
       extensions: [],
       areaStrategy: "flat",
@@ -177,6 +198,7 @@ export function useWizard() {
     selectGroundStationSet,
     selectCustomGroundStations,
     selectConstellation,
+    selectOrbitPropagator,
     selectProtocol,
     toggleExtension,
     setAreaStrategy,

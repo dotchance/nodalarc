@@ -5,6 +5,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Shell } from "./layout/Shell";
 import { GlobeView } from "./globe/GlobeView";
+import { VisualizationErrorBoundary } from "./globe/VisualizationErrorBoundary";
 import { TopologyView } from "./topology/TopologyView";
 import { InfoPanel } from "./panels/InfoPanel";
 import { FilterPanel } from "./panels/FilterPanel";
@@ -94,6 +95,7 @@ function AppInner() {
 
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
+  const [visualizationError, setVisualizationError] = useState<string | null>(null);
 
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth);
@@ -172,6 +174,10 @@ function AppInner() {
   const handleTopView = useCallback(() => { globeActionsRef.current?.flyToTopView(); }, []);
   const handleScreenshot = useCallback(() => { globeActionsRef.current?.captureScreenshot(); }, []);
   const handleFlyToNode = useCallback((nodeId: string) => { globeActionsRef.current?.flyToNode(nodeId); }, []);
+  const handleVisualizationFatalError = useCallback((message: string) => {
+    setVisualizationError(message);
+    setShowCatalog(true);
+  }, [setShowCatalog]);
 
   const keyboardActions = useMemo(
     () => ({
@@ -313,21 +319,24 @@ function AppInner() {
         className={viewMode === "split" ? "split-pane" : "full-pane"}
         style={{ display: (viewMode === "topology" || viewMode === "dashboard") ? "none" : undefined }}
       >
-        <GlobeView
-          snapshot={augmentedSnapshot}
-          ephemeris={ephemeris}
-          playbackState={playbackState}
-          selection={selection}
-          onSelect={select}
-          colorMode={colorMode}
-          globeMode={globeMode}
-          showGroundLinks={showGroundLinks}
-          showIslLinks={showIslLinks}
-          showSatPaths={showSatPaths}
-          referenceFrame={referenceFrame}
-          playbackPaused={playback.paused}
-          actionsRef={globeActionsRef}
-        />
+        <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
+          <GlobeView
+            snapshot={augmentedSnapshot}
+            ephemeris={ephemeris}
+            playbackState={playbackState}
+            selection={selection}
+            onSelect={select}
+            colorMode={colorMode}
+            globeMode={globeMode}
+            showGroundLinks={showGroundLinks}
+            showIslLinks={showIslLinks}
+            showSatPaths={showSatPaths}
+            referenceFrame={referenceFrame}
+            playbackPaused={playback.paused}
+            actionsRef={globeActionsRef}
+            onFatalError={handleVisualizationFatalError}
+          />
+        </VisualizationErrorBoundary>
       </div>
       <div
         className={viewMode === "split" ? "split-pane" : "full-pane"}
@@ -442,6 +451,7 @@ function AppInner() {
       deploying={switching}
       fallbackSessions={sessions}
       onFallbackDeploy={handleDeploy}
+      systemNotice={visualizationError ?? undefined}
     />
   ) : undefined;
 

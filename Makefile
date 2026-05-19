@@ -46,7 +46,7 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
 # ---------------------------------------------------------------------------
 
 .PHONY: help all deps build load install reinstall upgrade session lint lint-policy dead-code \
-        test test-integration test-root \
+        test test-integration test-root ensure-frontend-deps \
         teardown force-teardown reset-platform restart clean clean-deps clean-images \
         clean-registry purge-containerd nuke status check-registry test-backend test-frontend \
         build-frontends build-images ensure-base-images build-base-images \
@@ -411,10 +411,16 @@ dead-code: ## Report high-confidence unused code findings
 # Unit tests should not require a live cluster. Integration tests are explicit
 # because they assume a running platform or cluster-adjacent services.
 
-test: ## Run all unit tests (no sudo needed)
+ensure-frontend-deps: frontend/node_modules/.bin/vitest
+
+frontend/node_modules/.bin/vitest: frontend/package.json frontend/package-lock.json
+	@echo "[deps] Installing VF frontend dependencies..."
+	cd frontend && npm ci
+
+test: ensure-frontend-deps ## Run all unit tests (no sudo needed)
 	@backend=0; frontend=0; \
 	uv run pytest --ignore=tests/integration --tb=short -q || backend=$$?; \
-	cd frontend && npx vitest run || frontend=$$?; \
+	cd frontend && npm test || frontend=$$?; \
 	if [ $$backend -ne 0 ] || [ $$frontend -ne 0 ]; then \
 		echo ""; echo "[test] FAILURES: backend=$$backend frontend=$$frontend"; exit 1; \
 	fi
@@ -422,8 +428,8 @@ test: ## Run all unit tests (no sudo needed)
 test-backend: ## Run Python unit tests
 	uv run pytest --ignore=tests/integration --tb=short -q
 
-test-frontend: ## Run frontend unit tests (vitest)
-	cd frontend && npx vitest run
+test-frontend: ensure-frontend-deps ## Run frontend unit tests (vitest)
+	cd frontend && npm test
 
 test-integration: ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q

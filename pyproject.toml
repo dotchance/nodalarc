@@ -5,7 +5,7 @@ description = "Nodal Arc - Orbital Network Emulation Lab"
 license = { text = "NodalArc Source Available License 1.0" }
 requires-python = ">=3.14"
 dependencies = [
-    "pydantic>=2.0",
+    "pydantic>=2.13.4",
     "nats-py>=2.7.0",
     "pyyaml",
     "numpy",
@@ -20,7 +20,7 @@ dependencies = [
     "grpcio>=1.74",
     "protobuf>=6.31.1,<7",
     "httpx>=0.28.1",
-    "asyncssh>=2.14.0",
+    "asyncssh>=2.23.0",
 ]
 
 [project.optional-dependencies]

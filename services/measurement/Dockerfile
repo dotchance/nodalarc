@@ -5,6 +5,18 @@
 #   docker build -f services/measurement/Dockerfile -t nodalarc/measurement:latest .
 
 FROM python:3.14-slim@sha256:5b3879b6f3cb77e712644d50262d05a7c146b7312d784a18eff7ff5462e77033
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="NodalArc Measurement" \
+      org.opencontainers.image.description="Measurement and instrumentation service for NodalArc" \
+      org.opencontainers.image.vendor=".chance (dotchance)" \
+      org.opencontainers.image.authors=".chance (dotchance)" \
+      org.opencontainers.image.source="https://github.com/dotchance/nodalarc" \
+      org.opencontainers.image.url="https://nodal.asmolab.net" \
+      org.opencontainers.image.documentation="https://github.com/dotchance/nodalarc" \
+      org.opencontainers.image.licenses="NodalArc Source Available License 1.0" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 # kubectl needed for pod discovery
 RUN apt-get update && apt-get install -y --no-install-recommends \

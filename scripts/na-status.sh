@@ -96,6 +96,8 @@ for cs in d.get("status", {}).get("containerStatuses", []) or []:
 }
 
 echo "=== NodalArc Status ==="
+echo "Copyright 2024-2026 .chance (dotchance)"
+echo "Official source: https://github.com/dotchance/nodalarc"
 echo ""
 
 # --- Cluster ---

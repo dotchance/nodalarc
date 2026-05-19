@@ -59,6 +59,7 @@ from nodalarc.nats_channels import (
     sanitize_session_id,
 )
 from nodalarc.platform_config import get_platform_config
+from nodalarc.project_info import PROJECT_ATTRIBUTION
 
 from vs_api.continuous_tracer import ContinuousTracer
 from vs_api.introspect import VTYSH_COMMANDS, run_vtysh
@@ -1104,6 +1105,12 @@ def health_check() -> dict:
         "status": "ok",
         "session_status": _session_manager.status if _session_manager else "idle",
     }
+
+
+@app.get("/api/v1/about")
+def about() -> dict:
+    """Unauthenticated project attribution and provenance metadata."""
+    return dict(PROJECT_ATTRIBUTION)
 
 
 @app.get("/api/v1/auth/token")

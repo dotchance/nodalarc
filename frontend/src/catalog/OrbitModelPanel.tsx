@@ -4,6 +4,8 @@ import type { ConstellationPreset, OrbitPropagator } from "./wizardTypes";
 import {
   ORBIT_MODEL_OPTIONS,
   constellationSupportsSgp4Tle,
+  defaultOrbitPropagatorForConstellation,
+  supportedOrbitModelsForConstellation,
 } from "./orbitModels";
 
 interface OrbitModelPanelProps {
@@ -18,11 +20,15 @@ export function OrbitModelPanel({
   onSelect,
 }: OrbitModelPanelProps) {
   const supportsSgp4 = constellationSupportsSgp4Tle(constellation);
+  const supported = new Set(
+    supportedOrbitModelsForConstellation(constellation).map((option) => option.id),
+  );
+  const defaultModel = defaultOrbitPropagatorForConstellation(constellation);
 
   return (
     <div className="wizard-orbit-models">
       {ORBIT_MODEL_OPTIONS.map((option) => {
-        const disabled = option.id === "sgp4-tle" && !supportsSgp4;
+        const disabled = !supported.has(option.id);
         return (
           <button
             key={option.id}
@@ -32,14 +38,16 @@ export function OrbitModelPanel({
           >
             <div className="wizard-orbit-model-header">
               <span className="wizard-orbit-model-title">{option.label}</span>
-              {option.id === "j2-mean-elements" && (
+              {option.id === defaultModel && (
                 <span className="wizard-orbit-model-badge">Default</span>
               )}
             </div>
             <div className="wizard-orbit-model-desc">{option.description}</div>
             {disabled && (
               <div className="wizard-orbit-model-disabled">
-                Select a TLE-backed constellation before using SGP4.
+                {supportsSgp4
+                  ? "TLE-backed constellations require SGP4 propagation."
+                  : "Select a TLE-backed constellation before using SGP4."}
               </div>
             )}
           </button>

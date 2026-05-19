@@ -44,6 +44,15 @@ export function constellationSupportsSgp4Tle(preset: ConstellationPreset | null)
   return constellationMode(preset) === "tle";
 }
 
+export function supportedOrbitModelsForConstellation(
+  preset: ConstellationPreset | null,
+): OrbitModelOption[] {
+  if (constellationSupportsSgp4Tle(preset)) {
+    return ORBIT_MODEL_OPTIONS.filter((option) => option.id === "sgp4-tle");
+  }
+  return ORBIT_MODEL_OPTIONS.filter((option) => option.id !== "sgp4-tle");
+}
+
 export function defaultOrbitPropagatorForConstellation(
   preset: ConstellationPreset | null,
 ): OrbitPropagator {

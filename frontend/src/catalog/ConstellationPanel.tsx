@@ -8,8 +8,8 @@
 
 import { useState } from "react";
 import type { ConstellationPreset } from "./wizardTypes";
-import type { SessionInfo } from "../types";
 import { CONSTELLATION_HELP } from "./wizardHelp";
+import { supportedOrbitModelsForConstellation } from "./orbitModels";
 
 // --- Help component — click to expand, not hover tooltip ---
 
@@ -173,6 +173,20 @@ function geometryToPreset(label: string, desc: string, _real: string, values: Pa
     }),
     ground_stations: "",
   };
+}
+
+function OrbitSupportBadges({ preset }: { preset: ConstellationPreset }) {
+  const supportedModels = supportedOrbitModelsForConstellation(preset);
+  return (
+    <div className="wizard-card-orbit-support" aria-label="Supported orbit models">
+      <span className="wizard-card-orbit-label">Orbit</span>
+      {supportedModels.map((model) => (
+        <span key={model.id} className="wizard-card-orbit-badge">
+          {model.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 /** Pre-built ConstellationPreset cards from real constellation geometries. */
@@ -357,18 +371,12 @@ interface ConstellationPanelProps {
   presets: ConstellationPreset[];
   selected: ConstellationPreset | null;
   onSelect: (preset: ConstellationPreset) => void;
-  fallbackSessions: SessionInfo[];
-  deploying: boolean;
-  onFallbackDeploy: (id: string) => void;
 }
 
 export function ConstellationPanel({
   presets,
   selected,
   onSelect,
-  fallbackSessions,
-  deploying,
-  onFallbackDeploy,
 }: ConstellationPanelProps) {
   const [showCustom, setShowCustom] = useState(false);
 
@@ -383,34 +391,9 @@ export function ConstellationPanel({
 
   if (presets.length === 0) {
     return (
-      <div className="wizard-loading">
-        {fallbackSessions.length > 0 ? (
-          <>
-            <p className="catalog-fallback-warning">
-              Could not load wizard presets. Showing sessions from VS-API.
-            </p>
-            <div className="catalog-grid">
-              {fallbackSessions.map((s) => (
-                <div key={s.file} className={`catalog-card ${s.active ? "catalog-card--active" : ""}`}>
-                  <div className="catalog-card-header"><h3>{s.name}</h3></div>
-                  <div className="catalog-card-stats">
-                    <span>{s.constellation}</span>
-                    <span>{s.routing_stack}</span>
-                  </div>
-                  <button
-                    className={`catalog-deploy-btn ${s.active ? "catalog-deploy-btn--running" : deploying ? "catalog-deploy-btn--deploying" : ""}`}
-                    onClick={() => onFallbackDeploy(s.file.replace("configs/sessions/", "").replace(".yaml", ""))}
-                    disabled={s.active || deploying}
-                  >
-                    {s.active ? "Running" : deploying ? "Deploying..." : "Deploy"}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : (
-          <p>Loading presets...</p>
-        )}
+      <div className="wizard-error">
+        Constellation presets did not load. The wizard cannot build a session without
+        the preset catalog from VS-API.
       </div>
     );
   }
@@ -431,6 +414,7 @@ export function ConstellationPanel({
         >
           <div className="wizard-card-title">{p.name}</div>
           <div className="wizard-card-stat">{p.satellite_count} satellites</div>
+          <OrbitSupportBadges preset={p} />
           <div className="wizard-card-desc">{p.description}</div>
           {p.real && <div className="wizard-card-real">Real: {p.real}</div>}
         </button>

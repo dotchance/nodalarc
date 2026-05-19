@@ -108,6 +108,35 @@
   margin-bottom: var(--space-3);
 }
 
+.wizard-card-orbit-support {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.wizard-card-orbit-label {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  padding: 3px 0;
+  text-transform: uppercase;
+}
+
+.wizard-card-orbit-badge {
+  border: 1px solid rgba(85, 190, 120, 0.36);
+  border-radius: var(--radius-sm);
+  color: var(--accent-green);
+  font-size: 9px;
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  padding: 2px var(--space-3);
+  text-transform: uppercase;
+}
+
 .wizard-card-desc {
   font-size: var(--font-size-xs);
   color: var(--text-secondary);

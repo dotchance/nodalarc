@@ -1,4 +1,5 @@
 FROM quay.io/frrouting/frr:10.3.1@sha256:f90d26a9fd5c14fc5795a73b4254ac88bc3186c45bbeb220a225fb6182de812c
+ARG PROJECT_VERSION=0+unknown
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 LABEL org.opencontainers.image.title="NodalArc FRR" \
@@ -9,8 +10,12 @@ LABEL org.opencontainers.image.title="NodalArc FRR" \
       org.opencontainers.image.url="https://nodal.asmolab.net" \
       org.opencontainers.image.documentation="https://github.com/dotchance/nodalarc" \
       org.opencontainers.image.licenses="NodalArc Source Available License 1.0" \
+      org.opencontainers.image.version="${PROJECT_VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}"
+ENV NODALARC_VERSION=${PROJECT_VERSION} \
+    NODALARC_BUILD_REVISION=${VCS_REF} \
+    NODALARC_BUILD_DATE=${BUILD_DATE}
 
 # OpenSSH server for interactive terminal access (vtysh login shell).
 # Users SSH in and land directly in vtysh — same as a real router.

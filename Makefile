@@ -132,8 +132,7 @@ all: deps build ## Clean-state pipeline: deps → build → load → install →
 
 deps: check-deps ## Install Python + Node.js dependencies (idempotent)
 	@echo "[deps] Installing Python dependencies..."
-	uv sync --extra dev
-	uv pip install -e lib/
+	uv sync
 	@echo "[deps] Installing VF frontend dependencies..."
 	cd frontend && npm ci
 	@echo "[deps] Checking for high-severity vulnerabilities..."
@@ -280,10 +279,10 @@ load: ## Import images into K3s (single-node) or push to registry (multi-node)
 # common footgun where no nodes carry the nodalarc.io/node-agent=true
 # label and the DaemonSet silently schedules zero pods.
 install: ## Helm install the platform chart; refuses existing platform state
-	@ACTION=install MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
+	@ACTION=install MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
 
 reinstall: ## Explicit destructive reinstall through official teardown
-	@ACTION=reinstall MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
+	@ACTION=reinstall MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
 
 # ---------------------------------------------------------------------------
 # Session lifecycle and platform restarts
@@ -325,7 +324,7 @@ restart: ## Rolling restart all platform pods (forces image re-pull)
 #   git commit → make build && make load && make upgrade
 
 upgrade: ## In-place Helm upgrade (updates image tags, no teardown)
-	@ACTION=upgrade MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
+	@ACTION=upgrade MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' PROJECT_VERSION='$(PROJECT_VERSION)' SUDO_CTR='$(SUDO_CTR)' KUBECONFIG='$(KUBECONFIG)' NAMESPACE='$(NAMESPACE)' HELM_EXTRA_ARGS='$(HELM_EXTRA_ARGS)' bash scripts/na-install-platform.sh
 
 # ---------------------------------------------------------------------------
 # Iterative service deploys
@@ -402,15 +401,15 @@ status: ## Show cluster status (pods, phase, links)
 # ---------------------------------------------------------------------------
 
 lint: lint-policy ## Run lint, formatting, and high-confidence dead-code checks
-	uv run --extra dev ruff check .
-	uv run --extra dev ruff format --check .
+	uv run ruff check .
+	uv run ruff format --check .
 	$(MAKE) dead-code
 
 lint-policy: ## Verify lint policy was not weakened
-	uv run --extra dev python scripts/check-lint-policy.py
+	uv run python scripts/check-lint-policy.py
 
 dead-code: ## Report high-confidence unused code findings
-	uv run --extra dev vulture lib services tools scripts images --min-confidence 80
+	uv run vulture lib services tools scripts images --min-confidence 80
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -427,20 +426,20 @@ frontend/node_modules/.bin/vitest: frontend/package.json frontend/package-lock.j
 
 test: ensure-frontend-deps ## Run all unit tests (no sudo needed)
 	@backend=0; frontend=0; \
-	uv run --extra dev pytest --ignore=tests/integration --tb=short -q || backend=$$?; \
+	uv run pytest --ignore=tests/integration --tb=short -q || backend=$$?; \
 	cd frontend && npm test || frontend=$$?; \
 	if [ $$backend -ne 0 ] || [ $$frontend -ne 0 ]; then \
 		echo ""; echo "[test] FAILURES: backend=$$backend frontend=$$frontend"; exit 1; \
 	fi
 
 test-backend: ## Run Python unit tests
-	uv run --extra dev pytest --ignore=tests/integration --tb=short -q
+	uv run pytest --ignore=tests/integration --tb=short -q
 
 test-frontend: ensure-frontend-deps ## Run frontend unit tests (vitest)
 	cd frontend && npm test
 
 test-integration: ## Run integration tests (requires running cluster)
-	uv run --extra dev pytest tests/integration --tb=short -q
+	uv run pytest tests/integration --tb=short -q
 
 test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NET_ADMIN)
 	@if [ "$$(id -u)" != "0" ]; then \
@@ -448,7 +447,7 @@ test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NE
 		exit 1; \
 	fi
 	@if [ ! -x "$(TEST_ROOT_PYTHON)" ]; then \
-		echo "FATAL: $(TEST_ROOT_PYTHON) not found or not executable. Run: uv sync --extra dev"; \
+		echo "FATAL: $(TEST_ROOT_PYTHON) not found or not executable. Run: uv sync"; \
 		exit 1; \
 	fi
 	@echo "[test-root] Running privileged Node Agent substrate proof tests"

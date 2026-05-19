@@ -42,17 +42,25 @@ def _constellation_cr(
     observed_generation: int = 2,
     ready_pods: int = 43,
     pod_count: int = 43,
+    wired_pods: int = 43,
     session_yaml: str | None = None,
+    session_run_id: str = "run-test-0001",
+    session_name: str | None = "demo-36-ospf",
 ) -> dict:
+    status = {
+        "phase": phase,
+        "observedGeneration": observed_generation,
+        "readyPods": ready_pods,
+        "podCount": pod_count,
+        "wiredPods": wired_pods,
+        "sessionRunId": session_run_id,
+    }
+    if session_name is not None:
+        status["sessionName"] = session_name
     return {
         "metadata": {"generation": generation},
         "spec": {"sessionYaml": session_yaml if session_yaml is not None else _session_yaml_text()},
-        "status": {
-            "phase": phase,
-            "observedGeneration": observed_generation,
-            "readyPods": ready_pods,
-            "podCount": pod_count,
-        },
+        "status": status,
     }
 
 
@@ -127,9 +135,16 @@ class TestConstellationCRReadiness:
         ready = m._extract_ready_cr_session(_constellation_cr())
 
         assert ready is not None
-        assert ready.session_id == "demo-36-ospf"
+        assert ready.session_id == "run-test-0001"
+        assert ready.session_name == "demo-36-ospf"
         assert ready.generation == 2
         assert ready.session.session.name == "demo-36-ospf"
+
+    def test_extract_ready_cr_session_requires_runtime_identity(self):
+        import vs_api.main as m
+
+        with pytest.raises(ValueError, match="sessionRunId"):
+            m._extract_ready_cr_session(_constellation_cr(session_run_id=""))
 
     def test_extract_ready_cr_session_rejects_observed_generation_mismatch(self):
         import vs_api.main as m
@@ -137,6 +152,20 @@ class TestConstellationCRReadiness:
         ready = m._extract_ready_cr_session(_constellation_cr(generation=3, observed_generation=2))
 
         assert ready is None
+
+    def test_generation_current_helper_rejects_stale_error_status(self):
+        import vs_api.main as m
+
+        cr = _constellation_cr(phase="Error", generation=3, observed_generation=2)
+
+        assert m._cr_status_observes_current_generation(cr) is False
+
+    def test_generation_current_helper_accepts_current_error_status(self):
+        import vs_api.main as m
+
+        cr = _constellation_cr(phase="Error", generation=3, observed_generation=3)
+
+        assert m._cr_status_observes_current_generation(cr) is True
 
     def test_extract_ready_cr_session_rejects_non_ready_phase(self):
         import vs_api.main as m
@@ -151,6 +180,25 @@ class TestConstellationCRReadiness:
         ready = m._extract_ready_cr_session(_constellation_cr(ready_pods=42, pod_count=43))
 
         assert ready is None
+
+    def test_extract_ready_cr_session_rejects_incomplete_wiring_status(self):
+        import vs_api.main as m
+
+        ready = m._extract_ready_cr_session(_constellation_cr(wired_pods=42, pod_count=43))
+
+        assert ready is None
+
+    def test_extract_ready_cr_session_requires_status_session_name(self):
+        import vs_api.main as m
+
+        with pytest.raises(ValueError, match="sessionName"):
+            m._extract_ready_cr_session(_constellation_cr(session_name=None))
+
+    def test_extract_ready_cr_session_rejects_session_name_mismatch(self):
+        import vs_api.main as m
+
+        with pytest.raises(ValueError, match="status.sessionName"):
+            m._extract_ready_cr_session(_constellation_cr(session_name="wrong-name"))
 
     def test_extract_ready_cr_session_fails_loudly_without_session_yaml(self):
         import vs_api.main as m

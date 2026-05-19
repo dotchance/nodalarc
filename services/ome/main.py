@@ -36,6 +36,7 @@ from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.constellation import ConstellationConfig
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig, resolve_session_epoch
+from nodalarc.session_identity import require_session_run_id
 from nodalarc.tle import tle_age_days
 
 from ome.event_stream import (
@@ -575,7 +576,6 @@ def _run_pacing(
         ome_clock_subject,
         ome_visibility_subject,
         playback_state_subject,
-        sanitize_session_id,
         scheduling_checkpoint_subject,
         session_ephemeris_subject,
     )
@@ -650,7 +650,7 @@ def _run_pacing(
             time.sleep(5)
         cfg = _load_session_config(session_path)
     session = cfg.session
-    session_id = sanitize_session_id(session.session.name)
+    session_id = require_session_run_id(session)
     period = cfg.period
     epoch_unix = resolve_session_epoch(session.time)
     _validate_sgp4_tle_freshness(cfg, epoch_unix)
@@ -1271,8 +1271,6 @@ def main() -> None:
     import signal
     import threading
 
-    from nodalarc.nats_channels import sanitize_session_id
-
     # Health server must start BEFORE the session config wait.
     # K8s liveness probe hits :8081 immediately — if the health server
     # doesn't start until after config loads, the probe fails and K8s
@@ -1287,7 +1285,7 @@ def main() -> None:
         logging.debug("Waiting for session config at %s...", args.session)
         time.sleep(5)
     pre_cfg = _load_session_config(args.session)
-    session_id = sanitize_session_id(pre_cfg.session.session.name)
+    session_id = require_session_run_id(pre_cfg.session)
     from nodal.logging import set_session
 
     set_session(session_id)

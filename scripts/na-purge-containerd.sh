@@ -96,7 +96,8 @@ purge_remote() {
     fi
 
     remote_script='
-table="$(k3s crictl images 2>/dev/null)" || {
+runtime="${CONTAINER_RUNTIME_ENDPOINT:-unix:///run/k3s/containerd/containerd.sock}"
+table="$(crictl --runtime-endpoint "$runtime" images 2>/dev/null)" || {
     echo "list-failed" >&2
     exit 2
 }
@@ -108,7 +109,7 @@ fi
 failed=0
 removed=0
 for image in $images; do
-    if k3s crictl rmi "$image" >/dev/null 2>&1; then
+    if crictl --runtime-endpoint "$runtime" rmi "$image" >/dev/null 2>&1; then
         removed=$((removed + 1))
     else
         echo "failed:$image" >&2
@@ -127,7 +128,6 @@ echo "purged:$removed"
         pod="$(echo "$line" | awk '{print $1}')"
         node="$(echo "$line" | awk '{print $2}')"
         if result="$(kubectl exec "$pod" -n "$NAMESPACE" -c node-agent -- \
-            nsenter --target 1 --mount --uts --ipc --pid -- \
             sh -c "$remote_script" 2>&1)"; then
             case "$result" in
                 none)

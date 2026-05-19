@@ -77,6 +77,9 @@ spec:
               readOnly: true
             - name: node-agent-spool
               mountPath: /var/lib/nodalarc/node-agent
+            - name: host-modules
+              mountPath: /lib/modules
+              readOnly: true
       volumes:
         - name: platform-config
           configMap:
@@ -89,3 +92,7 @@ spec:
           hostPath:
             path: /var/lib/nodalarc/node-agent
             type: DirectoryOrCreate
+        - name: host-modules
+          hostPath:
+            path: /lib/modules
+            type: Directory

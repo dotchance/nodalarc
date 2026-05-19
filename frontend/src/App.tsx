@@ -5,6 +5,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Shell } from "./layout/Shell";
 import { GlobeView } from "./globe/GlobeView";
+import { VisualizationErrorBoundary } from "./globe/VisualizationErrorBoundary";
 import { TopologyView } from "./topology/TopologyView";
 import { InfoPanel } from "./panels/InfoPanel";
 import { FilterPanel } from "./panels/FilterPanel";
@@ -60,7 +61,7 @@ function AppInner() {
     }
   }, [select]);
 
-  const { sessions, switching, switchSession } = useSessionSwitcher(snapshot?.session_status ?? null);
+  const { switching } = useSessionSwitcher(snapshot?.session_status ?? null);
   const playback = usePlayback(snapshot?.playback_paused, snapshot?.playback_speed);
 
   const appState = useAppState({
@@ -72,7 +73,7 @@ function AppInner() {
 
   const {
     showCatalog, hasEverDeployed, setHasEverDeployed, setShowCatalog,
-    openCatalog, closeCatalog, hasActiveSession, activeSessionName, sessionStatus,
+    openCatalog, closeCatalog, activeSessionName, sessionStatus,
     viewMode, setViewMode, colorMode, setColorMode,
     showGroundLinks, setShowGroundLinks, showIslLinks, setShowIslLinks,
     showSatPaths, setShowSatPaths, setShowTrails,
@@ -82,18 +83,9 @@ function AppInner() {
     simTimeAdvanced, followNode, setFollowNode,
   } = appState;
 
-  const handleDeploy = useCallback((sessionId: string) => {
-    if (hasActiveSession) {
-      setShowCatalog(false);
-      return;
-    }
-    switchSession(`configs/sessions/${sessionId}.yaml`);
-    setShowCatalog(false);
-    setHasEverDeployed(true);
-  }, [switchSession, hasActiveSession, setShowCatalog, setHasEverDeployed]);
-
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
+  const [visualizationError, setVisualizationError] = useState<string | null>(null);
 
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth);
@@ -172,6 +164,9 @@ function AppInner() {
   const handleTopView = useCallback(() => { globeActionsRef.current?.flyToTopView(); }, []);
   const handleScreenshot = useCallback(() => { globeActionsRef.current?.captureScreenshot(); }, []);
   const handleFlyToNode = useCallback((nodeId: string) => { globeActionsRef.current?.flyToNode(nodeId); }, []);
+  const handleVisualizationFatalError = useCallback((message: string) => {
+    setVisualizationError(message);
+  }, []);
 
   const keyboardActions = useMemo(
     () => ({
@@ -313,21 +308,24 @@ function AppInner() {
         className={viewMode === "split" ? "split-pane" : "full-pane"}
         style={{ display: (viewMode === "topology" || viewMode === "dashboard") ? "none" : undefined }}
       >
-        <GlobeView
-          snapshot={augmentedSnapshot}
-          ephemeris={ephemeris}
-          playbackState={playbackState}
-          selection={selection}
-          onSelect={select}
-          colorMode={colorMode}
-          globeMode={globeMode}
-          showGroundLinks={showGroundLinks}
-          showIslLinks={showIslLinks}
-          showSatPaths={showSatPaths}
-          referenceFrame={referenceFrame}
-          playbackPaused={playback.paused}
-          actionsRef={globeActionsRef}
-        />
+        <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
+          <GlobeView
+            snapshot={augmentedSnapshot}
+            ephemeris={ephemeris}
+            playbackState={playbackState}
+            selection={selection}
+            onSelect={select}
+            colorMode={colorMode}
+            globeMode={globeMode}
+            showGroundLinks={showGroundLinks}
+            showIslLinks={showIslLinks}
+            showSatPaths={showSatPaths}
+            referenceFrame={referenceFrame}
+            playbackPaused={playback.paused}
+            actionsRef={globeActionsRef}
+            onFatalError={handleVisualizationFatalError}
+          />
+        </VisualizationErrorBoundary>
       </div>
       <div
         className={viewMode === "split" ? "split-pane" : "full-pane"}
@@ -440,8 +438,7 @@ function AppInner() {
       onDeployStarted={() => { setShowCatalog(false); setHasEverDeployed(true); }}
       onClose={hasEverDeployed ? () => setShowCatalog(false) : undefined}
       deploying={switching}
-      fallbackSessions={sessions}
-      onFallbackDeploy={handleDeploy}
+      systemNotice={visualizationError ?? undefined}
     />
   ) : undefined;
 

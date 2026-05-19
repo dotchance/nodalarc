@@ -12,7 +12,7 @@ def main():
     print("=== Step 4A: Pod Location Map ===\n")
 
     loc = PodLocationMap()
-    loc.load_from_k8s_api(namespace="nodalarc", agent_port=50100)
+    loc.load_from_k8s_api(namespace="nodalarc")
 
     print(f"Total pods: {len(loc.node_ids)}")
     print(f"Agent addresses: {loc.all_agent_addrs()}")

@@ -30,6 +30,71 @@ registry_manifest_exists() {
         "http://$REGISTRY_HOST/v2/$repo/manifests/$tag" >/dev/null 2>&1
 }
 
+print_problem_pod_diagnostics() {
+    local pod="$1"
+    local pod_json logs
+
+    echo "    $pod:"
+
+    pod_json="$(kubectl get pod "$pod" -n "$NAMESPACE" -o json 2>/dev/null || true)"
+    if [ -n "$pod_json" ]; then
+        echo "$pod_json" | python3 -c '
+import json
+import sys
+
+d = json.load(sys.stdin)
+for cs in d.get("status", {}).get("containerStatuses", []) or []:
+    name = cs.get("name", "unknown")
+    restarts = cs.get("restartCount", 0)
+    print(f"      container: {name} (restarts={restarts})")
+
+    state = cs.get("state") or {}
+    if "waiting" in state:
+        waiting = state["waiting"] or {}
+        reason = waiting.get("reason") or "Unknown"
+        message = (waiting.get("message") or "").replace("\n", " ").strip()
+        print(f"      current: waiting reason={reason}")
+        if message:
+            print(f"      message: {message[:220]}")
+    elif "terminated" in state:
+        term = state["terminated"] or {}
+        reason = term.get("reason") or "Unknown"
+        exit_code = term.get("exitCode", "?")
+        signal = term.get("signal")
+        finished = term.get("finishedAt") or "unknown"
+        suffix = f", signal={signal}" if signal is not None else ""
+        print(f"      current: terminated reason={reason}, exitCode={exit_code}{suffix}, finishedAt={finished}")
+
+    last = cs.get("lastState") or {}
+    if "terminated" in last:
+        term = last["terminated"] or {}
+        reason = term.get("reason") or "Unknown"
+        exit_code = term.get("exitCode", "?")
+        signal = term.get("signal")
+        finished = term.get("finishedAt") or "unknown"
+        suffix = f", signal={signal}" if signal is not None else ""
+        print(f"      last: terminated reason={reason}, exitCode={exit_code}{suffix}, finishedAt={finished}")
+        message = (term.get("message") or "").replace("\n", " ").strip()
+        if message:
+            print(f"      last message: {message[:220]}")
+'
+    else
+        echo "      pod details unavailable"
+    fi
+
+    logs="$(kubectl logs -n "$NAMESPACE" "$pod" --all-containers=true --tail=12 --previous 2>&1 || true)"
+    if echo "$logs" | grep -Eqi "previous terminated container|not found"; then
+        logs="$(kubectl logs -n "$NAMESPACE" "$pod" --all-containers=true --tail=12 2>&1 || true)"
+    fi
+
+    if [ -n "$logs" ]; then
+        echo "      recent logs:"
+        echo "$logs" | tail -n 12 | sed 's/^/        /'
+    else
+        echo "      recent logs: unavailable"
+    fi
+}
+
 echo "=== NodalArc Status ==="
 echo ""
 
@@ -121,9 +186,16 @@ else
                 echo "  Run: make build"
             fi
         elif [ "$CRASH" -gt 0 ]; then
-            CRASH_POD=$(echo "$PLATFORM" | grep -E "CrashLoopBackOff|Error" | awk '{print $1}' | head -1)
-            echo "  $CRASH pod(s) crashing. Inspect with:"
-            echo "    kubectl logs -n $NAMESPACE $CRASH_POD"
+            echo "  $CRASH pod(s) crashing."
+        fi
+
+        PROBLEM_PODS=$(echo "$PLATFORM" | awk '$3 != "Running" {print $1}' || true)
+        if [ -n "$PROBLEM_PODS" ]; then
+            echo "  Problem pod diagnostics:"
+            while IFS= read -r pod; do
+                [ -n "$pod" ] || continue
+                print_problem_pod_diagnostics "$pod"
+            done <<< "$PROBLEM_PODS"
         fi
     fi
     echo "$PLATFORM" | awk '{printf "    %-45s %-10s %s\n", $1, $3, $7}'

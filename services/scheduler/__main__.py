@@ -247,13 +247,11 @@ def main() -> None:
     session_id = sanitize_session_id(session.session.name)
 
     # Pod location map — canonical node IDs from K8s labels
-    # agent_port is legacy — PodLocationMap builds "host:port" strings but
-    # NodeAgentClient extracts hostname and uses NATS subject, not TCP port.
     loc = PodLocationMap()
     if args.pid_map:
-        loc.load_from_pid_map_file(args.pid_map, agent_port=0)
+        loc.load_from_pid_map_file(args.pid_map)
     else:
-        loc.load_from_k8s_api(agent_port=0)
+        loc.load_from_k8s_api()
     log.debug("Pod locations:\n%s", loc.summary())
 
     # --- Wiring gate: wait for Node Agent to complete wiring ---

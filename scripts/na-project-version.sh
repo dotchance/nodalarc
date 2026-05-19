@@ -42,7 +42,7 @@ format_describe() {
     fi
 
     if [[ "$described" =~ ^[0-9a-f]{7,40}$ ]]; then
-        printf '0+g%s%s\n' "$described" "$dirty"
+        printf '0.0.0+g%s%s\n' "$described" "$dirty"
         return 0
     fi
 
@@ -63,4 +63,4 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     fi
 fi
 
-printf '0+unknown\n'
+printf '0.0.0+unknown\n'

@@ -20,6 +20,7 @@ import threading
 import time
 
 from fastapi import FastAPI, HTTPException
+from nodalarc.project_info import project_version
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ async def _lifespan(app: FastAPI):
     _echo_stop.set()
 
 
-app = FastAPI(title="Nodal Arc Probe Daemon", version="1.0", lifespan=_lifespan)
+app = FastAPI(title="Nodal Arc Probe Daemon", version=project_version(), lifespan=_lifespan)
 
 # UDP probe packet format: 8-byte sequence number + 8-byte send timestamp (microseconds)
 # Total: 16 bytes per probe packet

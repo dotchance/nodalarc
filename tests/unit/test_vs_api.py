@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -133,11 +134,30 @@ class TestApiAttribution:
         import vs_api.main as m
 
         payload = m.about()
+        expected_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))[
+            "project"
+        ]["version"]
 
         assert payload["name"] == "NodalArc"
+        assert payload["version"] == expected_version
+        assert payload["revision"]
+        assert payload["build_date"]
         assert payload["author"] == ".chance (dotchance)"
         assert payload["source"] == "https://github.com/dotchance/nodalarc"
         assert payload["notice"] == "See NOTICE and THIRD_PARTY_NOTICES.md."
+
+    def test_about_uses_runtime_build_metadata(self, monkeypatch):
+        import vs_api.main as m
+
+        monkeypatch.setenv("NODALARC_VERSION", "9.8.7")
+        monkeypatch.setenv("NODALARC_BUILD_REVISION", "abc1234")
+        monkeypatch.setenv("NODALARC_BUILD_DATE", "2026-05-19T22:00:00Z")
+
+        payload = m.about()
+
+        assert payload["version"] == "9.8.7"
+        assert payload["revision"] == "abc1234"
+        assert payload["build_date"] == "2026-05-19T22:00:00Z"
 
 
 class TestConstellationCRReadiness:

@@ -8,6 +8,7 @@
 #   docker build -f services/node_agent/Dockerfile -t nodalarc/node-agent:latest .
 
 FROM python:3.14-slim@sha256:5b3879b6f3cb77e712644d50262d05a7c146b7312d784a18eff7ff5462e77033
+ARG PROJECT_VERSION=0+unknown
 ARG VCS_REF=unknown
 ARG BUILD_DATE=unknown
 LABEL org.opencontainers.image.title="NodalArc Node Agent" \
@@ -18,8 +19,12 @@ LABEL org.opencontainers.image.title="NodalArc Node Agent" \
       org.opencontainers.image.url="https://nodal.asmolab.net" \
       org.opencontainers.image.documentation="https://github.com/dotchance/nodalarc" \
       org.opencontainers.image.licenses="NodalArc Source Available License 1.0" \
+      org.opencontainers.image.version="${PROJECT_VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.created="${BUILD_DATE}"
+ENV NODALARC_VERSION=${PROJECT_VERSION} \
+    NODALARC_BUILD_REVISION=${VCS_REF} \
+    NODALARC_BUILD_DATE=${BUILD_DATE}
 
 # Install iproute2 (tc command for ground link mirred redirect)
 # Install iptables (cni0 egress lockdown for session pod security)

@@ -229,7 +229,9 @@ def test_docker_builds_pass_oci_metadata_args() -> None:
     makefile = _makefile()
 
     assert "BUILD_DATE ?=" in makefile
+    assert "PROJECT_VERSION ?=" in makefile
     assert "DOCKER_BUILD_METADATA_ARGS" in makefile
+    assert "--build-arg PROJECT_VERSION=$(PROJECT_VERSION)" in makefile
     assert "--build-arg VCS_REF=$(GIT_SHA)" in makefile
     assert "--build-arg BUILD_DATE=$(BUILD_DATE)" in makefile
     for target in (
@@ -257,12 +259,17 @@ def test_dockerfiles_have_oci_attribution_labels() -> None:
         'org.opencontainers.image.url="https://nodal.asmolab.net"',
         "org.opencontainers.image.documentation",
         'org.opencontainers.image.licenses="NodalArc Source Available License 1.0"',
+        'org.opencontainers.image.version="${PROJECT_VERSION}"',
         'org.opencontainers.image.revision="${VCS_REF}"',
         'org.opencontainers.image.created="${BUILD_DATE}"',
+        "ENV NODALARC_VERSION=${PROJECT_VERSION}",
+        "NODALARC_BUILD_REVISION=${VCS_REF}",
+        "NODALARC_BUILD_DATE=${BUILD_DATE}",
     )
 
     for rel in DOCKERFILES:
         text = (ROOT / rel).read_text()
+        assert "ARG PROJECT_VERSION=0+unknown" in text, rel
         assert "ARG VCS_REF=unknown" in text, rel
         assert "ARG BUILD_DATE=unknown" in text, rel
         for expected in required:

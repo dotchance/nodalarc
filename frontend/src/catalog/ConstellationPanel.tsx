@@ -151,6 +151,7 @@ function geometryToPreset(label: string, desc: string, _real: string, values: Pa
     name,
     description: desc,
     satellite_count: total,
+    mode: "parametric",
     constellation: JSON.stringify({
       mode: "parametric",
       name,
@@ -224,6 +225,7 @@ function CustomConstellationForm({ onSubmit, onCancel }: {
       name,
       description: `${form.planes} planes \u00d7 ${form.sats_per_plane} sats, ${form.altitude_km} km, ${form.inclination_deg}\u00b0 ${form.pattern}`,
       satellite_count: total,
+      mode: "parametric",
       constellation: JSON.stringify({
         mode: "parametric",
         name,

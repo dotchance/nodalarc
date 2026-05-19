@@ -162,9 +162,7 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
 
     # --- Validate constraints ---
     if protocol == "nodalpath":
-        if ext_set:
-            raise ValueError("nodalpath does not accept extensions")
-        return _resolve_nodalpath()
+        raise ValueError("NodalPath is distributed separately from NodalArc")
 
     if "sr" in ext_set and protocol not in ("ospf", "isis"):
         raise ValueError("SR extension requires ospf or isis protocol")
@@ -181,27 +179,6 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
         return _resolve_isis(ext_set)
     else:
         raise ValueError(f"Unknown protocol: {protocol}")
-
-
-def _resolve_nodalpath() -> ResolvedStack:
-    return ResolvedStack(
-        daemons=["zebra", "staticd"],
-        template_files=[_DAEMON_TEMPLATES["zebra"], _DAEMON_TEMPLATES["staticd"]],
-        template_variables={"grpc_port": 50052},
-        image="nodalpath-fwd",
-        mi_adapter=None,
-        segment_routing=False,
-        sysctls=_sr_sysctls(),
-        transport="grpc",
-        host_modules=["mpls_router", "mpls_iptunnel"],
-        env=[
-            {"name": "NODE_ID", "value": "{{ node_id }}"},
-            {"name": "GRPC_PORT", "value": "50052"},
-            {"name": "LOOPBACK_IPV4", "value": "{{ ipv4_loopback }}"},
-        ],
-        security_context_capabilities=["NET_ADMIN", "NET_RAW", "SYS_ADMIN"],
-        max_compression=10,
-    )
 
 
 def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:

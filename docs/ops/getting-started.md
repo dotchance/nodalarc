@@ -138,7 +138,6 @@ Available session configs:
 |---------|-----------|---------|-------------|
 | `demo-36-ospf.yaml` | 36 | OSPF | Default. Single ring, fast deploy |
 | `starlink-176-isis-te.yaml` | 176 | IS-IS + TE | Full Walker constellation |
-| `starlink-176-nodalpath.yaml` | 176 | NodalPath | Centralized path computation |
 | `starlink-576-isis-te.yaml` | 576 | IS-IS + TE | Large-scale testing |
 | `iridium-66.yaml` (constellation) | 66 | varies | Polar orbit topology |
 

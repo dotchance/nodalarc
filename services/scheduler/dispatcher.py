@@ -919,7 +919,7 @@ class Dispatcher:
     async def _dispatch_batch(
         self,
         vis_events: list[VisibilityEvent],
-        snapshots: list,
+        _snapshots: list,
         to_pub,
     ) -> None:
         """Process a batch of VisibilityEvents — builds desired and reconciles.

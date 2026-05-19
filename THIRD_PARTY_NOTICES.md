@@ -78,8 +78,6 @@ manifests and lockfiles:
 
 - Python: `pyproject.toml`, `lib/pyproject.toml`, `uv.lock`
 - Frontend: `frontend/package.json`, `frontend/package-lock.json`
-- NodalPath console frontend: `nodalpath/console/frontend/package.json`,
-  `nodalpath/console/frontend/package-lock.json`
 
 These package dependencies are not vendored into the source tree, but built
 frontend bundles, Python wheels, and container images may include third-party

@@ -17,6 +17,20 @@ COPY . .
 RUN npm run build
 
 FROM nginx:alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ARG BUILD_HASH=unknown
+LABEL org.opencontainers.image.title="NodalArc Visualization" \
+      org.opencontainers.image.description="Browser visualization frontend for NodalArc" \
+      org.opencontainers.image.vendor=".chance (dotchance)" \
+      org.opencontainers.image.authors=".chance (dotchance)" \
+      org.opencontainers.image.source="https://github.com/dotchance/nodalarc" \
+      org.opencontainers.image.url="https://nodal.asmolab.net" \
+      org.opencontainers.image.documentation="https://github.com/dotchance/nodalarc" \
+      org.opencontainers.image.licenses="NodalArc Source Available License 1.0" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${BUILD_HASH}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 RUN rm /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/conf.d/nodalarc.conf
 COPY --from=build /app/dist /usr/share/nginx/html

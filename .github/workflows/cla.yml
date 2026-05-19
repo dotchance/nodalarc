@@ -23,7 +23,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SIGN_PHRASE: I have read the NodalArc Contributor License Agreement and I agree to it.
-          ALLOWLIST: dependabot[bot],github-actions[bot]
+          ALLOWLIST: dotchance,dependabot[bot],github-actions[bot]
         run: |
           python - <<'PY'
           import fnmatch

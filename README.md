@@ -139,7 +139,7 @@ Once the system is running, you can:
 
 - watch IS-IS or OSPF reconverge as orbital links appear and disappear
 - measure ground-station handoff impact instead of arguing about timers
-- run the same constellation under IS-IS, OSPF, SR-MPLS, or NodalPath
+- run the same constellation under IS-IS, OSPF, SR-MPLS, or external path engines
 - change altitude, inclination, plane count, phase offset, and satellite terminal models
 - move ground stations and see what reachability you bought or lost
 - run `ping`, `traceroute`, and `iperf` through the emulated constellation
@@ -188,9 +188,9 @@ Pause, resume, change speed, and seek. If a failure happens at a certain point i
 
 A single machine can run hundreds of nodes. A Kubernetes cluster can spread the emulation across machines. Local links use host-mediated veths. Cross-node links use VXLAN. Substrate latency compensation keeps the emulated delay tied to the orbital path, not to the physical lab network.
 
-### NodalPath
+### External Path Engines
 
-NodalPath provides centralized path computation for experiments where distributed routing is not the model you want to test. If the future geometry is computable, forwarding state can be computed ahead of the topology instead of discovered one failure at a time.
+NodalArc keeps the emulation substrate honest: orbital mechanics, carrier events, Linux interfaces, timing, and observability. External path engines, including NodalPath, can attach to that substrate when distributed routing is not the model you want to test.
 
 ## Architecture At A Glance
 
@@ -201,7 +201,6 @@ Node Agent   Host kernel operations and proof of actual state
 Operator     Session lifecycle, pods, configs, and deployment
 VS-API       Browser/API front door and state aggregation
 VF           React + Three.js visualization frontend
-NodalPath    Centralized path computation engine
 NATS         Event bus and durable fact stream
 ```
 
@@ -212,9 +211,8 @@ The boundary matters. OME computes the sky. The Scheduler decides what should ex
 ```text
 services/       Backend services: OME, Scheduler, Node Agent, VS-API, Operator
 frontend/       Visualization frontend: React + Three.js
-nodalpath/      NodalPath path computation engine
 lib/            Shared Python library
-images/         Container images: FRR, probe, forwarding sidecar
+images/         Container images: FRR and probe
 deploy/         Helm chart and deployment tooling
 configs/        Constellations, ground stations, satellite types, sessions
 tests/          Unit and integration tests

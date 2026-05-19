@@ -34,7 +34,7 @@ time:
 | `session.name` | yes | - | Session identifier |
 | `constellation` | yes | - | Path to constellation YAML |
 | `ground_stations` | yes | - | Path to ground station set YAML |
-| `routing.protocol` | yes | - | `isis`, `ospf`, or `nodalpath` |
+| `routing.protocol` | yes | - | `isis` or `ospf` |
 | `routing.extensions` | no | none | Protocol extensions (see below) |
 | `routing.area_assignment.strategy` | no | `flat` | `flat`, `per-plane`, or `stripe` |
 | `routing.area_assignment.planes_per_stripe` | no | - | Required for `stripe` strategy |
@@ -49,7 +49,6 @@ time:
 |----------|---------------------|-------------|
 | `isis` | `traffic-engineering`, `sr`, `mpls` | IS-IS link-state IGP |
 | `ospf` | `traffic-engineering`, `sr`, `mpls` | OSPF link-state IGP |
-| `nodalpath` | none | Centralized path computation |
 
 Extension dependencies:
 - `mpls` requires `traffic-engineering`

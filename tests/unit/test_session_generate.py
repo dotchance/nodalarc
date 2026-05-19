@@ -76,7 +76,6 @@ class TestGenerateSessionYaml:
             ("isis", ["te"]),
             ("isis", ["te", "mpls"]),
             ("ospf", ["sr"]),
-            ("nodalpath", []),
         ],
     )
     def test_generate_and_roundtrip(self, constellation, protocol, extensions):
@@ -142,20 +141,18 @@ class TestGenerateInvalid:
             generate_session_yaml("nonexistent", "ospf", [], orbit_propagator="keplerian-circular")
 
     def test_invalid_combo(self):
-        with pytest.raises(ValueError, match="does not accept extensions"):
+        with pytest.raises(ValueError, match="distributed separately"):
             generate_session_yaml(
                 "iridium-66", "nodalpath", ["sr"], orbit_propagator="keplerian-circular"
             )
 
 
-class TestNodalPathNoAreaAssignment:
-    def test_no_area_assignment(self):
-        yaml_str, _ = generate_session_yaml(
-            "iridium-66", "nodalpath", [], orbit_propagator="keplerian-circular"
-        )
-        raw = yaml.safe_load(yaml_str)
-        session = SessionConfig.model_validate(raw)
-        assert session.routing.area_assignment is None
+class TestNodalPathExternal:
+    def test_nodalpath_sessions_are_not_generated_by_nodalarc(self):
+        with pytest.raises(ValueError, match="distributed separately"):
+            generate_session_yaml(
+                "iridium-66", "nodalpath", [], orbit_propagator="keplerian-circular"
+            )
 
 
 class TestOrbitPropagatorGeneration:

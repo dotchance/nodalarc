@@ -21,18 +21,15 @@ DRY_RUN_TARGETS = (
     "_clear-build-cache",
     "ensure-base-images",
     "build-base-images",
-    "proto-stubs",
     "build-base",
     "build-frr",
     "build-probe",
-    "build-fwd",
     "build-ome",
     "build-scheduler",
     "build-node-agent",
     "build-vs-api",
     "build-operator",
     "build-vf",
-    "build-nodalpath",
     "build-measurement",
     "load",
     "install",
@@ -47,7 +44,6 @@ DRY_RUN_TARGETS = (
     "deploy-vs-api",
     "deploy-operator",
     "deploy-vf",
-    "deploy-nodalpath",
     "deploy-measurement",
     "status",
     "lint",
@@ -189,25 +185,10 @@ def test_build_images_builds_every_image_load_requires_for_current_tag() -> None
     assert "build-base-images" in body
     assert "build-frr" in _target_body("build-base-images")
     assert "build-probe" in _target_body("build-base-images")
-    assert "build-fwd" in _target_body("build-base-images")
-
-
-def test_generated_proto_stubs_exist_before_lint_tests_and_runtime_images() -> None:
-    proto = _target_body("proto-stubs")
-    assert "uv run --extra dev bash nodalpath/proto/generate.sh" in proto
-
-    for target in ("lint", "test", "test-backend", "test-integration"):
-        assert _target_body(target).splitlines()[0].startswith(f"{target}: proto-stubs"), target
-
-    for target in ("build-vs-api", "build-nodalpath"):
-        assert _target_body(target).splitlines()[0].startswith(f"{target}: proto-stubs"), target
 
 
 def test_helm_templates_do_not_have_duplicate_env_blocks_or_nats_box_latest() -> None:
-    for rel in (
-        "deploy/helm/templates/operator-deployment.yaml",
-        "deploy/helm/templates/nodalpath-deployment.yaml",
-    ):
+    for rel in ("deploy/helm/templates/operator-deployment.yaml",):
         text = (ROOT / rel).read_text()
         assert text.count("          env:\n") == 1, rel
 

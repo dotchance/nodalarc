@@ -22,6 +22,7 @@ import contextlib
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 
 from nodalarc.models.path import (
     LiveTraceDirection,
@@ -34,7 +35,6 @@ from nodalarc.models.vs_api import TracedPath
 from nodalarc.platform_config import PlatformConfig
 from nodalarc.tracepath_parser import parse_tracepath
 
-from nodalpath.models.topology import TopologyNode
 from vs_api.timeline_scanner import TimelineScanner
 
 log = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class ContinuousTracer:
 
     def __init__(
         self,
-        node_registry: dict[str, TopologyNode],
+        node_registry: dict[str, Any],
         interface_map: dict[tuple[str, str], tuple[str, str]],
         pid_map: dict[str, int],
         trace_mode: str,
@@ -65,7 +65,8 @@ class ContinuousTracer:
         # Build IP → node_id lookup
         self._ip_to_node: dict[str, str] = {}
         for node_id, node in node_registry.items():
-            self._ip_to_node[node.loopback_ipv4] = node_id
+            loopback = node.get("loopback_ipv4") if isinstance(node, dict) else node.loopback_ipv4
+            self._ip_to_node[loopback] = node_id
 
         self._timeline_scanner = TimelineScanner(timeline_path) if timeline_path else None
         self._task: asyncio.Task | None = None
@@ -462,7 +463,7 @@ class ContinuousTracer:
             trace_mode="cspf",
         )
 
-    def _map_hops(self, parsed: TracepathResult, src_node: TopologyNode) -> list[PathHop]:
+    def _map_hops(self, parsed: TracepathResult, src_node: Any) -> list[PathHop]:
         """Map parsed tracepath hops to PathHop list.
 
         Deduplicates by hop_num — tracepath reports the same hop_num

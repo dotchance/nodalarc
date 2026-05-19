@@ -11,6 +11,19 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 
+DOCKERFILES = (
+    "images/base/Dockerfile",
+    "images/frr/Dockerfile",
+    "images/probe/Dockerfile",
+    "services/ome/Dockerfile",
+    "services/scheduler/Dockerfile",
+    "services/node_agent/Dockerfile",
+    "services/vs_api/Dockerfile",
+    "services/nodalarc_operator/Dockerfile",
+    "services/measurement/Dockerfile",
+    "frontend/Dockerfile",
+)
+
 DRY_RUN_TARGETS = (
     "help",
     "all",
@@ -187,6 +200,73 @@ def test_build_images_builds_every_image_load_requires_for_current_tag() -> None
     assert "build-base-images" in body
     assert "build-frr" in _target_body("build-base-images")
     assert "build-probe" in _target_body("build-base-images")
+
+
+def test_notice_file_carries_project_attribution() -> None:
+    notice = (ROOT / "NOTICE").read_text()
+
+    assert "NodalArc" in notice
+    assert ".chance (dotchance)" in notice
+    assert "https://github.com/dotchance/nodalarc" in notice
+    assert "THIRD_PARTY_NOTICES.md" in notice
+
+
+def test_cli_surfaces_project_attribution() -> None:
+    surfaces = {
+        "Makefile": _makefile(),
+        "scripts/na-status.sh": (ROOT / "scripts/na-status.sh").read_text(),
+        "scripts/bootstrap-host.sh": (ROOT / "scripts/bootstrap-host.sh").read_text(),
+        "scripts/na-teardown.sh": (ROOT / "scripts/na-teardown.sh").read_text(),
+        "scripts/na-nuke.sh": (ROOT / "scripts/na-nuke.sh").read_text(),
+    }
+
+    for rel, text in surfaces.items():
+        assert ".chance (dotchance)" in text, rel
+        assert "https://github.com/dotchance/nodalarc" in text, rel
+
+
+def test_docker_builds_pass_oci_metadata_args() -> None:
+    makefile = _makefile()
+
+    assert "BUILD_DATE ?=" in makefile
+    assert "DOCKER_BUILD_METADATA_ARGS" in makefile
+    assert "--build-arg VCS_REF=$(GIT_SHA)" in makefile
+    assert "--build-arg BUILD_DATE=$(BUILD_DATE)" in makefile
+    for target in (
+        "build-base",
+        "build-frr",
+        "build-probe",
+        "build-ome",
+        "build-scheduler",
+        "build-node-agent",
+        "build-vs-api",
+        "build-operator",
+        "build-measurement",
+        "build-vf",
+    ):
+        assert "$(DOCKER_BUILD_METADATA_ARGS)" in _target_body(target), target
+
+
+def test_dockerfiles_have_oci_attribution_labels() -> None:
+    required = (
+        "org.opencontainers.image.title",
+        "org.opencontainers.image.description",
+        'org.opencontainers.image.vendor=".chance (dotchance)"',
+        'org.opencontainers.image.authors=".chance (dotchance)"',
+        'org.opencontainers.image.source="https://github.com/dotchance/nodalarc"',
+        'org.opencontainers.image.url="https://nodal.asmolab.net"',
+        "org.opencontainers.image.documentation",
+        'org.opencontainers.image.licenses="NodalArc Source Available License 1.0"',
+        'org.opencontainers.image.revision="${VCS_REF}"',
+        'org.opencontainers.image.created="${BUILD_DATE}"',
+    )
+
+    for rel in DOCKERFILES:
+        text = (ROOT / rel).read_text()
+        assert "ARG VCS_REF=unknown" in text, rel
+        assert "ARG BUILD_DATE=unknown" in text, rel
+        for expected in required:
+            assert expected in text, f"{rel} missing {expected}"
 
 
 def test_helm_templates_do_not_have_duplicate_env_blocks_or_nats_box_latest() -> None:

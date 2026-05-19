@@ -1,9 +1,9 @@
 # Third-Party Notices
 
 This file lists third-party material distributed with the NodalArc source tree or
-included in artifacts built from it. The NodalArc Source Available License 1.0
-applies to NodalArc-owned code and documentation. Third-party material remains
-under its own license or usage terms.
+included in artifacts built from it. The Apache License 2.0 applies to
+NodalArc-owned code and documentation. Third-party material remains under its
+own license or usage terms.
 
 ## Bundled Frontend Assets
 
@@ -69,7 +69,7 @@ where noted in the files themselves, including:
 
 Facts are not owned by NodalArc. The NodalArc-specific configuration files,
 schema, comments, selection, validation logic, and documentation remain covered
-by the NodalArc Source Available License 1.0 unless a file says otherwise.
+by the Apache License 2.0 unless a file says otherwise.
 
 ## Package Dependencies
 

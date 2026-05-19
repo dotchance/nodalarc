@@ -7,7 +7,7 @@ authors:
   - name: ".chance (dotchance)"
 repository-code: "https://github.com/dotchance/nodalarc"
 url: "https://nodal.asmolab.net"
-license: "NodalArc Source Available License 1.0"
+license: "Apache-2.0"
 version: "0.1.0"
 date-released: "2026-05-18"
 keywords:

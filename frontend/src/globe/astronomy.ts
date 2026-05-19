@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+// Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Astronomy helpers for reference-frame rendering.
  *
  *  Provides the earth-rotation angle (GMST) as a pure function of UTC, and

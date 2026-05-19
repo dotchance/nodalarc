@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+// Licensed under the Apache License, Version 2.0. See LICENSE file.
 // Dashboard — aggregate health metrics at a glance.
 //
 // Summary cards: total links (ISL/GS), satellite count, GS count,

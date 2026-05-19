@@ -225,6 +225,9 @@ ensure-base-images:
 
 build-base-images: build-base build-frr build-probe build-fwd ## Build infrastructure images (base, FRR, probe)
 
+proto-stubs: ## Generate NodalPath gRPC Python stubs
+	uv run --extra dev bash nodalpath/proto/generate.sh
+
 build-base:
 	docker build -t "$(call IMAGE_REF,base)" -t "$(call IMAGE_REF_TAG,base,latest)" images/base/
 
@@ -246,13 +249,13 @@ build-scheduler: ## Build Scheduler image
 build-node-agent: ## Build Node Agent image
 	docker build -f services/node_agent/Dockerfile -t "$(call IMAGE_REF,node-agent)" -t "$(call IMAGE_REF_TAG,node-agent,latest)" .
 
-build-vs-api: ## Build VS-API image
+build-vs-api: proto-stubs ## Build VS-API image
 	docker build -f services/vs_api/Dockerfile -t "$(call IMAGE_REF,vs-api)" -t "$(call IMAGE_REF_TAG,vs-api,latest)" .
 
 build-operator: ## Build Operator image
 	docker build -f services/nodalarc_operator/Dockerfile -t "$(call IMAGE_REF,operator)" -t "$(call IMAGE_REF_TAG,operator,latest)" .
 
-build-nodalpath: ## Build NodalPath image
+build-nodalpath: proto-stubs ## Build NodalPath image
 	docker build -f nodalpath/Dockerfile -t "$(call IMAGE_REF,nodalpath)" -t "$(call IMAGE_REF_TAG,nodalpath,latest)" .
 
 build-measurement: ## Build MI (Measurement) image
@@ -411,7 +414,7 @@ status: ## Show cluster status (pods, phase, links)
 # Lint and static analysis
 # ---------------------------------------------------------------------------
 
-lint: lint-policy ## Run lint, formatting, and high-confidence dead-code checks
+lint: proto-stubs lint-policy ## Run lint, formatting, and high-confidence dead-code checks
 	uv run --extra dev ruff check .
 	uv run --extra dev ruff format --check .
 	$(MAKE) dead-code
@@ -429,7 +432,7 @@ dead-code: ## Report high-confidence unused code findings
 # Unit tests should not require a live cluster. Integration tests are explicit
 # because they assume a running platform or cluster-adjacent services.
 
-test: ## Run all unit tests (no sudo needed)
+test: proto-stubs ## Run all unit tests (no sudo needed)
 	@backend=0; frontend=0; \
 	uv run pytest --ignore=tests/integration --tb=short -q || backend=$$?; \
 	cd frontend && npx vitest run || frontend=$$?; \
@@ -437,13 +440,13 @@ test: ## Run all unit tests (no sudo needed)
 		echo ""; echo "[test] FAILURES: backend=$$backend frontend=$$frontend"; exit 1; \
 	fi
 
-test-backend: ## Run Python unit tests
+test-backend: proto-stubs ## Run Python unit tests
 	uv run pytest --ignore=tests/integration --tb=short -q
 
 test-frontend: ## Run frontend unit tests (vitest)
 	cd frontend && npx vitest run
 
-test-integration: ## Run integration tests (requires running cluster)
+test-integration: proto-stubs ## Run integration tests (requires running cluster)
 	uv run pytest tests/integration --tb=short -q
 
 test-root: ## Run privileged Node Agent kernel proof tests (requires root/CAP_NET_ADMIN)

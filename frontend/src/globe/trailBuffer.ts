@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+// Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Pure ring buffer for orbital trail geometry.
  *
  *  Extracted from orbitalTrails.ts so the draw-order and arc-length

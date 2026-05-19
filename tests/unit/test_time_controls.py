@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Unit tests for OME time control surface (R-OME-008B Tier 1).
 
 Tests the protocol handler, state mutation, and boundary validation.

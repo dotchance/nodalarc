@@ -258,7 +258,7 @@ def test_dockerfiles_have_oci_attribution_labels() -> None:
         'org.opencontainers.image.source="https://github.com/dotchance/nodalarc"',
         'org.opencontainers.image.url="https://nodal.asmolab.net"',
         "org.opencontainers.image.documentation",
-        'org.opencontainers.image.licenses="NodalArc Source Available License 1.0"',
+        'org.opencontainers.image.licenses="Apache-2.0"',
         'org.opencontainers.image.version="${PROJECT_VERSION}"',
         'org.opencontainers.image.revision="${VCS_REF}"',
         'org.opencontainers.image.created="${BUILD_DATE}"',

@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+// Licensed under the Apache License, Version 2.0. See LICENSE file.
 // Satellite rendering — InstancedMesh for O(1) draw calls at any scale.
 //
 // Before: 220 Mesh + 220 Sprite = 440 draw calls

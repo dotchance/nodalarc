@@ -1,0 +1,184 @@
+name: CLA
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  statuses: write
+
+jobs:
+  cla:
+    name: CLA
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    steps:
+      - name: Check CLA acceptance
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGN_PHRASE: I have read the NodalArc Contributor License Agreement and I agree to it.
+          ALLOWLIST: dependabot[bot],github-actions[bot]
+        run: |
+          python - <<'PY'
+          import fnmatch
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          api = os.environ["GITHUB_API_URL"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GITHUB_TOKEN"]
+          sign_phrase = os.environ["SIGN_PHRASE"]
+          allowlist = [
+              item.strip()
+              for item in os.environ.get("ALLOWLIST", "").split(",")
+              if item.strip()
+          ]
+          marker = "<!-- nodalarc-cla-check -->"
+
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as event_file:
+              event = json.load(event_file)
+
+          event_name = os.environ["GITHUB_EVENT_NAME"]
+          if event_name == "pull_request_target":
+              pr_number = event["pull_request"]["number"]
+          elif event_name == "issue_comment" and event.get("issue", {}).get("pull_request"):
+              pr_number = event["issue"]["number"]
+          else:
+              print("No pull request to check.")
+              sys.exit(0)
+
+          def request(method: str, path: str, payload: dict | None = None):
+              url = f"{api}/repos/{repo}{path}"
+              data = json.dumps(payload).encode("utf-8") if payload is not None else None
+              req = urllib.request.Request(
+                  url,
+                  data=data,
+                  method=method,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "Content-Type": "application/json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(req) as response:
+                  body = response.read()
+                  return json.loads(body.decode("utf-8")) if body else None
+
+          def request_pages(path: str):
+              page = 1
+              while True:
+                  separator = "&" if "?" in path else "?"
+                  items = request("GET", f"{path}{separator}per_page=100&page={page}")
+                  if not items:
+                      break
+                  yield from items
+                  if len(items) < 100:
+                      break
+                  page += 1
+
+          pr = request("GET", f"/pulls/{pr_number}")
+          head_sha = pr["head"]["sha"]
+          pr_author = pr["user"]["login"]
+          pr_url = pr["html_url"]
+          cla_url = f"https://github.com/{repo}/blob/main/CLA.md"
+
+          commit_users: set[str] = {pr_author}
+          unknown_commit_authors: set[str] = set()
+          for commit in request_pages(f"/pulls/{pr_number}/commits"):
+              author = commit.get("author")
+              if author and author.get("login"):
+                  commit_users.add(author["login"])
+              else:
+                  commit_author = commit.get("commit", {}).get("author", {})
+                  name = commit_author.get("name") or commit.get("sha", "unknown")
+                  unknown_commit_authors.add(name)
+
+          required_users = sorted(
+              user
+              for user in commit_users
+              if not any(fnmatch.fnmatchcase(user, pattern) for pattern in allowlist)
+          )
+
+          comments = list(request_pages(f"/issues/{pr_number}/comments"))
+          signed_users = {
+              comment["user"]["login"]
+              for comment in comments
+              if sign_phrase in comment.get("body", "")
+          }
+          missing = [user for user in required_users if user not in signed_users]
+
+          if unknown_commit_authors:
+              print(
+                  "Warning: commit authors without GitHub users: "
+                  + ", ".join(sorted(unknown_commit_authors))
+              )
+
+          def set_status(state: str, description: str):
+              request(
+                  "POST",
+                  f"/statuses/{head_sha}",
+                  {
+                      "state": state,
+                      "context": "CLA",
+                      "description": description[:140],
+                      "target_url": cla_url,
+                  },
+              )
+
+          def upsert_comment(body: str):
+              bot_comment = next(
+                  (
+                      comment
+                      for comment in comments
+                      if comment.get("body", "").startswith(marker)
+                      and comment.get("user", {}).get("type") == "Bot"
+                  ),
+                  None,
+              )
+              payload = {"body": body}
+              if bot_comment:
+                  request("PATCH", f"/issues/comments/{bot_comment['id']}", payload)
+              else:
+                  request("POST", f"/issues/{pr_number}/comments", payload)
+
+          if missing:
+              quoted_phrase = f"> {sign_phrase}"
+              body = f"""{marker}
+          CLA required for this pull request.
+
+          The following contributor(s) still need to accept the [NodalArc Contributor License Agreement]({cla_url}):
+
+          {chr(10).join(f"- @{user}" for user in missing)}
+
+          To accept the CLA for this pull request, comment exactly:
+
+          {quoted_phrase}
+
+          After signing, comment `recheck` if the status does not update automatically.
+          """
+              upsert_comment(body)
+              set_status("failure", "CLA acceptance required")
+              print(f"CLA missing for: {', '.join(missing)}")
+              sys.exit(1)
+
+          body = f"""{marker}
+          CLA accepted for this pull request.
+
+          All required contributor(s) have accepted the [NodalArc Contributor License Agreement]({cla_url}).
+          """
+          upsert_comment(body)
+          set_status("success", "CLA accepted")
+          print(f"CLA accepted for PR #{pr_number}: {pr_url}")
+          PY

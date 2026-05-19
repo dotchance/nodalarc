@@ -20,6 +20,7 @@ We welcome contributions. Whether it's a bug fix, new routing protocol support, 
 
 ## Pull Request Guidelines
 
+- You must accept the [NodalArc Contributor License Agreement](CLA.md) before a PR can merge. The GitHub CLA check will comment with the exact acceptance text when needed.
 - One logical change per PR. Don't mix bug fixes with refactors.
 - Tests must pass. All 996+ unit tests for backend, 33+ for frontend.
 - Follow existing code conventions (see [Conventions](docs/dev/conventions.md)):
@@ -62,4 +63,4 @@ Be respectful. Be constructive. Focus on the work.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the NodalArc Source Available License 1.0.
+By contributing, you agree that your contributions are governed by the [NodalArc Contributor License Agreement](CLA.md). Your contributions may be distributed as part of NodalArc under the license or licenses chosen by .chance (dotchance) for the project.

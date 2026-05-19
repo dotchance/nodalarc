@@ -236,7 +236,7 @@ The docs are split by the work you are trying to do.
 NodalArc is source-available and welcomes useful contributions. Bugs, routing stacks, constellation models, visualization improvements, documentation fixes, and operational reports all help, as long as they respect the architecture.
 
 - **Issues** - bug reports, feature requests, and questions
-- **Pull Requests** - read the [Developer Guide](docs/dev/) before opening one
+- **Pull Requests** - read [CONTRIBUTING.md](CONTRIBUTING.md), the [Developer Guide](docs/dev/), and the [Contributor License Agreement](CLA.md) before opening one
 - **Discussions** - architecture proposals, use cases, and experiments
 
 ## License

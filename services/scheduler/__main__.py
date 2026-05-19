@@ -34,8 +34,9 @@ from nodalarc.models.addressing import (
     AddressingScheme,
 )
 from nodalarc.models.session import SessionConfig
+from nodalarc.session_identity import require_session_run_id
 from nodalarc.substrate.manifest_contract import WiringManifest
-from nodalarc.substrate.wiring_status import parse_status_configmap
+from nodalarc.substrate.wiring_status import failed_status_summary, parse_status_configmap
 
 from scheduler.agent_pool import AgentPool
 from scheduler.dispatcher import Dispatcher
@@ -94,8 +95,19 @@ def wait_for_wiring_gate(
             if expected_nodes.issubset(ready):
                 log.info("Wiring gate passed: %d/%d nodes ready", len(ready), expected_count)
                 return
+            current_statuses = {
+                node_id: status
+                for node_id, status in statuses.items()
+                if status.session_id == session_id and status.wiring_generation == wiring_generation
+            }
+            failure = failed_status_summary(current_statuses, node_ids=expected_nodes)
+            if failure:
+                log.error("Wiring gate failed: %s", failure)
+                raise RuntimeError(f"Wiring gate failed: {failure}")
             if int(monotonic()) % 10 < 2:
                 log.debug("Wiring in progress: %d/%d", len(ready), expected_count)
+        except RuntimeError:
+            raise
         except Exception as exc:
             status = getattr(exc, "status", None)
             if status != 404:
@@ -242,9 +254,7 @@ def main() -> None:
     addressing = AddressingScheme(session.addressing)
     interface_map, bandwidth_map = _build_interface_map(session, addressing)
     log.debug("Interface map: %d link pairs", len(interface_map))
-    from nodalarc.nats_channels import sanitize_session_id
-
-    session_id = sanitize_session_id(session.session.name)
+    session_id = require_session_run_id(session)
 
     # Pod location map — canonical node IDs from K8s labels
     loc = PodLocationMap()

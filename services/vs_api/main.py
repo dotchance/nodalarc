@@ -461,10 +461,11 @@ _ws_clients: set = set()  # Active WebSocket connections for instant broadcast
 
 
 @dataclass(frozen=True)
-class ReadyCRSession:
-    """Authoritative ready session identity from the ConstellationSpec CR."""
+class CRSessionIdentity:
+    """Authoritative runtime identity from the ConstellationSpec CR."""
 
     session_id: str
+    session_name: str
     session_yaml: str
     session: SessionConfig
     generation: int
@@ -483,11 +484,20 @@ def _parse_session_yaml(session_yaml: str) -> tuple[str, SessionConfig]:
     if not raw:
         raise ValueError("sessionYaml is empty")
     session = SessionConfig.model_validate(raw)
-    return sanitize_session_id(session.session.name), session
+    return session.session.name, session
 
 
-def _extract_ready_cr_session(cr: dict[str, Any]) -> ReadyCRSession | None:
+def _extract_ready_cr_session(cr: dict[str, Any]) -> CRSessionIdentity | None:
     """Return the CR session only when its Ready state is generation-consistent."""
+    return _extract_cr_session(cr, require_ready=True)
+
+
+def _extract_cr_session(
+    cr: dict[str, Any],
+    *,
+    require_ready: bool,
+) -> CRSessionIdentity | None:
+    """Return the CR session only when status carries current runtime identity."""
 
     metadata = cr.get("metadata") or {}
     status = cr.get("status") or {}
@@ -497,28 +507,62 @@ def _extract_ready_cr_session(cr: dict[str, Any]) -> ReadyCRSession | None:
     observed_generation = _as_positive_int(status.get("observedGeneration"))
     ready_pods = _as_positive_int(status.get("readyPods"))
     pod_count = _as_positive_int(status.get("podCount"))
+    wired_pods = _as_positive_int(status.get("wiredPods"))
 
-    if status.get("phase") != "Ready":
-        return None
     if generation is None or observed_generation != generation:
         return None
-    if pod_count is None or ready_pods != pod_count:
-        return None
+    if require_ready:
+        if status.get("phase") != "Ready":
+            return None
+        if pod_count is None or ready_pods != pod_count:
+            return None
+        if wired_pods != pod_count:
+            return None
 
     session_yaml = str(spec.get("sessionYaml") or "")
     if not session_yaml.strip():
         raise ValueError("Ready ConstellationSpec is missing spec.sessionYaml")
 
-    session_id, session = _parse_session_yaml(session_yaml)
-    return ReadyCRSession(
-        session_id=session_id,
+    _display_session_id, session = _parse_session_yaml(session_yaml)
+    session_run_id = str(status.get("sessionRunId") or "")
+    if not session_run_id:
+        if require_ready:
+            raise ValueError("Ready ConstellationSpec is missing status.sessionRunId")
+        return None
+    session_run_id = sanitize_session_id(session_run_id)
+
+    status_name = str(status.get("sessionName") or "")
+    if require_ready and not status_name:
+        raise ValueError("Ready ConstellationSpec is missing status.sessionName")
+    if status_name and status_name != session.session.name:
+        raise ValueError(
+            "ConstellationSpec status.sessionName does not match spec.session.name "
+            f"({status_name!r} != {session.session.name!r})"
+        )
+    return CRSessionIdentity(
+        session_id=session_run_id,
+        session_name=session.session.name,
         session_yaml=session_yaml,
         session=session,
         generation=generation,
     )
 
 
-def _write_cr_session_file(ready: ReadyCRSession) -> Path:
+def _extract_current_cr_session(cr: dict[str, Any]) -> CRSessionIdentity | None:
+    """Return any current-generation CR session with a runtime identity."""
+    return _extract_cr_session(cr, require_ready=False)
+
+
+def _cr_status_observes_current_generation(cr: dict[str, Any]) -> bool:
+    """Return true when CR status belongs to the current spec generation."""
+    metadata = cr.get("metadata") or {}
+    status = cr.get("status") or {}
+    generation = _as_positive_int(metadata.get("generation"))
+    observed_generation = _as_positive_int(status.get("observedGeneration"))
+    return generation is not None and observed_generation == generation
+
+
+def _write_cr_session_file(ready: CRSessionIdentity) -> Path:
     path = Path(f"/tmp/_session-{ready.session_id}.yaml")
     path.write_text(ready.session_yaml, encoding="utf-8")
     return path
@@ -539,7 +583,7 @@ def _mark_session_manager_ready(session: SessionConfig, session_path: Path) -> N
     _session_manager.status_detail = ""
 
 
-async def _activate_session_context_from_cr(ready: ReadyCRSession, source: str) -> None:
+async def _activate_session_context_from_cr(ready: CRSessionIdentity, source: str) -> None:
     """Replace VS-API state with the authoritative ready CR session."""
 
     global _active_context, _active_cr_generation
@@ -567,6 +611,7 @@ async def _activate_session_context_from_cr(ready: ReadyCRSession, source: str) 
         {
             "old_session": old_session,
             "new_session": ready.session_id,
+            "session_name": ready.session_name,
             "generation": ready.generation,
             "source": source,
         },
@@ -578,7 +623,7 @@ async def _activate_session_context_from_cr(ready: ReadyCRSession, source: str) 
         json.dumps(
             {
                 "msg_type": "session_transitioning",
-                "detail": f"Activating session {ready.session_id}",
+                "detail": f"Activating session {ready.session_name}",
             }
         )
     )
@@ -604,6 +649,7 @@ async def _activate_session_context_from_cr(ready: ReadyCRSession, source: str) 
             f"CR session {ready.session_id} did not become ready in VS-API",
             {
                 "session_id": ready.session_id,
+                "session_name": ready.session_name,
                 "generation": ready.generation,
                 "timeout_seconds": _CR_CONTEXT_READY_TIMEOUT_SECONDS,
             },
@@ -632,6 +678,7 @@ async def _activate_session_context_from_cr(ready: ReadyCRSession, source: str) 
         f"CR session activation complete: {ready.session_id}",
         {
             "session_id": ready.session_id,
+            "session_name": ready.session_name,
             "generation": ready.generation,
             "links": len(new_ctx.links),
             "source": source,
@@ -736,9 +783,11 @@ async def _nats_subscriber() -> None:
 
     # If main() detected a CR in Wiring/Creating phase, start polling
     global _pending_cr_poll
+    _started_pending_poll = False
     if _pending_cr_poll:
         _pending_cr_poll = False
         asyncio.ensure_future(_poll_cr_until_ready())
+        _started_pending_poll = True
 
     # Wiring progress — core NATS (not session-scoped, not JetStream)
     async def _on_wiring_progress(msg):
@@ -798,32 +847,29 @@ async def _nats_subscriber() -> None:
     _cr_api = _k8s.CustomObjectsApi()
     _cr_ns = get_platform_config().kubernetes_namespace
 
-    session_yaml_from_cr = None
+    _cr_session: CRSessionIdentity | None = None
     _cr_phase = ""
     _cr_message = ""
-    _cr_generation: int | None = None
-    try:
-        _cr = _cr_api.get_namespaced_custom_object(
-            group="nodalarc.io",
-            version="v1alpha1",
-            namespace=_cr_ns,
-            plural="constellationspecs",
-            name="current-session",
-        )
-        session_yaml_from_cr = _cr.get("spec", {}).get("sessionYaml", "")
-        _cr_phase = _cr.get("status", {}).get("phase", "")
-        _cr_message = _cr.get("status", {}).get("message", "")
-        _cr_generation = _as_positive_int((_cr.get("metadata") or {}).get("generation"))
-    except Exception:
-        pass
+
+    def _candidate_from_cr(cr: dict[str, Any]) -> CRSessionIdentity | None:
+        nonlocal _cr_phase, _cr_message
+        _cr_phase = cr.get("status", {}).get("phase", "")
+        _cr_message = cr.get("status", {}).get("message", "")
+        if _cr_phase == "Ready":
+            return _extract_ready_cr_session(cr)
+        if _cr_phase in ("Pending", "Creating", "Wiring"):
+            return _extract_current_cr_session(cr)
+        if _cr_phase == "Error" and _cr_status_observes_current_generation(cr):
+            if _session_manager:
+                _session_manager._status = "error"
+                _session_manager.status_detail = _cr_message or "Operator reported error"
+            log.error("Current ConstellationSpec is Error: %s", _cr_message)
+        return None
 
     # Poll until a CR with sessionYaml exists. Handles both cases:
     # - VS-API starts before `make session` creates the CR (poll waits)
     # - VS-API restarts while a session is running (CR exists immediately)
-    if not session_yaml_from_cr:
-        log.info("No active session CR — waiting for session to be deployed")
-    while not session_yaml_from_cr:
-        await asyncio.sleep(5)
+    while _cr_session is None:
         try:
             _cr = _cr_api.get_namespaced_custom_object(
                 group="nodalarc.io",
@@ -832,49 +878,71 @@ async def _nats_subscriber() -> None:
                 plural="constellationspecs",
                 name="current-session",
             )
-            session_yaml_from_cr = _cr.get("spec", {}).get("sessionYaml", "")
-            _cr_phase = _cr.get("status", {}).get("phase", "")
-            _cr_message = _cr.get("status", {}).get("message", "")
-            _cr_generation = _as_positive_int((_cr.get("metadata") or {}).get("generation"))
-        except Exception:
-            pass
+            _cr_session = _candidate_from_cr(_cr)
+        except Exception as exc:
+            log.debug("Waiting for runtime session identity from CR: %s", exc)
+        if _cr_session is None:
+            log.info("No active Ready or wiring runtime session CR — waiting for session to deploy")
+            await asyncio.sleep(5)
 
-    try:
-        session_id, session = _parse_session_yaml(session_yaml_from_cr)
-    except Exception as exc:
-        log.error("FATAL: Failed to parse session from CR: %s", exc)
-        raise
+    if _cr_phase in ("Pending", "Creating", "Wiring"):
+        log.info("CR phase=%s — waiting for Ready before activating SessionContext", _cr_phase)
+        if _session_manager:
+            _session_manager._status = "wiring"
+            _session_manager.status_detail = _cr_message or f"Phase: {_cr_phase}"
+            for _s in _session_manager._available:
+                if _s.get("name") == _cr_session.session_name:
+                    _session_manager.set_active(_s["file"])
+                    break
+        if not _started_pending_poll:
+            asyncio.ensure_future(_poll_cr_until_ready())
+        if _cr_monitor_task is None or _cr_monitor_task.done():
+            _cr_monitor_task = asyncio.create_task(
+                _monitor_cr_session(_cr_api, _cr_ns), name="cr-session-monitor"
+            )
+    elif _cr_phase != "Ready":
+        log.info("CR phase=%s has no active session context", _cr_phase)
+    else:
+        session_id = _cr_session.session_id
+        session = _cr_session.session
 
-    _tmp_session = Path(f"/tmp/_session-{session_id}.yaml")
-    _tmp_session.write_text(session_yaml_from_cr, encoding="utf-8")
+        _tmp_session = Path(f"/tmp/_session-{session_id}.yaml")
+        _tmp_session.write_text(_cr_session.session_yaml, encoding="utf-8")
 
-    log.info("Bootstrapping session %s from CR (phase=%s)", session_id, _cr_phase)
-
-    if _session_manager:
-        _session_manager._status = "wiring" if _cr_phase in ("Creating", "Wiring") else "ready"
-        _session_manager.status_detail = _cr_message or ""
-        for _s in _session_manager._available:
-            if _s.get("name") == session.session.name:
-                _session_manager.set_active(_s["file"])
-                break
-
-    ctx = SessionContext(session_id, str(_tmp_session))
-    await ctx.start(nc, mode="recovery")
-    _active_context = ctx
-    _active_cr_generation = _cr_generation
-    await _publish_system_ops_event(
-        "info",
-        "SESSION_BOOTSTRAP",
-        f"VS-API started with session {session_id}",
-        {"session_id": session_id, "mode": "recovery"},
-    )
-
-    if _cr_phase in ("Creating", "Wiring"):
-        asyncio.ensure_future(_poll_cr_until_ready())
-    if _cr_monitor_task is None or _cr_monitor_task.done():
-        _cr_monitor_task = asyncio.create_task(
-            _monitor_cr_session(_cr_api, _cr_ns), name="cr-session-monitor"
+        log.info(
+            "Bootstrapping session %s from CR (name=%s phase=%s)",
+            session_id,
+            _cr_session.session_name,
+            _cr_phase,
         )
+
+        if _session_manager:
+            _session_manager._status = "ready"
+            _session_manager.status_detail = ""
+            for _s in _session_manager._available:
+                if _s.get("name") == session.session.name:
+                    _session_manager.set_active(_s["file"])
+                    break
+
+        ctx = SessionContext(session_id, str(_tmp_session))
+        await ctx.start(nc, mode="recovery")
+        _active_context = ctx
+        _active_cr_generation = _cr_session.generation
+        await _publish_system_ops_event(
+            "info",
+            "SESSION_BOOTSTRAP",
+            f"VS-API started with session {session_id}",
+            {
+                "session_id": session_id,
+                "session_name": _cr_session.session_name,
+                "mode": "recovery",
+            },
+        )
+
+        if _cr_monitor_task is None or _cr_monitor_task.done():
+            _cr_monitor_task = asyncio.create_task(
+                _monitor_cr_session(_cr_api, _cr_ns), name="cr-session-monitor"
+            )
 
     # Keep alive until cancelled
     try:
@@ -2281,7 +2349,7 @@ def generate_session(body: dict) -> dict:
     custom_constellation = body.get("custom_constellation")
     custom_ground_stations = body.get("custom_ground_stations")
     routing_config = body.get("routing_config")
-    orbit_propagator = body.get("orbit_propagator", body.get("propagator"))
+    orbit_propagator = body.get("orbit_propagator")
     if not constellation or not protocol:
         return JSONResponse(
             status_code=400, content={"error": "constellation and protocol are required"}
@@ -2563,20 +2631,20 @@ async def _run_switch_locked(session_path: str) -> None:
                 json.dumps({"msg_type": "session_transitioning", "detail": detail})
             )
 
-        await _session_manager.switch(session_path, progress_fn=_switch_progress)
+        ready_cr = await _session_manager.switch(session_path, progress_fn=_switch_progress)
+        ready = _extract_ready_cr_session(ready_cr)
+        if ready is None:
+            raise RuntimeError("Operator returned Ready without a current session_run_id")
 
         # (f) Create new SessionContext
-        from nodalarc.nats_channels import sanitize_session_id
-
-        session_data = yaml.safe_load(Path(session_path).read_text())
-        session = SessionConfig.model_validate(session_data)
-        session_id = sanitize_session_id(session.session.name)
+        session_id = ready.session_id
+        session_path_for_context = _write_cr_session_file(ready)
 
         if _nats_connection is None:
             log.error("FATAL: No NATS connection for new SessionContext")
             raise RuntimeError("No NATS connection available")
 
-        new_ctx = SessionContext(session_id, session_path)
+        new_ctx = SessionContext(session_id, str(session_path_for_context))
         await new_ctx.start(_nats_connection, mode="switch")
 
         # (g) Wait for first live snapshot
@@ -2606,7 +2674,7 @@ async def _run_switch_locked(session_path: str) -> None:
 
         # (h) Atomic pointer swap — only place _active_context is written
         _active_context = new_ctx
-        _active_cr_generation = None
+        _active_cr_generation = ready.generation
         from nodal.logging import set_session as _set_log_session
 
         _set_log_session(session_id)
@@ -2616,8 +2684,13 @@ async def _run_switch_locked(session_path: str) -> None:
         await _publish_system_ops_event(
             "info",
             "SESSION_SWITCH_COMPLETE",
-            f"Session switch complete: now running {session_id}",
-            {"session_id": session_id, "links": len(new_ctx.links)},
+            f"Session switch complete: now running {ready.session_name}",
+            {
+                "session_id": session_id,
+                "session_name": ready.session_name,
+                "generation": ready.generation,
+                "links": len(new_ctx.links),
+            },
         )
 
         # (i) Push ephemeris + session_ready to VF
@@ -2633,7 +2706,7 @@ async def _run_switch_locked(session_path: str) -> None:
             )
         )
 
-        log.info("Session switch complete — %s active", session_id)
+        log.info("Session switch complete — %s active (name=%s)", session_id, ready.session_name)
 
     except Exception as exc:
         if _session_manager and _session_manager.status == "switching":
@@ -2689,8 +2762,9 @@ async def _poll_cr_until_ready() -> None:
             )
             phase = cr.get("status", {}).get("phase", "")
             message = cr.get("status", {}).get("message", "")
+            status_is_current = _cr_status_observes_current_generation(cr)
             # Try to load session_id on each tick — the ConfigMap appears
-            if _session_manager and phase != "Wiring":
+            if _session_manager and phase != "Wiring" and status_is_current:
                 # During Wiring, Node Agent NATS progress owns _status_detail.
                 # Only update from CR for non-Wiring phases.
                 _session_manager.status_detail = message or f"Phase: {phase}"
@@ -2736,7 +2810,7 @@ async def _poll_cr_until_ready() -> None:
                     _session_manager.status_detail = ""
                 log.info("CR reached Ready — session is now operational")
                 return
-            if phase == "Error":
+            if phase == "Error" and status_is_current:
                 if _session_manager:
                     _session_manager._status = "error"
                     _session_manager.status_detail = message or "Operator reported error"
@@ -2834,9 +2908,11 @@ def main() -> None:
                         _session_manager.set_active(_s["file"])
                         _initial_session_file = _s["file"]
                         break
-            # Check CR phase — don't claim ready if data plane is still wiring
+            # Check CR phase — do not claim ready unless the authoritative CR is
+            # Ready and generation/pod/wiring identity checks all pass.
             _cr_phase = ""
             _cr_message = ""
+            _cr_ready = None
             try:
                 import kubernetes.client as _k8s_client
                 import kubernetes.config as _k8s_config
@@ -2855,16 +2931,24 @@ def main() -> None:
                 )
                 _cr_phase = _cr.get("status", {}).get("phase", "")
                 _cr_message = _cr.get("status", {}).get("message", "")
+                if _cr_phase == "Ready":
+                    _cr_ready = _extract_ready_cr_session(_cr)
             except Exception:
-                pass  # CR may not exist yet — treat as ready
+                pass  # CR may not exist yet — NATS bootstrap will wait for it.
 
-            if _cr_phase in ("Wiring", "Creating"):
+            if _cr_ready is not None:
+                _session_manager._status = "ready"
+                _session_manager.status_detail = ""
+            elif _cr_phase in ("Pending", "Wiring", "Creating"):
                 log.info(f"Session config loaded but CR phase={_cr_phase} — wiring in progress")
                 _session_manager._status = "wiring"
                 _session_manager.status_detail = _cr_message or f"Phase: {_cr_phase}"
                 _pending_cr_poll = True
+            elif _cr_phase == "Error":
+                _session_manager._status = "error"
+                _session_manager.status_detail = _cr_message or "Operator reported error"
             else:
-                _session_manager._status = "ready"
+                _session_manager._status = "idle"
         else:
             log.info("No session loaded — VS-API starting in idle mode")
             # Check if Operator has an active session (CR with phase Ready/Wiring)
@@ -2886,18 +2970,23 @@ def main() -> None:
                 )
                 phase = cr.get("status", {}).get("phase", "")
                 message = cr.get("status", {}).get("message", "")
-                if phase == "Ready":
+                ready = _extract_ready_cr_session(cr) if phase == "Ready" else None
+                if ready is not None:
                     log.info("Active ConstellationSpec CR found (phase=Ready)")
                     _session_manager._status = "ready"
-                elif phase in ("Wiring", "Creating"):
+                    _session_manager.status_detail = ""
+                elif phase in ("Pending", "Wiring", "Creating"):
                     log.info(
                         f"Active ConstellationSpec CR found (phase={phase}) — wiring in progress"
                     )
                     _session_manager._status = "wiring"
                     _session_manager.status_detail = message or f"Phase: {phase}"
                     _pending_cr_poll = True
+                elif phase == "Error":
+                    _session_manager._status = "error"
+                    _session_manager.status_detail = message or "Operator reported error"
                 # Try to match session name from mounted config
-                if phase in ("Ready", "Wiring", "Creating"):
+                if phase in ("Ready", "Pending", "Wiring", "Creating"):
                     _sp = Path(args.session)
                     if _sp.is_file():
                         _sd = yaml.safe_load(_sp.read_text())

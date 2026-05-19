@@ -2,7 +2,7 @@
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import type { LegacyWizardState } from "../../catalog/wizardTypes";
+import type { WizardRuntimeState } from "../../catalog/wizardTypes";
 
 vi.mock("../../config", () => ({
   REST_URL: "http://test:8080",
@@ -11,7 +11,7 @@ vi.mock("../../config", () => ({
 
 const { useWizardApi } = await import("../useWizardApi");
 
-function wizardState(): LegacyWizardState {
+function wizardState(): WizardRuntimeState {
   return {
     step: "review",
     satelliteType: {

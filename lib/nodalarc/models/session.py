@@ -15,7 +15,20 @@ class SessionMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
+    run_id: str | None = None
     data_dir: str = "/var/nodalarc/sessions"
+
+    @field_validator("run_id")
+    @classmethod
+    def _valid_run_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from nodalarc.nats_channels import sanitize_session_id
+
+        clean = sanitize_session_id(value)
+        if clean != value:
+            raise ValueError("session.run_id must already be a valid runtime subject segment")
+        return clean
 
 
 class AddressingConfig(BaseModel):

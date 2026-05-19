@@ -16,7 +16,7 @@ import type {
   RoutingTimers,
   SatelliteTypePreset,
   GroundStationSet,
-  LegacyWizardState,
+  WizardRuntimeState,
   WizardStep,
 } from "../catalog/wizardTypes";
 import { DEFAULT_ROUTING_TIMERS } from "../catalog/wizardTypes";
@@ -24,6 +24,7 @@ import {
   DEFAULT_ORBIT_PROPAGATOR,
   constellationSupportsSgp4Tle,
   defaultOrbitPropagatorForConstellation,
+  supportedOrbitModelsForConstellation,
 } from "../catalog/orbitModels";
 import { useWizardData } from "./useWizardData";
 import { useWizardNav } from "./useWizardNav";
@@ -33,7 +34,7 @@ export function useWizard() {
   const data = useWizardData();
   const api = useWizardApi();
 
-  const [state, setState] = useState<LegacyWizardState>({
+  const [state, setState] = useState<WizardRuntimeState>({
     step: "selections" as WizardStep,
     satelliteType: null,
     groundStationSet: null,
@@ -87,7 +88,15 @@ export function useWizard() {
   }, [api]);
 
   const selectOrbitPropagator = useCallback((orbitPropagator: OrbitPropagator) => {
-    setState((s) => ({ ...s, orbitPropagator }));
+    setState((s) => {
+      const supported = supportedOrbitModelsForConstellation(s.constellation).map(
+        (option) => option.id,
+      );
+      if (!supported.includes(orbitPropagator)) {
+        return s;
+      }
+      return { ...s, orbitPropagator };
+    });
     api.clearYaml();
     api.clearError();
   }, [api]);

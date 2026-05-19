@@ -29,7 +29,7 @@ import { updateLabels, animateLabels, clearLabels, setLabelContainer } from "./l
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
 import { loadBoundaries, setBoundariesVisible } from "./boundaries";
-import { VisualizationFallback } from "./VisualizationFallback";
+import { VisualizationFailure } from "./VisualizationFailure";
 import type { StateSnapshot, Selection, ColorMode, GlobeMode, ReferenceFrame } from "../types";
 
 // Reusable temporaries for camera-math helpers (flyToNode, getNodeScreenPosition,
@@ -454,7 +454,7 @@ export function GlobeView({
   }, [referenceFrame]);
 
   if (fatalError) {
-    return <VisualizationFallback message={fatalError} />;
+    return <VisualizationFailure message={fatalError} />;
   }
 
   return (

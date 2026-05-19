@@ -13,6 +13,7 @@ import base64
 import gzip
 import json
 import math
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, create_autospec, patch
 
@@ -21,17 +22,21 @@ import pytest
 import yaml
 from nodalarc.models.session import PlacementConfig
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
-from nodalarc.substrate.wiring_status import ready_status, status_configmap_data
+from nodalarc.substrate.wiring_status import failed_status, ready_status, status_configmap_data
 from nodalarc_operator.session_deployer import (
+    _create_terminal_ssh_keys,
     _deterministic_node,
     _required_substrate_pairs,
     check_wiring_complete,
     compute_expected_pod_count,
     compute_platform_hash,
     compute_pod_placement,
+    compute_runtime_hash,
     discover_available_nodes,
     ensure_session_configmaps,
     ensure_session_pods,
+    session_runtime_purge_targets,
+    teardown_session,
     write_wiring_manifest,
 )
 
@@ -350,6 +355,34 @@ class TestWiringCompletion:
             with pytest.raises(ValueError, match="unknown node entries"):
                 check_wiring_complete("nodalarc", 2)
 
+    def test_dirty_kernel_status_names_first_failure(self):
+        manifest = _make_wiring_manifest()
+        statuses = {node_id: ready_status(node_id, manifest) for node_id in manifest.nodes}
+        statuses["sat-P00S00"] = failed_status(
+            "sat-P00S00",
+            manifest,
+            phase="sysctls",
+            error_message="sysctl net.mpls.platform_labels=100000 failed",
+            dirty_kernel=True,
+        )
+        status_data = status_configmap_data(statuses, manifest)
+
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+
+        def read_cm(name, namespace):
+            assert namespace == "nodalarc"
+            if name == "nodalarc-topology-wiring":
+                return _manifest_configmap(manifest)
+            if name == "nodalarc-wiring-status":
+                return _status_configmap(status_data)
+            raise AssertionError(f"unexpected ConfigMap read: {name}")
+
+        mock_v1.read_namespaced_config_map.side_effect = read_cm
+
+        with patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1):
+            with pytest.raises(ValueError, match="first failure: sat-P00S00 sysctls"):
+                check_wiring_complete("nodalarc", 2)
+
 
 # ---------------------------------------------------------------------------
 # Class 4: TestPlatformHash
@@ -398,6 +431,46 @@ class TestPlatformHash:
         h2 = compute_platform_hash({})
         assert isinstance(h1, str) and len(h1) == 64
         assert isinstance(h2, str) and len(h2) == 64
+
+    def test_runtime_hash_includes_run_id(self):
+        platform_hash = "a" * 64
+        assert compute_runtime_hash(platform_hash, "run-a") != compute_runtime_hash(
+            platform_hash, "run-b"
+        )
+
+
+class TestRuntimeIdentityCleanup:
+    def test_purge_targets_are_session_scoped(self):
+        targets = session_runtime_purge_targets("run-test-0001")
+
+        assert targets
+        for _stream, subject in targets:
+            assert "run-test-0001" in subject
+            assert subject.endswith(".>")
+            assert subject != ">"
+
+    def test_teardown_purges_before_deleting_identity_configmap(self):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_config_map.return_value = kubernetes.client.V1ConfigMap(
+            data={
+                "session.yaml": yaml.safe_dump(
+                    {"session": {"name": "display-name", "run_id": "run-test-0001"}}
+                )
+            }
+        )
+
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.purge_session_runtime_state",
+                side_effect=RuntimeError("nats unavailable"),
+            ) as purge,
+        ):
+            with pytest.raises(RuntimeError, match="nats unavailable"):
+                teardown_session("nodalarc")
+
+        purge.assert_called_once_with("nodalarc", "run-test-0001")
+        mock_v1.delete_namespaced_config_map.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +552,13 @@ _INLINE_GROUND_STATIONS = {
 }
 
 
-def _make_inline_spec(tmp_path, protocol="ospf", constellation=None, ground_stations=None):
+def _make_inline_spec(
+    tmp_path,
+    protocol="ospf",
+    constellation=None,
+    ground_stations=None,
+    extensions=None,
+):
     """Build a fully self-contained CRD spec using tempfiles.
 
     Writes constellation and ground station YAML to tmp_path so
@@ -500,7 +579,11 @@ def _make_inline_spec(tmp_path, protocol="ospf", constellation=None, ground_stat
         "constellation": str(const_path),
         "ground_stations": str(gs_path),
         "orbit": {"propagator": "keplerian-circular"},
-        "routing": {"protocol": protocol, "area_assignment": {"strategy": "flat"}},
+        "routing": {
+            "protocol": protocol,
+            "extensions": extensions or [],
+            "area_assignment": {"strategy": "flat"},
+        },
         "time": {"step_seconds": 1},
     }
     return {"sessionYaml": yaml.dump(session, default_flow_style=False)}
@@ -525,6 +608,50 @@ def _extract_manifest(mock_v1):
     pytest.fail("Wiring manifest ConfigMap not found in mock calls")
 
 
+def _existing_terminal_secret(uid="test-uid", name="current-session"):
+    return kubernetes.client.V1Secret(
+        metadata=kubernetes.client.V1ObjectMeta(
+            name="nodalarc-terminal-keys",
+            owner_references=[
+                kubernetes.client.V1OwnerReference(
+                    api_version="nodalarc.io/v1alpha1",
+                    kind="ConstellationSpec",
+                    name=name,
+                    uid=uid,
+                )
+            ],
+        )
+    )
+
+
+def _existing_session_pod(
+    pod_name="sat-p00s00",
+    node_id="sat-P00S00",
+    uid="test-uid",
+    run_id="run-test-0001",
+):
+    return kubernetes.client.V1Pod(
+        metadata=kubernetes.client.V1ObjectMeta(
+            name=pod_name,
+            labels={
+                "nodalarc.io/session": "true",
+                "nodalarc.io/node-id": node_id,
+                "nodalarc.io/session-run-id": run_id,
+                "nodalarc.io/owner-uid": uid,
+            },
+            owner_references=[
+                kubernetes.client.V1OwnerReference(
+                    api_version="nodalarc.io/v1alpha1",
+                    kind="ConstellationSpec",
+                    name="current-session",
+                    uid=uid,
+                )
+            ],
+        ),
+        status=kubernetes.client.V1PodStatus(phase="Running", pod_ip="10.42.0.10"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Class 5: TestWiringManifest
 # ---------------------------------------------------------------------------
@@ -533,8 +660,9 @@ def _extract_manifest(mock_v1):
 class TestWiringManifest:
     """Tests write_wiring_manifest() - the contract between Operator and Node Agent."""
 
-    def _build_and_extract(self, tmp_path, **kwargs):
-        spec = _make_inline_spec(tmp_path, **kwargs)
+    def _build_and_extract(self, tmp_path, spec=None, **kwargs):
+        if spec is None:
+            spec = _make_inline_spec(tmp_path, **kwargs)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         # wiring-status delete returns 404 (normal for fresh deploy)
         mock_v1.delete_namespaced_config_map.side_effect = kubernetes.client.rest.ApiException(
@@ -557,13 +685,13 @@ class TestWiringManifest:
                 side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
         ):
-            write_wiring_manifest(spec, "nodalarc", owner_ref)
+            write_wiring_manifest(spec, "nodalarc", owner_ref, "run-test-0001")
         return _extract_manifest(mock_v1)
 
     def test_manifest_node_agent_schema(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)
         assert "session_id" in manifest
-        assert isinstance(manifest["session_id"], str)
+        assert manifest["session_id"] == "run-test-0001"
         assert "isl_link_count" in manifest
         assert isinstance(manifest["isl_link_count"], int)
         assert "required_substrate_pairs" in manifest
@@ -583,6 +711,25 @@ class TestWiringManifest:
             assert "segment_routing" in node, f"{node_id} missing segment_routing"
             assert "remove_default_route" in node, f"{node_id} missing remove_default_route"
             assert "mtu" in node, f"{node_id} missing mtu"
+
+    def test_manifest_disables_mpls_for_plain_igp(self, tmp_path):
+        manifest = self._build_and_extract(tmp_path)
+
+        assert manifest["nodes"]
+        assert all(node["mpls_enable"] is False for node in manifest["nodes"].values())
+
+    def test_manifest_enables_mpls_only_for_mpls_stack(self, tmp_path):
+        spec = _make_inline_spec(tmp_path, protocol="isis", extensions=["te", "mpls"])
+        manifest = self._build_and_extract(tmp_path, spec=spec)
+
+        assert manifest["nodes"]
+        assert all(node["mpls_enable"] is True for node in manifest["nodes"].values())
+
+    def test_manifest_requires_runtime_session_id(self, tmp_path):
+        spec = _make_inline_spec(tmp_path)
+
+        with pytest.raises(ValueError, match="session_run_id is required"):
+            write_wiring_manifest(spec, "nodalarc", None)
 
     def test_isl_peer_symmetry_graph_walk(self, tmp_path):
         manifest = self._build_and_extract(tmp_path)
@@ -652,7 +799,7 @@ class TestWiringManifest:
                 side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
         ):
-            write_wiring_manifest(spec, "nodalarc", owner_ref)
+            write_wiring_manifest(spec, "nodalarc", owner_ref, "run-test-0001")
         manifest = _extract_manifest(mock_v1)
         assert isinstance(manifest, dict)
         assert len(manifest["nodes"]) > 0
@@ -687,7 +834,7 @@ class TestWiringManifest:
                 side_effect=lambda _v1, required: dict.fromkeys(required, "10.0.0.1"),
             ),
         ):
-            write_wiring_manifest(spec, "nodalarc", owner_ref)
+            write_wiring_manifest(spec, "nodalarc", owner_ref, "run-test-0001")
         manifest = _extract_manifest(mock_v1)
         assert len(manifest["nodes"]) == 1602
         raw_json = json.dumps(manifest).encode()
@@ -771,7 +918,7 @@ class TestConfigRendering:
         spec = _make_inline_spec(tmp_path, protocol=protocol)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         # SSH key creation - return existing secret (already exists path)
-        mock_v1.read_namespaced_secret.return_value = MagicMock()
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
         owner_ref = {
             "apiVersion": "nodalarc.io/v1alpha1",
             "kind": "ConstellationSpec",
@@ -785,7 +932,9 @@ class TestConfigRendering:
                 return_value=["node01", "node02"],
             ),
         ):
-            context = ensure_session_configmaps(spec, "current-session", "nodalarc", owner_ref)
+            context = ensure_session_configmaps(
+                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+            )
 
         # Collect rendered configs from ConfigMap create/patch calls
         configs = {}
@@ -796,6 +945,128 @@ class TestConfigRendering:
                 if name.startswith("frr-config-"):
                     configs[name] = body.data
         return configs, context
+
+    def test_runtime_session_configmap_injects_run_id(self, tmp_path):
+        spec = _make_inline_spec(tmp_path)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01", "node02"],
+            ),
+        ):
+            context = ensure_session_configmaps(
+                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+            )
+
+        session_cms = [
+            (call[1].get("body") or call[0][1]).data
+            for call in mock_v1.create_namespaced_config_map.call_args_list
+            if (call[1].get("body") or call[0][1]).metadata.name == "nodalarc-session"
+        ]
+        assert len(session_cms) == 1
+        runtime_yaml = yaml.safe_load(session_cms[0]["session.yaml"])
+        assert context["session_id"] == "run-test-0001"
+        assert context["session_run_id"] == "run-test-0001"
+        assert runtime_yaml["session"]["run_id"] == "run-test-0001"
+        assert session_cms[0]["session_run_id"] == "run-test-0001"
+
+    def test_terminal_keys_are_not_rotated_when_secret_exists(self):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+        }
+        mock_v1.read_namespaced_secret.return_value = kubernetes.client.V1Secret(
+            metadata=kubernetes.client.V1ObjectMeta(
+                name="nodalarc-terminal-keys",
+                owner_references=[
+                    kubernetes.client.V1OwnerReference(
+                        api_version="nodalarc.io/v1alpha1",
+                        kind="ConstellationSpec",
+                        name="current-session",
+                        uid="test-uid",
+                    )
+                ],
+            )
+        )
+
+        _create_terminal_ssh_keys(mock_v1, "nodalarc", owner_ref)
+
+        mock_v1.read_namespaced_secret.assert_called_once_with("nodalarc-terminal-keys", "nodalarc")
+        mock_v1.create_namespaced_secret.assert_not_called()
+        mock_v1.replace_namespaced_secret.assert_not_called()
+
+    def test_terminal_keys_reject_secret_owned_by_previous_cr(self):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = kubernetes.client.V1Secret(
+            metadata=kubernetes.client.V1ObjectMeta(
+                name="nodalarc-terminal-keys",
+                owner_references=[
+                    kubernetes.client.V1OwnerReference(
+                        api_version="nodalarc.io/v1alpha1",
+                        kind="ConstellationSpec",
+                        name="current-session",
+                        uid="old-uid",
+                    )
+                ],
+            )
+        )
+
+        with pytest.raises(RuntimeError, match="not owned by the current ConstellationSpec"):
+            _create_terminal_ssh_keys(
+                mock_v1,
+                "nodalarc",
+                {
+                    "apiVersion": "nodalarc.io/v1alpha1",
+                    "kind": "ConstellationSpec",
+                    "name": "current-session",
+                    "uid": "new-uid",
+                },
+            )
+
+        mock_v1.create_namespaced_secret.assert_not_called()
+
+    def test_terminal_keys_reject_secret_that_is_deleting(self):
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = kubernetes.client.V1Secret(
+            metadata=kubernetes.client.V1ObjectMeta(
+                name="nodalarc-terminal-keys",
+                deletion_timestamp=datetime.now(UTC),
+                owner_references=[
+                    kubernetes.client.V1OwnerReference(
+                        api_version="nodalarc.io/v1alpha1",
+                        kind="ConstellationSpec",
+                        name="current-session",
+                        uid="test-uid",
+                    )
+                ],
+            )
+        )
+
+        with pytest.raises(RuntimeError, match="not owned by the current ConstellationSpec"):
+            _create_terminal_ssh_keys(
+                mock_v1,
+                "nodalarc",
+                {
+                    "apiVersion": "nodalarc.io/v1alpha1",
+                    "kind": "ConstellationSpec",
+                    "name": "current-session",
+                    "uid": "test-uid",
+                },
+            )
+
+        mock_v1.create_namespaced_secret.assert_not_called()
 
     def test_ospf_config_contains_router_ospf(self, tmp_path):
         configs, _ = self._render_configs(tmp_path, protocol="ospf")
@@ -850,7 +1121,7 @@ class TestPodSpec:
         """Run the full pipeline and capture all created pods."""
         spec = _make_inline_spec(tmp_path)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.read_namespaced_secret.return_value = MagicMock()
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret("test-uid-456")
         owner_ref = {
             "apiVersion": "nodalarc.io/v1alpha1",
             "kind": "ConstellationSpec",
@@ -874,7 +1145,9 @@ class TestPodSpec:
                 },
             ),
         ):
-            context = ensure_session_configmaps(spec, "current-session", "nodalarc", owner_ref)
+            context = ensure_session_configmaps(
+                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+            )
             ensure_session_pods(context, "nodalarc", owner_ref)
 
         pods = []
@@ -907,6 +1180,8 @@ class TestPodSpec:
         for pod in pods:
             labels = pod.metadata.labels
             assert labels.get("nodalarc.io/session") == "true"
+            assert labels.get("nodalarc.io/session-run-id") == "run-test-0001"
+            assert labels.get("nodalarc.io/owner-uid") == "test-uid-456"
             assert "nodalarc.io/node-id" in labels
             assert "nodalarc.io/role" in labels
             role = labels["nodalarc.io/role"]
@@ -928,8 +1203,16 @@ class TestPodSpec:
         """If create_namespaced_pod raises 409, ensure_session_pods continues."""
         spec = _make_inline_spec(tmp_path)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
-        mock_v1.read_namespaced_secret.return_value = MagicMock()
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
         mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
+        mock_v1.read_namespaced_pod.side_effect = lambda pod_name, _namespace: (
+            _existing_session_pod(
+                pod_name=pod_name,
+                node_id=pod_name,
+                uid="test-uid",
+                run_id="run-test-0001",
+            )
+        )
         owner_ref = {
             "apiVersion": "nodalarc.io/v1alpha1",
             "kind": "ConstellationSpec",
@@ -953,6 +1236,50 @@ class TestPodSpec:
                 },
             ),
         ):
-            context = ensure_session_configmaps(spec, "current-session", "nodalarc", owner_ref)
+            context = ensure_session_configmaps(
+                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+            )
             total = ensure_session_pods(context, "nodalarc", owner_ref)
         assert total > 0
+
+    def test_409_conflict_rejects_pod_owned_by_previous_cr(self, tmp_path):
+        spec = _make_inline_spec(tmp_path)
+        mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
+        mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret()
+        mock_v1.create_namespaced_pod.side_effect = kubernetes.client.rest.ApiException(status=409)
+        mock_v1.read_namespaced_pod.side_effect = lambda pod_name, _namespace: (
+            _existing_session_pod(
+                pod_name=pod_name,
+                node_id=pod_name,
+                uid="old-uid",
+                run_id="run-old-0001",
+            )
+        )
+        owner_ref = {
+            "apiVersion": "nodalarc.io/v1alpha1",
+            "kind": "ConstellationSpec",
+            "name": "current-session",
+            "uid": "test-uid",
+            "blockOwnerDeletion": True,
+        }
+        with (
+            patch("nodalarc_operator.session_deployer._get_v1", return_value=mock_v1),
+            patch(
+                "nodalarc_operator.session_deployer.discover_available_nodes",
+                return_value=["node01"],
+            ),
+            patch.dict(
+                "os.environ",
+                {
+                    "FRR_IMAGE": "test/frr:1",
+                    "PROBE_IMAGE": "test/probe:1",
+                    "NODALPATH_FWD_IMAGE": "test/nodalpath-fwd:1",
+                    "IMAGE_PULL_POLICY": "Never",
+                },
+            ),
+        ):
+            context = ensure_session_configmaps(
+                spec, "current-session", "nodalarc", owner_ref, session_run_id="run-test-0001"
+            )
+            with pytest.raises(RuntimeError, match="not owned by the current ConstellationSpec"):
+                ensure_session_pods(context, "nodalarc", owner_ref)

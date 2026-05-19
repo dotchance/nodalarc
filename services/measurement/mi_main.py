@@ -47,9 +47,9 @@ from nodalarc.nats_channels import (
     convergence_result_subject,
     nats_url,
     probe_result_subject,
-    sanitize_session_id,
 )
 from nodalarc.platform_config import get_platform_config
+from nodalarc.session_identity import require_session_run_id
 
 from measurement.adapters import create_adapter
 from measurement.convergence_gate import ConvergenceGate
@@ -118,7 +118,7 @@ class MIService:
         if namespace is None:
             namespace = get_platform_config().kubernetes_namespace
         self._session = session
-        self._session_id = sanitize_session_id(session.session.name)
+        self._session_id = require_session_run_id(session)
         self._gs_file = gs_file
         self._stack_config = stack_config
         self._db_path = db_path

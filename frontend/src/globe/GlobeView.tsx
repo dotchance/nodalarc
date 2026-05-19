@@ -29,6 +29,7 @@ import { updateLabels, animateLabels, clearLabels, setLabelContainer } from "./l
 import { updateSelection, animateSelection } from "./selection";
 import { updateCoverageFootprint } from "./coverageFootprint";
 import { loadBoundaries, setBoundariesVisible } from "./boundaries";
+import { VisualizationFallback } from "./VisualizationFallback";
 import type { StateSnapshot, Selection, ColorMode, GlobeMode, ReferenceFrame } from "../types";
 
 // Reusable temporaries for camera-math helpers (flyToNode, getNodeScreenPosition,
@@ -61,6 +62,12 @@ interface GlobeViewProps {
   referenceFrame: ReferenceFrame;
   playbackPaused: boolean;
   actionsRef?: MutableRefObject<GlobeActions | null>;
+  onFatalError?: (message: string) => void;
+}
+
+function formatGlobeStartupError(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return `WebGL visualization could not start: ${detail}`;
 }
 
 export function GlobeView({
@@ -77,6 +84,7 @@ export function GlobeView({
   referenceFrame,
   playbackPaused,
   actionsRef,
+  onFatalError,
 }: GlobeViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
@@ -95,6 +103,7 @@ export function GlobeView({
   const earthFrameRef = useRef<THREE.Group | null>(null);
   const starFrameRef = useRef<THREE.Group | null>(null);
   const followTargetRef = useRef<string | null>(null);
+  const [fatalError, setFatalError] = useState<string | null>(null);
 
   // Keep refs in sync
   snapshotRef.current = snapshot;
@@ -128,7 +137,19 @@ export function GlobeView({
     camera.position.set(0, CAMERA_DISTANCE * 0.5, CAMERA_DISTANCE * 0.87);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    } catch (error) {
+      const message = formatGlobeStartupError(error);
+      setFatalError(message);
+      onFatalError?.(message);
+      sceneRef.current = null;
+      cameraRef.current = null;
+      rendererRef.current = null;
+      if (actionsRef) actionsRef.current = null;
+      return;
+    }
     renderer.setSize(container.clientWidth, container.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(renderer.domElement);
@@ -367,7 +388,7 @@ export function GlobeView({
       renderer.dispose();
       container.removeChild(renderer.domElement);
     };
-  }, []);
+  }, [actionsRef, onFatalError]);
 
   // Recolor satellites when color mode changes
   useEffect(() => {
@@ -431,6 +452,10 @@ export function GlobeView({
       referenceFrame === "earth-inertial" ? EARTH_ROTATION_RATE_RAD_S : 0;
     reseedAllPins(earthFrame.rotation.y, angularVelocityRadS);
   }, [referenceFrame]);
+
+  if (fatalError) {
+    return <VisualizationFallback message={fatalError} />;
+  }
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>

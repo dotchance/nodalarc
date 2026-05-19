@@ -6,6 +6,7 @@
  */
 
 import type { LegacyWizardState } from "./wizardTypes";
+import { ORBIT_MODEL_OPTIONS } from "./orbitModels";
 
 interface ReviewPanelProps {
   state: LegacyWizardState;
@@ -28,6 +29,9 @@ export function ReviewPanel({
   onDownload,
   onReset,
 }: ReviewPanelProps) {
+  const orbitModelLabel =
+    ORBIT_MODEL_OPTIONS.find((o) => o.id === state.orbitPropagator)?.label ?? state.orbitPropagator;
+
   return (
     <div className="wizard-panel">
       <h2 className="wizard-panel-title">Review &amp; Deploy</h2>
@@ -47,6 +51,10 @@ export function ReviewPanel({
         <div className="wizard-review-row">
           <span className="wizard-review-label">Satellites</span>
           <span className="wizard-review-value">{state.constellation?.satellite_count ?? "-"}</span>
+        </div>
+        <div className="wizard-review-row">
+          <span className="wizard-review-label">Orbit Model</span>
+          <span className="wizard-review-value">{orbitModelLabel}</span>
         </div>
         <div className="wizard-review-row">
           <span className="wizard-review-label">Protocol</span>

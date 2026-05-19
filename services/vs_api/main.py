@@ -2154,7 +2154,7 @@ async def switch_session(body: dict):
 @app.get("/api/v1/presets/constellations", dependencies=[Depends(_require_api_key)])
 def list_constellation_presets() -> list[dict]:
     """Return available constellation presets for the wizard."""
-    from nodalarc.session_generator import load_constellation_presets
+    from nodalarc.session_generator import constellation_source_mode, load_constellation_presets
 
     presets = load_constellation_presets()
     return [
@@ -2164,6 +2164,7 @@ def list_constellation_presets() -> list[dict]:
             "satellite_count": p.satellite_count,
             "constellation": p.constellation,
             "ground_stations": p.ground_stations,
+            "mode": constellation_source_mode(p.constellation),
         }
         for p in presets.values()
     ]

@@ -50,6 +50,18 @@ def load_constellation_presets() -> dict[str, ConstellationPreset]:
     return presets
 
 
+def constellation_source_mode(source: str | Path | dict) -> str | None:
+    """Return the configured constellation mode for a file or inline source."""
+    if isinstance(source, dict):
+        mode = source.get("mode")
+        return mode if isinstance(mode, str) else None
+    data = yaml.safe_load(Path(source).read_text()) or {}
+    if not isinstance(data, dict):
+        return None
+    mode = data.get("mode")
+    return mode if isinstance(mode, str) else None
+
+
 def merge_constellation_with_satellite_type(
     constellation_path: str,
     satellite_type: str,
@@ -154,10 +166,7 @@ def generate_session_yaml(
     else:
         raise ValueError("No constellation source: provide a preset name or custom_constellation")
 
-    if isinstance(constellation_value, dict):
-        constellation_mode = constellation_value.get("mode")
-    else:
-        constellation_mode = yaml.safe_load(Path(constellation_value).read_text()).get("mode")
+    constellation_mode = constellation_source_mode(constellation_value)
     if orbit_propagator == "sgp4-tle" and constellation_mode != "tle":
         raise ValueError("orbit_propagator='sgp4-tle' requires a TLE constellation source")
     if constellation_mode == "tle" and orbit_propagator != "sgp4-tle":

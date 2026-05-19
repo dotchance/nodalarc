@@ -2,7 +2,7 @@
 // Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
 /** Session wizard — shell that composes extracted panels.
  *
- * Step Group A: SelectionCards (constellation, satellite type, GS — any order)
+ * Step Group A: SelectionCards (constellation, satellite type, GS, orbit model)
  * Step Group B: Protocol, Extensions, Review (linear after preview)
  */
 
@@ -21,6 +21,7 @@ interface SessionWizardProps {
   deploying: boolean;
   fallbackSessions: SessionInfo[];
   onFallbackDeploy: (id: string) => void;
+  systemNotice?: string;
 }
 
 const GROUP_B_STEPS: { id: WizardStep; label: string }[] = [
@@ -35,6 +36,7 @@ export function SessionWizard({
   deploying,
   fallbackSessions,
   onFallbackDeploy,
+  systemNotice,
 }: SessionWizardProps) {
   const wizard = useWizard();
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -95,6 +97,7 @@ export function SessionWizard({
     <div className="catalog-overlay">
       <h1 className="catalog-header">NODAL ARC</h1>
       <p className="catalog-subtitle">Orbital Network Emulation Lab</p>
+      {systemNotice && <div className="wizard-warning">{systemNotice}</div>}
 
       {/* Step indicator — simplified for group model */}
       <div className="wizard-steps">
@@ -141,10 +144,12 @@ export function SessionWizard({
           constellation={wizard.state.constellation}
           satelliteType={wizard.state.satelliteType}
           groundStationSet={wizard.state.groundStationSet}
+          orbitPropagator={wizard.state.orbitPropagator}
           onSelectConstellation={wizard.selectConstellation}
           onSelectSatelliteType={wizard.selectSatelliteType}
           onSelectGroundStationSet={wizard.selectGroundStationSet}
           onSelectCustomGroundStations={wizard.selectCustomGroundStations}
+          onSelectOrbitPropagator={wizard.selectOrbitPropagator}
           onPreview={wizard.previewCoverage}
           onContinueWithoutPreview={wizard.continueToProtocol}
           canPreview={allGroupASelected}

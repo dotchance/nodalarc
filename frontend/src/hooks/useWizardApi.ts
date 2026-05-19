@@ -56,6 +56,7 @@ export function useWizardApi() {
             protocol: state.protocol,
             extensions: state.extensions,
             area_strategy: state.areaStrategy,
+            orbit_propagator: state.orbitPropagator,
             ground_stations: state.groundStationSet?.file
               ? state.groundStationSet.file
               : state.groundStationSet?.stations ?? undefined,

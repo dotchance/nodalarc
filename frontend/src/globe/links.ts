@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+// Licensed under the Apache License, Version 2.0. See LICENSE file.
 // Link rendering — batched into ONE draw call via LineSegments2.
 //
 // All ISL and ground links share a single LineSegmentsGeometry with a

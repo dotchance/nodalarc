@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+// Licensed under the Apache License, Version 2.0. See LICENSE file.
 // GPU color picking — O(1) satellite selection at any scale.
 //
 // Renders instance IDs as RGB colors to a 1x1 offscreen framebuffer

@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Continuous path tracer — traces forward and reverse paths in a loop.
 
 Runs as an asyncio task, executing tracepath (or CSPF) at regular intervals.

@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Tests for hysteresis-aware ground link allocation in compute_step.
 
 Exercises the stateful fold: current_associations input biases the

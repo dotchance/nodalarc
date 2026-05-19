@@ -1,5 +1,5 @@
 // Copyright 2024-2026 .chance (dotchance)
-// Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+// Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Application UI state machine extracted from App.tsx for testability.
  *
  *  Owns view/display toggles, catalog visibility, CLI drawer state,

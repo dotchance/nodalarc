@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Manifest-driven substrate latency measurement.
 
 The Node Agent DaemonSet runs with hostNetwork, so ICMP ping measures RTT over

@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Named Linux kernel constants used by Node Agent proof code."""
 
 IFF_UP = 0x1

@@ -36,8 +36,9 @@ Important interpretation rules:
   listed above. It does not mean the system was executed in a full lab run.
 - "Paper-derived" means the claim comes from the paper or project page, not
   from source code inspection.
-- NodalArc is source-available under the license in this repository. Do not
-  describe the whole comparison set as "open-source" without that qualifier.
+- NodalArc is licensed under the Apache License 2.0. License statements in
+  this document describe the inspected snapshot and should be rechecked if
+  upstream projects change their terms.
 - This is a dated snapshot, not a live maintenance tracker.
 
 ## External References
@@ -84,8 +85,8 @@ NodalArc's differentiators are:
 
 NodalArc's current limitations are also real:
 
-- It is not OSI open source; it is source-available under this repository's
-  license.
+- Apache 2.0 is permissive. It allows proprietary forks and hosted services
+  subject to the license's notice, license, patent, and trademark terms.
 - The Scheduler and other control-plane services are deployed as single
   replicas today. The code explicitly notes that scheduler horizontal scaling
   needs a NATS queue group or leader election.
@@ -365,7 +366,6 @@ NodalArc is weaker when the experiment needs:
 - Minimal setup and fastest time to first packet on one machine.
 - Very fast delay/drop updates through eBPF maps.
 - MicroVM guest-kernel isolation.
-- A permissive OSI-approved open-source license.
 - A small scriptable research artifact rather than a full operator system.
 - Horizontally scaled control-plane services today.
 - BGP or commercial NOS containers today.
@@ -399,7 +399,7 @@ The comparison points to several concrete NodalArc refactor priorities:
 
 ## Bottom Line
 
-NodalArc should be positioned as a source-available, Kubernetes-native,
+NodalArc should be positioned as an Apache-2.0-licensed, Kubernetes-native,
 proof-oriented LEO routing emulator with a full operator interface. It is not
 the smallest emulator, not the fastest single-host delay engine, and not yet a
 provider-neutral NOS lab. Its strongest public claim is narrower and more

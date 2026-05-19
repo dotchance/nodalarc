@@ -1,5 +1,5 @@
 # Copyright 2024-2026 .chance (dotchance)
-# Licensed under the NodalArc Source Available License 1.0. See LICENSE file.
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
 """VS-API state models — all frozen (immutable after creation).
 
 StateSnapshot is the complete payload sent over WebSocket at ~1Hz.

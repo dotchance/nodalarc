@@ -109,7 +109,7 @@ export function BottomBar({ snapshot, connected, historicalMode, logPanelOpen, o
         NodalArc by .chance
       </a>
       <span style={{ color: "var(--accent-blue)", fontSize: 11, fontFamily: "var(--font-family)" }}>
-        build: {typeof __BUILD_HASH__ !== "undefined" ? __BUILD_HASH__ : "dev"}
+        build: {__BUILD_HASH__}
       </span>
     </div>
   );

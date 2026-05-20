@@ -430,6 +430,7 @@ def _build_snapshot() -> dict | None:
             else ctx.sim_time,
             wall_time=now,
             schema_version=1,
+            session_id=ctx.session_id,
             nodes=nodes,
             links=links,
             traced_paths=_traced,

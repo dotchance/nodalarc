@@ -160,6 +160,7 @@ class StateSnapshot(BaseModel):
     sim_time: datetime
     wall_time: datetime
     schema_version: int  # Always 1
+    session_id: str
     nodes: list[NodeState]
     links: list[LinkState]
     traced_paths: list[TracedPath]

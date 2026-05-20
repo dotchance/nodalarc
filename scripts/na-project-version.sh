@@ -6,7 +6,8 @@
 #
 # Precedence:
 #   1. NODALARC_VERSION, when explicitly provided by release automation.
-#   2. The nearest git tag, supporting both "0.4.2" and "nodalarc-0.4.2".
+#   2. The nearest git tag, supporting "0.4.2", "nodalarc-0.4.2",
+#      and release-marker aliases like "0.4.2-release".
 #   3. A deterministic unknown value when no tag/source metadata is available.
 
 set -euo pipefail
@@ -27,6 +28,13 @@ format_describe() {
         described="${described%-dirty}"
     fi
 
+    normalize_release_marker() {
+        local tag_base="$1"
+        printf '%s\n' "${tag_base%-release}"
+    }
+
+    described="$(normalize_release_marker "$described")"
+
     if [[ "$described" =~ ^[0-9]+([.][0-9A-Za-z]+)*$ ]]; then
         if [[ -n "$dirty" ]]; then
             printf '%s+dirty\n' "$described"
@@ -37,7 +45,9 @@ format_describe() {
     fi
 
     if [[ "$described" =~ ^(.+)-([0-9]+)-g([0-9a-f]+)$ ]]; then
-        printf '%s+%s.g%s%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "$dirty"
+        local base
+        base="$(normalize_release_marker "${BASH_REMATCH[1]}")"
+        printf '%s+%s.g%s%s\n' "$base" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "$dirty"
         return 0
     fi
 

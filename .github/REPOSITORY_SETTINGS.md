@@ -70,6 +70,13 @@ Quality / Lint
 CLA
 ```
 
+Require one approving review and require review from Code Owners. The
+repository-wide code owner is defined in `.github/CODEOWNERS`:
+
+```text
+* @dotchance
+```
+
 The `CLA` status is set by `.github/workflows/cla.yml`. The workflow does not
 check out pull request code; it only reads pull request metadata and comments,
 then writes a commit status on the pull request head SHA.

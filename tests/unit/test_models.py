@@ -622,6 +622,7 @@ class TestStateSnapshot:
             sim_time=NOW,
             wall_time=NOW,
             schema_version=1,
+            session_id="run-test-0001",
             nodes=[
                 NodeState(
                     node_id="sat-P00S00",
@@ -667,3 +668,4 @@ class TestStateSnapshot:
         assert len(restored.nodes) == 1
         assert len(restored.links) == 1
         assert restored.schema_version == 1
+        assert restored.session_id == "run-test-0001"

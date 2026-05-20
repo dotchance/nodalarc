@@ -124,6 +124,7 @@ export interface StateSnapshot {
   sim_time: string;
   wall_time: string;
   schema_version: number;
+  session_id: string;
   nodes: NodeState[];
   links: LinkState[];
   traced_paths: TracedPath[];

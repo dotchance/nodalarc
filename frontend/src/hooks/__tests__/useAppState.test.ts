@@ -24,6 +24,7 @@ function makeSnapshot(overrides?: Record<string, unknown>) {
     sim_time: "2026-01-01T00:00:00Z",
     wall_time: "2026-01-01T00:00:00Z",
     schema_version: 1,
+    session_id: "run-test-0001",
     nodes: [],
     links: [],
     traced_paths: [],

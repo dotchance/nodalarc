@@ -31,7 +31,10 @@ endif
 endif
 
 # Image tag: git short SHA for reproducibility
-GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
+GIT_SHA := $(shell git rev-parse --short HEAD)
+ifeq ($(strip $(GIT_SHA)),)
+$(error Unable to resolve git SHA; run from a git checkout)
+endif
 TAG     ?= $(GIT_SHA)
 PROJECT_VERSION ?= $(shell bash scripts/na-project-version.sh)
 ifeq ($(strip $(PROJECT_VERSION)),)
@@ -204,7 +207,7 @@ build: deps build-frontends build-images ## Build frontend dist + all Docker ima
 
 build-frontends: ## Build VF frontend
 	@echo "[build] Building VF frontend..."
-	cd frontend && npm run build
+	cd frontend && VITE_BUILD_HASH='$(GIT_SHA)' npm run build
 
 build-images: _clear-build-cache build-base-images build-ome build-scheduler build-node-agent \
               build-vs-api build-operator build-vf

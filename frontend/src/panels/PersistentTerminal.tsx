@@ -32,6 +32,7 @@ interface Session {
 interface PersistentTerminalProps {
   sessions: string[];
   activeNodeId: string | null;
+  runtimeSessionId: string;
   onSessionStatusChange: (nodeId: string, status: ConnectionStatus) => void;
   fontSize: number;
 }
@@ -39,6 +40,7 @@ interface PersistentTerminalProps {
 export function PersistentTerminal({
   sessions,
   activeNodeId,
+  runtimeSessionId,
   onSessionStatusChange,
   fontSize,
 }: PersistentTerminalProps) {
@@ -178,6 +180,17 @@ export function PersistentTerminal({
     [onSessionStatusChange]
   );
 
+  // Runtime session identity changes even when router node IDs are reused.
+  // Tear down stale WebSockets so a wizard redeploy opens terminals into the
+  // current pod set instead of replaying dead sessions from the previous run.
+  useEffect(() => {
+    for (const session of sessionsRef.current.values()) {
+      session.ws?.close();
+    }
+    sessionsRef.current.clear();
+    terminalRef.current?.reset();
+  }, [runtimeSessionId]);
+
   // Manage session lifecycle
   useEffect(() => {
     const currentIds = new Set(sessions);
@@ -196,7 +209,7 @@ export function PersistentTerminal({
         sessionsRef.current.delete(nodeId);
       }
     }
-  }, [sessions, createSession]);
+  }, [sessions, createSession, runtimeSessionId]);
 
   // Switch active session — replay buffer into shared terminal
   useEffect(() => {

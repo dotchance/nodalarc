@@ -25,6 +25,7 @@ def test_vs_api_state_snapshot_schema():
         sim_time=datetime.now(UTC),
         wall_time=datetime.now(UTC),
         schema_version=1,
+        session_id="run-test-0001",
         nodes=[
             NodeState(
                 node_id="sat-P00S00",
@@ -69,6 +70,7 @@ def test_vs_api_state_snapshot_schema():
 
     data = json.loads(snapshot.model_dump_json())
     assert data["schema_version"] == 1
+    assert data["session_id"] == "run-test-0001"
     assert len(data["nodes"]) == 1
     assert len(data["links"]) == 1
     assert data["network_health"]["status"] == "converged"

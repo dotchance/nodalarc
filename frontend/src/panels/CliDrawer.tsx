@@ -37,6 +37,8 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
   const [openSessions, setOpenSessions] = useState<string[]>([]);
   const [activeSession, setActiveSession] = useState<string | null>(null);
   const [sessionStatuses, setSessionStatuses] = useState<Map<string, ConnectionStatus>>(new Map());
+  const runtimeSessionId = snapshot?.session_id ?? "";
+  const previousRuntimeSessionIdRef = useRef("");
 
   // Auto-select node when selection changes
   useEffect(() => {
@@ -98,6 +100,17 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    if (!runtimeSessionId) return;
+    if (
+      previousRuntimeSessionIdRef.current &&
+      previousRuntimeSessionIdRef.current !== runtimeSessionId
+    ) {
+      setSessionStatuses(new Map());
+    }
+    previousRuntimeSessionIdRef.current = runtimeSessionId;
+  }, [runtimeSessionId]);
 
   // Drag handle for resizing
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -350,6 +363,7 @@ export function CliDrawer({ open, onClose, snapshot, selection }: CliDrawerProps
             <PersistentTerminal
               sessions={openSessions}
               activeNodeId={activeSession}
+              runtimeSessionId={runtimeSessionId}
               onSessionStatusChange={handleSessionStatus}
               fontSize={fontSize}
             />

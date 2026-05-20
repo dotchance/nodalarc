@@ -320,6 +320,7 @@ class TestSnapshotModel:
             sim_time=datetime.now(UTC),
             wall_time=datetime.now(UTC),
             schema_version=1,
+            session_id="run-test-0001",
             nodes=[
                 NodeState(
                     node_id="sat-P00S00",
@@ -376,6 +377,7 @@ class TestSnapshotModel:
         dumped = snap.model_dump_json()
         loaded = json.loads(dumped)
         assert loaded["schema_version"] == 1
+        assert loaded["session_id"] == "run-test-0001"
         assert len(loaded["nodes"]) == 1
         assert len(loaded["links"]) == 1
         assert loaded["nodes"][0]["node_id"] == "sat-P00S00"
@@ -386,6 +388,7 @@ class TestSnapshotModel:
             sim_time=datetime.now(UTC),
             wall_time=datetime.now(UTC),
             schema_version=1,
+            session_id="run-test-0001",
             nodes=[],
             links=[],
             traced_paths=[],

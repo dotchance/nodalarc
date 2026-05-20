@@ -62,13 +62,20 @@ def test_project_info_accepts_exact_release_tags() -> None:
     assert project_info._version_from_git_describe("nodalarc-0.4.2") == "0.4.2"
 
 
+def test_project_info_accepts_release_marker_tags() -> None:
+    assert project_info._version_from_git_describe("0.4.2-release") == "0.4.2"
+    assert project_info._version_from_git_describe("nodalarc-0.4.2-release") == "0.4.2"
+
+
 def test_project_info_marks_dirty_exact_tags_as_local_versions() -> None:
     assert project_info._version_from_git_describe("0.4.2-dirty") == "0.4.2+dirty"
     assert project_info._version_from_git_describe("nodalarc-0.4.2-dirty") == "0.4.2+dirty"
+    assert project_info._version_from_git_describe("0.4.2-release-dirty") == "0.4.2+dirty"
 
 
 def test_project_info_derives_post_tag_versions() -> None:
     assert project_info._version_from_git_describe("0.4.2-7-gabc1234") == "0.4.2+7.gabc1234"
+    assert project_info._version_from_git_describe("0.4.2-release-7-gabc1234") == "0.4.2+7.gabc1234"
     assert (
         project_info._version_from_git_describe("nodalarc-0.4.2-7-gabc1234-dirty")
         == "0.4.2+7.gabc1234.dirty"

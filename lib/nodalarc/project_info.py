@@ -46,11 +46,17 @@ def _version_from_git_describe(described: str) -> str | None:
         dirty_suffix = ".dirty"
         value = value.removesuffix("-dirty")
 
+    def normalize_release_marker(tag_base: str) -> str:
+        return tag_base.removesuffix("-release")
+
+    value = normalize_release_marker(value)
+
     if re.fullmatch(r"[0-9]+(?:[.][0-9A-Za-z]+)*", value):
         return f"{value}+dirty" if dirty_suffix else value
 
     if match := re.fullmatch(r"(.+)-([0-9]+)-g([0-9a-f]+)", value):
         base, commits, revision = match.groups()
+        base = normalize_release_marker(base)
         return f"{base}+{commits}.g{revision}{dirty_suffix}"
 
     if re.fullmatch(r"[0-9a-f]{7,40}", value):

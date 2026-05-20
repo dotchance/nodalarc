@@ -27,20 +27,24 @@ from starlette.websockets import WebSocket
 
 log = logging.getLogger(__name__)
 
-# Cached SSH private key object (loaded lazily from K8s Secret, kept in memory only)
+# Cached SSH private key object (loaded lazily from K8s Secret, kept in memory only).
+# The cache key includes the Secret resourceVersion. The Operator can recreate
+# terminal keys when the owning ConstellationSpec is replaced, while VS-API stays
+# up; a process-lifetime key cache would then keep authenticating with stale
+# credentials.
 _ssh_key: asyncssh.SSHKey | None = None
+_ssh_key_cache_key: tuple[str, str] | None = None
 
 
 def _load_ssh_key(namespace: str) -> asyncssh.SSHKey:
     """Load the SSH private key from the K8s Secret into memory.
 
-    Returns an asyncssh.SSHKey object. Called once, cached for the VS-API
-    process lifetime. The key NEVER touches disk — it stays in memory only.
-    Uses the cached K8s client to avoid blocking on load_incluster_config().
+    Returns an asyncssh.SSHKey object. The imported key is cached while the
+    Secret revision is unchanged. The key NEVER touches disk — it stays in
+    memory only. Uses the cached K8s client to avoid blocking on
+    load_incluster_config().
     """
-    global _ssh_key
-    if _ssh_key is not None:
-        return _ssh_key
+    global _ssh_key, _ssh_key_cache_key
 
     v1 = _get_k8s_client()
 
@@ -56,13 +60,25 @@ def _load_ssh_key(namespace: str) -> asyncssh.SSHKey:
 
     import base64
 
-    private_key_b64 = secret.data.get("id_ed25519")
+    private_key_b64 = (secret.data or {}).get("id_ed25519")
     if not private_key_b64:
         raise RuntimeError("Secret nodalarc-terminal-keys missing id_ed25519 key")
 
+    metadata = getattr(secret, "metadata", None)
+    resource_version = str(getattr(metadata, "resource_version", "") or "")
+    cache_key = (namespace, resource_version or private_key_b64)
+    if _ssh_key is not None and _ssh_key_cache_key == cache_key:
+        return _ssh_key
+
     private_key_pem = base64.b64decode(private_key_b64).decode()
     _ssh_key = asyncssh.import_private_key(private_key_pem)
-    log.info("SSH private key loaded from Secret (in-memory only, never written to disk)")
+    _ssh_key_cache_key = cache_key
+    log.info(
+        "SSH private key loaded from Secret %s resourceVersion=%s "
+        "(in-memory only, never written to disk)",
+        "nodalarc-terminal-keys",
+        resource_version or "unknown",
+    )
     return _ssh_key
 
 

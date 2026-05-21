@@ -29,8 +29,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iputils-ping iputils-tracepath openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
+COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
+
 RUN pip install --no-cache-dir \
-    kopf kubernetes pydantic>=2.0 pyyaml jinja2 numpy sgp4 skyfield nats-py
+    --constraint /tmp/nodalarc-runtime-constraints.txt \
+    kopf kubernetes "pydantic>=2.0" pyyaml jinja2 numpy sgp4 skyfield nats-py
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app

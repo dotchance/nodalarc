@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from nodalarc.catalog_paths import CatalogPathError
 from vs_api.session_manager import SessionManager, _pid_alive
 
 
@@ -178,6 +179,44 @@ class TestRecoverSession:
         mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
         mgr.recover_session()
         assert mgr._current_data_dir == d
+
+
+class TestSessionPathContainment:
+    def test_scan_fails_on_symlink_escape(self, tmp_path):
+        if not hasattr(os, "symlink"):
+            pytest.skip("symlink not supported on this platform")
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        outside = tmp_path / "outside.yaml"
+        outside.write_text("""
+session:
+  name: Outside
+constellation: configs/constellations/custom-example.yaml
+ground_stations: configs/ground-stations/default.yaml
+orbit:
+  propagator: keplerian-circular
+routing:
+  protocol: isis
+  area_assignment:
+    strategy: flat
+""")
+        try:
+            (sessions_dir / "escape.yaml").symlink_to(outside)
+        except OSError as exc:
+            pytest.skip(f"symlink creation not permitted: {exc}")
+
+        with pytest.raises(CatalogPathError, match="escapes sessions root"):
+            SessionManager(str(sessions_dir))
+
+    def test_valid_session_map_uses_resolved_paths(self, tmp_sessions):
+        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+
+        assert str(tmp_sessions["session_yaml"]) in mgr._valid_session_files()
+        assert (
+            mgr._validated_session_path(str(tmp_sessions["session_yaml"]))
+            == tmp_sessions["session_yaml"].resolve()
+        )
 
 
 class TestKillAllSessionProcesses:

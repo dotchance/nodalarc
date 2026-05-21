@@ -30,9 +30,12 @@ ENV NODALARC_VERSION=${PROJECT_VERSION} \
 WORKDIR /app
 
 # Install Python dependencies
+COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
+
 RUN pip install --no-cache-dir \
-    pydantic>=2.0 nats-py pyyaml numpy grpcio>=1.74 protobuf>=6.31.1 \
-    kubernetes jinja2 sgp4 skyfield httpx>=0.28.1
+    --constraint /tmp/nodalarc-runtime-constraints.txt \
+    "pydantic>=2.0" nats-py pyyaml numpy "grpcio>=1.74" "protobuf>=6.31.1" \
+    kubernetes jinja2 sgp4 skyfield "httpx>=0.28.1"
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app

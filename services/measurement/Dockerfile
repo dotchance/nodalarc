@@ -34,8 +34,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
+
 RUN pip install --no-cache-dir \
-    pydantic>=2.0 nats-py pyyaml fastapi uvicorn kubernetes
+    --constraint /tmp/nodalarc-runtime-constraints.txt \
+    "pydantic>=2.0" nats-py pyyaml fastapi uvicorn kubernetes
 
 # Add lib/ and services/ to Python path
 ENV PYTHONPATH=/app/lib:/app/services:/app

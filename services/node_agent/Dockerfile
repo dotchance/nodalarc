@@ -46,8 +46,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 WORKDIR /app
 
 # Install Python dependencies
+COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
+
 RUN pip install --no-cache-dir \
-    pydantic>=2.0 pyroute2 nats-py protobuf>=6.31.1 \
+    --constraint /tmp/nodalarc-runtime-constraints.txt \
+    "pydantic>=2.0" pyroute2 nats-py "protobuf>=6.31.1" \
     pyyaml kubernetes
 
 # Add lib/ and services/ to Python path

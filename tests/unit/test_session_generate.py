@@ -2,6 +2,7 @@
 
 import pytest
 import yaml
+from nodalarc.catalog_paths import CatalogPathError
 from nodalarc.constellation_loader import (
     expand_constellation,
     load_constellation,
@@ -10,8 +11,10 @@ from nodalarc.constellation_loader import (
 from nodalarc.ground_terminals import ground_terminal_type, station_ground_terminal_type
 from nodalarc.models.session import SessionConfig
 from nodalarc.session_generator import (
+    constellation_source_mode,
     generate_session_yaml,
     load_constellation_presets,
+    merge_constellation_with_satellite_type,
 )
 from pydantic import ValidationError
 
@@ -50,6 +53,16 @@ class TestLoadPresets:
                 f"Preset {name} has satellite ground terminals {satellite_types} "
                 f"but ground station terminals {station_types}"
             )
+
+
+class TestCatalogPathContainment:
+    def test_constellation_source_mode_rejects_absolute_path(self):
+        with pytest.raises(CatalogPathError, match="absolute"):
+            constellation_source_mode("/tmp/outside.yaml")
+
+    def test_merge_constellation_rejects_traversal_path(self):
+        with pytest.raises(CatalogPathError, match="traversal"):
+            merge_constellation_with_satellite_type("../../outside.yaml", "starlink-v2")
 
 
 class TestGenerateSessionYaml:

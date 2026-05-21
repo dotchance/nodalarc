@@ -31,6 +31,7 @@ function getTooltip(): HTMLDivElement {
       font-family: var(--font-family);
       line-height: 1.4;
     `;
+    tooltip.style.whiteSpace = "pre-line";
     document.body.appendChild(tooltip);
   }
   return tooltip;
@@ -156,7 +157,7 @@ export function setupRaycaster(
     if (nodeHit) {
       const nodeId = nodeHit.object.userData["nodeId"] as string;
       const nodeType = nodeHit.object.userData["nodeType"] as string;
-      tip.innerHTML = buildTooltipContent(nodeId, nodeType).replace(/\n/g, "<br>");
+      tip.textContent = buildTooltipContent(nodeId, nodeType);
       nodeHit.object.scale.set(HOVER_SCALE, HOVER_SCALE, HOVER_SCALE);
       hoveredObject = nodeHit.object;
       tip.style.display = "block";

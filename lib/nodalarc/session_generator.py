@@ -18,6 +18,14 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
+from nodalarc.catalog_paths import (
+    CatalogPathError,
+    CatalogRoots,
+    config_value_for,
+    resolve_constellation_reference,
+    resolve_ground_station_reference,
+    validate_station_names,
+)
 from nodalarc.models.session import SessionConfig
 from nodalarc.stack_resolver import resolve_stack
 
@@ -35,27 +43,36 @@ class ConstellationPreset(BaseModel):
     convergence: dict[str, Any] = {}
 
 
-_PRESETS_DIR = Path("configs/presets/constellations")
+def _default_catalog_roots() -> CatalogRoots:
+    return CatalogRoots.from_config_root(Path("configs"))
 
 
-def load_constellation_presets() -> dict[str, ConstellationPreset]:
+def load_constellation_presets(
+    catalog_roots: CatalogRoots | None = None,
+) -> dict[str, ConstellationPreset]:
     """Scan preset directory and return name -> preset map."""
+    presets_dir = (catalog_roots or _default_catalog_roots()).constellation_presets
     presets: dict[str, ConstellationPreset] = {}
-    if not _PRESETS_DIR.is_dir():
+    if not presets_dir.is_dir():
         return presets
-    for yaml_path in sorted(_PRESETS_DIR.glob("*.yaml")):
+    for yaml_path in sorted(presets_dir.glob("*.yaml")):
         raw = yaml.safe_load(yaml_path.read_text())
         preset = ConstellationPreset.model_validate(raw)
         presets[preset.name] = preset
     return presets
 
 
-def constellation_source_mode(source: str | Path | dict) -> str | None:
+def constellation_source_mode(
+    source: str | Path | dict,
+    catalog_roots: CatalogRoots | None = None,
+) -> str | None:
     """Return the configured constellation mode for a file or inline source."""
     if isinstance(source, dict):
         mode = source.get("mode")
         return mode if isinstance(mode, str) else None
-    data = yaml.safe_load(Path(source).read_text()) or {}
+    roots = catalog_roots or _default_catalog_roots()
+    source_path = resolve_constellation_reference(source, roots)
+    data = yaml.safe_load(source_path.read_text()) or {}
     if not isinstance(data, dict):
         return None
     mode = data.get("mode")
@@ -65,13 +82,16 @@ def constellation_source_mode(source: str | Path | dict) -> str | None:
 def merge_constellation_with_satellite_type(
     constellation_path: str,
     satellite_type: str,
+    catalog_roots: CatalogRoots | None = None,
 ) -> dict:
     """Load a constellation file and replace its satellite_type field.
 
     Returns the merged constellation as a plain dict suitable for
     embedding inline in a session YAML.
     """
-    data = yaml.safe_load(Path(constellation_path).read_text())
+    roots = catalog_roots or _default_catalog_roots()
+    source_path = resolve_constellation_reference(constellation_path, roots)
+    data = yaml.safe_load(source_path.read_text())
     if not isinstance(data, dict):
         raise ValueError(f"Constellation file is not a dict: {constellation_path}")
     # Replace satellite_type with the wizard's selection
@@ -96,6 +116,7 @@ def generate_session_yaml(
     routing_config: dict | None = None,
     ground_policy: str = "highest-elevation",
     ground_lookahead_horizon_ticks: int = 0,
+    catalog_roots: CatalogRoots | None = None,
 ) -> tuple[str, list[str]]:
     """Generate a session YAML from wizard selections.
 
@@ -125,9 +146,10 @@ def generate_session_yaml(
     Raises ValueError for invalid combinations.
     """
     warnings: list[str] = []
+    roots = catalog_roots or _default_catalog_roots()
 
     # Load preset for defaults — optional when custom_constellation is provided
-    presets = load_constellation_presets()
+    presets = load_constellation_presets(roots)
     preset = presets.get(constellation)
     if preset is None and custom_constellation is None:
         raise ValueError(f"Unknown constellation preset: {constellation}")
@@ -150,10 +172,10 @@ def generate_session_yaml(
             constellation_value = custom_constellation
     elif preset is not None and satellite_type:
         # Library preset with satellite type override
-        built_in_type = _read_constellation_satellite_type(preset.constellation)
+        built_in_type = _read_constellation_satellite_type(preset.constellation, roots)
         if built_in_type and built_in_type != satellite_type:
             constellation_value = merge_constellation_with_satellite_type(
-                preset.constellation, satellite_type
+                preset.constellation, satellite_type, roots
             )
             warnings.append(
                 f"Constellation '{constellation}' uses '{built_in_type}' terminals — "
@@ -166,7 +188,7 @@ def generate_session_yaml(
     else:
         raise ValueError("No constellation source: provide a preset name or custom_constellation")
 
-    constellation_mode = constellation_source_mode(constellation_value)
+    constellation_mode = constellation_source_mode(constellation_value, roots)
     if orbit_propagator == "sgp4-tle" and constellation_mode != "tle":
         raise ValueError("orbit_propagator='sgp4-tle' requires a TLE constellation source")
     if constellation_mode == "tle" and orbit_propagator != "sgp4-tle":
@@ -181,7 +203,18 @@ def generate_session_yaml(
             "stations": custom_ground_stations,
         }
     elif ground_stations:
-        gs_value = ground_stations
+        if isinstance(ground_stations, str):
+            try:
+                gs_value = config_value_for(
+                    resolve_ground_station_reference(ground_stations, roots)
+                )
+            except CatalogPathError as exc:
+                raise ValueError(str(exc)) from exc
+        elif isinstance(ground_stations, list):
+            validate_station_names(ground_stations)
+            gs_value = ground_stations
+        else:
+            gs_value = ground_stations
     elif preset is not None:
         gs_value = preset.ground_stations
     else:
@@ -266,10 +299,15 @@ def generate_session_yaml(
     return yaml_str, warnings
 
 
-def _read_constellation_satellite_type(constellation_path: str) -> str | None:
+def _read_constellation_satellite_type(
+    constellation_path: str,
+    catalog_roots: CatalogRoots | None = None,
+) -> str | None:
     """Read the satellite_type field from a constellation YAML without full parsing."""
     try:
-        data = yaml.safe_load(Path(constellation_path).read_text())
+        roots = catalog_roots or _default_catalog_roots()
+        source_path = resolve_constellation_reference(constellation_path, roots)
+        data = yaml.safe_load(source_path.read_text())
         if isinstance(data, dict):
             return data.get("satellite_type")
     except Exception:

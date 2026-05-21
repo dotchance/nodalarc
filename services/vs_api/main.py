@@ -33,6 +33,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
+from nodalarc.catalog_paths import (
+    CatalogPathError,
+    CatalogRoots,
+    config_value_for,
+    generated_file_path,
+    generated_file_stem,
+    resolve_constellation_reference,
+    resolve_ground_station_reference,
+    validate_station_names,
+    write_text_exclusive,
+)
 from nodalarc.db.queries import (
     insert_snapshot,
     query_convergence_events,
@@ -68,6 +79,8 @@ from vs_api.session_manager import SessionManager
 from vs_api.terminal import TerminalManager
 
 log = logging.getLogger(__name__)
+
+_CATALOG_ROOTS = CatalogRoots.from_config_root(Path("configs"))
 
 # --- Authentication ---
 
@@ -2343,6 +2356,24 @@ def wizard_extension_rules() -> dict:
     }
 
 
+def _catalog_error(exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"error": str(exc)})
+
+
+def _resolve_api_constellation_source(source: Any) -> Any:
+    if isinstance(source, str):
+        return config_value_for(resolve_constellation_reference(source, _CATALOG_ROOTS))
+    return source
+
+
+def _resolve_api_ground_station_source(source: Any) -> Any:
+    if isinstance(source, str):
+        return config_value_for(resolve_ground_station_reference(source, _CATALOG_ROOTS))
+    if isinstance(source, list) and all(isinstance(item, str) for item in source):
+        validate_station_names(source)
+    return source
+
+
 @app.post("/api/v1/session/generate", dependencies=[Depends(_require_api_key)])
 def generate_session(body: dict) -> dict:
     """Generate a session YAML from wizard selections."""
@@ -2376,8 +2407,9 @@ def generate_session(body: dict) -> dict:
             custom_ground_stations=custom_ground_stations,
             routing_config=routing_config,
             orbit_propagator=orbit_propagator,
+            catalog_roots=_CATALOG_ROOTS,
         )
-    except ValueError as exc:
+    except (ValueError, FileNotFoundError) as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
     return {"yaml": yaml_str, "warnings": warnings}
 
@@ -2393,14 +2425,20 @@ async def preview_coverage(body: dict) -> dict:
     """
     from ome.coverage_preview import compute_coverage_preview
 
+    try:
+        constellation = _resolve_api_constellation_source(body.get("constellation"))
+        ground_stations = _resolve_api_ground_station_source(body.get("ground_stations"))
+    except (CatalogPathError, FileNotFoundError) as exc:
+        return _catalog_error(exc)
+
     loop = asyncio.get_event_loop()
     try:
         result = await loop.run_in_executor(
             None,
             compute_coverage_preview,
-            body.get("constellation"),
+            constellation,
             body.get("satellite_type"),
-            body.get("ground_stations"),
+            ground_stations,
         )
     except (ValueError, FileNotFoundError) as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
@@ -2434,6 +2472,8 @@ async def deploy_generated_session(body: dict) -> dict:
     except Exception as exc:
         return JSONResponse(status_code=400, content={"error": f"Invalid session YAML: {exc}"})
 
+    modified = dict(raw)
+
     # Full semantic validation — expand the constellation and ground stations
     # to catch errors like invalid terminal counts, missing model files, or
     # empty constellations BEFORE creating the CR.
@@ -2444,8 +2484,14 @@ async def deploy_generated_session(body: dict) -> dict:
             load_ground_stations,
         )
 
-        constellation = load_constellation(session.constellation)
-        load_ground_stations(session.ground_stations)
+        constellation_source = _resolve_api_constellation_source(session.constellation)
+        ground_station_source = _resolve_api_ground_station_source(session.ground_stations)
+        if isinstance(session.constellation, str):
+            modified["constellation"] = constellation_source
+        if isinstance(session.ground_stations, str):
+            modified["ground_stations"] = ground_station_source
+        constellation = load_constellation(constellation_source)
+        load_ground_stations(ground_station_source)
         satellites = expand_constellation(constellation)
         if not satellites:
             return JSONResponse(
@@ -2456,12 +2502,13 @@ async def deploy_generated_session(body: dict) -> dict:
             status_code=400, content={"error": f"Invalid session configuration: {exc}"}
         )
 
-    # Write to sessions directory with _wizard- prefix
-    from pathlib import Path
-
-    sessions_dir = Path("configs/sessions")
-    session_file = sessions_dir / f"_wizard-{session.session.name}.yaml"
-    session_file.write_text(yaml_str)
+    # Write to sessions directory with _wizard- prefix and a collision-resistant stem.
+    try:
+        stem = generated_file_stem(session.session.name)
+        session_file = generated_file_path(_CATALOG_ROOTS.sessions, f"_wizard-{stem}.yaml")
+        write_text_exclusive(session_file, _yaml.dump(modified, default_flow_style=False))
+    except (CatalogPathError, FileExistsError) as exc:
+        return _catalog_error(exc)
 
     # Rescan and deploy
     if _session_manager is None:
@@ -2469,8 +2516,9 @@ async def deploy_generated_session(body: dict) -> dict:
     if _session_manager.status == "switching":
         return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
     _session_manager.rescan()
-    asyncio.create_task(_run_switch(str(session_file)))
-    return {"status": "switching", "session_file": str(session_file)}
+    session_file_value = config_value_for(session_file)
+    asyncio.create_task(_run_switch(session_file_value))
+    return {"status": "switching", "session_file": session_file_value}
 
 
 @app.post("/api/v1/session/deploy-from-yaml", dependencies=[Depends(_require_api_key)])
@@ -2480,8 +2528,6 @@ async def deploy_from_yaml(body: dict) -> dict:
     Extracts inline constellation/ground-station definitions, writes
     ephemeral files, and deploys identically to the wizard path.
     """
-    from pathlib import Path
-
     import yaml as _yaml
 
     yaml_str = body.get("yaml", "")
@@ -2494,27 +2540,57 @@ async def deploy_from_yaml(body: dict) -> dict:
         return JSONResponse(status_code=400, content={"error": f"Invalid session YAML: {exc}"})
 
     # Extract inline definitions → write ephemeral files → rewrite as paths
-    session_name = session.session.name
+    try:
+        stem = generated_file_stem(session.session.name)
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
     modified = dict(raw)
 
     if isinstance(session.constellation, dict):
-        eph_dir = Path("configs/constellations/_ephemeral")
-        eph_dir.mkdir(parents=True, exist_ok=True)
-        eph_path = eph_dir / f"{session_name}.yaml"
-        eph_path.write_text(_yaml.dump(session.constellation, default_flow_style=False))
-        modified["constellation"] = str(eph_path)
+        eph_path = generated_file_path(_CATALOG_ROOTS.constellation_ephemeral, f"{stem}.yaml")
+        try:
+            write_text_exclusive(
+                eph_path, _yaml.dump(session.constellation, default_flow_style=False)
+            )
+        except FileExistsError as exc:
+            return _catalog_error(exc)
+        modified["constellation"] = config_value_for(eph_path)
+    elif isinstance(session.constellation, str):
+        try:
+            modified["constellation"] = config_value_for(
+                resolve_constellation_reference(session.constellation, _CATALOG_ROOTS)
+            )
+        except (CatalogPathError, FileNotFoundError) as exc:
+            return _catalog_error(exc)
 
     if isinstance(session.ground_stations, dict):
-        eph_dir = Path("configs/ground-stations/_ephemeral")
-        eph_dir.mkdir(parents=True, exist_ok=True)
-        eph_path = eph_dir / f"{session_name}.yaml"
-        eph_path.write_text(_yaml.dump(session.ground_stations, default_flow_style=False))
-        modified["ground_stations"] = str(eph_path)
+        eph_path = generated_file_path(_CATALOG_ROOTS.ground_station_ephemeral, f"{stem}.yaml")
+        try:
+            write_text_exclusive(
+                eph_path, _yaml.dump(session.ground_stations, default_flow_style=False)
+            )
+        except FileExistsError as exc:
+            return _catalog_error(exc)
+        modified["ground_stations"] = config_value_for(eph_path)
+    elif isinstance(session.ground_stations, str):
+        try:
+            modified["ground_stations"] = config_value_for(
+                resolve_ground_station_reference(session.ground_stations, _CATALOG_ROOTS)
+            )
+        except (CatalogPathError, FileNotFoundError) as exc:
+            return _catalog_error(exc)
+    elif isinstance(session.ground_stations, list):
+        try:
+            validate_station_names(session.ground_stations)
+        except CatalogPathError as exc:
+            return _catalog_error(exc)
 
     # Write modified session YAML (inline defs replaced with ephemeral file paths)
-    sessions_dir = Path("configs/sessions")
-    session_file = sessions_dir / f"_wizard-{session_name}.yaml"
-    session_file.write_text(_yaml.dump(modified, default_flow_style=False))
+    session_file = generated_file_path(_CATALOG_ROOTS.sessions, f"_wizard-{stem}.yaml")
+    try:
+        write_text_exclusive(session_file, _yaml.dump(modified, default_flow_style=False))
+    except FileExistsError as exc:
+        return _catalog_error(exc)
 
     # Full semantic validation after ephemeral files are written
     try:
@@ -2542,8 +2618,9 @@ async def deploy_from_yaml(body: dict) -> dict:
     if _session_manager.status == "switching":
         return JSONResponse(status_code=409, content={"error": "Switch already in progress"})
     _session_manager.rescan()
-    asyncio.create_task(_run_switch(str(session_file)))
-    return {"status": "switching", "session_file": str(session_file)}
+    session_file_value = config_value_for(session_file)
+    asyncio.create_task(_run_switch(session_file_value))
+    return {"status": "switching", "session_file": session_file_value}
 
 
 @app.get(

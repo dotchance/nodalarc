@@ -43,6 +43,7 @@ function getTooltip(): HTMLDivElement {
       font-family: var(--font-family);
       line-height: 1.4;
     `;
+    tooltip.style.whiteSpace = "pre-line";
     document.body.appendChild(tooltip);
   }
   return tooltip;
@@ -159,7 +160,7 @@ export function setupGpuPicker(
     if (nodeHit) {
       const { nodeId, nodeType } = nodeHit;
       hoveredNodeId = nodeId;
-      tip.innerHTML = buildTooltipContent(nodeId, nodeType).replace(/\n/g, "<br>");
+      tip.textContent = buildTooltipContent(nodeId, nodeType);
       tip.style.display = "block";
       tip.style.left = `${event.clientX + 12}px`;
       tip.style.top = `${event.clientY - 8}px`;

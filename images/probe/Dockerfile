@@ -17,7 +17,9 @@ ENV NODALARC_VERSION=${PROJECT_VERSION} \
     NODALARC_BUILD_REVISION=${VCS_REF} \
     NODALARC_BUILD_DATE=${BUILD_DATE}
 
-RUN pip install --no-cache-dir fastapi uvicorn
+COPY build/runtime-constraints.txt /tmp/nodalarc-runtime-constraints.txt
+
+RUN pip install --no-cache-dir --constraint /tmp/nodalarc-runtime-constraints.txt fastapi uvicorn
 
 WORKDIR /app
 COPY services/measurement/probe_daemon.py /app/measurement/probe_daemon.py

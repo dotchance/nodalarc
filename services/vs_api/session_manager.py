@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 
 import yaml
+from nodalarc.catalog_paths import CatalogPathError
 from nodalarc.models.session import SessionConfig
 from nodalarc.platform_config import get_platform_config
 
@@ -68,6 +69,7 @@ class SessionManager:
         self._status_detail: str = ""
         self._detail_lock = threading.Lock()
         self._available: list[dict] = []
+        self._session_file_paths: dict[str, Path] = {}
 
         # Derive initial data_dir from db_path parent if provided
         if initial_db_path:
@@ -96,10 +98,21 @@ class SessionManager:
         if not self._sessions_dir.is_dir():
             log.warning(f"Sessions directory not found: {self._sessions_dir}")
             return results
+        root = self._sessions_dir.resolve(strict=True)
+        session_file_paths: dict[str, Path] = {}
 
         for yaml_path in sorted(self._sessions_dir.glob("*.yaml")):
+            file_key = str(yaml_path)
+            resolved_path = yaml_path.resolve(strict=True)
             try:
-                raw = yaml.safe_load(yaml_path.read_text())
+                resolved_path.relative_to(root)
+            except ValueError as exc:
+                msg = f"Session file escapes sessions root: {yaml_path}"
+                log.error(msg)
+                raise CatalogPathError(msg) from exc
+
+            try:
+                raw = yaml.safe_load(resolved_path.read_text())
                 session = SessionConfig.model_validate(raw)
                 if session.routing.stack is not None:
                     routing_label = Path(session.routing.stack).name
@@ -117,13 +130,15 @@ class SessionManager:
                 results.append(
                     {
                         "name": session.session.name,
-                        "file": str(yaml_path),
+                        "file": file_key,
                         "constellation": const_label,
                         "routing_stack": routing_label,
                     }
                 )
+                session_file_paths[file_key] = resolved_path
             except Exception as exc:
                 log.warning(f"Failed to parse session {yaml_path}: {exc}")
+        self._session_file_paths = session_file_paths
         return results
 
     def list_sessions(self) -> list[dict]:
@@ -159,7 +174,11 @@ class SessionManager:
 
     def _valid_session_files(self) -> set[str]:
         """Return the set of known session file paths from the initial scan."""
-        return {s["file"] for s in self._available}
+        return set(self._session_file_paths)
+
+    def _validated_session_path(self, session_path: str) -> Path | None:
+        """Return the resolved path for a scanned session file key."""
+        return self._session_file_paths.get(session_path)
 
     def _collect_data_dirs(self) -> list[Path]:
         """Collect all unique data_dir paths from scanned session configs."""
@@ -336,7 +355,8 @@ class SessionManager:
         import kubernetes.config
 
         self.rescan()
-        if session_path not in self._valid_session_files():
+        validated_session_path = self._validated_session_path(session_path)
+        if validated_session_path is None:
             self._status = "error"
             self.status_detail = f"Unknown session: {Path(session_path).name}"
             log.error("Rejected switch to unknown session path: %s", session_path)
@@ -426,7 +446,7 @@ class SessionManager:
 
             # === Build and apply ConstellationSpec CR ===
             await _progress("Deploying new constellation")
-            session_yaml_content = Path(session_path).read_text()
+            session_yaml_content = validated_session_path.read_text()
             cr_body = {
                 "apiVersion": "nodalarc.io/v1alpha1",
                 "kind": "ConstellationSpec",

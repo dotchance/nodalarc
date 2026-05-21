@@ -42,6 +42,7 @@ PROJECT_VERSION := 0+unknown
 endif
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)
 DOCKER_BUILD_METADATA_ARGS = --build-arg PROJECT_VERSION=$(PROJECT_VERSION) --build-arg VCS_REF=$(GIT_SHA) --build-arg BUILD_DATE=$(BUILD_DATE)
+RUNTIME_CONSTRAINTS ?= build/runtime-constraints.txt
 
 # ---------------------------------------------------------------------------
 # Image names
@@ -59,7 +60,7 @@ IMAGE_REF_TAG = $$(MODE='$(MODE)' REGISTRY_HOST='$(REGISTRY_HOST)' TAG='$(TAG)' 
         teardown force-teardown reset-platform restart clean clean-deps clean-images \
         clean-registry purge-containerd nuke status check-registry test-backend test-frontend \
         build-frontends build-images ensure-base-images build-base-images \
-        _clear-build-cache build-base build-frr build-probe build-fwd \
+        _runtime-constraints _clear-build-cache build-base build-frr build-probe build-fwd \
         build-ome build-scheduler build-node-agent build-vs-api \
         build-operator build-vf build-measurement \
         check-deps \
@@ -212,6 +213,10 @@ build-frontends: ## Build VF frontend
 build-images: _clear-build-cache build-base-images build-ome build-scheduler build-node-agent \
               build-vs-api build-operator build-vf
 
+_runtime-constraints:
+	@mkdir -p "$$(dirname '$(RUNTIME_CONSTRAINTS)')"
+	uv export --frozen --only-group runtime --no-emit-project --no-hashes --format requirements.txt > '$(RUNTIME_CONSTRAINTS)'
+
 _clear-build-cache:
 	@docker builder prune --filter type=source.local -f >/dev/null 2>&1 || true
 
@@ -233,25 +238,25 @@ build-base:
 build-frr: ## Build FRR image (official FRR base + our entrypoint)
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$(call IMAGE_REF,frr)" -t "$(call IMAGE_REF_TAG,frr,latest)" -t "$(call IMAGE_REF_TAG,frr,10)" images/frr/
 
-build-probe:
+build-probe: _runtime-constraints
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -t "$(call IMAGE_REF,probe)" -t "$(call IMAGE_REF_TAG,probe,latest)" -f images/probe/Dockerfile .
 
-build-ome: ## Build OME image
+build-ome: _runtime-constraints ## Build OME image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/ome/Dockerfile -t "$(call IMAGE_REF,ome)" -t "$(call IMAGE_REF_TAG,ome,latest)" .
 
-build-scheduler: ## Build Scheduler image
+build-scheduler: _runtime-constraints ## Build Scheduler image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/scheduler/Dockerfile -t "$(call IMAGE_REF,scheduler)" -t "$(call IMAGE_REF_TAG,scheduler,latest)" .
 
-build-node-agent: ## Build Node Agent image
+build-node-agent: _runtime-constraints ## Build Node Agent image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/node_agent/Dockerfile -t "$(call IMAGE_REF,node-agent)" -t "$(call IMAGE_REF_TAG,node-agent,latest)" .
 
-build-vs-api: ## Build VS-API image
+build-vs-api: _runtime-constraints ## Build VS-API image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/vs_api/Dockerfile -t "$(call IMAGE_REF,vs-api)" -t "$(call IMAGE_REF_TAG,vs-api,latest)" .
 
-build-operator: ## Build Operator image
+build-operator: _runtime-constraints ## Build Operator image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/nodalarc_operator/Dockerfile -t "$(call IMAGE_REF,operator)" -t "$(call IMAGE_REF_TAG,operator,latest)" .
 
-build-measurement: ## Build MI (Measurement) image
+build-measurement: _runtime-constraints ## Build MI (Measurement) image
 	docker build $(DOCKER_BUILD_METADATA_ARGS) -f services/measurement/Dockerfile -t "$(call IMAGE_REF,measurement)" -t "$(call IMAGE_REF_TAG,measurement,latest)" .
 
 build-vf: build-frontends ## Build VF (visualization) image
@@ -491,6 +496,7 @@ reset-platform: ## Teardown platform and runtime caches but keep dependencies
 clean: ## Remove build artifacts (dist/, caches)
 	rm -rf frontend/dist
 	find . -type d -name __pycache__ ! -path ./.venv/\* -exec rm -rf {} + 2>/dev/null || true
+	rm -f $(RUNTIME_CONSTRAINTS)
 	rm -rf .pytest_cache .ruff_cache
 	@echo "[clean] Build artifacts removed."
 

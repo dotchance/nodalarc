@@ -1639,7 +1639,7 @@ def write_pod_ips_configmap(
 # SSH terminal access
 # ---------------------------------------------------------------------------
 
-TERMINAL_SSH_SECRET_NAME = "nodalarc-terminal-keys"
+TERMINAL_SSH_KEY_RESOURCE_NAME = "nodalarc-terminal-keys"
 
 
 def _create_terminal_ssh_keys(
@@ -1662,12 +1662,14 @@ def _create_terminal_ssh_keys(
     import tempfile
 
     try:
-        existing = v1.read_namespaced_secret(TERMINAL_SSH_SECRET_NAME, namespace)
+        existing = v1.read_namespaced_secret(TERMINAL_SSH_KEY_RESOURCE_NAME, namespace)
         if _terminal_secret_reusable(existing, owner_ref):
-            log.debug("Terminal SSH keypair already exists (Secret: %s)", TERMINAL_SSH_SECRET_NAME)
+            log.debug(
+                "Terminal SSH keypair already exists (Secret: %s)", TERMINAL_SSH_KEY_RESOURCE_NAME
+            )
             return
         raise RetryableSessionDependency(
-            f"Existing {TERMINAL_SSH_SECRET_NAME} Secret is not owned by the current "
+            f"Existing {TERMINAL_SSH_KEY_RESOURCE_NAME} Secret is not owned by the current "
             "ConstellationSpec or is already deleting; waiting for Kubernetes garbage collection"
         )
     except kubernetes.client.rest.ApiException as e:
@@ -1685,7 +1687,7 @@ def _create_terminal_ssh_keys(
 
     body = kubernetes.client.V1Secret(
         metadata=kubernetes.client.V1ObjectMeta(
-            name=TERMINAL_SSH_SECRET_NAME,
+            name=TERMINAL_SSH_KEY_RESOURCE_NAME,
             namespace=namespace,
             labels={"nodalarc.io/managed-by": "operator"},
             owner_references=[owner_ref] if owner_ref else None,
@@ -1697,12 +1699,12 @@ def _create_terminal_ssh_keys(
     )
     try:
         v1.create_namespaced_secret(namespace, body)
-        log.info("Terminal SSH keypair created (Secret: %s)", TERMINAL_SSH_SECRET_NAME)
+        log.info("Terminal SSH keypair created (Secret: %s)", TERMINAL_SSH_KEY_RESOURCE_NAME)
     except kubernetes.client.rest.ApiException as e:
         if e.status == 409:
             log.debug(
                 "Terminal SSH keypair already exists after create race (Secret: %s)",
-                TERMINAL_SSH_SECRET_NAME,
+                TERMINAL_SSH_KEY_RESOURCE_NAME,
             )
         else:
             raise
@@ -1983,7 +1985,7 @@ def _create_session_pod(
         kubernetes.client.V1Volume(
             name="ssh-keys",
             secret=kubernetes.client.V1SecretVolumeSource(
-                secret_name=TERMINAL_SSH_SECRET_NAME,
+                secret_name=TERMINAL_SSH_KEY_RESOURCE_NAME,
                 items=[kubernetes.client.V1KeyToPath(key="id_ed25519.pub", path="authorized_keys")],
                 optional=True,  # Don't fail pod start if terminal keys not yet created
             ),

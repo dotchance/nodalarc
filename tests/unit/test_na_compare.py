@@ -1,7 +1,7 @@
-"""Test na-compare cross-session analysis tool.
+"""Test na-compare cross-session analysis semantics.
 
-Creates two temp SQLite databases with known data, runs each
-report type, and verifies the output contains expected information.
+Creates two temp SQLite databases with known data, runs each report type, and
+parses the rendered output into metadata, counts, deltas, and probe aggregates.
 """
 
 import sqlite3
@@ -149,106 +149,225 @@ class TestCountTable:
         conn.close()
 
 
+def _parse_summary_table_counts(output: str) -> dict[str, tuple[int, int]]:
+    counts = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if parts and parts[0] in {
+            "link_events",
+            "convergence_events",
+            "probe_results",
+            "adapter_events",
+            "snapshots",
+        }:
+            counts[parts[0]] = (int(parts[1]), int(parts[2]))
+    return counts
+
+
+def _parse_summary_metadata(output: str) -> dict[str, tuple[str, str]]:
+    metadata = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if parts and parts[0] in {"routing_stack", "session_name"}:
+            metadata[parts[0]] = (parts[1], parts[2])
+    return metadata
+
+
+def _parse_convergence_rows(output: str) -> dict[str, dict[str, dict[str, float | int | str]]]:
+    rows: dict[str, dict[str, dict[str, float | int | str]]] = {}
+    current_alias = None
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped in {"--- s1 ---", "--- s2 ---"}:
+            current_alias = stripped.removeprefix("--- ").removesuffix(" ---")
+            rows[current_alias] = {}
+            continue
+        parts = stripped.split()
+        if current_alias and len(parts) == 5 and parts[0].startswith("conv-"):
+            rows[current_alias][parts[0]] = {
+                "converged": parts[1],
+                "duration_ms": float(parts[2]),
+                "packets_lost": int(parts[3]),
+                "packets_sent": int(parts[4]),
+            }
+    return rows
+
+
+def _parse_convergence_deltas(output: str) -> dict[str, dict[str, float | int]]:
+    deltas = {}
+    in_side_by_side = False
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--- Side-by-side"):
+            in_side_by_side = True
+            continue
+        parts = stripped.split()
+        if in_side_by_side and len(parts) == 6 and parts[0].startswith("conv-"):
+            deltas[parts[0]] = {
+                "s1_ms": float(parts[1]),
+                "s2_ms": float(parts[2]),
+                "delta_ms": float(parts[3]),
+                "s1_lost": int(parts[4]),
+                "s2_lost": int(parts[5]),
+            }
+    return deltas
+
+
+def _parse_link_event_counts(output: str) -> dict[str, tuple[int, int]]:
+    counts = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[0] in {"LinkUp", "LinkDown", "LatencyUpdate"}:
+            counts[parts[0]] = (int(parts[1]), int(parts[2]))
+    return counts
+
+
+def _parse_probe_flows_by_alias(output: str) -> dict[str, dict[str, dict[str, float | int]]]:
+    rows: dict[str, dict[str, dict[str, float | int]]] = {}
+    current_alias = None
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped in {"--- s1 ---", "--- s2 ---"}:
+            current_alias = stripped.removeprefix("--- ").removesuffix(" ---")
+            rows[current_alias] = {}
+            continue
+        parts = stripped.split()
+        if current_alias and len(parts) == 7 and parts[0] != "flow_id":
+            rows[current_alias][parts[0]] = {
+                "samples": int(parts[1]),
+                "sent": int(parts[2]),
+                "received": int(parts[3]),
+                "loss_pct": float(parts[4].rstrip("%")),
+                "avg_latency_ms": float(parts[5]),
+                "jitter_ms": float(parts[6]),
+            }
+    return rows
+
+
 class TestReportSummary:
-    def test_contains_metadata(self, two_session_dbs):
+    def test_reports_metadata_side_by_side(self, two_session_dbs):
         db1, db2 = two_session_dbs
         conn = _attach_databases([db1, db2])
         output = report_summary(conn, ["s1", "s2"])
-        assert "SESSION COMPARISON" in output
-        assert "isis-run" in output
-        assert "ospf-run" in output
-        assert "frr-isis-sr" in output
-        assert "frr-ospf-te" in output
         conn.close()
 
-    def test_contains_table_counts(self, two_session_dbs):
+        assert _parse_summary_metadata(output) == {
+            "routing_stack": ("frr-isis-sr", "frr-ospf-te"),
+            "session_name": ("isis-run", "ospf-run"),
+        }
+
+    def test_reports_exact_table_counts_side_by_side(self, two_session_dbs):
         db1, db2 = two_session_dbs
         conn = _attach_databases([db1, db2])
         output = report_summary(conn, ["s1", "s2"])
-        assert "link_events" in output
-        assert "convergence_events" in output
-        assert "probe_results" in output
         conn.close()
+
+        assert _parse_summary_table_counts(output) == {
+            "link_events": (3, 3),
+            "convergence_events": (1, 1),
+            "probe_results": (1, 1),
+            "adapter_events": (0, 0),
+            "snapshots": (0, 0),
+        }
 
 
 class TestReportConvergence:
-    def test_contains_convergence_data(self, two_session_dbs):
+    def test_reports_per_session_convergence_rows(self, two_session_dbs):
         db1, db2 = two_session_dbs
         conn = _attach_databases([db1, db2])
         output = report_convergence(conn, ["s1", "s2"])
-        assert "CONVERGENCE" in output
-        assert "conv-001" in output
-        assert "2500" in output  # IS-IS duration
-        assert "3200" in output  # OSPF duration
         conn.close()
 
-    def test_side_by_side_comparison(self, two_session_dbs):
+        assert _parse_convergence_rows(output) == {
+            "s1": {
+                "conv-001": {
+                    "converged": "yes",
+                    "duration_ms": 2500.0,
+                    "packets_lost": 3,
+                    "packets_sent": 100,
+                }
+            },
+            "s2": {
+                "conv-001": {
+                    "converged": "yes",
+                    "duration_ms": 3200.0,
+                    "packets_lost": 5,
+                    "packets_sent": 100,
+                }
+            },
+        }
+
+    def test_reports_matched_event_deltas(self, two_session_dbs):
         db1, db2 = two_session_dbs
         conn = _attach_databases([db1, db2])
         output = report_convergence(conn, ["s1", "s2"])
-        assert "Side-by-side" in output
-        assert "+700" in output  # delta: 3200 - 2500
         conn.close()
+
+        assert _parse_convergence_deltas(output) == {
+            "conv-001": {
+                "s1_ms": 2500.0,
+                "s2_ms": 3200.0,
+                "delta_ms": 700.0,
+                "s1_lost": 3,
+                "s2_lost": 5,
+            }
+        }
 
 
 class TestReportLinkEvents:
-    def test_contains_link_data(self, two_session_dbs):
+    def test_reports_event_count_by_type_per_session(self, two_session_dbs):
         db1, db2 = two_session_dbs
         conn = _attach_databases([db1, db2])
         output = report_link_events(conn, ["s1", "s2"])
-        assert "LINK EVENTS" in output
-        assert "sat-P00S00" in output
-        assert "sat-P00S01" in output
-        assert "LinkUp" in output
-        assert "LinkDown" in output
         conn.close()
 
-    def test_event_count_by_type(self, two_session_dbs):
-        db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        output = report_link_events(conn, ["s1", "s2"])
-        assert "Event count by type" in output
-        conn.close()
+        assert _parse_link_event_counts(output) == {
+            "LinkUp": (2, 2),
+            "LinkDown": (1, 1),
+            "LatencyUpdate": (0, 0),
+        }
 
 
 class TestReportProbeResults:
-    def test_contains_probe_data(self, two_session_dbs):
+    def test_reports_probe_delivery_and_latency_by_session(self, two_session_dbs):
         db1, db2 = two_session_dbs
         conn = _attach_databases([db1, db2])
         output = report_probe_results(conn, ["s1", "s2"])
-        assert "PROBE RESULTS" in output
-        assert "test-flow" in output
-        assert "gs-hawthorne" not in output or "test-flow" in output  # flow_id shown
         conn.close()
 
-    def test_shows_loss_percentage(self, two_session_dbs):
-        db1, db2 = two_session_dbs
-        conn = _attach_databases([db1, db2])
-        output = report_probe_results(conn, ["s1", "s2"])
-        assert "5.0%" in output  # 5 lost of 100 sent
-        conn.close()
+        expected = {
+            "test-flow": {
+                "samples": 1,
+                "sent": 100,
+                "received": 95,
+                "loss_pct": 5.0,
+                "avg_latency_ms": 30.0,
+                "jitter_ms": 5.0,
+            }
+        }
+        assert _parse_probe_flows_by_alias(output) == {"s1": expected, "s2": expected}
 
 
 class TestRunCompare:
     def test_summary_report(self, two_session_dbs):
         db1, db2 = two_session_dbs
         output = run_compare([db1, db2], "summary")
-        assert "SESSION COMPARISON" in output
+        assert _parse_summary_table_counts(output)["link_events"] == (3, 3)
 
     def test_convergence_report(self, two_session_dbs):
         db1, db2 = two_session_dbs
         output = run_compare([db1, db2], "convergence")
-        assert "CONVERGENCE" in output
+        assert _parse_convergence_deltas(output)["conv-001"]["delta_ms"] == 700.0
 
     def test_link_events_report(self, two_session_dbs):
         db1, db2 = two_session_dbs
         output = run_compare([db1, db2], "link-events")
-        assert "LINK EVENTS" in output
+        assert _parse_link_event_counts(output)["LinkUp"] == (2, 2)
 
     def test_probe_results_report(self, two_session_dbs):
         db1, db2 = two_session_dbs
         output = run_compare([db1, db2], "probe-results")
-        assert "PROBE RESULTS" in output
+        assert _parse_probe_flows_by_alias(output)["s1"]["test-flow"]["loss_pct"] == 5.0
 
     def test_nonexistent_db_exits(self):
         with pytest.raises(SystemExit):
@@ -267,7 +386,7 @@ class TestEmptyDatabases:
             conn.close()
 
         output = run_compare([db1, db2], "summary")
-        assert "SESSION COMPARISON" in output
+        assert _parse_summary_table_counts(output)["link_events"] == (0, 0)
 
     def test_convergence_on_empty_dbs(self, tmp_path):
         db1 = str(tmp_path / "empty1.db")
@@ -278,4 +397,5 @@ class TestEmptyDatabases:
             conn.close()
 
         output = run_compare([db1, db2], "convergence")
+        assert _parse_convergence_rows(output) == {"s1": {}, "s2": {}}
         assert "no events" in output

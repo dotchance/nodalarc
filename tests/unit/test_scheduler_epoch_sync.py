@@ -267,7 +267,7 @@ class TestDispatcherRequiresSessionId:
     """Dispatcher construction requires session_id — no silent defaults."""
 
     def test_session_id_required(self):
-        try:
+        with pytest.raises(TypeError, match="session_id"):
             Dispatcher(
                 interface_map={},
                 bandwidth_map={},
@@ -277,12 +277,9 @@ class TestDispatcherRequiresSessionId:
                 sat_ground_terminal_capacities={},
                 # session_id omitted
             )
-            assert False, "Should have raised TypeError"
-        except TypeError:
-            pass
 
     def test_capacities_required(self):
-        try:
+        with pytest.raises(ValueError, match="gs_terminal_capacities is required"):
             Dispatcher(
                 interface_map={},
                 bandwidth_map={},
@@ -293,6 +290,3 @@ class TestDispatcherRequiresSessionId:
                 max_latency_age_s=1.0,
                 # capacities omitted — defaults to None
             )
-            assert False, "Should have raised ValueError"
-        except ValueError:
-            pass

@@ -1,7 +1,7 @@
-"""Tests for tools/na_report.py — single-session report tool.
+"""Tests for tools/na_report.py single-session report semantics.
 
-Pattern follows test_na_compare.py: create temp SQLite DB with known data,
-run each report type, verify expected strings in output.
+The tests create a SQLite session with known events, run the user-facing report
+functions, and parse the rendered tables back into counts and aggregates.
 """
 
 from __future__ import annotations
@@ -188,124 +188,240 @@ def empty_db(tmp_path: Path) -> str:
     return db_path
 
 
-class TestReportSummary:
-    def test_contains_metadata(self, session_db: str):
-        conn = sqlite3.connect(session_db)
-        output = report_summary(conn)
-        conn.close()
-        assert "isis-test-run" in output
-        assert "custom-example" in output
-        assert "frr-isis" in output
+TABLE_NAMES = {
+    "link_events",
+    "convergence_events",
+    "probe_results",
+    "adapter_events",
+    "session_metadata",
+    "config_changes",
+    "snapshots",
+}
 
-    def test_contains_table_counts(self, session_db: str):
-        conn = sqlite3.connect(session_db)
-        output = report_summary(conn)
+
+def _run_db_report(db_path: str, report_fn) -> str:
+    conn = sqlite3.connect(db_path)
+    try:
+        return report_fn(conn)
+    finally:
         conn.close()
-        assert "link_events" in output
-        assert "convergence_events" in output
-        assert "probe_results" in output
+
+
+def _parse_metadata(output: str) -> dict[str, str]:
+    metadata = {}
+    for line in output.splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2 and parts[0] in {"session_name", "constellation", "routing_stack"}:
+            metadata[parts[0]] = parts[1]
+    return metadata
+
+
+def _parse_table_counts(output: str) -> dict[str, int]:
+    counts = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in TABLE_NAMES:
+            counts[parts[0]] = int(parts[1])
+    return counts
+
+
+def _parse_convergence_events(output: str) -> dict[str, dict[str, float | int | str]]:
+    rows = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 5 and parts[0].startswith("conv-"):
+            rows[parts[0]] = {
+                "converged": parts[1],
+                "duration_ms": float(parts[2]),
+                "packets_lost": int(parts[3]),
+                "packets_sent": int(parts[4]),
+            }
+    return rows
+
+
+def _parse_convergence_stats(output: str) -> dict[str, float | int]:
+    stats = {}
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Events:"):
+            stats["events"] = int(stripped.split()[1])
+        elif stripped.startswith("Mean duration:"):
+            stats["mean_duration_ms"] = float(stripped.split()[2])
+        elif stripped.startswith("Median duration:"):
+            stats["median_duration_ms"] = float(stripped.split()[2])
+        elif stripped.startswith("Max duration:"):
+            stats["max_duration_ms"] = float(stripped.split()[2])
+        elif stripped.startswith("Total pkt loss:"):
+            stats["total_packet_loss"] = int(stripped.split()[3])
+    return stats
+
+
+def _parse_link_type_counts(output: str) -> dict[str, int]:
+    counts = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in {"LinkUp", "LinkDown", "LatencyUpdate"}:
+            counts[parts[0]] = int(parts[1])
+    return counts
+
+
+def _parse_node_churn(output: str) -> dict[str, int]:
+    churn = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].startswith("sat-"):
+            churn[parts[0]] = int(parts[1])
+    return churn
+
+
+def _parse_probe_flows(output: str) -> dict[str, dict[str, float | int]]:
+    flows = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 9 and parts[0].startswith("flow-"):
+            flows[parts[0]] = {
+                "samples": int(parts[1]),
+                "sent": int(parts[2]),
+                "received": int(parts[3]),
+                "loss_pct": float(parts[4].rstrip("%")),
+                "latency_min_ms": float(parts[5]),
+                "latency_avg_ms": float(parts[6]),
+                "latency_max_ms": float(parts[7]),
+                "jitter_ms": float(parts[8]),
+            }
+    return flows
+
+
+class TestReportSummary:
+    def test_reports_metadata_and_exact_table_counts(self, session_db: str):
+        output = _run_db_report(session_db, report_summary)
+
+        assert _parse_metadata(output) == {
+            "session_name": "isis-test-run",
+            "constellation": "custom-example",
+            "routing_stack": "frr-isis",
+        }
+        counts = _parse_table_counts(output)
+        assert counts["link_events"] == 3
+        assert counts["convergence_events"] == 2
+        assert counts["probe_results"] == 3
+        assert counts["adapter_events"] == 0
+        assert counts["session_metadata"] == 3
 
     def test_empty_db(self, empty_db: str):
-        conn = sqlite3.connect(empty_db)
-        output = report_summary(conn)
-        conn.close()
-        assert "SUMMARY" in output
+        output = _run_db_report(empty_db, report_summary)
+
+        assert _parse_metadata(output) == {}
+        assert _parse_table_counts(output)["link_events"] == 0
         assert "(no metadata)" in output
 
 
 class TestReportConvergence:
-    def test_contains_events(self, session_db: str):
-        conn = sqlite3.connect(session_db)
-        output = report_convergence(conn)
-        conn.close()
-        assert "conv-001" in output
-        assert "conv-002" in output
-        assert "120.5" in output
-        assert "85.0" in output
+    def test_reports_event_rows_and_statistics(self, session_db: str):
+        output = _run_db_report(session_db, report_convergence)
 
-    def test_contains_statistics(self, session_db: str):
-        conn = sqlite3.connect(session_db)
-        output = report_convergence(conn)
-        conn.close()
-        assert "Mean duration" in output
-        assert "Median duration" in output
-        assert "Max duration" in output
-        assert "Total pkt loss" in output
+        assert _parse_convergence_events(output) == {
+            "conv-001": {
+                "converged": "yes",
+                "duration_ms": 120.5,
+                "packets_lost": 2,
+                "packets_sent": 100,
+            },
+            "conv-002": {
+                "converged": "yes",
+                "duration_ms": 85.0,
+                "packets_lost": 0,
+                "packets_sent": 100,
+            },
+        }
+        assert _parse_convergence_stats(output) == {
+            "events": 2,
+            "mean_duration_ms": 102.8,
+            "median_duration_ms": 102.8,
+            "max_duration_ms": 120.5,
+            "total_packet_loss": 2,
+        }
 
     def test_empty_db(self, empty_db: str):
-        conn = sqlite3.connect(empty_db)
-        output = report_convergence(conn)
-        conn.close()
+        output = _run_db_report(empty_db, report_convergence)
+
+        assert _parse_convergence_events(output) == {}
         assert "(no convergence events)" in output
 
 
 class TestReportLinkEvents:
-    def test_contains_events(self, session_db: str):
-        conn = sqlite3.connect(session_db)
-        output = report_link_events(conn)
-        conn.close()
-        assert "sat-P00S00" in output
-        assert "sat-P00S01" in output
-        assert "LinkUp" in output
-        assert "LinkDown" in output
+    def test_reports_type_counts_and_node_churn(self, session_db: str):
+        output = _run_db_report(session_db, report_link_events)
 
-    def test_contains_type_counts(self, session_db: str):
-        conn = sqlite3.connect(session_db)
-        output = report_link_events(conn)
-        conn.close()
-        assert "Event counts by type" in output
-
-    def test_contains_node_churn(self, session_db: str):
-        conn = sqlite3.connect(session_db)
-        output = report_link_events(conn)
-        conn.close()
-        assert "Per-node adjacency churn" in output
+        assert _parse_link_type_counts(output) == {
+            "LinkUp": 2,
+            "LinkDown": 1,
+            "LatencyUpdate": 0,
+        }
+        assert _parse_node_churn(output) == {
+            "sat-P00S00": 3,
+            "sat-P00S01": 2,
+            "sat-P01S00": 1,
+        }
 
     def test_empty_db(self, empty_db: str):
-        conn = sqlite3.connect(empty_db)
-        output = report_link_events(conn)
-        conn.close()
+        output = _run_db_report(empty_db, report_link_events)
+
+        assert _parse_link_type_counts(output) == {}
+        assert _parse_node_churn(output) == {}
         assert "(no link events)" in output
 
 
 class TestReportProbeResults:
-    def test_contains_flow_stats(self, session_db: str):
-        conn = sqlite3.connect(session_db)
-        output = report_probe_results(conn)
-        conn.close()
-        assert "flow-alpha" in output
-        assert "flow-beta" in output
+    def test_reports_per_flow_delivery_and_latency_aggregates(self, session_db: str):
+        output = _run_db_report(session_db, report_probe_results)
 
-    def test_loss_percentage(self, session_db: str):
-        conn = sqlite3.connect(session_db)
-        output = report_probe_results(conn)
-        conn.close()
-        # flow-alpha: 100 sent, 98 received = 2% loss
-        assert "2.0%" in output
+        assert _parse_probe_flows(output) == {
+            "flow-alpha": {
+                "samples": 2,
+                "sent": 100,
+                "received": 98,
+                "loss_pct": 2.0,
+                "latency_min_ms": 9.0,
+                "latency_avg_ms": 14.5,
+                "latency_max_ms": 25.0,
+                "jitter_ms": 2.2,
+            },
+            "flow-beta": {
+                "samples": 1,
+                "sent": 100,
+                "received": 95,
+                "loss_pct": 5.0,
+                "latency_min_ms": 20.0,
+                "latency_avg_ms": 30.0,
+                "latency_max_ms": 40.0,
+                "jitter_ms": 5.0,
+            },
+        }
 
     def test_empty_db(self, empty_db: str):
-        conn = sqlite3.connect(empty_db)
-        output = report_probe_results(conn)
-        conn.close()
+        output = _run_db_report(empty_db, report_probe_results)
+
+        assert _parse_probe_flows(output) == {}
         assert "(no probe results)" in output
 
 
 class TestRunReport:
     def test_summary_via_run_report(self, session_db: str):
         output = run_report(session_db, "summary")
-        assert "SUMMARY" in output
+        assert _parse_table_counts(output)["link_events"] == 3
 
     def test_convergence_via_run_report(self, session_db: str):
         output = run_report(session_db, "convergence")
-        assert "CONVERGENCE" in output
+        assert _parse_convergence_stats(output)["events"] == 2
 
     def test_link_events_via_run_report(self, session_db: str):
         output = run_report(session_db, "link-events")
-        assert "LINK EVENTS" in output
+        assert _parse_link_type_counts(output)["LinkUp"] == 2
 
     def test_probe_results_via_run_report(self, session_db: str):
         output = run_report(session_db, "probe-results")
-        assert "PROBE RESULTS" in output
+        assert _parse_probe_flows(output)["flow-alpha"]["loss_pct"] == 2.0
 
     def test_nonexistent_db(self, tmp_path: Path):
         fake_path = str(tmp_path / "nonexistent.db")

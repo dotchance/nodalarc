@@ -38,6 +38,7 @@ from nodalarc.models.vs_api import (
     StateSnapshot,
     TracedPath,
 )
+from pydantic import ValidationError
 
 NOW = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 LATER = datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC)
@@ -76,7 +77,7 @@ class TestNodePosition:
             vel_y_km_s=0.0,
             vel_z_km_s=0.0,
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match="frozen"):
             pos.lat_deg = 10.0
 
 
@@ -105,7 +106,7 @@ class TestPositionEvent:
             vel_y_km_s=0.0,
             vel_z_km_s=0.0,
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match="frozen"):
             evt.node_id = "sat-P01S01"
 
 
@@ -166,11 +167,11 @@ class TestVisibilityEvent:
             elevation_deg=None,
             terminal_type="optical",
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match="frozen"):
             evt.visible = False
 
     def test_link_type_required(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match="link_type"):
             VisibilityEvent(
                 sim_time=NOW,
                 node_a="sat-P00S00",
@@ -270,11 +271,11 @@ class TestLinkUp:
             range_km=1500.0,
             reason="vis_gained",
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match="frozen"):
             evt.reason = "vis_lost"
 
     def test_link_type_required(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match="link_type"):
             LinkUp(
                 sim_time=NOW,
                 wall_time=NOW,
@@ -304,7 +305,7 @@ class TestLinkDown:
         _round_trip(evt)
 
     def test_link_type_required(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError, match="link_type"):
             LinkDown(
                 sim_time=NOW,
                 wall_time=NOW,

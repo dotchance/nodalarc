@@ -111,12 +111,20 @@ def test_nonexistent_ground_stations_raises():
         compute_coverage_preview("configs/constellations/demo-36.yaml", None, "nonexistent-gs-set")
 
 
-def test_satellite_type_override():
-    """Verify that satellite type override doesn't crash the pipeline."""
-    result = compute_coverage_preview(
-        constellation_source="configs/constellations/demo-36.yaml",
-        satellite_type_override="starlink-v2",
-        ground_stations_source="configs/ground-stations/sets/demo.yaml",
+def test_satellite_type_override_changes_resolved_terminal_constraints():
+    """Override must affect link feasibility, not just avoid crashing."""
+    baseline = compute_coverage_preview(
+        constellation_source="configs/constellations/custom-example.yaml",
+        satellite_type_override=None,
+        ground_stations_source="configs/ground-stations/custom-example.yaml",
     )
-    assert isinstance(result, CoveragePreviewResult)
-    assert result.isl.total_possible > 0
+    override = compute_coverage_preview(
+        constellation_source="configs/constellations/custom-example.yaml",
+        satellite_type_override="generic-4isl",
+        ground_stations_source="configs/ground-stations/custom-example.yaml",
+    )
+
+    assert baseline.isl.total_possible == override.isl.total_possible == 4
+    assert baseline.isl.failure_reasons.range_exceeded > 0
+    assert override.isl.failure_reasons.range_exceeded == 0
+    assert override.isl.formed_at_least_once == baseline.isl.formed_at_least_once

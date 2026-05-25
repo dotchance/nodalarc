@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tomllib
 from pathlib import Path
@@ -118,17 +119,24 @@ def test_project_version_script_uses_explicit_runtime_version() -> None:
     assert result.stdout.strip() == "0.4.2"
 
 
-def test_project_version_script_uses_tagged_git_version() -> None:
+def test_project_version_script_matches_python_version_contract(monkeypatch) -> None:
+    monkeypatch.delenv("NODALARC_VERSION", raising=False)
+    env = os.environ.copy()
+    env.pop("NODALARC_VERSION", None)
+
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/na-project-version.sh")],
         cwd=ROOT,
+        env=env,
         check=True,
         capture_output=True,
         text=True,
         timeout=5,
     )
 
-    assert result.stdout.strip()
+    version = result.stdout.strip()
+    assert version == project_info.project_version()
+    assert re.fullmatch(r"[0-9]+(?:[.][0-9A-Za-z]+)*(?:[+][0-9A-Za-z.]+)?", version)
 
 
 def test_helm_chart_renderer_injects_project_version(tmp_path: Path) -> None:

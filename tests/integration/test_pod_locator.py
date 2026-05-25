@@ -1,40 +1,34 @@
-"""Step 4A verification: PodLocationMap prints canonical node IDs mapped to agents.
+"""Integration contracts for PodLocationMap loaded from Kubernetes.
 
-Run with: sudo -E KUBECONFIG=/etc/rancher/k3s/k3s.yaml PYTHONPATH=... python tests/integration/test_pod_locator.py
+These assertions protect the scheduler dispatch contract: node IDs must come
+from the canonical ``nodalarc.io/node-id`` label, and every located pod must map
+to a concrete scheduler agent subject.
 """
 
 from __future__ import annotations
 
+import pytest
 from scheduler.pod_locator import PodLocationMap
 
+pytestmark = pytest.mark.integration
 
-def main():
-    print("=== Step 4A: Pod Location Map ===\n")
 
+def test_k8s_pod_location_map_preserves_canonical_node_ids(k3s_available):
     loc = PodLocationMap()
     loc.load_from_k8s_api(namespace="nodalarc")
 
-    print(f"Total pods: {len(loc.node_ids)}")
-    print(f"Agent addresses: {loc.all_agent_addrs()}")
-    print()
-    print(loc.summary())
+    assert loc.node_ids, "expected at least one deployed NodalArc pod"
+    assert loc.all_agent_addrs(), "scheduler cannot dispatch without agent subjects"
 
-    # Verify case sensitivity: all node IDs should use canonical case
-    print("\n--- Case sensitivity verification ---")
     for nid in sorted(loc.node_ids):
         if nid.startswith("sat-"):
-            # sat-P01S02 format: P and S are uppercase
-            suffix = nid[4:]  # P01S02
-            if suffix != suffix.upper():
-                print(f"  FAIL: {nid} is not canonical case (expected uppercase plane/slot)")
-                return
-        pid = loc.pid(nid)
+            assert nid[4:] == nid[4:].upper(), (
+                f"{nid} is not canonical case from nodalarc.io/node-id"
+            )
+
         k3s = loc.k3s_node(nid)
-        agent = loc.agent_addr(nid)
-        print(f"  {nid:20s}  PID={pid:<10d}  node={k3s}  agent={agent}")
+        assert k3s, f"{nid} is not assigned to a Kubernetes node"
+        assert loc.agent_addr(nid) == k3s, f"{nid} dispatch agent must match host node name"
 
-    print("\nPASS: All node IDs use canonical case from nodalarc.io/node-id label")
-
-
-if __name__ == "__main__":
-    main()
+    located_nodes = {loc.k3s_node(nid) for nid in loc.node_ids}
+    assert set(loc.all_agent_addrs()) == located_nodes

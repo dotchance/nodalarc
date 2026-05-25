@@ -162,13 +162,20 @@ class TestFourNodePipeline:
         assert "VisibilityEvent" in types
 
     def test_all_events_deserialize(self, four_node_timeline):
-        """All events deserialize to their respective Pydantic models."""
+        """All timeline event types must be recognized and schema-valid."""
         events = _load_events(four_node_timeline)
+        decoded = []
         for e in events:
             if e["event_type"] == "ClockTick":
-                ClockTick.model_validate(e["data"])
+                decoded.append(ClockTick.model_validate(e["data"]))
             elif e["event_type"] == "VisibilityEvent":
-                VisibilityEvent.model_validate(e["data"])
+                decoded.append(VisibilityEvent.model_validate(e["data"]))
+            else:
+                pytest.fail(f"unexpected event_type in OME output: {e['event_type']}")
+
+        assert len(decoded) == len(events)
+        assert any(isinstance(event, ClockTick) for event in decoded)
+        assert any(isinstance(event, VisibilityEvent) for event in decoded)
 
     def test_isl_visibility_events_present(self, four_node_timeline):
         """custom-example has ISL visibility events (4 sats, 2 planes)."""

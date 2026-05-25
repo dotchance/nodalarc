@@ -401,12 +401,16 @@ class TestReconcileStateMachine:
             _run(_reconcile(h, phase="Pending"))
             h.mock_custom.patch_namespaced_custom_object_status.assert_called()
 
-    def test_wiring_check_api_exception_warns_and_returns(self):
+    def test_wiring_check_api_exception_warns_and_returns(self, caplog):
         with _ReconcilerHarness(expected_count=7) as h:
             h.mock("check_wiring").side_effect = kubernetes.client.rest.ApiException(
                 status=500, reason="Internal Server Error"
             )
             _run(_reconcile(h, phase="Wiring"))
+
+            h.mock("check_wiring").assert_called_once_with("nodalarc", 7)
+            h.mock_custom.patch_namespaced_custom_object_status.assert_not_called()
+            assert "wiring status check error" in caplog.text
 
     def test_invalid_wiring_status_sets_error_phase(self):
         with _ReconcilerHarness(expected_count=7) as h:

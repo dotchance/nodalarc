@@ -92,7 +92,7 @@ def _target_body(name: str) -> str:
     return match.group(0)
 
 
-def test_make_targets_dry_run_cleanly() -> None:
+def _make_env(**overrides: str) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         {
@@ -101,19 +101,42 @@ def test_make_targets_dry_run_cleanly() -> None:
             "REGISTRY_HOST": "",
         }
     )
+    env.update(overrides)
+    return env
 
+
+def _dry_run_make(target: str, **env_overrides: str) -> str:
+    result = subprocess.run(
+        ["make", "-n", "--no-print-directory", target],
+        cwd=ROOT,
+        env=_make_env(**env_overrides),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, f"{target} dry-run failed:\n{output}"
+    return output
+
+
+def _help_output() -> str:
+    result = subprocess.run(
+        ["make", "--no-print-directory", "help"],
+        cwd=ROOT,
+        env=_make_env(),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    return re.sub(r"\x1b\[[0-9;]*m", "", output)
+
+
+def test_make_targets_dry_run_cleanly() -> None:
     stale_tool_script = re.compile(r"tools/(?:na-|clean-|detect-|check_lint_policy)|tools/.*\.sh")
     for target in DRY_RUN_TARGETS:
-        result = subprocess.run(
-            ["make", "-n", "--no-print-directory", target],
-            cwd=ROOT,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        output = result.stdout + result.stderr
-        assert result.returncode == 0, f"{target} dry-run failed:\n{output}"
+        output = _dry_run_make(target)
         assert not stale_tool_script.search(output), (
             f"{target} uses stale tools/ script path:\n{output}"
         )
@@ -133,36 +156,42 @@ def test_make_configuration_uses_canonical_script_paths() -> None:
 
 
 def test_all_preserves_user_environment_and_loads_before_install() -> None:
-    body = _target_body("all")
-    assert "sudo make" not in body
-    assert "$(MAKE) load install session" in body
-    assert "make build && make load && make upgrade" in body
+    output = _dry_run_make("all")
+
+    assert "sudo make" not in output
+    assert "make load install session" in output
+    assert "ACTION=install" in output
+    assert "scripts/na-load-images.sh" in output
+    assert output.index("scripts/na-load-images.sh") < output.index("ACTION=install")
+    assert "make build && make load && make upgrade" in output
 
 
 def test_help_documents_valid_lifecycle_transitions() -> None:
-    help_body = _target_body("help")
-    assert "make nuke && make all" in help_body
-    assert "make build && make load && make upgrade" in help_body
-    assert "make build && make load && make reinstall && make session" in help_body
-    assert "install refuses existing platform state" in help_body
+    output = _help_output()
+
+    assert "make nuke && make all" in output
+    assert "make build && make load && make upgrade" in output
+    assert "make build && make load && make reinstall && make session" in output
+    assert "install refuses existing platform state" in output
 
 
 def test_install_and_upgrade_delegate_to_platform_script() -> None:
-    install = _target_body("install")
-    reinstall = _target_body("reinstall")
-    upgrade = _target_body("upgrade")
+    install = _dry_run_make("install")
+    reinstall = _dry_run_make("reinstall")
+    upgrade = _dry_run_make("upgrade")
 
-    assert "scripts/na-install-platform.sh" in install
     assert "ACTION=install" in install
-    assert "PROJECT_VERSION='$(PROJECT_VERSION)'" in install
+    assert "bash scripts/na-install-platform.sh" in install
+    assert "PROJECT_VERSION='" in install
     assert "helm uninstall" not in install
     assert "kubectl delete namespace" not in install
 
-    assert "PROJECT_VERSION='$(PROJECT_VERSION)'" in reinstall
+    assert "ACTION=reinstall" in reinstall
+    assert "PROJECT_VERSION='" in reinstall
 
-    assert "scripts/na-install-platform.sh" in upgrade
     assert "ACTION=upgrade" in upgrade
-    assert "PROJECT_VERSION='$(PROJECT_VERSION)'" in upgrade
+    assert "bash scripts/na-install-platform.sh" in upgrade
+    assert "PROJECT_VERSION='" in upgrade
     assert "helm upgrade --install" not in upgrade
 
 
@@ -179,9 +208,9 @@ def test_force_teardown_is_the_only_raw_namespace_delete_target() -> None:
 
 
 def test_cleanup_scopes_are_separate() -> None:
-    clean_registry = _target_body("clean-registry")
-    purge_containerd = _target_body("purge-containerd")
-    nuke = _target_body("nuke")
+    clean_registry = _dry_run_make("clean-registry")
+    purge_containerd = _dry_run_make("purge-containerd")
+    nuke = _dry_run_make("nuke")
 
     assert "scripts/clean-registry.sh" in clean_registry
     assert "na-purge-containerd" not in clean_registry
@@ -190,21 +219,33 @@ def test_cleanup_scopes_are_separate() -> None:
 
 
 def test_lifecycle_targets_print_next_steps() -> None:
-    makefile = _makefile()
-    for expected in (
-        "[build] Next: make load",
-        "[all] Next:",
-        "[force-teardown] Next: make nuke",
-        "[reset-platform] Next: make build && make load && make install && make session",
-    ):
-        assert expected in makefile
+    expected_by_target = {
+        "build": "[build] Next: make load",
+        "all": "[all] Next:",
+        "force-teardown": "[force-teardown] Next: make nuke",
+        "reset-platform": "[reset-platform] Next: make build && make load && make install && make session",
+    }
+
+    for target, expected in expected_by_target.items():
+        assert expected in _dry_run_make(target)
 
 
 def test_build_images_builds_every_image_load_requires_for_current_tag() -> None:
-    body = _target_body("build-images")
-    assert "build-base-images" in body
-    assert "build-frr" in _target_body("build-base-images")
-    assert "build-probe" in _target_body("build-base-images")
+    output = _dry_run_make("build-images")
+
+    for image in (
+        "base",
+        "frr",
+        "probe",
+        "ome",
+        "scheduler",
+        "node-agent",
+        "vs-api",
+        "operator",
+        "vf",
+    ):
+        assert f"image-for {image}" in output, image
+    assert "image-for measurement" in _dry_run_make("deploy-measurement")
 
 
 def test_notice_file_carries_project_attribution() -> None:
@@ -236,12 +277,8 @@ def test_docker_builds_pass_oci_metadata_args() -> None:
     assert "BUILD_DATE ?=" in makefile
     assert "PROJECT_VERSION ?=" in makefile
     assert "bash scripts/na-project-version.sh" in makefile
-    assert "sed -n 's/^version = \"\\(.*\\)\"/\\1/p' pyproject.toml" not in makefile
+    assert r"sed -n 's/^version = \"\(.*\)\"/\1/p' pyproject.toml" not in makefile
     assert "uv pip install -e lib/" not in makefile
-    assert "DOCKER_BUILD_METADATA_ARGS" in makefile
-    assert "--build-arg PROJECT_VERSION=$(PROJECT_VERSION)" in makefile
-    assert "--build-arg VCS_REF=$(GIT_SHA)" in makefile
-    assert "--build-arg BUILD_DATE=$(BUILD_DATE)" in makefile
     for target in (
         "build-base",
         "build-frr",
@@ -254,7 +291,10 @@ def test_docker_builds_pass_oci_metadata_args() -> None:
         "build-measurement",
         "build-vf",
     ):
-        assert "$(DOCKER_BUILD_METADATA_ARGS)" in _target_body(target), target
+        output = _dry_run_make(target)
+        assert "--build-arg PROJECT_VERSION=" in output, target
+        assert "--build-arg VCS_REF=" in output, target
+        assert "--build-arg BUILD_DATE=" in output, target
 
 
 def test_dockerfiles_have_oci_attribution_labels() -> None:

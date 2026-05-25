@@ -17,6 +17,7 @@ import logging
 import sqlite3
 import sys
 from pathlib import Path
+from statistics import median
 
 from nodalarc.constants import LOG_FORMAT
 from nodalarc.db.queries import (
@@ -150,10 +151,10 @@ def report_convergence(conn: sqlite3.Connection) -> str:
     if durations:
         sorted_d = sorted(durations)
         mean = sum(sorted_d) / len(sorted_d)
-        median = sorted_d[len(sorted_d) // 2]
+        median_duration = median(sorted_d)
         lines.append(f"  Events:           {len(durations)}")
         lines.append(f"  Mean duration:    {mean:.1f} ms")
-        lines.append(f"  Median duration:  {median:.1f} ms")
+        lines.append(f"  Median duration:  {median_duration:.1f} ms")
         lines.append(f"  Max duration:     {max(sorted_d):.1f} ms")
         lines.append(f"  Total pkt loss:   {total_lost}")
 

@@ -208,7 +208,7 @@ def test_cross_node_mutation_defense_requires_fresh_local_measurement(
 ) -> None:
     monkeypatch.setenv("HOST_IP", "10.0.0.1")
     v1 = MagicMock()
-    substrate_monitor.configure_required_measurements(
+    document = substrate_monitor.configure_required_measurements(
         v1=v1,
         namespace="nodalarc",
         hostname="node-a",
@@ -217,6 +217,12 @@ def test_cross_node_mutation_defense_requires_fresh_local_measurement(
     )
 
     substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.2")
+
+    assert document is not None
+    assert document.measurements["node-b"].status == "ok"
+    assert v1.create_namespaced_config_map.call_count == 1
+    with pytest.raises(RuntimeError, match="no local substrate measurement"):
+        substrate_monitor.require_fresh_measurement_for_remote_ip("10.0.0.3")
 
 
 def test_cross_node_mutation_defense_rejects_missing_measurement(

@@ -103,6 +103,16 @@ def shared_names(ts_interfaces, py_models) -> set[str]:
 # -- Test: no orphan models on either side --
 
 
+_FRONTEND_ONLY_INTERFACES = {
+    # Nodal logging payload appended to StateSnapshot after model serialization.
+    "OpsEvent",
+    # Session switcher response is still served by vs_api.session_manager as dicts.
+    "SessionInfo",
+    # Local UI selection state, not a backend payload.
+    "Selection",
+}
+
+
 def test_no_backend_models_missing_from_frontend(ts_interfaces, py_models):
     """Every Pydantic model in vs_api.py must have a matching TypeScript
     interface in types.ts."""
@@ -114,20 +124,23 @@ def test_no_backend_models_missing_from_frontend(ts_interfaces, py_models):
 
 
 def test_no_frontend_interfaces_missing_from_backend(ts_interfaces, py_models):
-    """Every TypeScript interface in types.ts that shares a name with a
-    backend model concept must have a matching Pydantic model.
+    """Any TypeScript interface without a backend model must be intentional.
 
-    Note: types.ts may contain frontend-only types (Selection, ViewMode,
-    etc.) that have no backend equivalent. We only flag interfaces whose
-    names match the pattern of VS-API models (present in the backend module).
-    This test catches the case where someone adds a new model to the backend
-    but forgets the frontend, or vice versa."""
-    # We can't flag ALL frontend interfaces as missing — some are
-    # frontend-only (Selection, ViewMode, etc.). Instead, check that
-    # every backend model has a frontend counterpart (covered above).
-    # This test is the reverse: if a frontend interface name matches
-    # a backend model name, the fields must align (covered below).
-    pass  # Covered by test_no_backend_models_missing_from_frontend
+    This catches the common drift class where the UI grows a new API payload
+    interface but no backend model owns or validates that shape.
+    """
+    frontend_only = set(ts_interfaces.keys()) - set(py_models.keys())
+    unclassified = frontend_only - _FRONTEND_ONLY_INTERFACES
+    stale_allowlist = _FRONTEND_ONLY_INTERFACES - frontend_only
+
+    assert not unclassified, (
+        "Frontend interfaces without backend models need an explicit ownership "
+        f"classification: {sorted(unclassified)}"
+    )
+    assert not stale_allowlist, (
+        "Frontend-only schema allowlist contains names that no longer exist: "
+        f"{sorted(stale_allowlist)}"
+    )
 
 
 # -- Test: field-level agreement for every shared model --

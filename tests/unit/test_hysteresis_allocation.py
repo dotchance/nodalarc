@@ -1,17 +1,23 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Tests for hysteresis-aware ground link allocation in compute_step.
+"""Tests for hysteresis-aware ground link allocation.
 
-Exercises the stateful fold: current_associations input biases the
-allocator via discount_factor, with mask-edge fade and policy-aware
-scoring. All tests use synthetic StepContext with controlled geometry.
+The helper-function tests pin score/discount invariants; the allocator tests
+exercise real make-before-break replacement decisions so production ordering,
+terminal occupancy, and pending teardown behavior are covered together.
 """
 
 from __future__ import annotations
 
 import pytest
 from nodalarc.models.ground_station import HysteresisParameters
-from ome.ground_allocator import _compute_effective_discount, _compute_pair_score
+from ome.ground_allocator import (
+    _compute_effective_discount,
+    _compute_pair_score,
+    allocate_ground_links,
+)
+from ome.types import MbbTeardown
+from ome.visibility import GroundVisibility
 
 
 class TestComputePairScore:
@@ -83,160 +89,135 @@ class TestComputeEffectiveDiscount:
 
 
 class TestHysteresisDiscount:
-    """Integration: hysteresis discount protects active pairs in compute_step."""
+    """Hysteresis must affect real allocator replacement decisions."""
 
-    def _make_ctx_and_run(
-        self, sat_elevations, gs_terminal_count, policy, current_assoc, min_elev=25.0
+    def _allocate(
+        self,
+        visible: list[GroundVisibility],
+        *,
+        current: dict[tuple[str, str], tuple[int, int]] | None = None,
+        policy: str = "highest-elevation",
+        gs_terminals: int = 2,
+        min_elev: float = 25.0,
+        mbb_reserve: int = 1,
     ):
-        """Helper: build minimal StepContext and run one step."""
-        from unittest.mock import MagicMock
-
-        from nodalarc.models.addressing import AddressingScheme
-        from ome.event_stream import StepContext
-        from ome.propagator import GeoPosition, geodetic_to_ecef
-
-        gs_id = "gs-test"
-        addressing = MagicMock(spec=AddressingScheme)
-        addressing.gs_id.return_value = gs_id
-
-        gs_geo = GeoPosition(0.0, 0.0, 0.0)
-        gs_ecef = geodetic_to_ecef(gs_geo)
-
-        sat_nodes = []
-        for i, elev in enumerate(sat_elevations):
-            m = MagicMock()
-            m.plane = 0
-            m.slot = i
-            m.isl_terminal_count = 2
-            m.ground_terminal_count = 1
-            m.elements = MagicMock()
-            m.elements.semi_major_axis_km = 6921.0
-            m.elements.inclination_rad = 0.925
-            m.elements.raan_rad = 0.0
-            m.elements.true_anomaly_rad = 0.0
-            sat_nodes.append(m)
-
-        sat_ids = [f"sat-P00S{i:02d}" for i in range(len(sat_elevations))]
-        addressing.sat_id.side_effect = lambda p, s: sat_ids[s]
-
-        hyst = HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0)
-
-        StepContext(
-            satellites=sat_nodes,
-            addressing=addressing,
-            gs_positions={gs_id: (gs_ecef, gs_geo)},
-            gs_min_elevations={gs_id: min_elev},
-            gs_terminal_counts={gs_id: gs_terminal_count},
-            gs_policies={gs_id: policy},
-            gs_hysteresis={gs_id: hyst},
-            gs_service_priorities={gs_id: 10},
-            ground_pair_terminal_types={(gs_id, sid): "rf" for sid in sat_ids},
-            by_node={},
-            sat_isl_terminals=dict.fromkeys(sat_ids, 2),
-            sat_isl_terminal_constraints={sid: {} for sid in sat_ids},
-            sat_ground_terminals=dict.fromkeys(sat_ids, 1),
-            propagator_id="keplerian-circular",
-            polar_seam_enabled=False,
-            latitude_threshold_deg=70.0,
+        return allocate_ground_links(
+            step=10,
+            visible_per_station={"gs-test": visible},
+            ground_station_ids={"gs-test"},
+            current_associations=current or {},
+            pending_teardowns={},
+            gs_terminal_counts={"gs-test": gs_terminals},
+            gs_policies={"gs-test": policy},
+            gs_min_elevations={"gs-test": min_elev},
+            gs_hysteresis={
+                "gs-test": HysteresisParameters(
+                    discount_factor=1.15,
+                    mask_fade_range_deg=5.0,
+                )
+            },
+            gs_service_priorities={"gs-test": 10},
+            sat_ground_terminals={gv.sat_id: 1 for gv in visible},
+            mbb_overlap_ticks=3,
+            mbb_reserve=mbb_reserve,
         )
 
-        # We can't easily mock satellite positions for ground visibility,
-        # so we test through the helper functions and the sort logic directly.
-        # Instead, test the scoring+sort directly.
-        scored = []
-        for i, elev in enumerate(sat_elevations):
-            sat_id = sat_ids[i]
-            score = _compute_pair_score(elev, policy)
-            pair = (min(gs_id, sat_id), max(gs_id, sat_id))
-            if pair in current_assoc:
-                discount = _compute_effective_discount(elev, min_elev, hyst)
-                score *= discount
-            priority = 10
-            scored.append((priority, score, gs_id, sat_id))
+    def test_active_pair_survives_when_challenger_does_not_clear_hysteresis_margin(self):
+        old_pair = ("gs-test", "sat-active")
 
-        scored.sort(key=lambda x: (x[0], -x[1]))
-        return scored
-
-    def test_discount_protects_active_pair(self):
-        """Active pair at 40° should beat challenger at 44° (44 < 40*1.15=46)."""
-        scored = self._make_ctx_and_run(
-            sat_elevations=[40.0, 44.0],
-            gs_terminal_count=1,
-            policy="highest-elevation",
-            current_assoc=frozenset({("gs-test", "sat-P00S00")}),
+        result = self._allocate(
+            [
+                GroundVisibility("sat-active", True, 40.0, 1000.0),
+                GroundVisibility("sat-challenger", True, 44.0, 900.0),
+            ],
+            current={old_pair: (0, 0)},
         )
-        assert scored[0][3] == "sat-P00S00"  # Active pair wins
 
-    def test_discount_overcome_by_large_gap(self):
-        """Challenger at 47° beats active pair at 40° (47 > 46)."""
-        scored = self._make_ctx_and_run(
-            sat_elevations=[40.0, 47.0],
-            gs_terminal_count=1,
-            policy="highest-elevation",
-            current_assoc=frozenset({("gs-test", "sat-P00S00")}),
+        assert result.associations == {old_pair: (0, 0)}
+        assert result.pending_teardowns == {}
+        assert result.scheduled_pairs == frozenset({old_pair})
+
+    def test_challenger_starts_make_before_break_when_it_clears_hysteresis_margin(self):
+        old_pair = ("gs-test", "sat-active")
+        new_pair = ("gs-test", "sat-challenger")
+
+        result = self._allocate(
+            [
+                GroundVisibility("sat-active", True, 40.0, 1000.0),
+                GroundVisibility("sat-challenger", True, 47.0, 900.0),
+            ],
+            current={old_pair: (0, 0)},
         )
-        assert scored[0][3] == "sat-P00S01"  # Challenger wins
 
-    def test_no_associations_no_discount(self):
-        """Without current_associations, higher elevation wins."""
-        scored = self._make_ctx_and_run(
-            sat_elevations=[40.0, 44.0],
-            gs_terminal_count=1,
-            policy="highest-elevation",
-            current_assoc={},
+        assert result.associations == {
+            old_pair: (0, 0),
+            new_pair: (1, 0),
+        }
+        assert result.pending_teardowns == {old_pair: MbbTeardown(10, new_pair)}
+        assert result.scheduled_pairs == frozenset({old_pair, new_pair})
+
+    def test_without_current_association_highest_elevation_wins_normally(self):
+        result = self._allocate(
+            [
+                GroundVisibility("sat-lower", True, 40.0, 1000.0),
+                GroundVisibility("sat-higher", True, 44.0, 900.0),
+            ],
+            current={},
+            gs_terminals=1,
+            mbb_reserve=0,
         )
-        assert scored[0][3] == "sat-P00S01"  # 44° > 40°
 
-    def test_lowest_elevation_discount_protects(self):
-        """Under lowest-elevation, active at 40° (score=50) beats challenger at 45° (score=45).
-        With discount: 50*1.15=57.5 > 45. Active wins."""
-        scored = self._make_ctx_and_run(
-            sat_elevations=[40.0, 45.0],
-            gs_terminal_count=1,
+        assert result.associations == {("gs-test", "sat-higher"): (0, 0)}
+        assert result.pending_teardowns == {}
+
+    def test_lowest_elevation_policy_applies_hysteresis_to_policy_score(self):
+        old_pair = ("gs-test", "sat-active")
+
+        result = self._allocate(
+            [
+                GroundVisibility("sat-active", True, 50.0, 1000.0),
+                GroundVisibility("sat-challenger", True, 45.0, 900.0),
+            ],
+            current={old_pair: (0, 0)},
             policy="lowest-elevation",
-            current_assoc=frozenset({("gs-test", "sat-P00S00")}),
         )
-        assert scored[0][3] == "sat-P00S00"  # Active pair wins
 
-    def test_multi_terminal_all_active_get_discount(self):
-        """4-terminal GS: 3 active associations all get discount."""
-        scored = self._make_ctx_and_run(
-            sat_elevations=[40.0, 41.0, 42.0, 50.0],
-            gs_terminal_count=4,
-            policy="highest-elevation",
-            current_assoc=frozenset(
-                {
-                    ("gs-test", "sat-P00S00"),
-                    ("gs-test", "sat-P00S01"),
-                    ("gs-test", "sat-P00S02"),
-                }
-            ),
+        assert result.associations == {old_pair: (0, 0)}
+        assert result.pending_teardowns == {}
+
+    def test_multi_terminal_replacement_uses_discounted_worst_active_pair(self):
+        old_pairs = {
+            ("gs-test", "sat-active-40"): (0, 0),
+            ("gs-test", "sat-active-41"): (1, 0),
+            ("gs-test", "sat-active-42"): (2, 0),
+        }
+
+        result = self._allocate(
+            [
+                GroundVisibility("sat-active-40", True, 40.0, 1000.0),
+                GroundVisibility("sat-active-41", True, 41.0, 1000.0),
+                GroundVisibility("sat-active-42", True, 42.0, 1000.0),
+                GroundVisibility("sat-challenger", True, 45.5, 900.0),
+            ],
+            current=old_pairs,
+            gs_terminals=4,
         )
-        # All 3 active pairs get boosted: 40*1.15=46, 41*1.15=47.15, 42*1.15=48.3
-        # Challenger at 50 is unboosted. Sort order: 50, 48.3, 47.15, 46
-        assert scored[0][3] == "sat-P00S03"  # 50° unboosted highest
-        assert scored[1][3] == "sat-P00S02"  # 48.3
-        assert scored[2][3] == "sat-P00S01"  # 47.15
-        assert scored[3][3] == "sat-P00S00"  # 46
 
-    def test_mask_fade_near_boundary(self):
-        """Active pair near the mask edge gets partial discount."""
-        # min_elev=25, fade_range=5, sat at 27° → t=0.4, discount=1.06
-        scored = self._make_ctx_and_run(
-            sat_elevations=[27.0, 28.0],
-            gs_terminal_count=1,
-            policy="highest-elevation",
-            current_assoc=frozenset({("gs-test", "sat-P00S00")}),
+        assert result.associations == old_pairs
+        assert result.pending_teardowns == {}
+        assert result.scheduled_pairs == frozenset(old_pairs)
+
+    def test_mask_fade_partial_discount_protects_near_boundary_active_pair(self):
+        old_pair = ("gs-test", "sat-active")
+
+        result = self._allocate(
+            [
+                GroundVisibility("sat-active", True, 27.0, 1000.0),
+                GroundVisibility("sat-challenger", True, 28.0, 900.0),
+            ],
+            current={old_pair: (0, 0)},
             min_elev=25.0,
         )
-        # Sat-A at 27° with partial discount: 27 * 1.06 = 28.62
-        # Sat-B at 28° unboosted: 28
-        # 28.62 > 28 → active pair wins
-        assert scored[0][3] == "sat-P00S00"
 
-    def test_backward_compat_default_frozenset(self):
-        """compute_step with default current_associations produces valid output."""
-
-        # Just verify it doesn't crash with default param
-        # Full integration test would need real orbital data
-        pass
+        assert result.associations == {old_pair: (0, 0)}
+        assert result.pending_teardowns == {}

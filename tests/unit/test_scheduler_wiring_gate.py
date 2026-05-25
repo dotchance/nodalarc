@@ -65,8 +65,10 @@ class _K8s:
         }
         self.data.update({node: _ready_node(node) for node in wired or set()})
         self.data.update(statuses or {})
+        self.reads: list[tuple[str, str]] = []
 
-    def read_namespaced_config_map(self, _name: str, _namespace: str):
+    def read_namespaced_config_map(self, name: str, namespace: str):
+        self.reads.append((name, namespace))
         return SimpleNamespace(data=self.data)
 
 
@@ -170,8 +172,10 @@ def test_wiring_manifest_gate_fails_immediately_on_malformed_manifest() -> None:
 
 
 def test_wiring_gate_passes_when_all_expected_nodes_are_wired() -> None:
-    wait_for_wiring_gate(
-        k8s_v1=_K8s({"sat-a", "sat-b"}),
+    k8s = _K8s({"sat-a", "sat-b"})
+
+    result = wait_for_wiring_gate(
+        k8s_v1=k8s,
         namespace="nodalarc",
         expected_nodes={"sat-a", "sat-b"},
         session_id=SESSION_ID,
@@ -180,6 +184,9 @@ def test_wiring_gate_passes_when_all_expected_nodes_are_wired() -> None:
         poll_s=0.0,
         sleep=lambda _seconds: None,
     )
+
+    assert result is None
+    assert k8s.reads == [("nodalarc-wiring-status", "nodalarc")]
 
 
 def test_wiring_gate_fails_closed_on_timeout() -> None:

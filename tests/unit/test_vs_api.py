@@ -408,11 +408,8 @@ class TestSnapshotModel:
             playback_speed=1.0,
             stale=False,
         )
-        try:
+        with pytest.raises(Exception, match="frozen"):
             snap.stale = True
-            assert False, "Should be frozen"
-        except Exception:
-            pass
 
 
 class TestSQLiteQueries:

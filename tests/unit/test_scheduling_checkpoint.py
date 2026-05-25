@@ -4,6 +4,7 @@
 
 from datetime import UTC, datetime
 
+import pytest
 from nodalarc.models.events import CheckpointAssociation, SchedulingCheckpoint, TeardownEntry
 from nodalarc.scheduling_checkpoint import decode_retained_scheduling_checkpoint
 
@@ -157,22 +158,15 @@ def test_checkpoint_with_teardowns():
         assert restored_entry.successor_node_a == entry.successor_node_a
         assert restored_entry.successor_node_b == entry.successor_node_b
 
-    # Verify frozen (immutable)
-    try:
+    with pytest.raises(Exception, match="frozen"):
         restored.step = 999
-        assert False, "Should have raised"
-    except Exception:
-        pass  # Expected — frozen model
 
 
 def test_teardown_entry_frozen():
     """TeardownEntry is frozen — mutation raises."""
     entry = _teardown(3, "gs-a", "sat-b")
-    try:
+    with pytest.raises(Exception, match="frozen"):
         entry.remaining_ticks = 0
-        assert False, "Should have raised"
-    except Exception:
-        pass
 
 
 def test_checkpoint_associations_preserve_parallel_mbb_links():
@@ -194,11 +188,8 @@ def test_checkpoint_associations_preserve_parallel_mbb_links():
 def test_checkpoint_frozen():
     """SchedulingCheckpoint is frozen — mutation raises."""
     ckpt = _checkpoint()
-    try:
+    with pytest.raises(Exception, match="frozen"):
         ckpt.epoch_id = 99
-        assert False, "Should have raised"
-    except Exception:
-        pass
 
 
 def test_incompatible_retained_checkpoint_decodes_as_clean_start():

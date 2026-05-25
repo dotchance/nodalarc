@@ -194,65 +194,68 @@ class MIService:
             log.error("Failed to publish to %s: %s", subject, exc)
             raise
 
+    def collect_once(self) -> None:
+        """Collect one batch of adapter and probe events, then persist and publish them."""
+        for pod in _discover_pods(self._namespace):
+            node_id = pod["node_id"]
+            if not node_id:
+                continue
+
+            try:
+                self._adapter.poll(node_id)
+            except AttributeError:
+                pass
+            except Exception as exc:
+                log.debug(f"Poll failed for {node_id}: {exc}")
+
+            try:
+                events = self._adapter.get_events(node_id)
+            except Exception as exc:
+                log.debug(f"get_events failed for {node_id}: {exc}")
+                continue
+
+            for event in events:
+                with self._db_lock:
+                    try:
+                        insert_adapter_event(self._db_conn, event)
+                    except Exception as exc:
+                        log.warning(f"DB insert failed: {exc}")
+                self._publish_sync(self._subj_adapter, event.model_dump_json().encode())
+
+        if self._flow_manager:
+            try:
+                results = self._flow_manager.collect_results()
+                for r in results:
+                    now = datetime.now(UTC)
+                    probe_result = ProbeResult(
+                        sim_time=now,
+                        wall_time=now,
+                        flow_id=r.get("flow_id", ""),
+                        src_node=r.get("src_node", ""),
+                        dst_node=r.get("dst_node", ""),
+                        packets_sent=r.get("packets_sent", 0),
+                        packets_received=r.get("packets_received", 0),
+                        latency_min_ms=r.get("latency_min_ms", 0.0),
+                        latency_max_ms=r.get("latency_max_ms", 0.0),
+                        latency_avg_ms=r.get("latency_avg_ms", 0.0),
+                        jitter_ms=r.get("jitter_ms", 0.0),
+                    )
+                    with self._db_lock:
+                        try:
+                            insert_probe_result(self._db_conn, probe_result)
+                        except Exception as exc:
+                            log.warning(f"DB probe insert failed: {exc}")
+                    self._publish_sync(
+                        self._subj_probe,
+                        probe_result.model_dump_json().encode(),
+                    )
+            except Exception as exc:
+                log.warning(f"Probe result collection failed: {exc}")
+
     def _collector_loop(self) -> None:
         """Periodically collect events from all adapters. Runs in background thread."""
         while self._running:
-            for pod in _discover_pods(self._namespace):
-                node_id = pod["node_id"]
-                if not node_id:
-                    continue
-
-                try:
-                    self._adapter.poll(node_id)
-                except AttributeError:
-                    pass
-                except Exception as exc:
-                    log.debug(f"Poll failed for {node_id}: {exc}")
-
-                try:
-                    events = self._adapter.get_events(node_id)
-                except Exception as exc:
-                    log.debug(f"get_events failed for {node_id}: {exc}")
-                    continue
-
-                for event in events:
-                    with self._db_lock:
-                        try:
-                            insert_adapter_event(self._db_conn, event)
-                        except Exception as exc:
-                            log.warning(f"DB insert failed: {exc}")
-                    self._publish_sync(self._subj_adapter, event.model_dump_json().encode())
-
-            if self._flow_manager:
-                try:
-                    results = self._flow_manager.collect_results()
-                    for r in results:
-                        now = datetime.now(UTC)
-                        probe_result = ProbeResult(
-                            sim_time=now,
-                            wall_time=now,
-                            flow_id=r.get("flow_id", ""),
-                            src_node=r.get("src_node", ""),
-                            dst_node=r.get("dst_node", ""),
-                            packets_sent=r.get("packets_sent", 0),
-                            packets_received=r.get("packets_received", 0),
-                            latency_min_ms=r.get("latency_min_ms", 0.0),
-                            latency_max_ms=r.get("latency_max_ms", 0.0),
-                            latency_avg_ms=r.get("latency_avg_ms", 0.0),
-                            jitter_ms=r.get("jitter_ms", 0.0),
-                        )
-                        with self._db_lock:
-                            try:
-                                insert_probe_result(self._db_conn, probe_result)
-                            except Exception as exc:
-                                log.warning(f"DB probe insert failed: {exc}")
-                        self._publish_sync(
-                            self._subj_probe,
-                            probe_result.model_dump_json().encode(),
-                        )
-                except Exception as exc:
-                    log.warning(f"Probe result collection failed: {exc}")
-
+            self.collect_once()
             time.sleep(1.0)
 
     async def _on_convergence_request(self, msg) -> None:

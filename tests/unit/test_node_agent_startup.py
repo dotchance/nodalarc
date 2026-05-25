@@ -34,10 +34,13 @@ def test_startup_rejects_invalid_host_ip_in_k8s(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_startup_accepts_valid_host_ip_in_k8s(monkeypatch: pytest.MonkeyPatch) -> None:
+    spooled: list[dict] = []
     monkeypatch.setenv("NODE_NAME", "k3s-a")
     monkeypatch.setenv("HOST_IP", "10.0.0.10")
+    monkeypatch.setattr(ops_events, "spool_failure", lambda **kwargs: spooled.append(kwargs))
 
-    _require_host_ip_for_vxlan_capable_startup()
+    assert _require_host_ip_for_vxlan_capable_startup() is None
+    assert spooled == []
 
 
 def test_loads_mpls_kernel_modules_in_k8s(monkeypatch: pytest.MonkeyPatch) -> None:

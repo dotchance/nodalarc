@@ -2023,6 +2023,14 @@ def _create_session_pod(
             security_context=kubernetes.client.V1SecurityContext(
                 capabilities=kubernetes.client.V1Capabilities(add=["NET_RAW"])
             ),
+            env=[
+                kubernetes.client.V1EnvVar(
+                    name="NODALARC_PROBE_BIND_HOST",
+                    value_from=kubernetes.client.V1EnvVarSource(
+                        field_ref=kubernetes.client.V1ObjectFieldSelector(field_path="status.podIP")
+                    ),
+                )
+            ],
             ports=[kubernetes.client.V1ContainerPort(container_port=9100, name="probe-api")],
             resources=kubernetes.client.V1ResourceRequirements(
                 limits={"memory": "64Mi", "cpu": "100m"}

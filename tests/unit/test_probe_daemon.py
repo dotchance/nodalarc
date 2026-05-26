@@ -1,10 +1,12 @@
 """Unit tests for probe daemon — flow state management and result tracking."""
 
 from measurement.probe_daemon import (
+    PROBE_BIND_HOST_ENV,
     FlowConfig,
     _flows,
     _FlowState,
     _lock,
+    _probe_bind_host,
 )
 
 
@@ -14,6 +16,25 @@ def _clear_flows():
         for state in _flows.values():
             state.stop()
         _flows.clear()
+
+
+class TestProbeBindHost:
+    """Probe listeners bind to a concrete interface, not every interface."""
+
+    def test_default_bind_host_is_loopback(self, monkeypatch):
+        monkeypatch.delenv(PROBE_BIND_HOST_ENV, raising=False)
+
+        assert _probe_bind_host() == "127.0.0.1"
+
+    def test_cluster_bind_host_comes_from_pod_ip_env(self, monkeypatch):
+        monkeypatch.setenv(PROBE_BIND_HOST_ENV, "10.42.0.17")
+
+        assert _probe_bind_host() == "10.42.0.17"
+
+    def test_blank_bind_host_falls_back_to_loopback(self, monkeypatch):
+        monkeypatch.setenv(PROBE_BIND_HOST_ENV, "  ")
+
+        assert _probe_bind_host() == "127.0.0.1"
 
 
 class TestFlowState:

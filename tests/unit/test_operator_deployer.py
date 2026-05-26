@@ -1117,9 +1117,13 @@ class TestPodSpec:
     The pod spec IS the Operator's primary output.
     """
 
-    def _create_pods(self, tmp_path):
+    def _create_pods(self, tmp_path, *, mi_enabled=False):
         """Run the full pipeline and capture all created pods."""
         spec = _make_inline_spec(tmp_path)
+        if mi_enabled:
+            session = yaml.safe_load(spec["sessionYaml"])
+            session["mi"] = {"enabled": True}
+            spec["sessionYaml"] = yaml.dump(session, default_flow_style=False)
         mock_v1 = create_autospec(kubernetes.client.CoreV1Api, instance=True)
         mock_v1.read_namespaced_secret.return_value = _existing_terminal_secret("test-uid-456")
         owner_ref = {
@@ -1189,6 +1193,24 @@ class TestPodSpec:
             if role == "satellite":
                 assert "nodalarc.io/plane" in labels
                 assert "nodalarc.io/slot" in labels
+
+    def test_probe_sidecar_bind_host_uses_pod_ip_downward_api(self, tmp_path):
+        pods = self._create_pods(tmp_path, mi_enabled=True)
+        probe_containers = [
+            container
+            for pod in pods
+            if pod.metadata.labels["nodalarc.io/role"] == "ground-station"
+            for container in pod.spec.containers
+            if container.name == "probe"
+        ]
+
+        assert probe_containers, "MI-enabled ground-station pods should include probe sidecars"
+        for probe in probe_containers:
+            env = {item.name: item for item in probe.env or []}
+            bind_host = env.get("NODALARC_PROBE_BIND_HOST")
+            assert bind_host is not None
+            assert bind_host.value is None
+            assert bind_host.value_from.field_ref.field_path == "status.podIP"
 
     def test_owner_reference(self, tmp_path):
         pods = self._create_pods(tmp_path)

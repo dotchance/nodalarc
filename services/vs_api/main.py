@@ -1433,8 +1433,9 @@ async def get_node_config(node_id: str) -> Response:
 
     try:
         ssh_key = _load_ssh_key(namespace)
-    except RuntimeError as e:
-        return JSONResponse(status_code=503, content={"error": str(e)})
+    except RuntimeError as exc:
+        log.warning("SSH key unavailable for config export: %s", exc)
+        return JSONResponse(status_code=503, content={"error": "SSH key unavailable"})
 
     session = TerminalSession(pod_ip, ssh_key)
     try:
@@ -1448,8 +1449,8 @@ async def get_node_config(node_id: str) -> Response:
             },
         )
     except Exception as exc:
-        log.warning("Config export error for %s: %s", node_id, exc)
-        return JSONResponse(status_code=500, content={"error": f"Failed to retrieve config: {exc}"})
+        log.warning("Config export error for %s: %s", node_id, exc, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Failed to retrieve config"})
     finally:
         await session.close()
 
@@ -2042,8 +2043,8 @@ async def start_continuous_trace(body: dict) -> dict:
     try:
         tracer = _create_continuous_tracer()
     except Exception as exc:
-        log.warning("Failed to create continuous tracer: %s", exc)
-        return JSONResponse(status_code=500, content={"error": f"Tracer init failed: {exc}"})
+        log.warning("Failed to create continuous tracer: %s", exc, exc_info=True)
+        return JSONResponse(status_code=500, content={"error": "Tracer initialization failed"})
 
     ctx.continuous_tracer = tracer
     await tracer.start(src, dst)
@@ -2356,8 +2357,24 @@ def wizard_extension_rules() -> dict:
     }
 
 
+def _error_response(status_code: int, message: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content={"error": message})
+
+
 def _catalog_error(exc: Exception) -> JSONResponse:
-    return JSONResponse(status_code=400, content={"error": str(exc)})
+    if isinstance(exc, CatalogPathError):
+        message = (
+            exc.args[0]
+            if exc.args and isinstance(exc.args[0], str)
+            else "Invalid catalog reference"
+        )
+    elif isinstance(exc, FileExistsError):
+        message = "Catalog file already exists"
+    elif isinstance(exc, FileNotFoundError):
+        message = "Catalog reference not found"
+    else:
+        message = "Invalid catalog reference"
+    return _error_response(400, message)
 
 
 def _resolve_api_constellation_source(source: Any) -> Any:
@@ -2409,8 +2426,13 @@ def generate_session(body: dict) -> dict:
             orbit_propagator=orbit_propagator,
             catalog_roots=_CATALOG_ROOTS,
         )
-    except (ValueError, FileNotFoundError) as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except FileNotFoundError as exc:
+        return _catalog_error(exc)
+    except ValueError as exc:
+        log.info("Invalid session generation request: %s", exc)
+        return _error_response(400, "Invalid session request")
     return {"yaml": yaml_str, "warnings": warnings}
 
 
@@ -2440,14 +2462,16 @@ async def preview_coverage(body: dict) -> dict:
             body.get("satellite_type"),
             ground_stations,
         )
-    except (ValueError, FileNotFoundError) as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except FileNotFoundError as exc:
+        return _catalog_error(exc)
+    except ValueError as exc:
+        log.info("Invalid coverage preview request: %s", exc)
+        return _error_response(400, "Coverage preview request is invalid")
     except Exception as exc:
         log.error("Coverage preview internal error: %s", exc, exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"Coverage preview failed: {type(exc).__name__}: {exc}"},
-        )
+        return _error_response(500, "Coverage preview failed")
     return result.model_dump()
 
 
@@ -2470,7 +2494,8 @@ async def deploy_generated_session(body: dict) -> dict:
         raw = _yaml.safe_load(yaml_str)
         session = SessionConfig.model_validate(raw)
     except Exception as exc:
-        return JSONResponse(status_code=400, content={"error": f"Invalid session YAML: {exc}"})
+        log.info("Invalid session YAML rejected: %s", exc)
+        return _error_response(400, "Invalid session YAML")
 
     modified = dict(raw)
 
@@ -2497,10 +2522,13 @@ async def deploy_generated_session(body: dict) -> dict:
             return JSONResponse(
                 status_code=400, content={"error": "Constellation expands to 0 satellites"}
             )
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except FileNotFoundError as exc:
+        return _catalog_error(exc)
     except Exception as exc:
-        return JSONResponse(
-            status_code=400, content={"error": f"Invalid session configuration: {exc}"}
-        )
+        log.info("Invalid session configuration rejected: %s", exc)
+        return _error_response(400, "Invalid session configuration")
 
     # Write to sessions directory with _wizard- prefix and a collision-resistant stem.
     try:
@@ -2537,7 +2565,8 @@ async def deploy_from_yaml(body: dict) -> dict:
         raw = _yaml.safe_load(yaml_str)
         session = SessionConfig.model_validate(raw)
     except Exception as exc:
-        return JSONResponse(status_code=400, content={"error": f"Invalid session YAML: {exc}"})
+        log.info("Invalid session YAML rejected: %s", exc)
+        return _error_response(400, "Invalid session YAML")
 
     # Extract inline definitions → write ephemeral files → rewrite as paths
     try:
@@ -2608,10 +2637,13 @@ async def deploy_from_yaml(body: dict) -> dict:
             return JSONResponse(
                 status_code=400, content={"error": "Constellation expands to 0 satellites"}
             )
+    except CatalogPathError as exc:
+        return _catalog_error(exc)
+    except FileNotFoundError as exc:
+        return _catalog_error(exc)
     except Exception as exc:
-        return JSONResponse(
-            status_code=400, content={"error": f"Invalid session configuration: {exc}"}
-        )
+        log.info("Invalid session configuration rejected: %s", exc)
+        return _error_response(400, "Invalid session configuration")
 
     if _session_manager is None:
         return JSONResponse(status_code=503, content={"error": "Session manager not initialized"})
@@ -2645,8 +2677,12 @@ def introspect(body: dict) -> dict:
         return JSONResponse(status_code=400, content={"error": f"Command not allowed: {command}"})
     try:
         result = run_vtysh(node_id, command)
+    except ValueError as exc:
+        log.info("Invalid introspection request: %s", exc)
+        return _error_response(400, "Invalid introspection request")
     except Exception as exc:
-        return JSONResponse(status_code=500, content={"error": str(exc)})
+        log.warning("Introspection command failed: %s", exc, exc_info=True)
+        return _error_response(500, "Introspection command failed")
     if result.get("error") == "Command timed out":
         return JSONResponse(status_code=504, content=result)
     return result

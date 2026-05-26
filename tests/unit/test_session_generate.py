@@ -64,6 +64,12 @@ class TestCatalogPathContainment:
         with pytest.raises(CatalogPathError, match="traversal"):
             merge_constellation_with_satellite_type("../../outside.yaml", "starlink-v2")
 
+    def test_merge_constellation_rejects_satellite_type_path_syntax(self):
+        with pytest.raises(CatalogPathError, match="satellite_type"):
+            merge_constellation_with_satellite_type(
+                "configs/constellations/demo-36.yaml", "../starlink-v2"
+            )
+
 
 class TestGenerateSessionYaml:
     """Generate YAML for every valid preset x protocol x extension combo."""

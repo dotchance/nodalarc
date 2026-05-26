@@ -71,7 +71,8 @@ class TestExecErrors:
         mock_stream.side_effect = Exception("connection timeout")
         result = run_vtysh("sat-p00s00", "show isis neighbor")
         assert result["exit_code"] == -1
-        assert "connection timeout" in result["error"]
+        assert result["error"] == "vtysh exec failed"
+        assert "connection timeout" not in result["error"]
         assert result["node_id"] == "sat-p00s00"
 
 
@@ -87,7 +88,8 @@ class TestNonZeroExit:
         )
         result = run_vtysh("sat-p99s99", "show isis neighbor")
         assert result["exit_code"] == -1
-        assert "Not Found" in result["error"]
+        assert result["error"] == "Kubernetes exec failed"
+        assert "Not Found" not in result["error"]
 
     @patch("vs_api.introspect.kubernetes.stream.stream")
     def test_success_has_no_error(self, mock_stream):

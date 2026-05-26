@@ -40,6 +40,23 @@ def test_resolves_known_constellation_name_under_root(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "source",
     [
+        "demo.yaml",
+        "constellations/demo.yaml",
+        "configs/constellations/demo.yaml",
+    ],
+)
+def test_resolves_existing_constellation_paths_from_approved_bases(tmp_path, monkeypatch, source):
+    roots = _make_roots(tmp_path, monkeypatch)
+    (roots.constellations / "demo.yaml").write_text("mode: parametric\n")
+
+    resolved = resolve_constellation_reference(source, roots)
+
+    assert resolved == (roots.constellations / "demo.yaml").resolve()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
         "../../outside",
         "foo/../../outside",
         "/tmp/outside",

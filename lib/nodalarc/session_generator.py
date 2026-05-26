@@ -19,11 +19,11 @@ import yaml
 from pydantic import BaseModel
 
 from nodalarc.catalog_paths import (
-    CatalogPathError,
     CatalogRoots,
     config_value_for,
     resolve_constellation_reference,
     resolve_ground_station_reference,
+    validate_catalog_name,
     validate_station_names,
 )
 from nodalarc.models.session import SessionConfig
@@ -90,6 +90,7 @@ def merge_constellation_with_satellite_type(
     embedding inline in a session YAML.
     """
     roots = catalog_roots or _default_catalog_roots()
+    satellite_type = validate_catalog_name(satellite_type, label="satellite_type")
     source_path = resolve_constellation_reference(constellation_path, roots)
     data = yaml.safe_load(source_path.read_text())
     if not isinstance(data, dict):
@@ -147,6 +148,8 @@ def generate_session_yaml(
     """
     warnings: list[str] = []
     roots = catalog_roots or _default_catalog_roots()
+    if satellite_type:
+        satellite_type = validate_catalog_name(satellite_type, label="satellite_type")
 
     # Load preset for defaults — optional when custom_constellation is provided
     presets = load_constellation_presets(roots)
@@ -204,12 +207,7 @@ def generate_session_yaml(
         }
     elif ground_stations:
         if isinstance(ground_stations, str):
-            try:
-                gs_value = config_value_for(
-                    resolve_ground_station_reference(ground_stations, roots)
-                )
-            except CatalogPathError as exc:
-                raise ValueError(str(exc)) from exc
+            gs_value = config_value_for(resolve_ground_station_reference(ground_stations, roots))
         elif isinstance(ground_stations, list):
             validate_station_names(ground_stations)
             gs_value = ground_stations

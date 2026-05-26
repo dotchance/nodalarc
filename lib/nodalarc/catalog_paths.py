@@ -62,6 +62,16 @@ def reject_path_name(name: str, *, label: str = "name") -> None:
         raise CatalogPathError(f"{label} must not contain path traversal")
 
 
+def validate_catalog_name(name: str, *, label: str = "name") -> str:
+    """Return a catalog object name after rejecting path syntax."""
+    if not isinstance(name, str):
+        raise CatalogPathError(f"{label} must be a string")
+    reject_path_name(name, label=label)
+    if not _SAFE_NAME.fullmatch(name):
+        raise CatalogPathError(f"{label} must contain only [A-Za-z0-9_-]")
+    return name
+
+
 def generated_file_stem(display_name: str, write_id: str | None = None) -> str:
     """Return a collision-resistant generated-file stem for one API write."""
     reject_path_name(display_name, label="session.name")
@@ -73,9 +83,9 @@ def generated_file_stem(display_name: str, write_id: str | None = None) -> str:
 
 def config_value_for(path: Path) -> str:
     """Return a stable config string, preferring repo-relative paths."""
-    resolved = path.resolve()
+    resolved = path if path.is_absolute() else Path.cwd() / path
     try:
-        return str(resolved.relative_to(Path.cwd().resolve()))
+        return str(resolved.relative_to(Path.cwd()))
     except ValueError:
         return str(resolved)
 
@@ -97,7 +107,20 @@ def _resolve_existing_under(source: str | Path, root: Path, *, label: str) -> Pa
     raw = str(source)
     candidate = _reject_unsafe_path_source(raw, label=label)
     root_resolved = root.resolve(strict=True)
-    resolved = candidate.resolve(strict=True)
+    cwd = Path.cwd().resolve(strict=True)
+    try:
+        root_from_cwd = root_resolved.relative_to(cwd)
+    except ValueError:
+        root_from_cwd = None
+
+    if root_from_cwd is not None:
+        try:
+            candidate = candidate.relative_to(root_from_cwd)
+        except ValueError:
+            if candidate.parts[:1] == (root_resolved.name,):
+                candidate = Path(*candidate.parts[1:])
+
+    resolved = (root_resolved / candidate).resolve(strict=True)
     try:
         resolved.relative_to(root_resolved)
     except ValueError as exc:
@@ -106,9 +129,7 @@ def _resolve_existing_under(source: str | Path, root: Path, *, label: str) -> Pa
 
 
 def _resolve_named_yaml_under(name: str, root: Path, *, label: str) -> Path:
-    reject_path_name(name, label=label)
-    if not _SAFE_NAME.fullmatch(name):
-        raise CatalogPathError(f"{label} must contain only [A-Za-z0-9_-]")
+    name = validate_catalog_name(name, label=label)
     root_resolved = root.resolve(strict=True)
     resolved = (root_resolved / f"{name}.yaml").resolve(strict=True)
     try:
@@ -156,9 +177,7 @@ def resolve_ground_station_reference(source: str | Path, roots: CatalogRoots) ->
 def validate_station_names(names: list[str]) -> None:
     """Validate individual ground-station names before loader path expansion."""
     for name in names:
-        reject_path_name(name, label="ground station name")
-        if not _SAFE_NAME.fullmatch(name):
-            raise CatalogPathError("ground station name must contain only [A-Za-z0-9_-]")
+        validate_catalog_name(name, label="ground station name")
 
 
 def generated_file_path(root: Path, filename: str) -> Path:

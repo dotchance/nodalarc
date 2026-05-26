@@ -75,26 +75,30 @@ def run_vtysh(node_id: str, command: str) -> dict:
         )
         stderr = ""
         exit_code = 0
-    except kubernetes.client.rest.ApiException as e:
+    except kubernetes.client.rest.ApiException as exc:
+        log.warning(
+            "Kubernetes exec failed for %s cmd=%s: %s", node_id, command, exc, exc_info=True
+        )
         return {
             "node_id": node_id,
             "command": command,
             "output": "",
             "exit_code": -1,
-            "error": f"K8s exec failed: {e.reason}",
+            "error": "Kubernetes exec failed",
         }
     except Exception as exc:
+        log.warning("vtysh exec failed for %s cmd=%s: %s", node_id, command, exc, exc_info=True)
         return {
             "node_id": node_id,
             "command": command,
             "output": "",
             "exit_code": -1,
-            "error": str(exc),
+            "error": "vtysh exec failed",
         }
 
     if stdout is None:
         log.error("vtysh exec returned None stdout for %s cmd=%s", node_id, command)
-        raise ValueError(f"vtysh exec returned None stdout for {node_id}")
+        raise ValueError("vtysh exec returned no output")
     max_bytes = cfg.vs_api_introspect_max_response_bytes
     if len(stdout) > max_bytes:
         stdout = stdout[:max_bytes] + "\n... (truncated)"

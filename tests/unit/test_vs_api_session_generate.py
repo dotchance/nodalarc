@@ -88,6 +88,30 @@ def test_preview_coverage_rejects_traversal_constellation_reference():
     assert "traversal" in response.json()["error"]
 
 
+def test_generate_session_rejects_satellite_type_path_syntax():
+    response = client.post(
+        "/api/v1/session/generate",
+        json={
+            "constellation": "starlink-176",
+            "protocol": "isis",
+            "extensions": ["te"],
+            "ground_stations": "global",
+            "satellite_type": "../starlink-v2",
+            "orbit_propagator": "j2-mean-elements",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "satellite_type" in response.json()["error"]
+
+
+def test_deploy_sanitizes_yaml_parser_errors():
+    response = client.post("/api/v1/session/deploy", json={"yaml": "session: ["})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "Invalid session YAML"
+
+
 def test_deploy_rejects_session_name_with_path_separator():
     response = client.post(
         "/api/v1/session/deploy",

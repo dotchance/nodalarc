@@ -1,6 +1,7 @@
 """Tests for satellite type Pydantic model and YAML loading."""
 
 import pytest
+from nodalarc.catalog_paths import CatalogPathError
 from nodalarc.constellation_loader import load_satellite_type, set_satellite_type_dir
 from nodalarc.models.satellite_type import (
     GroundTerminalDef,
@@ -320,3 +321,7 @@ class TestSatelliteTypeLoaderErrors:
     def test_nonexistent_type(self):
         with pytest.raises(FileNotFoundError, match="Satellite type file not found"):
             load_satellite_type("does-not-exist")
+
+    def test_rejects_name_that_would_escape_satellite_type_catalog(self):
+        with pytest.raises(CatalogPathError, match="satellite_type"):
+            load_satellite_type("../outside")

@@ -61,6 +61,8 @@ def test_resolves_existing_constellation_paths_from_approved_bases(tmp_path, mon
         "foo/../../outside",
         "/tmp/outside",
         "name\\with\\separators",
+        "bad name.yaml",
+        "demo.txt",
     ],
 )
 def test_rejects_unsafe_constellation_references(tmp_path, monkeypatch, source):
@@ -68,6 +70,23 @@ def test_rejects_unsafe_constellation_references(tmp_path, monkeypatch, source):
 
     with pytest.raises((CatalogPathError, FileNotFoundError)):
         resolve_constellation_reference(source, roots)
+
+
+def test_resolves_ground_station_path_from_approved_root(tmp_path, monkeypatch):
+    roots = _make_roots(tmp_path, monkeypatch)
+    (roots.ground_station_sets / "global.yaml").write_text("ground_station_set:\n  stations: []\n")
+
+    resolved = resolve_ground_station_reference("configs/ground-stations/sets/global.yaml", roots)
+
+    assert resolved == (roots.ground_station_sets / "global.yaml").resolve()
+
+
+def test_rejects_non_yaml_ground_station_path(tmp_path, monkeypatch):
+    roots = _make_roots(tmp_path, monkeypatch)
+    (roots.ground_stations / "notes.md").write_text("not a catalog source\n")
+
+    with pytest.raises(CatalogPathError, match="must be YAML"):
+        resolve_ground_station_reference("configs/ground-stations/notes.md", roots)
 
 
 def test_rejects_symlink_escape_under_constellation_root(tmp_path, monkeypatch):

@@ -15,6 +15,7 @@ class CatalogPathError(ValueError):
 
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+_YAML_SUFFIXES = {".yaml", ".yml"}
 
 
 @dataclass(frozen=True)
@@ -103,10 +104,21 @@ def _reject_unsafe_path_source(source: str, *, label: str) -> Path:
     return path
 
 
-def _resolve_existing_under(source: str | Path, root: Path, *, label: str) -> Path:
-    raw = str(source)
-    candidate = _reject_unsafe_path_source(raw, label=label)
-    root_resolved = root.resolve(strict=True)
+def _validate_yaml_path_reference(path: Path, *, label: str) -> Path:
+    if not path.parts:
+        raise CatalogPathError(f"{label} path is required")
+
+    filename = path.name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in _YAML_SUFFIXES:
+        raise CatalogPathError(f"{label} path must be YAML")
+
+    parts = [validate_catalog_name(part, label=f"{label} directory") for part in path.parts[:-1]]
+    stem = validate_catalog_name(Path(filename).stem, label=f"{label} filename")
+    return Path(*parts, f"{stem}{suffix}")
+
+
+def _strip_catalog_root_prefix(candidate: Path, root_resolved: Path) -> Path:
     cwd = Path.cwd().resolve(strict=True)
     try:
         root_from_cwd = root_resolved.relative_to(cwd)
@@ -115,17 +127,36 @@ def _resolve_existing_under(source: str | Path, root: Path, *, label: str) -> Pa
 
     if root_from_cwd is not None:
         try:
-            candidate = candidate.relative_to(root_from_cwd)
+            return candidate.relative_to(root_from_cwd)
         except ValueError:
-            if candidate.parts[:1] == (root_resolved.name,):
-                candidate = Path(*candidate.parts[1:])
+            pass
 
-    resolved = (root_resolved / candidate).resolve(strict=True)
-    try:
-        resolved.relative_to(root_resolved)
-    except ValueError as exc:
-        raise CatalogPathError(f"{label} escapes approved root: {root}") from exc
-    return resolved
+    if candidate.parts[:1] == (root_resolved.name,):
+        return Path(*candidate.parts[1:])
+    return candidate
+
+
+def _resolve_existing_under(source: str | Path, root: Path, *, label: str) -> Path:
+    raw = str(source)
+    candidate = _reject_unsafe_path_source(raw, label=label)
+    root_resolved = root.resolve(strict=True)
+    reference = _validate_yaml_path_reference(
+        _strip_catalog_root_prefix(candidate, root_resolved), label=label
+    )
+
+    for yaml_path in sorted(
+        path for suffix in _YAML_SUFFIXES for path in root_resolved.rglob(f"*{suffix}")
+    ):
+        if yaml_path.relative_to(root_resolved) != reference:
+            continue
+        resolved = yaml_path.resolve(strict=True)
+        try:
+            resolved.relative_to(root_resolved)
+        except ValueError as exc:
+            raise CatalogPathError(f"{label} escapes approved root: {root}") from exc
+        return resolved
+
+    raise FileNotFoundError(f"{label} file not found: {root / reference}")
 
 
 def _resolve_named_yaml_under(name: str, root: Path, *, label: str) -> Path:

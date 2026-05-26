@@ -8,12 +8,13 @@ Lightweight UDP probe with sequence numbering; runs as sidecar in ground
 station pods.
 
 Run: python -m measurement.probe_daemon
-     uvicorn measurement.probe_daemon:app --host 0.0.0.0 --port 9100
+     uvicorn measurement.probe_daemon:app --host 127.0.0.1 --port 9100
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import struct
 import threading
@@ -43,6 +44,16 @@ from nodalarc.platform_config import get_platform_config
 
 PROBE_PACKET_FMT = "!Qq"  # network byte order: unsigned long long + signed long long
 PROBE_PACKET_SIZE = struct.calcsize(PROBE_PACKET_FMT)
+PROBE_BIND_HOST_ENV = "NODALARC_PROBE_BIND_HOST"
+_DEFAULT_PROBE_BIND_HOST = "127.0.0.1"
+
+
+def _probe_bind_host() -> str:
+    """Return the interface address used by the probe HTTP and UDP listeners."""
+    return (
+        os.environ.get(PROBE_BIND_HOST_ENV, _DEFAULT_PROBE_BIND_HOST).strip()
+        or _DEFAULT_PROBE_BIND_HOST
+    )
 
 
 # --- Request/Response Models ---
@@ -301,9 +312,10 @@ def _udp_echo_server() -> None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     udp_port = get_platform_config().probe_daemon_udp_data_port
-    sock.bind(("0.0.0.0", udp_port))
+    bind_host = _probe_bind_host()
+    sock.bind((bind_host, udp_port))
     sock.settimeout(1.0)
-    log.info(f"UDP echo server listening on port {udp_port}")
+    log.info("UDP echo server listening on %s:%s", bind_host, udp_port)
 
     while not _echo_stop.is_set():
         try:
@@ -421,4 +433,4 @@ if __name__ == "__main__":
     from nodalarc.nats_channels import probe_daemon_port
 
     _configure_logging("nodal.arc.probe")
-    uvicorn.run(app, host="0.0.0.0", port=probe_daemon_port())
+    uvicorn.run(app, host=_probe_bind_host(), port=probe_daemon_port())

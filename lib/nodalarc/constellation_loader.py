@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 import yaml
 from pydantic import TypeAdapter
 
+from nodalarc.catalog_paths import CatalogPathError, validate_catalog_name
 from nodalarc.constants import EARTH_MU
 from nodalarc.models.constellation import (
     ConstellationConfig,
@@ -122,11 +123,17 @@ def load_satellite_type(name: str) -> SatelliteTypeConfig:
     The name resolves to configs/satellite-types/{name}.yaml.
     Results are cached since the same type may be referenced multiple times.
     """
-    sat_type_dir = _resolve_sat_type_dir()
+    name = validate_catalog_name(name, label="satellite_type")
+    sat_type_dir = _resolve_sat_type_dir().resolve(strict=True)
     path = sat_type_dir / f"{name}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(f"Satellite type file not found: {path}")
-    data = yaml.safe_load(path.read_text())
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(sat_type_dir)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Satellite type file not found: {path}") from exc
+    except ValueError as exc:
+        raise CatalogPathError(f"satellite_type escapes approved root: {sat_type_dir}") from exc
+    data = yaml.safe_load(resolved.read_text())
     # Handle top-level 'satellite_type' key
     if isinstance(data, dict) and "satellite_type" in data:
         data = data["satellite_type"]

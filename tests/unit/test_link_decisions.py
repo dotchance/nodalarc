@@ -529,10 +529,11 @@ class TestCrossTypeSemantics:
 
 
 class TestLinkDecisionSnapshotSubject:
-    """The new SUBJECT_LINK_DECISIONS lives on NODALARC_LINKS stream
-    (already MaxMsgsPerSubject=1). The subject pattern must match the
-    existing `link_state_snapshot_subject` so both snapshots share a
-    stream and the same per-session retention rules."""
+    """SUBJECT_GROUND_LINK_DECISION_SNAPSHOT lives on the NODALARC_LINKS
+    stream (already MaxMsgsPerSubject=1). The subject pattern parallels
+    ``link_state_snapshot_subject`` so both snapshots retain together
+    per session; pairing between them is by (epoch_id, snapshot_seq,
+    sim_time) in the consumer, not by shared-stream colocation."""
 
     def test_session_scoped_subject_pattern(self) -> None:
         subj = ground_link_decision_snapshot_subject("starlink-prod")

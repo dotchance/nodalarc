@@ -113,8 +113,8 @@ class GroundVisibilityDecisionWire(BaseModel):
     """Per-pair ground visibility decision in wire form.
 
     Published as part of `GroundLinkDecisionSnapshot` on the
-    `SUBJECT_LINK_DECISIONS` NATS subject (added in the producer
-    landing PR per the plan's NATS subject discipline).
+    `SUBJECT_GROUND_LINK_DECISION_SNAPSHOT` NATS subject
+    (``nodalarc.links.<session>.ground_decisions``).
 
     Every field is required at construction. `applied_*` fields use
     `None` to mean "this constraint was not in effect for the decision"

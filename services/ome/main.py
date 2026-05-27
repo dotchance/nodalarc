@@ -1192,11 +1192,13 @@ def _run_pacing(
                 )
                 _enqueue(subj_link_snapshot, snap.model_dump_json().encode())
                 # Companion GroundLinkDecisionSnapshot — carries the typed
-                # per-pair decisions and the typed unscheduled-pair
-                # reasons. Same snapshot_seq and sim_time as the state
-                # snapshot above; both share the NODALARC_LINKS stream
-                # with MaxMsgsPerSubject=1 so a consumer with the
-                # latest state snapshot also has the latest decisions.
+                # per-pair GROUND decisions and the typed unscheduled-
+                # ground-pair reasons. Same snapshot_seq and sim_time as
+                # the state snapshot above; pairing is by
+                # (epoch_id, snapshot_seq, sim_time) at the consumer
+                # (see scheduler.dispatcher.paired_decision_snapshot),
+                # NOT by shared-stream colocation — both retain
+                # independently under MaxMsgsPerSubject=1.
                 decision_snap = build_link_decision_snapshot(
                     decisions=step_result.ground_decisions,
                     unscheduled_pairs=step_result.ground_allocation.unscheduled_pairs,

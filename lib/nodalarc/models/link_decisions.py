@@ -46,18 +46,26 @@ VisibilityRejectReason = Literal[
     "range_exceeded",
     "field_of_regard",
     "tracking_exceeded",
+    "polar_seam",
+    "terminal_type_mismatch",
+    "terminal_role_mismatch",
 ]
 """Physical / geometric reason a pair fails visibility.
 
 `ok` means the pair is geometrically visible. Other values describe
 *why* the pair did not pass the per-terminal physics gate. These are
 independent of scheduling — a visible pair may still be unscheduled
-(see `UnscheduledReason`)."""
+(see `UnscheduledReason`).
+
+Ground-applicable subset: `ok`, `los_blocked`, `elevation_below_min`,
+`range_exceeded`, `field_of_regard`, `tracking_exceeded`. ISL adds
+`polar_seam`, `terminal_type_mismatch`, `terminal_role_mismatch`."""
 
 
 UnscheduledReason = Literal[
     "gs_capacity",
     "sat_capacity",
+    "isl_terminal_capacity",
     "hysteresis_hold",
     "incumbent_held",
     "bbm_no_spare",
@@ -65,10 +73,16 @@ UnscheduledReason = Literal[
 ]
 """Allocation reason a visible pair is not currently scheduled.
 
-These are the scheduler-side reasons. A pair in active MBB teardown
-overlap is `(visible=True, scheduled=True, scheduling_state="teardown")`
-and is NOT in `unscheduled_pairs` — teardown is a scheduling state, not
-an unscheduled-reason. The post-teardown released pair is
+Ground reasons: `gs_capacity`, `sat_capacity`, `hysteresis_hold`,
+`incumbent_held`, `bbm_no_spare`, `replaced_by_successor`. ISL adds
+`isl_terminal_capacity` for the case where the pair is physically
+feasible but the satellite's ISL terminals are exhausted by symmetric
+priority allocation.
+
+A pair in active MBB teardown overlap is `(visible=True,
+scheduled=True, scheduling_state="teardown")` and is NOT in
+`unscheduled_pairs` — teardown is a scheduling state, not an
+unscheduled-reason. The post-teardown released pair is
 `replaced_by_successor`."""
 
 
@@ -153,6 +167,29 @@ class GroundVisibilityDecisionWire(BaseModel):
     applied_sat_terminal_profile: str | None
 
     @model_validator(mode="after")
+    def _visible_iff_reject_ok(self) -> GroundVisibilityDecisionWire:
+        """Foundational consistency: visible == (reject_reason == 'ok').
+
+        A pair cannot simultaneously be visible and rejected. The two
+        fields are not independent — they encode the same yes/no
+        decision with the reason field carrying the *why* for the no
+        case. Any other combination is an impossible state at the
+        decision boundary; the producer is wrong.
+        """
+        if self.visible and self.reject_reason != "ok":
+            raise ValueError(
+                f"visible=True requires reject_reason='ok', got "
+                f"{self.reject_reason!r}. A visible pair cannot also carry "
+                "a rejection reason — the two fields must be consistent."
+            )
+        if not self.visible and self.reject_reason == "ok":
+            raise ValueError(
+                "visible=False requires a non-'ok' reject_reason — an "
+                "invisible pair must carry the reason it failed visibility."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _terminal_constraint_must_name_profile(self) -> GroundVisibilityDecisionWire:
         """Terminal-bound rejections must name the terminal that rejected.
 
@@ -221,6 +258,25 @@ class LinkDecisionSnapshot(BaseModel):
     `snapshot_seq`. Consumers asking "what is forwarding?" read the
     state snapshot; consumers asking "why isn't this link up?" read
     the decision snapshot.
+
+    Internal consistency invariants (enforced at construction —
+    Phase 1.1 boundary correctness):
+
+    1. `decisions` has no duplicate pairs. Each (gs, sat) pair gets
+       exactly one decision per snapshot.
+    2. Every `UnscheduledPair` references a `pair` that is present in
+       `decisions` with `visible=True`. An unscheduled pair by
+       definition is visible-but-not-scheduled; pointing at an
+       invisible pair or a pair not in the decision set is a
+       producer bug.
+    3. Every `UnscheduledPair`'s `tenant_id` and `reference_body`
+       match the corresponding decision's. Divergence means the
+       allocator and visibility engine disagree about which
+       tenant/body owns the pair — a fatal contract break.
+    4. `unscheduled_pairs` has no duplicate pairs.
+
+    Producers that fail any of these are wrong. Phase 1.1 demands
+    foundational types reject impossible states at construction.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -230,3 +286,56 @@ class LinkDecisionSnapshot(BaseModel):
     epoch_id: int
     decisions: tuple[GroundVisibilityDecisionWire, ...]
     unscheduled_pairs: tuple[UnscheduledPair, ...]
+
+    @model_validator(mode="after")
+    def _decisions_have_unique_pairs(self) -> LinkDecisionSnapshot:
+        seen: set[tuple[str, str]] = set()
+        for d in self.decisions:
+            if d.pair in seen:
+                raise ValueError(
+                    f"LinkDecisionSnapshot.decisions has duplicate pair {d.pair!r}. "
+                    "Each pair must have exactly one decision per snapshot."
+                )
+            seen.add(d.pair)
+        return self
+
+    @model_validator(mode="after")
+    def _unscheduled_pairs_consistent_with_decisions(self) -> LinkDecisionSnapshot:
+        decision_by_pair = {d.pair: d for d in self.decisions}
+        seen: set[tuple[str, str]] = set()
+        for u in self.unscheduled_pairs:
+            if u.pair in seen:
+                raise ValueError(
+                    f"LinkDecisionSnapshot.unscheduled_pairs has duplicate pair "
+                    f"{u.pair!r}. Each unscheduled pair must appear at most once."
+                )
+            seen.add(u.pair)
+            decision = decision_by_pair.get(u.pair)
+            if decision is None:
+                raise ValueError(
+                    f"unscheduled_pair {u.pair!r} has no matching entry in "
+                    "decisions. Every unscheduled pair must correspond to a "
+                    "visibility decision in the same snapshot."
+                )
+            if not decision.visible:
+                raise ValueError(
+                    f"unscheduled_pair {u.pair!r} references a decision with "
+                    "visible=False. An unscheduled pair is by definition "
+                    "visible-but-not-scheduled — invisible pairs are simply "
+                    "absent from allocation, not unscheduled."
+                )
+            if u.tenant_id != decision.tenant_id:
+                raise ValueError(
+                    f"unscheduled_pair {u.pair!r} tenant_id={u.tenant_id!r} "
+                    f"disagrees with its decision tenant_id="
+                    f"{decision.tenant_id!r}. Allocator and visibility engine "
+                    "must agree on tenant ownership."
+                )
+            if u.reference_body != decision.reference_body:
+                raise ValueError(
+                    f"unscheduled_pair {u.pair!r} reference_body="
+                    f"{u.reference_body!r} disagrees with its decision "
+                    f"reference_body={decision.reference_body!r}. Allocator "
+                    "and visibility engine must agree on the body anchor."
+                )
+        return self

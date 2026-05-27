@@ -53,6 +53,29 @@ class VisibilityEvent(BaseModel):
     """Visibility state change between two nodes.
 
     node_a is always alphabetically < node_b (enforced by validator).
+
+    Reason fields (Phase 1, C-foundation-5): every transition must carry
+    both axes of the typed reason taxonomy so consumers can explain
+    the transition from the event stream alone — without correlating
+    against the decision snapshot.
+
+    - ``visibility_reject_reason``: physical / geometric attribution.
+      ``"ok"`` when the pair is visible; one of the typed rejection
+      reasons (``"los_blocked"``, ``"elevation_below_min"``,
+      ``"range_exceeded"``, ``"field_of_regard"``,
+      ``"tracking_exceeded"``) when not visible.
+    - ``unscheduled_reason``: scheduling attribution. ``None`` when the
+      pair is allocated (``scheduled=True``) or invisible. One of
+      ``"gs_capacity"``, ``"sat_capacity"``, ``"hysteresis_hold"``,
+      ``"incumbent_held"``, ``"bbm_no_spare"``, or
+      ``"replaced_by_successor"`` when the pair is visible but the
+      allocator did not schedule it.
+
+    Field-level consistency invariants:
+    - ``visible == (visibility_reject_reason == "ok")``.
+    - ``unscheduled_reason is None`` whenever ``scheduled`` is True OR
+      ``visible`` is False. (A scheduled pair has no unscheduled
+      reason; an invisible pair never reached the allocator.)
     """
 
     model_config = ConfigDict(frozen=True)
@@ -70,6 +93,29 @@ class VisibilityEvent(BaseModel):
     gs_terminal_index: int | None = None  # None for ISL events
     sat_terminal_index: int | None = None  # None for ISL events
     scheduling_state: str = "active"  # "active" | "teardown"
+    visibility_reject_reason: Literal[
+        "ok",
+        "los_blocked",
+        "elevation_below_min",
+        "range_exceeded",
+        "field_of_regard",
+        "tracking_exceeded",
+        "polar_seam",
+        "terminal_type_mismatch",
+        "terminal_role_mismatch",
+    ] = "ok"
+    unscheduled_reason: (
+        Literal[
+            "gs_capacity",
+            "sat_capacity",
+            "isl_terminal_capacity",
+            "hysteresis_hold",
+            "incumbent_held",
+            "bbm_no_spare",
+            "replaced_by_successor",
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="before")
     @classmethod
@@ -80,6 +126,30 @@ class VisibilityEvent(BaseModel):
             values["node_a"] = b
             values["node_b"] = a
         return values
+
+    @model_validator(mode="after")
+    def _reasons_consistent_with_state(self) -> VisibilityEvent:
+        """Direction 1.1: visible iff visibility_reject_reason == 'ok'.
+        unscheduled_reason allowed only when visible-but-unscheduled."""
+        if self.visible and self.visibility_reject_reason != "ok":
+            raise ValueError(
+                f"visible=True requires visibility_reject_reason='ok', got "
+                f"{self.visibility_reject_reason!r}."
+            )
+        if not self.visible and self.visibility_reject_reason == "ok":
+            raise ValueError("visible=False requires a non-'ok' visibility_reject_reason.")
+        if self.unscheduled_reason is not None:
+            if not self.visible:
+                raise ValueError(
+                    "unscheduled_reason set on a non-visible pair — an "
+                    "invisible pair never reached the allocator."
+                )
+            if self.scheduled:
+                raise ValueError(
+                    "unscheduled_reason set on a scheduled pair — a "
+                    "scheduled pair has no unscheduled reason."
+                )
+        return self
 
 
 class ClockTick(BaseModel):

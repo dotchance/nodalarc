@@ -50,8 +50,22 @@ def _substrate_measurement(rtt_ms: float) -> SubstrateMeasurement:
 
 
 def _make_vis(
-    node_a: str, node_b: str, visible: bool, scheduled: bool, link_type: str = "isl"
+    node_a: str,
+    node_b: str,
+    visible: bool,
+    scheduled: bool,
+    *,
+    visibility_reject_reason: str,
+    link_type: str = "isl",
+    unscheduled_reason: str | None = None,
 ) -> VisibilityEvent:
+    """Construct a VisibilityEvent for tests.
+
+    `visibility_reject_reason` is required. The caller must declare
+    the physical state under test — a visible pair passes 'ok'; a
+    non-visible pair passes the specific rejection reason it models.
+    No defaults that could hide an impossible state at construction.
+    """
     return VisibilityEvent(
         sim_time=datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
         node_a=node_a,
@@ -65,6 +79,8 @@ def _make_vis(
         link_type=link_type,
         gs_terminal_index=0 if link_type == "ground" else None,
         sat_terminal_index=0 if link_type == "ground" else None,
+        visibility_reject_reason=visibility_reject_reason,
+        unscheduled_reason=unscheduled_reason,
     )
 
 
@@ -193,7 +209,13 @@ class MockNats:
 class TestDispatcherActiveLinks:
     def test_visibility_event_adds_isl_to_active_links(self):
         d, _ = _make_dispatcher()
-        vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=True)
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=True,
+            scheduled=True,
+            visibility_reject_reason="ok",
+        )
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
@@ -221,7 +243,12 @@ class TestDispatcherActiveLinks:
     def test_visibility_event_adds_gs_to_active_links(self):
         d, _ = _make_dispatcher()
         vis = _make_vis(
-            "gs-ashburn", "sat-P00S00", visible=True, scheduled=True, link_type="ground"
+            "gs-ashburn",
+            "sat-P00S00",
+            visible=True,
+            scheduled=True,
+            link_type="ground",
+            visibility_reject_reason="ok",
         )
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
@@ -234,7 +261,15 @@ class TestDispatcherActiveLinks:
         d._desired_links[("sat-P00S00", "sat-P00S01")] = info
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
-        vis = _make_vis("sat-P00S00", "sat-P00S01", visible=False, scheduled=False)
+        # Physical visibility loss for an ISL pair: LOS blocked as the
+        # sats drift to opposite sides of the Earth.
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=False,
+            scheduled=False,
+            visibility_reject_reason="los_blocked",
+        )
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
@@ -246,8 +281,16 @@ class TestDispatcherActiveLinks:
         d._desired_links[("gs-ashburn", "sat-P00S00")] = info
         d._active_links[("gs-ashburn", "sat-P00S00")] = info
 
+        # GS pair still visible (reject_reason='ok') but allocator
+        # released the terminal in favor of a successor.
         vis = _make_vis(
-            "gs-ashburn", "sat-P00S00", visible=True, scheduled=False, link_type="ground"
+            "gs-ashburn",
+            "sat-P00S00",
+            visible=True,
+            scheduled=False,
+            link_type="ground",
+            visibility_reject_reason="ok",
+            unscheduled_reason="replaced_by_successor",
         )
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
@@ -260,7 +303,16 @@ class TestDispatcherActiveLinks:
         d._desired_links[("sat-P00S00", "sat-P00S01")] = info
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
-        vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=False)
+        # ISL pair still visible but allocator did not schedule it
+        # (terminal capacity exhausted by symmetric allocation).
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=True,
+            scheduled=False,
+            visibility_reject_reason="ok",
+            unscheduled_reason="isl_terminal_capacity",
+        )
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
@@ -351,7 +403,13 @@ class TestDispatcherLinkStateSnapshot:
 class TestDispatcherLiveDispatch:
     def test_link_up_publishes_after_node_agent_ack(self):
         d, pool = _make_dispatcher()
-        vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=True)
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=True,
+            scheduled=True,
+            visibility_reject_reason="ok",
+        )
         pub = MockNats()
 
         asyncio.run(d._dispatch_batch([vis], [], pub))
@@ -380,7 +438,14 @@ class TestDispatcherLiveDispatch:
         d._active_links[("sat-P00S00", "sat-P00S01")] = ActiveLinkInfo(
             "isl0", "isl1", 3.0, 1000.0, link_type="isl"
         )
-        vis = _make_vis("sat-P00S00", "sat-P00S01", visible=False, scheduled=False)
+        # Physical visibility loss for an ISL pair.
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=False,
+            scheduled=False,
+            visibility_reject_reason="los_blocked",
+        )
         pub = MockNats()
 
         asyncio.run(d._dispatch_batch([vis], [], pub))
@@ -397,7 +462,13 @@ class TestDispatcherLiveDispatch:
         stub = pool.get_stub.return_value
         stub.async_batch_link_up = AsyncMock(side_effect=Exception("agent unreachable"))
 
-        vis = _make_vis("sat-P00S00", "sat-P00S01", visible=True, scheduled=True)
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            visible=True,
+            scheduled=True,
+            visibility_reject_reason="ok",
+        )
         pub = MockNats()
 
         with pytest.raises(Exception, match="agent unreachable"):

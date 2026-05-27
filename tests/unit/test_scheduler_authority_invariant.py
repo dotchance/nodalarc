@@ -60,10 +60,19 @@ def _make_vis(
     scheduled: bool,
     *,
     sim_time: datetime,
+    visibility_reject_reason: str,
     scheduling_state: str = "active",
     link_type: str = "ground",
+    unscheduled_reason: str | None = None,
 ) -> VisibilityEvent:
-    """Build a ground VisibilityEvent for the repro scenario."""
+    """Build a VisibilityEvent for the repro scenario.
+
+    `visibility_reject_reason` is REQUIRED. The caller declares the
+    physical state under test — there is no default. A visible pair
+    passes 'ok'; a non-visible pair passes the specific rejection
+    reason it intends to model. Defaulting either way would be the
+    exact wallpaper pattern the foundations plan forbids.
+    """
     return VisibilityEvent(
         sim_time=sim_time,
         node_a=pair[0],
@@ -78,6 +87,8 @@ def _make_vis(
         gs_terminal_index=0 if link_type == "ground" else None,
         sat_terminal_index=0 if link_type == "ground" else None,
         scheduling_state=scheduling_state,
+        visibility_reject_reason=visibility_reject_reason,
+        unscheduled_reason=unscheduled_reason,
     )
 
 
@@ -210,12 +221,17 @@ class TestCAReproFailedReplacement:
         # Now drive the release event: OME's teardown window elapsed,
         # OME has released the old pair. The new pair is "scheduled"
         # in OME's view but was never confirmed UP in the Scheduler.
+        # Physical state: pair is still visible (`reject_reason="ok"`)
+        # but the allocator released it because the successor took
+        # over the terminal (`unscheduled_reason="replaced_by_successor"`).
         release_event = _make_vis(
             old_pair,
             visible=True,
             scheduled=False,
             sim_time=SIM_T0 + timedelta(seconds=3),
             scheduling_state="active",
+            visibility_reject_reason="ok",
+            unscheduled_reason="replaced_by_successor",
         )
         d._apply_events_to_desired([release_event])
         return d
@@ -286,13 +302,15 @@ class TestAuthoritySubsetInvariantHappyPath:
         d = _make_dispatcher_with_two_terminal_gs()
         pair = ("gs-multi", "sat-old")
 
-        # Drive a normal up event.
+        # Drive a normal up event — pair is visible AND scheduled, so
+        # visibility_reject_reason is 'ok' and no unscheduled_reason.
         up_event = _make_vis(
             pair,
             visible=True,
             scheduled=True,
             sim_time=SIM_T0,
             scheduling_state="active",
+            visibility_reject_reason="ok",
         )
         d._apply_events_to_desired([up_event])
 
@@ -314,19 +332,140 @@ class TestAuthoritySubsetInvariantHappyPath:
             scheduled=True,
             sim_time=SIM_T0,
             scheduling_state="active",
+            visibility_reject_reason="ok",
         )
         d._apply_events_to_desired([up_event])
         assert pair in d._desired_links
 
-        # Visibility loss event.
+        # Visibility loss event — modeling the satellite drifting
+        # below the GS elevation mask. Caller declares the physical
+        # cause explicitly.
         loss_event = _make_vis(
             pair,
             visible=False,
             scheduled=False,
             sim_time=SIM_T0 + timedelta(seconds=10),
+            visibility_reject_reason="elevation_below_min",
         )
         d._apply_events_to_desired([loss_event])
 
         assert pair not in d._desired_links, "Visibility loss must drop the pair"
         assert d._ome_view[pair] == (False, False, "active")
         assert d.authority_subset_violation() == set()
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.3.b correction: explicit decision/state snapshot pairing.
+#
+# Sharing a NATS stream does not prove pairing. Consumers reading the
+# decision snapshot need an explicit (epoch_id, snapshot_seq, sim_time)
+# match check before trusting the diagnostics for the current state.
+# paired_decision_snapshot() encodes that contract.
+# ---------------------------------------------------------------------------
+
+
+from nodalarc.models.link_decisions import (
+    GroundVisibilityDecisionWire,
+    LinkDecisionSnapshot,
+)
+
+
+def _make_decision_wire(pair: tuple[str, str]) -> GroundVisibilityDecisionWire:
+    return GroundVisibilityDecisionWire(
+        pair=pair,
+        tenant_id="default",
+        reference_body="earth",
+        visible=True,
+        range_km=900.0,
+        elevation_deg=45.0,
+        azimuth_deg=180.0,
+        observer_frame="body_local",
+        reject_reason="ok",
+        applied_min_elevation_deg=25.0,
+        applied_max_range_km=None,
+        applied_field_of_regard_deg=None,
+        applied_max_tracking_rate_deg_s=None,
+        applied_boresight_mode=None,
+        applied_gs_terminal_profile=None,
+        applied_sat_terminal_profile=None,
+    )
+
+
+class TestPairedDecisionSnapshot:
+    """The pairing contract: paired_decision_snapshot() returns the
+    decision snapshot only when (epoch_id, snapshot_seq, sim_time)
+    exactly match the latest applied LinkStateSnapshot."""
+
+    def _set_state_snapshot_anchors(
+        self,
+        d: Dispatcher,
+        *,
+        seq: int,
+        epoch_id: int,
+        sim_time: datetime,
+    ) -> None:
+        """Simulate the side effect of applying a LinkStateSnapshot."""
+        d._last_snapshot_seq = seq
+        d._last_snapshot_epoch_id = epoch_id
+        d._last_snapshot_sim_time = sim_time
+
+    def _make_decision_snapshot(
+        self,
+        *,
+        seq: int,
+        epoch_id: int,
+        sim_time: datetime,
+    ) -> LinkDecisionSnapshot:
+        return LinkDecisionSnapshot(
+            sim_time=sim_time,
+            snapshot_seq=seq,
+            epoch_id=epoch_id,
+            decisions=(_make_decision_wire(("gs-multi", "sat-old")),),
+            unscheduled_pairs=(),
+        )
+
+    def test_no_decision_snapshot_returns_none(self) -> None:
+        d = _make_dispatcher_with_two_terminal_gs()
+        self._set_state_snapshot_anchors(d, seq=5, epoch_id=0, sim_time=SIM_T0)
+        assert d.paired_decision_snapshot() is None
+
+    def test_no_state_snapshot_yet_returns_none(self) -> None:
+        """Decision snapshot arrived but no LinkStateSnapshot has been
+        applied. Diagnostic is not yet anchored to a state."""
+        d = _make_dispatcher_with_two_terminal_gs()
+        d._latest_decision_snapshot = self._make_decision_snapshot(
+            seq=1, epoch_id=0, sim_time=SIM_T0
+        )
+        assert d.paired_decision_snapshot() is None
+
+    def test_matching_seq_epoch_simtime_returns_snapshot(self) -> None:
+        d = _make_dispatcher_with_two_terminal_gs()
+        self._set_state_snapshot_anchors(d, seq=7, epoch_id=2, sim_time=SIM_T0)
+        ds = self._make_decision_snapshot(seq=7, epoch_id=2, sim_time=SIM_T0)
+        d._latest_decision_snapshot = ds
+        paired = d.paired_decision_snapshot()
+        assert paired is ds
+
+    def test_mismatched_seq_returns_none(self) -> None:
+        d = _make_dispatcher_with_two_terminal_gs()
+        self._set_state_snapshot_anchors(d, seq=7, epoch_id=2, sim_time=SIM_T0)
+        d._latest_decision_snapshot = self._make_decision_snapshot(
+            seq=6, epoch_id=2, sim_time=SIM_T0
+        )
+        assert d.paired_decision_snapshot() is None
+
+    def test_mismatched_epoch_returns_none(self) -> None:
+        d = _make_dispatcher_with_two_terminal_gs()
+        self._set_state_snapshot_anchors(d, seq=7, epoch_id=2, sim_time=SIM_T0)
+        d._latest_decision_snapshot = self._make_decision_snapshot(
+            seq=7, epoch_id=1, sim_time=SIM_T0
+        )
+        assert d.paired_decision_snapshot() is None
+
+    def test_mismatched_sim_time_returns_none(self) -> None:
+        d = _make_dispatcher_with_two_terminal_gs()
+        self._set_state_snapshot_anchors(d, seq=7, epoch_id=2, sim_time=SIM_T0)
+        d._latest_decision_snapshot = self._make_decision_snapshot(
+            seq=7, epoch_id=2, sim_time=SIM_T0 + timedelta(seconds=1)
+        )
+        assert d.paired_decision_snapshot() is None

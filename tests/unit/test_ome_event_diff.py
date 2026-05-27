@@ -159,3 +159,116 @@ def test_ground_event_diff_marks_mbb_teardown_state():
 
     assert diff.state[pair] == (True, True, "teardown")
     assert diff.events[0].scheduling_state == "teardown"
+
+
+# ---------------------------------------------------------------------------
+# Reason propagation (Phase 1, C-foundation-5):
+# event_diff must surface BOTH visibility_reject_reason (from the
+# typed decision) and unscheduled_reason (from the allocator's
+# unscheduled_pairs) onto VisibilityEvent so consumers can explain
+# transitions from the event stream alone.
+# ---------------------------------------------------------------------------
+
+
+from nodalarc.models.link_decisions import UnscheduledPair as _UnscheduledPair
+
+
+def test_ground_event_diff_propagates_visibility_reject_reason_for_invisible_pair():
+    pair = ("gs-den", "sat-a")
+    allocation = GroundAllocationResult(
+        associations={},
+        pending_teardowns={},
+        scheduled_pairs=frozenset(),
+        unscheduled_pairs=(),
+    )
+
+    diff = diff_ground_visibility_events(
+        sim_time=SIM,
+        visibility_decisions={
+            pair: _decision(
+                pair,
+                visible=False,
+                range_km=3000.0,
+                elevation_deg=15.0,
+                reject_reason="elevation_below_min",
+            )
+        },
+        allocation=allocation,
+        terminal_types={pair: "rf"},
+        previous_state={pair: (True, True, "active")},
+    )
+
+    assert len(diff.events) == 1
+    event = diff.events[0]
+    assert event.visible is False
+    assert event.visibility_reject_reason == "elevation_below_min"
+    assert event.unscheduled_reason is None  # invisible → never reached allocator
+
+
+def test_ground_event_diff_propagates_unscheduled_reason_for_visible_but_unallocated_pair():
+    """The allocator decided the pair is visible-but-unscheduled with
+    a typed reason; that reason must surface on the emitted event."""
+    pair = ("gs-den", "sat-a")
+    incumbent = ("gs-den", "sat-b")
+    allocation = GroundAllocationResult(
+        associations={incumbent: (0, 0)},
+        pending_teardowns={},
+        scheduled_pairs=frozenset({incumbent}),
+        unscheduled_pairs=(
+            _UnscheduledPair(
+                pair=pair,
+                tenant_id="default",
+                reference_body="earth",
+                unscheduled_reason="bbm_no_spare",
+                incumbent_pair=incumbent,
+            ),
+        ),
+    )
+
+    diff = diff_ground_visibility_events(
+        sim_time=SIM,
+        visibility_decisions={
+            pair: _decision(pair, visible=True, range_km=900.0, elevation_deg=80.0),
+        },
+        allocation=allocation,
+        terminal_types={pair: "rf"},
+        previous_state={pair: (True, True, "active")},
+    )
+
+    # Exactly one event for the pair we focused on.
+    events_for_pair = [e for e in diff.events if (e.node_a, e.node_b) == pair]
+    assert len(events_for_pair) == 1
+    event = events_for_pair[0]
+    assert event.visible is True
+    assert event.scheduled is False
+    assert event.visibility_reject_reason == "ok"
+    assert event.unscheduled_reason == "bbm_no_spare"
+
+
+def test_ground_event_diff_clears_unscheduled_reason_for_scheduled_pair():
+    """A scheduled pair has no unscheduled reason — even if the
+    allocator's unscheduled_pairs happened to mention something for
+    another pair on the same GS."""
+    pair = ("gs-den", "sat-a")
+    allocation = GroundAllocationResult(
+        associations={pair: (0, 0)},
+        pending_teardowns={},
+        scheduled_pairs=frozenset({pair}),
+        unscheduled_pairs=(),
+    )
+
+    diff = diff_ground_visibility_events(
+        sim_time=SIM,
+        visibility_decisions={
+            pair: _decision(pair, visible=True, range_km=900.0, elevation_deg=80.0)
+        },
+        allocation=allocation,
+        terminal_types={pair: "rf"},
+        previous_state={},
+    )
+
+    assert len(diff.events) == 1
+    event = diff.events[0]
+    assert event.scheduled is True
+    assert event.visibility_reject_reason == "ok"
+    assert event.unscheduled_reason is None

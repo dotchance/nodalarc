@@ -68,12 +68,23 @@ class GroundVisibilityDecision:
     applied_sat_terminal_profile: str | None
 
     def __post_init__(self) -> None:
-        """Mirror of `GroundVisibilityDecisionWire`'s validator.
+        """Mirror of `GroundVisibilityDecisionWire`'s validators.
 
-        Hot-path producers fail loud at construction if a
-        terminal-bound rejection cannot be attributed to a terminal
-        profile.
+        Hot-path producers fail loud at construction if visible /
+        reject_reason are inconsistent, or if a terminal-bound
+        rejection cannot be attributed to a terminal profile.
         """
+        if self.visible and self.reject_reason != "ok":
+            raise ValueError(
+                f"visible=True requires reject_reason='ok', got "
+                f"{self.reject_reason!r}. A visible pair cannot also carry "
+                "a rejection reason — the two fields must be consistent."
+            )
+        if not self.visible and self.reject_reason == "ok":
+            raise ValueError(
+                "visible=False requires a non-'ok' reject_reason — an "
+                "invisible pair must carry the reason it failed visibility."
+            )
         if self.reject_reason in (
             "range_exceeded",
             "field_of_regard",

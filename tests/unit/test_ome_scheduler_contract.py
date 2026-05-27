@@ -36,9 +36,18 @@ def _make_vis(
     node_b: str,
     visible: bool,
     scheduled: bool,
+    *,
+    visibility_reject_reason: str,
     link_type: str = "isl",
     sim_time: datetime | None = None,
+    unscheduled_reason: str | None = None,
 ) -> VisibilityEvent:
+    """Construct a VisibilityEvent for contract tests.
+
+    `visibility_reject_reason` is required — the caller declares the
+    physical state under test. No default that could silently smuggle
+    in an impossible (visible / reject_reason) combination.
+    """
     return VisibilityEvent(
         sim_time=sim_time or datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
         node_a=node_a,
@@ -52,6 +61,8 @@ def _make_vis(
         link_type=link_type,
         gs_terminal_index=0 if link_type == "ground" else None,
         sat_terminal_index=0 if link_type == "ground" else None,
+        visibility_reject_reason=visibility_reject_reason,
+        unscheduled_reason=unscheduled_reason,
     )
 
 
@@ -276,6 +287,7 @@ class TestSnapshotDominatesStaleVisibility:
             True,
             link_type="ground",
             sim_time=datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC),
+            visibility_reject_reason="ok",
         )
         desired = d._apply_events_to_desired([stale_event])
 
@@ -299,12 +311,16 @@ class TestSnapshotDominatesStaleVisibility:
         )
         d._build_desired_from_snapshot(snapshot)
 
+        # ISL pair drifting out of LOS. Caller declares the physical
+        # cause explicitly so impossible (visible=False, reason='ok')
+        # states cannot slip through.
         stale_removal = _make_vis(
             "sat-P00S00",
             "sat-P00S01",
             False,
             False,
             sim_time=snapshot_time,
+            visibility_reject_reason="los_blocked",
         )
         desired = d._apply_events_to_desired([stale_removal])
 
@@ -340,6 +356,7 @@ class TestSnapshotDominatesStaleVisibility:
             True,
             link_type="ground",
             sim_time=datetime(2026, 1, 1, 0, 0, 11, tzinfo=UTC),
+            visibility_reject_reason="ok",
         )
         desired = d._apply_events_to_desired([newer_event])
 
@@ -356,7 +373,16 @@ class TestGsDeallocationDispatchBatch:
         d._desired_links[("gs-ashburn", "sat-P00S00")] = info
         d._active_links[("gs-ashburn", "sat-P00S00")] = info
 
-        vis = _make_vis("gs-ashburn", "sat-P00S00", True, False, link_type="ground")
+        # GS pair still visible but allocator released the terminal.
+        vis = _make_vis(
+            "gs-ashburn",
+            "sat-P00S00",
+            True,
+            False,
+            link_type="ground",
+            visibility_reject_reason="ok",
+            unscheduled_reason="replaced_by_successor",
+        )
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
@@ -368,7 +394,15 @@ class TestGsDeallocationDispatchBatch:
         d._desired_links[("sat-P00S00", "sat-P00S01")] = info
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
-        vis = _make_vis("sat-P00S00", "sat-P00S01", True, False)
+        # ISL pair still visible but terminal-capacity-bound.
+        vis = _make_vis(
+            "sat-P00S00",
+            "sat-P00S01",
+            True,
+            False,
+            visibility_reject_reason="ok",
+            unscheduled_reason="isl_terminal_capacity",
+        )
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
@@ -397,7 +431,15 @@ class TestGsDeallocationConsistency:
         info = ActiveLinkInfo("term0", "gnd0", 3.0, 1000.0, link_type="ground")
         d2._desired_links[pair] = info
         d2._active_links[pair] = info
-        vis = _make_vis("gs-ashburn", "sat-P00S00", True, False, link_type="ground")
+        vis = _make_vis(
+            "gs-ashburn",
+            "sat-P00S00",
+            True,
+            False,
+            link_type="ground",
+            visibility_reject_reason="ok",
+            unscheduled_reason="replaced_by_successor",
+        )
         asyncio.run(d2._dispatch_batch([vis], [], MockNats()))
 
         # Both must agree

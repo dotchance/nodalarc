@@ -20,9 +20,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from nodalarc.models.link_decisions import LinkDecisionSnapshot, UnscheduledPair
+import pytest
+from nodalarc.models.link_decisions import (
+    GroundVisibilityDecisionWire,
+    LinkDecisionSnapshot,
+    UnscheduledPair,
+)
 from ome.snapshot_builder import build_link_decision_snapshot
 from ome.types import GroundVisibilityDecision
+from pydantic import ValidationError
 
 
 def _hot_decision(
@@ -128,9 +134,13 @@ class TestBuildLinkDecisionSnapshot:
         # Output order must be (a, b, c) regardless of input dict order.
         assert tuple(d.pair for d in snap.decisions) == (a, b, c)
 
-    def test_unscheduled_pairs_passed_through(self):
-        """The allocator already sorts unscheduled_pairs by pair. The
-        builder passes them through unchanged."""
+    def test_unscheduled_pairs_must_have_matching_visible_decision(self):
+        """Snapshot-level consistency: every unscheduled pair must
+        reference a visible decision in the same snapshot. An empty
+        decisions tuple with a non-empty unscheduled_pairs tuple is
+        impossible (the unscheduled pair has nowhere to anchor)."""
+        from pydantic import ValidationError
+
         pair = ("gs-a", "sat-2")
         unscheduled = UnscheduledPair(
             pair=pair,
@@ -140,8 +150,30 @@ class TestBuildLinkDecisionSnapshot:
             incumbent_pair=("gs-b", "sat-2"),
             capacity_constraint="sat-2.ground_terminals",
         )
+        with pytest.raises(ValidationError, match="no matching entry in"):
+            build_link_decision_snapshot(
+                decisions={},
+                unscheduled_pairs=(unscheduled,),
+                sim_time=SIM,
+                snapshot_seq=5,
+                epoch_id=0,
+            )
+
+    def test_unscheduled_pairs_with_matching_decision_pass_through(self):
+        """The normal path: an unscheduled pair anchored to a visible
+        decision in the same snapshot. Builder passes through unchanged."""
+        pair = ("gs-a", "sat-2")
+        unscheduled = UnscheduledPair(
+            pair=pair,
+            tenant_id="default",
+            reference_body="earth",
+            unscheduled_reason="sat_capacity",
+            incumbent_pair=("gs-b", "sat-2"),
+            capacity_constraint="sat-2.ground_terminals",
+        )
+        decision = _hot_decision(pair, visible=True)
         snap = build_link_decision_snapshot(
-            decisions={},
+            decisions={pair: decision},
             unscheduled_pairs=(unscheduled,),
             sim_time=SIM,
             snapshot_seq=5,
@@ -177,3 +209,166 @@ class TestBuildLinkDecisionSnapshot:
         )
         assert snap.snapshot_seq == 7
         assert snap.epoch_id == 4
+
+
+# ---------------------------------------------------------------------------
+# Snapshot-level consistency validators (Phase 1.1 boundary correctness)
+# ---------------------------------------------------------------------------
+
+
+def _wire_decision(
+    pair: tuple[str, str],
+    *,
+    visible: bool = True,
+    tenant_id: str = "default",
+    reference_body: str = "earth",
+) -> GroundVisibilityDecisionWire:
+    return GroundVisibilityDecisionWire(
+        pair=pair,
+        tenant_id=tenant_id,
+        reference_body=reference_body,
+        visible=visible,
+        range_km=1234.5,
+        elevation_deg=42.0 if visible else 10.0,
+        azimuth_deg=180.0,
+        observer_frame="body_local",
+        reject_reason="ok" if visible else "elevation_below_min",
+        applied_min_elevation_deg=25.0,
+        applied_max_range_km=None,
+        applied_field_of_regard_deg=None,
+        applied_max_tracking_rate_deg_s=None,
+        applied_boresight_mode=None,
+        applied_gs_terminal_profile=None,
+        applied_sat_terminal_profile=None,
+    )
+
+
+class TestLinkDecisionSnapshotConsistency:
+    """Direct LinkDecisionSnapshot construction must reject impossible
+    states. Producers (snapshot builder) can pass through valid inputs,
+    but the model is the last line of defense."""
+
+    def test_duplicate_decision_pair_rejected(self) -> None:
+        pair = ("gs-a", "sat-1")
+        with pytest.raises(ValidationError, match="duplicate pair"):
+            LinkDecisionSnapshot(
+                sim_time=SIM,
+                snapshot_seq=1,
+                epoch_id=0,
+                decisions=(_wire_decision(pair), _wire_decision(pair)),
+                unscheduled_pairs=(),
+            )
+
+    def test_unscheduled_pair_without_matching_decision_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="no matching entry in"):
+            LinkDecisionSnapshot(
+                sim_time=SIM,
+                snapshot_seq=1,
+                epoch_id=0,
+                decisions=(),
+                unscheduled_pairs=(
+                    UnscheduledPair(
+                        pair=("gs-a", "sat-1"),
+                        tenant_id="default",
+                        reference_body="earth",
+                        unscheduled_reason="sat_capacity",
+                    ),
+                ),
+            )
+
+    def test_unscheduled_pair_pointing_at_invisible_decision_rejected(self) -> None:
+        pair = ("gs-a", "sat-1")
+        with pytest.raises(ValidationError, match="visible=False"):
+            LinkDecisionSnapshot(
+                sim_time=SIM,
+                snapshot_seq=1,
+                epoch_id=0,
+                decisions=(_wire_decision(pair, visible=False),),
+                unscheduled_pairs=(
+                    UnscheduledPair(
+                        pair=pair,
+                        tenant_id="default",
+                        reference_body="earth",
+                        unscheduled_reason="sat_capacity",
+                    ),
+                ),
+            )
+
+    def test_unscheduled_pair_tenant_mismatch_rejected(self) -> None:
+        pair = ("gs-a", "sat-1")
+        with pytest.raises(ValidationError, match="tenant_id"):
+            LinkDecisionSnapshot(
+                sim_time=SIM,
+                snapshot_seq=1,
+                epoch_id=0,
+                decisions=(_wire_decision(pair, tenant_id="tenant-a"),),
+                unscheduled_pairs=(
+                    UnscheduledPair(
+                        pair=pair,
+                        tenant_id="tenant-b",
+                        reference_body="earth",
+                        unscheduled_reason="sat_capacity",
+                    ),
+                ),
+            )
+
+    def test_unscheduled_pair_body_mismatch_rejected(self) -> None:
+        pair = ("gs-a", "sat-1")
+        with pytest.raises(ValidationError, match="reference_body"):
+            LinkDecisionSnapshot(
+                sim_time=SIM,
+                snapshot_seq=1,
+                epoch_id=0,
+                decisions=(_wire_decision(pair, reference_body="earth"),),
+                unscheduled_pairs=(
+                    UnscheduledPair(
+                        pair=pair,
+                        tenant_id="default",
+                        reference_body="luna",
+                        unscheduled_reason="sat_capacity",
+                    ),
+                ),
+            )
+
+    def test_duplicate_unscheduled_pair_rejected(self) -> None:
+        pair = ("gs-a", "sat-1")
+        with pytest.raises(ValidationError, match="duplicate pair"):
+            LinkDecisionSnapshot(
+                sim_time=SIM,
+                snapshot_seq=1,
+                epoch_id=0,
+                decisions=(_wire_decision(pair),),
+                unscheduled_pairs=(
+                    UnscheduledPair(
+                        pair=pair,
+                        tenant_id="default",
+                        reference_body="earth",
+                        unscheduled_reason="sat_capacity",
+                    ),
+                    UnscheduledPair(
+                        pair=pair,
+                        tenant_id="default",
+                        reference_body="earth",
+                        unscheduled_reason="gs_capacity",
+                    ),
+                ),
+            )
+
+    def test_valid_snapshot_with_consistent_unscheduled_pair(self) -> None:
+        pair = ("gs-a", "sat-1")
+        snap = LinkDecisionSnapshot(
+            sim_time=SIM,
+            snapshot_seq=1,
+            epoch_id=0,
+            decisions=(_wire_decision(pair, visible=True),),
+            unscheduled_pairs=(
+                UnscheduledPair(
+                    pair=pair,
+                    tenant_id="default",
+                    reference_body="earth",
+                    unscheduled_reason="sat_capacity",
+                ),
+            ),
+        )
+        assert len(snap.decisions) == 1
+        assert len(snap.unscheduled_pairs) == 1

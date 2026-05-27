@@ -155,6 +155,100 @@ class TestVisibilityEvent:
         )
         assert evt.elevation_deg == 45.0
 
+    def test_visible_false_requires_non_ok_reject_reason(self):
+        """Foundational: an invisible event must declare WHY. Producer
+        must populate visibility_reject_reason."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="non-'ok'"):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                link_type="isl",
+                visible=False,
+                scheduled=False,
+                range_km=1000.0,
+                elevation_deg=None,
+                terminal_type="optical",
+                # visibility_reject_reason defaults to 'ok' — would be
+                # impossible with visible=False, so construction fails.
+            )
+
+    def test_visible_true_with_non_ok_reject_reason_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="visible=True requires"):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                link_type="isl",
+                visible=True,
+                scheduled=True,
+                range_km=1000.0,
+                elevation_deg=None,
+                terminal_type="optical",
+                visibility_reject_reason="los_blocked",
+            )
+
+    def test_unscheduled_reason_on_scheduled_pair_rejected(self):
+        """A scheduled pair has no unscheduled reason."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="unscheduled_reason set on a scheduled"):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                link_type="isl",
+                visible=True,
+                scheduled=True,
+                range_km=1000.0,
+                elevation_deg=None,
+                terminal_type="optical",
+                visibility_reject_reason="ok",
+                unscheduled_reason="isl_terminal_capacity",
+            )
+
+    def test_unscheduled_reason_on_invisible_pair_rejected(self):
+        """An invisible pair never reached the allocator."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="unscheduled_reason set on a non-visible"):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                link_type="isl",
+                visible=False,
+                scheduled=False,
+                range_km=1000.0,
+                elevation_deg=None,
+                terminal_type="optical",
+                visibility_reject_reason="los_blocked",
+                unscheduled_reason="isl_terminal_capacity",
+            )
+
+    def test_visible_unscheduled_event_carries_unscheduled_reason(self):
+        """A visible-but-unscheduled event must carry the scheduling
+        attribution so consumers can explain the transition from the
+        event stream alone."""
+        evt = VisibilityEvent(
+            sim_time=NOW,
+            node_a="sat-P00S00",
+            node_b="sat-P00S01",
+            link_type="isl",
+            visible=True,
+            scheduled=False,
+            range_km=1000.0,
+            elevation_deg=None,
+            terminal_type="optical",
+            visibility_reject_reason="ok",
+            unscheduled_reason="isl_terminal_capacity",
+        )
+        assert evt.unscheduled_reason == "isl_terminal_capacity"
+
     def test_frozen(self):
         evt = VisibilityEvent(
             sim_time=NOW,

@@ -270,6 +270,12 @@ class Dispatcher:
         self._last_substrate_reload: datetime | None = None
         self._dispatch_blocked_reason: str | None = None
 
+        # Epoch id of the most recent applied LinkStateSnapshot. Used
+        # together with _last_snapshot_seq and _last_snapshot_sim_time
+        # to enforce the pairing contract between LinkStateSnapshot and
+        # LinkDecisionSnapshot (see paired_decision_snapshot below).
+        self._last_snapshot_epoch_id: int = 0
+
         # Control plane state: scenario overrides. Values are reason strings.
         # Mutated only by _on_scenario_command on the main event loop.
         self._override_pairs: dict[tuple[str, str], str] = {}
@@ -874,6 +880,43 @@ class Dispatcher:
     # replacement-LinkUp-failure handling.
     # ------------------------------------------------------------------
 
+    def paired_decision_snapshot(self) -> LinkDecisionSnapshot | None:
+        """Return the latest decision snapshot ONLY if it pairs with
+        the latest applied LinkStateSnapshot — else None.
+
+        The plan's contract claims decision and state snapshots share
+        fate via the same stream + retention policy. Sharing a stream
+        does NOT prove pairing: NATS delivery is async and per-subject;
+        a Scheduler may receive the state snapshot for seq=N before
+        the decision snapshot for seq=N (or vice versa), or one may
+        be entirely missing during a stream restart.
+
+        Consumers asking "why is this pair not scheduled?" need to
+        know whether the diagnostic snapshot they hold actually
+        corresponds to the state snapshot they reconciled against.
+        This accessor enforces the pairing contract explicitly:
+        ``(epoch_id, snapshot_seq, sim_time)`` must match exactly.
+        On mismatch (or when one is missing), it returns None and the
+        consumer must treat diagnostics as unavailable for the current
+        state.
+
+        Multi-replica (Direction 4): each Scheduler replica enforces
+        pairing against its own observed snapshots. Replicas may pair
+        at slightly different seqs during catch-up; that is correct.
+        """
+        ds = self._latest_decision_snapshot
+        if ds is None:
+            return None
+        if self._last_snapshot_sim_time is None:
+            return None
+        if ds.snapshot_seq != self._last_snapshot_seq:
+            return None
+        if ds.epoch_id != self._last_snapshot_epoch_id:
+            return None
+        if ds.sim_time != self._last_snapshot_sim_time:
+            return None
+        return ds
+
     def authority_subset_violation(self) -> set[tuple[str, str]]:
         """Return pairs in `_desired_links` that `_ome_view` says the
         OME has NOT marked (visible AND scheduled).
@@ -1004,6 +1047,7 @@ class Dispatcher:
 
         self._last_snapshot_seq = snapshot.snapshot_seq
         self._last_snapshot_sim_time = snapshot.sim_time
+        self._last_snapshot_epoch_id = snapshot.epoch_id
         desired: dict[tuple[str, str], ActiveLinkInfo] = {}
         self._teardown_pairs.clear()
 

@@ -61,6 +61,30 @@ def diff_isl_visibility_events(
             continue
 
         state[pair] = new_state
+        # Phase 1 (C-foundation-5): propagate typed reasons onto the event.
+        # An ISL transition's reason is fully attributable from the
+        # feasibility result + scheduling result without consulting
+        # the snapshot.
+        visibility_reject_reason = "ok" if visible else result.reject_reason
+
+        # ISL unscheduled_reason: only meaningful when visible AND not
+        # scheduled. The ISL engine's contract today writes "capacity"
+        # in that case. Anything else on a visible+unscheduled pair is
+        # an ISL engine contract violation — fail loud so we discover
+        # the bug instead of papering over it.
+        unscheduled_reason: str | None = None
+        if visible and not scheduled:
+            isl_unscheduled = scheduled_links[pair].unscheduled_reason
+            if isl_unscheduled == "capacity":
+                unscheduled_reason = "isl_terminal_capacity"
+            else:
+                raise ValueError(
+                    f"ISL pair {pair} is visible+unscheduled but "
+                    f"scheduled_links[pair].unscheduled_reason="
+                    f"{isl_unscheduled!r} — expected 'capacity'. The ISL "
+                    "engine must not write physical-rejection values into "
+                    "the scheduling-axis field."
+                )
         events.append(
             VisibilityEvent(
                 sim_time=sim_time,
@@ -73,6 +97,8 @@ def diff_isl_visibility_events(
                 elevation_deg=None,
                 terminal_type=result.terminal_type,
                 link_type="isl",
+                visibility_reject_reason=visibility_reject_reason,
+                unscheduled_reason=unscheduled_reason,
             )
         )
 
@@ -93,9 +119,19 @@ def diff_ground_visibility_events(
     replacement for the positional `GroundVisibilityDetails` tuple).
     Named field access — no positional unpacking that can silently
     swap fields when the schema grows.
+
+    Reason propagation (Phase 1, C-foundation-5): every emitted event
+    carries both ``visibility_reject_reason`` (from the typed
+    decision) and ``unscheduled_reason`` (from the allocation's
+    unscheduled-pair set). Consumers of the event stream can attribute
+    transitions without correlating against the decision snapshot.
     """
     state = dict(previous_state)
     events: list[VisibilityEvent] = []
+
+    # Index the allocator's unscheduled-pair attributions by pair so
+    # we can propagate the reason onto the visibility event.
+    unscheduled_by_pair = {u.pair: u.unscheduled_reason for u in allocation.unscheduled_pairs}
 
     for pair, decision in visibility_decisions.items():
         scheduled = pair in allocation.scheduled_pairs if decision.visible else False
@@ -107,6 +143,13 @@ def diff_ground_visibility_events(
 
         state[pair] = new_state
         indices = allocation.associations[pair] if scheduled else None
+        # unscheduled_reason is set only when the pair is visible AND
+        # not scheduled (and the allocator recorded a reason for it).
+        # An invisible pair never reached the allocator. A scheduled
+        # pair has no rejection reason.
+        unscheduled_reason = (
+            unscheduled_by_pair.get(pair) if (decision.visible and not scheduled) else None
+        )
         events.append(
             VisibilityEvent(
                 sim_time=sim_time,
@@ -122,6 +165,8 @@ def diff_ground_visibility_events(
                 gs_terminal_index=indices[0] if indices else None,
                 sat_terminal_index=indices[1] if indices else None,
                 scheduling_state=sched_state,
+                visibility_reject_reason=decision.reject_reason,
+                unscheduled_reason=unscheduled_reason,
             )
         )
 

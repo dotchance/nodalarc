@@ -267,12 +267,21 @@ class TestUnscheduledPair:
 
 class TestLinkDecisionSnapshot:
     def _snapshot_kwargs(self) -> dict:
+        # Snapshot-level consistency: the unscheduled pair must
+        # reference a visible decision in the SAME snapshot. Both
+        # fixtures point at ("gs-a", "sat-1").
+        unscheduled_for_decision = UnscheduledPair(
+            pair=("gs-a", "sat-1"),
+            tenant_id="default",
+            reference_body="earth",
+            unscheduled_reason="gs_capacity",
+        )
         return {
             "sim_time": datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC),
             "snapshot_seq": 42,
             "epoch_id": 1,
             "decisions": (GroundVisibilityDecisionWire(**_decision_kwargs_wire()),),
-            "unscheduled_pairs": (UnscheduledPair(**_unscheduled_kwargs()),),
+            "unscheduled_pairs": (unscheduled_for_decision,),
         }
 
     def test_construction(self) -> None:
@@ -316,6 +325,42 @@ class TestLinkDecisionSnapshot:
 # ---------------------------------------------------------------------------
 # Cross-type semantics
 # ---------------------------------------------------------------------------
+
+
+class TestVisibleRejectReasonConsistency:
+    """Foundational consistency: visible iff reject_reason == 'ok'.
+    Both forms must reject impossible states at construction."""
+
+    def test_wire_rejects_visible_true_with_non_ok_reason(self) -> None:
+        for bad in ("los_blocked", "elevation_below_min"):
+            kwargs = _decision_kwargs_wire()
+            kwargs["visible"] = True
+            kwargs["reject_reason"] = bad
+            # Terminal-bound rejection profiles default to set; clear so
+            # the *visible* check fires first.
+            with pytest.raises(ValidationError, match="visible=True requires"):
+                GroundVisibilityDecisionWire(**kwargs)
+
+    def test_wire_rejects_visible_false_with_ok_reason(self) -> None:
+        kwargs = _decision_kwargs_wire()
+        kwargs["visible"] = False
+        kwargs["reject_reason"] = "ok"
+        with pytest.raises(ValidationError, match="non-'ok' reject_reason"):
+            GroundVisibilityDecisionWire(**kwargs)
+
+    def test_hot_path_rejects_visible_true_with_non_ok_reason(self) -> None:
+        kwargs = _decision_kwargs_hot()
+        kwargs["visible"] = True
+        kwargs["reject_reason"] = "los_blocked"
+        with pytest.raises(ValueError, match="visible=True requires"):
+            GroundVisibilityDecision(**kwargs)
+
+    def test_hot_path_rejects_visible_false_with_ok_reason(self) -> None:
+        kwargs = _decision_kwargs_hot()
+        kwargs["visible"] = False
+        kwargs["reject_reason"] = "ok"
+        with pytest.raises(ValueError, match="non-'ok' reject_reason"):
+            GroundVisibilityDecision(**kwargs)
 
 
 class TestTerminalConstraintAttribution:

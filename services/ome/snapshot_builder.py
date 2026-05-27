@@ -11,10 +11,16 @@ wire contract.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import datetime
 
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.geo import compute_latency_ms, compute_range_km
+from nodalarc.models.link_decisions import (
+    GroundVisibilityDecisionWire,
+    LinkDecisionSnapshot,
+    UnscheduledPair,
+)
 from nodalarc.models.link_state import (
     AdminState,
     CarrierState,
@@ -24,7 +30,45 @@ from nodalarc.models.link_state import (
 )
 
 from ome.propagation_engine import PropagatedState
-from ome.types import MbbTeardownState
+from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
+
+
+def build_link_decision_snapshot(
+    *,
+    decisions: GroundVisibilityDecisionMap,
+    unscheduled_pairs: tuple[UnscheduledPair, ...],
+    sim_time: datetime,
+    snapshot_seq: int,
+    epoch_id: int,
+) -> LinkDecisionSnapshot:
+    """Build the diagnostic companion to ``LinkStateSnapshot``.
+
+    Converts the hot-path slotted ``GroundVisibilityDecision`` instances
+    to Pydantic ``GroundVisibilityDecisionWire`` form for the NATS
+    boundary. Decisions are sorted by pair for deterministic payloads —
+    Direction 4 (multi-compute-node) requires that two Scheduler
+    replicas receiving the same snapshot see the same ordering.
+
+    The same ``snapshot_seq`` / ``sim_time`` as the companion
+    ``LinkStateSnapshot`` so consumers can correlate the two by
+    sequence and time.
+
+    ``unscheduled_pairs`` is already a Pydantic tuple from the
+    allocator (the allocator constructs UnscheduledPair instances
+    directly). The order is preserved — the allocator already
+    sorted by pair.
+    """
+    sorted_decisions = sorted(decisions.items(), key=lambda kv: kv[0])
+    wire_decisions = tuple(
+        GroundVisibilityDecisionWire(**asdict(decision)) for _pair, decision in sorted_decisions
+    )
+    return LinkDecisionSnapshot(
+        sim_time=sim_time,
+        snapshot_seq=snapshot_seq,
+        epoch_id=epoch_id,
+        decisions=wire_decisions,
+        unscheduled_pairs=unscheduled_pairs,
+    )
 
 
 def build_link_state_snapshot(

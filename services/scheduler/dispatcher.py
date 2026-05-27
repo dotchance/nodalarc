@@ -50,6 +50,7 @@ from typing import Literal
 
 import nats
 from nodalarc.models.events import PlaybackState, SessionEphemeris, VisibilityEvent
+from nodalarc.models.link_decisions import LinkDecisionSnapshot
 from nodalarc.models.link_events import LinkDecisionProvenance
 from nodalarc.models.link_state import LinkStateSnapshot
 from nodalarc.nats_channels import (
@@ -57,6 +58,7 @@ from nodalarc.nats_channels import (
     STREAM_LINK_EVENTS,
     STREAM_OME_EVENTS,
     latency_update_subject,
+    link_decision_snapshot_subject,
     link_down_subject,
     link_state_snapshot_subject,
     link_up_subject,
@@ -205,6 +207,7 @@ class Dispatcher:
         self._subj_playback = playback_state_subject(session_id)
         self._subj_checkpoint = scheduling_checkpoint_subject(session_id)
         self._subj_link_snapshot = link_state_snapshot_subject(session_id)
+        self._subj_link_decisions = link_decision_snapshot_subject(session_id)
         self._subj_link_up = link_up_subject(session_id)
         self._subj_link_down = link_down_subject(session_id)
         self._subj_latency = latency_update_subject(session_id)
@@ -213,6 +216,14 @@ class Dispatcher:
         # Written ONLY by callbacks. Snapshots replace entirely. Events modify
         # incrementally. The queue carries copies to the dispatch worker.
         self._desired_links: dict[tuple[str, str], ActiveLinkInfo] = {}
+
+        # Latest LinkDecisionSnapshot from OME (Phase 1.3.b). Passive
+        # storage in this sub-phase; Phase 1.4 reads it to construct
+        # ``_ome_view`` and detect divergence from ``_desired_links``.
+        # Reset to None on each Scheduler start; rebuilt from NATS
+        # subscription (Direction 4: state derived from authority, not
+        # local invention).
+        self._latest_decision_snapshot: LinkDecisionSnapshot | None = None
 
         # Actuator state: what IS active (confirmed by Node Agent).
         # Written ONLY by the dispatch worker after Node Agent ACK.
@@ -691,6 +702,42 @@ class Dispatcher:
                 )
                 await self._dispatch_queue.put(intent)
 
+        async def _on_link_decision_snapshot(msg):
+            """Phase 1.3.b passive receiver — validate and store the
+            decision snapshot. The Scheduler does not yet act on it.
+
+            Phase 1.4 introduces ``_ome_view`` (the parallel divergence
+            detector); Phase 5 promotes the subset invariant to a
+            production ``RuntimeError`` and removes the safety-net
+            override at ``dispatcher.py:835-857``.
+
+            For now: validate the payload structure (fail-loud on any
+            schema mismatch), retain the most recent snapshot for the
+            ``_ome_view`` consumer in 1.4, and log a debug summary.
+            Direction 4 (multi-compute-node): each Scheduler replica
+            receives this independently from NATS — no replica-local
+            state that does not survive failover.
+            """
+            try:
+                decision_snapshot = LinkDecisionSnapshot.model_validate_json(msg.data)
+            except ValidationError as exc:
+                log.warning(
+                    "Ignoring schema-incompatible retained LinkDecisionSnapshot on %s; "
+                    "waiting for OME to publish current decision snapshot: %s",
+                    msg.subject,
+                    exc,
+                )
+                return
+
+            self._latest_decision_snapshot = decision_snapshot
+            log.debug(
+                "LinkDecisionSnapshot seq=%d epoch_id=%d: %d decisions, %d unscheduled",
+                decision_snapshot.snapshot_seq,
+                decision_snapshot.epoch_id,
+                len(decision_snapshot.decisions),
+                len(decision_snapshot.unscheduled_pairs),
+            )
+
         subs = []
 
         subscriptions = [
@@ -711,6 +758,12 @@ class Dispatcher:
                 STREAM_LINK_EVENTS,
                 DeliverPolicy.LAST_PER_SUBJECT,
                 _on_link_state_snapshot,
+            ),
+            (
+                self._subj_link_decisions,
+                STREAM_LINK_EVENTS,
+                DeliverPolicy.LAST_PER_SUBJECT,
+                _on_link_decision_snapshot,
             ),
         ]
         for subj, stream, policy, cb in subscriptions:

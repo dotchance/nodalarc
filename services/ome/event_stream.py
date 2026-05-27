@@ -57,7 +57,7 @@ from ome.propagator import (
     geodetic_to_ecef,
 )
 from ome.snapshot_builder import build_link_state_snapshot as build_link_state_snapshot
-from ome.types import MbbTeardownState
+from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +176,11 @@ class StepResult:
 
     This replaces the former tuple return so callers cannot accidentally mix
     physics output, allocation state, and MBB teardown state by position.
+
+    ``ground_decisions`` carries the typed per-pair visibility decisions
+    the OME produced this tick. The OME main loop uses them to build
+    ``LinkDecisionSnapshot`` at every snapshot interval — the diagnostic
+    companion to ``LinkStateSnapshot``.
     """
 
     events: list[TimelineEvent]
@@ -184,6 +189,7 @@ class StepResult:
     isl_feasibility: dict[tuple[str, str], IslFeasibilityResult]
     isl_links: dict[tuple[str, str], ScheduledIsl]
     ground_allocation: GroundAllocationResult
+    ground_decisions: GroundVisibilityDecisionMap
     propagated_states: dict[str, PropagatedState]
     sim_time: datetime
     sim_time_unix: float
@@ -463,6 +469,7 @@ def compute_step(
         isl_feasibility=isl_feasibility,
         isl_links=isl_links,
         ground_allocation=ground_allocation,
+        ground_decisions=ground_visibility.decisions,
         propagated_states=sat_states,
         sim_time=sim_time,
         sim_time_unix=epoch_unix + dt,

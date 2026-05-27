@@ -225,6 +225,30 @@ class Dispatcher:
         # local invention).
         self._latest_decision_snapshot: LinkDecisionSnapshot | None = None
 
+        # Parallel OME-view dict: the OME's stated truth for each pair
+        # the OME has spoken about. Used by the C-A subset invariant
+        # repro test to detect divergence from ``_desired_links``.
+        #
+        # Lifecycle (Phase 1.4 introduces the dict; Phase 5 promotes
+        # the divergence check to a production fail-loud RuntimeError
+        # and graduates ``_ome_view`` to the authoritative model
+        # replacing ``_desired_links`` after the safety-net override
+        # is removed):
+        #   - Construction: incremental from VisibilityEvent; full
+        #     replacement from LinkStateSnapshot.
+        #   - Reset: cleared on Scheduler SUSPENDED → playing
+        #     transition; rebuilt from the first post-resume snapshot.
+        #   - Memory bound: per-pair, bounded by the constellation's
+        #     pair count (configured at session start).
+        #   - Multi-replica (Direction 4): each Scheduler replica
+        #     computes ``_ome_view`` from its own NATS subscription.
+        #     Replicas see the same events and converge to the same
+        #     view. The C-A repro asserts per-replica.
+        #   - Tuple shape mirrors event_diff's GroundVisibilityState
+        #     and LinkStateSnapshot's gs_state for direct comparison:
+        #     (visible: bool, scheduled: bool, sched_state: str).
+        self._ome_view: dict[tuple[str, str], tuple[bool, bool, str]] = {}
+
         # Actuator state: what IS active (confirmed by Node Agent).
         # Written ONLY by the dispatch worker after Node Agent ACK.
         self._actual_links: dict[tuple[str, str], ActiveLinkInfo] = {}
@@ -839,6 +863,43 @@ class Dispatcher:
             log.info("Dispatcher stopped")
 
     # ------------------------------------------------------------------
+    # C-A subset invariant: _desired_links ⊆ OME's stated truth.
+    #
+    # Phase 1.4 introduces this as a pure-observation helper. The C-A
+    # repro test calls it to assert divergence between _desired_links
+    # and _ome_view when the safety-net override at lines 926-932 (in
+    # _apply_events_to_desired) fires. Phase 5 promotes the check to a
+    # production-time fail-loud RuntimeError in the same change set
+    # that removes the override and adds the fail-loud
+    # replacement-LinkUp-failure handling.
+    # ------------------------------------------------------------------
+
+    def authority_subset_violation(self) -> set[tuple[str, str]]:
+        """Return pairs in `_desired_links` that `_ome_view` says the
+        OME has NOT marked (visible AND scheduled).
+
+        A non-empty result means the Scheduler's desired state diverges
+        from the OME's stated truth — the safety-net override is the
+        primary known cause today (line 926-932). Phase 5 will fail
+        loud on any non-empty result.
+
+        Pure observation. No state mutation. Multi-replica safe — each
+        replica's view is derived from its own NATS subscription.
+        """
+        violations: set[tuple[str, str]] = set()
+        for pair in self._desired_links:
+            ome_state = self._ome_view.get(pair)
+            if ome_state is None:
+                # OME has not spoken about this pair at all — the
+                # Scheduler is making it up. This is a violation.
+                violations.add(pair)
+                continue
+            visible, scheduled, _sched_state = ome_state
+            if not (visible and scheduled):
+                violations.add(pair)
+        return violations
+
+    # ------------------------------------------------------------------
     # Decision Engine: build desired state (pure computation, no I/O)
     # ------------------------------------------------------------------
 
@@ -870,6 +931,16 @@ class Dispatcher:
                     self._last_snapshot_sim_time.isoformat(),
                 )
                 continue
+
+            # Update _ome_view: this is the OME's stated truth for the
+            # pair, independent of what the Scheduler's own
+            # _desired_links holds (which may diverge via the
+            # safety-net override at line 926-932 — see C-A repro test).
+            self._ome_view[pair] = (
+                vis.visible,
+                vis.scheduled,
+                getattr(vis, "scheduling_state", "active"),
+            )
 
             if vis.visible and vis.scheduled:
                 sched_state = getattr(vis, "scheduling_state", "active")
@@ -936,7 +1007,31 @@ class Dispatcher:
         desired: dict[tuple[str, str], ActiveLinkInfo] = {}
         self._teardown_pairs.clear()
 
+        # Snapshot is replace-not-merge for both _desired_links and
+        # _ome_view (Phase 1.4). _ome_view captures the OME's stated
+        # truth derived from the snapshot's carrier and scheduling_state
+        # fields, independent of any safety-net override applied later
+        # via _apply_events_to_desired. The C-A repro test compares
+        # _ome_view to _desired_links to surface divergence.
+        new_ome_view: dict[tuple[str, str], tuple[bool, bool, str]] = {}
+
         for link in snapshot.links:
+            pair = (link.node_a, link.node_b)
+            # Derive (visible, scheduled, sched_state) from the
+            # snapshot's CarrierState + scheduling_state metadata.
+            # UP → (True, True, sched_state).
+            # LOWERLAYERDOWN → (True, False, sched_state).
+            # DOWN → (False, False, sched_state).
+            from nodalarc.models.link_state import CarrierState as _Carrier
+
+            sched_state = getattr(link, "scheduling_state", "active") or "active"
+            if link.carrier == _Carrier.UP:
+                new_ome_view[pair] = (True, True, sched_state)
+            elif link.carrier == _Carrier.LOWERLAYERDOWN:
+                new_ome_view[pair] = (True, False, sched_state)
+            else:
+                new_ome_view[pair] = (False, False, sched_state)
+
             built = desired_link_from_snapshot_link(
                 link,
                 interface_map=self._interface_map,
@@ -948,14 +1043,16 @@ class Dispatcher:
                 continue
             pair, info = built
             desired[pair] = info
-            sched_state = getattr(link, "scheduling_state", "active")
             if sched_state == "teardown":
                 self._teardown_pairs.add(pair)
             else:
                 self._teardown_pairs.discard(pair)
 
-        # Replace _desired_links entirely — snapshot is authoritative
+        # Replace _desired_links entirely — snapshot is authoritative.
+        # Replace _ome_view entirely for the same reason — Phase 1.4
+        # tests assert this is the OME's stated truth at snapshot time.
         self._desired_links = desired
+        self._ome_view = new_ome_view
 
         isl = sum(1 for info in desired.values() if info.link_type == "isl")
         gs = sum(1 for info in desired.values() if info.link_type == "ground")

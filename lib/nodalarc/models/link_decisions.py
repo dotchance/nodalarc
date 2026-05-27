@@ -1,0 +1,232 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
+"""Link-decision boundary types.
+
+The OME computes a per-pair visibility *decision* every tick: physical
+visibility plus the constraints applied to reach that decision, plus
+why the pair is or is not scheduled. The decision is distinct from the
+*actuated link state* carried on `LinkStateSnapshot` — `LinkStateSnapshot`
+describes what the forwarding plane is doing right now; `LinkDecisionSnapshot`
+describes what the OME decided and why.
+
+Two layers per the foundational trust plan:
+
+- `GroundVisibilityDecisionWire` — Pydantic frozen, used at the NATS
+  publish/parse boundary. Crosses component boundaries.
+- The hot-path computational variant lives in `services/ome/types.py`
+  as a slotted dataclass and is converted to the wire form at publish
+  time. Inside the OME compute loop we never instantiate Pydantic
+  models per pair — that would cost too much at constellation scale.
+
+Direction 2 (multi-tenant from day one): every entity carries `tenant_id`.
+Direction 3 (multi-body from day one): every decision carries the
+`reference_body` it is anchored to and the `observer_frame` used to
+compute the geometry. A future cislunar relay serving Earth and Luna
+GSes will carry decisions for both bodies; the consumer reads the
+field rather than assuming Earth.
+
+These models are intentionally strict: every constructor argument is
+required. There are no permissive defaults. A field that "could be
+None" is one whose semantic meaning is "this constraint was not
+applied" — never "we forgot to fill this in." If a field is unknown at
+construction time, the producer is wrong; fix the producer.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, model_validator
+
+VisibilityRejectReason = Literal[
+    "ok",
+    "los_blocked",
+    "elevation_below_min",
+    "range_exceeded",
+    "field_of_regard",
+    "tracking_exceeded",
+]
+"""Physical / geometric reason a pair fails visibility.
+
+`ok` means the pair is geometrically visible. Other values describe
+*why* the pair did not pass the per-terminal physics gate. These are
+independent of scheduling — a visible pair may still be unscheduled
+(see `UnscheduledReason`)."""
+
+
+UnscheduledReason = Literal[
+    "gs_capacity",
+    "sat_capacity",
+    "hysteresis_hold",
+    "incumbent_held",
+    "bbm_no_spare",
+    "replaced_by_successor",
+]
+"""Allocation reason a visible pair is not currently scheduled.
+
+These are the scheduler-side reasons. A pair in active MBB teardown
+overlap is `(visible=True, scheduled=True, scheduling_state="teardown")`
+and is NOT in `unscheduled_pairs` — teardown is a scheduling state, not
+an unscheduled-reason. The post-teardown released pair is
+`replaced_by_successor`."""
+
+
+ObserverFrame = Literal["body_local", "configured_inertial"]
+"""Reference frame for `elevation_deg` / `azimuth_deg`.
+
+`body_local` is the body-local-vertical frame anchored to the
+observer's `reference_body` (ENU at Earth, MCMF-local-vertical at
+Luna, etc.). `configured_inertial` is an explicitly configured
+inertial vector relative to the body's reference frame — used for
+Lagrange-point relays and other platforms with no natural local
+vertical."""
+
+
+BoresightMode = Literal[
+    "local_vertical",
+    "configured_inertial",
+    "steerable_envelope",
+    "nadir",
+]
+"""Which boresight model produced the FoR check.
+
+`local_vertical` and `configured_inertial` apply to ground terminals.
+`nadir` is the default for satellite ground terminals (points toward
+the body the sat orbits). `steerable_envelope` is the multi-axis
+mount model with independent az/el limits."""
+
+
+class GroundVisibilityDecisionWire(BaseModel):
+    """Per-pair ground visibility decision in wire form.
+
+    Published as part of `LinkDecisionSnapshot` on the
+    `SUBJECT_LINK_DECISIONS` NATS subject (added in the producer
+    landing PR per the plan's NATS subject discipline).
+
+    Every field is required at construction. `applied_*` fields use
+    `None` to mean "this constraint was not in effect for the decision"
+    (e.g., a `geometry_only` session does not declare `max_range_km`,
+    so the field is `None`); they never mean "we forgot to populate
+    this." A `physical_v1` session must populate every applied
+    constraint that the GS or sat terminal declares.
+
+    Terminal profile fields explained:
+    - `applied_gs_terminal_profile` and `applied_sat_terminal_profile`
+      identify which *terminal definition / constraint profile* the
+      visibility check evaluated against — NOT the kernel interface
+      name (`term0`, `gnd0`) and NOT the terminal instance index.
+      A satellite type may declare multiple `GroundTerminalDef`
+      entries with different `max_range_km` / boresight values; the
+      profile identifier names which definition's constraints applied
+      to this decision. Use `None` only when the session is
+      `geometry_only` and no terminal-level constraints were applied.
+      The instance index (which physical terminal got the
+      assignment) is carried separately on `VisibilityEvent` /
+      `LinkState` as `gs_terminal_index` / `sat_terminal_index`.
+
+    Invariant (enforced by the model validator below): if
+    `reject_reason` names a terminal-bound constraint
+    (`range_exceeded`, `field_of_regard`, `tracking_exceeded`), at
+    least one side's profile MUST be identified — otherwise the
+    rejection is unattributable to a specific terminal and cannot be
+    audited.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pair: tuple[str, str]
+    tenant_id: str
+    reference_body: str
+    visible: bool
+    range_km: float
+    elevation_deg: float
+    azimuth_deg: float | None
+    observer_frame: ObserverFrame
+    reject_reason: VisibilityRejectReason
+    applied_min_elevation_deg: float
+    applied_max_range_km: float | None
+    applied_field_of_regard_deg: float | None
+    applied_max_tracking_rate_deg_s: float | None
+    applied_boresight_mode: BoresightMode | None
+    applied_gs_terminal_profile: str | None
+    applied_sat_terminal_profile: str | None
+
+    @model_validator(mode="after")
+    def _terminal_constraint_must_name_profile(self) -> GroundVisibilityDecisionWire:
+        """Terminal-bound rejections must name the terminal that rejected.
+
+        If we say "this pair was rejected for range_exceeded," an
+        auditor must be able to ask "which terminal's max range was
+        exceeded?" The answer lives in the profile identifier. If
+        neither side's profile is identified for a terminal-bound
+        rejection, the producer is wrong — fail loud at construction.
+        """
+        if self.reject_reason in (
+            "range_exceeded",
+            "field_of_regard",
+            "tracking_exceeded",
+        ) and (
+            self.applied_gs_terminal_profile is None and self.applied_sat_terminal_profile is None
+        ):
+            raise ValueError(
+                f"reject_reason={self.reject_reason!r} requires at least one of "
+                "applied_gs_terminal_profile / applied_sat_terminal_profile to be "
+                "set — the rejection must be attributable to a specific terminal "
+                "profile for audit."
+            )
+        return self
+
+
+class UnscheduledPair(BaseModel):
+    """A pair that was visible but not scheduled, with the reason.
+
+    Carried in `LinkDecisionSnapshot.unscheduled_pairs`. A pair appears
+    here when `GroundVisibilityDecisionWire.visible=True` but the
+    allocator did not schedule it.
+
+    Teardown-overlap pairs do NOT appear here — they are scheduled
+    (the old terminal is still active) and carry
+    `scheduling_state="teardown"` on `VisibilityEvent` / `LinkState`.
+
+    `incumbent_pair` is populated when this pair was rejected because
+    a specific incumbent held the slot (`hysteresis_hold` or
+    `incumbent_held`). `capacity_constraint` is populated when the
+    reason names a specific resource that ran out (e.g., the sat
+    ground-terminal id).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pair: tuple[str, str]
+    tenant_id: str
+    reference_body: str
+    unscheduled_reason: UnscheduledReason
+    incumbent_pair: tuple[str, str] | None = None
+    capacity_constraint: str | None = None
+
+
+class LinkDecisionSnapshot(BaseModel):
+    """Companion to `LinkStateSnapshot`: what the OME decided, and why.
+
+    Published on `SUBJECT_LINK_DECISIONS` alongside (same `sim_time`
+    and `snapshot_seq`) the carrier-state `LinkStateSnapshot`.
+
+    `LinkStateSnapshot` carries the actuated forwarding-plane state.
+    `LinkDecisionSnapshot` carries the OME's decision context for
+    every pair the OME considered — visible-and-scheduled,
+    visible-but-rejected, and visible-but-unscheduled.
+
+    The two snapshots are correlatable by `sim_time` and
+    `snapshot_seq`. Consumers asking "what is forwarding?" read the
+    state snapshot; consumers asking "why isn't this link up?" read
+    the decision snapshot.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    sim_time: datetime
+    snapshot_seq: int
+    epoch_id: int
+    decisions: tuple[GroundVisibilityDecisionWire, ...]
+    unscheduled_pairs: tuple[UnscheduledPair, ...]

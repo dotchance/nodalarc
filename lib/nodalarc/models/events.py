@@ -129,8 +129,21 @@ class VisibilityEvent(BaseModel):
 
     @model_validator(mode="after")
     def _reasons_consistent_with_state(self) -> VisibilityEvent:
-        """Direction 1.1: visible iff visibility_reject_reason == 'ok'.
-        unscheduled_reason allowed only when visible-but-unscheduled."""
+        """Phase 1 (C-foundation-5): both axes of the reason taxonomy must be
+        consistent with (visible, scheduled). The four states are:
+
+        - visible=True,  scheduled=True  → reject='ok',     unscheduled=None
+        - visible=True,  scheduled=False → reject='ok',     unscheduled=<set>
+        - visible=False, scheduled=False → reject=<non-ok>, unscheduled=None
+        - visible=False, scheduled=True  → impossible (a non-visible pair
+          cannot be scheduled — the OME would never have allocated it).
+
+        A visible-but-unscheduled pair without an unscheduled_reason is a
+        producer bug: the allocator must attribute every visible pair it
+        did not schedule. We refuse to emit an event that elides the
+        attribution because consumers downstream then cannot explain the
+        transition from the event alone.
+        """
         if self.visible and self.visibility_reject_reason != "ok":
             raise ValueError(
                 f"visible=True requires visibility_reject_reason='ok', got "
@@ -138,6 +151,19 @@ class VisibilityEvent(BaseModel):
             )
         if not self.visible and self.visibility_reject_reason == "ok":
             raise ValueError("visible=False requires a non-'ok' visibility_reject_reason.")
+        if not self.visible and self.scheduled:
+            raise ValueError(
+                "visible=False with scheduled=True is impossible — a "
+                "non-visible pair cannot be scheduled. The producer must "
+                "set scheduled=False whenever visible=False."
+            )
+        if self.visible and not self.scheduled and self.unscheduled_reason is None:
+            raise ValueError(
+                "visible=True with scheduled=False requires "
+                "unscheduled_reason to be set — the allocator must "
+                "attribute every visible pair it did not schedule. "
+                "Missing attribution is a producer bug."
+            )
         if self.unscheduled_reason is not None:
             if not self.visible:
                 raise ValueError(

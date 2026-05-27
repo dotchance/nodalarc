@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 from datetime import UTC, datetime
 
+import pytest
 from nodalarc.geo import compute_latency_ms
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import GroundAllocationResult
@@ -244,6 +245,31 @@ def test_ground_event_diff_propagates_unscheduled_reason_for_visible_but_unalloc
     assert event.scheduled is False
     assert event.visibility_reject_reason == "ok"
     assert event.unscheduled_reason == "bbm_no_spare"
+
+
+def test_ground_event_diff_fails_loud_when_allocator_omits_attribution_for_visible_unscheduled():
+    """If the allocator hands diff_ground_visibility_events a visible-but-
+    unscheduled pair without a matching UnscheduledPair attribution, the
+    producer is wrong. The diff engine must refuse to emit an event with
+    no scheduling reason rather than papering over the gap with None."""
+    pair = ("gs-den", "sat-a")
+    allocation = GroundAllocationResult(
+        associations={},
+        pending_teardowns={},
+        scheduled_pairs=frozenset(),
+        unscheduled_pairs=(),  # allocator omitted attribution
+    )
+
+    with pytest.raises(ValueError, match="did not attribute an unscheduled_reason"):
+        diff_ground_visibility_events(
+            sim_time=SIM,
+            visibility_decisions={
+                pair: _decision(pair, visible=True, range_km=900.0, elevation_deg=80.0),
+            },
+            allocation=allocation,
+            terminal_types={pair: "rf"},
+            previous_state={},
+        )
 
 
 def test_ground_event_diff_clears_unscheduled_reason_for_scheduled_pair():

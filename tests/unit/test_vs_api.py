@@ -1079,3 +1079,266 @@ class TestDebugRefCounting:
 
         assert "scheduler" not in m._debug_sources
         assert "scheduler" not in m._debug_clients.get(1001, set())
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 (C-foundation-5): operator-facing decision reasons
+# ---------------------------------------------------------------------------
+
+
+def _decision_snapshot_payload() -> dict:
+    """Build a minimal LinkDecisionSnapshot payload covering all three
+    operator-relevant cases: visible+scheduled, visible+unscheduled,
+    invisible. The endpoint must surface each correctly."""
+    return {
+        "sim_time": "2026-01-01T00:00:00+00:00",
+        "snapshot_seq": 42,
+        "epoch_id": 0,
+        "decisions": [
+            {
+                "pair": ["gs-den", "sat-a"],
+                "tenant_id": "default",
+                "reference_body": "earth",
+                "visible": True,
+                "range_km": 900.0,
+                "elevation_deg": 70.0,
+                "azimuth_deg": 180.0,
+                "observer_frame": "body_local",
+                "reject_reason": "ok",
+                "applied_min_elevation_deg": 25.0,
+                "applied_max_range_km": None,
+                "applied_field_of_regard_deg": None,
+                "applied_max_tracking_rate_deg_s": None,
+                "applied_boresight_mode": None,
+                "applied_gs_terminal_profile": None,
+                "applied_sat_terminal_profile": None,
+            },
+            {
+                "pair": ["gs-den", "sat-b"],
+                "tenant_id": "default",
+                "reference_body": "earth",
+                "visible": True,
+                "range_km": 1100.0,
+                "elevation_deg": 30.0,
+                "azimuth_deg": 90.0,
+                "observer_frame": "body_local",
+                "reject_reason": "ok",
+                "applied_min_elevation_deg": 25.0,
+                "applied_max_range_km": None,
+                "applied_field_of_regard_deg": None,
+                "applied_max_tracking_rate_deg_s": None,
+                "applied_boresight_mode": None,
+                "applied_gs_terminal_profile": None,
+                "applied_sat_terminal_profile": None,
+            },
+            {
+                "pair": ["gs-den", "sat-c"],
+                "tenant_id": "default",
+                "reference_body": "earth",
+                "visible": False,
+                "range_km": 5000.0,
+                "elevation_deg": -10.0,
+                "azimuth_deg": None,
+                "observer_frame": "body_local",
+                "reject_reason": "elevation_below_min",
+                "applied_min_elevation_deg": 25.0,
+                "applied_max_range_km": None,
+                "applied_field_of_regard_deg": None,
+                "applied_max_tracking_rate_deg_s": None,
+                "applied_boresight_mode": None,
+                "applied_gs_terminal_profile": None,
+                "applied_sat_terminal_profile": None,
+            },
+        ],
+        "unscheduled_pairs": [
+            {
+                "pair": ["gs-den", "sat-b"],
+                "tenant_id": "default",
+                "reference_body": "earth",
+                "unscheduled_reason": "hysteresis_hold",
+                "incumbent_pair": ["gs-den", "sat-a"],
+                "capacity_constraint": None,
+            }
+        ],
+    }
+
+
+class TestLinkDecisionSnapshotSubscription:
+    """SessionContext subscribes to LinkDecisionSnapshot and retains the
+    latest. Older sequence numbers are discarded so an out-of-order
+    delivery cannot regress operator-visible state."""
+
+    def test_handler_stores_latest_snapshot(self):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        msg = MagicMock()
+        msg.data = json.dumps(_decision_snapshot_payload()).encode()
+
+        asyncio.run(ctx._on_link_decision_snapshot(msg))
+
+        snap = ctx.latest_link_decision_snapshot
+        assert snap is not None
+        assert snap.snapshot_seq == 42
+        assert {d.pair for d in snap.decisions} == {
+            ("gs-den", "sat-a"),
+            ("gs-den", "sat-b"),
+            ("gs-den", "sat-c"),
+        }
+        assert len(snap.unscheduled_pairs) == 1
+        assert snap.unscheduled_pairs[0].unscheduled_reason == "hysteresis_hold"
+
+    def test_stale_snapshot_seq_is_discarded(self):
+        """A snapshot with seq <= last seq must not regress state.
+        Direction 4 (multi-replica) requires deterministic ordering;
+        out-of-order delivery is real on JetStream restart."""
+        import asyncio
+        from unittest.mock import MagicMock
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        first = MagicMock()
+        first.data = json.dumps(_decision_snapshot_payload()).encode()
+        asyncio.run(ctx._on_link_decision_snapshot(first))
+
+        older = _decision_snapshot_payload()
+        older["snapshot_seq"] = 41
+        older["unscheduled_pairs"] = []
+        old_msg = MagicMock()
+        old_msg.data = json.dumps(older).encode()
+        asyncio.run(ctx._on_link_decision_snapshot(old_msg))
+
+        # Retained snapshot is still seq 42 with its original unscheduled pair.
+        snap = ctx.latest_link_decision_snapshot
+        assert snap.snapshot_seq == 42
+        assert len(snap.unscheduled_pairs) == 1
+
+
+class TestLinkDecisionsEndpoint:
+    """`GET /api/v1/link-decisions` exposes the OME's reasons to operators.
+
+    Without an active session: 404. Without a snapshot: 404. Full
+    snapshot when called with no pair query; per-pair view (decision +
+    matching unscheduled record) when called with both query params."""
+
+    def _make_ctx_with_snapshot(self):
+        from unittest.mock import MagicMock
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        import asyncio
+
+        msg = MagicMock()
+        msg.data = json.dumps(_decision_snapshot_payload()).encode()
+        asyncio.run(ctx._on_link_decision_snapshot(msg))
+        return ctx
+
+    def test_returns_404_when_no_session(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", None)
+        r = TestClient(m.app).get("/api/v1/link-decisions")
+        assert r.status_code == 404
+
+    def test_returns_404_when_no_snapshot_received(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        monkeypatch.setattr(m, "_active_context", ctx)
+
+        r = TestClient(m.app).get("/api/v1/link-decisions")
+        assert r.status_code == 404
+        assert "no" in r.json()["error"].lower()
+
+    def test_full_snapshot_returned_without_pair_query(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get("/api/v1/link-decisions")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["snapshot_seq"] == 42
+        assert len(body["decisions"]) == 3
+        assert len(body["unscheduled_pairs"]) == 1
+        assert body["unscheduled_pairs"][0]["unscheduled_reason"] == "hysteresis_hold"
+
+    def test_per_pair_returns_scheduled_decision_with_null_unscheduled(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get(
+            "/api/v1/link-decisions",
+            params={"node_a": "gs-den", "node_b": "sat-a"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["decision"]["pair"] == ["gs-den", "sat-a"]
+        assert body["decision"]["visible"] is True
+        assert body["decision"]["reject_reason"] == "ok"
+        assert body["unscheduled"] is None
+
+    def test_per_pair_returns_unscheduled_attribution(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get(
+            "/api/v1/link-decisions",
+            params={"node_a": "sat-b", "node_b": "gs-den"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        # Pair is normalized lexicographically
+        assert body["decision"]["pair"] == ["gs-den", "sat-b"]
+        assert body["decision"]["visible"] is True
+        assert body["unscheduled"]["unscheduled_reason"] == "hysteresis_hold"
+        assert body["unscheduled"]["incumbent_pair"] == ["gs-den", "sat-a"]
+
+    def test_per_pair_returns_invisible_with_physical_reason(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get(
+            "/api/v1/link-decisions",
+            params={"node_a": "gs-den", "node_b": "sat-c"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["decision"]["visible"] is False
+        assert body["decision"]["reject_reason"] == "elevation_below_min"
+        assert body["unscheduled"] is None  # invisible never reaches allocator
+
+    def test_per_pair_unknown_pair_returns_404(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get(
+            "/api/v1/link-decisions",
+            params={"node_a": "gs-mystery", "node_b": "sat-ghost"},
+        )
+        assert r.status_code == 404
+
+    def test_one_query_param_alone_returns_400(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get("/api/v1/link-decisions", params={"node_a": "gs-den"})
+        assert r.status_code == 400

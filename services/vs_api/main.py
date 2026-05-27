@@ -1611,6 +1611,67 @@ def get_link_decision_traces(
     return traces
 
 
+@app.get(
+    "/api/v1/link-decisions",
+    dependencies=[Depends(_require_api_key)],
+    response_model=None,
+)
+def get_link_decisions(
+    node_a: str = Query(None),
+    node_b: str = Query(None),
+) -> dict | JSONResponse:
+    """Return the latest OME LinkDecisionSnapshot.
+
+    Phase 1 (C-foundation-5): the operator-facing surface for "why isn't
+    this pair up?" Every pair the OME considered carries
+    ``visibility_reject_reason``; visible-but-unscheduled pairs
+    additionally carry ``unscheduled_reason`` plus the incumbent or
+    capacity constraint the allocator chose them over.
+
+    Without ``node_a`` / ``node_b`` returns the full snapshot
+    (``sim_time``, ``snapshot_seq``, ``epoch_id``, all decisions, all
+    unscheduled pairs). With both, returns just that pair's decision
+    and matching unscheduled-pair record (if any).
+
+    ``404`` if no snapshot has been received yet; ``404`` for a
+    specific pair the OME never considered.
+    """
+    ctx = _active_context
+    if ctx is None:
+        return JSONResponse(status_code=404, content={"error": "No active session"})
+    if (node_a is None) != (node_b is None):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "node_a and node_b must be provided together"},
+        )
+    with ctx.state_lock:
+        snapshot = ctx.latest_link_decision_snapshot
+    if snapshot is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "No LinkDecisionSnapshot received yet"},
+        )
+    if node_a and node_b:
+        target = tuple(sorted((node_a, node_b)))
+        decision = next((d for d in snapshot.decisions if d.pair == target), None)
+        if decision is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"OME has no decision for pair {node_a}<->{node_b}"},
+            )
+        unscheduled = next((u for u in snapshot.unscheduled_pairs if u.pair == target), None)
+        return {
+            "sim_time": snapshot.sim_time.isoformat(),
+            "snapshot_seq": snapshot.snapshot_seq,
+            "epoch_id": snapshot.epoch_id,
+            "decision": json.loads(decision.model_dump_json()),
+            "unscheduled": (
+                json.loads(unscheduled.model_dump_json()) if unscheduled is not None else None
+            ),
+        }
+    return json.loads(snapshot.model_dump_json())
+
+
 @app.get("/api/v1/metrics/convergence", dependencies=[Depends(_require_api_key)])
 def get_convergence_events(
     start: str = Query(None),

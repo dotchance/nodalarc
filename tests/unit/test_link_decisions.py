@@ -133,6 +133,22 @@ class TestGroundVisibilityDecisionHotPath:
         # Sanity: optional-but-present field name was correctly classified
         assert "azimuth_deg" in required_fields
 
+    def test_isl_only_reject_reason_rejected_on_hot_path(self) -> None:
+        """Static `Literal` typing rules out ISL-only values, but
+        dataclasses do not enforce it at runtime. The hot path must
+        fail loud anyway so a producer bug cannot inject `polar_seam`
+        or other ISL values into a ground decision in the compute loop."""
+        for isl_only in (
+            "polar_seam",
+            "terminal_type_mismatch",
+            "terminal_role_mismatch",
+        ):
+            kwargs = _decision_kwargs_hot()
+            kwargs["visible"] = False
+            kwargs["reject_reason"] = isl_only
+            with pytest.raises(ValueError, match="not a valid ground rejection reason"):
+                GroundVisibilityDecision(**kwargs)
+
     def test_none_applied_fields_allowed(self) -> None:
         """`applied_*` fields and `azimuth_deg` may be None — semantic
         meaning is 'constraint not applied for this decision'.
@@ -181,6 +197,23 @@ class TestGroundVisibilityDecisionWire:
         kwargs["reject_reason"] = "made_up_reason"
         with pytest.raises(ValidationError):
             GroundVisibilityDecisionWire(**kwargs)
+
+    def test_isl_only_reject_reason_rejected_on_ground_decision(self) -> None:
+        """ISL-only physical reasons cannot appear on a ground decision.
+        Polar seam, terminal type mismatch, and terminal role mismatch
+        are inter-satellite-only failure modes — stamping them on a
+        ground decision is a producer bug, and the type system refuses
+        it."""
+        for isl_only in (
+            "polar_seam",
+            "terminal_type_mismatch",
+            "terminal_role_mismatch",
+        ):
+            kwargs = _decision_kwargs_wire()
+            kwargs["visible"] = False
+            kwargs["reject_reason"] = isl_only
+            with pytest.raises(ValidationError):
+                GroundVisibilityDecisionWire(**kwargs)
 
     def test_invalid_observer_frame_rejected(self) -> None:
         kwargs = _decision_kwargs_wire()
@@ -253,6 +286,20 @@ class TestUnscheduledPair:
     def test_invalid_reason_rejected(self) -> None:
         kwargs = _unscheduled_kwargs()
         kwargs["unscheduled_reason"] = "active_teardown"
+        with pytest.raises(ValidationError):
+            UnscheduledPair(
+                **kwargs,
+                incumbent_pair=None,
+                capacity_constraint=None,
+            )
+
+    def test_isl_only_unscheduled_reason_rejected_on_ground_decision(self) -> None:
+        """The ISL allocator's `isl_terminal_capacity` is a satellite-
+        side resource exhaustion. It cannot describe a ground-link
+        rejection. A `LinkDecisionSnapshot` is ground-context, so
+        `UnscheduledPair` refuses the ISL-only reason at construction."""
+        kwargs = _unscheduled_kwargs()
+        kwargs["unscheduled_reason"] = "isl_terminal_capacity"
         with pytest.raises(ValidationError):
             UnscheduledPair(
                 **kwargs,
@@ -496,9 +543,11 @@ class TestLinkDecisionSnapshotSubject:
 
     def test_decision_subject_lives_on_links_stream(self) -> None:
         """Both decision and state snapshots share the
-        `nodalarc.links.{session}.*` namespace so they retain together
-        on NODALARC_LINKS. A consumer with the latest state snapshot
-        also has the latest decision snapshot."""
+        `nodalarc.links.{session}.*` namespace so they live on the
+        NODALARC_LINKS stream's per-subject retention. Same stream is
+        NOT pairing — pairing happens explicitly by
+        (epoch_id, snapshot_seq, sim_time) in the consumer; see
+        scheduler.dispatcher.paired_decision_snapshot."""
         assert SUBJECT_LINK_STATE_SNAPSHOT.startswith("nodalarc.links.")
         assert SUBJECT_LINK_DECISION_SNAPSHOT.startswith("nodalarc.links.")
         # Different terminal segments — separate subjects within the stream

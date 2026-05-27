@@ -21,7 +21,7 @@ from typing import NamedTuple
 
 from nodalarc.constants import WGS84_A, WGS84_B
 from nodalarc.geo import compute_range_km
-from nodalarc.models.link_decisions import VisibilityRejectReason
+from nodalarc.models.link_decisions import GroundVisibilityRejectReason
 
 from ome.propagator import GeoPosition, Vec3
 
@@ -62,7 +62,7 @@ class GroundVisibility(NamedTuple):
     elevation_deg: float
     range_km: float
     remaining_visible_s: float | None
-    reject_reason: VisibilityRejectReason
+    reject_reason: GroundVisibilityRejectReason
 
 
 class IslVisibility(NamedTuple):

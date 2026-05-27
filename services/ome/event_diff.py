@@ -144,12 +144,25 @@ def diff_ground_visibility_events(
         state[pair] = new_state
         indices = allocation.associations[pair] if scheduled else None
         # unscheduled_reason is set only when the pair is visible AND
-        # not scheduled (and the allocator recorded a reason for it).
-        # An invisible pair never reached the allocator. A scheduled
-        # pair has no rejection reason.
-        unscheduled_reason = (
-            unscheduled_by_pair.get(pair) if (decision.visible and not scheduled) else None
-        )
+        # not scheduled. An invisible pair never reached the allocator.
+        # A scheduled pair has no rejection reason. A visible+unscheduled
+        # pair MUST have been attributed by the allocator — if not, the
+        # producer is wrong and we fail loud rather than emit an event
+        # the downstream consumer cannot explain.
+        unscheduled_reason: str | None
+        if decision.visible and not scheduled:
+            if pair not in unscheduled_by_pair:
+                raise ValueError(
+                    f"Ground pair {pair} is visible+unscheduled but the "
+                    "allocator did not attribute an unscheduled_reason. "
+                    "Every visible pair the allocator did not schedule "
+                    "must appear in allocation.unscheduled_pairs — fix the "
+                    "allocator attribution rather than emitting an event "
+                    "with no scheduling reason."
+                )
+            unscheduled_reason = unscheduled_by_pair[pair]
+        else:
+            unscheduled_reason = None
         events.append(
             VisibilityEvent(
                 sim_time=sim_time,

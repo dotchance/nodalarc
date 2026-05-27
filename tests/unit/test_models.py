@@ -275,6 +275,55 @@ class TestVisibilityEvent:
         )
         assert evt.unscheduled_reason == "isl_terminal_capacity"
 
+    def test_visible_unscheduled_without_reason_rejected(self):
+        """A visible-but-unscheduled event with unscheduled_reason=None
+        is a producer bug — the allocator must attribute every visible
+        pair it did not schedule. Refuse construction so the producer
+        cannot silently emit an unexplainable transition."""
+        from pydantic import ValidationError
+
+        with pytest.raises(
+            ValidationError,
+            match="visible=True with scheduled=False requires",
+        ):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                link_type="isl",
+                visible=True,
+                scheduled=False,
+                range_km=1000.0,
+                elevation_deg=None,
+                terminal_type="optical",
+                visibility_reject_reason="ok",
+                unscheduled_reason=None,
+            )
+
+    def test_invisible_but_scheduled_rejected(self):
+        """visible=False with scheduled=True is impossible — a pair the
+        OME deemed invisible cannot also be in the allocator's
+        scheduled set."""
+        from pydantic import ValidationError
+
+        with pytest.raises(
+            ValidationError,
+            match="visible=False with scheduled=True is impossible",
+        ):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                link_type="isl",
+                visible=False,
+                scheduled=True,
+                range_km=1000.0,
+                elevation_deg=None,
+                terminal_type="optical",
+                visibility_reject_reason="los_blocked",
+                unscheduled_reason=None,
+            )
+
     def test_frozen(self):
         evt = VisibilityEvent(
             sim_time=NOW,

@@ -109,12 +109,16 @@ def link_decision_snapshot_subject(session_id: str) -> str:
 
     The subject lives on the ``NODALARC_LINKS`` stream which already
     enforces ``MaxMsgsPerSubject=1``. Replace-not-merge: only the
-    latest decision snapshot is retained. A late-joining Scheduler
-    receives the current decisions without history replay.
+    latest decision snapshot is retained per subject. A late-joining
+    Scheduler receives the current decisions without history replay.
 
-    Carrying both snapshots on the same stream guarantees they share
-    fate: a Scheduler that has the latest ``LinkStateSnapshot`` also
-    has the latest ``LinkDecisionSnapshot``.
+    Same-stream colocation does NOT pair the two snapshots — the state
+    and decision snapshots are independent NATS messages with separate
+    ``MaxMsgsPerSubject=1`` retention. Consumers pair them by
+    ``(epoch_id, snapshot_seq, sim_time)``; see
+    ``scheduler.dispatcher.paired_decision_snapshot()``. Treating the
+    shared stream as pairing is wrong and will deliver mismatched
+    state/decision pairs on restart or restream.
     """
     return f"nodalarc.links.{session_id}.decisions"
 

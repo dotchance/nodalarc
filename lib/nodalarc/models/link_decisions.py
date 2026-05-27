@@ -39,45 +39,43 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-VisibilityRejectReason = Literal[
+GroundVisibilityRejectReason = Literal[
     "ok",
     "los_blocked",
     "elevation_below_min",
     "range_exceeded",
     "field_of_regard",
     "tracking_exceeded",
-    "polar_seam",
-    "terminal_type_mismatch",
-    "terminal_role_mismatch",
 ]
-"""Physical / geometric reason a pair fails visibility.
+"""Physical / geometric reason a ground-link pair fails visibility.
 
 `ok` means the pair is geometrically visible. Other values describe
-*why* the pair did not pass the per-terminal physics gate. These are
-independent of scheduling — a visible pair may still be unscheduled
-(see `UnscheduledReason`).
+*why* the pair did not pass the per-terminal physics gate at the
+ground-station boundary. These are independent of scheduling — a
+visible pair may still be unscheduled (see `GroundUnscheduledReason`).
 
-Ground-applicable subset: `ok`, `los_blocked`, `elevation_below_min`,
-`range_exceeded`, `field_of_regard`, `tracking_exceeded`. ISL adds
-`polar_seam`, `terminal_type_mismatch`, `terminal_role_mismatch`."""
+This is the GROUND-ONLY subset. ISL adds its own rejection reasons
+(`polar_seam`, `terminal_type_mismatch`, `terminal_role_mismatch`) on
+`VisibilityEvent`, but those values must never appear on a
+`GroundVisibilityDecisionWire` — a ground decision rejected for an
+ISL-only reason is a producer bug, and the type system refuses it."""
 
 
-UnscheduledReason = Literal[
+GroundUnscheduledReason = Literal[
     "gs_capacity",
     "sat_capacity",
-    "isl_terminal_capacity",
     "hysteresis_hold",
     "incumbent_held",
     "bbm_no_spare",
     "replaced_by_successor",
 ]
-"""Allocation reason a visible pair is not currently scheduled.
+"""Allocation reason a visible GROUND pair is not currently scheduled.
 
-Ground reasons: `gs_capacity`, `sat_capacity`, `hysteresis_hold`,
-`incumbent_held`, `bbm_no_spare`, `replaced_by_successor`. ISL adds
-`isl_terminal_capacity` for the case where the pair is physically
-feasible but the satellite's ISL terminals are exhausted by symmetric
-priority allocation.
+The ISL allocator's `isl_terminal_capacity` is intentionally absent
+from this enum. `UnscheduledPair` lives in the ground-decision
+snapshot (`LinkDecisionSnapshot.unscheduled_pairs`), and a ground pair
+stamped with an ISL-only reason is a producer bug. Future ISL
+decision snapshots will carry their own typed reason.
 
 A pair in active MBB teardown overlap is `(visible=True,
 scheduled=True, scheduling_state="teardown")` and is NOT in
@@ -157,7 +155,7 @@ class GroundVisibilityDecisionWire(BaseModel):
     elevation_deg: float
     azimuth_deg: float | None
     observer_frame: ObserverFrame
-    reject_reason: VisibilityRejectReason
+    reject_reason: GroundVisibilityRejectReason
     applied_min_elevation_deg: float
     applied_max_range_km: float | None
     applied_field_of_regard_deg: float | None
@@ -238,7 +236,7 @@ class UnscheduledPair(BaseModel):
     pair: tuple[str, str]
     tenant_id: str
     reference_body: str
-    unscheduled_reason: UnscheduledReason
+    unscheduled_reason: GroundUnscheduledReason
     incumbent_pair: tuple[str, str] | None
     capacity_constraint: str | None
 

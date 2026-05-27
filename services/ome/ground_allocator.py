@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from nodalarc.models.ground_station import HysteresisParameters
-from nodalarc.models.link_decisions import UnscheduledPair, UnscheduledReason
+from nodalarc.models.link_decisions import GroundUnscheduledReason, UnscheduledPair
 
 from ome.types import MbbTeardown, MbbTeardownState
 from ome.visibility import GroundVisibility
@@ -163,7 +163,7 @@ def _attribute_rejected_pairs(
         gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
         tenant_id = gs_tenant_ids[gs_id]
         reference_body = gs_reference_bodies[gs_id]
-        reason: UnscheduledReason
+        reason: GroundUnscheduledReason
 
         # Case 1: this pair was in an MBB teardown that just expired.
         # The OME has released the slot for a successor. The pair is

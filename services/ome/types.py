@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 from nodalarc.models.link_decisions import (
     BoresightMode,
+    GroundVisibilityRejectReason,
     ObserverFrame,
-    VisibilityRejectReason,
 )
 
 
@@ -58,7 +58,7 @@ class GroundVisibilityDecision:
     elevation_deg: float
     azimuth_deg: float | None
     observer_frame: ObserverFrame
-    reject_reason: VisibilityRejectReason
+    reject_reason: GroundVisibilityRejectReason
     applied_min_elevation_deg: float
     applied_max_range_km: float | None
     applied_field_of_regard_deg: float | None
@@ -73,7 +73,20 @@ class GroundVisibilityDecision:
         Hot-path producers fail loud at construction if visible /
         reject_reason are inconsistent, or if a terminal-bound
         rejection cannot be attributed to a terminal profile.
+
+        Dataclasses do not enforce `Literal` at runtime, so we also
+        check that `reject_reason` is a member of the ground-only
+        rejection enum. An ISL-only value here would otherwise slip
+        past static typing into the hot path.
         """
+        if self.reject_reason not in _GROUND_REJECT_REASONS:
+            raise ValueError(
+                f"reject_reason={self.reject_reason!r} is not a valid "
+                "ground rejection reason. Allowed: "
+                f"{sorted(_GROUND_REJECT_REASONS)!r}. ISL-only values "
+                "(polar_seam, terminal_type_mismatch, terminal_role_mismatch) "
+                "must never appear on a ground decision."
+            )
         if self.visible and self.reject_reason != "ok":
             raise ValueError(
                 f"visible=True requires reject_reason='ok', got "
@@ -98,6 +111,18 @@ class GroundVisibilityDecision:
                 "set — the rejection must be attributable to a specific terminal "
                 "profile for audit."
             )
+
+
+_GROUND_REJECT_REASONS: frozenset[str] = frozenset(
+    {
+        "ok",
+        "los_blocked",
+        "elevation_below_min",
+        "range_exceeded",
+        "field_of_regard",
+        "tracking_exceeded",
+    }
+)
 
 
 GroundVisibilityDecisionMap = dict[tuple[str, str], GroundVisibilityDecision]

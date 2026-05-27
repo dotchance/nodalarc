@@ -12,15 +12,20 @@ from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.models.addressing import AddressingScheme
 
 from ome.propagation_engine import PropagatedState, propagate_satellites
-from ome.types import GroundVisibilityDetails
+from ome.types import GroundVisibilityDecision, GroundVisibilityDecisionMap
 from ome.visibility import GroundVisibility, check_ground_visibility
 
 
 @dataclass(frozen=True)
 class GroundVisibilityEvaluation:
-    """Ground visibility output for one OME tick."""
+    """Ground visibility output for one OME tick.
 
-    details: GroundVisibilityDetails
+    `decisions` carries the typed per-pair decision (visibility,
+    range, elevation, applied constraints, reject reason). Replaces
+    the legacy positional `details` tuple alias in Phase 1.2.b.
+    """
+
+    decisions: GroundVisibilityDecisionMap
     visible_per_station: dict[str, list[GroundVisibility]]
 
 
@@ -106,17 +111,29 @@ def evaluate_ground_visibility(
     sat_states: Mapping[str, PropagatedState],
     gs_positions: Mapping[str, tuple[EcefVec3, GeoPosition]],
     gs_min_elevations: Mapping[str, float],
+    gs_tenant_ids: Mapping[str, str],
+    gs_reference_bodies: Mapping[str, str],
     gs_policies: Mapping[str, str] | None = None,
     pass_lookahead: GroundPassLookahead | None = None,
 ) -> GroundVisibilityEvaluation:
     """Evaluate geometric GS/satellite visibility for one tick.
 
-    Missing propagated satellite state is fatal. The ground allocator must not
-    receive a candidate set that silently omits a satellite because the
-    propagation boundary failed upstream.
+    Missing propagated satellite state is fatal. Missing per-GS
+    `tenant_id` or `reference_body` is fatal — Direction 2 and
+    Direction 3 require every decision to carry both. The ground
+    allocator must not receive a candidate set that silently omits a
+    satellite because the propagation boundary failed upstream, and
+    consumers must not receive decisions whose tenant or body context
+    is unknown.
+
+    `applied_*` constraint fields are populated as `None` in this
+    sub-phase (Phase 1.2.b) — the typed decision substrate is in
+    place, but the actual range/FoR/tracking constraint enforcement
+    (Phase 2 of the foundational trust plan) has not landed yet. The
+    `physical_v1` fidelity gate will populate them when it ships.
     """
     ordered_satellite_ids = tuple(satellite_ids)
-    details: GroundVisibilityDetails = {}
+    decisions: dict[tuple[str, str], GroundVisibilityDecision] = {}
     visible_per_station: dict[str, list[GroundVisibility]] = {}
 
     policies = gs_policies or {}
@@ -132,6 +149,20 @@ def evaluate_ground_visibility(
             "Ground visibility is missing minimum elevation config for "
             f"{', '.join(missing_min_elev)}"
         )
+    missing_tenant = sorted(set(gs_positions) - set(gs_tenant_ids))
+    if missing_tenant:
+        raise ValueError(
+            "Ground visibility is missing tenant_id for "
+            f"{', '.join(missing_tenant)} — Direction 2 requires every decision "
+            "to carry tenant scope from day one"
+        )
+    missing_body = sorted(set(gs_positions) - set(gs_reference_bodies))
+    if missing_body:
+        raise ValueError(
+            "Ground visibility is missing reference_body for "
+            f"{', '.join(missing_body)} — Direction 3 requires every decision "
+            "to be anchored to a specific body"
+        )
     longest_pass_station_ids = {
         gs_id for gs_id in gs_positions if policies.get(gs_id) == "longest-remaining-pass"
     }
@@ -143,6 +174,8 @@ def evaluate_ground_visibility(
     visible_candidates_requiring_dwell: set[tuple[str, str]] = set()
     for gs_id, (gs_ecef, gs_geo) in gs_positions.items():
         min_elev = gs_min_elevations[gs_id]
+        tenant_id = gs_tenant_ids[gs_id]
+        reference_body = gs_reference_bodies[gs_id]
         visible_sats: list[GroundVisibility] = []
         for sat_id in ordered_satellite_ids:
             state = sat_states.get(sat_id)
@@ -159,7 +192,30 @@ def evaluate_ground_visibility(
                 min_elev,
             )
             pair = (min(gs_id, sat_id), max(gs_id, sat_id))
-            details[pair] = (gv.visible, gv.range_km, gv.elevation_deg)
+            decisions[pair] = GroundVisibilityDecision(
+                pair=pair,
+                tenant_id=tenant_id,
+                reference_body=reference_body,
+                visible=gv.visible,
+                range_km=gv.range_km,
+                elevation_deg=gv.elevation_deg,
+                # Azimuth is computed in Phase 2 when the boresight
+                # model lands. Phase 1.2 publishes None to keep the
+                # contract honest: we do not have the data yet.
+                azimuth_deg=None,
+                observer_frame="body_local",
+                reject_reason=gv.reject_reason,
+                applied_min_elevation_deg=min_elev,
+                # Phase 2 populates these. Until then the decision
+                # honestly says "this constraint was not applied" —
+                # no fallback, no silent permissive default.
+                applied_max_range_km=None,
+                applied_field_of_regard_deg=None,
+                applied_max_tracking_rate_deg_s=None,
+                applied_boresight_mode=None,
+                applied_gs_terminal_profile=None,
+                applied_sat_terminal_profile=None,
+            )
             if gv.visible:
                 if gs_id in longest_pass_station_ids:
                     visible_candidates_requiring_dwell.add((gs_id, sat_id))
@@ -195,6 +251,6 @@ def evaluate_ground_visibility(
             ]
 
     return GroundVisibilityEvaluation(
-        details=details,
+        decisions=decisions,
         visible_per_station=visible_per_station,
     )

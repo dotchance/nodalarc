@@ -151,6 +151,12 @@ class StepContext:
     gs_policies: dict[str, str]
     gs_hysteresis: dict[str, HysteresisParameters]
     gs_service_priorities: dict[str, int]
+    # Per-GS tenant scope (Direction 2 — multi-tenant from day one) and
+    # reference body (Direction 3 — multi-body from day one). Both
+    # already exist on GroundStationConfig; the StepContext carries them
+    # so every visibility decision is tenant- and body-attributable.
+    gs_tenant_ids: dict[str, str]
+    gs_reference_bodies: dict[str, str]
     ground_pair_terminal_types: dict[tuple[str, str], str]
     by_node: dict[str, list[NeighborAssignment]]
     sat_isl_terminals: dict[str, int]
@@ -253,6 +259,8 @@ def build_step_context(
     gs_policies: dict[str, str] = {}
     gs_hysteresis: dict[str, HysteresisParameters] = {}
     gs_service_priorities: dict[str, int] = {}
+    gs_tenant_ids: dict[str, str] = {}
+    gs_reference_bodies: dict[str, str] = {}
     gs_terminal_types: dict[str, str] = {}
     ground_pair_terminal_types: dict[tuple[str, str], str] = {}
     if gs_file:
@@ -280,6 +288,8 @@ def build_step_context(
             )
             gs_hysteresis[node_id] = station.hysteresis
             gs_service_priorities[node_id] = station.service_priority
+            gs_tenant_ids[node_id] = station.tenant_id
+            gs_reference_bodies[node_id] = station.reference_body
         for gs_id, gs_type in gs_terminal_types.items():
             for sat_id, sat_type in sat_ground_terminal_types.items():
                 if gs_type != sat_type:
@@ -300,6 +310,8 @@ def build_step_context(
         gs_policies=gs_policies,
         gs_hysteresis=gs_hysteresis,
         gs_service_priorities=gs_service_priorities,
+        gs_tenant_ids=gs_tenant_ids,
+        gs_reference_bodies=gs_reference_bodies,
         ground_pair_terminal_types=ground_pair_terminal_types,
         by_node=by_node,
         sat_isl_terminals=sat_isl_terminals,
@@ -394,6 +406,8 @@ def compute_step(
         sat_states=sat_states,
         gs_positions=ctx.gs_positions,
         gs_min_elevations=ctx.gs_min_elevations,
+        gs_tenant_ids=ctx.gs_tenant_ids,
+        gs_reference_bodies=ctx.gs_reference_bodies,
         gs_policies=ctx.gs_policies,
         pass_lookahead=(
             GroundPassLookahead(
@@ -429,7 +443,7 @@ def compute_step(
     # 8. Emit ground visibility events on state changes (triple state).
     ground_diff = diff_ground_visibility_events(
         sim_time=sim_time,
-        visibility_details=ground_visibility.details,
+        visibility_decisions=ground_visibility.decisions,
         allocation=ground_allocation,
         previous_state=gs_state,
         terminal_types=ctx.ground_pair_terminal_types,

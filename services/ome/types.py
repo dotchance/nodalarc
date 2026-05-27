@@ -89,14 +89,7 @@ class GroundVisibilityDecision:
             )
 
 
-# TODO(phase-1.2): `GroundVisibilityDetails` is the legacy positional
-# tuple alias. Phase 1.2 of the foundational trust plan migrates every
-# consumer to `GroundVisibilityDecision` (above) and removes this alias.
-# Do not add new consumers of this type.
-GroundVisibilityDetails = dict[tuple[str, str], tuple[bool, float, float | None]]
-"""Legacy positional tuple alias. Migrate consumers to
-`GroundVisibilityDecision` and remove this in Phase 1.2."""
-
 GroundVisibilityDecisionMap = dict[tuple[str, str], GroundVisibilityDecision]
-"""Per-pair decision map. The Phase 1.2 replacement for
-`GroundVisibilityDetails` once consumers are migrated."""
+"""Per-pair decision map. Replaced the legacy positional tuple alias
+`GroundVisibilityDetails` in Phase 1.2.b — no positional unpacking, no
+sentinel-value heuristics, every field named and typed."""

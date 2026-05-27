@@ -49,6 +49,8 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
         gs_policies={},
         gs_hysteresis={},
         gs_service_priorities={},
+        gs_tenant_ids={},
+        gs_reference_bodies={},
         ground_pair_terminal_types={},
         by_node={
             node_a: [

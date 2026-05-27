@@ -19,7 +19,7 @@ from nodalarc.models.events import VisibilityEvent
 
 from ome.ground_allocator import GroundAllocationResult
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
-from ome.types import GroundVisibilityDetails
+from ome.types import GroundVisibilityDecisionMap
 
 IslVisibilityState = dict[tuple[str, str], tuple[bool, bool]]
 GroundVisibilityState = dict[tuple[str, str], tuple[bool, bool, str]]
@@ -82,19 +82,25 @@ def diff_isl_visibility_events(
 def diff_ground_visibility_events(
     *,
     sim_time: datetime,
-    visibility_details: GroundVisibilityDetails,
+    visibility_decisions: GroundVisibilityDecisionMap,
     allocation: GroundAllocationResult,
     previous_state: Mapping[tuple[str, str], tuple[bool, bool, str]],
     terminal_types: Mapping[tuple[str, str], str],
 ) -> GroundEventDiff:
-    """Emit ground VisibilityEvents for changed visibility/allocation state."""
+    """Emit ground VisibilityEvents for changed visibility/allocation state.
+
+    Consumes the typed `GroundVisibilityDecisionMap` (Phase 1.2.b
+    replacement for the positional `GroundVisibilityDetails` tuple).
+    Named field access — no positional unpacking that can silently
+    swap fields when the schema grows.
+    """
     state = dict(previous_state)
     events: list[VisibilityEvent] = []
 
-    for pair, (visible, range_km, elev_deg) in visibility_details.items():
-        scheduled = pair in allocation.scheduled_pairs if visible else False
+    for pair, decision in visibility_decisions.items():
+        scheduled = pair in allocation.scheduled_pairs if decision.visible else False
         sched_state = "teardown" if pair in allocation.pending_teardowns else "active"
-        new_state = (visible, scheduled, sched_state)
+        new_state = (decision.visible, scheduled, sched_state)
 
         if new_state == state.get(pair, (False, False, "active")):
             continue
@@ -106,11 +112,11 @@ def diff_ground_visibility_events(
                 sim_time=sim_time,
                 node_a=pair[0],
                 node_b=pair[1],
-                visible=visible,
+                visible=decision.visible,
                 scheduled=scheduled,
-                range_km=range_km,
-                latency_ms=compute_latency_ms(range_km),
-                elevation_deg=elev_deg,
+                range_km=decision.range_km,
+                latency_ms=compute_latency_ms(decision.range_km),
+                elevation_deg=decision.elevation_deg,
                 terminal_type=terminal_types[pair],
                 link_type="ground",
                 gs_terminal_index=indices[0] if indices else None,

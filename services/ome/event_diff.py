@@ -13,9 +13,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from typing import cast
 
 from nodalarc.geo import compute_latency_ms
-from nodalarc.models.events import VisibilityEvent
+from nodalarc.models.events import (
+    UnscheduledReason,
+    VisibilityEvent,
+    VisibilityRejectReason,
+)
 
 from ome.ground_allocator import GroundAllocationResult
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
@@ -64,15 +69,19 @@ def diff_isl_visibility_events(
         # Phase 1 (C-foundation-5): propagate typed reasons onto the event.
         # An ISL transition's reason is fully attributable from the
         # feasibility result + scheduling result without consulting
-        # the snapshot.
-        visibility_reject_reason = "ok" if visible else result.reject_reason
+        # the snapshot. `IslFeasibilityResult.reject_reason` is `str`
+        # in its own contract; we cast at the boundary so the Pydantic
+        # validator on `VisibilityEvent` does the runtime check.
+        visibility_reject_reason: VisibilityRejectReason = (
+            "ok" if visible else cast(VisibilityRejectReason, result.reject_reason)
+        )
 
         # ISL unscheduled_reason: only meaningful when visible AND not
         # scheduled. The ISL engine's contract today writes "capacity"
         # in that case. Anything else on a visible+unscheduled pair is
         # an ISL engine contract violation — fail loud so we discover
         # the bug instead of papering over it.
-        unscheduled_reason: str | None = None
+        unscheduled_reason: UnscheduledReason | None = None
         if visible and not scheduled:
             isl_unscheduled = scheduled_links[pair].unscheduled_reason
             if isl_unscheduled == "capacity":
@@ -149,7 +158,7 @@ def diff_ground_visibility_events(
         # pair MUST have been attributed by the allocator — if not, the
         # producer is wrong and we fail loud rather than emit an event
         # the downstream consumer cannot explain.
-        unscheduled_reason: str | None
+        unscheduled_reason: UnscheduledReason | None
         if decision.visible and not scheduled:
             if pair not in unscheduled_by_pair:
                 raise ValueError(

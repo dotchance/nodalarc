@@ -49,6 +49,40 @@ class PositionEvent(BaseModel):
     vel_z_km_s: float
 
 
+VisibilityRejectReason = Literal[
+    "ok",
+    "los_blocked",
+    "elevation_below_min",
+    "range_exceeded",
+    "field_of_regard",
+    "tracking_exceeded",
+    "polar_seam",
+    "terminal_type_mismatch",
+    "terminal_role_mismatch",
+]
+"""Full union of physical/geometric rejection reasons across ground + ISL.
+
+`VisibilityEvent` carries either axis. The ground-only subset
+(`GroundVisibilityRejectReason` in `nodalarc.models.link_decisions`)
+is the narrower type used on `GroundVisibilityDecisionWire`."""
+
+
+UnscheduledReason = Literal[
+    "gs_capacity",
+    "sat_capacity",
+    "isl_terminal_capacity",
+    "hysteresis_hold",
+    "incumbent_held",
+    "bbm_no_spare",
+    "replaced_by_successor",
+]
+"""Full union of allocation rejection reasons across ground + ISL.
+
+`VisibilityEvent` carries either axis. The ground-only subset
+(`GroundUnscheduledReason` in `nodalarc.models.link_decisions`) is the
+narrower type used on `UnscheduledPair`."""
+
+
 class VisibilityEvent(BaseModel):
     """Visibility state change between two nodes.
 
@@ -93,29 +127,8 @@ class VisibilityEvent(BaseModel):
     gs_terminal_index: int | None = None  # None for ISL events
     sat_terminal_index: int | None = None  # None for ISL events
     scheduling_state: str = "active"  # "active" | "teardown"
-    visibility_reject_reason: Literal[
-        "ok",
-        "los_blocked",
-        "elevation_below_min",
-        "range_exceeded",
-        "field_of_regard",
-        "tracking_exceeded",
-        "polar_seam",
-        "terminal_type_mismatch",
-        "terminal_role_mismatch",
-    ]
-    unscheduled_reason: (
-        Literal[
-            "gs_capacity",
-            "sat_capacity",
-            "isl_terminal_capacity",
-            "hysteresis_hold",
-            "incumbent_held",
-            "bbm_no_spare",
-            "replaced_by_successor",
-        ]
-        | None
-    )
+    visibility_reject_reason: VisibilityRejectReason
+    unscheduled_reason: UnscheduledReason | None
 
     @model_validator(mode="before")
     @classmethod

@@ -220,7 +220,14 @@ def evaluate_ground_visibility(
                 if gs_id in longest_pass_station_ids:
                     visible_candidates_requiring_dwell.add((gs_id, sat_id))
                 visible_sats.append(
-                    GroundVisibility(sat_id, gv.visible, gv.elevation_deg, gv.range_km),
+                    GroundVisibility(
+                        sat_id=sat_id,
+                        visible=gv.visible,
+                        elevation_deg=gv.elevation_deg,
+                        range_km=gv.range_km,
+                        remaining_visible_s=None,
+                        reject_reason=gv.reject_reason,
+                    ),
                 )
         visible_per_station[gs_id] = visible_sats
 
@@ -241,11 +248,12 @@ def evaluate_ground_visibility(
                 continue
             visible_per_station[gs_id] = [
                 GroundVisibility(
-                    gv.sat_id,
-                    gv.visible,
-                    gv.elevation_deg,
-                    gv.range_km,
-                    remaining_by_pair[(gs_id, gv.sat_id)],
+                    sat_id=gv.sat_id,
+                    visible=gv.visible,
+                    elevation_deg=gv.elevation_deg,
+                    range_km=gv.range_km,
+                    remaining_visible_s=remaining_by_pair[(gs_id, gv.sat_id)],
+                    reject_reason=gv.reject_reason,
                 )
                 for gv in visible_sats
             ]

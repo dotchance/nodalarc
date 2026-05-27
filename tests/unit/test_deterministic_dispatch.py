@@ -35,8 +35,22 @@ class TestGroundAllocatorDeterminism:
         sat_b = "sat-P00S01"
 
         visible = [
-            GroundVisibility(sat_a, True, 45.0, 1000.0),
-            GroundVisibility(sat_b, True, 45.0, 1000.0),
+            GroundVisibility(
+                sat_id=sat_a,
+                visible=True,
+                elevation_deg=45.0,
+                range_km=1000.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id=sat_b,
+                visible=True,
+                elevation_deg=45.0,
+                range_km=1000.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
         ]
 
         results = []
@@ -76,8 +90,22 @@ class TestGroundAllocatorDeterminism:
         sat_b = "sat-P01S00"
 
         visible = [
-            GroundVisibility(sat_b, True, 45.0, 1000.0),
-            GroundVisibility(sat_a, True, 45.0, 1000.0),
+            GroundVisibility(
+                sat_id=sat_b,
+                visible=True,
+                elevation_deg=45.0,
+                range_km=1000.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id=sat_a,
+                visible=True,
+                elevation_deg=45.0,
+                range_km=1000.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
         ]
 
         result = allocate_ground_links(

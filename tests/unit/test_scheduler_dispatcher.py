@@ -233,6 +233,8 @@ class TestDispatcherActiveLinks:
             elevation_deg=45.0,
             terminal_type="optical",
             link_type="isl",
+            visibility_reject_reason="ok",
+            unscheduled_reason=None,
         )
 
         with pytest.raises(ValueError, match="missing OME-authoritative latency_ms"):

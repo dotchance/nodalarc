@@ -37,21 +37,32 @@ class VisibilityResult(NamedTuple):
 class GroundVisibility(NamedTuple):
     """Ground station to satellite visibility details.
 
-    `reject_reason` carries the specific reason a non-visible pair
-    failed (`los_blocked`, `elevation_below_min`, etc.). For a visible
-    pair it is `"ok"`. The field is the foundational signal that
-    `GroundVisibilityDecision` carries forward to downstream consumers
-    — without it, the producer cannot attribute the rejection.
+    All fields required at construction. There are no defaults. A
+    producer that does not know whether to populate
+    ``remaining_visible_s`` must pass ``None`` explicitly; a producer
+    that does not know the ``reject_reason`` is wrong and must be
+    fixed at the construction site.
+
+    ``reject_reason`` carries the specific reason a non-visible pair
+    failed (``los_blocked``, ``elevation_below_min``, etc.). For a
+    visible pair it is ``"ok"``. The field is the foundational signal
+    that ``GroundVisibilityDecision`` carries forward to downstream
+    consumers — without it, the producer cannot attribute the
+    rejection.
+
+    ``remaining_visible_s`` is populated only for policies that
+    explicitly require future dwell prediction. ``None`` here means
+    "not applicable for this policy"; for ``longest-remaining-pass``
+    the producer must populate a non-None value or downstream
+    scoring fails loudly.
     """
 
     sat_id: str
     visible: bool
     elevation_deg: float
     range_km: float
-    # Populated only for policies that explicitly require future dwell
-    # prediction. None is fatal for longest-remaining-pass scoring.
-    remaining_visible_s: float | None = None
-    reject_reason: VisibilityRejectReason = "ok"
+    remaining_visible_s: float | None
+    reject_reason: VisibilityRejectReason
 
 
 class IslVisibility(NamedTuple):
@@ -337,6 +348,7 @@ def check_ground_visibility(
             visible=False,
             elevation_deg=-90.0,
             range_km=range_km,
+            remaining_visible_s=None,
             reject_reason="los_blocked",
         )
 
@@ -347,6 +359,7 @@ def check_ground_visibility(
             visible=False,
             elevation_deg=elevation,
             range_km=range_km,
+            remaining_visible_s=None,
             reject_reason="elevation_below_min",
         )
 
@@ -355,6 +368,7 @@ def check_ground_visibility(
         visible=True,
         elevation_deg=elevation,
         range_km=range_km,
+        remaining_visible_s=None,
         reject_reason="ok",
     )
 

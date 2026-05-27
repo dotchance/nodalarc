@@ -20,6 +20,23 @@ from ome.types import MbbTeardown
 from ome.visibility import GroundVisibility
 
 
+def _visible_gv(sat_id: str, elevation_deg: float, range_km: float) -> GroundVisibility:
+    """Build a visible GroundVisibility for allocator-input fixtures.
+
+    All fields explicit — no defaults, no fallbacks. Tests that need
+    invisible pairs construct GroundVisibility directly with the
+    appropriate reject_reason.
+    """
+    return GroundVisibility(
+        sat_id=sat_id,
+        visible=True,
+        elevation_deg=elevation_deg,
+        range_km=range_km,
+        remaining_visible_s=None,
+        reject_reason="ok",
+    )
+
+
 class TestComputePairScore:
     """_compute_pair_score must always return positive, higher=better."""
 
@@ -129,8 +146,8 @@ class TestHysteresisDiscount:
 
         result = self._allocate(
             [
-                GroundVisibility("sat-active", True, 40.0, 1000.0),
-                GroundVisibility("sat-challenger", True, 44.0, 900.0),
+                _visible_gv("sat-active", 40.0, 1000.0),
+                _visible_gv("sat-challenger", 44.0, 900.0),
             ],
             current={old_pair: (0, 0)},
         )
@@ -145,8 +162,8 @@ class TestHysteresisDiscount:
 
         result = self._allocate(
             [
-                GroundVisibility("sat-active", True, 40.0, 1000.0),
-                GroundVisibility("sat-challenger", True, 47.0, 900.0),
+                _visible_gv("sat-active", 40.0, 1000.0),
+                _visible_gv("sat-challenger", 47.0, 900.0),
             ],
             current={old_pair: (0, 0)},
         )
@@ -161,8 +178,8 @@ class TestHysteresisDiscount:
     def test_without_current_association_highest_elevation_wins_normally(self):
         result = self._allocate(
             [
-                GroundVisibility("sat-lower", True, 40.0, 1000.0),
-                GroundVisibility("sat-higher", True, 44.0, 900.0),
+                _visible_gv("sat-lower", 40.0, 1000.0),
+                _visible_gv("sat-higher", 44.0, 900.0),
             ],
             current={},
             gs_terminals=1,
@@ -177,8 +194,8 @@ class TestHysteresisDiscount:
 
         result = self._allocate(
             [
-                GroundVisibility("sat-active", True, 50.0, 1000.0),
-                GroundVisibility("sat-challenger", True, 45.0, 900.0),
+                _visible_gv("sat-active", 50.0, 1000.0),
+                _visible_gv("sat-challenger", 45.0, 900.0),
             ],
             current={old_pair: (0, 0)},
             policy="lowest-elevation",
@@ -196,10 +213,10 @@ class TestHysteresisDiscount:
 
         result = self._allocate(
             [
-                GroundVisibility("sat-active-40", True, 40.0, 1000.0),
-                GroundVisibility("sat-active-41", True, 41.0, 1000.0),
-                GroundVisibility("sat-active-42", True, 42.0, 1000.0),
-                GroundVisibility("sat-challenger", True, 45.5, 900.0),
+                _visible_gv("sat-active-40", 40.0, 1000.0),
+                _visible_gv("sat-active-41", 41.0, 1000.0),
+                _visible_gv("sat-active-42", 42.0, 1000.0),
+                _visible_gv("sat-challenger", 45.5, 900.0),
             ],
             current=old_pairs,
             gs_terminals=4,
@@ -214,8 +231,8 @@ class TestHysteresisDiscount:
 
         result = self._allocate(
             [
-                GroundVisibility("sat-active", True, 27.0, 1000.0),
-                GroundVisibility("sat-challenger", True, 28.0, 900.0),
+                _visible_gv("sat-active", 27.0, 1000.0),
+                _visible_gv("sat-challenger", 28.0, 900.0),
             ],
             current={old_pair: (0, 0)},
             min_elev=25.0,

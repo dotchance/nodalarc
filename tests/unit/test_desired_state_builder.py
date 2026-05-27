@@ -54,6 +54,8 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
         elevation_deg=None,
         terminal_type="optical",
         link_type="isl",
+        visibility_reject_reason="ok",
+        unscheduled_reason=None,
     )
 
     pair, info = desired_link_from_visibility(
@@ -86,6 +88,8 @@ def test_ground_visibility_event_uses_terminal_indices():
         link_type="ground",
         gs_terminal_index=2,
         sat_terminal_index=1,
+        visibility_reject_reason="ok",
+        unscheduled_reason=None,
     )
 
     pair, info = desired_link_from_visibility(
@@ -112,6 +116,8 @@ def test_missing_isl_interface_map_fails_loudly():
         elevation_deg=None,
         terminal_type="optical",
         link_type="isl",
+        visibility_reject_reason="ok",
+        unscheduled_reason=None,
     )
 
     with pytest.raises(ValueError, match="no configured ISL interfaces"):
@@ -205,6 +211,8 @@ def test_missing_or_nonpositive_bandwidth_fails_loudly():
         elevation_deg=None,
         terminal_type="optical",
         link_type="isl",
+        visibility_reject_reason="ok",
+        unscheduled_reason=None,
     )
 
     with pytest.raises(ValueError, match="unknown physical rate"):

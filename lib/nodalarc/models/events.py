@@ -103,7 +103,7 @@ class VisibilityEvent(BaseModel):
         "polar_seam",
         "terminal_type_mismatch",
         "terminal_role_mismatch",
-    ] = "ok"
+    ]
     unscheduled_reason: (
         Literal[
             "gs_capacity",
@@ -115,7 +115,7 @@ class VisibilityEvent(BaseModel):
             "replaced_by_successor",
         ]
         | None
-    ) = None
+    )
 
     @model_validator(mode="before")
     @classmethod

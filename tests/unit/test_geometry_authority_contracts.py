@@ -188,6 +188,8 @@ class TestSchedulerAuthorityPreservation:
             elevation_deg=None,
             terminal_type="optical",
             link_type="isl",
+            visibility_reject_reason="ok",
+            unscheduled_reason=None,
         )
 
         desired = d._apply_events_to_desired([event])

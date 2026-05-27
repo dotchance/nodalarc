@@ -222,7 +222,11 @@ class TestGroundVisibilityDecisionWire:
 
 class TestUnscheduledPair:
     def test_minimum_valid_construction(self) -> None:
-        u = UnscheduledPair(**_unscheduled_kwargs())
+        u = UnscheduledPair(
+            **_unscheduled_kwargs(),
+            incumbent_pair=None,
+            capacity_constraint=None,
+        )
         assert u.pair == ("gs-a", "sat-2")
         assert u.unscheduled_reason == "gs_capacity"
         assert u.incumbent_pair is None
@@ -238,7 +242,11 @@ class TestUnscheduledPair:
         assert u.capacity_constraint == "sat-2.gnd0"
 
     def test_unscheduled_pair_is_frozen(self) -> None:
-        u = UnscheduledPair(**_unscheduled_kwargs())
+        u = UnscheduledPair(
+            **_unscheduled_kwargs(),
+            incumbent_pair=None,
+            capacity_constraint=None,
+        )
         with pytest.raises(ValidationError):
             u.unscheduled_reason = "bbm_no_spare"  # type: ignore[misc]
 
@@ -246,7 +254,11 @@ class TestUnscheduledPair:
         kwargs = _unscheduled_kwargs()
         kwargs["unscheduled_reason"] = "active_teardown"
         with pytest.raises(ValidationError):
-            UnscheduledPair(**kwargs)
+            UnscheduledPair(
+                **kwargs,
+                incumbent_pair=None,
+                capacity_constraint=None,
+            )
 
     def test_teardown_explicitly_not_an_unscheduled_reason(self) -> None:
         """Teardown overlap is a scheduling state, not an
@@ -257,7 +269,11 @@ class TestUnscheduledPair:
             kwargs = _unscheduled_kwargs()
             kwargs["unscheduled_reason"] = bad
             with pytest.raises(ValidationError):
-                UnscheduledPair(**kwargs)
+                UnscheduledPair(
+                    **kwargs,
+                    incumbent_pair=None,
+                    capacity_constraint=None,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +291,8 @@ class TestLinkDecisionSnapshot:
             tenant_id="default",
             reference_body="earth",
             unscheduled_reason="gs_capacity",
+            incumbent_pair=None,
+            capacity_constraint=None,
         )
         return {
             "sim_time": datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC),

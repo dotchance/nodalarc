@@ -221,6 +221,7 @@ def test_ground_event_diff_propagates_unscheduled_reason_for_visible_but_unalloc
                 reference_body="earth",
                 unscheduled_reason="bbm_no_spare",
                 incumbent_pair=incumbent,
+                capacity_constraint=None,
             ),
         ),
     )

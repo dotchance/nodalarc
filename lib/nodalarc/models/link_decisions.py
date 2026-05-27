@@ -239,8 +239,8 @@ class UnscheduledPair(BaseModel):
     tenant_id: str
     reference_body: str
     unscheduled_reason: UnscheduledReason
-    incumbent_pair: tuple[str, str] | None = None
-    capacity_constraint: str | None = None
+    incumbent_pair: tuple[str, str] | None
+    capacity_constraint: str | None
 
 
 class LinkDecisionSnapshot(BaseModel):

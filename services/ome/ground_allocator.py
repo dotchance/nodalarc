@@ -179,6 +179,7 @@ def _attribute_rejected_pairs(
                         reference_body=reference_body,
                         unscheduled_reason="replaced_by_successor",
                         incumbent_pair=teardown.successor_pair,
+                        capacity_constraint=None,
                     )
                 )
                 continue

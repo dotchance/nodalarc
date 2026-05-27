@@ -132,7 +132,14 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
         visible_until = 2.0 if sat_ecef.y == 1.0 else 4.0
         visible = sat_ecef.x < visible_until
         elevation = 70.0 if sat_ecef.y == 1.0 else 30.0
-        return GroundVisibility("", visible, elevation if visible else -10.0, 1000.0)
+        return GroundVisibility(
+            sat_id="",
+            visible=visible,
+            elevation_deg=elevation if visible else -10.0,
+            range_km=1000.0,
+            remaining_visible_s=None,
+            reject_reason="ok" if visible else "elevation_below_min",
+        )
 
     def fake_propagate_satellites(**kwargs):
         dt = float(kwargs["dt"])

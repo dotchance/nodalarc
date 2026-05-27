@@ -44,8 +44,22 @@ def _allocate(
 def test_highest_elevation_selects_best_visible_candidate():
     result = _allocate(
         [
-            GroundVisibility("sat-low", True, 35.0, 1200.0),
-            GroundVisibility("sat-high", True, 55.0, 900.0),
+            GroundVisibility(
+                sat_id="sat-low",
+                visible=True,
+                elevation_deg=35.0,
+                range_km=1200.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id="sat-high",
+                visible=True,
+                elevation_deg=55.0,
+                range_km=900.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
         ]
     )
 
@@ -57,8 +71,22 @@ def test_highest_elevation_selects_best_visible_candidate():
 def test_longest_remaining_pass_selects_longest_sampled_dwell_not_highest_elevation():
     result = _allocate(
         [
-            GroundVisibility("sat-high-short", True, 70.0, 900.0, 5.0),
-            GroundVisibility("sat-low-long", True, 30.0, 1200.0, 60.0),
+            GroundVisibility(
+                sat_id="sat-high-short",
+                visible=True,
+                elevation_deg=70.0,
+                range_km=900.0,
+                remaining_visible_s=5.0,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id="sat-low-long",
+                visible=True,
+                elevation_deg=30.0,
+                range_km=1200.0,
+                remaining_visible_s=60.0,
+                reject_reason="ok",
+            ),
         ],
         policy="longest-remaining-pass",
     )
@@ -73,8 +101,22 @@ def test_mbb_replacement_starts_teardown_when_challenger_beats_hysteresis():
 
     result = _allocate(
         [
-            GroundVisibility("sat-old", True, 40.0, 1000.0),
-            GroundVisibility("sat-new", True, 47.0, 900.0),
+            GroundVisibility(
+                sat_id="sat-old",
+                visible=True,
+                elevation_deg=40.0,
+                range_km=1000.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id="sat-new",
+                visible=True,
+                elevation_deg=47.0,
+                range_km=900.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
         ],
         current={old_pair: (0, 0)},
         gs_terminals=2,
@@ -94,8 +136,22 @@ def test_hysteresis_prevents_mbb_replacement_when_challenger_does_not_clear_marg
 
     result = _allocate(
         [
-            GroundVisibility("sat-old", True, 40.0, 1000.0),
-            GroundVisibility("sat-new", True, 44.0, 900.0),
+            GroundVisibility(
+                sat_id="sat-old",
+                visible=True,
+                elevation_deg=40.0,
+                range_km=1000.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id="sat-new",
+                visible=True,
+                elevation_deg=44.0,
+                range_km=900.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
         ],
         current={old_pair: (0, 0)},
         gs_terminals=2,
@@ -115,8 +171,22 @@ def test_pending_teardown_expires_after_overlap_window():
         step=13,
         visible_per_station={
             "gs-A": [
-                GroundVisibility("sat-old", True, 40.0, 1000.0),
-                GroundVisibility("sat-new", True, 47.0, 900.0),
+                GroundVisibility(
+                    sat_id="sat-old",
+                    visible=True,
+                    elevation_deg=40.0,
+                    range_km=1000.0,
+                    remaining_visible_s=None,
+                    reject_reason="ok",
+                ),
+                GroundVisibility(
+                    sat_id="sat-new",
+                    visible=True,
+                    elevation_deg=47.0,
+                    range_km=900.0,
+                    remaining_visible_s=None,
+                    reject_reason="ok",
+                ),
             ]
         },
         ground_station_ids={"gs-A"},
@@ -152,7 +222,16 @@ def test_unscheduled_pairs_empty_when_all_visible_pairs_allocated():
     """The happy path: GS has spare terminal capacity, sat has spare
     terminal capacity, the candidate is allocated. No rejection record."""
     result = _allocate(
-        [GroundVisibility("sat-a", True, 55.0, 900.0)],
+        [
+            GroundVisibility(
+                sat_id="sat-a",
+                visible=True,
+                elevation_deg=55.0,
+                range_km=900.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            )
+        ],
         gs_terminals=2,
     )
     assert result.unscheduled_pairs == ()
@@ -162,7 +241,16 @@ def test_unscheduled_pair_sat_capacity_exhausted():
     """Two GSes compete for the same sat which has ground_terminal_count=1.
     The losing GS gets unscheduled_reason='sat_capacity' with the
     incumbent pair named."""
-    visible = [GroundVisibility("sat-shared", True, 55.0, 900.0)]
+    visible = [
+        GroundVisibility(
+            sat_id="sat-shared",
+            visible=True,
+            elevation_deg=55.0,
+            range_km=900.0,
+            remaining_visible_s=None,
+            reject_reason="ok",
+        )
+    ]
     result = allocate_ground_links(
         step=0,
         visible_per_station={"gs-A": visible, "gs-B": visible},
@@ -204,8 +292,22 @@ def test_unscheduled_pair_bbm_no_spare_on_single_terminal_gs():
     incumbent = ("gs-A", "sat-incumbent")
     result = _allocate(
         [
-            GroundVisibility("sat-incumbent", True, 26.0, 1000.0),
-            GroundVisibility("sat-challenger", True, 80.0, 900.0),
+            GroundVisibility(
+                sat_id="sat-incumbent",
+                visible=True,
+                elevation_deg=26.0,
+                range_km=1000.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id="sat-challenger",
+                visible=True,
+                elevation_deg=80.0,
+                range_km=900.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
         ],
         current={incumbent: (0, 0)},
         gs_terminals=1,
@@ -229,8 +331,22 @@ def test_unscheduled_pair_hysteresis_hold_on_multi_terminal_displacement():
     # margin so displacement should not fire with default discount_factor=1.15.
     result = _allocate(
         [
-            GroundVisibility("sat-incumbent", True, 40.0, 1000.0),
-            GroundVisibility("sat-challenger", True, 44.0, 900.0),
+            GroundVisibility(
+                sat_id="sat-incumbent",
+                visible=True,
+                elevation_deg=40.0,
+                range_km=1000.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id="sat-challenger",
+                visible=True,
+                elevation_deg=44.0,
+                range_km=900.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
         ],
         current={incumbent: (0, 0)},
         gs_terminals=2,
@@ -256,8 +372,22 @@ def test_unscheduled_pair_replaced_by_successor_when_teardown_expires():
         step=13,  # 10 + 3 overlap = expired
         visible_per_station={
             "gs-A": [
-                GroundVisibility("sat-old", True, 40.0, 1000.0),
-                GroundVisibility("sat-new", True, 47.0, 900.0),
+                GroundVisibility(
+                    sat_id="sat-old",
+                    visible=True,
+                    elevation_deg=40.0,
+                    range_km=1000.0,
+                    remaining_visible_s=None,
+                    reject_reason="ok",
+                ),
+                GroundVisibility(
+                    sat_id="sat-new",
+                    visible=True,
+                    elevation_deg=47.0,
+                    range_km=900.0,
+                    remaining_visible_s=None,
+                    reject_reason="ok",
+                ),
             ]
         },
         ground_station_ids={"gs-A"},
@@ -292,9 +422,30 @@ def test_unscheduled_pairs_are_deterministically_sorted():
     incumbent = ("gs-A", "sat-incumbent")
     result = _allocate(
         [
-            GroundVisibility("sat-incumbent", True, 40.0, 1000.0),
-            GroundVisibility("sat-z-late", True, 41.0, 900.0),
-            GroundVisibility("sat-a-early", True, 42.0, 900.0),
+            GroundVisibility(
+                sat_id="sat-incumbent",
+                visible=True,
+                elevation_deg=40.0,
+                range_km=1000.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id="sat-z-late",
+                visible=True,
+                elevation_deg=41.0,
+                range_km=900.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
+            GroundVisibility(
+                sat_id="sat-a-early",
+                visible=True,
+                elevation_deg=42.0,
+                range_km=900.0,
+                remaining_visible_s=None,
+                reject_reason="ok",
+            ),
         ],
         current={incumbent: (0, 0)},
         gs_terminals=1,
@@ -313,7 +464,18 @@ def test_missing_tenant_id_fails_loudly():
     with pytest.raises(ValueError, match="tenant_id"):
         allocate_ground_links(
             step=0,
-            visible_per_station={"gs-A": [GroundVisibility("sat-a", True, 40.0, 1000.0)]},
+            visible_per_station={
+                "gs-A": [
+                    GroundVisibility(
+                        sat_id="sat-a",
+                        visible=True,
+                        elevation_deg=40.0,
+                        range_km=1000.0,
+                        remaining_visible_s=None,
+                        reject_reason="ok",
+                    )
+                ]
+            },
             ground_station_ids={"gs-A"},
             current_associations={},
             pending_teardowns={},
@@ -338,7 +500,18 @@ def test_missing_reference_body_fails_loudly():
     with pytest.raises(ValueError, match="reference_body"):
         allocate_ground_links(
             step=0,
-            visible_per_station={"gs-A": [GroundVisibility("sat-a", True, 40.0, 1000.0)]},
+            visible_per_station={
+                "gs-A": [
+                    GroundVisibility(
+                        sat_id="sat-a",
+                        visible=True,
+                        elevation_deg=40.0,
+                        range_km=1000.0,
+                        remaining_visible_s=None,
+                        reject_reason="ok",
+                    )
+                ]
+            },
             ground_station_ids={"gs-A"},
             current_associations={},
             pending_teardowns={},

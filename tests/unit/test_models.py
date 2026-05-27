@@ -122,6 +122,8 @@ class TestVisibilityEvent:
             range_km=1500.0,
             elevation_deg=None,
             terminal_type="optical",
+            visibility_reject_reason="ok",
+            unscheduled_reason=None,
         )
         _round_trip(evt)
 
@@ -137,6 +139,8 @@ class TestVisibilityEvent:
             range_km=1000.0,
             elevation_deg=None,
             terminal_type="optical",
+            visibility_reject_reason="ok",
+            unscheduled_reason=None,
         )
         assert evt.node_a == "sat-P00S00"
         assert evt.node_b == "sat-P01S00"
@@ -152,12 +156,33 @@ class TestVisibilityEvent:
             range_km=800.0,
             elevation_deg=45.0,
             terminal_type="optical",
+            visibility_reject_reason="ok",
+            unscheduled_reason=None,
         )
         assert evt.elevation_deg == 45.0
 
-    def test_visible_false_requires_non_ok_reject_reason(self):
-        """Foundational: an invisible event must declare WHY. Producer
-        must populate visibility_reject_reason."""
+    def test_visibility_reject_reason_required(self):
+        """No default. Producer MUST declare physical state."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="visibility_reject_reason"):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                link_type="isl",
+                visible=True,
+                scheduled=True,
+                range_km=1000.0,
+                elevation_deg=None,
+                terminal_type="optical",
+                # visibility_reject_reason omitted — required field absent.
+                unscheduled_reason=None,
+            )
+
+    def test_visible_false_with_ok_reject_reason_rejected(self):
+        """Invisible event with reject_reason='ok' is impossible —
+        validator must reject it."""
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="non-'ok'"):
@@ -171,8 +196,8 @@ class TestVisibilityEvent:
                 range_km=1000.0,
                 elevation_deg=None,
                 terminal_type="optical",
-                # visibility_reject_reason defaults to 'ok' — would be
-                # impossible with visible=False, so construction fails.
+                visibility_reject_reason="ok",
+                unscheduled_reason=None,
             )
 
     def test_visible_true_with_non_ok_reject_reason_rejected(self):
@@ -190,6 +215,7 @@ class TestVisibilityEvent:
                 elevation_deg=None,
                 terminal_type="optical",
                 visibility_reject_reason="los_blocked",
+                unscheduled_reason=None,
             )
 
     def test_unscheduled_reason_on_scheduled_pair_rejected(self):
@@ -260,6 +286,8 @@ class TestVisibilityEvent:
             range_km=1000.0,
             elevation_deg=None,
             terminal_type="optical",
+            visibility_reject_reason="ok",
+            unscheduled_reason=None,
         )
         with pytest.raises(ValidationError, match="frozen"):
             evt.visible = False
@@ -275,6 +303,8 @@ class TestVisibilityEvent:
                 range_km=1000.0,
                 elevation_deg=None,
                 terminal_type="optical",
+                visibility_reject_reason="ok",
+                unscheduled_reason=None,
             )
 
 

@@ -272,6 +272,8 @@ class TestLinkDecisionSnapshotConsistency:
                         tenant_id="default",
                         reference_body="earth",
                         unscheduled_reason="sat_capacity",
+                        incumbent_pair=None,
+                        capacity_constraint=None,
                     ),
                 ),
             )
@@ -290,6 +292,8 @@ class TestLinkDecisionSnapshotConsistency:
                         tenant_id="default",
                         reference_body="earth",
                         unscheduled_reason="sat_capacity",
+                        incumbent_pair=None,
+                        capacity_constraint=None,
                     ),
                 ),
             )
@@ -308,6 +312,8 @@ class TestLinkDecisionSnapshotConsistency:
                         tenant_id="tenant-b",
                         reference_body="earth",
                         unscheduled_reason="sat_capacity",
+                        incumbent_pair=None,
+                        capacity_constraint=None,
                     ),
                 ),
             )
@@ -326,6 +332,8 @@ class TestLinkDecisionSnapshotConsistency:
                         tenant_id="default",
                         reference_body="luna",
                         unscheduled_reason="sat_capacity",
+                        incumbent_pair=None,
+                        capacity_constraint=None,
                     ),
                 ),
             )
@@ -344,12 +352,16 @@ class TestLinkDecisionSnapshotConsistency:
                         tenant_id="default",
                         reference_body="earth",
                         unscheduled_reason="sat_capacity",
+                        incumbent_pair=None,
+                        capacity_constraint=None,
                     ),
                     UnscheduledPair(
                         pair=pair,
                         tenant_id="default",
                         reference_body="earth",
                         unscheduled_reason="gs_capacity",
+                        incumbent_pair=None,
+                        capacity_constraint=None,
                     ),
                 ),
             )
@@ -367,6 +379,8 @@ class TestLinkDecisionSnapshotConsistency:
                     tenant_id="default",
                     reference_body="earth",
                     unscheduled_reason="sat_capacity",
+                    incumbent_pair=None,
+                    capacity_constraint=None,
                 ),
             ),
         )

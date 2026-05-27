@@ -109,14 +109,37 @@ class TestGroundVisibility:
         sat_ecef = geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
         result = check_ground_visibility(gs_ecef, gs_geo, sat_ecef, min_elevation_deg=25.0)
         assert result.visible
+        assert result.reject_reason == "ok"
 
     def test_below_min_elevation(self):
+        """LEO sat at 550km, 10° latitude offset from a ground station
+        at the equator: LOS is clear, but elevation is ~20° — below the
+        25° mask. Must reject with `elevation_below_min`, not
+        `los_blocked`. (At 25° lat offset Earth occludes LOS, which is
+        a separate rejection — see `test_los_blocked_pair`.)"""
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
         gs_ecef = geodetic_to_ecef(gs_geo)
-        sat_ecef = geodetic_to_ecef(GeoPosition(25.0, 0.0, 550.0))
+        sat_ecef = geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
         result = check_ground_visibility(gs_ecef, gs_geo, sat_ecef, min_elevation_deg=25.0)
-        # Far satellite should be below 25° elevation
         assert not result.visible
+        assert result.reject_reason == "elevation_below_min"
+        # The elevation value carries the actual computed angle, not a
+        # sentinel. This distinguishes elevation_below_min from los_blocked.
+        assert 0.0 < result.elevation_deg < 25.0
+
+    def test_los_blocked_pair(self):
+        """Antipodal pair must reject with `los_blocked` and carry the
+        -90.0 elevation sentinel only because Earth occlusion makes
+        elevation undefined; the reject_reason field is the
+        authoritative attribution, not the elevation value."""
+        gs_geo = GeoPosition(0.0, 0.0, 0.0)
+        gs_ecef = geodetic_to_ecef(gs_geo)
+        # Satellite on the opposite side of Earth — LOS blocked.
+        sat_ecef = geodetic_to_ecef(GeoPosition(0.0, 180.0, 550.0))
+        result = check_ground_visibility(gs_ecef, gs_geo, sat_ecef, min_elevation_deg=25.0)
+        assert not result.visible
+        assert result.reject_reason == "los_blocked"
+        assert result.elevation_deg == -90.0
 
 
 class TestIslVisibility:

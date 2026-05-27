@@ -21,6 +21,7 @@ from typing import NamedTuple
 
 from nodalarc.constants import WGS84_A, WGS84_B
 from nodalarc.geo import compute_range_km
+from nodalarc.models.link_decisions import VisibilityRejectReason
 
 from ome.propagator import GeoPosition, Vec3
 
@@ -34,7 +35,14 @@ class VisibilityResult(NamedTuple):
 
 
 class GroundVisibility(NamedTuple):
-    """Ground station to satellite visibility details."""
+    """Ground station to satellite visibility details.
+
+    `reject_reason` carries the specific reason a non-visible pair
+    failed (`los_blocked`, `elevation_below_min`, etc.). For a visible
+    pair it is `"ok"`. The field is the foundational signal that
+    `GroundVisibilityDecision` carries forward to downstream consumers
+    — without it, the producer cannot attribute the rejection.
+    """
 
     sat_id: str
     visible: bool
@@ -43,6 +51,7 @@ class GroundVisibility(NamedTuple):
     # Populated only for policies that explicitly require future dwell
     # prediction. None is fatal for longest-remaining-pass scoring.
     remaining_visible_s: float | None = None
+    reject_reason: VisibilityRejectReason = "ok"
 
 
 class IslVisibility(NamedTuple):
@@ -315,18 +324,39 @@ def check_ground_visibility(
 ) -> GroundVisibility:
     """Check if satellite is visible from ground station.
 
-    Checks LOS and elevation angle.
+    Checks LOS and elevation angle. Populates `reject_reason` so
+    downstream consumers can attribute the failure without relying on
+    sentinel-value heuristics (the legacy `-90.0` elevation sentinel
+    for LOS-blocked).
     """
     range_km = compute_range_km(gs_ecef, sat_ecef)
 
     if not has_line_of_sight(gs_ecef, sat_ecef):
-        return GroundVisibility("", False, -90.0, range_km)
+        return GroundVisibility(
+            sat_id="",
+            visible=False,
+            elevation_deg=-90.0,
+            range_km=range_km,
+            reject_reason="los_blocked",
+        )
 
     elevation = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
     if elevation < min_elevation_deg:
-        return GroundVisibility("", False, elevation, range_km)
+        return GroundVisibility(
+            sat_id="",
+            visible=False,
+            elevation_deg=elevation,
+            range_km=range_km,
+            reject_reason="elevation_below_min",
+        )
 
-    return GroundVisibility("", True, elevation, range_km)
+    return GroundVisibility(
+        sat_id="",
+        visible=True,
+        elevation_deg=elevation,
+        range_km=range_km,
+        reject_reason="ok",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from nodalarc.models.ground_station import HysteresisParameters
+from nodalarc.models.link_decisions import UnscheduledPair, UnscheduledReason
 
 from ome.types import MbbTeardown, MbbTeardownState
 from ome.visibility import GroundVisibility
@@ -22,11 +23,21 @@ from ome.visibility import GroundVisibility
 
 @dataclass(frozen=True)
 class GroundAllocationResult:
-    """Result of the ground allocation pass for one OME tick."""
+    """Result of the ground allocation pass for one OME tick.
+
+    ``unscheduled_pairs`` carries one entry per visible pair that the
+    allocator considered but did not schedule, with the attributed
+    reason. Active MBB teardown pairs (scheduled, draining) are NOT in
+    ``unscheduled_pairs`` — they remain in ``associations`` and
+    ``scheduled_pairs`` with ``scheduling_state="teardown"`` on the
+    event/snapshot. Only the post-teardown released pair appears here
+    (as ``replaced_by_successor``).
+    """
 
     associations: dict[tuple[str, str], tuple[int, int]]
     pending_teardowns: MbbTeardownState
     scheduled_pairs: frozenset[tuple[str, str]]
+    unscheduled_pairs: tuple[UnscheduledPair, ...]
 
 
 def _compute_pair_score(
@@ -80,6 +91,175 @@ def _ground_and_satellite_ids(
     return pair[1], pair[0]
 
 
+def _find_gs_incumbent(
+    new_associations: Mapping[tuple[str, str], tuple[int, int]],
+    new_pending_teardowns: Mapping[tuple[str, str], MbbTeardown],
+    ground_station_ids: set[str],
+    gs_id: str,
+) -> tuple[str, str] | None:
+    """Return one steady-state (non-teardown) incumbent on the given GS, if any.
+
+    Used to attribute `hysteresis_hold` and `incumbent_held` rejections — the
+    operator should see WHICH incumbent the candidate lost to.
+    """
+    for ap in sorted(new_associations):
+        if ap in new_pending_teardowns:
+            continue
+        ap_gs, _ = _ground_and_satellite_ids(ap, ground_station_ids)
+        if ap_gs == gs_id:
+            return ap
+    return None
+
+
+def _find_sat_incumbent(
+    new_associations: Mapping[tuple[str, str], tuple[int, int]],
+    ground_station_ids: set[str],
+    sat_id: str,
+) -> tuple[str, str] | None:
+    """Return one association that consumed the given sat's ground-terminal capacity, if any."""
+    for ap in sorted(new_associations):
+        _, ap_sat = _ground_and_satellite_ids(ap, ground_station_ids)
+        if ap_sat == sat_id:
+            return ap
+    return None
+
+
+def _attribute_rejected_pairs(
+    *,
+    visible_set: set[tuple[str, str]],
+    new_associations: Mapping[tuple[str, str], tuple[int, int]],
+    new_pending_teardowns: Mapping[tuple[str, str], MbbTeardown],
+    pending_teardowns: MbbTeardownState,
+    gs_occupied: Mapping[str, set[int]],
+    sat_capacity: Mapping[str, int],
+    gs_terminal_counts: Mapping[str, int],
+    ground_station_ids: set[str],
+    gs_tenant_ids: Mapping[str, str],
+    gs_reference_bodies: Mapping[str, str],
+    mbb_reserve: int,
+    mbb_overlap_ticks: int,
+    step: int,
+) -> tuple[UnscheduledPair, ...]:
+    """Attribute a typed rejection reason to every visible pair that did not allocate.
+
+    The attribution inspects the post-allocation state of the allocator
+    (which terminals are occupied, what survived the candidate walk) and
+    picks the reason that best fits each rejected pair.
+
+    Returns a tuple sorted by pair for deterministic NATS payloads —
+    Direction 4 (multi-compute-node) requires that two Scheduler replicas
+    receiving the same `LinkDecisionSnapshot` see the same ordering.
+
+    The final `else` branch raises rather than returning a default. The
+    plan demands no silent fall-throughs: if the allocator cannot
+    attribute a rejection to one of the typed reasons, the producer is
+    wrong and must fail loud so we can fix the attribution logic, not
+    hide it behind a generic value.
+    """
+    rejected = sorted(visible_set - set(new_associations.keys()))
+    out: list[UnscheduledPair] = []
+
+    for pair in rejected:
+        gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
+        tenant_id = gs_tenant_ids[gs_id]
+        reference_body = gs_reference_bodies[gs_id]
+        reason: UnscheduledReason
+
+        # Case 1: this pair was in an MBB teardown that just expired.
+        # The OME has released the slot for a successor. The pair is
+        # still visible but no longer allocated.
+        if pair in pending_teardowns:
+            teardown = pending_teardowns[pair]
+            elapsed = step - teardown.start_step
+            if elapsed >= mbb_overlap_ticks:
+                out.append(
+                    UnscheduledPair(
+                        pair=pair,
+                        tenant_id=tenant_id,
+                        reference_body=reference_body,
+                        unscheduled_reason="replaced_by_successor",
+                        incumbent_pair=teardown.successor_pair,
+                    )
+                )
+                continue
+
+        # Case 2: the satellite's ground-terminal capacity is exhausted
+        # globally. A co-located ground station got there first.
+        if sat_capacity.get(sat_id, 0) <= 0:
+            incumbent = _find_sat_incumbent(new_associations, ground_station_ids, sat_id)
+            out.append(
+                UnscheduledPair(
+                    pair=pair,
+                    tenant_id=tenant_id,
+                    reference_body=reference_body,
+                    unscheduled_reason="sat_capacity",
+                    incumbent_pair=incumbent,
+                    capacity_constraint=f"{sat_id}.ground_terminals",
+                )
+            )
+            continue
+
+        # Case 3: GS-side resource constraint.
+        tc = gs_terminal_counts[gs_id]
+        gs_physical = len(gs_occupied.get(gs_id, set()))
+        gs_steady = sum(
+            1
+            for ap in new_associations
+            if _ground_and_satellite_ids(ap, ground_station_ids)[0] == gs_id
+            and ap not in new_pending_teardowns
+        )
+        logical_room = gs_steady < (tc - mbb_reserve)
+        physical_room = gs_physical < tc
+        incumbent = _find_gs_incumbent(
+            new_associations, new_pending_teardowns, ground_station_ids, gs_id
+        )
+
+        if not physical_room and tc == 1:
+            # Single-terminal GS with an incumbent occupying the only slot.
+            # The allocator has no BBM-displacement path for this case
+            # (verified in the foundations plan as Finding 2).
+            reason = "bbm_no_spare"
+        elif not logical_room and physical_room:
+            # Displacement was eligible (physical_room true, no logical
+            # room) but the displacement check did not promote this
+            # candidate. The incumbent's discount-boosted score won, or
+            # priorities did not allow the swap. Phase 1.3 attributes
+            # both as `hysteresis_hold` — Phase 3 of the foundations
+            # plan refines the selection-vs-handover split, at which
+            # point we will distinguish `hysteresis_hold` from
+            # `incumbent_held` more precisely.
+            reason = "hysteresis_hold"
+        elif not physical_room:
+            # Multi-terminal GS with all physical terminals occupied
+            # (steady + overlap). No room to add even with logical-room
+            # allowance.
+            reason = "gs_capacity"
+        else:
+            # sat has capacity, GS has both logical and physical room —
+            # the allocator should have scheduled this pair. The merge
+            # loop missed it. This is a logic bug we want to surface.
+            raise ValueError(
+                f"Allocator could not attribute rejection reason for {pair} — "
+                f"sat_capacity[{sat_id}]={sat_capacity.get(sat_id, 0)} > 0, "
+                f"gs_steady={gs_steady}, gs_physical={gs_physical}, tc={tc}, "
+                f"mbb_reserve={mbb_reserve}. This is an allocator logic bug; "
+                "fix the attribution rather than hiding it behind a default."
+            )
+
+        out.append(
+            UnscheduledPair(
+                pair=pair,
+                tenant_id=tenant_id,
+                reference_body=reference_body,
+                unscheduled_reason=reason,
+                incumbent_pair=incumbent,
+                capacity_constraint=f"{gs_id}.terminals" if reason != "hysteresis_hold" else None,
+            )
+        )
+
+    return tuple(out)
+
+
 def allocate_ground_links(
     *,
     step: int,
@@ -92,6 +272,8 @@ def allocate_ground_links(
     gs_min_elevations: Mapping[str, float],
     gs_hysteresis: Mapping[str, HysteresisParameters],
     gs_service_priorities: Mapping[str, int],
+    gs_tenant_ids: Mapping[str, str],
+    gs_reference_bodies: Mapping[str, str],
     sat_ground_terminals: Mapping[str, int],
     mbb_overlap_ticks: int,
     mbb_reserve: int,
@@ -102,7 +284,26 @@ def allocate_ground_links(
     hysteresis-aware replacement, and tracks make-before-break overlap state.
     It fails loudly for unknown policies via `_compute_pair_score`; policy
     misspellings must never silently change handover behavior.
+
+    Direction 2 (multi-tenant) and Direction 3 (multi-body) require every
+    unscheduled-pair record to carry tenant scope and body anchor. Missing
+    per-GS ``tenant_id`` or ``reference_body`` is fatal at the producer
+    boundary — no silent fall-through to a default.
     """
+    missing_tenant = sorted(set(visible_per_station) - set(gs_tenant_ids))
+    if missing_tenant:
+        raise ValueError(
+            "Ground allocator is missing tenant_id for "
+            f"{', '.join(missing_tenant)} — Direction 2 requires every "
+            "unscheduled-pair record to carry tenant scope"
+        )
+    missing_body = sorted(set(visible_per_station) - set(gs_reference_bodies))
+    if missing_body:
+        raise ValueError(
+            "Ground allocator is missing reference_body for "
+            f"{', '.join(missing_body)} — Direction 3 requires every "
+            "unscheduled-pair record to be anchored to a specific body"
+        )
     gs_scheduled: dict[tuple[str, str], bool] = {}
     sat_capacity: dict[str, int] = dict(sat_ground_terminals)
 
@@ -287,8 +488,30 @@ def allocate_ground_links(
         if pair not in gs_scheduled:
             gs_scheduled[pair] = True
 
+    # Attribute the rejection reason for every visible pair that did not
+    # end up scheduled. The attribution is end-of-allocation: it inspects
+    # the FINAL state (which terminals were occupied, what survived the
+    # candidate walk) and assigns a typed reason. Missing attribution is
+    # a fatal logic bug — see the final `else` of `_attribute_rejection`.
+    unscheduled_list = _attribute_rejected_pairs(
+        visible_set=visible_set,
+        new_associations=new_associations,
+        new_pending_teardowns=new_pending_teardowns,
+        pending_teardowns=pending_teardowns,
+        gs_occupied=gs_occupied,
+        sat_capacity=sat_capacity,
+        gs_terminal_counts=gs_terminal_counts,
+        ground_station_ids=ground_station_ids,
+        gs_tenant_ids=gs_tenant_ids,
+        gs_reference_bodies=gs_reference_bodies,
+        mbb_reserve=mbb_reserve,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        step=step,
+    )
+
     return GroundAllocationResult(
         associations=new_associations,
         pending_teardowns=new_pending_teardowns,
         scheduled_pairs=frozenset(pair for pair, scheduled in gs_scheduled.items() if scheduled),
+        unscheduled_pairs=unscheduled_list,
     )

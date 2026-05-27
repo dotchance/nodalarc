@@ -436,6 +436,8 @@ def compute_step(
         gs_min_elevations=ctx.gs_min_elevations,
         gs_hysteresis=ctx.gs_hysteresis,
         gs_service_priorities=ctx.gs_service_priorities,
+        gs_tenant_ids=ctx.gs_tenant_ids,
+        gs_reference_bodies=ctx.gs_reference_bodies,
         sat_ground_terminals=ctx.sat_ground_terminals,
         mbb_overlap_ticks=ctx.mbb_overlap_ticks,
         mbb_reserve=ctx.mbb_reserve,

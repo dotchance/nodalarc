@@ -53,6 +53,8 @@ class TestGroundAllocatorDeterminism:
                 gs_min_elevations={gs_id: 25.0},
                 gs_hysteresis={gs_id: HysteresisParameters()},
                 gs_service_priorities={gs_id: 10},
+                gs_tenant_ids={gs_id: "default"},
+                gs_reference_bodies={gs_id: "earth"},
                 mbb_overlap_ticks=3,
                 mbb_reserve=0,
             )
@@ -90,6 +92,8 @@ class TestGroundAllocatorDeterminism:
             gs_min_elevations={gs_id: 25.0},
             gs_hysteresis={gs_id: HysteresisParameters()},
             gs_service_priorities={gs_id: 10},
+            gs_tenant_ids={gs_id: "default"},
+            gs_reference_bodies={gs_id: "earth"},
             mbb_overlap_ticks=3,
             mbb_reserve=0,
         )

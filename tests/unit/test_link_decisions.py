@@ -22,6 +22,11 @@ from nodalarc.models.link_decisions import (
     LinkDecisionSnapshot,
     UnscheduledPair,
 )
+from nodalarc.nats_channels import (
+    SUBJECT_LINK_DECISION_SNAPSHOT,
+    SUBJECT_LINK_STATE_SNAPSHOT,
+    link_decision_snapshot_subject,
+)
 from ome.types import GroundVisibilityDecision
 from pydantic import ValidationError
 
@@ -406,3 +411,32 @@ class TestCrossTypeSemantics:
         wire = GroundVisibilityDecisionWire(**kwargs)
         for field in kwargs:
             assert getattr(hot, field) == getattr(wire, field), field
+
+
+# ---------------------------------------------------------------------------
+# NATS subject — pin the link_decision_snapshot_subject builder
+# ---------------------------------------------------------------------------
+
+
+class TestLinkDecisionSnapshotSubject:
+    """The new SUBJECT_LINK_DECISIONS lives on NODALARC_LINKS stream
+    (already MaxMsgsPerSubject=1). The subject pattern must match the
+    existing `link_state_snapshot_subject` so both snapshots share a
+    stream and the same per-session retention rules."""
+
+    def test_session_scoped_subject_pattern(self) -> None:
+        subj = link_decision_snapshot_subject("starlink-prod")
+        assert subj == "nodalarc.links.starlink-prod.decisions"
+
+    def test_legacy_constant_uses_default_session(self) -> None:
+        assert SUBJECT_LINK_DECISION_SNAPSHOT == "nodalarc.links.default.decisions"
+
+    def test_decision_subject_lives_on_links_stream(self) -> None:
+        """Both decision and state snapshots share the
+        `nodalarc.links.{session}.*` namespace so they retain together
+        on NODALARC_LINKS. A consumer with the latest state snapshot
+        also has the latest decision snapshot."""
+        assert SUBJECT_LINK_STATE_SNAPSHOT.startswith("nodalarc.links.")
+        assert SUBJECT_LINK_DECISION_SNAPSHOT.startswith("nodalarc.links.")
+        # Different terminal segments — separate subjects within the stream
+        assert SUBJECT_LINK_DECISION_SNAPSHOT != SUBJECT_LINK_STATE_SNAPSHOT

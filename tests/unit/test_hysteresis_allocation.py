@@ -117,6 +117,8 @@ class TestHysteresisDiscount:
                 )
             },
             gs_service_priorities={"gs-test": 10},
+            gs_tenant_ids={"gs-test": "default"},
+            gs_reference_bodies={"gs-test": "earth"},
             sat_ground_terminals={gv.sat_id: 1 for gv in visible},
             mbb_overlap_ticks=3,
             mbb_reserve=mbb_reserve,

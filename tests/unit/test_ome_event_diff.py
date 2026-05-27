@@ -115,6 +115,7 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
         associations={pair: (1, 0)},
         pending_teardowns={},
         scheduled_pairs=frozenset({pair}),
+        unscheduled_pairs=(),
     )
 
     diff = diff_ground_visibility_events(
@@ -143,6 +144,7 @@ def test_ground_event_diff_marks_mbb_teardown_state():
         associations={pair: (0, 0)},
         pending_teardowns={pair: MbbTeardown(10, successor)},
         scheduled_pairs=frozenset({pair, successor}),
+        unscheduled_pairs=(),
     )
 
     diff = diff_ground_visibility_events(

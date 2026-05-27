@@ -35,7 +35,7 @@ from typing import Literal
 
 import nats
 import yaml
-from nodalarc.models.link_decisions import LinkDecisionSnapshot
+from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
     AlmanacState,
@@ -51,8 +51,8 @@ from nodalarc.nats_channels import (
     STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
     almanac_event_subject,
+    ground_link_decision_snapshot_subject,
     latency_update_subject,
-    link_decision_snapshot_subject,
     link_down_subject,
     link_state_snapshot_subject,
     link_up_subject,
@@ -120,12 +120,12 @@ class SessionContext:
         self.nodes: dict[str, NodeState] = {}
         self.links: dict[str, LinkState] = {}
         self.link_decision_traces: dict[str, LinkDecisionTrace] = {}
-        # Latest LinkDecisionSnapshot from the OME — the operator-facing
+        # Latest GroundLinkDecisionSnapshot from the OME — the operator-facing
         # surface for "why isn't pair X scheduled?" Carries
         # visibility_reject_reason for every pair the OME considered
         # plus unscheduled_reason for visible-but-unallocated pairs.
         # None until the first snapshot lands.
-        self.latest_link_decision_snapshot: LinkDecisionSnapshot | None = None
+        self.latest_ground_link_decision_snapshot: GroundLinkDecisionSnapshot | None = None
         self.recent_events: list[RecentEvent] = []
         self.network_health: NetworkHealth = NetworkHealth(
             status="no measurement",
@@ -289,11 +289,11 @@ class SessionContext:
             )
             self._subscriptions.append(
                 await js.subscribe(
-                    link_decision_snapshot_subject(sid),
+                    ground_link_decision_snapshot_subject(sid),
                     stream=STREAM_LINK_EVENTS,
                     ordered_consumer=True,
                     deliver_policy=state_policy,
-                    cb=self._on_link_decision_snapshot,
+                    cb=self._on_ground_link_decision_snapshot,
                 )
             )
             self._subscriptions.append(
@@ -500,35 +500,35 @@ class SessionContext:
             )
             self._check_ready()
 
-    async def _on_link_decision_snapshot(self, msg) -> None:
-        """Retain the latest OME LinkDecisionSnapshot.
+    async def _on_ground_link_decision_snapshot(self, msg) -> None:
+        """Retain the latest OME GroundLinkDecisionSnapshot.
 
         Phase 1 (C-foundation-5): every pair the OME considered carries a
         typed `visibility_reject_reason` and, for visible-but-unscheduled
         pairs, an `unscheduled_reason`. Operators query the decision
-        surface via `/api/v1/link-decisions` to attribute "why isn't
+        surface via `/api/v1/ground-link-decisions` to attribute "why isn't
         this link up?" without reading scheduler logs.
 
         Pairing with `LinkStateSnapshot` is by
         (epoch_id, snapshot_seq, sim_time), NOT by shared stream — see
-        `link_decision_snapshot_subject` docstring.
+        `ground_link_decision_snapshot_subject` docstring.
         """
         try:
-            snapshot = LinkDecisionSnapshot.model_validate_json(msg.data)
+            snapshot = GroundLinkDecisionSnapshot.model_validate_json(msg.data)
         except Exception as exc:
-            log.error("FATAL: Failed to parse LinkDecisionSnapshot: %s", exc)
+            log.error("FATAL: Failed to parse GroundLinkDecisionSnapshot: %s", exc)
             raise
 
         with self.state_lock:
-            current = self.latest_link_decision_snapshot
+            current = self.latest_ground_link_decision_snapshot
             if current is not None and snapshot.snapshot_seq <= current.snapshot_seq:
                 log.warning(
-                    "Stale LinkDecisionSnapshot seq=%d (last=%d) — discarding",
+                    "Stale GroundLinkDecisionSnapshot seq=%d (last=%d) — discarding",
                     snapshot.snapshot_seq,
                     current.snapshot_seq,
                 )
                 return
-            self.latest_link_decision_snapshot = snapshot
+            self.latest_ground_link_decision_snapshot = snapshot
 
     async def _on_link_up(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()

@@ -1087,7 +1087,7 @@ class TestDebugRefCounting:
 
 
 def _decision_snapshot_payload() -> dict:
-    """Build a minimal LinkDecisionSnapshot payload covering all three
+    """Build a minimal GroundLinkDecisionSnapshot payload covering all three
     operator-relevant cases: visible+scheduled, visible+unscheduled,
     invisible. The endpoint must surface each correctly."""
     return {
@@ -1164,7 +1164,7 @@ def _decision_snapshot_payload() -> dict:
 
 
 class TestLinkDecisionSnapshotSubscription:
-    """SessionContext subscribes to LinkDecisionSnapshot and retains the
+    """SessionContext subscribes to GroundLinkDecisionSnapshot and retains the
     latest. Older sequence numbers are discarded so an out-of-order
     delivery cannot regress operator-visible state."""
 
@@ -1178,9 +1178,9 @@ class TestLinkDecisionSnapshotSubscription:
         msg = MagicMock()
         msg.data = json.dumps(_decision_snapshot_payload()).encode()
 
-        asyncio.run(ctx._on_link_decision_snapshot(msg))
+        asyncio.run(ctx._on_ground_link_decision_snapshot(msg))
 
-        snap = ctx.latest_link_decision_snapshot
+        snap = ctx.latest_ground_link_decision_snapshot
         assert snap is not None
         assert snap.snapshot_seq == 42
         assert {d.pair for d in snap.decisions} == {
@@ -1203,23 +1203,23 @@ class TestLinkDecisionSnapshotSubscription:
 
         first = MagicMock()
         first.data = json.dumps(_decision_snapshot_payload()).encode()
-        asyncio.run(ctx._on_link_decision_snapshot(first))
+        asyncio.run(ctx._on_ground_link_decision_snapshot(first))
 
         older = _decision_snapshot_payload()
         older["snapshot_seq"] = 41
         older["unscheduled_pairs"] = []
         old_msg = MagicMock()
         old_msg.data = json.dumps(older).encode()
-        asyncio.run(ctx._on_link_decision_snapshot(old_msg))
+        asyncio.run(ctx._on_ground_link_decision_snapshot(old_msg))
 
         # Retained snapshot is still seq 42 with its original unscheduled pair.
-        snap = ctx.latest_link_decision_snapshot
+        snap = ctx.latest_ground_link_decision_snapshot
         assert snap.snapshot_seq == 42
         assert len(snap.unscheduled_pairs) == 1
 
 
 class TestLinkDecisionsEndpoint:
-    """`GET /api/v1/link-decisions` exposes the OME's reasons to operators.
+    """`GET /api/v1/ground-link-decisions` exposes the OME's reasons to operators.
 
     Without an active session: 404. Without a snapshot: 404. Full
     snapshot when called with no pair query; per-pair view (decision +
@@ -1234,7 +1234,7 @@ class TestLinkDecisionsEndpoint:
 
         msg = MagicMock()
         msg.data = json.dumps(_decision_snapshot_payload()).encode()
-        asyncio.run(ctx._on_link_decision_snapshot(msg))
+        asyncio.run(ctx._on_ground_link_decision_snapshot(msg))
         return ctx
 
     def test_returns_404_when_no_session(self, monkeypatch):
@@ -1242,7 +1242,7 @@ class TestLinkDecisionsEndpoint:
         from fastapi.testclient import TestClient
 
         monkeypatch.setattr(m, "_active_context", None)
-        r = TestClient(m.app).get("/api/v1/link-decisions")
+        r = TestClient(m.app).get("/api/v1/ground-link-decisions")
         assert r.status_code == 404
 
     def test_returns_404_when_no_snapshot_received(self, monkeypatch):
@@ -1253,7 +1253,7 @@ class TestLinkDecisionsEndpoint:
         ctx._init_state_only()
         monkeypatch.setattr(m, "_active_context", ctx)
 
-        r = TestClient(m.app).get("/api/v1/link-decisions")
+        r = TestClient(m.app).get("/api/v1/ground-link-decisions")
         assert r.status_code == 404
         assert "no" in r.json()["error"].lower()
 
@@ -1263,7 +1263,7 @@ class TestLinkDecisionsEndpoint:
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
-        r = TestClient(m.app).get("/api/v1/link-decisions")
+        r = TestClient(m.app).get("/api/v1/ground-link-decisions")
         assert r.status_code == 200
         body = r.json()
         assert body["snapshot_seq"] == 42
@@ -1278,7 +1278,7 @@ class TestLinkDecisionsEndpoint:
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
         r = TestClient(m.app).get(
-            "/api/v1/link-decisions",
+            "/api/v1/ground-link-decisions",
             params={"node_a": "gs-den", "node_b": "sat-a"},
         )
         assert r.status_code == 200
@@ -1295,7 +1295,7 @@ class TestLinkDecisionsEndpoint:
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
         r = TestClient(m.app).get(
-            "/api/v1/link-decisions",
+            "/api/v1/ground-link-decisions",
             params={"node_a": "sat-b", "node_b": "gs-den"},
         )
         assert r.status_code == 200
@@ -1313,7 +1313,7 @@ class TestLinkDecisionsEndpoint:
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
         r = TestClient(m.app).get(
-            "/api/v1/link-decisions",
+            "/api/v1/ground-link-decisions",
             params={"node_a": "gs-den", "node_b": "sat-c"},
         )
         assert r.status_code == 200
@@ -1329,7 +1329,7 @@ class TestLinkDecisionsEndpoint:
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
         r = TestClient(m.app).get(
-            "/api/v1/link-decisions",
+            "/api/v1/ground-link-decisions",
             params={"node_a": "gs-mystery", "node_b": "sat-ghost"},
         )
         assert r.status_code == 404
@@ -1340,5 +1340,5 @@ class TestLinkDecisionsEndpoint:
 
         monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
 
-        r = TestClient(m.app).get("/api/v1/link-decisions", params={"node_a": "gs-den"})
+        r = TestClient(m.app).get("/api/v1/ground-link-decisions", params={"node_a": "gs-den"})
         assert r.status_code == 400

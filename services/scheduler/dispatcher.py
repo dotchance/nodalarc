@@ -50,15 +50,15 @@ from typing import Literal
 
 import nats
 from nodalarc.models.events import PlaybackState, SessionEphemeris, VisibilityEvent
-from nodalarc.models.link_decisions import LinkDecisionSnapshot
+from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LinkDecisionProvenance
 from nodalarc.models.link_state import LinkStateSnapshot
 from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     STREAM_LINK_EVENTS,
     STREAM_OME_EVENTS,
+    ground_link_decision_snapshot_subject,
     latency_update_subject,
-    link_decision_snapshot_subject,
     link_down_subject,
     link_state_snapshot_subject,
     link_up_subject,
@@ -207,7 +207,7 @@ class Dispatcher:
         self._subj_playback = playback_state_subject(session_id)
         self._subj_checkpoint = scheduling_checkpoint_subject(session_id)
         self._subj_link_snapshot = link_state_snapshot_subject(session_id)
-        self._subj_link_decisions = link_decision_snapshot_subject(session_id)
+        self._subj_link_decisions = ground_link_decision_snapshot_subject(session_id)
         self._subj_link_up = link_up_subject(session_id)
         self._subj_link_down = link_down_subject(session_id)
         self._subj_latency = latency_update_subject(session_id)
@@ -217,13 +217,13 @@ class Dispatcher:
         # incrementally. The queue carries copies to the dispatch worker.
         self._desired_links: dict[tuple[str, str], ActiveLinkInfo] = {}
 
-        # Latest LinkDecisionSnapshot from OME (Phase 1.3.b). Passive
+        # Latest GroundLinkDecisionSnapshot from OME (Phase 1.3.b). Passive
         # storage in this sub-phase; Phase 1.4 reads it to construct
         # ``_ome_view`` and detect divergence from ``_desired_links``.
         # Reset to None on each Scheduler start; rebuilt from NATS
         # subscription (Direction 4: state derived from authority, not
         # local invention).
-        self._latest_decision_snapshot: LinkDecisionSnapshot | None = None
+        self._latest_decision_snapshot: GroundLinkDecisionSnapshot | None = None
 
         # Parallel OME-view dict: the OME's stated truth for each pair
         # the OME has spoken about. Used by the C-A subset invariant
@@ -273,7 +273,7 @@ class Dispatcher:
         # Epoch id of the most recent applied LinkStateSnapshot. Used
         # together with _last_snapshot_seq and _last_snapshot_sim_time
         # to enforce the pairing contract between LinkStateSnapshot and
-        # LinkDecisionSnapshot (see paired_decision_snapshot below).
+        # GroundLinkDecisionSnapshot (see paired_decision_snapshot below).
         self._last_snapshot_epoch_id: int = 0
 
         # Control plane state: scenario overrides. Values are reason strings.
@@ -732,7 +732,7 @@ class Dispatcher:
                 )
                 await self._dispatch_queue.put(intent)
 
-        async def _on_link_decision_snapshot(msg):
+        async def _on_ground_link_decision_snapshot(msg):
             """Phase 1.3.b passive receiver — validate and store the
             decision snapshot. The Scheduler does not yet act on it.
 
@@ -749,10 +749,10 @@ class Dispatcher:
             state that does not survive failover.
             """
             try:
-                decision_snapshot = LinkDecisionSnapshot.model_validate_json(msg.data)
+                decision_snapshot = GroundLinkDecisionSnapshot.model_validate_json(msg.data)
             except ValidationError as exc:
                 log.warning(
-                    "Ignoring schema-incompatible retained LinkDecisionSnapshot on %s; "
+                    "Ignoring schema-incompatible retained GroundLinkDecisionSnapshot on %s; "
                     "waiting for OME to publish current decision snapshot: %s",
                     msg.subject,
                     exc,
@@ -761,7 +761,7 @@ class Dispatcher:
 
             self._latest_decision_snapshot = decision_snapshot
             log.debug(
-                "LinkDecisionSnapshot seq=%d epoch_id=%d: %d decisions, %d unscheduled",
+                "GroundLinkDecisionSnapshot seq=%d epoch_id=%d: %d decisions, %d unscheduled",
                 decision_snapshot.snapshot_seq,
                 decision_snapshot.epoch_id,
                 len(decision_snapshot.decisions),
@@ -793,7 +793,7 @@ class Dispatcher:
                 self._subj_link_decisions,
                 STREAM_LINK_EVENTS,
                 DeliverPolicy.LAST_PER_SUBJECT,
-                _on_link_decision_snapshot,
+                _on_ground_link_decision_snapshot,
             ),
         ]
         for subj, stream, policy, cb in subscriptions:
@@ -880,7 +880,7 @@ class Dispatcher:
     # replacement-LinkUp-failure handling.
     # ------------------------------------------------------------------
 
-    def paired_decision_snapshot(self) -> LinkDecisionSnapshot | None:
+    def paired_decision_snapshot(self) -> GroundLinkDecisionSnapshot | None:
         """Return the latest decision snapshot ONLY if it pairs with
         the latest applied LinkStateSnapshot — else None.
 

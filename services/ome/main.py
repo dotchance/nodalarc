@@ -572,7 +572,7 @@ def _run_pacing(
         TeardownEntry,
     )
     from nodalarc.nats_channels import (
-        link_decision_snapshot_subject,
+        ground_link_decision_snapshot_subject,
         link_state_snapshot_subject,
         ome_clock_subject,
         ome_visibility_subject,
@@ -662,7 +662,7 @@ def _run_pacing(
     subj_visibility = ome_visibility_subject(session_id)
     subj_clock = ome_clock_subject(session_id)
     subj_link_snapshot = link_state_snapshot_subject(session_id)
-    subj_link_decisions = link_decision_snapshot_subject(session_id)
+    subj_link_decisions = ground_link_decision_snapshot_subject(session_id)
     subj_ephemeris = session_ephemeris_subject(session_id)
     subj_playback = playback_state_subject(session_id)
     subj_checkpoint = scheduling_checkpoint_subject(session_id)
@@ -967,7 +967,7 @@ def _run_pacing(
         current_step=step,
     )
     _enqueue(subj_link_snapshot, initial_snap.model_dump_json().encode())
-    # Companion LinkDecisionSnapshot — empty at session start (no
+    # Companion GroundLinkDecisionSnapshot — empty at session start (no
     # compute_step has run yet, so no decisions exist). Same sim_time
     # and snapshot_seq as the state snapshot so consumers can pair them.
     initial_decision_snap = build_link_decision_snapshot(
@@ -1060,7 +1060,7 @@ def _run_pacing(
                     epoch_id=_epoch_id,
                 )
                 _enqueue(subj_link_snapshot, seek_snap.model_dump_json().encode())
-                # Companion empty LinkDecisionSnapshot at seek — running
+                # Companion empty GroundLinkDecisionSnapshot at seek — running
                 # state was reset; the first post-seek compute_step
                 # repopulates decisions.
                 seek_decision_snap = build_link_decision_snapshot(
@@ -1191,7 +1191,7 @@ def _run_pacing(
                     current_step=step,
                 )
                 _enqueue(subj_link_snapshot, snap.model_dump_json().encode())
-                # Companion LinkDecisionSnapshot — carries the typed
+                # Companion GroundLinkDecisionSnapshot — carries the typed
                 # per-pair decisions and the typed unscheduled-pair
                 # reasons. Same snapshot_seq and sim_time as the state
                 # snapshot above; both share the NODALARC_LINKS stream

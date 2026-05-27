@@ -18,14 +18,14 @@ from datetime import UTC, datetime
 
 import pytest
 from nodalarc.models.link_decisions import (
+    GroundLinkDecisionSnapshot,
     GroundVisibilityDecisionWire,
-    LinkDecisionSnapshot,
     UnscheduledPair,
 )
 from nodalarc.nats_channels import (
-    SUBJECT_LINK_DECISION_SNAPSHOT,
+    SUBJECT_GROUND_LINK_DECISION_SNAPSHOT,
     SUBJECT_LINK_STATE_SNAPSHOT,
-    link_decision_snapshot_subject,
+    ground_link_decision_snapshot_subject,
 )
 from ome.types import GroundVisibilityDecision
 from pydantic import ValidationError
@@ -296,7 +296,7 @@ class TestUnscheduledPair:
     def test_isl_only_unscheduled_reason_rejected_on_ground_decision(self) -> None:
         """The ISL allocator's `isl_terminal_capacity` is a satellite-
         side resource exhaustion. It cannot describe a ground-link
-        rejection. A `LinkDecisionSnapshot` is ground-context, so
+        rejection. A `GroundLinkDecisionSnapshot` is ground-context, so
         `UnscheduledPair` refuses the ISL-only reason at construction."""
         kwargs = _unscheduled_kwargs()
         kwargs["unscheduled_reason"] = "isl_terminal_capacity"
@@ -324,7 +324,7 @@ class TestUnscheduledPair:
 
 
 # ---------------------------------------------------------------------------
-# LinkDecisionSnapshot
+# GroundLinkDecisionSnapshot
 # ---------------------------------------------------------------------------
 
 
@@ -350,7 +350,7 @@ class TestLinkDecisionSnapshot:
         }
 
     def test_construction(self) -> None:
-        s = LinkDecisionSnapshot(**self._snapshot_kwargs())
+        s = GroundLinkDecisionSnapshot(**self._snapshot_kwargs())
         assert s.snapshot_seq == 42
         assert s.epoch_id == 1
         assert len(s.decisions) == 1
@@ -362,19 +362,19 @@ class TestLinkDecisionSnapshot:
         kwargs = self._snapshot_kwargs()
         kwargs["decisions"] = ()
         kwargs["unscheduled_pairs"] = ()
-        s = LinkDecisionSnapshot(**kwargs)
+        s = GroundLinkDecisionSnapshot(**kwargs)
         assert s.decisions == ()
         assert s.unscheduled_pairs == ()
 
     def test_snapshot_is_frozen(self) -> None:
-        s = LinkDecisionSnapshot(**self._snapshot_kwargs())
+        s = GroundLinkDecisionSnapshot(**self._snapshot_kwargs())
         with pytest.raises(ValidationError):
             s.snapshot_seq = 43  # type: ignore[misc]
 
     def test_round_trip_json(self) -> None:
-        original = LinkDecisionSnapshot(**self._snapshot_kwargs())
+        original = GroundLinkDecisionSnapshot(**self._snapshot_kwargs())
         payload = original.model_dump_json()
-        parsed = LinkDecisionSnapshot.model_validate_json(payload)
+        parsed = GroundLinkDecisionSnapshot.model_validate_json(payload)
         assert parsed == original
 
     def test_seq_and_epoch_must_be_present(self) -> None:
@@ -384,7 +384,7 @@ class TestLinkDecisionSnapshot:
             kwargs = self._snapshot_kwargs()
             del kwargs[field]
             with pytest.raises(ValidationError, match=field):
-                LinkDecisionSnapshot(**kwargs)
+                GroundLinkDecisionSnapshot(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +524,7 @@ class TestCrossTypeSemantics:
 
 
 # ---------------------------------------------------------------------------
-# NATS subject — pin the link_decision_snapshot_subject builder
+# NATS subject — pin the ground_link_decision_snapshot_subject builder
 # ---------------------------------------------------------------------------
 
 
@@ -535,11 +535,11 @@ class TestLinkDecisionSnapshotSubject:
     stream and the same per-session retention rules."""
 
     def test_session_scoped_subject_pattern(self) -> None:
-        subj = link_decision_snapshot_subject("starlink-prod")
-        assert subj == "nodalarc.links.starlink-prod.decisions"
+        subj = ground_link_decision_snapshot_subject("starlink-prod")
+        assert subj == "nodalarc.links.starlink-prod.ground_decisions"
 
     def test_legacy_constant_uses_default_session(self) -> None:
-        assert SUBJECT_LINK_DECISION_SNAPSHOT == "nodalarc.links.default.decisions"
+        assert SUBJECT_GROUND_LINK_DECISION_SNAPSHOT == "nodalarc.links.default.ground_decisions"
 
     def test_decision_subject_lives_on_links_stream(self) -> None:
         """Both decision and state snapshots share the
@@ -549,6 +549,6 @@ class TestLinkDecisionSnapshotSubject:
         (epoch_id, snapshot_seq, sim_time) in the consumer; see
         scheduler.dispatcher.paired_decision_snapshot."""
         assert SUBJECT_LINK_STATE_SNAPSHOT.startswith("nodalarc.links.")
-        assert SUBJECT_LINK_DECISION_SNAPSHOT.startswith("nodalarc.links.")
+        assert SUBJECT_GROUND_LINK_DECISION_SNAPSHOT.startswith("nodalarc.links.")
         # Different terminal segments — separate subjects within the stream
-        assert SUBJECT_LINK_DECISION_SNAPSHOT != SUBJECT_LINK_STATE_SNAPSHOT
+        assert SUBJECT_GROUND_LINK_DECISION_SNAPSHOT != SUBJECT_LINK_STATE_SNAPSHOT

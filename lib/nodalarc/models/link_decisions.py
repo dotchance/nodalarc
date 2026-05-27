@@ -6,7 +6,7 @@ The OME computes a per-pair visibility *decision* every tick: physical
 visibility plus the constraints applied to reach that decision, plus
 why the pair is or is not scheduled. The decision is distinct from the
 *actuated link state* carried on `LinkStateSnapshot` — `LinkStateSnapshot`
-describes what the forwarding plane is doing right now; `LinkDecisionSnapshot`
+describes what the forwarding plane is doing right now; `GroundLinkDecisionSnapshot`
 describes what the OME decided and why.
 
 Two layers per the foundational trust plan:
@@ -73,7 +73,7 @@ GroundUnscheduledReason = Literal[
 
 The ISL allocator's `isl_terminal_capacity` is intentionally absent
 from this enum. `UnscheduledPair` lives in the ground-decision
-snapshot (`LinkDecisionSnapshot.unscheduled_pairs`), and a ground pair
+snapshot (`GroundLinkDecisionSnapshot.unscheduled_pairs`), and a ground pair
 stamped with an ISL-only reason is a producer bug. Future ISL
 decision snapshots will carry their own typed reason.
 
@@ -112,7 +112,7 @@ mount model with independent az/el limits."""
 class GroundVisibilityDecisionWire(BaseModel):
     """Per-pair ground visibility decision in wire form.
 
-    Published as part of `LinkDecisionSnapshot` on the
+    Published as part of `GroundLinkDecisionSnapshot` on the
     `SUBJECT_LINK_DECISIONS` NATS subject (added in the producer
     landing PR per the plan's NATS subject discipline).
 
@@ -216,7 +216,7 @@ class GroundVisibilityDecisionWire(BaseModel):
 class UnscheduledPair(BaseModel):
     """A pair that was visible but not scheduled, with the reason.
 
-    Carried in `LinkDecisionSnapshot.unscheduled_pairs`. A pair appears
+    Carried in `GroundLinkDecisionSnapshot.unscheduled_pairs`. A pair appears
     here when `GroundVisibilityDecisionWire.visible=True` but the
     allocator did not schedule it.
 
@@ -241,21 +241,31 @@ class UnscheduledPair(BaseModel):
     capacity_constraint: str | None
 
 
-class LinkDecisionSnapshot(BaseModel):
-    """Companion to `LinkStateSnapshot`: what the OME decided, and why.
+class GroundLinkDecisionSnapshot(BaseModel):
+    """Companion to `LinkStateSnapshot`: what the OME decided about
+    GROUND links, and why.
 
-    Published on `SUBJECT_LINK_DECISIONS` alongside (same `sim_time`
-    and `snapshot_seq`) the carrier-state `LinkStateSnapshot`.
+    Ground-scoped. Carries decisions only for GS↔satellite pairs.
+    ISL pair decisions are not snapshotted today; a separate
+    `IslLinkDecisionSnapshot` type and subject will be added when
+    ISL decision attribution lands. Consumers must not interpret an
+    absent pair as "the OME ignored it" — it may simply be an ISL
+    pair this snapshot does not cover.
 
-    `LinkStateSnapshot` carries the actuated forwarding-plane state.
-    `LinkDecisionSnapshot` carries the OME's decision context for
-    every pair the OME considered — visible-and-scheduled,
-    visible-but-rejected, and visible-but-unscheduled.
+    Published on `SUBJECT_GROUND_LINK_DECISION_SNAPSHOT` (same
+    `sim_time` and `snapshot_seq` as the corresponding
+    `LinkStateSnapshot`, for pairing).
+
+    `LinkStateSnapshot` carries the actuated forwarding-plane state
+    across both link types. `GroundLinkDecisionSnapshot` carries the
+    OME's decision context for every GROUND pair the OME considered —
+    visible-and-scheduled, visible-but-rejected, and
+    visible-but-unscheduled.
 
     The two snapshots are correlatable by `sim_time` and
     `snapshot_seq`. Consumers asking "what is forwarding?" read the
-    state snapshot; consumers asking "why isn't this link up?" read
-    the decision snapshot.
+    state snapshot; consumers asking "why isn't this ground link up?"
+    read this decision snapshot.
 
     Internal consistency invariants (enforced at construction —
     Phase 1.1 boundary correctness):
@@ -286,25 +296,25 @@ class LinkDecisionSnapshot(BaseModel):
     unscheduled_pairs: tuple[UnscheduledPair, ...]
 
     @model_validator(mode="after")
-    def _decisions_have_unique_pairs(self) -> LinkDecisionSnapshot:
+    def _decisions_have_unique_pairs(self) -> GroundLinkDecisionSnapshot:
         seen: set[tuple[str, str]] = set()
         for d in self.decisions:
             if d.pair in seen:
                 raise ValueError(
-                    f"LinkDecisionSnapshot.decisions has duplicate pair {d.pair!r}. "
+                    f"GroundLinkDecisionSnapshot.decisions has duplicate pair {d.pair!r}. "
                     "Each pair must have exactly one decision per snapshot."
                 )
             seen.add(d.pair)
         return self
 
     @model_validator(mode="after")
-    def _unscheduled_pairs_consistent_with_decisions(self) -> LinkDecisionSnapshot:
+    def _unscheduled_pairs_consistent_with_decisions(self) -> GroundLinkDecisionSnapshot:
         decision_by_pair = {d.pair: d for d in self.decisions}
         seen: set[tuple[str, str]] = set()
         for u in self.unscheduled_pairs:
             if u.pair in seen:
                 raise ValueError(
-                    f"LinkDecisionSnapshot.unscheduled_pairs has duplicate pair "
+                    f"GroundLinkDecisionSnapshot.unscheduled_pairs has duplicate pair "
                     f"{u.pair!r}. Each unscheduled pair must appear at most once."
                 )
             seen.add(u.pair)

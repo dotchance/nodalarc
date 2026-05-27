@@ -62,9 +62,13 @@ VisibilityRejectReason = Literal[
 ]
 """Full union of physical/geometric rejection reasons across ground + ISL.
 
-`VisibilityEvent` carries either axis. The ground-only subset
-(`GroundVisibilityRejectReason` in `nodalarc.models.link_decisions`)
-is the narrower type used on `GroundVisibilityDecisionWire`."""
+`VisibilityEvent` carries either axis but is constrained at runtime by
+its model validator to the link-type-specific subset (see
+``_GROUND_REJECT_REASONS`` and ``_ISL_REJECT_REASONS`` below). The
+narrower wire form for ground decisions
+(``GroundVisibilityRejectReason`` in
+``nodalarc.models.link_decisions``) is the type used on
+``GroundVisibilityDecisionWire``."""
 
 
 UnscheduledReason = Literal[
@@ -78,9 +82,57 @@ UnscheduledReason = Literal[
 ]
 """Full union of allocation rejection reasons across ground + ISL.
 
-`VisibilityEvent` carries either axis. The ground-only subset
-(`GroundUnscheduledReason` in `nodalarc.models.link_decisions`) is the
-narrower type used on `UnscheduledPair`."""
+`VisibilityEvent` carries either axis but is constrained at runtime by
+its model validator to the link-type-specific subset (see
+``_GROUND_UNSCHEDULED_REASONS`` and ``_ISL_UNSCHEDULED_REASONS``
+below). The narrower wire form for ground decisions
+(``GroundUnscheduledReason`` in ``nodalarc.models.link_decisions``)
+is the type used on ``UnscheduledPair``."""
+
+
+# Link-type-specific reason taxonomy. The validator on `VisibilityEvent`
+# enforces these at construction so an ISL-only value (``polar_seam``,
+# ``terminal_type_mismatch``, ``terminal_role_mismatch``,
+# ``isl_terminal_capacity``) cannot land on a ground event, and a
+# ground-only value (``elevation_below_min``, ``gs_capacity``,
+# ``sat_capacity``, ``hysteresis_hold``, ``incumbent_held``,
+# ``bbm_no_spare``, ``replaced_by_successor``) cannot land on an ISL
+# event. The overlap set (``ok``, ``los_blocked``, ``range_exceeded``,
+# ``field_of_regard``, ``tracking_exceeded``) is legitimately shared
+# because the underlying physics gate applies to both terminal types.
+_GROUND_REJECT_REASONS: frozenset[str] = frozenset(
+    {
+        "ok",
+        "los_blocked",
+        "elevation_below_min",
+        "range_exceeded",
+        "field_of_regard",
+        "tracking_exceeded",
+    }
+)
+_ISL_REJECT_REASONS: frozenset[str] = frozenset(
+    {
+        "ok",
+        "los_blocked",
+        "range_exceeded",
+        "field_of_regard",
+        "tracking_exceeded",
+        "polar_seam",
+        "terminal_type_mismatch",
+        "terminal_role_mismatch",
+    }
+)
+_GROUND_UNSCHEDULED_REASONS: frozenset[str] = frozenset(
+    {
+        "gs_capacity",
+        "sat_capacity",
+        "hysteresis_hold",
+        "incumbent_held",
+        "bbm_no_spare",
+        "replaced_by_successor",
+    }
+)
+_ISL_UNSCHEDULED_REASONS: frozenset[str] = frozenset({"isl_terminal_capacity"})
 
 
 class VisibilityEvent(BaseModel):
@@ -139,6 +191,51 @@ class VisibilityEvent(BaseModel):
             values["node_a"] = b
             values["node_b"] = a
         return values
+
+    @model_validator(mode="after")
+    def _reasons_match_link_type(self) -> VisibilityEvent:
+        """Link-type-domain enforcement: ground reasons on ground events,
+        ISL reasons on ISL events.
+
+        The Literal unions are unioned across both domains so a single
+        model can serialize either, but a ground event stamped with an
+        ISL-only value (``polar_seam``, ``isl_terminal_capacity``, etc.)
+        is an impossible state — producer bug. Reject at construction so
+        consumers downstream do not have to defensively re-validate.
+        """
+        if self.link_type == "ground":
+            if self.visibility_reject_reason not in _GROUND_REJECT_REASONS:
+                raise ValueError(
+                    f"link_type='ground' rejects visibility_reject_reason="
+                    f"{self.visibility_reject_reason!r}. Allowed for ground: "
+                    f"{sorted(_GROUND_REJECT_REASONS)!r}."
+                )
+            if (
+                self.unscheduled_reason is not None
+                and self.unscheduled_reason not in _GROUND_UNSCHEDULED_REASONS
+            ):
+                raise ValueError(
+                    f"link_type='ground' rejects unscheduled_reason="
+                    f"{self.unscheduled_reason!r}. Allowed for ground: "
+                    f"{sorted(_GROUND_UNSCHEDULED_REASONS)!r}."
+                )
+        elif self.link_type == "isl":
+            if self.visibility_reject_reason not in _ISL_REJECT_REASONS:
+                raise ValueError(
+                    f"link_type='isl' rejects visibility_reject_reason="
+                    f"{self.visibility_reject_reason!r}. Allowed for ISL: "
+                    f"{sorted(_ISL_REJECT_REASONS)!r}."
+                )
+            if (
+                self.unscheduled_reason is not None
+                and self.unscheduled_reason not in _ISL_UNSCHEDULED_REASONS
+            ):
+                raise ValueError(
+                    f"link_type='isl' rejects unscheduled_reason="
+                    f"{self.unscheduled_reason!r}. Allowed for ISL: "
+                    f"{sorted(_ISL_UNSCHEDULED_REASONS)!r}."
+                )
+        return self
 
     @model_validator(mode="after")
     def _reasons_consistent_with_state(self) -> VisibilityEvent:

@@ -365,8 +365,8 @@ class TestAuthoritySubsetInvariantHappyPath:
 
 
 from nodalarc.models.link_decisions import (
+    GroundLinkDecisionSnapshot,
     GroundVisibilityDecisionWire,
-    LinkDecisionSnapshot,
 )
 
 
@@ -415,8 +415,8 @@ class TestPairedDecisionSnapshot:
         seq: int,
         epoch_id: int,
         sim_time: datetime,
-    ) -> LinkDecisionSnapshot:
-        return LinkDecisionSnapshot(
+    ) -> GroundLinkDecisionSnapshot:
+        return GroundLinkDecisionSnapshot(
             sim_time=sim_time,
             snapshot_seq=seq,
             epoch_id=epoch_id,

@@ -324,6 +324,103 @@ class TestVisibilityEvent:
                 unscheduled_reason=None,
             )
 
+    def test_ground_event_rejects_isl_only_reject_reason(self):
+        """A ground event stamped with an ISL-only physical reason is
+        impossible — the ground physics gate never emits those values."""
+        from pydantic import ValidationError
+
+        for isl_only in (
+            "polar_seam",
+            "terminal_type_mismatch",
+            "terminal_role_mismatch",
+        ):
+            with pytest.raises(
+                ValidationError, match="link_type='ground' rejects visibility_reject_reason"
+            ):
+                VisibilityEvent(
+                    sim_time=NOW,
+                    node_a="gs-den",
+                    node_b="sat-P00S00",
+                    link_type="ground",
+                    visible=False,
+                    scheduled=False,
+                    range_km=1000.0,
+                    elevation_deg=10.0,
+                    terminal_type="rf",
+                    visibility_reject_reason=isl_only,
+                    unscheduled_reason=None,
+                )
+
+    def test_ground_event_rejects_isl_only_unscheduled_reason(self):
+        """``isl_terminal_capacity`` is satellite-side ISL allocator state
+        and cannot describe a ground rejection."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="link_type='ground' rejects unscheduled_reason"):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="gs-den",
+                node_b="sat-P00S00",
+                link_type="ground",
+                visible=True,
+                scheduled=False,
+                range_km=1000.0,
+                elevation_deg=40.0,
+                terminal_type="rf",
+                visibility_reject_reason="ok",
+                unscheduled_reason="isl_terminal_capacity",
+            )
+
+    def test_isl_event_rejects_ground_only_reject_reason(self):
+        """ISL terminals have no ground elevation mask;
+        ``elevation_below_min`` is a ground-only physical reason."""
+        from pydantic import ValidationError
+
+        with pytest.raises(
+            ValidationError, match="link_type='isl' rejects visibility_reject_reason"
+        ):
+            VisibilityEvent(
+                sim_time=NOW,
+                node_a="sat-P00S00",
+                node_b="sat-P00S01",
+                link_type="isl",
+                visible=False,
+                scheduled=False,
+                range_km=1000.0,
+                elevation_deg=None,
+                terminal_type="optical",
+                visibility_reject_reason="elevation_below_min",
+                unscheduled_reason=None,
+            )
+
+    def test_isl_event_rejects_ground_only_unscheduled_reason(self):
+        """Ground allocator reasons (gs_capacity, sat_capacity, etc.)
+        cannot describe an ISL rejection."""
+        from pydantic import ValidationError
+
+        for ground_only in (
+            "gs_capacity",
+            "sat_capacity",
+            "hysteresis_hold",
+            "incumbent_held",
+            "bbm_no_spare",
+            "replaced_by_successor",
+        ):
+            with pytest.raises(ValidationError, match="link_type='isl' rejects unscheduled_reason"):
+                VisibilityEvent(
+                    sim_time=NOW,
+                    node_a="sat-P00S00",
+                    node_b="sat-P00S01",
+                    link_type="isl",
+                    visible=True,
+                    scheduled=False,
+                    range_km=1000.0,
+                    elevation_deg=None,
+                    terminal_type="optical",
+                    visibility_reject_reason="ok",
+                    unscheduled_reason=ground_only,
+                )
+
     def test_frozen(self):
         evt = VisibilityEvent(
             sim_time=NOW,

@@ -416,7 +416,7 @@ def test_unscheduled_pair_replaced_by_successor_when_teardown_expires():
 
 def test_unscheduled_pairs_are_deterministically_sorted():
     """Direction 4 (multi-compute-node): two Scheduler replicas
-    receiving the same LinkDecisionSnapshot must see the same
+    receiving the same GroundLinkDecisionSnapshot must see the same
     ordering of unscheduled_pairs."""
     # Build a scenario where multiple pairs reject for different reasons.
     incumbent = ("gs-A", "sat-incumbent")

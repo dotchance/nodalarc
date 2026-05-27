@@ -17,8 +17,8 @@ from datetime import datetime
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.models.link_decisions import (
+    GroundLinkDecisionSnapshot,
     GroundVisibilityDecisionWire,
-    LinkDecisionSnapshot,
     UnscheduledPair,
 )
 from nodalarc.models.link_state import (
@@ -40,7 +40,7 @@ def build_link_decision_snapshot(
     sim_time: datetime,
     snapshot_seq: int,
     epoch_id: int,
-) -> LinkDecisionSnapshot:
+) -> GroundLinkDecisionSnapshot:
     """Build the diagnostic companion to ``LinkStateSnapshot``.
 
     Converts the hot-path slotted ``GroundVisibilityDecision`` instances
@@ -62,7 +62,7 @@ def build_link_decision_snapshot(
     wire_decisions = tuple(
         GroundVisibilityDecisionWire(**asdict(decision)) for _pair, decision in sorted_decisions
     )
-    return LinkDecisionSnapshot(
+    return GroundLinkDecisionSnapshot(
         sim_time=sim_time,
         snapshot_seq=snapshot_seq,
         epoch_id=epoch_id,

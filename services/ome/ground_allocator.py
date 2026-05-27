@@ -148,7 +148,7 @@ def _attribute_rejected_pairs(
 
     Returns a tuple sorted by pair for deterministic NATS payloads —
     Direction 4 (multi-compute-node) requires that two Scheduler replicas
-    receiving the same `LinkDecisionSnapshot` see the same ordering.
+    receiving the same `GroundLinkDecisionSnapshot` see the same ordering.
 
     The final `else` branch raises rather than returning a default. The
     plan demands no silent fall-throughs: if the allocator cannot

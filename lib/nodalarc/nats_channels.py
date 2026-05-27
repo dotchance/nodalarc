@@ -95,17 +95,22 @@ def link_state_snapshot_subject(session_id: str) -> str:
     return f"nodalarc.links.{session_id}.state"
 
 
-def link_decision_snapshot_subject(session_id: str) -> str:
-    """OME link decision snapshot subject for a specific session.
+def ground_link_decision_snapshot_subject(session_id: str) -> str:
+    """OME GROUND-link decision snapshot subject for a specific session.
+
+    Ground-scoped — covers only GS↔satellite pair decisions. The OME
+    publishes ground decisions here today; ISL decisions are not yet
+    snapshotted and a separate ISL subject will be introduced when
+    they are.
 
     The decision snapshot is the diagnostic companion to
     ``link_state_snapshot_subject``: same ``snapshot_seq`` and
     ``sim_time``, separate payload. ``LinkStateSnapshot`` describes the
     actuated forwarding-plane state (carrier UP/DOWN, applied
-    range/latency); ``LinkDecisionSnapshot`` describes the OME's
-    visibility and scheduling decisions for every pair the OME
-    considered — including visible-but-unscheduled pairs and the
-    reasons for non-allocation.
+    range/latency); ``GroundLinkDecisionSnapshot`` describes the OME's
+    visibility and scheduling decisions for every GROUND pair the OME
+    considered — including visible-but-unscheduled ground pairs and
+    the reasons for non-allocation.
 
     The subject lives on the ``NODALARC_LINKS`` stream which already
     enforces ``MaxMsgsPerSubject=1``. Replace-not-merge: only the
@@ -120,7 +125,7 @@ def link_decision_snapshot_subject(session_id: str) -> str:
     shared stream as pairing is wrong and will deliver mismatched
     state/decision pairs on restart or restream.
     """
-    return f"nodalarc.links.{session_id}.decisions"
+    return f"nodalarc.links.{session_id}.ground_decisions"
 
 
 def link_up_subject(session_id: str) -> str:
@@ -196,7 +201,7 @@ SUBJECT_HEARTBEAT = ome_heartbeat_subject(_DEFAULT_SESSION_ID)
 
 # Link state (JetStream — retained, replace-not-merge)
 SUBJECT_LINK_STATE_SNAPSHOT = link_state_snapshot_subject(_DEFAULT_SESSION_ID)
-SUBJECT_LINK_DECISION_SNAPSHOT = link_decision_snapshot_subject(_DEFAULT_SESSION_ID)
+SUBJECT_GROUND_LINK_DECISION_SNAPSHOT = ground_link_decision_snapshot_subject(_DEFAULT_SESSION_ID)
 SUBJECT_LINK_UP = link_up_subject(_DEFAULT_SESSION_ID)
 SUBJECT_LINK_DOWN = link_down_subject(_DEFAULT_SESSION_ID)
 SUBJECT_LATENCY_UPDATE = latency_update_subject(_DEFAULT_SESSION_ID)

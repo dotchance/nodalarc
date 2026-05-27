@@ -22,8 +22,8 @@ from datetime import UTC, datetime
 
 import pytest
 from nodalarc.models.link_decisions import (
+    GroundLinkDecisionSnapshot,
     GroundVisibilityDecisionWire,
-    LinkDecisionSnapshot,
     UnscheduledPair,
 )
 from ome.snapshot_builder import build_link_decision_snapshot
@@ -72,7 +72,7 @@ class TestBuildLinkDecisionSnapshot:
             snapshot_seq=1,
             epoch_id=0,
         )
-        assert isinstance(snap, LinkDecisionSnapshot)
+        assert isinstance(snap, GroundLinkDecisionSnapshot)
         assert snap.decisions == ()
         assert snap.unscheduled_pairs == ()
         assert snap.sim_time == SIM
@@ -193,7 +193,7 @@ class TestBuildLinkDecisionSnapshot:
             epoch_id=2,
         )
         payload = snap.model_dump_json()
-        parsed = LinkDecisionSnapshot.model_validate_json(payload)
+        parsed = GroundLinkDecisionSnapshot.model_validate_json(payload)
         assert parsed == snap
 
     def test_seq_and_epoch_are_carried(self):
@@ -244,14 +244,14 @@ def _wire_decision(
 
 
 class TestLinkDecisionSnapshotConsistency:
-    """Direct LinkDecisionSnapshot construction must reject impossible
+    """Direct GroundLinkDecisionSnapshot construction must reject impossible
     states. Producers (snapshot builder) can pass through valid inputs,
     but the model is the last line of defense."""
 
     def test_duplicate_decision_pair_rejected(self) -> None:
         pair = ("gs-a", "sat-1")
         with pytest.raises(ValidationError, match="duplicate pair"):
-            LinkDecisionSnapshot(
+            GroundLinkDecisionSnapshot(
                 sim_time=SIM,
                 snapshot_seq=1,
                 epoch_id=0,
@@ -261,7 +261,7 @@ class TestLinkDecisionSnapshotConsistency:
 
     def test_unscheduled_pair_without_matching_decision_rejected(self) -> None:
         with pytest.raises(ValidationError, match="no matching entry in"):
-            LinkDecisionSnapshot(
+            GroundLinkDecisionSnapshot(
                 sim_time=SIM,
                 snapshot_seq=1,
                 epoch_id=0,
@@ -281,7 +281,7 @@ class TestLinkDecisionSnapshotConsistency:
     def test_unscheduled_pair_pointing_at_invisible_decision_rejected(self) -> None:
         pair = ("gs-a", "sat-1")
         with pytest.raises(ValidationError, match="visible=False"):
-            LinkDecisionSnapshot(
+            GroundLinkDecisionSnapshot(
                 sim_time=SIM,
                 snapshot_seq=1,
                 epoch_id=0,
@@ -301,7 +301,7 @@ class TestLinkDecisionSnapshotConsistency:
     def test_unscheduled_pair_tenant_mismatch_rejected(self) -> None:
         pair = ("gs-a", "sat-1")
         with pytest.raises(ValidationError, match="tenant_id"):
-            LinkDecisionSnapshot(
+            GroundLinkDecisionSnapshot(
                 sim_time=SIM,
                 snapshot_seq=1,
                 epoch_id=0,
@@ -321,7 +321,7 @@ class TestLinkDecisionSnapshotConsistency:
     def test_unscheduled_pair_body_mismatch_rejected(self) -> None:
         pair = ("gs-a", "sat-1")
         with pytest.raises(ValidationError, match="reference_body"):
-            LinkDecisionSnapshot(
+            GroundLinkDecisionSnapshot(
                 sim_time=SIM,
                 snapshot_seq=1,
                 epoch_id=0,
@@ -341,7 +341,7 @@ class TestLinkDecisionSnapshotConsistency:
     def test_duplicate_unscheduled_pair_rejected(self) -> None:
         pair = ("gs-a", "sat-1")
         with pytest.raises(ValidationError, match="duplicate pair"):
-            LinkDecisionSnapshot(
+            GroundLinkDecisionSnapshot(
                 sim_time=SIM,
                 snapshot_seq=1,
                 epoch_id=0,
@@ -368,7 +368,7 @@ class TestLinkDecisionSnapshotConsistency:
 
     def test_valid_snapshot_with_consistent_unscheduled_pair(self) -> None:
         pair = ("gs-a", "sat-1")
-        snap = LinkDecisionSnapshot(
+        snap = GroundLinkDecisionSnapshot(
             sim_time=SIM,
             snapshot_seq=1,
             epoch_id=0,

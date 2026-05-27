@@ -179,7 +179,7 @@ class StepResult:
 
     ``ground_decisions`` carries the typed per-pair visibility decisions
     the OME produced this tick. The OME main loop uses them to build
-    ``LinkDecisionSnapshot`` at every snapshot interval — the diagnostic
+    ``GroundLinkDecisionSnapshot`` at every snapshot interval — the diagnostic
     companion to ``LinkStateSnapshot``.
     """
 

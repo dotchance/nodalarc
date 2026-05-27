@@ -1612,29 +1612,36 @@ def get_link_decision_traces(
 
 
 @app.get(
-    "/api/v1/link-decisions",
+    "/api/v1/ground-link-decisions",
     dependencies=[Depends(_require_api_key)],
     response_model=None,
 )
-def get_link_decisions(
+def get_ground_link_decisions(
     node_a: str = Query(None),
     node_b: str = Query(None),
 ) -> dict | JSONResponse:
-    """Return the latest OME LinkDecisionSnapshot.
+    """Return the latest OME GroundLinkDecisionSnapshot.
+
+    GROUND-SCOPED. The OME only publishes ground (GS↔satellite) link
+    decisions today; ISL pair decisions are not yet snapshotted and a
+    separate endpoint will be added when they are. Querying an
+    ISL-only pair (sat-sat) returns 404 — not because the OME has no
+    opinion, but because the ISL decision surface does not exist yet.
 
     Phase 1 (C-foundation-5): the operator-facing surface for "why isn't
-    this pair up?" Every pair the OME considered carries
+    this ground pair up?" Every ground pair the OME considered carries
     ``visibility_reject_reason``; visible-but-unscheduled pairs
     additionally carry ``unscheduled_reason`` plus the incumbent or
     capacity constraint the allocator chose them over.
 
     Without ``node_a`` / ``node_b`` returns the full snapshot
-    (``sim_time``, ``snapshot_seq``, ``epoch_id``, all decisions, all
-    unscheduled pairs). With both, returns just that pair's decision
-    and matching unscheduled-pair record (if any).
+    (``sim_time``, ``snapshot_seq``, ``epoch_id``, all ground
+    decisions, all unscheduled ground pairs). With both, returns just
+    that ground pair's decision and matching unscheduled-pair record
+    (if any).
 
     ``404`` if no snapshot has been received yet; ``404`` for a
-    specific pair the OME never considered.
+    specific pair the OME's ground decision set does not cover.
     """
     ctx = _active_context
     if ctx is None:
@@ -1645,11 +1652,11 @@ def get_link_decisions(
             content={"error": "node_a and node_b must be provided together"},
         )
     with ctx.state_lock:
-        snapshot = ctx.latest_link_decision_snapshot
+        snapshot = ctx.latest_ground_link_decision_snapshot
     if snapshot is None:
         return JSONResponse(
             status_code=404,
-            content={"error": "No LinkDecisionSnapshot received yet"},
+            content={"error": "No GroundLinkDecisionSnapshot received yet"},
         )
     if node_a and node_b:
         target = tuple(sorted((node_a, node_b)))
@@ -1657,7 +1664,13 @@ def get_link_decisions(
         if decision is None:
             return JSONResponse(
                 status_code=404,
-                content={"error": f"OME has no decision for pair {node_a}<->{node_b}"},
+                content={
+                    "error": (
+                        f"OME ground-decision snapshot does not cover pair "
+                        f"{node_a}<->{node_b}. Note: ISL pair decisions are "
+                        "not exposed on this endpoint."
+                    )
+                },
             )
         unscheduled = next((u for u in snapshot.unscheduled_pairs if u.pair == target), None)
         return {

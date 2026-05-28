@@ -1,6 +1,9 @@
 """Test visibility computation — LOS, range, elevation, scheduling."""
 
+import math
+
 from nodalarc.geo import compute_range_km
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from ome.propagator import (
     GeoPosition,
     Vec3,
@@ -101,6 +104,21 @@ class TestElevationAngle:
         elev = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
         assert elev < 0.0
 
+    def test_analytic_horizon_is_near_zero_elevation(self):
+        """At the geometric tangent point, elevation is zero in the local frame."""
+        gs_geo = GeoPosition(0.0, 0.0, 0.0)
+        gs_ecef = geodetic_to_ecef(gs_geo)
+        radius_km = gs_ecef.x
+        orbit_radius_km = radius_km + 550.0
+        central_angle = math.acos(radius_km / orbit_radius_km)
+        sat_ecef = Vec3(
+            orbit_radius_km * math.cos(central_angle),
+            orbit_radius_km * math.sin(central_angle),
+            0.0,
+        )
+        elev = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
+        assert abs(elev) < 1e-9
+
 
 class TestGroundVisibility:
     def test_overhead_visible(self):
@@ -140,6 +158,68 @@ class TestGroundVisibility:
         assert not result.visible
         assert result.reject_reason == "los_blocked"
         assert result.elevation_deg == -90.0
+
+    def test_range_limit_rejects_visible_overhead_satellite(self):
+        gs_geo = GeoPosition(0.0, 0.0, 0.0)
+        gs_ecef = geodetic_to_ecef(gs_geo)
+        sat_ecef = geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
+        result = check_ground_visibility(
+            gs_ecef,
+            gs_geo,
+            sat_ecef,
+            min_elevation_deg=25.0,
+            max_range_km=100.0,
+        )
+        assert not result.visible
+        assert result.reject_reason == "range_exceeded"
+        assert result.range_km > 500.0
+
+    def test_ground_field_of_regard_rejects_off_boresight_satellite(self):
+        gs_geo = GeoPosition(0.0, 0.0, 0.0)
+        gs_ecef = geodetic_to_ecef(gs_geo)
+        sat_ecef = geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
+        result = check_ground_visibility(
+            gs_ecef,
+            gs_geo,
+            sat_ecef,
+            min_elevation_deg=0.0,
+            gs_boresight=TerminalBoresight(mode="local_vertical", half_angle_deg=10.0),
+        )
+        assert not result.visible
+        assert result.reject_reason == "field_of_regard"
+
+    def test_satellite_nadir_field_of_regard_rejects_off_axis_ground_station(self):
+        gs_geo = GeoPosition(0.0, 0.0, 0.0)
+        gs_ecef = geodetic_to_ecef(gs_geo)
+        sat_ecef = geodetic_to_ecef(GeoPosition(10.0, 0.0, 550.0))
+        result = check_ground_visibility(
+            gs_ecef,
+            gs_geo,
+            sat_ecef,
+            min_elevation_deg=0.0,
+            sat_boresight=SatGroundTerminalBoresight(
+                target_body="earth",
+                mode="nadir",
+                half_angle_deg=1.0,
+            ),
+        )
+        assert not result.visible
+        assert result.reject_reason == "field_of_regard"
+
+    def test_tracking_rate_limit_rejects_fast_overhead_satellite(self):
+        gs_geo = GeoPosition(0.0, 0.0, 0.0)
+        gs_ecef = geodetic_to_ecef(gs_geo)
+        sat_ecef = geodetic_to_ecef(GeoPosition(0.0, 0.0, 550.0))
+        result = check_ground_visibility(
+            gs_ecef,
+            gs_geo,
+            sat_ecef,
+            min_elevation_deg=25.0,
+            max_tracking_rate_deg_s=0.1,
+            sat_velocity_ecef_km_s=Vec3(0.0, 10.0, 0.0),
+        )
+        assert not result.visible
+        assert result.reject_reason == "tracking_exceeded"
 
 
 class TestIslVisibility:

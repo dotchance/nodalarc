@@ -39,6 +39,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from nodalarc.models.terminal_physics import GroundBoresightMode
+
 GroundVisibilityRejectReason = Literal[
     "ok",
     "los_blocked",
@@ -95,20 +97,6 @@ Lagrange-point relays and other platforms with no natural local
 vertical."""
 
 
-BoresightMode = Literal[
-    "local_vertical",
-    "configured_inertial",
-    "steerable_envelope",
-    "nadir",
-]
-"""Which boresight model produced the FoR check.
-
-`local_vertical` and `configured_inertial` apply to ground terminals.
-`nadir` is the default for satellite ground terminals (points toward
-the body the sat orbits). `steerable_envelope` is the multi-axis
-mount model with independent az/el limits."""
-
-
 class GroundVisibilityDecisionWire(BaseModel):
     """Per-pair ground visibility decision in wire form.
 
@@ -160,7 +148,7 @@ class GroundVisibilityDecisionWire(BaseModel):
     applied_max_range_km: float | None
     applied_field_of_regard_deg: float | None
     applied_max_tracking_rate_deg_s: float | None
-    applied_boresight_mode: BoresightMode | None
+    applied_boresight_mode: GroundBoresightMode | None
     applied_gs_terminal_profile: str | None
     applied_sat_terminal_profile: str | None
 

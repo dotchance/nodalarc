@@ -7,17 +7,19 @@ from __future__ import annotations
 import pytest
 from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.geo import geodetic_to_ecef
+from nodalarc.ground_terminals import TerminalPhysicsProfile
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
 from ome.propagation_engine import PropagatedState
 from ome.visibility import GroundVisibility
 
 
-def _state(node_id: str, geo: GeoPosition) -> PropagatedState:
+def _state(node_id: str, geo: GeoPosition, velocity: Vec3 | None = None) -> PropagatedState:
     return PropagatedState(
         node_id=node_id,
         sim_time_unix=0.0,
         position_ecef_km=geodetic_to_ecef(geo),
-        velocity_ecef_km_s=EcefVec3(Vec3(0.0, 0.0, 0.0)),
+        velocity_ecef_km_s=EcefVec3(velocity or Vec3(0.0, 0.0, 0.0)),
         geodetic=geo,
         propagator_id="test-fixture",
     )
@@ -31,7 +33,45 @@ def _gs_default_kwargs(gs_id: str = "gs-equator") -> dict:
     }
 
 
-def test_ground_visibility_evaluates_all_station_satellite_pairs():
+def _physical_kwargs(
+    *,
+    gs_id: str = "gs-equator",
+    sat_id: str = "sat-a",
+    max_range_km: float = 5000.0,
+    field_of_regard_deg: float = 180.0,
+    max_tracking_rate_deg_s: float = 10.0,
+) -> dict:
+    return {
+        "simulation_fidelity": "physical_v1",
+        "gs_terminal_profiles": {
+            gs_id: TerminalPhysicsProfile(
+                profile_id=f"{gs_id}.terminals",
+                max_range_km=max_range_km,
+                field_of_regard_deg=field_of_regard_deg,
+                max_tracking_rate_deg_s=max_tracking_rate_deg_s,
+                boresight=TerminalBoresight(
+                    mode="local_vertical", half_angle_deg=field_of_regard_deg / 2.0
+                ),
+            )
+        },
+        "sat_ground_terminal_profiles": {
+            sat_id: TerminalPhysicsProfile(
+                profile_id=f"{sat_id}.ground_terminals",
+                max_range_km=max_range_km,
+                field_of_regard_deg=field_of_regard_deg,
+                max_tracking_rate_deg_s=max_tracking_rate_deg_s,
+                boresight=SatGroundTerminalBoresight(
+                    target_body="earth",
+                    mode="nadir",
+                    half_angle_deg=field_of_regard_deg / 2.0,
+                ),
+                target_body="earth",
+            )
+        },
+    }
+
+
+def test_ground_visibility_evaluates_all_station_satellite_pairs_with_physical_constraints():
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
     sat_geo = GeoPosition(0.0, 0.0, 550.0)
 
@@ -41,6 +81,7 @@ def test_ground_visibility_evaluates_all_station_satellite_pairs():
         gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
         gs_min_elevations={"gs-equator": 25.0},
         **_gs_default_kwargs(),
+        **_physical_kwargs(),
     )
 
     pair = ("gs-equator", "sat-a")
@@ -53,13 +94,43 @@ def test_ground_visibility_evaluates_all_station_satellite_pairs():
     assert decision.reference_body == "earth"
     assert decision.observer_frame == "body_local"
     assert decision.reject_reason == "ok"
-    # Phase 1.2.b: applied terminal constraints are None because the
-    # physical_v1 fidelity gate has not landed yet. Honest absence,
-    # not silent permissive default.
-    assert decision.applied_max_range_km is None
-    assert decision.applied_field_of_regard_deg is None
-    assert decision.applied_max_tracking_rate_deg_s is None
+    assert decision.applied_max_range_km == 5000.0
+    assert decision.applied_field_of_regard_deg == 180.0
+    assert decision.applied_max_tracking_rate_deg_s == 10.0
+    assert decision.applied_gs_terminal_profile == "gs-equator.terminals"
+    assert decision.applied_sat_terminal_profile == "sat-a.ground_terminals"
     assert result.visible_per_station["gs-equator"][0].sat_id == "sat-a"
+
+
+def test_physical_visibility_rejects_range_before_allocator_candidate_set():
+    gs_geo = GeoPosition(0.0, 0.0, 0.0)
+
+    result = evaluate_ground_visibility(
+        satellite_ids=("sat-a",),
+        sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
+        gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_min_elevations={"gs-equator": 25.0},
+        **_gs_default_kwargs(),
+        **_physical_kwargs(max_range_km=100.0),
+    )
+
+    decision = result.decisions[("gs-equator", "sat-a")]
+    assert decision.visible is False
+    assert decision.reject_reason == "range_exceeded"
+    assert result.visible_per_station["gs-equator"] == []
+
+
+def test_physical_visibility_requires_endpoint_profiles():
+    gs_geo = GeoPosition(0.0, 0.0, 0.0)
+
+    with pytest.raises(ValueError, match="ground terminal profiles"):
+        evaluate_ground_visibility(
+            satellite_ids=("sat-a",),
+            sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
+            gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+            gs_min_elevations={"gs-equator": 25.0},
+            **_gs_default_kwargs(),
+        )
 
 
 def test_ground_visibility_missing_propagated_state_fails_loudly():
@@ -72,12 +143,12 @@ def test_ground_visibility_missing_propagated_state_fails_loudly():
             gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
             **_gs_default_kwargs(),
+            **_physical_kwargs(sat_id="sat-missing"),
         )
 
 
 def test_ground_visibility_missing_tenant_fails_loudly():
-    """Direction 2: every visibility decision must carry tenant scope.
-    Missing tenant id for any GS in scope is fatal at construction time."""
+    """Direction 2: every visibility decision must carry tenant scope."""
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
     with pytest.raises(ValueError, match="tenant_id"):
         evaluate_ground_visibility(
@@ -85,14 +156,13 @@ def test_ground_visibility_missing_tenant_fails_loudly():
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
             gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
-            gs_tenant_ids={},  # empty — must fail
+            gs_tenant_ids={},
             gs_reference_bodies={"gs-equator": "earth"},
         )
 
 
 def test_ground_visibility_missing_reference_body_fails_loudly():
-    """Direction 3: every visibility decision is anchored to a specific
-    body. Missing reference_body for any GS is fatal."""
+    """Direction 3: every visibility decision is anchored to a specific body."""
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
     with pytest.raises(ValueError, match="reference_body"):
         evaluate_ground_visibility(
@@ -101,16 +171,13 @@ def test_ground_visibility_missing_reference_body_fails_loudly():
             gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
             gs_tenant_ids={"gs-equator": "default"},
-            gs_reference_bodies={},  # empty — must fail
+            gs_reference_bodies={},
         )
 
 
 def test_ground_visibility_carries_rejection_reason_for_invisible_pair():
-    """Non-visible pairs carry the typed `reject_reason`. The legacy
-    sentinel-elevation heuristic is gone — `los_blocked` and
-    `elevation_below_min` are independently observable in the decision."""
+    """Non-visible pairs carry the typed `reject_reason`."""
     gs_geo = GeoPosition(0.0, 0.0, 0.0)
-    # 10° lat offset: LOS clear, elevation ~20° (below 25° mask).
     sat_geo = GeoPosition(10.0, 0.0, 550.0)
     result = evaluate_ground_visibility(
         satellite_ids=("sat-a",),
@@ -118,6 +185,7 @@ def test_ground_visibility_carries_rejection_reason_for_invisible_pair():
         gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
         gs_min_elevations={"gs-equator": 25.0},
         **_gs_default_kwargs(),
+        **_physical_kwargs(),
     )
     decision = result.decisions[("gs-equator", "sat-a")]
     assert decision.visible is False
@@ -202,7 +270,9 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
             step_seconds=1,
             horizon_ticks=5,
             propagator_id="test",
+            simulation_fidelity="geometry_only",
         ),
+        simulation_fidelity="geometry_only",
         **_gs_default_kwargs(),
     )
 
@@ -223,4 +293,5 @@ def test_longest_remaining_pass_without_lookahead_fails_loudly():
             gs_min_elevations={"gs-equator": 25.0},
             gs_policies={"gs-equator": "longest-remaining-pass"},
             **_gs_default_kwargs(),
+            **_physical_kwargs(),
         )

@@ -128,6 +128,22 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
     )
 
 
+def _enforce_simulation_fidelity_contract(session: SessionConfig) -> None:
+    """Fail before OME run if geometry-only physics is not explicitly acknowledged."""
+    if session.simulation.fidelity != "geometry_only":
+        return
+    if not session.simulation.acknowledge_geometry_only:
+        raise ValueError(
+            "simulation.fidelity=geometry_only requires "
+            "simulation.acknowledge_geometry_only: true. Ground links would "
+            "otherwise run without range, field-of-regard, or tracking-rate checks."
+        )
+    logging.warning(
+        "simulation.fidelity=geometry_only: ground links use LOS/elevation only; "
+        "range, field-of-regard, and tracking-rate constraints are not enforced"
+    )
+
+
 def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None:
     """Fail before dispatch if a selected SGP4 source violates its age budget."""
     if cfg.session.orbit.propagator != "sgp4-tle":
@@ -189,6 +205,7 @@ _seeking: bool = False  # True while seek in progress — mutex for pause/set_sp
 def run(session_path: str, output_dir: str | None = None) -> Path:
     """Run the OME pipeline (single window, batch mode) and return the output path."""
     cfg = _load_session_config(session_path)
+    _enforce_simulation_fidelity_contract(cfg.session)
     epoch_unix = resolve_session_epoch(cfg.session.time)
     _validate_sgp4_tle_freshness(cfg, epoch_unix)
     mbb_dispatch = cfg.session.scheduling.ground.handover_mode == "mbb"
@@ -212,6 +229,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         default_ground_policy=cfg.session.scheduling.ground.policy,
+        simulation_fidelity=cfg.session.simulation.fidelity,
     )
 
     out_dir = Path(output_dir) if output_dir else Path("output")
@@ -719,6 +737,7 @@ def _run_pacing(
         mbb_reserve=mbb_reserve,
         ground_policy_lookahead_horizon_ticks=session.scheduling.ground.lookahead_horizon_ticks,
         default_ground_policy=session.scheduling.ground.policy,
+        simulation_fidelity=session.simulation.fidelity,
     )
 
     step_seconds = session.time.step_seconds

@@ -10,6 +10,8 @@ Three formats are supported:
 
 from pydantic import BaseModel, field_validator, model_validator
 
+from nodalarc.models.terminal_physics import TerminalBoresight
+
 MAX_GROUND_TERMINAL_COUNT = 128
 
 
@@ -110,6 +112,10 @@ class GroundTerminalDef(BaseModel):
     count: int
     bandwidth_mbps: float
     tracking_capacity: int
+    max_range_km: float | None = None
+    field_of_regard_deg: float | None = None
+    max_tracking_rate_deg_s: float | None = None
+    boresight: TerminalBoresight | None = None
     frequency_band: str | None = None  # For future environmental modeling
     band: str | None = None  # Shorthand band identifier (Ka, Ku, E, V)
 
@@ -119,6 +125,53 @@ class GroundTerminalDef(BaseModel):
         if not 1 <= v <= MAX_GROUND_TERMINAL_COUNT:
             raise ValueError(f"terminal count must be 1-{MAX_GROUND_TERMINAL_COUNT}, got {v}")
         return v
+
+    @field_validator("bandwidth_mbps")
+    @classmethod
+    def _positive_bandwidth(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"bandwidth_mbps must be positive, got {v}")
+        return v
+
+    @field_validator("tracking_capacity")
+    @classmethod
+    def _positive_tracking_capacity(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(f"tracking_capacity must be >= 1, got {v}")
+        return v
+
+    @field_validator("max_range_km")
+    @classmethod
+    def _positive_range(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"max_range_km must be positive, got {v}")
+        return v
+
+    @field_validator("field_of_regard_deg")
+    @classmethod
+    def _for_range(cls, v: float | None) -> float | None:
+        if v is not None and not 0 < v <= 180:
+            raise ValueError(f"field_of_regard_deg must be in (0, 180], got {v}")
+        return v
+
+    @field_validator("max_tracking_rate_deg_s")
+    @classmethod
+    def _positive_tracking_rate(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"max_tracking_rate_deg_s must be positive, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _boresight_matches_for(self):
+        if self.field_of_regard_deg is None or self.boresight is None:
+            return self
+        expected_half_angle = self.field_of_regard_deg / 2.0
+        if abs(self.boresight.half_angle_deg - expected_half_angle) > 1e-9:
+            raise ValueError(
+                "boresight.half_angle_deg must equal field_of_regard_deg / 2 "
+                f"({expected_half_angle:g})"
+            )
+        return self
 
 
 class VerificationInfo(BaseModel):

@@ -13,13 +13,15 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from nodalarc.constellation_loader import SatelliteNode, isl_terminal_for_interface
 from nodalarc.ground_terminals import (
+    TerminalPhysicsProfile,
     ground_terminal_type,
     station_ground_terminal_capacity,
     station_ground_terminal_type,
+    terminal_physics_profile,
 )
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
@@ -151,6 +153,9 @@ class StepContext:
     gs_policies: dict[str, str]
     gs_hysteresis: dict[str, HysteresisParameters]
     gs_service_priorities: dict[str, int]
+    simulation_fidelity: Literal["geometry_only", "physical_v1"]
+    gs_terminal_profiles: dict[str, TerminalPhysicsProfile]
+    sat_ground_terminal_profiles: dict[str, TerminalPhysicsProfile]
     # Per-GS tenant scope (Direction 2 — multi-tenant from day one) and
     # reference body (Direction 3 — multi-body from day one). Both
     # already exist on GroundStationConfig; the StepContext carries them
@@ -233,6 +238,7 @@ def build_step_context(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_ground_policy: str | None = None,
+    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1",
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     by_node = neighbors_by_node(neighbors)
@@ -241,11 +247,21 @@ def build_step_context(
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]] = {}
     sat_ground_terminals: dict[str, int] = {}
     sat_ground_terminal_types: dict[str, str] = {}
+    sat_ground_terminal_profiles: dict[str, TerminalPhysicsProfile] = {}
+    has_ground_stations = gs_file is not None and bool(gs_file.stations)
+    require_ground_physics = simulation_fidelity == "physical_v1" and has_ground_stations
     for sat in satellites:
         nid = addressing.sat_id(sat.plane, sat.slot)
         sat_isl_terminals[nid] = sat.isl_terminal_count
         sat_ground_terminals[nid] = sat.ground_terminal_count
-        sat_ground_terminal_types[nid] = ground_terminal_type(sat.ground_terminals)
+        if sat.ground_terminals:
+            sat_ground_terminal_types[nid] = ground_terminal_type(sat.ground_terminals)
+            sat_ground_terminal_profiles[nid] = terminal_physics_profile(
+                tuple(sat.ground_terminals),
+                profile_id=f"{nid}.ground_terminals",
+                endpoint="satellite",
+                require_constraints=require_ground_physics,
+            )
         constraints_by_iface: dict[str, IslTerminalConstraints] = {}
         for idx in range(sat.isl_terminal_count):
             iface = f"isl{idx}"
@@ -268,6 +284,7 @@ def build_step_context(
     gs_tenant_ids: dict[str, str] = {}
     gs_reference_bodies: dict[str, str] = {}
     gs_terminal_types: dict[str, str] = {}
+    gs_terminal_profiles: dict[str, TerminalPhysicsProfile] = {}
     ground_pair_terminal_types: dict[tuple[str, str], str] = {}
     if gs_file:
         default_gs_policy = (
@@ -287,6 +304,13 @@ def build_step_context(
             )
             gs_terminal_counts[node_id] = station_ground_terminal_capacity(gs_file, station)
             gs_terminal_types[node_id] = station_ground_terminal_type(gs_file, station)
+            effective_terminals = station.terminals or gs_file.default_terminals
+            gs_terminal_profiles[node_id] = terminal_physics_profile(
+                tuple(effective_terminals),
+                profile_id=f"{node_id}.terminals",
+                endpoint="ground",
+                require_constraints=require_ground_physics,
+            )
             gs_policies[node_id] = (
                 station.scheduling_policy
                 if station.scheduling_policy is not None
@@ -316,6 +340,9 @@ def build_step_context(
         gs_policies=gs_policies,
         gs_hysteresis=gs_hysteresis,
         gs_service_priorities=gs_service_priorities,
+        simulation_fidelity=simulation_fidelity,
+        gs_terminal_profiles=gs_terminal_profiles,
+        sat_ground_terminal_profiles=sat_ground_terminal_profiles,
         gs_tenant_ids=gs_tenant_ids,
         gs_reference_bodies=gs_reference_bodies,
         ground_pair_terminal_types=ground_pair_terminal_types,
@@ -424,10 +451,17 @@ def compute_step(
                 step_seconds=step_seconds,
                 horizon_ticks=ctx.ground_policy_lookahead_horizon_ticks,
                 propagator_id=ctx.propagator_id,
+                simulation_fidelity=ctx.simulation_fidelity,
+                gs_reference_bodies=ctx.gs_reference_bodies,
+                gs_terminal_profiles=ctx.gs_terminal_profiles,
+                sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
             )
             if "longest-remaining-pass" in set(ctx.gs_policies.values())
             else None
         ),
+        simulation_fidelity=ctx.simulation_fidelity,
+        gs_terminal_profiles=ctx.gs_terminal_profiles,
+        sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
     )
 
     # 7. Scored, hysteresis-aware ground link allocation.
@@ -559,6 +593,7 @@ def precompute_timeline_window(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_ground_policy: str | None = None,
+    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1",
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
@@ -584,6 +619,7 @@ def precompute_timeline_window(
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_ground_policy=default_ground_policy,
+        simulation_fidelity=simulation_fidelity,
     )
     return precompute_timeline_window_from_context(
         ctx,
@@ -614,6 +650,7 @@ def precompute_timeline(
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
     default_ground_policy: str | None = None,
+    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1",
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
 
@@ -634,6 +671,7 @@ def precompute_timeline(
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         default_ground_policy=default_ground_policy,
+        simulation_fidelity=simulation_fidelity,
     )
     return result.events
 

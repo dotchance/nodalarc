@@ -35,6 +35,7 @@ from nodalarc.models.session import (
     SessionMeta,
     TimeConfig,
 )
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.orbital import elements_from_params
 from nodalarc.session_validator import (
     VALID_SCHEDULING_POLICIES,
@@ -51,6 +52,24 @@ ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.4897433
 # ---------------------------------------------------------------------------
 # Helpers — build minimal valid models for testing
 # ---------------------------------------------------------------------------
+
+
+GROUND_PHYSICAL_TERMINAL_FIELDS = {
+    "max_range_km": 2000.0,
+    "field_of_regard_deg": 120.0,
+    "max_tracking_rate_deg_s": 1.5,
+    "boresight": TerminalBoresight(mode="local_vertical", half_angle_deg=60.0),
+}
+SAT_PHYSICAL_TERMINAL_FIELDS = {
+    "max_range_km": 2000.0,
+    "field_of_regard_deg": 120.0,
+    "max_tracking_rate_deg_s": 1.5,
+    "boresight": SatGroundTerminalBoresight(
+        target_body="earth",
+        mode="nadir",
+        half_angle_deg=60.0,
+    ),
+}
 
 
 def _make_session(
@@ -98,6 +117,7 @@ def _make_gs_file(
                         count=2,
                         bandwidth_mbps=1000,
                         tracking_capacity=2,
+                        **GROUND_PHYSICAL_TERMINAL_FIELDS,
                     )
                 ],
             ),
@@ -109,6 +129,7 @@ def _make_gs_file(
                 count=1,
                 bandwidth_mbps=1000,
                 tracking_capacity=1,
+                **GROUND_PHYSICAL_TERMINAL_FIELDS,
             )
         ],
         default_scheduling_policy=default_scheduling_policy,
@@ -156,6 +177,7 @@ def _make_satellites(
                             type=ground_terminal_type,
                             count=ground_terminals,
                             bandwidth_mbps=1000.0,
+                            **SAT_PHYSICAL_TERMINAL_FIELDS,
                         ),
                     )
                     if ground_terminals > 0
@@ -197,7 +219,12 @@ def _make_constellation(
                 ),
             ],
             ground=[
-                GroundTerminal(type="rf", count=1, bandwidth_mbps=1000.0),
+                GroundTerminal(
+                    type="rf",
+                    count=1,
+                    bandwidth_mbps=1000.0,
+                    **SAT_PHYSICAL_TERMINAL_FIELDS,
+                ),
             ],
         ),
     )
@@ -227,7 +254,14 @@ def _make_tle_constellation() -> TLEConstellation:
                     max_tracking_rate_deg_s=5.0,
                 ),
             ],
-            ground=[GroundTerminal(type="rf", count=1, bandwidth_mbps=1000.0)],
+            ground=[
+                GroundTerminal(
+                    type="rf",
+                    count=1,
+                    bandwidth_mbps=1000.0,
+                    **SAT_PHYSICAL_TERMINAL_FIELDS,
+                )
+            ],
         ),
     )
 
@@ -250,6 +284,14 @@ def _make_tle_satellites() -> list[SatelliteNode]:
             elements=elements_from_params(420.0, 51.6, 21.5, 21.8),
             isl_terminal_count=2,
             ground_terminal_count=1,
+            ground_terminals=(
+                GroundTerminal(
+                    type="rf",
+                    count=1,
+                    bandwidth_mbps=1000.0,
+                    **SAT_PHYSICAL_TERMINAL_FIELDS,
+                ),
+            ),
             tle_line_1=ISS_TLE_LINE_1,
             tle_line_2=ISS_TLE_LINE_2,
             norad_id=25544,
@@ -619,6 +661,7 @@ class TestE010:
                             count=1,
                             bandwidth_mbps=1000,
                             tracking_capacity=1,
+                            **GROUND_PHYSICAL_TERMINAL_FIELDS,
                         )
                     ],
                 )
@@ -652,6 +695,7 @@ class TestE010:
                             count=2,
                             bandwidth_mbps=1000,
                             tracking_capacity=1,
+                            **GROUND_PHYSICAL_TERMINAL_FIELDS,
                         )
                     ],
                 )
@@ -697,6 +741,7 @@ class TestE011:
                             count=1,
                             bandwidth_mbps=1000,
                             tracking_capacity=1,
+                            **GROUND_PHYSICAL_TERMINAL_FIELDS,
                         )
                     ],
                 )
@@ -713,6 +758,100 @@ class TestE011:
         assert "Ground terminal type mismatch" in errors[0].message
         assert "ground station uses 'optical'" in errors[0].message
         assert "satellite uses 'rf'" in errors[0].message
+
+
+# ---------------------------------------------------------------------------
+# E020/E021: Ground physics fidelity gates
+# ---------------------------------------------------------------------------
+
+
+class TestGroundPhysicsFidelityGates:
+    def test_geometry_only_requires_explicit_acknowledgement(self):
+        session = _make_session()
+        session.simulation.fidelity = "geometry_only"
+        session.simulation.acknowledge_geometry_only = False
+        gs = _make_gs_file()
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E020"]
+        assert len(errors) == 1
+        assert "acknowledge_geometry_only" in errors[0].message
+
+    def test_acknowledged_geometry_only_warns_but_does_not_emit_e020(self):
+        session = _make_session()
+        session.simulation.fidelity = "geometry_only"
+        session.simulation.acknowledge_geometry_only = True
+        gs = _make_gs_file()
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        assert [r for r in results if r.code == "E020"] == []
+        warnings = [r for r in results if r.level == "warning" and r.code == "W009"]
+        assert len(warnings) == 1
+
+    def test_physical_v1_requires_ground_station_terminal_physics(self):
+        session = _make_session()
+        gs = _make_gs_file(
+            stations=[
+                GroundStationConfig(
+                    name="missing-physics",
+                    lat_deg=34.0,
+                    lon_deg=-118.0,
+                    terminals=[
+                        GroundTerminalDef(
+                            type="rf",
+                            count=1,
+                            bandwidth_mbps=1000.0,
+                            tracking_capacity=1,
+                        )
+                    ],
+                )
+            ]
+        )
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E021"]
+        assert len(errors) == 1
+        assert "ground_stations.missing-physics.terminals[0]" in errors[0].message
+        assert "max_range_km" in errors[0].message
+
+    def test_physical_v1_requires_satellite_terminal_physics(self):
+        session = _make_session()
+        gs = _make_gs_file()
+        sats = _make_satellites()
+        sats[0].ground_terminals = (GroundTerminal(type="rf", count=1, bandwidth_mbps=1000.0),)
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E021"]
+        assert len(errors) == 1
+        assert "satellite P00S00.ground_terminals[0]" in errors[0].message
+        assert "field_of_regard_deg" in errors[0].message
+        assert "boresight" in errors[0].message
+
+    def test_physical_v1_skips_e021_for_pure_isl_satellites(self):
+        session = _make_session()
+        gs = _make_gs_file()
+        sats = _make_satellites(ground_terminals=0)
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        assert [r for r in results if r.level == "error" and r.code == "E021"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -837,6 +976,7 @@ class TestW003:
                     count=1,
                     bandwidth_mbps=1000,
                     tracking_capacity=1,
+                    **GROUND_PHYSICAL_TERMINAL_FIELDS,
                 ),
             ],
         )
@@ -889,6 +1029,7 @@ class TestW003:
                     count=1,
                     bandwidth_mbps=1000,
                     tracking_capacity=1,
+                    **GROUND_PHYSICAL_TERMINAL_FIELDS,
                 ),
             ],
         )
@@ -1086,6 +1227,7 @@ class TestW007:
                     count=1,
                     bandwidth_mbps=10.0,
                     tracking_capacity=1,
+                    **GROUND_PHYSICAL_TERMINAL_FIELDS,
                 ),
             ],
         )
@@ -1122,6 +1264,7 @@ class TestW007:
                         count=8,
                         bandwidth_mbps=100000.0,
                         tracking_capacity=8,
+                        **GROUND_PHYSICAL_TERMINAL_FIELDS,
                     ),
                 ],
             )

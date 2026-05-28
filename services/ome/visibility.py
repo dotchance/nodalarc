@@ -10,18 +10,17 @@ Handles:
 - Ground link scheduling (highest-elevation, lowest-elevation,
   longest-remaining-pass)
 - ISL terminal scheduling (priority-based with symmetric constraint)
-
-Under 500 lines.
 """
 
 from __future__ import annotations
 
 import math
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
-from nodalarc.constants import WGS84_A, WGS84_B
+from nodalarc.body_frames import EARTH_BODY_FRAME, BodyFrame
 from nodalarc.geo import compute_range_km
 from nodalarc.models.link_decisions import GroundVisibilityRejectReason
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 
 from ome.propagator import GeoPosition, Vec3
 
@@ -63,6 +62,7 @@ class GroundVisibility(NamedTuple):
     range_km: float
     remaining_visible_s: float | None
     reject_reason: GroundVisibilityRejectReason
+    azimuth_deg: float | None = None
 
 
 class IslVisibility(NamedTuple):
@@ -90,77 +90,79 @@ class ScheduledLink(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
-def has_line_of_sight(pos_a: Vec3, pos_b: Vec3) -> bool:
-    """Check if two points have line of sight (not occluded by Earth).
-
-    Uses closest approach of line segment to Earth center.
-    Earth is modeled as an oblate spheroid (WGS84 semi-axes).
-    """
-    # Direction vector from A to B
+def has_line_of_sight(
+    pos_a: Vec3,
+    pos_b: Vec3,
+    body_frame: BodyFrame = EARTH_BODY_FRAME,
+) -> bool:
+    """Check if two points have line of sight through a body-fixed frame."""
     dx = pos_b.x - pos_a.x
     dy = pos_b.y - pos_a.y
     dz = pos_b.z - pos_a.z
 
-    # Parametric closest approach to origin: t = -(A·D)/(D·D)
     dot_ad = pos_a.x * dx + pos_a.y * dy + pos_a.z * dz
     dot_dd = dx * dx + dy * dy + dz * dz
 
     if dot_dd == 0:
-        return True  # Same point
+        return True
 
-    t = -dot_ad / dot_dd
-
-    # Clamp t to [0, 1] — only check between the two points
-    t = max(0.0, min(1.0, t))
-
-    # Closest point on segment to Earth center
+    t = max(0.0, min(1.0, -dot_ad / dot_dd))
     cx = pos_a.x + t * dx
     cy = pos_a.y + t * dy
     cz = pos_a.z + t * dz
 
-    # Check against the WGS84 oblate ellipsoid by normalizing each axis.
-    # (cx/a)² + (cy/a)² + (cz/b)² >= 1 means outside ellipsoid
-    norm_sq = (cx / WGS84_A) ** 2 + (cy / WGS84_A) ** 2 + (cz / WGS84_B) ** 2
+    a = body_frame.equatorial_radius_km
+    b = body_frame.polar_radius_km
+    norm_sq = (cx / a) ** 2 + (cy / a) ** 2 + (cz / b) ** 2
     return norm_sq >= 1.0
+
+
+def _enu_components(
+    observer_ecef: Vec3, observer_geo: GeoPosition, target_ecef: Vec3
+) -> tuple[float, float, float]:
+    dx = target_ecef.x - observer_ecef.x
+    dy = target_ecef.y - observer_ecef.y
+    dz = target_ecef.z - observer_ecef.z
+
+    lat_rad = math.radians(observer_geo.lat_deg)
+    lon_rad = math.radians(observer_geo.lon_deg)
+    sin_lat = math.sin(lat_rad)
+    cos_lat = math.cos(lat_rad)
+    sin_lon = math.sin(lon_rad)
+    cos_lon = math.cos(lon_rad)
+
+    e = -sin_lon * dx + cos_lon * dy
+    n = -sin_lat * cos_lon * dx - sin_lat * sin_lon * dy + cos_lat * dz
+    u = cos_lat * cos_lon * dx + cos_lat * sin_lon * dy + sin_lat * dz
+    return e, n, u
+
+
+def compute_look_angles(
+    gs_ecef: Vec3,
+    gs_geo: GeoPosition,
+    sat_ecef: Vec3,
+    body_frame: BodyFrame = EARTH_BODY_FRAME,
+) -> tuple[float, float]:
+    """Return (elevation_deg, azimuth_deg) in the observer body-local frame."""
+    _ = body_frame
+    e, n, u = _enu_components(gs_ecef, gs_geo, sat_ecef)
+    horizontal_dist = math.sqrt(e**2 + n**2)
+    if horizontal_dist < 1e-10:
+        return 90.0, 0.0
+    elevation = math.degrees(math.atan2(u, horizontal_dist))
+    azimuth = math.degrees(math.atan2(e, n)) % 360.0
+    return elevation, azimuth
 
 
 def compute_elevation_angle(
     gs_ecef: Vec3,
     gs_geo: GeoPosition,
     sat_ecef: Vec3,
+    body_frame: BodyFrame = EARTH_BODY_FRAME,
 ) -> float:
-    """Compute elevation angle of satellite as seen from ground station.
-
-    Uses ENU (East-North-Up) coordinate frame at the ground station.
-    Returns elevation angle in degrees (positive = above horizon).
-    """
-    # Vector from GS to satellite
-    dx = sat_ecef.x - gs_ecef.x
-    dy = sat_ecef.y - gs_ecef.y
-    dz = sat_ecef.z - gs_ecef.z
-
-    # ENU rotation from ECEF
-    lat_rad = math.radians(gs_geo.lat_deg)
-    lon_rad = math.radians(gs_geo.lon_deg)
-
-    sin_lat = math.sin(lat_rad)
-    cos_lat = math.cos(lat_rad)
-    sin_lon = math.sin(lon_rad)
-    cos_lon = math.cos(lon_rad)
-
-    # East
-    e = -sin_lon * dx + cos_lon * dy
-    # North
-    n = -sin_lat * cos_lon * dx - sin_lat * sin_lon * dy + cos_lat * dz
-    # Up
-    u = cos_lat * cos_lon * dx + cos_lat * sin_lon * dy + sin_lat * dz
-
-    horizontal_dist = math.sqrt(e**2 + n**2)
-    if horizontal_dist < 1e-10:
-        return 90.0  # Directly overhead
-
-    elevation_rad = math.atan2(u, horizontal_dist)
-    return math.degrees(elevation_rad)
+    """Compute elevation angle of satellite as seen from ground station."""
+    elevation, _azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef, body_frame)
+    return elevation
 
 
 def compute_angular_velocity(
@@ -273,6 +275,111 @@ def check_field_of_regard(
     return not elevation_b > half_angle_rad
 
 
+def _unit(vec: Vec3) -> Vec3:
+    mag = math.sqrt(vec.x**2 + vec.y**2 + vec.z**2)
+    if mag < 1e-12:
+        return Vec3(0.0, 0.0, 0.0)
+    return Vec3(vec.x / mag, vec.y / mag, vec.z / mag)
+
+
+def _angle_between_deg(a: Vec3, b: Vec3) -> float:
+    au = _unit(a)
+    bu = _unit(b)
+    dot = max(-1.0, min(1.0, au.x * bu.x + au.y * bu.y + au.z * bu.z))
+    return math.degrees(math.acos(dot))
+
+
+def _local_unit_from_az_el(az_deg: float, el_deg: float) -> Vec3:
+    az = math.radians(az_deg)
+    el = math.radians(el_deg)
+    cos_el = math.cos(el)
+    # ENU components, with azimuth clockwise from north.
+    return Vec3(cos_el * math.sin(az), cos_el * math.cos(az), math.sin(el))
+
+
+def _ground_for_allows(
+    *,
+    gs_ecef: Vec3,
+    gs_geo: GeoPosition,
+    sat_ecef: Vec3,
+    boresight: TerminalBoresight,
+    body_frame: BodyFrame,
+) -> bool:
+    elevation, azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef, body_frame)
+    if boresight.mode == "steerable_envelope":
+        if (
+            boresight.min_az_deg is None
+            or boresight.max_az_deg is None
+            or boresight.min_el_deg is None
+            or boresight.max_el_deg is None
+        ):
+            raise ValueError("steerable_envelope boresight is missing azimuth/elevation bounds")
+        return (
+            boresight.min_az_deg <= azimuth <= boresight.max_az_deg
+            and boresight.min_el_deg <= elevation <= boresight.max_el_deg
+        )
+    target = _local_unit_from_az_el(azimuth, elevation)
+    if boresight.mode == "local_vertical":
+        bore = Vec3(0.0, 0.0, 1.0)
+    else:
+        if boresight.configured_az_deg is None or boresight.configured_el_deg is None:
+            raise ValueError(
+                "configured_inertial boresight is missing configured azimuth/elevation"
+            )
+        bore = _local_unit_from_az_el(boresight.configured_az_deg, boresight.configured_el_deg)
+    return _angle_between_deg(bore, target) <= boresight.half_angle_deg
+
+
+def _sat_ground_for_allows(
+    *,
+    sat_ecef: Vec3,
+    gs_ecef: Vec3,
+    boresight: SatGroundTerminalBoresight,
+) -> bool:
+    if boresight.mode != "nadir":
+        raise ValueError(
+            "physical_v1 currently supports satellite ground-terminal boresight "
+            "mode='nadir'. Configured satellite boresights need terminal-frame "
+            "orientation metadata before they can be applied truthfully."
+        )
+    los_to_gs = Vec3(gs_ecef.x - sat_ecef.x, gs_ecef.y - sat_ecef.y, gs_ecef.z - sat_ecef.z)
+    nadir = Vec3(-sat_ecef.x, -sat_ecef.y, -sat_ecef.z)
+    return _angle_between_deg(nadir, los_to_gs) <= boresight.half_angle_deg
+
+
+def compute_topocentric_angular_velocity(
+    observer_ecef: Vec3,
+    target_ecef: Vec3,
+    target_velocity_km_s: Vec3,
+    body_frame: BodyFrame = EARTH_BODY_FRAME,
+    velocity_frame: Literal["body_fixed", "inertial"] = "body_fixed",
+) -> float:
+    """Apparent angular rate in the body-fixed topocentric frame of the observer.
+
+    Production propagation supplies ECEF/MCMF body-fixed velocities. The
+    inertial path exists so tests and future propagators must account for the
+    observing body's rotation instead of accidentally treating inertial velocity
+    as topocentric-body-fixed velocity.
+    """
+    if velocity_frame == "body_fixed":
+        target_velocity_body_fixed_km_s = target_velocity_km_s
+    elif velocity_frame == "inertial":
+        omega = body_frame.rotation_rate_rad_s
+        target_velocity_body_fixed_km_s = Vec3(
+            target_velocity_km_s.x + omega * target_ecef.y,
+            target_velocity_km_s.y - omega * target_ecef.x,
+            target_velocity_km_s.z,
+        )
+    else:
+        raise ValueError(f"Unsupported velocity_frame={velocity_frame!r}")
+    return compute_angular_velocity(
+        observer_ecef,
+        Vec3(0.0, 0.0, 0.0),
+        target_ecef,
+        target_velocity_body_fixed_km_s,
+    )
+
+
 # ---------------------------------------------------------------------------
 # High-level visibility checks
 # ---------------------------------------------------------------------------
@@ -332,17 +439,18 @@ def check_ground_visibility(
     gs_geo: GeoPosition,
     sat_ecef: Vec3,
     min_elevation_deg: float = 25.0,
+    *,
+    max_range_km: float | None = None,
+    gs_boresight: TerminalBoresight | None = None,
+    sat_boresight: SatGroundTerminalBoresight | None = None,
+    max_tracking_rate_deg_s: float | None = None,
+    sat_velocity_ecef_km_s: Vec3 | None = None,
+    body_frame: BodyFrame = EARTH_BODY_FRAME,
 ) -> GroundVisibility:
-    """Check if satellite is visible from ground station.
-
-    Checks LOS and elevation angle. Populates `reject_reason` so
-    downstream consumers can attribute the failure without relying on
-    sentinel-value heuristics (the legacy `-90.0` elevation sentinel
-    for LOS-blocked).
-    """
+    """Check ground-station-to-satellite visibility with optional physics constraints."""
     range_km = compute_range_km(gs_ecef, sat_ecef)
 
-    if not has_line_of_sight(gs_ecef, sat_ecef):
+    if not has_line_of_sight(gs_ecef, sat_ecef, body_frame):
         return GroundVisibility(
             sat_id="",
             visible=False,
@@ -350,9 +458,22 @@ def check_ground_visibility(
             range_km=range_km,
             remaining_visible_s=None,
             reject_reason="los_blocked",
+            azimuth_deg=None,
         )
 
-    elevation = compute_elevation_angle(gs_ecef, gs_geo, sat_ecef)
+    if max_range_km is not None and range_km > max_range_km:
+        elevation, azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef, body_frame)
+        return GroundVisibility(
+            sat_id="",
+            visible=False,
+            elevation_deg=elevation,
+            range_km=range_km,
+            remaining_visible_s=None,
+            reject_reason="range_exceeded",
+            azimuth_deg=azimuth,
+        )
+
+    elevation, azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef, body_frame)
     if elevation < min_elevation_deg:
         return GroundVisibility(
             sat_id="",
@@ -361,7 +482,62 @@ def check_ground_visibility(
             range_km=range_km,
             remaining_visible_s=None,
             reject_reason="elevation_below_min",
+            azimuth_deg=azimuth,
         )
+
+    if gs_boresight is not None and not _ground_for_allows(
+        gs_ecef=gs_ecef,
+        gs_geo=gs_geo,
+        sat_ecef=sat_ecef,
+        boresight=gs_boresight,
+        body_frame=body_frame,
+    ):
+        return GroundVisibility(
+            sat_id="",
+            visible=False,
+            elevation_deg=elevation,
+            range_km=range_km,
+            remaining_visible_s=None,
+            reject_reason="field_of_regard",
+            azimuth_deg=azimuth,
+        )
+
+    if sat_boresight is not None and not _sat_ground_for_allows(
+        sat_ecef=sat_ecef,
+        gs_ecef=gs_ecef,
+        boresight=sat_boresight,
+    ):
+        return GroundVisibility(
+            sat_id="",
+            visible=False,
+            elevation_deg=elevation,
+            range_km=range_km,
+            remaining_visible_s=None,
+            reject_reason="field_of_regard",
+            azimuth_deg=azimuth,
+        )
+
+    if max_tracking_rate_deg_s is not None:
+        if sat_velocity_ecef_km_s is None:
+            raise ValueError(
+                "Ground tracking-rate visibility requires same-frame satellite velocity"
+            )
+        angular_velocity = compute_topocentric_angular_velocity(
+            gs_ecef,
+            sat_ecef,
+            sat_velocity_ecef_km_s,
+            body_frame,
+        )
+        if angular_velocity > max_tracking_rate_deg_s:
+            return GroundVisibility(
+                sat_id="",
+                visible=False,
+                elevation_deg=elevation,
+                range_km=range_km,
+                remaining_visible_s=None,
+                reject_reason="tracking_exceeded",
+                azimuth_deg=azimuth,
+            )
 
     return GroundVisibility(
         sat_id="",
@@ -370,6 +546,7 @@ def check_ground_visibility(
         range_km=range_km,
         remaining_visible_s=None,
         reject_reason="ok",
+        azimuth_deg=azimuth,
     )
 
 

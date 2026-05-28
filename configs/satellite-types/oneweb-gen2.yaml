@@ -21,4 +21,11 @@ satellite_type:
       band: Ka
       count: 1
       bandwidth_mbps: 500
+      max_range_km: 3000
+      field_of_regard_deg: 120
+      max_tracking_rate_deg_s: 1.5
+      boresight:
+        target_body: earth
+        mode: nadir
+        half_angle_deg: 60
       beam_falloff_exponent: 2.8

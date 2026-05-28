@@ -6,9 +6,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Literal
 
+from nodalarc.body_frames import body_frame_for
 from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.frames import EcefVec3, GeoPosition
+from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.addressing import AddressingScheme
 
 from ome.propagation_engine import PropagatedState, propagate_satellites
@@ -45,6 +48,33 @@ class GroundPassLookahead:
     step_seconds: int
     horizon_ticks: int
     propagator_id: str
+    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1"
+    gs_reference_bodies: Mapping[str, str] | None = None
+    gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
+    sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
+
+
+def _physical_profile(
+    profiles: Mapping[str, TerminalPhysicsProfile] | None,
+    node_id: str,
+    *,
+    label: str,
+    fidelity: Literal["geometry_only", "physical_v1"],
+) -> TerminalPhysicsProfile | None:
+    if fidelity == "geometry_only":
+        return None
+    if profiles is None or node_id not in profiles:
+        raise ValueError(f"physical_v1 ground visibility is missing {label} for {node_id}")
+    profile = profiles[node_id]
+    if (
+        profile.max_range_km is None
+        or profile.field_of_regard_deg is None
+        or profile.max_tracking_rate_deg_s is None
+        or profile.boresight is None
+        or profile.profile_id is None
+    ):
+        raise ValueError(f"physical_v1 ground visibility has incomplete {label} for {node_id}")
+    return profile
 
 
 def _estimate_remaining_visible_seconds(
@@ -89,11 +119,49 @@ def _estimate_remaining_visible_seconds(
                     f"Missing propagated satellite state for {sat_id}; "
                     "ground pass lookahead cannot be evaluated authoritatively"
                 )
+            reference_body = (lookahead.gs_reference_bodies or {}).get(gs_id, "earth")
+            body_frame = body_frame_for(reference_body)
+            gs_profile = _physical_profile(
+                lookahead.gs_terminal_profiles,
+                gs_id,
+                label="ground terminal profile",
+                fidelity=lookahead.simulation_fidelity,
+            )
+            sat_profile = _physical_profile(
+                lookahead.sat_ground_terminal_profiles,
+                sat_id,
+                label="satellite ground terminal profile",
+                fidelity=lookahead.simulation_fidelity,
+            )
+            if (
+                sat_profile is not None
+                and sat_profile.target_body is not None
+                and sat_profile.target_body != reference_body
+            ):
+                raise ValueError(
+                    f"Satellite terminal profile {sat_profile.profile_id} targets "
+                    f"{sat_profile.target_body!r}, but {gs_id} is anchored to "
+                    f"reference_body={reference_body!r}"
+                )
+            kwargs = {}
+            if gs_profile is not None and sat_profile is not None:
+                kwargs = {
+                    "max_range_km": min(gs_profile.max_range_km, sat_profile.max_range_km),
+                    "gs_boresight": gs_profile.boresight,
+                    "sat_boresight": sat_profile.boresight,
+                    "max_tracking_rate_deg_s": min(
+                        gs_profile.max_tracking_rate_deg_s,
+                        sat_profile.max_tracking_rate_deg_s,
+                    ),
+                    "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
+                    "body_frame": body_frame,
+                }
             visible = check_ground_visibility(
                 gs_ecef,
                 gs_geo,
                 state.position_ecef_km,
                 gs_min_elevations[gs_id],
+                **kwargs,
             ).visible
             if not visible:
                 remaining[(gs_id, sat_id)] = (tick_offset - 1) * lookahead.step_seconds
@@ -115,6 +183,9 @@ def evaluate_ground_visibility(
     gs_reference_bodies: Mapping[str, str],
     gs_policies: Mapping[str, str] | None = None,
     pass_lookahead: GroundPassLookahead | None = None,
+    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1",
+    gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None,
+    sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None,
 ) -> GroundVisibilityEvaluation:
     """Evaluate geometric GS/satellite visibility for one tick.
 
@@ -126,11 +197,11 @@ def evaluate_ground_visibility(
     consumers must not receive decisions whose tenant or body context
     is unknown.
 
-    `applied_*` constraint fields are populated as `None` in this
-    sub-phase (Phase 1.2.b) — the typed decision substrate is in
-    place, but the actual range/FoR/tracking constraint enforcement
-    (Phase 2 of the foundational trust plan) has not landed yet. The
-    `physical_v1` fidelity gate will populate them when it ships.
+    In `physical_v1`, both endpoint terminal profiles are required and
+    range, field-of-regard, and topocentric tracking-rate constraints are
+    applied before a pair is allowed into the allocator. In
+    `geometry_only`, those fields are deliberately absent and the caller
+    must have passed the explicit session-level acknowledgement gate.
     """
     ordered_satellite_ids = tuple(satellite_ids)
     decisions: dict[tuple[str, str], GroundVisibilityDecision] = {}
@@ -163,6 +234,22 @@ def evaluate_ground_visibility(
             f"{', '.join(missing_body)} — Direction 3 requires every decision "
             "to be anchored to a specific body"
         )
+    if simulation_fidelity == "physical_v1" and gs_positions:
+        missing_gs_profiles = sorted(set(gs_positions) - set(gs_terminal_profiles or {}))
+        if missing_gs_profiles:
+            raise ValueError(
+                "physical_v1 ground visibility is missing ground terminal profiles for "
+                f"{', '.join(missing_gs_profiles)}"
+            )
+        missing_sat_profiles = sorted(
+            set(ordered_satellite_ids) - set(sat_ground_terminal_profiles or {})
+        )
+        if missing_sat_profiles:
+            raise ValueError(
+                "physical_v1 ground visibility is missing satellite ground terminal profiles for "
+                f"{', '.join(missing_sat_profiles)}"
+            )
+
     longest_pass_station_ids = {
         gs_id for gs_id in gs_positions if policies.get(gs_id) == "longest-remaining-pass"
     }
@@ -185,11 +272,60 @@ def evaluate_ground_visibility(
                     "ground visibility cannot be evaluated authoritatively"
                 )
 
+            body_frame = body_frame_for(reference_body)
+            gs_profile = _physical_profile(
+                gs_terminal_profiles,
+                gs_id,
+                label="ground terminal profile",
+                fidelity=simulation_fidelity,
+            )
+            sat_profile = _physical_profile(
+                sat_ground_terminal_profiles,
+                sat_id,
+                label="satellite ground terminal profile",
+                fidelity=simulation_fidelity,
+            )
+            if (
+                sat_profile is not None
+                and sat_profile.target_body is not None
+                and sat_profile.target_body != reference_body
+            ):
+                raise ValueError(
+                    f"Satellite terminal profile {sat_profile.profile_id} targets "
+                    f"{sat_profile.target_body!r}, but {gs_id} is anchored to "
+                    f"reference_body={reference_body!r}"
+                )
+            max_range_km = None
+            field_of_regard_deg = None
+            max_tracking_rate_deg_s = None
+            applied_boresight_mode = None
+            kwargs = {}
+            if gs_profile is not None and sat_profile is not None:
+                max_range_km = min(gs_profile.max_range_km, sat_profile.max_range_km)
+                field_of_regard_deg = min(
+                    gs_profile.field_of_regard_deg,
+                    sat_profile.field_of_regard_deg,
+                )
+                max_tracking_rate_deg_s = min(
+                    gs_profile.max_tracking_rate_deg_s,
+                    sat_profile.max_tracking_rate_deg_s,
+                )
+                applied_boresight_mode = getattr(gs_profile.boresight, "mode", None)
+                kwargs = {
+                    "max_range_km": max_range_km,
+                    "gs_boresight": gs_profile.boresight,
+                    "sat_boresight": sat_profile.boresight,
+                    "max_tracking_rate_deg_s": max_tracking_rate_deg_s,
+                    "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
+                    "body_frame": body_frame,
+                }
+
             gv = check_ground_visibility(
                 gs_ecef,
                 gs_geo,
                 state.position_ecef_km,
                 min_elev,
+                **kwargs,
             )
             pair = (min(gs_id, sat_id), max(gs_id, sat_id))
             decisions[pair] = GroundVisibilityDecision(
@@ -199,22 +335,16 @@ def evaluate_ground_visibility(
                 visible=gv.visible,
                 range_km=gv.range_km,
                 elevation_deg=gv.elevation_deg,
-                # Azimuth is computed in Phase 2 when the boresight
-                # model lands. Phase 1.2 publishes None to keep the
-                # contract honest: we do not have the data yet.
-                azimuth_deg=None,
+                azimuth_deg=gv.azimuth_deg,
                 observer_frame="body_local",
                 reject_reason=gv.reject_reason,
                 applied_min_elevation_deg=min_elev,
-                # Phase 2 populates these. Until then the decision
-                # honestly says "this constraint was not applied" —
-                # no fallback, no silent permissive default.
-                applied_max_range_km=None,
-                applied_field_of_regard_deg=None,
-                applied_max_tracking_rate_deg_s=None,
-                applied_boresight_mode=None,
-                applied_gs_terminal_profile=None,
-                applied_sat_terminal_profile=None,
+                applied_max_range_km=max_range_km,
+                applied_field_of_regard_deg=field_of_regard_deg,
+                applied_max_tracking_rate_deg_s=max_tracking_rate_deg_s,
+                applied_boresight_mode=applied_boresight_mode,
+                applied_gs_terminal_profile=gs_profile.profile_id if gs_profile else None,
+                applied_sat_terminal_profile=sat_profile.profile_id if sat_profile else None,
             )
             if gv.visible:
                 if gs_id in longest_pass_station_ids:
@@ -227,6 +357,7 @@ def evaluate_ground_visibility(
                         range_km=gv.range_km,
                         remaining_visible_s=None,
                         reject_reason=gv.reject_reason,
+                        azimuth_deg=gv.azimuth_deg,
                     ),
                 )
         visible_per_station[gs_id] = visible_sats
@@ -254,6 +385,7 @@ def evaluate_ground_visibility(
                     range_km=gv.range_km,
                     remaining_visible_s=remaining_by_pair[(gs_id, gv.sat_id)],
                     reject_reason=gv.reject_reason,
+                    azimuth_deg=gv.azimuth_deg,
                 )
                 for gv in visible_sats
             ]

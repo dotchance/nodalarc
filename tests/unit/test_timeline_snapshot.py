@@ -39,6 +39,13 @@ def four_node_timeline():
                     "count": 1,
                     "bandwidth_mbps": 1000,
                     "tracking_capacity": 1,
+                    "max_range_km": 2000,
+                    "field_of_regard_deg": 120,
+                    "max_tracking_rate_deg_s": 1.5,
+                    "boresight": {
+                        "mode": "local_vertical",
+                        "half_angle_deg": 60,
+                    },
                 }
             ],
             "default_min_elevation_deg": 25,

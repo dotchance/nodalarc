@@ -11,6 +11,12 @@ ground_station:
       count: 1
       bandwidth_mbps: 10000
       tracking_capacity: 1
+      max_range_km: 2000
+      field_of_regard_deg: 120
+      max_tracking_rate_deg_s: 1.5
+      boresight:
+        mode: local_vertical
+        half_angle_deg: 60
   antennas: 1
   antenna_diameter_m: 1.85
   band: Ka

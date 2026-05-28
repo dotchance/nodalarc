@@ -48,6 +48,8 @@ class TestSessionConfigLoading:
         assert config.addressing.gs_id_template == "gs-{name}"
         assert config.time.step_seconds == 1
         assert config.simulation.schema_version == 2
+        assert config.simulation.fidelity == "physical_v1"
+        assert config.simulation.acknowledge_geometry_only is False
         assert config.orbit.propagator == "keplerian-circular"
         assert config.dispatch.latency_authority == "ome"
         assert config.dispatch.substrate_compensation.rtt_to_one_way == "half-rtt"
@@ -110,11 +112,18 @@ class TestEngineConfigValidation:
         with pytest.raises(ValidationError, match="schema_version must be 2"):
             SessionConfig.model_validate(data)
 
-    def test_simulation_fidelity_is_not_a_second_propagator_knob(self):
+    def test_simulation_fidelity_is_ground_physics_mode_not_propagator_knob(self):
         data = dict(_SAMPLE_SESSION)
         data["simulation"] = {"schema_version": 2, "fidelity": "j2-mean-elements"}
-        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        with pytest.raises(ValidationError, match="Input should be"):
             SessionConfig.model_validate(data)
+
+    def test_geometry_only_fidelity_requires_validator_acknowledgement_not_model_default(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"schema_version": 2, "fidelity": "geometry_only"}
+        config = SessionConfig.model_validate(data)
+        assert config.simulation.fidelity == "geometry_only"
+        assert config.simulation.acknowledge_geometry_only is False
 
     def test_unknown_propagator_rejected(self):
         data = dict(_SAMPLE_SESSION)

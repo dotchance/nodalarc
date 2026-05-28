@@ -525,7 +525,21 @@ _INLINE_CONSTELLATION = {
                 "field_of_regard_deg": 140,
             }
         ],
-        "ground": [{"type": "rf", "count": 1, "bandwidth_mbps": 1000}],
+        "ground": [
+            {
+                "type": "rf",
+                "count": 1,
+                "bandwidth_mbps": 1000,
+                "max_range_km": 2000,
+                "field_of_regard_deg": 120,
+                "max_tracking_rate_deg_s": 1.5,
+                "boresight": {
+                    "target_body": "earth",
+                    "mode": "nadir",
+                    "half_angle_deg": 60,
+                },
+            }
+        ],
     },
     "orbit": {
         "altitude_km": 550,
@@ -543,7 +557,19 @@ _INLINE_CONSTELLATION = {
 # Ground stations with inline station definitions.
 _INLINE_GROUND_STATIONS = {
     "default_terminals": [
-        {"type": "rf", "count": 1, "bandwidth_mbps": 1000, "tracking_capacity": 1}
+        {
+            "type": "rf",
+            "count": 1,
+            "bandwidth_mbps": 1000,
+            "tracking_capacity": 1,
+            "max_range_km": 2000,
+            "field_of_regard_deg": 120,
+            "max_tracking_rate_deg_s": 1.5,
+            "boresight": {
+                "mode": "local_vertical",
+                "half_angle_deg": 60,
+            },
+        }
     ],
     "stations": [
         {"name": "alpha", "lat_deg": 34.0, "lon_deg": -118.0, "alt_m": 20},

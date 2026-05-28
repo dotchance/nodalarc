@@ -11,6 +11,12 @@ default_terminals:
     count: 1                # Number of terminals at each station
     bandwidth_mbps: 1000    # Link bandwidth in Mbps
     tracking_capacity: 1    # Max simultaneous satellite connections
+    max_range_km: 2000
+    field_of_regard_deg: 120
+    max_tracking_rate_deg_s: 1.5
+    boresight:
+      mode: local_vertical
+      half_angle_deg: 60
 
 # Minimum elevation angle (degrees) for satellite visibility.
 # Satellites below this angle are not schedulable for ground links.
@@ -65,6 +71,12 @@ stations:
         count: 1
         bandwidth_mbps: 500
         tracking_capacity: 1
+        max_range_km: 2000
+        field_of_regard_deg: 120
+        max_tracking_rate_deg_s: 1.5
+        boresight:
+          mode: local_vertical
+          half_angle_deg: 60
     # Override terrestrial prefixes for this specific station
     terrestrial_prefixes:
       - prefix: "172.16.100.0/24"

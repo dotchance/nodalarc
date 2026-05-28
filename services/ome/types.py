@@ -6,11 +6,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from nodalarc.models.link_decisions import (
-    BoresightMode,
-    GroundVisibilityRejectReason,
-    ObserverFrame,
-)
+from nodalarc.models.link_decisions import GroundVisibilityRejectReason, ObserverFrame
+from nodalarc.models.terminal_physics import GroundBoresightMode
 
 
 @dataclass(frozen=True)
@@ -63,7 +60,7 @@ class GroundVisibilityDecision:
     applied_max_range_km: float | None
     applied_field_of_regard_deg: float | None
     applied_max_tracking_rate_deg_s: float | None
-    applied_boresight_mode: BoresightMode | None
+    applied_boresight_mode: GroundBoresightMode | None
     applied_gs_terminal_profile: str | None
     applied_sat_terminal_profile: str | None
 

@@ -9,6 +9,8 @@ and are referenced by name from constellation definitions.
 
 from pydantic import BaseModel, field_validator, model_validator
 
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
+
 
 class IslTerminalDef(BaseModel):
     """ISL terminal definition within a satellite type."""
@@ -79,6 +81,10 @@ class GroundTerminalDef(BaseModel):
     band: str | None = None  # Frequency band for RF terminals
     count: int
     bandwidth_mbps: float
+    max_range_km: float | None = None
+    field_of_regard_deg: float | None = None
+    max_tracking_rate_deg_s: float | None = None
+    boresight: SatGroundTerminalBoresight | None = None
     beam_falloff_exponent: float = 2.0
 
     @field_validator("type")
@@ -101,6 +107,39 @@ class GroundTerminalDef(BaseModel):
         if v <= 0:
             raise ValueError(f"bandwidth_mbps must be positive, got {v}")
         return v
+
+    @field_validator("max_range_km")
+    @classmethod
+    def _positive_ground_range(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"max_range_km must be positive, got {v}")
+        return v
+
+    @field_validator("field_of_regard_deg")
+    @classmethod
+    def _ground_for_range(cls, v: float | None) -> float | None:
+        if v is not None and not 0 < v <= 180:
+            raise ValueError(f"field_of_regard_deg must be in (0, 180], got {v}")
+        return v
+
+    @field_validator("max_tracking_rate_deg_s")
+    @classmethod
+    def _positive_ground_tracking_rate(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"max_tracking_rate_deg_s must be positive, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _boresight_matches_for(self):
+        if self.field_of_regard_deg is None or self.boresight is None:
+            return self
+        expected_half_angle = self.field_of_regard_deg / 2.0
+        if abs(self.boresight.half_angle_deg - expected_half_angle) > 1e-9:
+            raise ValueError(
+                "boresight.half_angle_deg must equal field_of_regard_deg / 2 "
+                f"({expected_half_angle:g})"
+            )
+        return self
 
     @field_validator("beam_falloff_exponent")
     @classmethod

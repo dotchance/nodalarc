@@ -12,6 +12,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Discriminator, Tag, field_validator, model_validator
 
+from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
+
 
 class OrbitalElements(BaseModel):
     """Orbital elements for explicit-mode satellites."""
@@ -68,6 +70,10 @@ class GroundTerminal(BaseModel):
     type: str  # "optical" or "rf"
     count: int
     bandwidth_mbps: float
+    max_range_km: float | None = None
+    field_of_regard_deg: float | None = None
+    max_tracking_rate_deg_s: float | None = None
+    boresight: SatGroundTerminalBoresight | None = None
 
     @field_validator("count")
     @classmethod
@@ -75,6 +81,46 @@ class GroundTerminal(BaseModel):
         if not 1 <= v <= 8:
             raise ValueError(f"terminal count must be 1-8, got {v}")
         return v
+
+    @field_validator("bandwidth_mbps")
+    @classmethod
+    def _positive_bandwidth(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"bandwidth_mbps must be positive, got {v}")
+        return v
+
+    @field_validator("max_range_km")
+    @classmethod
+    def _positive_range(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"max_range_km must be positive, got {v}")
+        return v
+
+    @field_validator("field_of_regard_deg")
+    @classmethod
+    def _for_range(cls, v: float | None) -> float | None:
+        if v is not None and not 0 < v <= 180:
+            raise ValueError(f"field_of_regard_deg must be in (0, 180], got {v}")
+        return v
+
+    @field_validator("max_tracking_rate_deg_s")
+    @classmethod
+    def _positive_tracking_rate(cls, v: float | None) -> float | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"max_tracking_rate_deg_s must be positive, got {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _boresight_matches_for(self):
+        if self.field_of_regard_deg is None or self.boresight is None:
+            return self
+        expected_half_angle = self.field_of_regard_deg / 2.0
+        if abs(self.boresight.half_angle_deg - expected_half_angle) > 1e-9:
+            raise ValueError(
+                "boresight.half_angle_deg must equal field_of_regard_deg / 2 "
+                f"({expected_half_angle:g})"
+            )
+        return self
 
 
 class TerminalConfig(BaseModel):

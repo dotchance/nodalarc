@@ -126,6 +126,8 @@ class SimulationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = 2
+    fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1"
+    acknowledge_geometry_only: bool = False
 
     @field_validator("schema_version")
     @classmethod

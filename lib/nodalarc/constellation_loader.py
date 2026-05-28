@@ -166,6 +166,10 @@ def _sat_type_to_terminal_config(sat_type: SatelliteTypeConfig) -> TerminalConfi
                 type=td.type,
                 count=td.count,
                 bandwidth_mbps=td.bandwidth_mbps,
+                max_range_km=td.max_range_km,
+                field_of_regard_deg=td.field_of_regard_deg,
+                max_tracking_rate_deg_s=td.max_tracking_rate_deg_s,
+                boresight=td.boresight,
             )
         )
     return TerminalConfig(isl=isl_terminals, ground=ground_terminals)

@@ -12,6 +12,7 @@ from nodalarc.ground_terminals import (
     ground_terminal_type,
     station_ground_terminal_capacity,
     station_ground_terminal_type,
+    terminal_collection_missing_physics,
 )
 from nodalarc.models.constellation import (
     ConstellationConfig,
@@ -65,6 +66,8 @@ def validate_session_readiness(
     results.extend(_check_e009(session, ground_stations))
     results.extend(_check_e010(session, ground_stations))
     results.extend(_check_e011(satellites, ground_stations))
+    results.extend(_check_e020(session))
+    results.extend(_check_e021(session, satellites, ground_stations))
 
     results.extend(_check_w001(ground_stations))
     results.extend(_check_w002(ground_stations))
@@ -74,6 +77,7 @@ def validate_session_readiness(
     results.extend(_check_w006(session))
     results.extend(_check_w007(satellites, ground_stations, constellation))
     results.extend(_check_w008(session, constellation))
+    results.extend(_check_w009(session))
 
     return results
 
@@ -509,6 +513,119 @@ def _check_e011(
     ]
 
 
+def _check_e020(session: SessionConfig) -> list[ValidationResult]:
+    """E020: geometry_only requires explicit acknowledgement."""
+    if session.simulation.fidelity != "geometry_only":
+        return []
+    if session.simulation.acknowledge_geometry_only:
+        return []
+    return [
+        ValidationResult(
+            level="error",
+            code="E020",
+            message=(
+                "simulation.fidelity is 'geometry_only' but "
+                "simulation.acknowledge_geometry_only is not true. "
+                "Geometry-only mode omits ground terminal range/FoR/tracking "
+                "physics and is not fidelity-grade."
+            ),
+            remediation=(
+                "Either set simulation.fidelity to 'physical_v1' and declare "
+                "ground terminal physics, or explicitly set "
+                "simulation.acknowledge_geometry_only: true."
+            ),
+            field_path="simulation.acknowledge_geometry_only",
+        )
+    ]
+
+
+def _check_e021(
+    session: SessionConfig,
+    satellites: list,
+    ground_stations: GroundStationFile,
+) -> list[ValidationResult]:
+    """E021: physical_v1 requires ground terminal physics on both ends."""
+    if session.simulation.fidelity == "geometry_only":
+        return []
+    if not ground_stations.stations:
+        return []
+
+    results: list[ValidationResult] = []
+    for station in ground_stations.stations:
+        terminals = station.terminals or ground_stations.default_terminals
+        label = f"ground_stations.{station.name}.terminals"
+        missing = terminal_collection_missing_physics(terminals, label=label)
+        for error in missing:
+            results.append(
+                ValidationResult(
+                    level="error",
+                    code="E021",
+                    message=(
+                        f"physical_v1 requires ground terminal physics: {error}. "
+                        "Ground links cannot be fidelity-grade without range, "
+                        "field-of-regard, and tracking-rate limits."
+                    ),
+                    remediation=(
+                        "Add max_range_km, field_of_regard_deg, "
+                        "max_tracking_rate_deg_s, and boresight to the effective "
+                        "ground terminal definition, or opt into geometry_only "
+                        "with explicit acknowledgement."
+                    ),
+                    field_path="ground_stations",
+                )
+            )
+
+    seen_sat_terminal_shapes: set[tuple] = set()
+    for sat in satellites:
+        terminals = tuple(getattr(sat, "ground_terminals", ()) or ())
+        if not terminals and getattr(sat, "ground_terminal_count", 0) == 0:
+            continue
+        # Expanded constellations usually share the same satellite type. Avoid
+        # emitting the same terminal-shape error hundreds of times.
+        shape = tuple(
+            (
+                getattr(t, "type", None),
+                getattr(t, "count", None),
+                getattr(t, "bandwidth_mbps", None),
+                getattr(t, "max_range_km", None),
+                getattr(t, "field_of_regard_deg", None),
+                getattr(t, "max_tracking_rate_deg_s", None),
+                (
+                    getattr(t, "boresight", None).model_dump_json()
+                    if getattr(t, "boresight", None) is not None
+                    else None
+                ),
+            )
+            for t in terminals
+        )
+        if shape in seen_sat_terminal_shapes:
+            continue
+        seen_sat_terminal_shapes.add(shape)
+        label = f"satellite P{sat.plane:02d}S{sat.slot:02d}.ground_terminals"
+        missing = terminal_collection_missing_physics(terminals, label=label)
+        for error in missing:
+            results.append(
+                ValidationResult(
+                    level="error",
+                    code="E021",
+                    message=(
+                        f"physical_v1 requires satellite ground terminal physics: {error}. "
+                        "Ground links cannot be fidelity-grade without range, "
+                        "field-of-regard, and tracking-rate limits on the satellite side."
+                    ),
+                    remediation=(
+                        "Add max_range_km, field_of_regard_deg, "
+                        "max_tracking_rate_deg_s, and boresight to the satellite "
+                        "type ground_terminal definition, or opt into geometry_only "
+                        "with explicit acknowledgement."
+                    ),
+                    field_path="satellite_type.ground_terminals",
+                )
+            )
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Warning checks (logged, deployment proceeds)
 # ---------------------------------------------------------------------------
@@ -764,3 +881,25 @@ def _check_w008(
         )
 
     return results
+
+
+def _check_w009(session: SessionConfig) -> list[ValidationResult]:
+    """W009: geometry_only sessions are explicitly non-fidelity-grade."""
+    if session.simulation.fidelity != "geometry_only":
+        return []
+    return [
+        ValidationResult(
+            level="warning",
+            code="W009",
+            message=(
+                "simulation.fidelity is 'geometry_only'. Ground links use LOS "
+                "and elevation only; range, field-of-regard, and tracking-rate "
+                "limits are intentionally not enforced."
+            ),
+            remediation=(
+                "Use simulation.fidelity: physical_v1 with terminal physics "
+                "fields for fidelity-grade ground visibility."
+            ),
+            field_path="simulation.fidelity",
+        )
+    ]

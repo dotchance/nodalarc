@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -64,6 +65,7 @@ from ome.propagator import (
     GeoPosition,
     geodetic_to_ecef,
 )
+from ome.snapshot_builder import LinkSnapshotSource
 from ome.snapshot_builder import build_link_state_snapshot as build_link_state_snapshot
 from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
 
@@ -209,6 +211,7 @@ class StepResult:
     isl_links: dict[tuple[str, str], ScheduledIsl]
     ground_allocation: GroundAllocationResult
     ground_decisions: GroundVisibilityDecisionMap
+    link_snapshot_source: LinkSnapshotSource
     propagated_states: dict[str, PropagatedState]
     sim_time: datetime
     sim_time_unix: float
@@ -494,6 +497,64 @@ def build_step_context(
     )
 
 
+def _build_link_snapshot_source(
+    *,
+    isl_feasibility: Mapping[tuple[str, str], IslFeasibilityResult],
+    isl_links: Mapping[tuple[str, str], ScheduledIsl],
+    ground_decisions: GroundVisibilityDecisionMap,
+    ground_allocation: GroundAllocationResult,
+    propagated_states: Mapping[str, PropagatedState],
+) -> LinkSnapshotSource:
+    """Derive authoritative snapshot state from current tick facts.
+
+    This does not inspect emitted VisibilityEvents or event-diff transition
+    state. Snapshots are committed state; events are deltas after state.
+    """
+    isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+    for pair, feasibility in sorted(isl_feasibility.items()):
+        visible = feasibility.feasible
+        scheduled = isl_links[pair].scheduled if visible else False
+        if not visible and not scheduled:
+            continue
+        isl_state[pair] = (visible, scheduled)
+
+    ground_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
+    forwarding_pairs = (
+        set(ground_allocation.scheduled_pairs)
+        | set(ground_allocation.pending_teardowns)
+        | {unscheduled.pair for unscheduled in ground_allocation.unscheduled_pairs}
+    )
+    for pair in sorted(forwarding_pairs):
+        decision = ground_decisions.get(pair)
+        if decision is None:
+            raise ValueError(
+                "Cannot build authoritative LinkStateSnapshot source for ground pair "
+                f"{pair}: allocator referenced a pair missing from ground visibility decisions"
+            )
+        visible = decision.visible
+        scheduled = pair in ground_allocation.scheduled_pairs
+        if not visible:
+            raise ValueError(
+                "Cannot build authoritative LinkStateSnapshot source for ground pair "
+                f"{pair}: allocator referenced an invisible pair"
+            )
+        if scheduled and pair not in ground_allocation.associations:
+            raise ValueError(
+                "Cannot build authoritative LinkStateSnapshot source for scheduled "
+                f"ground pair {pair}: missing terminal association"
+            )
+        sched_state = "teardown" if pair in ground_allocation.pending_teardowns else "active"
+        ground_state[pair] = (visible, scheduled, sched_state)
+
+    return LinkSnapshotSource(
+        isl_state=isl_state,
+        ground_state=ground_state,
+        associations=dict(ground_allocation.associations),
+        pending_teardowns=dict(ground_allocation.pending_teardowns),
+        propagated_states=dict(propagated_states),
+    )
+
+
 def compute_step(
     ctx: StepContext,
     epoch_unix: float,
@@ -639,6 +700,14 @@ def compute_step(
         TimelineEvent(timestamp_s, "VisibilityEvent", event) for event in ground_diff.events
     )
 
+    link_snapshot_source = _build_link_snapshot_source(
+        isl_feasibility=isl_feasibility,
+        isl_links=isl_links,
+        ground_decisions=ground_visibility.decisions,
+        ground_allocation=ground_allocation,
+        propagated_states=sat_states,
+    )
+
     return StepResult(
         events=events,
         positions=positions,
@@ -647,6 +716,7 @@ def compute_step(
         isl_links=isl_links,
         ground_allocation=ground_allocation,
         ground_decisions=ground_visibility.decisions,
+        link_snapshot_source=link_snapshot_source,
         propagated_states=sat_states,
         sim_time=sim_time,
         sim_time_unix=epoch_unix + dt,

@@ -15,10 +15,11 @@ first LinkStateSnapshot. SUSPENDED is entered ONLY on a Tier 2 seek
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from nodalarc.models.events import VisibilityEvent
 from nodalarc.models.link_state import LinkStateSnapshot
 from scheduler.dispatcher import Dispatcher
 from scheduler.epoch_sync import EpochSyncState
@@ -41,13 +42,37 @@ def _make_dispatcher(**overrides) -> Dispatcher:
     return Dispatcher(**defaults)
 
 
-def _make_snapshot(epoch_id: int = 0, seq: int = 1) -> LinkStateSnapshot:
+def _make_snapshot(
+    epoch_id: int = 0,
+    seq: int = 1,
+    sim_time: datetime | None = None,
+) -> LinkStateSnapshot:
     return LinkStateSnapshot(
-        sim_time=datetime(2025, 1, 1, tzinfo=UTC),
+        sim_time=sim_time or datetime(2025, 1, 1, tzinfo=UTC),
         snapshot_seq=seq,
         links=(),
         interval_s=5.0,
         epoch_id=epoch_id,
+    )
+
+
+def _make_visibility_event(
+    sim_time: datetime,
+    pair: tuple[str, str] = ("sat-a", "sat-b"),
+) -> VisibilityEvent:
+    return VisibilityEvent(
+        sim_time=sim_time,
+        node_a=pair[0],
+        node_b=pair[1],
+        visible=True,
+        scheduled=True,
+        range_km=1000.0,
+        latency_ms=3.3,
+        elevation_deg=None,
+        terminal_type="optical",
+        link_type="isl",
+        visibility_reject_reason="ok",
+        unscheduled_reason=None,
     )
 
 
@@ -144,6 +169,70 @@ class TestSeekEntersSuspended:
 
         assert d._epoch_deps_met == {"ephemeris": False, "snapshot": False}
         assert d._playback_playing_received is False
+
+    def test_begin_seek_resets_visibility_batch_but_preserves_actual_links(self):
+        d = _make_dispatcher()
+        old_time = datetime(2025, 1, 2, tzinfo=UTC)
+        pair = ("sat-a", "sat-b")
+        vis = _make_visibility_event(old_time, pair)
+        actual_info = MagicMock()
+
+        d._pending_visibility_events.append(vis)
+        d._last_visibility_sim_time = old_time
+        d._desired_links[pair] = MagicMock()
+        d._ome_view[pair] = (True, True, "active")
+        d._teardown_pairs.add(pair)
+        d._latest_decision_snapshot = MagicMock()
+        d._last_snapshot_sim_time = old_time
+        d._actual_links[pair] = actual_info
+
+        assert d._begin_seek_epoch(2) is True
+
+        assert d._pending_visibility_events == []
+        assert d._last_visibility_sim_time is None
+        assert d._desired_links == {}
+        assert d._ome_view == {}
+        assert d._teardown_pairs == set()
+        assert d._latest_decision_snapshot is None
+        assert d._last_snapshot_sim_time is None
+        assert d._actual_links[pair] is actual_info
+
+    def test_reverse_seek_resumes_then_accepts_earlier_visibility_event(self):
+        old_time = datetime(2025, 1, 2, tzinfo=UTC)
+        target_time = datetime(2025, 1, 1, tzinfo=UTC)
+        step1_time = target_time + timedelta(seconds=1)
+        step2_time = target_time + timedelta(seconds=2)
+        pair = ("sat-a", "sat-b")
+        d = _make_dispatcher(
+            interface_map={pair: ("isl0", "isl1")},
+            bandwidth_map={pair: 1000.0},
+        )
+        d._pending_visibility_events.append(_make_visibility_event(old_time, pair))
+        d._last_visibility_sim_time = old_time
+
+        assert d._begin_seek_epoch(7) is True
+        d._epoch_sync.mark_playing(7)
+        d._epoch_sync.mark_ephemeris(7)
+        assert d._epoch_sync.buffer_snapshot(
+            _make_snapshot(epoch_id=7, seq=10, sim_time=target_time)
+        )
+
+        async def _run() -> None:
+            await d._handle_clock_tick_payload({"sim_time": target_time.isoformat(), "epoch_id": 7})
+            await d._handle_visibility_event(_make_visibility_event(step1_time, pair))
+            await d._handle_clock_tick_payload({"sim_time": step2_time.isoformat(), "epoch_id": 7})
+
+        asyncio.run(_run())
+
+        assert d._suspended is False
+        assert d._last_visibility_sim_time == step2_time
+        assert d._pending_visibility_events == []
+        resume_intent = d._dispatch_queue.get_nowait()
+        event_intent = d._dispatch_queue.get_nowait()
+        assert resume_intent.source == "resume"
+        assert event_intent.source == "ome_event"
+        assert event_intent.sim_time == step1_time
+        assert pair in event_intent.desired
 
 
 class TestSeekResume:

@@ -256,3 +256,98 @@ class TestComputeStepMatchesWindow:
         gs_count = sum(1 for k in positions if k.startswith("gs-"))
         assert sat_count > 0
         assert gs_count >= 0  # May be 0 if no GS configured
+
+    def test_step_result_snapshot_source_survives_zero_event_delta(self):
+        """Snapshot authority is full StepResult state, not emitted-event replay.
+
+        The second compute repeats the same tick with the first compute's
+        event-diff baselines already populated. It therefore emits no
+        VisibilityEvents. A snapshot source built from emitted events would be
+        empty; the committed StepResult source must still contain the current
+        visible pairs and allocation state.
+        """
+        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        epoch_unix = 1704067200.0
+        step_seconds = session.time.step_seconds
+
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=addressing,
+            gs_file=gs_file,
+            neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
+        )
+        isl_state: dict = {}
+        gs_state: dict = {}
+
+        first = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state)
+        previously_visible = {
+            pair
+            for pair, (visible, _scheduled) in first.link_snapshot_source.isl_state.items()
+            if visible
+        } | {
+            pair
+            for pair, (
+                visible,
+                _scheduled,
+                _state,
+            ) in first.link_snapshot_source.ground_state.items()
+            if visible
+        }
+        assert previously_visible
+
+        stable = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, isl_state, gs_state)
+        emitted_visibility = [
+            event for event in stable.events if event.event_type == "VisibilityEvent"
+        ]
+        assert emitted_visibility == []
+
+        source = stable.link_snapshot_source
+        stable_visible = {
+            pair for pair, (visible, _scheduled) in source.isl_state.items() if visible
+        } | {pair for pair, (visible, _scheduled, _state) in source.ground_state.items() if visible}
+        assert previously_visible <= stable_visible
+        assert source.propagated_states == stable.propagated_states
+        assert source.associations == stable.associations
+        assert source.pending_teardowns == stable.pending_teardowns
+
+    def test_link_snapshot_source_is_forwarding_plane_not_visibility_cross_product(self):
+        """LinkStateSnapshot source excludes invisible GS x sat decisions.
+
+        GroundLinkDecisionSnapshot carries the full physical visibility audit.
+        LinkStateSnapshot is forwarding-plane authority, so its source is
+        limited to visible scheduled pairs, visible unscheduled candidates, and
+        pending teardowns. This keeps snapshot size proportional to actual link
+        candidates rather than the full ground-station by satellite product.
+        """
+        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        epoch_unix = 1704067200.0
+        step_seconds = session.time.step_seconds
+
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=addressing,
+            gs_file=gs_file,
+            neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
+        )
+
+        result = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, {}, {})
+        source = result.link_snapshot_source
+
+        expected_ground_pairs = (
+            set(result.ground_allocation.scheduled_pairs)
+            | set(result.ground_allocation.pending_teardowns)
+            | {pair.pair for pair in result.ground_allocation.unscheduled_pairs}
+        )
+        expected_isl_pairs = {
+            pair for pair, feasibility in result.isl_feasibility.items() if feasibility.feasible
+        }
+
+        assert set(source.ground_state) == expected_ground_pairs
+        assert set(source.isl_state) == expected_isl_pairs
+        assert set(source.ground_state) < set(result.ground_decisions)
+        assert all(result.ground_decisions[pair].visible for pair in source.ground_state)
+        assert len(source.ground_state) < len(result.ground_decisions)

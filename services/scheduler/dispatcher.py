@@ -285,6 +285,13 @@ class Dispatcher:
         # Used by the safety check to identify teardown-expired removals.
         self._teardown_pairs: set[tuple[str, str]] = set()
 
+        # Visibility batching state owned by the Scheduler epoch lifecycle.
+        # Reverse seeks can legitimately make master sim_time decrease across
+        # epochs; the epoch boundary resets these fields before new-epoch
+        # VisibilityEvents are accepted.
+        self._pending_visibility_events: list[VisibilityEvent] = []
+        self._last_visibility_sim_time: datetime | None = None
+
         # Epoch synchronization — only active during Tier 2 seek.
         # The Scheduler starts UNSUSPENDED. It receives snapshots and
         # dispatches immediately. SUSPENDED is entered ONLY when the OME
@@ -396,6 +403,122 @@ class Dispatcher:
     @_active_links.setter
     def _active_links(self, value: dict[tuple[str, str], ActiveLinkInfo]) -> None:
         self._actual_links = value
+
+    def _reset_epoch_local_authority(self) -> None:
+        """Clear OME-authority state that cannot cross a seek epoch boundary."""
+        self._desired_links.clear()
+        self._ome_view.clear()
+        self._teardown_pairs.clear()
+        self._latest_decision_snapshot = None
+        self._pending_visibility_events.clear()
+        self._last_visibility_sim_time = None
+        self._last_snapshot_sim_time = None
+
+    def _discard_pending_dispatch_intents(self) -> int:
+        """Best-effort cleanup of queued old-epoch intents.
+
+        Correctness does not rely on this queue drain. The dispatch worker's
+        suspended-state guard is the invariant that prevents old-epoch intents
+        from reaching the actuator; this drain only reduces wasted queue work.
+        """
+        discarded = 0
+        while True:
+            try:
+                intent = self._dispatch_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if intent is None:
+                self._dispatch_queue.put_nowait(None)
+                break
+            discarded += 1
+        return discarded
+
+    def _begin_seek_epoch(self, epoch_id: int) -> bool:
+        """Enter seek suspension and reset all Scheduler-owned epoch state."""
+        if not self._epoch_sync.begin_seek(epoch_id):
+            return False
+        self._reset_epoch_local_authority()
+        self._last_snapshot_epoch_id = epoch_id
+        discarded = self._discard_pending_dispatch_intents()
+        if discarded:
+            log.info("Discarded %d queued old-epoch dispatch intents on seek", discarded)
+        return True
+
+    async def _handle_visibility_event(self, vis: VisibilityEvent) -> None:
+        """Apply one OME VisibilityEvent to the Scheduler batching state.
+
+        This is the testable body of the NATS visibility callback. Reverse
+        seeks can legitimately move master sim_time backward across epochs,
+        but never inside an active epoch; _begin_seek_epoch owns that reset.
+        """
+        if self._suspended:
+            log.debug("Seek suspended — dropping VisibilityEvent for %s/%s", vis.node_a, vis.node_b)
+            return
+
+        snap_sim = vis.sim_time
+
+        # Flush BEFORE appending the new event. When an event from a
+        # new tick arrives, all events from the previous tick are
+        # complete and ready to dispatch atomically. The new event
+        # then starts accumulating for its own tick.
+        last_sim_time = self._last_visibility_sim_time
+        pending_vis = self._pending_visibility_events
+        if last_sim_time is not None and snap_sim != last_sim_time:
+            delta_ms = (snap_sim - last_sim_time).total_seconds() * 1000
+            if delta_ms < 0:
+                raise RuntimeError(
+                    "VisibilityEvent sim_time regressed outside an epoch seek: "
+                    f"last={last_sim_time.isoformat()} current={snap_sim.isoformat()}"
+                )
+            if delta_ms > self._epsilon_ms and pending_vis:
+                self._apply_events_to_desired(list(pending_vis))
+                intent = self._build_dispatch_intent(
+                    sim_time=pending_vis[0].sim_time,
+                    source="ome_event",
+                )
+                await self._dispatch_queue.put(intent)
+                pending_vis.clear()
+
+        pending_vis.append(vis)
+        self._last_visibility_sim_time = snap_sim
+
+    async def _handle_clock_tick_payload(self, data: dict) -> None:
+        """Apply one OME ClockTick payload to batching/resume state."""
+        tick_epoch_id = data.get("epoch_id")
+        if tick_epoch_id is None:
+            log.error("ClockTick missing epoch_id: %s", data)
+            raise ValueError("ClockTick missing epoch_id")
+
+        if self._suspended:
+            if tick_epoch_id == self._expected_epoch_id:
+                await self._try_resume_on_clock_tick(data)
+            return
+
+        tick_sim_str = data.get("sim_time")
+        if not tick_sim_str:
+            log.error("ClockTick missing sim_time: %s", data)
+            raise ValueError("ClockTick missing sim_time")
+        tick_sim_time = datetime.fromisoformat(tick_sim_str)
+        self._current_sim_time = tick_sim_time
+
+        # Flush ONLY events from sim_times strictly OLDER than this tick.
+        # Events at the same sim_time as this tick may still be in flight
+        # on the visibility subject (cross-subject NATS ordering is not
+        # guaranteed). Flushing them now would split a tick's events
+        # across two dispatch cycles, breaking break-before-make for
+        # GS handovers (which emit two events at the same sim_time).
+        pending_vis = self._pending_visibility_events
+        if pending_vis:
+            pending_sim = pending_vis[0].sim_time
+            if pending_sim < tick_sim_time:
+                self._apply_events_to_desired(list(pending_vis))
+                intent = self._build_dispatch_intent(
+                    sim_time=pending_vis[0].sim_time,
+                    source="ome_event",
+                )
+                await self._dispatch_queue.put(intent)
+                pending_vis.clear()
+                self._last_visibility_sim_time = tick_sim_time
 
     def _build_dispatch_intent(
         self,
@@ -535,17 +658,14 @@ class Dispatcher:
         # They NEVER await Node Agent I/O. They return in microseconds.
         from nats.js.api import DeliverPolicy
 
-        # CONCURRENCY NOTE: pending_vis is mutated by _on_visibility and
-        # _on_clock_tick, which both yield control at await queue.put().
-        # Safe today because asyncio runs callbacks cooperatively on one
-        # thread — no preemption between await points. If this ever moves
-        # to a multi-threaded event loop, pending_vis must be protected
-        # by an asyncio.Lock.
-        pending_vis: list[VisibilityEvent] = []
-        last_sim_time: datetime | None = None
+        # CONCURRENCY NOTE: _pending_visibility_events is mutated by
+        # _on_visibility and _on_clock_tick, which both yield control at
+        # await queue.put(). Safe today because asyncio runs callbacks
+        # cooperatively on one thread — no preemption between await points.
+        # If this ever moves to a multi-threaded event loop, this batch must
+        # be protected by an asyncio.Lock.
 
         async def _on_visibility(msg):
-            nonlocal last_sim_time
             data = json.loads(msg.data)
             try:
                 vis = VisibilityEvent.model_validate(data)
@@ -557,48 +677,7 @@ class Dispatcher:
                     exc,
                 )
                 return
-
-            if self._suspended:
-                log.debug(
-                    "Seek suspended — dropping VisibilityEvent for %s/%s", vis.node_a, vis.node_b
-                )
-                return
-
-            snap_sim = vis.sim_time
-
-            # Flush BEFORE appending the new event. When an event from a
-            # new tick arrives, all events from the previous tick are
-            # complete and ready to dispatch atomically. The new event
-            # then starts accumulating for its own tick.
-            #
-            # The previous (broken) version appended first then flushed,
-            # which dispatched the first event of tick T as part of tick
-            # T-1's batch. Subsequent events from T accumulated alone and
-            # were dispatched in the NEXT cycle. For a GS handover where
-            # the OME emits two events at the same sim_time (the new sat
-            # scheduled + the old sat unscheduled), this split the pair
-            # across two reconciliation cycles, breaking break-before-make:
-            # the new attach completed in cycle N before the old detach
-            # completed in cycle N+1, and the detach brought the shared
-            # GS bridge port DOWN, killing the freshly-established carrier.
-            if last_sim_time is not None and snap_sim != last_sim_time:
-                delta_ms = (snap_sim - last_sim_time).total_seconds() * 1000
-                if delta_ms < 0:
-                    raise RuntimeError(
-                        "VisibilityEvent sim_time regressed outside an epoch seek: "
-                        f"last={last_sim_time.isoformat()} current={snap_sim.isoformat()}"
-                    )
-                if delta_ms > self._epsilon_ms and pending_vis:
-                    self._apply_events_to_desired(list(pending_vis))
-                    intent = self._build_dispatch_intent(
-                        sim_time=pending_vis[0].sim_time,
-                        source="ome_event",
-                    )
-                    await self._dispatch_queue.put(intent)
-                    pending_vis.clear()
-
-            pending_vis.append(vis)
-            last_sim_time = snap_sim
+            await self._handle_visibility_event(vis)
 
         async def _on_session_ephemeris(msg):
             try:
@@ -638,8 +717,10 @@ class Dispatcher:
                 )
                 return
             if ps.state == "seeking" and ps.epoch_id > self._expected_epoch_id:
-                # New seek — enter SUSPENDED state
-                self._epoch_sync.begin_seek(ps.epoch_id)
+                # New seek — enter SUSPENDED state and clear old-epoch
+                # Scheduler authority. _actual_links is actuator truth and is
+                # deliberately preserved for reconciliation on resume.
+                self._begin_seek_epoch(ps.epoch_id)
                 # Start watchdog
                 if self._watchdog_task and not self._watchdog_task.done():
                     self._watchdog_task.cancel()
@@ -653,47 +734,8 @@ class Dispatcher:
                 log.debug("PlaybackState(paused, epoch_id=%d)", ps.epoch_id)
 
         async def _on_clock_tick(msg):
-            nonlocal last_sim_time
             data = json.loads(msg.data)
-            tick_epoch_id = data.get("epoch_id")
-            if tick_epoch_id is None:
-                log.error("ClockTick missing epoch_id: %s", data)
-                raise ValueError("ClockTick missing epoch_id")
-
-            if self._suspended:
-                if tick_epoch_id == self._expected_epoch_id:
-                    await self._try_resume_on_clock_tick(data)
-                return
-
-            tick_sim_str = data.get("sim_time")
-            if not tick_sim_str:
-                log.error("ClockTick missing sim_time: %s", data)
-                raise ValueError("ClockTick missing sim_time")
-            tick_sim_time = datetime.fromisoformat(tick_sim_str)
-            self._current_sim_time = tick_sim_time
-
-            # Flush ONLY events from sim_times strictly OLDER than this tick.
-            # Events at the same sim_time as this tick may still be in flight
-            # on the visibility subject (cross-subject NATS ordering is not
-            # guaranteed). Flushing them now would split a tick's events
-            # across two dispatch cycles, breaking break-before-make for
-            # GS handovers (which emit two events at the same sim_time).
-            #
-            # When the next vis event from a later sim_time arrives, the
-            # _on_visibility flush-before-append will dispatch this tick's
-            # events atomically. If no later vis events arrive, the next
-            # ClockTick (with sim_time > pending_vis sim_time) will flush.
-            if pending_vis and tick_sim_time is not None:
-                pending_sim = pending_vis[0].sim_time
-                if pending_sim < tick_sim_time:
-                    self._apply_events_to_desired(list(pending_vis))
-                    intent = self._build_dispatch_intent(
-                        sim_time=pending_vis[0].sim_time,
-                        source="ome_event",
-                    )
-                    await self._dispatch_queue.put(intent)
-                    pending_vis.clear()
-                    last_sim_time = tick_sim_time
+            await self._handle_clock_tick_payload(data)
 
         async def _on_link_state_snapshot(msg):
             try:
@@ -1159,6 +1201,14 @@ class Dispatcher:
 
             if intent is None:
                 break
+
+            # Correctness boundary for seek: no old-epoch event/snapshot/scenario
+            # intent may reach the actuator while suspended. _discard_pending_
+            # dispatch_intents() is only an optimization; this guard is the
+            # invariant that protects kernel state during epoch replacement.
+            if self._suspended and intent.source != "resume":
+                log.debug("Dropping %s dispatch intent while seek-suspended", intent.source)
+                continue
 
             # Drain queue to latest intent. rebaseline_counts is OR'd
             # across drained entries — it's a side effect that must not

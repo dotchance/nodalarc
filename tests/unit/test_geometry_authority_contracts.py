@@ -27,6 +27,7 @@ from nodalarc.models.link_state import (
 from nodalarc.propagator import geodetic_to_ecef as reexported_geodetic_to_ecef
 from ome.event_stream import build_link_state_snapshot
 from ome.propagation_engine import PropagatedState
+from ome.snapshot_builder import LinkSnapshotSource
 from scheduler.dispatcher import Dispatcher
 from scheduler.pod_locator import PodLocationMap
 
@@ -44,6 +45,21 @@ def _propagated_state(node_id: str, lat: float, lon: float, alt_km: float) -> Pr
         velocity_ecef_km_s=EcefVec3(Vec3(0.0, 0.0, 0.0)),
         geodetic=geo,
         propagator_id="test-authority",
+    )
+
+
+def _snapshot_source(
+    *,
+    isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
+    ground_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
+    propagated_states: dict[str, PropagatedState] | None = None,
+) -> LinkSnapshotSource:
+    return LinkSnapshotSource(
+        isl_state=isl_state or {},
+        ground_state=ground_state or {},
+        associations={},
+        pending_teardowns={},
+        propagated_states=propagated_states or {},
     )
 
 
@@ -111,14 +127,12 @@ class TestOmeSnapshotGeometry:
             "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
         }
         snapshot = build_link_state_snapshot(
-            isl_state={pair: (True, True)},
-            gs_state={},
+            _snapshot_source(isl_state={pair: (True, True)}, propagated_states=propagated_states),
             interface_map={pair: ("isl0", "isl1")},
             bandwidth_map={pair: 1000.0},
             sim_time=SIM,
             seq=1,
             interval_s=1.0,
-            propagated_states=propagated_states,
             epoch_id=0,
         )
         link = snapshot.links[0]
@@ -141,16 +155,17 @@ class TestOmeSnapshotGeometry:
 
         with pytest.raises(ValueError, match="missing same-tick ECEF state"):
             build_link_state_snapshot(
-                isl_state={pair: (True, True)},
-                gs_state={},
+                _snapshot_source(
+                    isl_state={pair: (True, True)},
+                    propagated_states={
+                        "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
+                    },
+                ),
                 interface_map={pair: ("isl0", "isl1")},
                 bandwidth_map={pair: 1000.0},
                 sim_time=SIM,
                 seq=1,
                 interval_s=1.0,
-                propagated_states={
-                    "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
-                },
                 epoch_id=0,
             )
 
@@ -159,17 +174,18 @@ class TestOmeSnapshotGeometry:
 
         with pytest.raises(ValueError, match="missing config-derived bandwidth"):
             build_link_state_snapshot(
-                isl_state={pair: (True, True)},
-                gs_state={},
+                _snapshot_source(
+                    isl_state={pair: (True, True)},
+                    propagated_states={
+                        "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
+                        "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
+                    },
+                ),
                 interface_map={pair: ("isl0", "isl1")},
                 bandwidth_map={},
                 sim_time=SIM,
                 seq=1,
                 interval_s=1.0,
-                propagated_states={
-                    "sat-a": _propagated_state("sat-a", 0.0, 0.0, 550.0),
-                    "sat-b": _propagated_state("sat-b", 0.0, 5.0, 550.0),
-                },
                 epoch_id=0,
             )
 

@@ -11,7 +11,7 @@ wire contract.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 
 from nodalarc.frames import EcefVec3, GeoPosition
@@ -33,6 +33,25 @@ from nodalarc.models.link_state import (
 
 from ome.propagation_engine import PropagatedState
 from ome.types import GroundVisibilityDecisionMap, MbbTeardownState
+
+IslSnapshotState = Mapping[tuple[str, str], tuple[bool, bool]]
+GroundSnapshotState = Mapping[tuple[str, str], tuple[bool, bool, str]]
+
+
+@dataclass(frozen=True)
+class LinkSnapshotSource:
+    """Committed OME state used to serialize LinkStateSnapshot.
+
+    This is not an event-replay cache. The Physicist builds it from the
+    current tick's propagation, visibility, and allocation results. The
+    Publisher consumes it directly when serializing authoritative snapshots.
+    """
+
+    isl_state: IslSnapshotState
+    ground_state: GroundSnapshotState
+    associations: Mapping[tuple[str, str], tuple[int, int]]
+    pending_teardowns: MbbTeardownState
+    propagated_states: Mapping[str, PropagatedState]
 
 
 def build_link_decision_snapshot(
@@ -78,22 +97,19 @@ def build_link_decision_snapshot(
 
 
 def build_link_state_snapshot(
-    isl_state: dict[tuple[str, str], tuple[bool, bool]],
-    gs_state: dict[tuple[str, str], tuple[bool, bool, str]],
+    source: LinkSnapshotSource,
+    *,
     interface_map: dict[tuple[str, str], tuple[str, str]],
     bandwidth_map: Mapping[tuple[str, str], float],
     sim_time: datetime,
     seq: int,
     interval_s: float,
-    propagated_states: Mapping[str, PropagatedState] | None = None,
     fixed_positions: Mapping[str, tuple[EcefVec3, GeoPosition]] | None = None,
     epoch_id: int = 0,
-    current_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
-    mbb_pending_teardowns: MbbTeardownState | None = None,
     mbb_overlap_ticks: int = 3,
     current_step: int = 0,
 ) -> LinkStateSnapshot:
-    """Build a LinkStateSnapshot from OME internal state.
+    """Build a LinkStateSnapshot from committed OME StepResult state.
 
     Active links require same-tick propagated ECEF state so range and
     one-way latency are OME-authoritative. Missing state for an active link is
@@ -101,9 +117,8 @@ def build_link_state_snapshot(
     downstream components to decide whether to invent or reject physics.
     """
     ecef: dict[str, EcefVec3] = {}
-    if propagated_states:
-        for node_id, state in propagated_states.items():
-            ecef[node_id] = state.position_ecef_km
+    for node_id, state in source.propagated_states.items():
+        ecef[node_id] = state.position_ecef_km
     if fixed_positions:
         for node_id, (position_ecef, _geo) in fixed_positions.items():
             ecef[node_id] = position_ecef
@@ -135,7 +150,7 @@ def build_link_state_snapshot(
 
     links: list[LinkState] = []
 
-    for pair, (visible, scheduled) in isl_state.items():
+    for pair, (visible, scheduled) in source.isl_state.items():
         if pair not in interface_map:
             raise ValueError(
                 f"Cannot build LinkStateSnapshot for ISL link {pair}: "
@@ -164,9 +179,9 @@ def build_link_state_snapshot(
             )
         )
 
-    assoc = current_associations or {}
-    td_state = mbb_pending_teardowns or {}
-    for pair, state_tuple in gs_state.items():
+    assoc = source.associations
+    td_state = source.pending_teardowns
+    for pair, state_tuple in source.ground_state.items():
         visible = state_tuple[0]
         scheduled = state_tuple[1]
         sched_state = state_tuple[2]

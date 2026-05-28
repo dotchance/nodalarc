@@ -34,8 +34,10 @@ from nodalarc.constellation_loader import (
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.constellation import ConstellationConfig
+from nodalarc.models.events import PlaybackControlCommand
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig, resolve_session_epoch
+from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
 from nodalarc.session_identity import require_session_run_id
 from nodalarc.tle import tle_age_days
 
@@ -200,6 +202,104 @@ _paused: bool = False  # emission halted?
 _seek_target: float | None = None  # Unix timestamp to seek to, or None
 _epoch_id: int = 0  # current epoch, incremented on each Tier 2 seek
 _seeking: bool = False  # True while seek in progress — mutex for pause/set_speed
+_initial_epoch_committed: bool = (
+    False  # playback controls other than status wait for step-0 authority
+)
+
+
+def _playback_control_state() -> str:
+    if not _initial_epoch_committed:
+        return "bootstrapping"
+    if _seeking:
+        return "seeking"
+    return "paused" if _paused else "playing"
+
+
+async def _handle_playback_control_command(
+    cmd: PlaybackControlCommand,
+    publish_playback_state,
+) -> dict:
+    """Apply one playback-control command and return the API reply.
+
+    Playback control owns operator intent only. The out-of-band
+    ``PlaybackState(seeking)`` publish is deliberate: it is the epoch-boundary
+    signal that makes Scheduler consumers suspend before the pacing thread
+    publishes the committed step-0 authority. The pacing thread, not this
+    helper, publishes ``PlaybackState(playing)`` after the new snapshot,
+    decision snapshot, and checkpoint have committed.
+    """
+    global _time_accel, _paused, _seeking, _seek_target, _epoch_id
+
+    action = cmd.action
+    if not _initial_epoch_committed and action in (
+        "pause",
+        "resume",
+        "set_speed",
+        "seek",
+    ):
+        return {
+            "error": "session bootstrapping; retry after ready",
+            "state": "bootstrapping",
+            "paused": _paused,
+            "speed": _time_accel,
+            "epoch_id": _epoch_id,
+        }
+
+    if _seeking and action in ("pause", "resume", "set_speed"):
+        return {
+            "error": f"cannot {action} during seek (epoch_id={_epoch_id})",
+            "state": "seeking",
+            "paused": _paused,
+            "speed": _time_accel,
+            "epoch_id": _epoch_id,
+        }
+
+    if action == "pause":
+        _paused = True
+        await publish_playback_state("paused")
+        logging.info("Playback paused (speed=%.1f)", _time_accel)
+    elif action == "resume":
+        _paused = False
+        await publish_playback_state("playing")
+        logging.info("Playback resumed (speed=%.1f)", _time_accel)
+    elif action == "set_speed":
+        if cmd.factor is None:
+            raise ValueError("set_speed requires factor")
+        factor = float(cmd.factor)
+        if factor < MIN_TIME_ACCEL or factor > MAX_TIME_ACCEL:
+            return {
+                "error": f"factor {factor} out of range [{MIN_TIME_ACCEL}, {MAX_TIME_ACCEL}]",
+                "paused": _paused,
+                "speed": _time_accel,
+            }
+        _time_accel = factor
+        logging.info("Playback speed set to %.1fx", factor)
+    elif action == "seek":
+        _epoch_id += 1
+        _seeking = True
+        if cmd.target_sim_time:
+            _seek_target = cmd.target_sim_time.timestamp()
+        else:
+            _seek_target = datetime.now(UTC).timestamp()
+        _paused = False
+        await publish_playback_state("seeking")
+        target_iso = datetime.fromtimestamp(_seek_target, UTC).isoformat()
+        logging.info("Seek requested: %s epoch_id=%d (auto-resumed)", target_iso, _epoch_id)
+    elif action == "get_status":
+        pass
+    else:
+        return {
+            "error": f"unknown action: {action}",
+            "paused": _paused,
+            "speed": _time_accel,
+        }
+
+    return {
+        "paused": _paused,
+        "speed": _time_accel,
+        "epoch_id": _epoch_id,
+        "state": _playback_control_state(),
+    }
 
 
 def run(session_path: str, output_dir: str | None = None) -> Path:
@@ -389,10 +489,8 @@ async def _nats_publisher_loop(
     import queue
 
     import nats
-    from nodalarc.models.events import PlaybackControlCommand, PlaybackState
+    from nodalarc.models.events import PlaybackState
     from nodalarc.nats_channels import (
-        MAX_TIME_ACCEL,
-        MIN_TIME_ACCEL,
         NATS_CONNECT_OPTIONS,
         SUBJECT_PLAYBACK_CONTROL,
         nats_url,
@@ -419,69 +517,10 @@ async def _nats_publisher_loop(
     # --- Playback control subscriber (R-OME-008B Tier 1) ---
 
     async def _handle_playback(msg) -> None:
-        global _time_accel, _paused, _seeking, _seek_target, _epoch_id
         try:
             cmd = PlaybackControlCommand.model_validate_json(msg.data)
-            action = cmd.action
-
-            # Seeking mutex: reject pause/set_speed during seek
-            if _seeking and action in ("pause", "set_speed"):
-                reply = {
-                    "error": f"cannot {action} during seek (epoch_id={_epoch_id})",
-                    "paused": _paused,
-                    "speed": _time_accel,
-                }
-                await msg.respond(json.dumps(reply).encode())
-                return
-
-            if action == "pause":
-                _paused = True
-                await _publish_playback_state("paused")
-                logging.info("Playback paused (speed=%.1f)", _time_accel)
-            elif action == "resume":
-                _paused = False
-                await _publish_playback_state("playing")
-                logging.info("Playback resumed (speed=%.1f)", _time_accel)
-            elif action == "set_speed":
-                if cmd.factor is None:
-                    raise ValueError("set_speed requires factor")
-                factor = float(cmd.factor)
-                if factor < MIN_TIME_ACCEL or factor > MAX_TIME_ACCEL:
-                    reply = {
-                        "error": f"factor {factor} out of range [{MIN_TIME_ACCEL}, {MAX_TIME_ACCEL}]",
-                        "paused": _paused,
-                        "speed": _time_accel,
-                    }
-                    await msg.respond(json.dumps(reply).encode())
-                    return
-                _time_accel = factor
-                logging.info("Playback speed set to %.1fx", factor)
-            elif action == "seek":
-                _epoch_id += 1
-                _seeking = True
-                if cmd.target_sim_time:
-                    _seek_target = cmd.target_sim_time.timestamp()
-                else:
-                    _seek_target = datetime.now(UTC).timestamp()
-                _paused = False
-                await _publish_playback_state("seeking")
-                target_iso = datetime.fromtimestamp(_seek_target, UTC).isoformat()
-                logging.info("Seek requested: %s epoch_id=%d (auto-resumed)", target_iso, _epoch_id)
-            elif action == "get_status":
-                pass  # fall through to reply with current state
-            else:
-                reply = {
-                    "error": f"unknown action: {action}",
-                    "paused": _paused,
-                    "speed": _time_accel,
-                }
-                await msg.respond(json.dumps(reply).encode())
-                return
-            await msg.respond(
-                json.dumps(
-                    {"paused": _paused, "speed": _time_accel, "epoch_id": _epoch_id}
-                ).encode()
-            )
+            reply = await _handle_playback_control_command(cmd, _publish_playback_state)
+            await msg.respond(json.dumps(reply).encode())
         except Exception as exc:
             logging.error("Playback control error: %s", exc)
             await msg.respond(json.dumps({"error": str(exc)}).encode())
@@ -679,8 +718,13 @@ def _run_pacing(
 
     # Initialize Pacemaker rate from static compression (R-OME-008B Part 1).
     # Runtime set_speed commands replace this value dynamically.
-    global _time_accel, _seek_target, _seeking, _paused, _epoch_id
+    global _time_accel, _seek_target, _seeking, _paused, _epoch_id, _initial_epoch_committed
     _time_accel = float(compression)
+    _seek_target = None
+    _seeking = False
+    _paused = False
+    _epoch_id = 0
+    _initial_epoch_committed = False
     platform_snapshot_interval_s = get_platform_config().ome_link_state_snapshot_interval_s
 
     interface_map = cfg.interface_map
@@ -771,8 +815,6 @@ def _run_pacing(
     lookahead_launched_for_epoch: float | None = None
     isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
     gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
-    running_isl_state: dict[tuple[str, str], tuple[bool, bool]] = {}
-    running_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] = {}
     current_associations: dict[tuple[str, str], tuple[int, int]] = {}
     mbb_pending_teardowns: MbbTeardownState = {}
     step = 0
@@ -791,6 +833,69 @@ def _run_pacing(
     iter_timings: deque[float] = deque(maxlen=3600)  # full iteration (compute + sleep)
     last_timing_log = time.monotonic()
     last_iter_start: float = time.monotonic()
+
+    def _publish_link_authority(step_result, *, epoch_id: int) -> None:
+        """Publish paired authoritative state/decision snapshots for a committed tick."""
+        nonlocal snapshot_seq, last_snapshot_sim_s, force_first_snapshot
+        snapshot_seq += 1
+        snap = build_link_state_snapshot(
+            step_result.link_snapshot_source,
+            interface_map=interface_map,
+            bandwidth_map=bandwidth_map,
+            sim_time=step_result.sim_time,
+            seq=snapshot_seq,
+            interval_s=snapshot_interval_s,
+            fixed_positions=step_ctx.gs_positions,
+            epoch_id=epoch_id,
+            mbb_overlap_ticks=mbb_overlap_ticks,
+            current_step=step_result.step,
+        )
+        _enqueue(subj_link_snapshot, snap.model_dump_json().encode())
+
+        decision_snap = build_link_decision_snapshot(
+            decisions=step_result.ground_decisions,
+            unscheduled_pairs=step_result.ground_allocation.unscheduled_pairs,
+            policy_audit=step_result.ground_allocation.policy_audit,
+            allocation_events=step_result.ground_allocation.allocation_events,
+            sim_time=step_result.sim_time,
+            snapshot_seq=snapshot_seq,
+            epoch_id=epoch_id,
+        )
+        _enqueue(subj_link_decisions, decision_snap.model_dump_json().encode())
+        last_snapshot_sim_s = step_result.step * step_seconds
+        force_first_snapshot = False
+
+    def _publish_checkpoint(step_result, *, epoch_id: int) -> None:
+        ckpt = _build_scheduling_checkpoint(
+            sim_time=step_result.sim_time,
+            epoch_id=epoch_id,
+            snapshot_seq=snapshot_seq,
+            step=step_result.step,
+            associations=step_result.associations,
+            teardowns=step_result.pending_teardowns,
+            mbb_overlap_ticks=mbb_overlap_ticks,
+        )
+        _enqueue(
+            subj_checkpoint,
+            _ckpt_gzip.compress(ckpt.model_dump_json().encode()),
+        )
+
+    def _publish_clock_tick(step_result, rate: float, *, epoch_id: int) -> None:
+        ct = ClockTick(
+            sim_time=step_result.sim_time,
+            wall_time=datetime.now(UTC),
+            compression_ratio=float(rate),
+            epoch_id=epoch_id,
+        )
+        _enqueue(subj_clock, ct.model_dump_json().encode())
+
+    def _sleep_until_next_step_due() -> None:
+        if _paused or shutdown_event.is_set():
+            return
+        wall_target = pace_ref_wall + (step - pace_ref_step) * (step_seconds / current_rate)
+        now_mono = time.monotonic()
+        if now_mono < wall_target:
+            time.sleep(wall_target - now_mono)
 
     logging.info(
         "OME starting [build=%s, session_id=%s, sat_count=%d, gs_count=%d, epoch=%s, step=%ds, accel=%.1fx]",
@@ -899,10 +1004,11 @@ def _run_pacing(
     else:
         logging.info("No checkpoint found — starting from epoch")
 
-    # Recompute link state at recovered (or initial) sim_time before publishing.
-    # Run enough steps from epoch to reach the recovered step so ISL/GS state
-    # is accurate. For a fresh start (step=0), this is a no-op.
-    replayed_propagated_states = None
+    # Compute committed state before publishing any authoritative snapshot.
+    # Fresh start commits step 0. Warm restart replays to the retained checkpoint
+    # step and publishes the final replay StepResult. In both cases the snapshot
+    # is serialized from StepResult authority, not from replayed VisibilityEvents.
+    initial_step_result = None
     if recovered_checkpoint is not None:
         logging.warning(
             "RecoveryReplay: replaying %d steps from checkpoint (step=%d)",
@@ -923,20 +1029,29 @@ def _run_pacing(
                 current_associations,
                 mbb_pending_teardowns,
             )
-            replayed_propagated_states = replay_result.propagated_states
+            initial_step_result = replay_result
             current_associations = replay_result.associations
             mbb_pending_teardowns = replay_result.pending_teardowns
-            for te in replay_result.events:
-                if te.event_type == "VisibilityEvent":
-                    vis = te.data
-                    pair = (vis.node_a, vis.node_b)
-                    if vis.link_type == "ground":
-                        running_gs_state[pair] = (vis.visible, vis.scheduled, vis.scheduling_state)
-                    else:
-                        running_isl_state[pair] = (vis.visible, vis.scheduled)
             if replay_step > 0 and replay_step % 1000 == 0:
                 logging.debug("Recovery replay: %d/%d steps", replay_step, step + 1)
-        logging.debug("Replayed %d steps to rebuild link state", step + 1)
+        logging.debug("Replayed %d steps to rebuild committed link state", step + 1)
+    else:
+        initial_step_result = compute_step(
+            step_ctx,
+            epoch_unix,
+            0,
+            step_seconds,
+            0.0,
+            isl_state,
+            gs_state,
+            current_associations,
+            mbb_pending_teardowns,
+        )
+        current_associations = initial_step_result.associations
+        mbb_pending_teardowns = initial_step_result.pending_teardowns
+
+    if initial_step_result is None:
+        raise RuntimeError("Initial epoch commit produced no StepResult; refusing to publish state")
 
     # Restore playback state from checkpoint. A restart is not a user action —
     # if the session was playing, it resumes playing. If the user had paused,
@@ -944,68 +1059,30 @@ def _run_pacing(
     if recovered_checkpoint is not None:
         _paused = recovered_checkpoint.paused
         _time_accel = recovered_checkpoint.time_accel
+        current_rate = _time_accel
     else:
         _paused = False
 
     # --- Session start sequence (epoch_id=0) ---
-    # Order: SessionEphemeris → LinkStateSnapshot → PlaybackState(paused)
-    # → then tick loop waits for unpause before first ClockTick.
+    # Order: SessionEphemeris → StepResult-sourced LinkStateSnapshot +
+    # GroundLinkDecisionSnapshot → SchedulingCheckpoint → PlaybackState →
+    # ClockTick if playing. No pre-compute empty snapshot is ever published.
     eph = build_session_ephemeris(step_ctx, epoch_unix, _epoch_id)
     _enqueue(subj_ephemeris, eph.model_dump_json().encode())
     logging.debug("Published SessionEphemeris epoch_id=%d (%d nodes)", _epoch_id, len(eph.nodes))
 
-    # Force initial LinkStateSnapshot with epoch_id
-    snapshot_seq += 1
-    initial_sim_time = datetime.fromtimestamp(epoch_unix + step * step_seconds, UTC)
-    initial_snap = build_link_state_snapshot(
-        isl_state=running_isl_state,
-        gs_state=running_gs_state,
-        interface_map=interface_map,
-        bandwidth_map=bandwidth_map,
-        sim_time=initial_sim_time,
-        seq=snapshot_seq,
-        interval_s=snapshot_interval_s,
-        propagated_states=replayed_propagated_states,
-        fixed_positions=step_ctx.gs_positions,
-        epoch_id=_epoch_id,
-        current_associations=current_associations,
-        mbb_pending_teardowns=mbb_pending_teardowns,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        current_step=step,
-    )
-    _enqueue(subj_link_snapshot, initial_snap.model_dump_json().encode())
-    # Companion GroundLinkDecisionSnapshot — empty at session start (no
-    # compute_step has run yet, so no decisions exist). Same sim_time
-    # and snapshot_seq as the state snapshot so consumers can pair them.
-    initial_decision_snap = build_link_decision_snapshot(
-        decisions={},
-        unscheduled_pairs=(),
-        policy_audit=step_ctx.ground_policy_audit,
-        allocation_events=(),
-        sim_time=initial_sim_time,
-        snapshot_seq=snapshot_seq,
-        epoch_id=_epoch_id,
-    )
-    _enqueue(subj_link_decisions, initial_decision_snap.model_dump_json().encode())
-    initial_ckpt = _build_scheduling_checkpoint(
-        sim_time=initial_sim_time,
-        epoch_id=_epoch_id,
-        snapshot_seq=snapshot_seq,
-        step=step,
-        associations=current_associations,
-        teardowns=mbb_pending_teardowns,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-    )
-    _enqueue(
-        subj_checkpoint,
-        _ckpt_gzip.compress(initial_ckpt.model_dump_json().encode()),
-    )
-    last_snapshot_sim_s = step * step_seconds
-    force_first_snapshot = False
+    initial_epoch_id = _epoch_id
+    _publish_link_authority(initial_step_result, epoch_id=initial_epoch_id)
+    _publish_checkpoint(initial_step_result, epoch_id=initial_epoch_id)
 
     initial_playback_state = "paused" if _paused else "playing"
-    ps = PlaybackState(epoch_id=_epoch_id, state=initial_playback_state)
+    ps = PlaybackState(epoch_id=initial_epoch_id, state=initial_playback_state)
     _enqueue(subj_playback, ps.model_dump_json().encode())
+    if not _paused:
+        _publish_clock_tick(initial_step_result, current_rate, epoch_id=initial_epoch_id)
+
+    _initial_epoch_committed = True
+
     if recovered_checkpoint is not None:
         logging.info(
             "OME recovered from checkpoint [epoch_id=%d, step=%d, paused=%s, speed=%.1fx]",
@@ -1017,11 +1094,11 @@ def _run_pacing(
     else:
         logging.debug("OME fresh session, auto-play [epoch_id=%d]", _epoch_id)
 
-    if recovered_checkpoint is not None:
-        step += 1
-        pace_ref_wall = time.monotonic()
-        pace_ref_step = step
-        last_iter_start = time.monotonic()
+    step = initial_step_result.step + 1
+    pace_ref_wall = time.monotonic()
+    pace_ref_step = initial_step_result.step
+    last_iter_start = time.monotonic()
+    _sleep_until_next_step_due()
 
     try:
         while not shutdown_event.is_set():
@@ -1034,78 +1111,87 @@ def _run_pacing(
             seek_to = _seek_target
             if seek_to is not None:
                 _seek_target = None
+                seek_epoch_id = _epoch_id
                 epoch_unix = seek_to
                 isl_state = {}
                 gs_state = {}
-                running_isl_state = {}
-                running_gs_state = {}
                 current_associations = {}
                 mbb_pending_teardowns = {}
                 step = 0
                 pace_ref_wall = time.monotonic()
                 pace_ref_step = 0
                 current_rate = _time_accel
-                last_snapshot_sim_s = -snapshot_interval_s
-                force_first_snapshot = False  # we publish it explicitly below
+                force_first_snapshot = False  # the committed step-0 snapshot is published below
                 lookahead.cancel()
                 lookahead_launched_for_epoch = None
 
-                # Publish epoch dependencies for the new epoch_id
-                # (epoch_id was already incremented by the publisher thread's seek handler)
-                eph = build_session_ephemeris(step_ctx, epoch_unix, _epoch_id)
+                # Compute first, publish after commit. This is the Phase 4
+                # ordering boundary; no empty new-epoch snapshot is allowed.
+                try:
+                    seek_result = compute_step(
+                        step_ctx,
+                        epoch_unix,
+                        0,
+                        step_seconds,
+                        0.0,
+                        isl_state,
+                        gs_state,
+                        current_associations,
+                        mbb_pending_teardowns,
+                    )
+                except Exception as exc:
+                    target_master_sim_time = datetime.fromtimestamp(epoch_unix, UTC).isoformat()
+                    logging.exception(
+                        "FATAL: seek step-0 compute failed [epoch_id=%d, target_master_sim_time=%s]",
+                        seek_epoch_id,
+                        target_master_sim_time,
+                        extra={
+                            "code": "SEEK_STEP0_COMPUTE_FAILED",
+                            "details": {
+                                "epoch_id": seek_epoch_id,
+                                "target_master_sim_time": target_master_sim_time,
+                                "exception_type": type(exc).__name__,
+                                "exception": str(exc),
+                            },
+                        },
+                    )
+                    raise
+                current_associations = seek_result.associations
+                mbb_pending_teardowns = seek_result.pending_teardowns
+
+                if _epoch_id != seek_epoch_id or _seek_target is not None:
+                    logging.info(
+                        "Seek epoch_id=%d abandoned before publish because a newer seek arrived",
+                        seek_epoch_id,
+                    )
+                    continue
+
+                # The publisher thread already emitted PlaybackState(seeking)
+                # and incremented _epoch_id. The authoritative state payloads
+                # below are the first facts of that epoch. Step-0 VisibilityEvents
+                # are intentionally not published; StepResult is the state carrier.
+                eph = build_session_ephemeris(step_ctx, epoch_unix, seek_epoch_id)
                 _enqueue(subj_ephemeris, eph.model_dump_json().encode())
+                _publish_link_authority(seek_result, epoch_id=seek_epoch_id)
+                _publish_checkpoint(seek_result, epoch_id=seek_epoch_id)
 
-                snapshot_seq += 1
-                seek_snap = build_link_state_snapshot(
-                    isl_state=running_isl_state,
-                    gs_state=running_gs_state,
-                    interface_map=interface_map,
-                    bandwidth_map=bandwidth_map,
-                    sim_time=datetime.fromtimestamp(epoch_unix, UTC),
-                    seq=snapshot_seq,
-                    interval_s=snapshot_interval_s,
-                    propagated_states={},
-                    fixed_positions=step_ctx.gs_positions,
-                    epoch_id=_epoch_id,
-                )
-                _enqueue(subj_link_snapshot, seek_snap.model_dump_json().encode())
-                # Companion empty GroundLinkDecisionSnapshot at seek — running
-                # state was reset; the first post-seek compute_step
-                # repopulates decisions.
-                seek_decision_snap = build_link_decision_snapshot(
-                    decisions={},
-                    unscheduled_pairs=(),
-                    policy_audit=step_ctx.ground_policy_audit,
-                    allocation_events=(),
-                    sim_time=datetime.fromtimestamp(epoch_unix, UTC),
-                    snapshot_seq=snapshot_seq,
-                    epoch_id=_epoch_id,
-                )
-                _enqueue(subj_link_decisions, seek_decision_snap.model_dump_json().encode())
-                seek_ckpt = _build_scheduling_checkpoint(
-                    sim_time=datetime.fromtimestamp(epoch_unix, UTC),
-                    epoch_id=_epoch_id,
-                    snapshot_seq=snapshot_seq,
-                    step=step,
-                    associations=current_associations,
-                    teardowns=mbb_pending_teardowns,
-                    mbb_overlap_ticks=mbb_overlap_ticks,
-                )
-                _enqueue(
-                    subj_checkpoint,
-                    _ckpt_gzip.compress(seek_ckpt.model_dump_json().encode()),
-                )
-                last_snapshot_sim_s = 0.0
-
-                ps = PlaybackState(epoch_id=_epoch_id, state="playing")
+                ps = PlaybackState(epoch_id=seek_epoch_id, state="playing")
                 _enqueue(subj_playback, ps.model_dump_json().encode())
-                _seeking = False  # Clear seeking mutex
+                _publish_clock_tick(seek_result, current_rate, epoch_id=seek_epoch_id)
+                if _epoch_id == seek_epoch_id and _seek_target is None:
+                    _seeking = False  # Clear seeking mutex only for the committed active seek
 
                 logging.info(
-                    "Seek applied: new epoch %s epoch_id=%d",
+                    "Seek committed: new epoch %s epoch_id=%d snapshot_seq=%d",
                     datetime.fromtimestamp(seek_to, UTC).isoformat(),
-                    _epoch_id,
+                    seek_epoch_id,
+                    snapshot_seq,
                 )
+
+                step = 1
+                last_iter_start = time.monotonic()
+                _sleep_until_next_step_due()
+                continue
 
             # --- Launch look-ahead if not already running for this epoch ---
             if lookahead_launched_for_epoch != epoch_unix:
@@ -1144,6 +1230,7 @@ def _run_pacing(
                 current_rate = new_rate
 
             # --- Compute one step (Physicist role) ---
+            tick_epoch_id = _epoch_id
             step_result = compute_step(
                 step_ctx,
                 epoch_unix,
@@ -1155,90 +1242,38 @@ def _run_pacing(
                 current_associations,
                 mbb_pending_teardowns,
             )
+            if _epoch_id != tick_epoch_id or _seek_target is not None:
+                logging.info(
+                    "Tick step=%d epoch_id=%d abandoned before publish because seek epoch_id=%d is pending",
+                    step,
+                    tick_epoch_id,
+                    _epoch_id,
+                )
+                continue
             step_events = step_result.events
             current_associations = step_result.associations
             mbb_pending_teardowns = step_result.pending_teardowns
 
             # --- Emit events for this step ---
-            sim_time = datetime.fromtimestamp(epoch_unix + step * step_seconds, UTC)
-
             for te in step_events:
-                payload = te.data.model_dump_json().encode()
                 if te.event_type == "VisibilityEvent":
+                    payload = te.data.model_dump_json().encode()
                     _enqueue(subj_visibility, payload)
-                    vis = te.data
-                    pair = (vis.node_a, vis.node_b)
-                    if vis.link_type == "ground":
-                        running_gs_state[pair] = (vis.visible, vis.scheduled, vis.scheduling_state)
-                    else:
-                        running_isl_state[pair] = (vis.visible, vis.scheduled)
             # ClockTick with real wall_time (not precomputed placeholder)
-            ct = ClockTick(
-                sim_time=sim_time,
-                wall_time=datetime.now(UTC),
-                compression_ratio=float(current_rate),
-                epoch_id=_epoch_id,
-            )
-            _enqueue(subj_clock, ct.model_dump_json().encode())
+            _publish_clock_tick(step_result, current_rate, epoch_id=tick_epoch_id)
 
             # LinkStateSnapshot at interval
             sim_s = step * step_seconds
             if sim_s - last_snapshot_sim_s >= snapshot_interval_s or force_first_snapshot:
-                snapshot_seq += 1
-                snap = build_link_state_snapshot(
-                    isl_state=running_isl_state,
-                    gs_state=running_gs_state,
-                    interface_map=interface_map,
-                    bandwidth_map=bandwidth_map,
-                    sim_time=sim_time,
-                    seq=snapshot_seq,
-                    interval_s=snapshot_interval_s,
-                    propagated_states=step_result.propagated_states,
-                    fixed_positions=step_ctx.gs_positions,
-                    epoch_id=_epoch_id,
-                    current_associations=current_associations,
-                    mbb_pending_teardowns=mbb_pending_teardowns,
-                    mbb_overlap_ticks=mbb_overlap_ticks,
-                    current_step=step,
-                )
-                _enqueue(subj_link_snapshot, snap.model_dump_json().encode())
-                # Companion GroundLinkDecisionSnapshot — carries the typed
-                # per-pair GROUND decisions and the typed unscheduled-
-                # ground-pair reasons. Same snapshot_seq and sim_time as
-                # the state snapshot above; pairing is by
-                # (epoch_id, snapshot_seq, sim_time) at the consumer
-                # (see scheduler.dispatcher.paired_decision_snapshot),
-                # NOT by shared-stream colocation — both retain
-                # independently under MaxMsgsPerSubject=1.
-                decision_snap = build_link_decision_snapshot(
-                    decisions=step_result.ground_decisions,
-                    unscheduled_pairs=step_result.ground_allocation.unscheduled_pairs,
-                    policy_audit=step_result.ground_allocation.policy_audit,
-                    allocation_events=step_result.ground_allocation.allocation_events,
-                    sim_time=sim_time,
-                    snapshot_seq=snapshot_seq,
-                    epoch_id=_epoch_id,
-                )
-                _enqueue(subj_link_decisions, decision_snap.model_dump_json().encode())
-                last_snapshot_sim_s = sim_s
-                force_first_snapshot = False
+                # Companion GroundLinkDecisionSnapshot is published by the same
+                # helper with the same (epoch_id, snapshot_seq, sim_time). Both
+                # snapshots are serialized from committed StepResult state.
+                _publish_link_authority(step_result, epoch_id=tick_epoch_id)
 
             # Retain the latest authoritative scheduling state every tick, not
             # only at snapshot cadence. Otherwise a crash between snapshots can
             # force recovery to replay stale sim_time and duplicate decisions.
-            ckpt = _build_scheduling_checkpoint(
-                sim_time=sim_time,
-                epoch_id=_epoch_id,
-                snapshot_seq=snapshot_seq,
-                step=step,
-                associations=current_associations,
-                teardowns=mbb_pending_teardowns,
-                mbb_overlap_ticks=mbb_overlap_ticks,
-            )
-            _enqueue(
-                subj_checkpoint,
-                _ckpt_gzip.compress(ckpt.model_dump_json().encode()),
-            )
+            _publish_checkpoint(step_result, epoch_id=tick_epoch_id)
 
             # Write JSONL if --output-dir provided
             if out_path is not None:

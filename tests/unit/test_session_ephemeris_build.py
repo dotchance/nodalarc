@@ -24,6 +24,7 @@ from nodalarc.models.events import (
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.session import GroundSchedulingConfig, SessionConfig
 from ome.event_stream import build_link_state_snapshot, build_session_ephemeris, build_step_context
+from ome.snapshot_builder import LinkSnapshotSource
 
 from tests.conftest import FIXTURES_DIR
 
@@ -184,8 +185,13 @@ class TestBuildSessionEphemeris:
 class TestLinkStateSnapshotEpochId:
     def test_epoch_id_stamped(self):
         snap = build_link_state_snapshot(
-            isl_state={},
-            gs_state={},
+            LinkSnapshotSource(
+                isl_state={},
+                ground_state={},
+                associations={},
+                pending_teardowns={},
+                propagated_states={},
+            ),
             interface_map={},
             bandwidth_map={},
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),
@@ -197,8 +203,13 @@ class TestLinkStateSnapshotEpochId:
 
     def test_epoch_id_default_zero(self):
         snap = build_link_state_snapshot(
-            isl_state={},
-            gs_state={},
+            LinkSnapshotSource(
+                isl_state={},
+                ground_state={},
+                associations={},
+                pending_teardowns={},
+                propagated_states={},
+            ),
             interface_map={},
             bandwidth_map={},
             sim_time=datetime(2025, 1, 1, tzinfo=UTC),

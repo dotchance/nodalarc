@@ -326,29 +326,20 @@ def evaluate_ground_visibility(
             )
             gs_max_range_km = None
             sat_max_range_km = None
-            max_range_km = None
             gs_field_of_regard_deg = None
             sat_field_of_regard_deg = None
-            field_of_regard_deg = None
             gs_max_tracking_rate_deg_s = None
             sat_max_tracking_rate_deg_s = None
-            max_tracking_rate_deg_s = None
             gs_boresight_mode = None
             sat_boresight_mode = None
             kwargs = {}
             if gs_profile is not None and sat_profile is not None:
                 gs_max_range_km = gs_profile.max_range_km
                 sat_max_range_km = sat_profile.max_range_km
-                max_range_km = min(gs_max_range_km, sat_max_range_km)
                 gs_field_of_regard_deg = gs_profile.field_of_regard_deg
                 sat_field_of_regard_deg = sat_profile.field_of_regard_deg
-                field_of_regard_deg = min(gs_field_of_regard_deg, sat_field_of_regard_deg)
                 gs_max_tracking_rate_deg_s = gs_profile.max_tracking_rate_deg_s
                 sat_max_tracking_rate_deg_s = sat_profile.max_tracking_rate_deg_s
-                max_tracking_rate_deg_s = min(
-                    gs_max_tracking_rate_deg_s,
-                    sat_max_tracking_rate_deg_s,
-                )
                 gs_boresight_mode = getattr(gs_profile.boresight, "mode", None)
                 sat_boresight_mode = getattr(sat_profile.boresight, "mode", None)
                 kwargs = {
@@ -384,13 +375,10 @@ def evaluate_ground_visibility(
                 reject_reason=gv.reject_reason,
                 rejecting_endpoint=gv.rejecting_endpoint,
                 applied_min_elevation_deg=min_elev,
-                applied_max_range_km=max_range_km,
                 applied_gs_max_range_km=gs_max_range_km,
                 applied_sat_max_range_km=sat_max_range_km,
-                applied_field_of_regard_deg=field_of_regard_deg,
                 applied_gs_field_of_regard_deg=gs_field_of_regard_deg,
                 applied_sat_field_of_regard_deg=sat_field_of_regard_deg,
-                applied_max_tracking_rate_deg_s=max_tracking_rate_deg_s,
                 applied_gs_max_tracking_rate_deg_s=gs_max_tracking_rate_deg_s,
                 applied_sat_max_tracking_rate_deg_s=sat_max_tracking_rate_deg_s,
                 applied_gs_boresight_mode=gs_boresight_mode,

@@ -364,10 +364,13 @@ def compute_topocentric_angular_velocity(
 ) -> float:
     """Apparent angular rate in the body-fixed topocentric frame of the observer.
 
-    Production propagation supplies ECEF/MCMF body-fixed velocities. The
-    inertial path exists so tests and future propagators must account for the
-    observing body's rotation instead of accidentally treating inertial velocity
-    as topocentric-body-fixed velocity.
+    Production propagation supplies ECEF/MCMF body-fixed velocities. In that
+    production path, ``body_frame`` is intentionally not used: a fixed ground
+    observer has zero body-fixed velocity, and the supplied target velocity is
+    already in the observer's rotating frame. The inertial path exists so tests
+    and future propagators must account for the observing body's rotation
+    instead of accidentally treating inertial velocity as topocentric-body-fixed
+    velocity.
     """
     if velocity_frame == "body_fixed":
         target_velocity_body_fixed_km_s = target_velocity_km_s

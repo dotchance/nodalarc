@@ -37,8 +37,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from nodalarc.body_frames import SupportedBody
 from nodalarc.models.terminal_physics import GroundBoresightMode, SatGroundBoresightMode
 
 GroundVisibilityRejectReason = Literal[
@@ -145,7 +146,7 @@ class GroundVisibilityDecisionWire(BaseModel):
 
     pair: tuple[str, str]
     tenant_id: str
-    reference_body: str
+    reference_body: SupportedBody
     visible: bool
     range_km: float
     elevation_deg: float
@@ -154,15 +155,42 @@ class GroundVisibilityDecisionWire(BaseModel):
     reject_reason: GroundVisibilityRejectReason
     rejecting_endpoint: GroundVisibilityRejectingEndpoint
     applied_min_elevation_deg: float
-    applied_max_range_km: float | None
-    applied_gs_max_range_km: float | None
-    applied_sat_max_range_km: float | None
-    applied_field_of_regard_deg: float | None
-    applied_gs_field_of_regard_deg: float | None
-    applied_sat_field_of_regard_deg: float | None
-    applied_max_tracking_rate_deg_s: float | None
-    applied_gs_max_tracking_rate_deg_s: float | None
-    applied_sat_max_tracking_rate_deg_s: float | None
+    applied_gs_max_range_km: float | None = Field(
+        description=(
+            "Ground terminal max_range_km applied to this decision; None only when "
+            "terminal constraints were not applied, e.g. geometry_only fidelity."
+        ),
+    )
+    applied_sat_max_range_km: float | None = Field(
+        description=(
+            "Satellite ground-terminal max_range_km applied to this decision; None only "
+            "when terminal constraints were not applied, e.g. geometry_only fidelity."
+        ),
+    )
+    applied_gs_field_of_regard_deg: float | None = Field(
+        description=(
+            "Full apex angle, in degrees, of the ground terminal field-of-regard cone "
+            "applied to this decision; None only when terminal constraints were not applied."
+        ),
+    )
+    applied_sat_field_of_regard_deg: float | None = Field(
+        description=(
+            "Full apex angle, in degrees, of the satellite ground-terminal field-of-regard "
+            "cone applied to this decision; None only when terminal constraints were not applied."
+        ),
+    )
+    applied_gs_max_tracking_rate_deg_s: float | None = Field(
+        description=(
+            "Ground terminal topocentric tracking-rate limit applied to this decision; "
+            "None only when terminal constraints were not applied."
+        ),
+    )
+    applied_sat_max_tracking_rate_deg_s: float | None = Field(
+        description=(
+            "Satellite ground-terminal topocentric tracking-rate limit applied to this "
+            "decision; None only when terminal constraints were not applied."
+        ),
+    )
     applied_gs_boresight_mode: GroundBoresightMode | None
     applied_sat_boresight_mode: SatGroundBoresightMode | None
     applied_gs_terminal_profile: str | None
@@ -270,7 +298,7 @@ class UnscheduledPair(BaseModel):
 
     pair: tuple[str, str]
     tenant_id: str
-    reference_body: str
+    reference_body: SupportedBody
     unscheduled_reason: GroundUnscheduledReason
     incumbent_pair: tuple[str, str] | None
     capacity_constraint: str | None

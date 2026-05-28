@@ -37,7 +37,7 @@ def test_ground_segment_validation():
         GroundStationConfig(name="gs", lat_deg=0, lon_deg=0, service_priority=0)
 
     # Invalid reference_body
-    with pytest.raises(ValidationError, match="reference_body must be one of"):
+    with pytest.raises(ValidationError, match="Input should be"):
         GroundStationConfig(name="gs", lat_deg=0, lon_deg=0, reference_body="pluto")
 
 

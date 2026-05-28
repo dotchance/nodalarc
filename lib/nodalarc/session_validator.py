@@ -575,13 +575,22 @@ def _check_e021(
                 )
             )
 
+    def _boresight_shape_without_target_body(boresight) -> tuple | None:
+        if boresight is None:
+            return None
+        data = boresight.model_dump()
+        data.pop("target_body", None)
+        return tuple(sorted(data.items()))
+
     seen_sat_terminal_shapes: set[tuple] = set()
     for sat in satellites:
         terminals = tuple(getattr(sat, "ground_terminals", ()) or ())
         if not terminals and getattr(sat, "ground_terminal_count", 0) == 0:
             continue
         # Expanded constellations usually share the same satellite type. Avoid
-        # emitting the same terminal-shape error hundreds of times.
+        # emitting the same terminal-shape error hundreds of times. Satellite
+        # ground terminals can be target-body-distinct while sharing the same
+        # physical shape, so target_body is excluded from the dedupe key.
         shape = tuple(
             (
                 getattr(t, "type", None),
@@ -590,11 +599,7 @@ def _check_e021(
                 getattr(t, "max_range_km", None),
                 getattr(t, "field_of_regard_deg", None),
                 getattr(t, "max_tracking_rate_deg_s", None),
-                (
-                    getattr(t, "boresight", None).model_dump_json()
-                    if getattr(t, "boresight", None) is not None
-                    else None
-                ),
+                _boresight_shape_without_target_body(getattr(t, "boresight", None)),
             )
             for t in terminals
         )

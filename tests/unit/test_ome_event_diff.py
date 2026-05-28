@@ -41,13 +41,10 @@ def _decision(
         reject_reason=reject_reason,  # type: ignore[arg-type]
         applied_min_elevation_deg=25.0,
         rejecting_endpoint="none",
-        applied_max_range_km=None,
         applied_gs_max_range_km=None,
         applied_sat_max_range_km=None,
-        applied_field_of_regard_deg=None,
         applied_gs_field_of_regard_deg=None,
         applied_sat_field_of_regard_deg=None,
-        applied_max_tracking_rate_deg_s=None,
         applied_gs_max_tracking_rate_deg_s=None,
         applied_sat_max_tracking_rate_deg_s=None,
         applied_gs_boresight_mode=None,

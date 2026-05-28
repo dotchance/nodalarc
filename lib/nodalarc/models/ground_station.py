@@ -10,6 +10,7 @@ Three formats are supported:
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from nodalarc.body_frames import SupportedBody
 from nodalarc.models.terminal_physics import TerminalBoresight
 
 MAX_GROUND_TERMINAL_COUNT = 128
@@ -45,7 +46,7 @@ class GroundSegment(BaseModel):
     """
 
     tenant_id: str = "default"
-    reference_body: str = "earth"
+    reference_body: SupportedBody = "earth"
     mobility: str = "fixed"  # "fixed", "terrestrial", "maritime", "aerial"
     service_priority: int = 10  # Lower = higher priority. Headroom: 1, 5, 10, 20...
     hysteresis: HysteresisParameters = HysteresisParameters()
@@ -63,14 +64,6 @@ class GroundSegment(BaseModel):
         valid_classes = ("fixed", "terrestrial", "maritime", "aerial")
         if v not in valid_classes:
             raise ValueError(f"mobility must be one of {valid_classes}, got {v!r}")
-        return v
-
-    @field_validator("reference_body")
-    @classmethod
-    def _valid_body(cls, v: str) -> str:
-        valid_bodies = ("earth", "luna", "mars", "sun")
-        if v not in valid_bodies:
-            raise ValueError(f"reference_body must be one of {valid_bodies}, got {v!r}")
         return v
 
 

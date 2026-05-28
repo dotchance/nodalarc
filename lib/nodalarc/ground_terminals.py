@@ -15,6 +15,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from nodalarc.body_frames import SupportedBody
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
@@ -56,7 +57,20 @@ class TerminalPhysicsProfile:
     field_of_regard_deg: float | None
     max_tracking_rate_deg_s: float | None
     boresight: TerminalBoresight | SatGroundTerminalBoresight | None
-    target_body: str | None = None
+    target_body: SupportedBody | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.boresight, SatGroundTerminalBoresight):
+            if self.target_body != self.boresight.target_body:
+                raise ValueError(
+                    "TerminalPhysicsProfile target_body must match satellite boresight "
+                    f"target_body={self.boresight.target_body!r}; got {self.target_body!r}"
+                )
+        elif self.target_body is not None:
+            raise ValueError(
+                "TerminalPhysicsProfile target_body is only valid for satellite "
+                "ground-terminal boresights"
+            )
 
 
 def ground_terminal_capacity(terminals: Iterable[GroundTerminalCapacityLike]) -> int:

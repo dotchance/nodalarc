@@ -4,12 +4,16 @@
 
 from __future__ import annotations
 
+import nodalarc.constellation_loader as constellation_loader
 import pytest
 from nodalarc.body_frames import LUNA_BODY_FRAME
 from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.geo import geodetic_to_ecef
 from nodalarc.ground_terminals import TerminalPhysicsProfile
+from nodalarc.models.addressing import AddressingScheme
+from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile, GroundTerminalDef
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from ome.event_stream import build_step_context
 from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
 from ome.propagation_engine import PropagatedState
 from ome.visibility import GroundVisibility
@@ -38,9 +42,9 @@ def _physical_kwargs(
     *,
     gs_id: str = "gs-equator",
     sat_id: str = "sat-a",
-    max_range_km: float = 5000.0,
-    field_of_regard_deg: float = 180.0,
-    max_tracking_rate_deg_s: float = 10.0,
+    max_range_km: float = 2400.0,
+    field_of_regard_deg: float = 130.0,
+    max_tracking_rate_deg_s: float = 6.0,
 ) -> dict:
     return {
         "simulation_fidelity": "physical_v1",
@@ -93,15 +97,12 @@ def test_ground_visibility_evaluates_all_station_satellite_pairs_with_physical_c
     assert decision.observer_frame == "body_local"
     assert decision.reject_reason == "ok"
     assert decision.rejecting_endpoint == "none"
-    assert decision.applied_max_range_km == 5000.0
-    assert decision.applied_gs_max_range_km == 5000.0
-    assert decision.applied_sat_max_range_km == 5000.0
-    assert decision.applied_field_of_regard_deg == 180.0
-    assert decision.applied_gs_field_of_regard_deg == 180.0
-    assert decision.applied_sat_field_of_regard_deg == 180.0
-    assert decision.applied_max_tracking_rate_deg_s == 10.0
-    assert decision.applied_gs_max_tracking_rate_deg_s == 10.0
-    assert decision.applied_sat_max_tracking_rate_deg_s == 10.0
+    assert decision.applied_gs_max_range_km == 2400.0
+    assert decision.applied_sat_max_range_km == 2400.0
+    assert decision.applied_gs_field_of_regard_deg == 130.0
+    assert decision.applied_sat_field_of_regard_deg == 130.0
+    assert decision.applied_gs_max_tracking_rate_deg_s == 6.0
+    assert decision.applied_sat_max_tracking_rate_deg_s == 6.0
     assert decision.applied_gs_boresight_mode == "local_vertical"
     assert decision.applied_sat_boresight_mode == "nadir"
     assert decision.applied_gs_terminal_profile == "gs-equator.terminals"
@@ -370,3 +371,125 @@ def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
     assert decision.visible
     assert decision.applied_sat_terminal_profile == f"{sat_id}.ground_terminals[1]"
     assert decision.reference_body == "luna"
+
+
+def test_cislunar_satellite_type_config_flows_through_build_context_to_engine(
+    tmp_path,
+    monkeypatch,
+):
+    sat_type_dir = tmp_path / "satellite-types"
+    sat_type_dir.mkdir()
+    (sat_type_dir / "cislunar-relay.yaml").write_text(
+        """
+satellite_type:
+  name: cislunar-relay
+  isl_terminals:
+    - type: optical
+      count: 1
+      max_range_km: 5000.0
+      bandwidth_mbps: 100000.0
+      max_tracking_rate_deg_s: 5.0
+  ground_terminals:
+    - type: rf
+      count: 1
+      bandwidth_mbps: 1000.0
+      max_range_km: 2000.0
+      field_of_regard_deg: 120.0
+      max_tracking_rate_deg_s: 6.0
+      boresight:
+        target_body: earth
+        mode: nadir
+    - type: rf
+      count: 1
+      bandwidth_mbps: 1000.0
+      max_range_km: 2000.0
+      field_of_regard_deg: 120.0
+      max_tracking_rate_deg_s: 6.0
+      boresight:
+        target_body: luna
+        mode: nadir
+"""
+    )
+    monkeypatch.setattr(constellation_loader, "_SAT_TYPE_DIR", sat_type_dir)
+    constellation_loader.load_satellite_type.cache_clear()
+
+    constellation = constellation_loader.load_constellation(
+        {
+            "mode": "parametric",
+            "name": "cislunar-config-test",
+            "satellite_type": "cislunar-relay",
+            "orbit": {
+                "altitude_km": 550.0,
+                "inclination_deg": 0.0,
+                "pattern": "walker-delta",
+            },
+            "planes": {
+                "count": 1,
+                "raan_spacing_deg": 360.0,
+                "sats_per_plane": 1,
+                "phase_offset_deg": 0.0,
+            },
+        }
+    )
+    satellites = constellation_loader.expand_constellation(constellation)
+    addressing = AddressingScheme()
+    gs_file = GroundStationFile(
+        default_terminals=[
+            GroundTerminalDef(
+                type="rf",
+                count=1,
+                bandwidth_mbps=1000.0,
+                tracking_capacity=1,
+                max_range_km=2000.0,
+                field_of_regard_deg=120.0,
+                max_tracking_rate_deg_s=6.0,
+                boresight=TerminalBoresight(mode="local_vertical"),
+            )
+        ],
+        stations=[
+            GroundStationConfig(
+                name="luna",
+                lat_deg=0.0,
+                lon_deg=0.0,
+                reference_body="luna",
+            )
+        ],
+    )
+    ctx = build_step_context(
+        satellites=satellites,
+        addressing=addressing,
+        gs_file=gs_file,
+        neighbors=frozenset(),
+        propagator_id="keplerian-circular",
+        simulation_fidelity="physical_v1",
+    )
+
+    sat_id = addressing.sat_id(0, 0)
+    gs_id = addressing.gs_id("luna")
+    luna_radius = LUNA_BODY_FRAME.equatorial_radius_km
+    gs_geo = GeoPosition(0.0, 0.0, 0.0)
+    result = evaluate_ground_visibility(
+        satellite_ids=(sat_id,),
+        sat_states={
+            sat_id: PropagatedState(
+                sat_id,
+                0.0,
+                EcefVec3(Vec3(luna_radius + 550.0, 0.0, 0.0)),
+                EcefVec3(Vec3(0.0, 0.0, 0.0)),
+                GeoPosition(0.0, 0.0, 550.0),
+                "test-fixture",
+            )
+        },
+        gs_positions={gs_id: (EcefVec3(Vec3(luna_radius, 0.0, 0.0)), gs_geo)},
+        gs_min_elevations=ctx.gs_min_elevations,
+        gs_tenant_ids=ctx.gs_tenant_ids,
+        gs_reference_bodies=ctx.gs_reference_bodies,
+        simulation_fidelity="physical_v1",
+        gs_terminal_profiles=ctx.gs_terminal_profiles,
+        sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
+    )
+
+    decision = result.decisions[(gs_id, sat_id)]
+    assert decision.visible
+    assert decision.reference_body == "luna"
+    assert decision.applied_sat_terminal_profile == f"{sat_id}.ground_terminals[1]"

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from nodalarc.body_frames import BODY_FRAMES, SupportedBody
 from nodalarc.models.link_decisions import (
     GroundVisibilityRejectingEndpoint,
     GroundVisibilityRejectReason,
@@ -40,14 +41,14 @@ class GroundVisibilityDecision:
     Every field is required. There are no permissive defaults. The
     ``applied_*`` fields use ``None`` to mean "this constraint was not
     in effect for the decision". Side-specific values identify the
-    ground and satellite endpoint constraints separately; the effective
-    aggregate fields are derived minima for compatibility and quick
-    auditing, never a replacement for endpoint attribution.
+    ground and satellite endpoint constraints separately; there are no
+    duplicate combined applied-constraint fields on the ground decision
+    surface.
     """
 
     pair: tuple[str, str]
     tenant_id: str
-    reference_body: str
+    reference_body: SupportedBody
     visible: bool
     range_km: float
     elevation_deg: float
@@ -56,13 +57,10 @@ class GroundVisibilityDecision:
     reject_reason: GroundVisibilityRejectReason
     rejecting_endpoint: GroundVisibilityRejectingEndpoint
     applied_min_elevation_deg: float
-    applied_max_range_km: float | None
     applied_gs_max_range_km: float | None
     applied_sat_max_range_km: float | None
-    applied_field_of_regard_deg: float | None
     applied_gs_field_of_regard_deg: float | None
     applied_sat_field_of_regard_deg: float | None
-    applied_max_tracking_rate_deg_s: float | None
     applied_gs_max_tracking_rate_deg_s: float | None
     applied_sat_max_tracking_rate_deg_s: float | None
     applied_gs_boresight_mode: GroundBoresightMode | None
@@ -72,6 +70,11 @@ class GroundVisibilityDecision:
 
     def __post_init__(self) -> None:
         """Mirror of ``GroundVisibilityDecisionWire``'s validators."""
+        if self.reference_body not in BODY_FRAMES:
+            raise ValueError(
+                f"reference_body={self.reference_body!r} is not supported. "
+                f"Supported bodies: {sorted(BODY_FRAMES)!r}."
+            )
         if self.reject_reason not in _GROUND_REJECT_REASONS:
             raise ValueError(
                 f"reject_reason={self.reject_reason!r} is not a valid "

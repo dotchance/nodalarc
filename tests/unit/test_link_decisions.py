@@ -49,13 +49,10 @@ def _decision_kwargs_wire() -> dict:
         "reject_reason": "ok",
         "applied_min_elevation_deg": 25.0,
         "rejecting_endpoint": "none",
-        "applied_max_range_km": 2000.0,
         "applied_gs_max_range_km": 2000.0,
         "applied_sat_max_range_km": 2000.0,
-        "applied_field_of_regard_deg": 120.0,
         "applied_gs_field_of_regard_deg": 120.0,
         "applied_sat_field_of_regard_deg": 120.0,
-        "applied_max_tracking_rate_deg_s": 4.0,
         "applied_gs_max_tracking_rate_deg_s": 4.0,
         "applied_sat_max_tracking_rate_deg_s": 4.0,
         "applied_gs_boresight_mode": "local_vertical",
@@ -167,13 +164,10 @@ class TestGroundVisibilityDecisionHotPath:
         constraint profile applied)."""
         kwargs = _decision_kwargs_hot()
         kwargs["azimuth_deg"] = None
-        kwargs["applied_max_range_km"] = None
         kwargs["applied_gs_max_range_km"] = None
         kwargs["applied_sat_max_range_km"] = None
-        kwargs["applied_field_of_regard_deg"] = None
         kwargs["applied_gs_field_of_regard_deg"] = None
         kwargs["applied_sat_field_of_regard_deg"] = None
-        kwargs["applied_max_tracking_rate_deg_s"] = None
         kwargs["applied_gs_max_tracking_rate_deg_s"] = None
         kwargs["applied_sat_max_tracking_rate_deg_s"] = None
         kwargs["applied_gs_boresight_mode"] = None
@@ -182,13 +176,10 @@ class TestGroundVisibilityDecisionHotPath:
         kwargs["applied_sat_terminal_profile"] = None
         d = GroundVisibilityDecision(**kwargs)
         assert d.azimuth_deg is None
-        assert d.applied_max_range_km is None
         assert d.applied_gs_max_range_km is None
         assert d.applied_sat_max_range_km is None
-        assert d.applied_field_of_regard_deg is None
         assert d.applied_gs_field_of_regard_deg is None
         assert d.applied_sat_field_of_regard_deg is None
-        assert d.applied_max_tracking_rate_deg_s is None
         assert d.applied_gs_max_tracking_rate_deg_s is None
         assert d.applied_sat_max_tracking_rate_deg_s is None
         assert d.applied_gs_boresight_mode is None

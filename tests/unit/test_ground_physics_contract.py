@@ -265,16 +265,12 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
             assert decision.visible
             assert decision.reject_reason == "ok"
             assert decision.rejecting_endpoint == "none"
-            assert decision.applied_max_range_km == 2000.0
             assert decision.applied_gs_max_range_km == 2000.0
             assert decision.applied_sat_max_range_km == 2000.0
-            assert decision.applied_field_of_regard_deg == 120.0
             assert decision.applied_gs_field_of_regard_deg == 120.0
             assert decision.applied_sat_field_of_regard_deg == 120.0
-            assert decision.applied_max_tracking_rate_deg_s == 2.0
             assert decision.applied_gs_max_tracking_rate_deg_s == 2.0
             assert decision.applied_sat_max_tracking_rate_deg_s == 2.0
-            assert decision.range_km <= decision.applied_max_range_km
 
             gs_ecef, gs_geo = ctx.gs_positions[scheduled_pair[0]]
             gs_profile, sat_profile = _terminal_profiles()

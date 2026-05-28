@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pytest
 from nodalarc.constellation_loader import load_ground_stations, load_satellite_type
+from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.constellation import GroundTerminal
 from nodalarc.models.ground_station import GroundTerminalDef as StationGroundTerminalDef
 from nodalarc.models.satellite_type import GroundTerminalDef as SatelliteTypeGroundTerminalDef
@@ -93,6 +94,35 @@ def test_satellite_ground_boresight_accepts_only_nadir_until_orientation_model_e
 def test_ground_boresight_does_not_accept_satellite_nadir_mode():
     with pytest.raises(ValidationError, match="local_vertical"):
         TerminalBoresight(mode="nadir")
+
+
+def test_satellite_ground_boresight_rejects_unknown_target_body():
+    with pytest.raises(ValidationError, match="Input should be"):
+        SatGroundTerminalBoresight(target_body="lunar", mode="nadir")
+
+
+def test_terminal_physics_profile_target_body_matches_satellite_boresight():
+    with pytest.raises(ValueError, match="target_body must match"):
+        TerminalPhysicsProfile(
+            profile_id="sat.ground_terminals",
+            max_range_km=2000.0,
+            field_of_regard_deg=120.0,
+            max_tracking_rate_deg_s=1.5,
+            boresight=SatGroundTerminalBoresight(target_body="luna", mode="nadir"),
+            target_body="earth",
+        )
+
+
+def test_terminal_physics_profile_ground_boresight_cannot_claim_target_body():
+    with pytest.raises(ValueError, match="only valid for satellite"):
+        TerminalPhysicsProfile(
+            profile_id="gs.terminals",
+            max_range_km=2000.0,
+            field_of_regard_deg=120.0,
+            max_tracking_rate_deg_s=1.5,
+            boresight=TerminalBoresight(mode="local_vertical"),
+            target_body="earth",
+        )
 
 
 def _assert_catalog_ground_physics_is_not_placeholder(term) -> None:

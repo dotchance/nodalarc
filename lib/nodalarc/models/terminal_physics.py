@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from nodalarc.body_frames import SupportedBody
+
 GroundBoresightMode = Literal["local_vertical", "configured_topocentric", "steerable_envelope"]
 SatGroundBoresightMode = Literal["nadir"]
 
@@ -88,12 +90,5 @@ class SatGroundTerminalBoresight(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    target_body: str
+    target_body: SupportedBody
     mode: SatGroundBoresightMode
-
-    @field_validator("target_body")
-    @classmethod
-    def _target_body_non_empty(cls, value: str) -> str:
-        if not value:
-            raise ValueError("target_body must be non-empty")
-        return value

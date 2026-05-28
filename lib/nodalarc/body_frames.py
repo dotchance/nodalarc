@@ -5,8 +5,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from nodalarc.constants import WGS84_A, WGS84_B
+
+SupportedBody = Literal["earth", "luna", "mars"]
+SUPPORTED_BODY_NAMES: tuple[SupportedBody, ...] = ("earth", "luna", "mars")
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,14 +42,14 @@ MARS_BODY_FRAME = BodyFrame(
     rotation_rate_rad_s=7.0882181e-5,
 )
 
-BODY_FRAMES: dict[str, BodyFrame] = {
-    EARTH_BODY_FRAME.name: EARTH_BODY_FRAME,
-    LUNA_BODY_FRAME.name: LUNA_BODY_FRAME,
-    MARS_BODY_FRAME.name: MARS_BODY_FRAME,
+BODY_FRAMES: dict[SupportedBody, BodyFrame] = {
+    "earth": EARTH_BODY_FRAME,
+    "luna": LUNA_BODY_FRAME,
+    "mars": MARS_BODY_FRAME,
 }
 
 
-def body_frame_for(reference_body: str) -> BodyFrame:
+def body_frame_for(reference_body: SupportedBody | str) -> BodyFrame:
     """Return the configured body frame or fail loud for unsupported bodies."""
 
     try:

@@ -7,7 +7,7 @@ in a constellation. Satellite type files live in configs/satellite-types/
 and are referenced by name from constellation definitions.
 """
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 
@@ -82,7 +82,10 @@ class GroundTerminalDef(BaseModel):
     count: int
     bandwidth_mbps: float
     max_range_km: float | None = None
-    field_of_regard_deg: float | None = None
+    field_of_regard_deg: float | None = Field(
+        default=None,
+        description="Full apex angle, in degrees, of the ground-link field-of-regard cone.",
+    )
     max_tracking_rate_deg_s: float | None = None
     boresight: SatGroundTerminalBoresight | None = None
     beam_falloff_exponent: float = 2.0
@@ -128,18 +131,6 @@ class GroundTerminalDef(BaseModel):
         if v is not None and v <= 0:
             raise ValueError(f"max_tracking_rate_deg_s must be positive, got {v}")
         return v
-
-    @model_validator(mode="after")
-    def _boresight_matches_for(self):
-        if self.field_of_regard_deg is None or self.boresight is None:
-            return self
-        expected_half_angle = self.field_of_regard_deg / 2.0
-        if abs(self.boresight.half_angle_deg - expected_half_angle) > 1e-9:
-            raise ValueError(
-                "boresight.half_angle_deg must equal field_of_regard_deg / 2 "
-                f"({expected_half_angle:g})"
-            )
-        return self
 
     @field_validator("beam_falloff_exponent")
     @classmethod

@@ -14,7 +14,6 @@ ground_station:
       max_tracking_rate_deg_s: 1.5
       boresight:
         mode: local_vertical
-        half_angle_deg: 60
   terrestrial_prefixes:
     - prefix: "172.16.6.0/24"
       metric: 10

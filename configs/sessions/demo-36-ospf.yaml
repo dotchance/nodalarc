@@ -8,6 +8,7 @@ ground_stations: configs/ground-stations/sets/demo.yaml
 
 simulation:
   schema_version: 2
+  fidelity: physical_v1
 
 orbit:
   propagator: j2-mean-elements

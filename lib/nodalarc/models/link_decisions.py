@@ -39,7 +39,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from nodalarc.models.terminal_physics import GroundBoresightMode
+from nodalarc.models.terminal_physics import GroundBoresightMode, SatGroundBoresightMode
 
 GroundVisibilityRejectReason = Literal[
     "ok",
@@ -61,6 +61,15 @@ This is the GROUND-ONLY subset. ISL adds its own rejection reasons
 `VisibilityEvent`, but those values must never appear on a
 `GroundVisibilityDecisionWire` — a ground decision rejected for an
 ISL-only reason is a producer bug, and the type system refuses it."""
+
+
+GroundVisibilityRejectingEndpoint = Literal["none", "ground", "satellite", "both"]
+"""Which ground-link endpoint caused a terminal-bound visibility rejection.
+
+``none`` is used for visible decisions and non-terminal-bound rejections
+(`los_blocked`, `elevation_below_min`). ``both`` means both endpoint
+profiles impose the same limiting value.
+"""
 
 
 GroundUnscheduledReason = Literal[
@@ -86,15 +95,14 @@ unscheduled-reason. The post-teardown released pair is
 `replaced_by_successor`."""
 
 
-ObserverFrame = Literal["body_local", "configured_inertial"]
+ObserverFrame = Literal["body_local"]
 """Reference frame for `elevation_deg` / `azimuth_deg`.
 
-`body_local` is the body-local-vertical frame anchored to the
-observer's `reference_body` (ENU at Earth, MCMF-local-vertical at
-Luna, etc.). `configured_inertial` is an explicitly configured
-inertial vector relative to the body's reference frame — used for
-Lagrange-point relays and other platforms with no natural local
-vertical."""
+Phase 2 computes ground-link look angles in the body-local topocentric
+frame anchored to the observer's `reference_body` (ENU at Earth,
+MCMF-local-vertical at Luna, etc.). Configured boresights are expressed
+in that same topocentric frame; no inertial observer-frame mode exists
+in physical_v1."""
 
 
 class GroundVisibilityDecisionWire(BaseModel):
@@ -144,11 +152,19 @@ class GroundVisibilityDecisionWire(BaseModel):
     azimuth_deg: float | None
     observer_frame: ObserverFrame
     reject_reason: GroundVisibilityRejectReason
+    rejecting_endpoint: GroundVisibilityRejectingEndpoint
     applied_min_elevation_deg: float
     applied_max_range_km: float | None
+    applied_gs_max_range_km: float | None
+    applied_sat_max_range_km: float | None
     applied_field_of_regard_deg: float | None
+    applied_gs_field_of_regard_deg: float | None
+    applied_sat_field_of_regard_deg: float | None
     applied_max_tracking_rate_deg_s: float | None
-    applied_boresight_mode: GroundBoresightMode | None
+    applied_gs_max_tracking_rate_deg_s: float | None
+    applied_sat_max_tracking_rate_deg_s: float | None
+    applied_gs_boresight_mode: GroundBoresightMode | None
+    applied_sat_boresight_mode: SatGroundBoresightMode | None
     applied_gs_terminal_profile: str | None
     applied_sat_terminal_profile: str | None
 
@@ -173,6 +189,15 @@ class GroundVisibilityDecisionWire(BaseModel):
                 "visible=False requires a non-'ok' reject_reason — an "
                 "invisible pair must carry the reason it failed visibility."
             )
+        if self.visible and self.rejecting_endpoint != "none":
+            raise ValueError("visible=True requires rejecting_endpoint='none'")
+        if (
+            self.reject_reason in ("los_blocked", "elevation_below_min")
+            and self.rejecting_endpoint != "none"
+        ):
+            raise ValueError(
+                f"reject_reason={self.reject_reason!r} requires rejecting_endpoint='none'"
+            )
         return self
 
     @model_validator(mode="after")
@@ -189,15 +214,37 @@ class GroundVisibilityDecisionWire(BaseModel):
             "range_exceeded",
             "field_of_regard",
             "tracking_exceeded",
-        ) and (
-            self.applied_gs_terminal_profile is None and self.applied_sat_terminal_profile is None
         ):
-            raise ValueError(
-                f"reject_reason={self.reject_reason!r} requires at least one of "
-                "applied_gs_terminal_profile / applied_sat_terminal_profile to be "
-                "set — the rejection must be attributable to a specific terminal "
-                "profile for audit."
-            )
+            if self.rejecting_endpoint == "none":
+                raise ValueError(
+                    f"reject_reason={self.reject_reason!r} requires a terminal rejecting_endpoint"
+                )
+            if (
+                self.applied_gs_terminal_profile is None
+                and self.applied_sat_terminal_profile is None
+            ):
+                raise ValueError(
+                    f"reject_reason={self.reject_reason!r} requires at least one of "
+                    "applied_gs_terminal_profile / applied_sat_terminal_profile to be "
+                    "set — the rejection must be attributable to a specific terminal "
+                    "profile for audit."
+                )
+            if (
+                self.rejecting_endpoint in ("ground", "both")
+                and self.applied_gs_terminal_profile is None
+            ):
+                raise ValueError(
+                    f"rejecting_endpoint={self.rejecting_endpoint!r} requires "
+                    "applied_gs_terminal_profile for attributable audit"
+                )
+            if (
+                self.rejecting_endpoint in ("satellite", "both")
+                and self.applied_sat_terminal_profile is None
+            ):
+                raise ValueError(
+                    f"rejecting_endpoint={self.rejecting_endpoint!r} requires "
+                    "applied_sat_terminal_profile for attributable audit"
+                )
         return self
 
 

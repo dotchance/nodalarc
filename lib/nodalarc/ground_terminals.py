@@ -214,6 +214,85 @@ def terminal_physics_profile(
     )
 
 
+def terminal_physics_profiles(
+    terminals: Sequence[TerminalPhysicsLike],
+    *,
+    profile_id: str,
+    endpoint: Literal["ground", "satellite"],
+    require_constraints: bool,
+) -> tuple[TerminalPhysicsProfile, ...]:
+    """Return one visibility profile per target-body-compatible terminal block.
+
+    Satellite ground terminals may legitimately target different bodies (for
+    example one nadir antenna for Earth and one for Luna). Collapsing that
+    collection into a single profile rejects a valid cislunar relay shape, so
+    this helper keeps target-body-distinct profiles separate while still
+    refusing heterogeneous physics for the same target body.
+    """
+    if not terminals:
+        raise ValueError(f"{profile_id} has no terminal definitions")
+
+    missing_errors = terminal_collection_missing_physics(terminals, label=profile_id)
+    if require_constraints and missing_errors:
+        raise ValueError(
+            "physical_v1 ground visibility requires terminal physics fields: "
+            + "; ".join(missing_errors)
+        )
+    if missing_errors:
+        return (
+            TerminalPhysicsProfile(
+                profile_id=None,
+                max_range_km=None,
+                field_of_regard_deg=None,
+                max_tracking_rate_deg_s=None,
+                boresight=None,
+                target_body=None,
+            ),
+        )
+
+    profiles_by_target: dict[str | None, TerminalPhysicsProfile] = {}
+    signatures_by_target: dict[str | None, tuple[float, float, float, str]] = {}
+    for idx, term in enumerate(terminals):
+        if (
+            term.max_range_km is None
+            or term.field_of_regard_deg is None
+            or term.max_tracking_rate_deg_s is None
+            or term.boresight is None
+        ):
+            raise ValueError(f"{profile_id} has incomplete terminal physics")
+        boresight = _validated_boresight(term.boresight, endpoint=endpoint, profile_id=profile_id)
+        target_body = (
+            boresight.target_body if isinstance(boresight, SatGroundTerminalBoresight) else None
+        )
+        signature = (
+            float(term.max_range_km),
+            float(term.field_of_regard_deg),
+            float(term.max_tracking_rate_deg_s),
+            boresight.model_dump_json(),
+        )
+        existing = signatures_by_target.get(target_body)
+        if existing is not None and existing != signature:
+            target_label = f" target_body={target_body!r}" if target_body is not None else ""
+            raise ValueError(
+                f"{profile_id}{target_label} has heterogeneous ground terminal physics. "
+                "Terminal-block-aware allocation is required before these can be "
+                "collapsed into one visibility decision."
+            )
+        signatures_by_target[target_body] = signature
+        if target_body not in profiles_by_target:
+            block_profile_id = profile_id if len(terminals) == 1 else f"{profile_id}[{idx}]"
+            profiles_by_target[target_body] = TerminalPhysicsProfile(
+                profile_id=block_profile_id,
+                max_range_km=float(term.max_range_km),
+                field_of_regard_deg=float(term.field_of_regard_deg),
+                max_tracking_rate_deg_s=float(term.max_tracking_rate_deg_s),
+                boresight=boresight,
+                target_body=target_body,
+            )
+
+    return tuple(profiles_by_target.values())
+
+
 def _validated_boresight(
     boresight: TerminalBoresight | SatGroundTerminalBoresight,
     *,

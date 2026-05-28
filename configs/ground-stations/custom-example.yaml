@@ -16,7 +16,6 @@ default_terminals:
     max_tracking_rate_deg_s: 1.5
     boresight:
       mode: local_vertical
-      half_angle_deg: 60
 
 # Minimum elevation angle (degrees) for satellite visibility.
 # Satellites below this angle are not schedulable for ground links.
@@ -76,7 +75,6 @@ stations:
         max_tracking_rate_deg_s: 1.5
         boresight:
           mode: local_vertical
-          half_angle_deg: 60
     # Override terrestrial prefixes for this specific station
     terrestrial_prefixes:
       - prefix: "172.16.100.0/24"

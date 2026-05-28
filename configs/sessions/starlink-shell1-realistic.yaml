@@ -4,6 +4,7 @@ constellation: configs/constellations/starlink-shell1-220.yaml
 ground_stations: configs/ground-stations/sets/shell1-realistic.yaml
 simulation:
   schema_version: 2
+  fidelity: physical_v1
 orbit:
   propagator: j2-mean-elements
 scheduling:

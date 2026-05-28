@@ -10,7 +10,7 @@ Supports three modes via discriminated union on the `mode` field:
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Discriminator, Tag, field_validator, model_validator
+from pydantic import BaseModel, Discriminator, Field, Tag, field_validator, model_validator
 
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 
@@ -71,7 +71,10 @@ class GroundTerminal(BaseModel):
     count: int
     bandwidth_mbps: float
     max_range_km: float | None = None
-    field_of_regard_deg: float | None = None
+    field_of_regard_deg: float | None = Field(
+        default=None,
+        description="Full apex angle, in degrees, of the ground-link field-of-regard cone.",
+    )
     max_tracking_rate_deg_s: float | None = None
     boresight: SatGroundTerminalBoresight | None = None
 
@@ -109,18 +112,6 @@ class GroundTerminal(BaseModel):
         if v is not None and v <= 0:
             raise ValueError(f"max_tracking_rate_deg_s must be positive, got {v}")
         return v
-
-    @model_validator(mode="after")
-    def _boresight_matches_for(self):
-        if self.field_of_regard_deg is None or self.boresight is None:
-            return self
-        expected_half_angle = self.field_of_regard_deg / 2.0
-        if abs(self.boresight.half_angle_deg - expected_half_angle) > 1e-9:
-            raise ValueError(
-                "boresight.half_angle_deg must equal field_of_regard_deg / 2 "
-                f"({expected_half_angle:g})"
-            )
-        return self
 
 
 class TerminalConfig(BaseModel):

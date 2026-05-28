@@ -172,6 +172,7 @@ class TestGroundVisibility:
         )
         assert not result.visible
         assert result.reject_reason == "range_exceeded"
+        assert result.rejecting_endpoint == "both"
         assert result.range_km > 500.0
 
     def test_ground_field_of_regard_rejects_off_boresight_satellite(self):
@@ -183,10 +184,12 @@ class TestGroundVisibility:
             gs_geo,
             sat_ecef,
             min_elevation_deg=0.0,
-            gs_boresight=TerminalBoresight(mode="local_vertical", half_angle_deg=10.0),
+            gs_boresight=TerminalBoresight(mode="local_vertical"),
+            gs_field_of_regard_deg=10.0,
         )
         assert not result.visible
         assert result.reject_reason == "field_of_regard"
+        assert result.rejecting_endpoint == "ground"
 
     def test_satellite_nadir_field_of_regard_rejects_off_axis_ground_station(self):
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
@@ -200,11 +203,12 @@ class TestGroundVisibility:
             sat_boresight=SatGroundTerminalBoresight(
                 target_body="earth",
                 mode="nadir",
-                half_angle_deg=1.0,
             ),
+            sat_field_of_regard_deg=10.0,
         )
         assert not result.visible
         assert result.reject_reason == "field_of_regard"
+        assert result.rejecting_endpoint == "satellite"
 
     def test_tracking_rate_limit_rejects_fast_overhead_satellite(self):
         gs_geo = GeoPosition(0.0, 0.0, 0.0)
@@ -220,6 +224,7 @@ class TestGroundVisibility:
         )
         assert not result.visible
         assert result.reject_reason == "tracking_exceeded"
+        assert result.rejecting_endpoint == "both"
 
 
 class TestIslVisibility:

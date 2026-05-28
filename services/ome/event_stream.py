@@ -22,6 +22,7 @@ from nodalarc.ground_terminals import (
     station_ground_terminal_capacity,
     station_ground_terminal_type,
     terminal_physics_profile,
+    terminal_physics_profiles,
 )
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
@@ -155,7 +156,7 @@ class StepContext:
     gs_service_priorities: dict[str, int]
     simulation_fidelity: Literal["geometry_only", "physical_v1"]
     gs_terminal_profiles: dict[str, TerminalPhysicsProfile]
-    sat_ground_terminal_profiles: dict[str, TerminalPhysicsProfile]
+    sat_ground_terminal_profiles: dict[str, tuple[TerminalPhysicsProfile, ...]]
     # Per-GS tenant scope (Direction 2 — multi-tenant from day one) and
     # reference body (Direction 3 — multi-body from day one). Both
     # already exist on GroundStationConfig; the StepContext carries them
@@ -247,7 +248,7 @@ def build_step_context(
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]] = {}
     sat_ground_terminals: dict[str, int] = {}
     sat_ground_terminal_types: dict[str, str] = {}
-    sat_ground_terminal_profiles: dict[str, TerminalPhysicsProfile] = {}
+    sat_ground_terminal_profiles: dict[str, tuple[TerminalPhysicsProfile, ...]] = {}
     has_ground_stations = gs_file is not None and bool(gs_file.stations)
     require_ground_physics = simulation_fidelity == "physical_v1" and has_ground_stations
     for sat in satellites:
@@ -256,7 +257,7 @@ def build_step_context(
         sat_ground_terminals[nid] = sat.ground_terminal_count
         if sat.ground_terminals:
             sat_ground_terminal_types[nid] = ground_terminal_type(sat.ground_terminals)
-            sat_ground_terminal_profiles[nid] = terminal_physics_profile(
+            sat_ground_terminal_profiles[nid] = terminal_physics_profiles(
                 tuple(sat.ground_terminals),
                 profile_id=f"{nid}.ground_terminals",
                 endpoint="satellite",

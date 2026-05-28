@@ -38,5 +38,4 @@ satellite_type:
       boresight:
         target_body: earth
         mode: nadir
-        half_angle_deg: 60
       beam_falloff_exponent: 3.5

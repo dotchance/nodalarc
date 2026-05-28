@@ -48,10 +48,18 @@ def _decision_kwargs_wire() -> dict:
         "observer_frame": "body_local",
         "reject_reason": "ok",
         "applied_min_elevation_deg": 25.0,
+        "rejecting_endpoint": "none",
         "applied_max_range_km": 2000.0,
+        "applied_gs_max_range_km": 2000.0,
+        "applied_sat_max_range_km": 2000.0,
         "applied_field_of_regard_deg": 120.0,
+        "applied_gs_field_of_regard_deg": 120.0,
+        "applied_sat_field_of_regard_deg": 120.0,
         "applied_max_tracking_rate_deg_s": 4.0,
-        "applied_boresight_mode": "local_vertical",
+        "applied_gs_max_tracking_rate_deg_s": 4.0,
+        "applied_sat_max_tracking_rate_deg_s": 4.0,
+        "applied_gs_boresight_mode": "local_vertical",
+        "applied_sat_boresight_mode": "nadir",
         "applied_gs_terminal_profile": "gs_ka_gateway",
         "applied_sat_terminal_profile": "sat_ka_gateway",
     }
@@ -123,6 +131,7 @@ class TestGroundVisibilityDecisionHotPath:
             "elevation_deg",
             "observer_frame",
             "reject_reason",
+            "rejecting_endpoint",
             "applied_min_elevation_deg",
         ]
         for field in always_required:
@@ -159,17 +168,31 @@ class TestGroundVisibilityDecisionHotPath:
         kwargs = _decision_kwargs_hot()
         kwargs["azimuth_deg"] = None
         kwargs["applied_max_range_km"] = None
+        kwargs["applied_gs_max_range_km"] = None
+        kwargs["applied_sat_max_range_km"] = None
         kwargs["applied_field_of_regard_deg"] = None
+        kwargs["applied_gs_field_of_regard_deg"] = None
+        kwargs["applied_sat_field_of_regard_deg"] = None
         kwargs["applied_max_tracking_rate_deg_s"] = None
-        kwargs["applied_boresight_mode"] = None
+        kwargs["applied_gs_max_tracking_rate_deg_s"] = None
+        kwargs["applied_sat_max_tracking_rate_deg_s"] = None
+        kwargs["applied_gs_boresight_mode"] = None
+        kwargs["applied_sat_boresight_mode"] = None
         kwargs["applied_gs_terminal_profile"] = None
         kwargs["applied_sat_terminal_profile"] = None
         d = GroundVisibilityDecision(**kwargs)
         assert d.azimuth_deg is None
         assert d.applied_max_range_km is None
+        assert d.applied_gs_max_range_km is None
+        assert d.applied_sat_max_range_km is None
         assert d.applied_field_of_regard_deg is None
+        assert d.applied_gs_field_of_regard_deg is None
+        assert d.applied_sat_field_of_regard_deg is None
         assert d.applied_max_tracking_rate_deg_s is None
-        assert d.applied_boresight_mode is None
+        assert d.applied_gs_max_tracking_rate_deg_s is None
+        assert d.applied_sat_max_tracking_rate_deg_s is None
+        assert d.applied_gs_boresight_mode is None
+        assert d.applied_sat_boresight_mode is None
         assert d.applied_gs_terminal_profile is None
         assert d.applied_sat_terminal_profile is None
 
@@ -223,7 +246,7 @@ class TestGroundVisibilityDecisionWire:
 
     def test_invalid_boresight_mode_rejected(self) -> None:
         kwargs = _decision_kwargs_wire()
-        kwargs["applied_boresight_mode"] = "made_up_mode"
+        kwargs["applied_gs_boresight_mode"] = "made_up_mode"
         with pytest.raises(ValidationError):
             GroundVisibilityDecisionWire(**kwargs)
 
@@ -445,6 +468,7 @@ class TestTerminalConstraintAttribution:
         kwargs = _decision_kwargs_hot()
         kwargs["visible"] = False
         kwargs["reject_reason"] = reason
+        kwargs["rejecting_endpoint"] = "ground"
         kwargs["applied_gs_terminal_profile"] = None
         kwargs["applied_sat_terminal_profile"] = None
         with pytest.raises(ValueError, match="attributable to a specific terminal"):
@@ -455,6 +479,7 @@ class TestTerminalConstraintAttribution:
         kwargs = _decision_kwargs_wire()
         kwargs["visible"] = False
         kwargs["reject_reason"] = reason
+        kwargs["rejecting_endpoint"] = "ground"
         kwargs["applied_gs_terminal_profile"] = None
         kwargs["applied_sat_terminal_profile"] = None
         with pytest.raises(ValidationError):
@@ -468,6 +493,9 @@ class TestTerminalConstraintAttribution:
             kwargs = _decision_kwargs_wire()
             kwargs["visible"] = False
             kwargs["reject_reason"] = reason
+            kwargs["rejecting_endpoint"] = (
+                "ground" if side == "applied_gs_terminal_profile" else "satellite"
+            )
             kwargs["applied_gs_terminal_profile"] = None
             kwargs["applied_sat_terminal_profile"] = None
             kwargs[side] = "named_profile"
@@ -482,6 +510,7 @@ class TestTerminalConstraintAttribution:
             kwargs = _decision_kwargs_wire()
             kwargs["visible"] = False
             kwargs["reject_reason"] = reason
+            kwargs["rejecting_endpoint"] = "none"
             kwargs["applied_gs_terminal_profile"] = None
             kwargs["applied_sat_terminal_profile"] = None
             w = GroundVisibilityDecisionWire(**kwargs)

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import pytest
+from nodalarc.body_frames import LUNA_BODY_FRAME
 from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.geo import geodetic_to_ecef
 from nodalarc.ground_terminals import TerminalPhysicsProfile
@@ -49,9 +50,7 @@ def _physical_kwargs(
                 max_range_km=max_range_km,
                 field_of_regard_deg=field_of_regard_deg,
                 max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-                boresight=TerminalBoresight(
-                    mode="local_vertical", half_angle_deg=field_of_regard_deg / 2.0
-                ),
+                boresight=TerminalBoresight(mode="local_vertical"),
             )
         },
         "sat_ground_terminal_profiles": {
@@ -63,7 +62,6 @@ def _physical_kwargs(
                 boresight=SatGroundTerminalBoresight(
                     target_body="earth",
                     mode="nadir",
-                    half_angle_deg=field_of_regard_deg / 2.0,
                 ),
                 target_body="earth",
             )
@@ -94,9 +92,18 @@ def test_ground_visibility_evaluates_all_station_satellite_pairs_with_physical_c
     assert decision.reference_body == "earth"
     assert decision.observer_frame == "body_local"
     assert decision.reject_reason == "ok"
+    assert decision.rejecting_endpoint == "none"
     assert decision.applied_max_range_km == 5000.0
+    assert decision.applied_gs_max_range_km == 5000.0
+    assert decision.applied_sat_max_range_km == 5000.0
     assert decision.applied_field_of_regard_deg == 180.0
+    assert decision.applied_gs_field_of_regard_deg == 180.0
+    assert decision.applied_sat_field_of_regard_deg == 180.0
     assert decision.applied_max_tracking_rate_deg_s == 10.0
+    assert decision.applied_gs_max_tracking_rate_deg_s == 10.0
+    assert decision.applied_sat_max_tracking_rate_deg_s == 10.0
+    assert decision.applied_gs_boresight_mode == "local_vertical"
+    assert decision.applied_sat_boresight_mode == "nadir"
     assert decision.applied_gs_terminal_profile == "gs-equator.terminals"
     assert decision.applied_sat_terminal_profile == "sat-a.ground_terminals"
     assert result.visible_per_station["gs-equator"][0].sat_id == "sat-a"
@@ -117,6 +124,7 @@ def test_physical_visibility_rejects_range_before_allocator_candidate_set():
     decision = result.decisions[("gs-equator", "sat-a")]
     assert decision.visible is False
     assert decision.reject_reason == "range_exceeded"
+    assert decision.rejecting_endpoint == "both"
     assert result.visible_per_station["gs-equator"] == []
 
 
@@ -190,6 +198,7 @@ def test_ground_visibility_carries_rejection_reason_for_invisible_pair():
     decision = result.decisions[("gs-equator", "sat-a")]
     assert decision.visible is False
     assert decision.reject_reason == "elevation_below_min"
+    assert decision.rejecting_endpoint == "none"
 
 
 def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
@@ -295,3 +304,69 @@ def test_longest_remaining_pass_without_lookahead_fails_loudly():
             **_gs_default_kwargs(),
             **_physical_kwargs(),
         )
+
+
+def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
+    gs_id = "gs-luna"
+    sat_id = "sat-relay"
+    luna_radius = LUNA_BODY_FRAME.equatorial_radius_km
+    gs_geo = GeoPosition(0.0, 0.0, 0.0)
+    gs_ecef = EcefVec3(Vec3(luna_radius, 0.0, 0.0))
+    sat_state = PropagatedState(
+        sat_id,
+        0.0,
+        EcefVec3(Vec3(luna_radius + 550.0, 0.0, 0.0)),
+        EcefVec3(Vec3(0.0, 0.0, 0.0)),
+        GeoPosition(0.0, 0.0, 550.0),
+        "test-fixture",
+    )
+
+    result = evaluate_ground_visibility(
+        satellite_ids=(sat_id,),
+        sat_states={sat_id: sat_state},
+        gs_positions={gs_id: (gs_ecef, gs_geo)},
+        gs_min_elevations={gs_id: 25.0},
+        gs_tenant_ids={gs_id: "default"},
+        gs_reference_bodies={gs_id: "luna"},
+        simulation_fidelity="physical_v1",
+        gs_terminal_profiles={
+            gs_id: TerminalPhysicsProfile(
+                profile_id=f"{gs_id}.terminals",
+                max_range_km=2000.0,
+                field_of_regard_deg=120.0,
+                max_tracking_rate_deg_s=10.0,
+                boresight=TerminalBoresight(mode="local_vertical"),
+            )
+        },
+        sat_ground_terminal_profiles={
+            sat_id: (
+                TerminalPhysicsProfile(
+                    profile_id=f"{sat_id}.ground_terminals[0]",
+                    max_range_km=2000.0,
+                    field_of_regard_deg=120.0,
+                    max_tracking_rate_deg_s=10.0,
+                    boresight=SatGroundTerminalBoresight(
+                        target_body="earth",
+                        mode="nadir",
+                    ),
+                    target_body="earth",
+                ),
+                TerminalPhysicsProfile(
+                    profile_id=f"{sat_id}.ground_terminals[1]",
+                    max_range_km=2000.0,
+                    field_of_regard_deg=120.0,
+                    max_tracking_rate_deg_s=10.0,
+                    boresight=SatGroundTerminalBoresight(
+                        target_body="luna",
+                        mode="nadir",
+                    ),
+                    target_body="luna",
+                ),
+            )
+        },
+    )
+
+    decision = result.decisions[(gs_id, sat_id)]
+    assert decision.visible
+    assert decision.applied_sat_terminal_profile == f"{sat_id}.ground_terminals[1]"
+    assert decision.reference_body == "luna"

@@ -44,7 +44,6 @@ def four_node_timeline():
                     "max_tracking_rate_deg_s": 1.5,
                     "boresight": {
                         "mode": "local_vertical",
-                        "half_angle_deg": 60,
                     },
                 }
             ],

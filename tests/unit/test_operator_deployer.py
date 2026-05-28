@@ -536,7 +536,6 @@ _INLINE_CONSTELLATION = {
                 "boresight": {
                     "target_body": "earth",
                     "mode": "nadir",
-                    "half_angle_deg": 60,
                 },
             }
         ],
@@ -567,7 +566,6 @@ _INLINE_GROUND_STATIONS = {
             "max_tracking_rate_deg_s": 1.5,
             "boresight": {
                 "mode": "local_vertical",
-                "half_angle_deg": 60,
             },
         }
     ],

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -17,6 +17,8 @@ from nodalarc.models.addressing import AddressingScheme
 from ome.propagation_engine import PropagatedState, propagate_satellites
 from ome.types import GroundVisibilityDecision, GroundVisibilityDecisionMap
 from ome.visibility import GroundVisibility, check_ground_visibility
+
+TerminalPhysicsProfileSet = TerminalPhysicsProfile | Sequence[TerminalPhysicsProfile]
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,24 @@ class GroundPassLookahead:
     simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1"
     gs_reference_bodies: Mapping[str, str] | None = None
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
-    sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
+    sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None
+
+
+def _require_complete_profile(
+    profile: TerminalPhysicsProfile,
+    *,
+    node_id: str,
+    label: str,
+) -> TerminalPhysicsProfile:
+    if (
+        profile.max_range_km is None
+        or profile.field_of_regard_deg is None
+        or profile.max_tracking_rate_deg_s is None
+        or profile.boresight is None
+        or profile.profile_id is None
+    ):
+        raise ValueError(f"physical_v1 ground visibility has incomplete {label} for {node_id}")
+    return profile
 
 
 def _physical_profile(
@@ -65,16 +84,45 @@ def _physical_profile(
         return None
     if profiles is None or node_id not in profiles:
         raise ValueError(f"physical_v1 ground visibility is missing {label} for {node_id}")
-    profile = profiles[node_id]
-    if (
-        profile.max_range_km is None
-        or profile.field_of_regard_deg is None
-        or profile.max_tracking_rate_deg_s is None
-        or profile.boresight is None
-        or profile.profile_id is None
-    ):
-        raise ValueError(f"physical_v1 ground visibility has incomplete {label} for {node_id}")
-    return profile
+    return _require_complete_profile(profiles[node_id], node_id=node_id, label=label)
+
+
+def _profile_options(value: TerminalPhysicsProfileSet) -> tuple[TerminalPhysicsProfile, ...]:
+    if isinstance(value, TerminalPhysicsProfile):
+        return (value,)
+    return tuple(value)
+
+
+def _sat_physical_profile(
+    profiles: Mapping[str, TerminalPhysicsProfileSet] | None,
+    sat_id: str,
+    *,
+    reference_body: str,
+    fidelity: Literal["geometry_only", "physical_v1"],
+) -> TerminalPhysicsProfile | None:
+    if fidelity == "geometry_only":
+        return None
+    if profiles is None or sat_id not in profiles:
+        raise ValueError(
+            f"physical_v1 ground visibility is missing satellite ground terminal profile for {sat_id}"
+        )
+    options = _profile_options(profiles[sat_id])
+    if not options:
+        raise ValueError(
+            f"physical_v1 ground visibility is missing satellite ground terminal profile for {sat_id}"
+        )
+    matches = [profile for profile in options if profile.target_body == reference_body]
+    if len(matches) != 1:
+        available = sorted(str(profile.target_body) for profile in options)
+        raise ValueError(
+            f"Satellite ground terminal profiles for {sat_id} do not contain exactly one "
+            f"profile for reference_body={reference_body!r}; available target bodies: {available}"
+        )
+    return _require_complete_profile(
+        matches[0],
+        node_id=sat_id,
+        label="satellite ground terminal profile",
+    )
 
 
 def _estimate_remaining_visible_seconds(
@@ -127,32 +175,23 @@ def _estimate_remaining_visible_seconds(
                 label="ground terminal profile",
                 fidelity=lookahead.simulation_fidelity,
             )
-            sat_profile = _physical_profile(
+            sat_profile = _sat_physical_profile(
                 lookahead.sat_ground_terminal_profiles,
                 sat_id,
-                label="satellite ground terminal profile",
+                reference_body=reference_body,
                 fidelity=lookahead.simulation_fidelity,
             )
-            if (
-                sat_profile is not None
-                and sat_profile.target_body is not None
-                and sat_profile.target_body != reference_body
-            ):
-                raise ValueError(
-                    f"Satellite terminal profile {sat_profile.profile_id} targets "
-                    f"{sat_profile.target_body!r}, but {gs_id} is anchored to "
-                    f"reference_body={reference_body!r}"
-                )
             kwargs = {}
             if gs_profile is not None and sat_profile is not None:
                 kwargs = {
-                    "max_range_km": min(gs_profile.max_range_km, sat_profile.max_range_km),
+                    "gs_max_range_km": gs_profile.max_range_km,
+                    "sat_max_range_km": sat_profile.max_range_km,
                     "gs_boresight": gs_profile.boresight,
                     "sat_boresight": sat_profile.boresight,
-                    "max_tracking_rate_deg_s": min(
-                        gs_profile.max_tracking_rate_deg_s,
-                        sat_profile.max_tracking_rate_deg_s,
-                    ),
+                    "gs_field_of_regard_deg": gs_profile.field_of_regard_deg,
+                    "sat_field_of_regard_deg": sat_profile.field_of_regard_deg,
+                    "gs_max_tracking_rate_deg_s": gs_profile.max_tracking_rate_deg_s,
+                    "sat_max_tracking_rate_deg_s": sat_profile.max_tracking_rate_deg_s,
                     "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
                     "body_frame": body_frame,
                 }
@@ -279,43 +318,48 @@ def evaluate_ground_visibility(
                 label="ground terminal profile",
                 fidelity=simulation_fidelity,
             )
-            sat_profile = _physical_profile(
+            sat_profile = _sat_physical_profile(
                 sat_ground_terminal_profiles,
                 sat_id,
-                label="satellite ground terminal profile",
+                reference_body=reference_body,
                 fidelity=simulation_fidelity,
             )
-            if (
-                sat_profile is not None
-                and sat_profile.target_body is not None
-                and sat_profile.target_body != reference_body
-            ):
-                raise ValueError(
-                    f"Satellite terminal profile {sat_profile.profile_id} targets "
-                    f"{sat_profile.target_body!r}, but {gs_id} is anchored to "
-                    f"reference_body={reference_body!r}"
-                )
+            gs_max_range_km = None
+            sat_max_range_km = None
             max_range_km = None
+            gs_field_of_regard_deg = None
+            sat_field_of_regard_deg = None
             field_of_regard_deg = None
+            gs_max_tracking_rate_deg_s = None
+            sat_max_tracking_rate_deg_s = None
             max_tracking_rate_deg_s = None
-            applied_boresight_mode = None
+            gs_boresight_mode = None
+            sat_boresight_mode = None
             kwargs = {}
             if gs_profile is not None and sat_profile is not None:
-                max_range_km = min(gs_profile.max_range_km, sat_profile.max_range_km)
-                field_of_regard_deg = min(
-                    gs_profile.field_of_regard_deg,
-                    sat_profile.field_of_regard_deg,
-                )
+                gs_max_range_km = gs_profile.max_range_km
+                sat_max_range_km = sat_profile.max_range_km
+                max_range_km = min(gs_max_range_km, sat_max_range_km)
+                gs_field_of_regard_deg = gs_profile.field_of_regard_deg
+                sat_field_of_regard_deg = sat_profile.field_of_regard_deg
+                field_of_regard_deg = min(gs_field_of_regard_deg, sat_field_of_regard_deg)
+                gs_max_tracking_rate_deg_s = gs_profile.max_tracking_rate_deg_s
+                sat_max_tracking_rate_deg_s = sat_profile.max_tracking_rate_deg_s
                 max_tracking_rate_deg_s = min(
-                    gs_profile.max_tracking_rate_deg_s,
-                    sat_profile.max_tracking_rate_deg_s,
+                    gs_max_tracking_rate_deg_s,
+                    sat_max_tracking_rate_deg_s,
                 )
-                applied_boresight_mode = getattr(gs_profile.boresight, "mode", None)
+                gs_boresight_mode = getattr(gs_profile.boresight, "mode", None)
+                sat_boresight_mode = getattr(sat_profile.boresight, "mode", None)
                 kwargs = {
-                    "max_range_km": max_range_km,
+                    "gs_max_range_km": gs_max_range_km,
+                    "sat_max_range_km": sat_max_range_km,
                     "gs_boresight": gs_profile.boresight,
                     "sat_boresight": sat_profile.boresight,
-                    "max_tracking_rate_deg_s": max_tracking_rate_deg_s,
+                    "gs_field_of_regard_deg": gs_field_of_regard_deg,
+                    "sat_field_of_regard_deg": sat_field_of_regard_deg,
+                    "gs_max_tracking_rate_deg_s": gs_max_tracking_rate_deg_s,
+                    "sat_max_tracking_rate_deg_s": sat_max_tracking_rate_deg_s,
                     "sat_velocity_ecef_km_s": state.velocity_ecef_km_s,
                     "body_frame": body_frame,
                 }
@@ -338,11 +382,19 @@ def evaluate_ground_visibility(
                 azimuth_deg=gv.azimuth_deg,
                 observer_frame="body_local",
                 reject_reason=gv.reject_reason,
+                rejecting_endpoint=gv.rejecting_endpoint,
                 applied_min_elevation_deg=min_elev,
                 applied_max_range_km=max_range_km,
+                applied_gs_max_range_km=gs_max_range_km,
+                applied_sat_max_range_km=sat_max_range_km,
                 applied_field_of_regard_deg=field_of_regard_deg,
+                applied_gs_field_of_regard_deg=gs_field_of_regard_deg,
+                applied_sat_field_of_regard_deg=sat_field_of_regard_deg,
                 applied_max_tracking_rate_deg_s=max_tracking_rate_deg_s,
-                applied_boresight_mode=applied_boresight_mode,
+                applied_gs_max_tracking_rate_deg_s=gs_max_tracking_rate_deg_s,
+                applied_sat_max_tracking_rate_deg_s=sat_max_tracking_rate_deg_s,
+                applied_gs_boresight_mode=gs_boresight_mode,
+                applied_sat_boresight_mode=sat_boresight_mode,
                 applied_gs_terminal_profile=gs_profile.profile_id if gs_profile else None,
                 applied_sat_terminal_profile=sat_profile.profile_id if sat_profile else None,
             )

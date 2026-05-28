@@ -58,7 +58,7 @@ GROUND_PHYSICAL_TERMINAL_FIELDS = {
     "max_range_km": 2000.0,
     "field_of_regard_deg": 120.0,
     "max_tracking_rate_deg_s": 1.5,
-    "boresight": TerminalBoresight(mode="local_vertical", half_angle_deg=60.0),
+    "boresight": TerminalBoresight(mode="local_vertical"),
 }
 SAT_PHYSICAL_TERMINAL_FIELDS = {
     "max_range_km": 2000.0,
@@ -67,7 +67,6 @@ SAT_PHYSICAL_TERMINAL_FIELDS = {
     "boresight": SatGroundTerminalBoresight(
         target_body="earth",
         mode="nadir",
-        half_angle_deg=60.0,
     ),
 }
 
@@ -1429,3 +1428,14 @@ class TestExistingSessions:
         assert errors == [], f"Session {session_path.name} has validation errors: " + "; ".join(
             f"[{e.code}] {e.message}" for e in errors
         )
+
+
+def test_checked_in_sessions_declare_fidelity_and_geometry_ack_explicitly():
+    for path in sorted((CONFIGS_DIR / "sessions").glob("*.yaml")):
+        data = yaml.safe_load(path.read_text())
+        simulation = data.get("simulation") or {}
+        assert "fidelity" in simulation, f"{path} must explicitly declare simulation.fidelity"
+        if simulation["fidelity"] == "geometry_only":
+            assert simulation.get("acknowledge_geometry_only") is True, (
+                f"{path} uses geometry_only without explicit acknowledgement"
+            )

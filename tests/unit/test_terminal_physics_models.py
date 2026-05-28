@@ -24,7 +24,7 @@ def _station_terminal(**updates):
         "max_range_km": 2000.0,
         "field_of_regard_deg": 120.0,
         "max_tracking_rate_deg_s": 1.5,
-        "boresight": TerminalBoresight(mode="local_vertical", half_angle_deg=60.0),
+        "boresight": TerminalBoresight(mode="local_vertical"),
     }
     data.update(updates)
     return data
@@ -41,7 +41,6 @@ def _satellite_terminal(**updates):
         "boresight": SatGroundTerminalBoresight(
             target_body="earth",
             mode="nadir",
-            half_angle_deg=60.0,
         ),
     }
     data.update(updates)
@@ -61,29 +60,26 @@ def test_ground_link_field_of_regard_is_a_forward_cone_not_full_sphere(model, fa
         model(**factory(field_of_regard_deg=181.0))
 
 
-@pytest.mark.parametrize(
-    ("model", "factory", "boresight"),
-    [
-        (
-            StationGroundTerminalDef,
-            _station_terminal,
-            TerminalBoresight(mode="local_vertical", half_angle_deg=45.0),
-        ),
-        (
-            GroundTerminal,
-            _satellite_terminal,
-            SatGroundTerminalBoresight(target_body="earth", mode="nadir", half_angle_deg=45.0),
-        ),
-        (
-            SatelliteTypeGroundTerminalDef,
-            _satellite_terminal,
-            SatGroundTerminalBoresight(target_body="earth", mode="nadir", half_angle_deg=45.0),
-        ),
-    ],
-)
-def test_field_of_regard_and_boresight_half_angle_must_match(model, factory, boresight):
-    with pytest.raises(ValidationError, match="half_angle_deg"):
-        model(**factory(field_of_regard_deg=120.0, boresight=boresight))
+def test_ground_boresight_configured_topocentric_requires_azimuth_and_elevation():
+    with pytest.raises(ValidationError, match="configured_topocentric"):
+        TerminalBoresight(mode="configured_topocentric", configured_az_deg=180.0)
+
+    boresight = TerminalBoresight(
+        mode="configured_topocentric",
+        configured_az_deg=180.0,
+        configured_el_deg=45.0,
+    )
+    assert boresight.configured_az_deg == 180.0
+    assert boresight.configured_el_deg == 45.0
+
+
+def test_ground_boresight_rejects_removed_configured_inertial_mode():
+    with pytest.raises(ValidationError, match="configured_topocentric"):
+        TerminalBoresight(
+            mode="configured_inertial",
+            configured_az_deg=180.0,
+            configured_el_deg=45.0,
+        )
 
 
 def test_satellite_ground_boresight_accepts_only_nadir_until_orientation_model_exists():
@@ -91,13 +87,12 @@ def test_satellite_ground_boresight_accepts_only_nadir_until_orientation_model_e
         SatGroundTerminalBoresight(
             target_body="earth",
             mode="configured",
-            half_angle_deg=60.0,
         )
 
 
 def test_ground_boresight_does_not_accept_satellite_nadir_mode():
     with pytest.raises(ValidationError, match="local_vertical"):
-        TerminalBoresight(mode="nadir", half_angle_deg=60.0)
+        TerminalBoresight(mode="nadir")
 
 
 def _assert_catalog_ground_physics_is_not_placeholder(term) -> None:

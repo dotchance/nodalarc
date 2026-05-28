@@ -19,7 +19,10 @@ from typing import Literal, NamedTuple
 
 from nodalarc.body_frames import EARTH_BODY_FRAME, BodyFrame
 from nodalarc.geo import compute_range_km
-from nodalarc.models.link_decisions import GroundVisibilityRejectReason
+from nodalarc.models.link_decisions import (
+    GroundVisibilityRejectingEndpoint,
+    GroundVisibilityRejectReason,
+)
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 
 from ome.propagator import GeoPosition, Vec3
@@ -36,18 +39,12 @@ class VisibilityResult(NamedTuple):
 class GroundVisibility(NamedTuple):
     """Ground station to satellite visibility details.
 
-    All fields required at construction. There are no defaults. A
-    producer that does not know whether to populate
-    ``remaining_visible_s`` must pass ``None`` explicitly; a producer
-    that does not know the ``reject_reason`` is wrong and must be
-    fixed at the construction site.
-
     ``reject_reason`` carries the specific reason a non-visible pair
     failed (``los_blocked``, ``elevation_below_min``, etc.). For a
-    visible pair it is ``"ok"``. The field is the foundational signal
-    that ``GroundVisibilityDecision`` carries forward to downstream
-    consumers — without it, the producer cannot attribute the
-    rejection.
+    visible pair it is ``"ok"``. ``rejecting_endpoint`` identifies the
+    endpoint whose terminal-bound constraint rejected the pair. It is
+    ``"none"`` for visible pairs and for non-terminal rejections such
+    as LOS and elevation mask failures.
 
     ``remaining_visible_s`` is populated only for policies that
     explicitly require future dwell prediction. ``None`` here means
@@ -62,6 +59,7 @@ class GroundVisibility(NamedTuple):
     range_km: float
     remaining_visible_s: float | None
     reject_reason: GroundVisibilityRejectReason
+    rejecting_endpoint: GroundVisibilityRejectingEndpoint = "none"
     azimuth_deg: float | None = None
 
 
@@ -141,10 +139,8 @@ def compute_look_angles(
     gs_ecef: Vec3,
     gs_geo: GeoPosition,
     sat_ecef: Vec3,
-    body_frame: BodyFrame = EARTH_BODY_FRAME,
 ) -> tuple[float, float]:
     """Return (elevation_deg, azimuth_deg) in the observer body-local frame."""
-    _ = body_frame
     e, n, u = _enu_components(gs_ecef, gs_geo, sat_ecef)
     horizontal_dist = math.sqrt(e**2 + n**2)
     if horizontal_dist < 1e-10:
@@ -158,10 +154,9 @@ def compute_elevation_angle(
     gs_ecef: Vec3,
     gs_geo: GeoPosition,
     sat_ecef: Vec3,
-    body_frame: BodyFrame = EARTH_BODY_FRAME,
 ) -> float:
     """Compute elevation angle of satellite as seen from ground station."""
-    elevation, _azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef, body_frame)
+    elevation, _azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef)
     return elevation
 
 
@@ -303,9 +298,9 @@ def _ground_for_allows(
     gs_geo: GeoPosition,
     sat_ecef: Vec3,
     boresight: TerminalBoresight,
-    body_frame: BodyFrame,
+    field_of_regard_deg: float,
 ) -> bool:
-    elevation, azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef, body_frame)
+    elevation, azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef)
     if boresight.mode == "steerable_envelope":
         if (
             boresight.min_az_deg is None
@@ -324,10 +319,10 @@ def _ground_for_allows(
     else:
         if boresight.configured_az_deg is None or boresight.configured_el_deg is None:
             raise ValueError(
-                "configured_inertial boresight is missing configured azimuth/elevation"
+                "configured_topocentric boresight is missing configured azimuth/elevation"
             )
         bore = _local_unit_from_az_el(boresight.configured_az_deg, boresight.configured_el_deg)
-    return _angle_between_deg(bore, target) <= boresight.half_angle_deg
+    return _angle_between_deg(bore, target) <= field_of_regard_deg / 2.0
 
 
 def _sat_ground_for_allows(
@@ -335,16 +330,29 @@ def _sat_ground_for_allows(
     sat_ecef: Vec3,
     gs_ecef: Vec3,
     boresight: SatGroundTerminalBoresight,
+    field_of_regard_deg: float,
 ) -> bool:
     if boresight.mode != "nadir":
-        raise ValueError(
-            "physical_v1 currently supports satellite ground-terminal boresight "
-            "mode='nadir'. Configured satellite boresights need terminal-frame "
-            "orientation metadata before they can be applied truthfully."
-        )
+        raise ValueError(f"Unsupported satellite ground-terminal boresight mode={boresight.mode!r}")
     los_to_gs = Vec3(gs_ecef.x - sat_ecef.x, gs_ecef.y - sat_ecef.y, gs_ecef.z - sat_ecef.z)
     nadir = Vec3(-sat_ecef.x, -sat_ecef.y, -sat_ecef.z)
-    return _angle_between_deg(nadir, los_to_gs) <= boresight.half_angle_deg
+    return _angle_between_deg(nadir, los_to_gs) <= field_of_regard_deg / 2.0
+
+
+def _limiting_endpoint(
+    gs_value: float | None,
+    sat_value: float | None,
+) -> GroundVisibilityRejectingEndpoint:
+    """Return which endpoint supplied the stricter terminal constraint."""
+    if gs_value is None and sat_value is None:
+        return "both"
+    if gs_value is None:
+        return "satellite"
+    if sat_value is None:
+        return "ground"
+    if math.isclose(gs_value, sat_value, rel_tol=0.0, abs_tol=1e-12):
+        return "both"
+    return "ground" if gs_value < sat_value else "satellite"
 
 
 def compute_topocentric_angular_velocity(
@@ -441,14 +449,65 @@ def check_ground_visibility(
     min_elevation_deg: float = 25.0,
     *,
     max_range_km: float | None = None,
+    gs_max_range_km: float | None = None,
+    sat_max_range_km: float | None = None,
     gs_boresight: TerminalBoresight | None = None,
     sat_boresight: SatGroundTerminalBoresight | None = None,
+    gs_field_of_regard_deg: float | None = None,
+    sat_field_of_regard_deg: float | None = None,
     max_tracking_rate_deg_s: float | None = None,
+    gs_max_tracking_rate_deg_s: float | None = None,
+    sat_max_tracking_rate_deg_s: float | None = None,
     sat_velocity_ecef_km_s: Vec3 | None = None,
     body_frame: BodyFrame = EARTH_BODY_FRAME,
 ) -> GroundVisibility:
-    """Check ground-station-to-satellite visibility with optional physics constraints."""
+    """Check ground-station-to-satellite visibility with physics constraints.
+
+    Rejection precedence is deterministic and documented: LOS occlusion → range
+    → elevation mask → ground field-of-regard → satellite field-of-regard →
+    tracking rate. Terminal-bound rejects set ``rejecting_endpoint`` to the
+    endpoint whose declared constraint rejected the pair.
+    """
     range_km = compute_range_km(gs_ecef, sat_ecef)
+
+    if gs_max_range_km is not None or sat_max_range_km is not None:
+        effective_max_range_km = min(
+            v for v in (gs_max_range_km, sat_max_range_km) if v is not None
+        )
+        if max_range_km is not None and not math.isclose(
+            max_range_km,
+            effective_max_range_km,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("max_range_km conflicts with endpoint max-range constraints")
+        range_rejecting_endpoint = _limiting_endpoint(gs_max_range_km, sat_max_range_km)
+    else:
+        effective_max_range_km = max_range_km
+        range_rejecting_endpoint: GroundVisibilityRejectingEndpoint = (
+            "both" if max_range_km is not None else "none"
+        )
+
+    if gs_max_tracking_rate_deg_s is not None or sat_max_tracking_rate_deg_s is not None:
+        effective_max_tracking_rate_deg_s = min(
+            v for v in (gs_max_tracking_rate_deg_s, sat_max_tracking_rate_deg_s) if v is not None
+        )
+        if max_tracking_rate_deg_s is not None and not math.isclose(
+            max_tracking_rate_deg_s,
+            effective_max_tracking_rate_deg_s,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise ValueError("max_tracking_rate_deg_s conflicts with endpoint tracking constraints")
+        tracking_rejecting_endpoint = _limiting_endpoint(
+            gs_max_tracking_rate_deg_s,
+            sat_max_tracking_rate_deg_s,
+        )
+    else:
+        effective_max_tracking_rate_deg_s = max_tracking_rate_deg_s
+        tracking_rejecting_endpoint: GroundVisibilityRejectingEndpoint = (
+            "both" if max_tracking_rate_deg_s is not None else "none"
+        )
 
     if not has_line_of_sight(gs_ecef, sat_ecef, body_frame):
         return GroundVisibility(
@@ -458,11 +517,13 @@ def check_ground_visibility(
             range_km=range_km,
             remaining_visible_s=None,
             reject_reason="los_blocked",
+            rejecting_endpoint="none",
             azimuth_deg=None,
         )
 
-    if max_range_km is not None and range_km > max_range_km:
-        elevation, azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef, body_frame)
+    elevation, azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef)
+
+    if effective_max_range_km is not None and range_km > effective_max_range_km:
         return GroundVisibility(
             sat_id="",
             visible=False,
@@ -470,10 +531,10 @@ def check_ground_visibility(
             range_km=range_km,
             remaining_visible_s=None,
             reject_reason="range_exceeded",
+            rejecting_endpoint=range_rejecting_endpoint,
             azimuth_deg=azimuth,
         )
 
-    elevation, azimuth = compute_look_angles(gs_ecef, gs_geo, sat_ecef, body_frame)
     if elevation < min_elevation_deg:
         return GroundVisibility(
             sat_id="",
@@ -482,15 +543,18 @@ def check_ground_visibility(
             range_km=range_km,
             remaining_visible_s=None,
             reject_reason="elevation_below_min",
+            rejecting_endpoint="none",
             azimuth_deg=azimuth,
         )
 
+    if gs_boresight is not None and gs_field_of_regard_deg is None:
+        raise ValueError("Ground boresight visibility requires gs_field_of_regard_deg")
     if gs_boresight is not None and not _ground_for_allows(
         gs_ecef=gs_ecef,
         gs_geo=gs_geo,
         sat_ecef=sat_ecef,
         boresight=gs_boresight,
-        body_frame=body_frame,
+        field_of_regard_deg=gs_field_of_regard_deg,
     ):
         return GroundVisibility(
             sat_id="",
@@ -499,13 +563,17 @@ def check_ground_visibility(
             range_km=range_km,
             remaining_visible_s=None,
             reject_reason="field_of_regard",
+            rejecting_endpoint="ground",
             azimuth_deg=azimuth,
         )
 
+    if sat_boresight is not None and sat_field_of_regard_deg is None:
+        raise ValueError("Satellite boresight visibility requires sat_field_of_regard_deg")
     if sat_boresight is not None and not _sat_ground_for_allows(
         sat_ecef=sat_ecef,
         gs_ecef=gs_ecef,
         boresight=sat_boresight,
+        field_of_regard_deg=sat_field_of_regard_deg,
     ):
         return GroundVisibility(
             sat_id="",
@@ -514,10 +582,11 @@ def check_ground_visibility(
             range_km=range_km,
             remaining_visible_s=None,
             reject_reason="field_of_regard",
+            rejecting_endpoint="satellite",
             azimuth_deg=azimuth,
         )
 
-    if max_tracking_rate_deg_s is not None:
+    if effective_max_tracking_rate_deg_s is not None:
         if sat_velocity_ecef_km_s is None:
             raise ValueError(
                 "Ground tracking-rate visibility requires same-frame satellite velocity"
@@ -528,7 +597,7 @@ def check_ground_visibility(
             sat_velocity_ecef_km_s,
             body_frame,
         )
-        if angular_velocity > max_tracking_rate_deg_s:
+        if angular_velocity > effective_max_tracking_rate_deg_s:
             return GroundVisibility(
                 sat_id="",
                 visible=False,
@@ -536,6 +605,7 @@ def check_ground_visibility(
                 range_km=range_km,
                 remaining_visible_s=None,
                 reject_reason="tracking_exceeded",
+                rejecting_endpoint=tracking_rejecting_endpoint,
                 azimuth_deg=azimuth,
             )
 
@@ -546,6 +616,7 @@ def check_ground_visibility(
         range_km=range_km,
         remaining_visible_s=None,
         reject_reason="ok",
+        rejecting_endpoint="none",
         azimuth_deg=azimuth,
     )
 

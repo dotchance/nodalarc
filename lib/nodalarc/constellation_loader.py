@@ -29,6 +29,7 @@ from nodalarc.models.constellation import (
     TerminalConfig,
     TLEConstellation,
 )
+from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
@@ -170,6 +171,8 @@ def _sat_type_to_terminal_config(sat_type: SatelliteTypeConfig) -> TerminalConfi
                 field_of_regard_deg=td.field_of_regard_deg,
                 max_tracking_rate_deg_s=td.max_tracking_rate_deg_s,
                 boresight=td.boresight,
+                gateway_beam_quota=td.gateway_beam_quota,
+                user_terminal_beam_quota=td.user_terminal_beam_quota,
             )
         )
     return TerminalConfig(isl=isl_terminals, ground=ground_terminals)
@@ -309,10 +312,8 @@ def load_ground_station_set(name: str) -> GroundStationSetConfig:
     return GroundStationSetConfig.model_validate(data)
 
 
-# Default elevation/policy values for individual station files
-# (stations in sets use the set's defaults; individual stations need schema defaults)
+# Default elevation for individual station files. Policy defaults come from session unless explicitly set in station/set YAML.
 _DEFAULT_MIN_ELEVATION_DEG = 25.0
-_DEFAULT_SCHEDULING_POLICY = "highest-elevation"
 
 
 def _build_gs_file_from_stations(
@@ -321,7 +322,8 @@ def _build_gs_file_from_stations(
     default_terminals: list[GroundTerminalDef] | None = None,
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None,
     default_min_elevation_deg: float | None = None,
-    default_scheduling_policy: str | None = None,
+    default_selection_policy: SelectionPolicySpec | None = None,
+    default_handover_policy: HandoverPolicySpec | None = None,
 ) -> GroundStationFile:
     """Build a GroundStationFile from a list of individual station configs.
 
@@ -336,11 +338,8 @@ def _build_gs_file_from_stations(
             if default_min_elevation_deg is not None
             else _DEFAULT_MIN_ELEVATION_DEG
         ),
-        default_scheduling_policy=(
-            default_scheduling_policy
-            if default_scheduling_policy is not None
-            else _DEFAULT_SCHEDULING_POLICY
-        ),
+        default_selection_policy=default_selection_policy,
+        default_handover_policy=default_handover_policy,
         default_terrestrial_prefixes=default_terrestrial_prefixes,
         stations=stations,
     )
@@ -363,7 +362,8 @@ def load_ground_stations_from_set(
         default_terminals=gs_set.default_terminals,
         default_terrestrial_prefixes=gs_set.default_terrestrial_prefixes,
         default_min_elevation_deg=gs_set.default_min_elevation_deg,
-        default_scheduling_policy=gs_set.default_scheduling_policy,
+        default_selection_policy=gs_set.default_selection_policy,
+        default_handover_policy=gs_set.default_handover_policy,
     )
 
 
@@ -414,7 +414,8 @@ def load_ground_stations(source: str | Path | list[str] | dict) -> GroundStation
                 default_terminals=gs_set.default_terminals,
                 default_terrestrial_prefixes=gs_set.default_terrestrial_prefixes,
                 default_min_elevation_deg=gs_set.default_min_elevation_deg,
-                default_scheduling_policy=gs_set.default_scheduling_policy,
+                default_selection_policy=gs_set.default_selection_policy,
+                default_handover_policy=gs_set.default_handover_policy,
             )
         if "set" in data:
             gs_file = load_ground_stations(data["set"])

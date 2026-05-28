@@ -4,7 +4,9 @@ default_terminals:
     bandwidth_mbps: 1000
     tracking_capacity: 1
 default_min_elevation_deg: 25
-default_scheduling_policy: highest-elevation
+default_selection_policy:
+  name: highest-elevation
+  params: {}
 stations:
   - name: bad-station
     lat_deg: 33.92

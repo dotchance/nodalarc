@@ -89,6 +89,8 @@ class GroundTerminalDef(BaseModel):
     max_tracking_rate_deg_s: float | None = None
     boresight: SatGroundTerminalBoresight | None = None
     beam_falloff_exponent: float = 2.0
+    gateway_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
+    user_terminal_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
 
     @field_validator("type")
     @classmethod
@@ -130,6 +132,13 @@ class GroundTerminalDef(BaseModel):
     def _positive_ground_tracking_rate(cls, v: float | None) -> float | None:
         if v is not None and v <= 0:
             raise ValueError(f"max_tracking_rate_deg_s must be positive, got {v}")
+        return v
+
+    @field_validator("gateway_beam_quota", "user_terminal_beam_quota")
+    @classmethod
+    def _positive_future_quota(cls, v: int | None) -> int | None:
+        if v is not None and v < 1:
+            raise ValueError(f"future beam quota fields must be >= 1, got {v}")
         return v
 
     @field_validator("beam_falloff_exponent")

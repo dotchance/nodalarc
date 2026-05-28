@@ -4,7 +4,9 @@ ground_station:
   lon_deg: 15.63
   alt_m: 30
   min_elevation_deg: 15
-  scheduling_policy: lowest-elevation
+  selection_policy:
+    name: lowest-elevation
+    params: {}
   terminals:
     - type: rf
       band: Ka

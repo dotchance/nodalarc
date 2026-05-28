@@ -13,6 +13,7 @@ from nodalarc.ground_terminals import (
     station_ground_terminal_capacity,
     station_ground_terminal_type,
     terminal_collection_missing_physics,
+    terminal_physics_profiles,
 )
 from nodalarc.models.constellation import (
     ConstellationConfig,
@@ -20,19 +21,18 @@ from nodalarc.models.constellation import (
     TLEConstellation,
 )
 from nodalarc.models.events import ValidationReport, ValidationResult
+from nodalarc.models.ground_policy import (
+    VALID_SELECTION_POLICY_NAMES,
+    selection_policy_score_scale,
+)
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig, resolve_session_epoch
 from nodalarc.stack_resolver import ResolvedStack
 from nodalarc.tle import tle_age_days
 
-# Canonical list of valid scheduling policies. Checked by E005.
-VALID_SCHEDULING_POLICIES = frozenset(
-    {
-        "highest-elevation",
-        "lowest-elevation",
-        "longest-remaining-pass",
-    }
-)
+# Canonical list of valid selection policies. Pydantic validates parsed YAML;
+# readiness keeps the constant for operator-facing validation reports and tests.
+VALID_SCHEDULING_POLICIES = VALID_SELECTION_POLICY_NAMES
 
 
 def validate_session_readiness(
@@ -65,6 +65,7 @@ def validate_session_readiness(
     results.extend(_check_e008(session, constellation, satellites))
     results.extend(_check_e009(session, ground_stations))
     results.extend(_check_e010(session, ground_stations))
+    results.extend(_check_e022(session, ground_stations))
     results.extend(_check_e011(satellites, ground_stations))
     results.extend(_check_e020(session))
     results.extend(_check_e021(session, satellites, ground_stations))
@@ -78,6 +79,7 @@ def validate_session_readiness(
     results.extend(_check_w007(satellites, ground_stations, constellation))
     results.extend(_check_w008(session, constellation))
     results.extend(_check_w009(session))
+    results.extend(_check_w010(satellites, ground_stations))
 
     return results
 
@@ -191,52 +193,57 @@ def _check_e004(
 
 
 def _check_e005(ground_stations: GroundStationFile) -> list[ValidationResult]:
-    """E005: Invalid scheduling_policy values."""
+    """E005: Invalid selection policy values.
+
+    Parsed Pydantic models reject unknown policy names before readiness runs.
+    This check remains as a defensive contract for callers that mutate models
+    after parsing or construct them non-validated.
+    """
     results: list[ValidationResult] = []
 
-    if ground_stations.default_scheduling_policy not in VALID_SCHEDULING_POLICIES:
-        results.append(
-            ValidationResult(
-                level="error",
-                code="E005",
-                message=(
-                    f"Invalid default_scheduling_policy: "
-                    f"'{ground_stations.default_scheduling_policy}'. "
-                    f"Valid values: {', '.join(sorted(VALID_SCHEDULING_POLICIES))}"
-                ),
-                remediation="Fix the scheduling_policy in the ground station file.",
-            )
-        )
-
+    specs = []
+    if ground_stations.default_selection_policy is not None:
+        specs.append(("default_selection_policy", ground_stations.default_selection_policy))
     for station in ground_stations.stations:
-        if (
-            station.scheduling_policy is not None
-            and station.scheduling_policy not in VALID_SCHEDULING_POLICIES
-        ):
+        if station.selection_policy is not None:
+            specs.append((f"stations.{station.name}.selection_policy", station.selection_policy))
+
+    for label, spec in specs:
+        if spec.name not in VALID_SCHEDULING_POLICIES:
             results.append(
                 ValidationResult(
                     level="error",
                     code="E005",
                     message=(
-                        f"Station '{station.name}' has invalid scheduling_policy: "
-                        f"'{station.scheduling_policy}'. "
+                        f"Invalid selection policy at {label}: {spec.name!r}. "
                         f"Valid values: {', '.join(sorted(VALID_SCHEDULING_POLICIES))}"
                     ),
-                    remediation=(f"Fix scheduling_policy for station '{station.name}'."),
+                    remediation="Fix the selection_policy in the ground station file.",
+                    field_path="ground_stations",
                 )
             )
 
     return results
 
 
-def _ground_policies_requiring_lookahead(ground_stations: GroundStationFile) -> list[str]:
-    """Return station labels using future-dwell policies."""
+def _ground_policies_requiring_lookahead(
+    session: SessionConfig,
+    ground_stations: GroundStationFile,
+) -> list[str]:
+    """Return policy labels using future-dwell scoring without horizon params."""
     labels: list[str] = []
-    if ground_stations.default_scheduling_policy == "longest-remaining-pass":
-        labels.append("default_scheduling_policy")
+
+    def check(label: str, policy) -> None:
+        if policy is None or policy.name != "longest-remaining-pass":
+            return
+        horizon = policy.params.get("lookahead_horizon_ticks")
+        if horizon is None or int(horizon) <= 0:
+            labels.append(label)
+
+    check("scheduling.ground.selection_policy", session.scheduling.ground.selection_policy)
+    check("ground_stations.default_selection_policy", ground_stations.default_selection_policy)
     for station in ground_stations.stations:
-        if station.scheduling_policy == "longest-remaining-pass":
-            labels.append(f"stations.{station.name}.scheduling_policy")
+        check(f"stations.{station.name}.selection_policy", station.selection_policy)
     return labels
 
 
@@ -366,25 +373,72 @@ def _check_e009(
     session: SessionConfig,
     ground_stations: GroundStationFile,
 ) -> list[ValidationResult]:
-    """E009: Future-dwell ground policies require an explicit lookahead horizon."""
-    labels = _ground_policies_requiring_lookahead(ground_stations)
+    """E009: Future-dwell ground policies require explicit lookahead params."""
+    labels = _ground_policies_requiring_lookahead(session, ground_stations)
     if not labels:
-        return []
-    if session.scheduling.ground.lookahead_horizon_ticks > 0:
         return []
     return [
         ValidationResult(
             level="error",
             code="E009",
             message=(
-                "Ground scheduling policy 'longest-remaining-pass' requires "
-                "scheduling.ground.lookahead_horizon_ticks > 0. Affected fields: "
+                "Ground selection policy 'longest-remaining-pass' requires "
+                "selection_policy.params.lookahead_horizon_ticks > 0. Affected fields: "
                 f"{', '.join(labels)}"
             ),
             remediation=(
-                "Set scheduling.ground.lookahead_horizon_ticks to the dwell-prediction "
-                "horizon, in OME ticks, or choose highest-elevation/lowest-elevation."
+                "Set params.lookahead_horizon_ticks on each longest-remaining-pass "
+                "selection_policy, or choose highest-elevation/lowest-elevation."
             ),
+        )
+    ]
+
+
+def _resolved_ground_selection_policies(
+    session: SessionConfig,
+    ground_stations: GroundStationFile,
+) -> list[tuple[str, str]]:
+    default_policy = (
+        ground_stations.default_selection_policy or session.scheduling.ground.selection_policy
+    )
+    resolved: list[tuple[str, str]] = []
+    for station in ground_stations.stations:
+        policy = station.selection_policy or default_policy
+        resolved.append((f"stations.{station.name}.selection_policy", policy.name))
+    return resolved
+
+
+def _check_e022(
+    session: SessionConfig,
+    ground_stations: GroundStationFile,
+) -> list[ValidationResult]:
+    """E022: global selection_score ranking requires compatible score scales."""
+    if "selection_score" not in session.scheduling.ground.ranking_order:
+        return []
+
+    scales: dict[str, list[str]] = {}
+    for label, policy_name in _resolved_ground_selection_policies(session, ground_stations):
+        if policy_name not in VALID_SELECTION_POLICY_NAMES:
+            continue
+        scales.setdefault(selection_policy_score_scale(policy_name), []).append(label)
+    if len(scales) <= 1:
+        return []
+
+    details = "; ".join(f"{scale}: {', '.join(labels)}" for scale, labels in sorted(scales.items()))
+    return [
+        ValidationResult(
+            level="error",
+            code="E022",
+            message=(
+                "scheduling.ground.ranking_order includes 'selection_score', but "
+                "resolved ground selection policies use incompatible score scales: "
+                f"{details}"
+            ),
+            remediation=(
+                "Use ranking_order with 'per_gs_rank' for cross-policy arbitration, "
+                "or configure selection policies whose raw scores share the same scale."
+            ),
+            field_path="scheduling.ground.ranking_order",
         )
     ]
 
@@ -515,7 +569,7 @@ def _check_e011(
 
 def _check_e020(session: SessionConfig) -> list[ValidationResult]:
     """E020: geometry_only requires explicit acknowledgement."""
-    if session.simulation.fidelity != "geometry_only":
+    if session.simulation.ground_link_model != "geometry_only":
         return []
     if session.simulation.acknowledge_geometry_only:
         return []
@@ -524,13 +578,13 @@ def _check_e020(session: SessionConfig) -> list[ValidationResult]:
             level="error",
             code="E020",
             message=(
-                "simulation.fidelity is 'geometry_only' but "
+                "simulation.ground_link_model is 'geometry_only' but "
                 "simulation.acknowledge_geometry_only is not true. "
                 "Geometry-only mode omits ground terminal range/FoR/tracking "
-                "physics and is not fidelity-grade."
+                "physics and is not constraint-enforced."
             ),
             remediation=(
-                "Either set simulation.fidelity to 'physical_v1' and declare "
+                "Either set simulation.ground_link_model to 'terminal_physics' and declare "
                 "ground terminal physics, or explicitly set "
                 "simulation.acknowledge_geometry_only: true."
             ),
@@ -544,8 +598,8 @@ def _check_e021(
     satellites: list,
     ground_stations: GroundStationFile,
 ) -> list[ValidationResult]:
-    """E021: physical_v1 requires ground terminal physics on both ends."""
-    if session.simulation.fidelity == "geometry_only":
+    """E021: terminal_physics requires ground terminal physics on both ends."""
+    if session.simulation.ground_link_model == "geometry_only":
         return []
     if not ground_stations.stations:
         return []
@@ -561,8 +615,8 @@ def _check_e021(
                     level="error",
                     code="E021",
                     message=(
-                        f"physical_v1 requires ground terminal physics: {error}. "
-                        "Ground links cannot be fidelity-grade without range, "
+                        f"terminal_physics requires ground terminal physics: {error}. "
+                        "Ground links cannot be constraint-enforced without range, "
                         "field-of-regard, and tracking-rate limits."
                     ),
                     remediation=(
@@ -614,8 +668,8 @@ def _check_e021(
                     level="error",
                     code="E021",
                     message=(
-                        f"physical_v1 requires satellite ground terminal physics: {error}. "
-                        "Ground links cannot be fidelity-grade without range, "
+                        f"terminal_physics requires satellite ground terminal physics: {error}. "
+                        "Ground links cannot be constraint-enforced without range, "
                         "field-of-regard, and tracking-rate limits on the satellite side."
                     ),
                     remediation=(
@@ -627,6 +681,32 @@ def _check_e021(
                     field_path="satellite_type.ground_terminals",
                 )
             )
+        if not missing:
+            try:
+                terminal_physics_profiles(
+                    terminals,
+                    profile_id=label,
+                    endpoint="satellite",
+                    require_constraints=True,
+                )
+            except ValueError as exc:
+                results.append(
+                    ValidationResult(
+                        level="error",
+                        code="E021",
+                        message=(
+                            "terminal_physics requires a satellite ground-terminal "
+                            f"profile that can be applied unambiguously: {exc}"
+                        ),
+                        remediation=(
+                            "Keep target-body-distinct satellite ground terminal blocks, "
+                            "but do not declare heterogeneous physics for the same "
+                            "target_body until terminal-block-aware visibility/allocation "
+                            "is implemented."
+                        ),
+                        field_path="satellite_type.ground_terminals",
+                    )
+                )
 
     return results
 
@@ -889,22 +969,80 @@ def _check_w008(
 
 
 def _check_w009(session: SessionConfig) -> list[ValidationResult]:
-    """W009: geometry_only sessions are explicitly non-fidelity-grade."""
-    if session.simulation.fidelity != "geometry_only":
+    """W009: geometry_only sessions are explicitly non-constraint-enforced."""
+    if session.simulation.ground_link_model != "geometry_only":
         return []
     return [
         ValidationResult(
             level="warning",
             code="W009",
             message=(
-                "simulation.fidelity is 'geometry_only'. Ground links use LOS "
+                "simulation.ground_link_model is 'geometry_only'. Ground links use LOS "
                 "and elevation only; range, field-of-regard, and tracking-rate "
                 "limits are intentionally not enforced."
             ),
             remediation=(
-                "Use simulation.fidelity: physical_v1 with terminal physics "
-                "fields for fidelity-grade ground visibility."
+                "Use simulation.ground_link_model: terminal_physics with terminal physics "
+                "fields for constraint-enforced ground visibility."
             ),
-            field_path="simulation.fidelity",
+            field_path="simulation.ground_link_model",
+        )
+    ]
+
+
+def _check_w010(
+    satellites: list,
+    ground_stations: GroundStationFile,
+) -> list[ValidationResult]:
+    """W010: Future capacity dimensions are accepted but not enforced by the current allocator."""
+    paths: list[str] = []
+
+    def scan(terminals, base_path: str) -> None:
+        for idx, terminal in enumerate(terminals or []):
+            for field_name in ("gateway_beam_quota", "user_terminal_beam_quota"):
+                if getattr(terminal, field_name, None) is not None:
+                    paths.append(f"{base_path}[{idx}].{field_name}")
+
+    scan(ground_stations.default_terminals, "ground_stations.default_terminals")
+    for station in ground_stations.stations:
+        if station.terminals is not None:
+            scan(station.terminals, f"ground_stations.stations.{station.name}.terminals")
+
+    seen_sat_shapes: set[tuple] = set()
+    for sat in satellites:
+        terminals = tuple(getattr(sat, "ground_terminals", ()) or ())
+        shape = tuple(
+            (
+                getattr(t, "type", None),
+                getattr(t, "count", None),
+                getattr(t, "gateway_beam_quota", None),
+                getattr(t, "user_terminal_beam_quota", None),
+            )
+            for t in terminals
+        )
+        if shape in seen_sat_shapes:
+            continue
+        seen_sat_shapes.add(shape)
+        scan(
+            terminals,
+            f"satellite P{getattr(sat, 'plane', 0):02d}S{getattr(sat, 'slot', 0):02d}.ground_terminals",
+        )
+
+    if not paths:
+        return []
+    return [
+        ValidationResult(
+            level="warning",
+            code="W010",
+            message=(
+                "Ground capacity beam quota fields are declared but Phase 3 "
+                "enforces only total simultaneous ground links. Ignored fields: "
+                f"{', '.join(sorted(paths))}"
+            ),
+            remediation=(
+                "Keep these fields for forward-compatible config documentation, but "
+                "do not interpret current allocation results as enforcing per-beam quotas."
+            ),
+            field_path="ground_stations",
         )
     ]

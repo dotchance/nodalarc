@@ -116,7 +116,7 @@ def generate_session_yaml(
     custom_ground_stations: list[dict] | None = None,
     routing_config: dict | None = None,
     ground_policy: str = "highest-elevation",
-    ground_lookahead_horizon_ticks: int = 0,
+    ground_selection_lookahead_horizon_ticks: int = 0,
     catalog_roots: CatalogRoots | None = None,
 ) -> tuple[str, list[str]]:
     """Generate a session YAML from wizard selections.
@@ -139,7 +139,7 @@ def generate_session_yaml(
             single user-facing fidelity choice; the fidelity label is derived
             from it.
         ground_policy: Ground handover scoring policy.
-        ground_lookahead_horizon_ticks: Required when ground_policy is
+        ground_selection_lookahead_horizon_ticks: Required when ground_policy is
             ``longest-remaining-pass``; measured in OME ticks.
 
     Returns:
@@ -239,6 +239,22 @@ def generate_session_yaml(
     if orbit_propagator not in supported_propagators:
         raise ValueError(f"Unsupported orbit_propagator: {orbit_propagator!r}")
 
+    selection_policy: dict[str, Any] = {"name": ground_policy, "params": {}}
+    if ground_policy == "longest-remaining-pass":
+        if ground_selection_lookahead_horizon_ticks <= 0:
+            raise ValueError(
+                "ground_selection_lookahead_horizon_ticks is required when ground_policy is "
+                "'longest-remaining-pass'"
+            )
+        selection_policy["params"]["lookahead_horizon_ticks"] = int(
+            ground_selection_lookahead_horizon_ticks
+        )
+    elif ground_selection_lookahead_horizon_ticks > 0:
+        raise ValueError(
+            "ground_selection_lookahead_horizon_ticks is only valid when ground_policy is "
+            "'longest-remaining-pass'"
+        )
+
     # Build session dict
     session_dict: dict[str, Any] = {
         "session": {"name": session_name},
@@ -252,11 +268,17 @@ def generate_session_yaml(
         },
         "scheduling": {
             "ground": {
-                "policy": ground_policy,
+                "selection_policy": selection_policy,
+                "handover_policy": {
+                    "name": "hysteresis",
+                    "params": {
+                        "discount_factor": 1.15,
+                        "mask_fade_range_deg": 5.0,
+                    },
+                },
                 "handover_mode": "mbb" if mbb_requested else "bbm",
                 "mbb_overlap_ticks": mbb_overlap_ticks,
                 "mbb_reserve": 1 if mbb_requested else 0,
-                "lookahead_horizon_ticks": ground_lookahead_horizon_ticks,
             }
         },
         "dispatch": {

@@ -15,7 +15,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from nodalarc.body_frames import SupportedBody
+from nodalarc.body_frames import SUPPORTED_BODY_NAMES, SupportedSurfaceBody
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
@@ -57,7 +57,7 @@ class TerminalPhysicsProfile:
     field_of_regard_deg: float | None
     max_tracking_rate_deg_s: float | None
     boresight: TerminalBoresight | SatGroundTerminalBoresight | None
-    target_body: SupportedBody | None = None
+    target_body: SupportedSurfaceBody | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.boresight, SatGroundTerminalBoresight):
@@ -115,6 +115,70 @@ def ground_terminal_type(terminals: Iterable[GroundTerminalTypeLike]) -> str:
     return next(iter(types))
 
 
+def satellite_terminal_index_pools_by_target_body(
+    terminals: Sequence[TerminalPhysicsLike],
+    *,
+    total_count: int,
+    ground_link_model: Literal["geometry_only", "terminal_physics"],
+) -> dict[str, tuple[int, ...]]:
+    """Return allocatable satellite ground-terminal indices per target body.
+
+    Satellite ground terminals are expanded in YAML order: a block with
+    ``count: 2`` owns two consecutive terminal indices. In terminal_physics
+    mode, each block must declare a satellite boresight target_body; the
+    allocator may only assign indices from the pool matching the ground
+    station's reference body. In geometry_only mode, terminal boresight
+    constraints are intentionally absent, so each index is eligible for every
+    supported surface body while still consuming one global physical terminal.
+    """
+
+    if total_count < 0:
+        raise ValueError(f"satellite ground terminal count must be >= 0, got {total_count}")
+    if total_count == 0:
+        return {}
+
+    pools: dict[str, list[int]] = {}
+    if not terminals:
+        if ground_link_model == "terminal_physics":
+            raise ValueError(
+                "terminal_physics ground allocation requires satellite ground terminal "
+                "definitions with boresight.target_body"
+            )
+        all_indices = tuple(range(total_count))
+        return dict.fromkeys(SUPPORTED_BODY_NAMES, all_indices)
+
+    next_index = 0
+    for block_idx, term in enumerate(terminals):
+        count = int(term.count)
+        if count <= 0:
+            raise ValueError(f"satellite ground terminal block {block_idx} count must be positive")
+        indices = tuple(range(next_index, next_index + count))
+        next_index += count
+
+        boresight = term.boresight
+        if isinstance(boresight, SatGroundTerminalBoresight):
+            targets = (boresight.target_body,)
+        elif ground_link_model == "geometry_only":
+            targets = SUPPORTED_BODY_NAMES
+        else:
+            raise ValueError(
+                f"satellite ground terminal block {block_idx} is missing "
+                "boresight.target_body; terminal_physics allocation cannot assign "
+                "body-specific terminal indices"
+            )
+
+        for target_body in targets:
+            pools.setdefault(str(target_body), []).extend(indices)
+
+    if next_index != total_count:
+        raise ValueError(
+            "satellite ground terminal count does not match expanded terminal blocks: "
+            f"ground_terminal_count={total_count}, expanded={next_index}"
+        )
+
+    return {body: tuple(indices) for body, indices in sorted(pools.items())}
+
+
 def station_ground_terminal_type(
     gs_file: GroundStationFile,
     station: GroundStationConfig,
@@ -125,7 +189,7 @@ def station_ground_terminal_type(
 
 
 def terminal_physics_missing_fields(term: TerminalPhysicsLike) -> tuple[str, ...]:
-    """Return Phase 2 physical_v1 fields missing from a terminal definition."""
+    """Return Phase 2 terminal_physics fields missing from a terminal definition."""
     missing: list[str] = []
     if term.max_range_km is None:
         missing.append("max_range_km")
@@ -168,7 +232,7 @@ def terminal_physics_profile(
     missing_errors = terminal_collection_missing_physics(terminals, label=profile_id)
     if require_constraints and missing_errors:
         raise ValueError(
-            "physical_v1 ground visibility requires terminal physics fields: "
+            "terminal_physics ground visibility requires terminal physics fields: "
             + "; ".join(missing_errors)
         )
     if missing_errors:
@@ -249,7 +313,7 @@ def terminal_physics_profiles(
     missing_errors = terminal_collection_missing_physics(terminals, label=profile_id)
     if require_constraints and missing_errors:
         raise ValueError(
-            "physical_v1 ground visibility requires terminal physics fields: "
+            "terminal_physics ground visibility requires terminal physics fields: "
             + "; ".join(missing_errors)
         )
     if missing_errors:

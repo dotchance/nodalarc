@@ -21,10 +21,18 @@ from nodalarc.models.events import (
     EphemerisNodeTLE,
     SessionEphemeris,
 )
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
+from nodalarc.models.session import GroundSchedulingConfig, SessionConfig
 from ome.event_stream import build_link_state_snapshot, build_session_ephemeris, build_step_context
 
 from tests.conftest import FIXTURES_DIR
+
+
+def _ground_scheduling() -> GroundSchedulingConfig:
+    return GroundSchedulingConfig(
+        selection_policy=SelectionPolicySpec(name="highest-elevation", params={}),
+        handover_policy=HandoverPolicySpec(name="none", params={}),
+    )
 
 
 def _load_test_ctx():
@@ -47,6 +55,7 @@ def _load_test_ctx():
         gs_file=gs_file,
         neighbors=neighbors,
         propagator_id=session.orbit.propagator,
+        ground_scheduling=session.scheduling.ground,
     )
     return ctx, sats, gs_file
 
@@ -75,6 +84,7 @@ class TestBuildSessionEphemeris:
             gs_file=gs_file,
             neighbors=frozenset(),
             propagator_id="j2-mean-elements",
+            ground_scheduling=_ground_scheduling(),
         )
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
         sat = eph.nodes["sat-P00S00"]

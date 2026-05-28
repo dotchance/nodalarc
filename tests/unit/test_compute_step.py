@@ -4,13 +4,15 @@
 
 from __future__ import annotations
 
+import pytest
 from nodalarc.constellation_loader import (
     expand_constellation,
     load_constellation,
     load_ground_stations,
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.ground_policy import SelectionPolicySpec
+from nodalarc.models.session import GroundSchedulingConfig, SessionConfig
 from ome.event_stream import (
     build_step_context,
     compute_step,
@@ -60,6 +62,7 @@ class TestComputeStepMatchesWindow:
             epoch_unix=epoch_unix,
             duration_s=n_steps * step_seconds,
             propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
             step_seconds=step_seconds,
         )
         window_events = window.events
@@ -71,6 +74,7 @@ class TestComputeStepMatchesWindow:
             gs_file=gs_file,
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -112,6 +116,7 @@ class TestComputeStepMatchesWindow:
             epoch_unix=epoch_unix,
             duration_s=n_steps * step_seconds,
             propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
             step_seconds=step_seconds,
         )
 
@@ -121,6 +126,7 @@ class TestComputeStepMatchesWindow:
             gs_file=gs_file,
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -141,9 +147,12 @@ class TestComputeStepMatchesWindow:
             addressing=addressing,
             gs_file=gs_file,
             neighbors=neighbors,
-            mbb_overlap_ticks=7,
-            mbb_reserve=2,
-            default_ground_policy="lowest-elevation",
+            ground_scheduling=GroundSchedulingConfig(
+                selection_policy=SelectionPolicySpec(name="lowest-elevation"),
+                handover_mode="bbm",
+                mbb_overlap_ticks=7,
+                mbb_reserve=0,
+            ),
             propagator_id="j2-mean-elements",
         )
 
@@ -157,9 +166,33 @@ class TestComputeStepMatchesWindow:
 
         assert window.predictive is True
         assert ctx.mbb_overlap_ticks == 7
-        assert ctx.mbb_reserve == 2
+        assert ctx.mbb_reserve == 0
         assert ctx.propagator_id == "j2-mean-elements"
         assert len(window.events) > 0
+
+    def test_selection_score_ranking_rejects_incompatible_policy_scales(self):
+        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        if len(gs_file.stations) < 2:
+            pytest.skip("test requires at least two ground stations")
+
+        gs_file = gs_file.model_copy(deep=True)
+        gs_file.stations[0].selection_policy = SelectionPolicySpec(
+            name="longest-remaining-pass",
+            params={"lookahead_horizon_ticks": 10},
+        )
+        gs_file.stations[1].selection_policy = SelectionPolicySpec(name="highest-elevation")
+
+        with pytest.raises(ValueError, match="incompatible score scales"):
+            build_step_context(
+                satellites=sats,
+                addressing=addressing,
+                gs_file=gs_file,
+                neighbors=neighbors,
+                ground_scheduling=GroundSchedulingConfig(
+                    ranking_order=["selection_score", "lex_pair"],
+                ),
+                propagator_id=session.orbit.propagator,
+            )
 
     def test_visibility_transitions_only_on_state_change(self):
         """VisibilityEvents are emitted only when state changes, not every step."""
@@ -173,6 +206,7 @@ class TestComputeStepMatchesWindow:
             gs_file=gs_file,
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
         )
         isl_state: dict = {}
         gs_state: dict = {}
@@ -208,6 +242,7 @@ class TestComputeStepMatchesWindow:
             gs_file=gs_file,
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
         )
         isl_state: dict = {}
         gs_state: dict = {}

@@ -15,6 +15,19 @@ from nodalarc.template_vars import build_template_vars
 
 from tests.conftest import CONFIGS_DIR
 
+_EXPLICIT_SCHEDULING = {
+    "ground": {
+        "selection_policy": {"name": "highest-elevation", "params": {}},
+        "handover_policy": {
+            "name": "hysteresis",
+            "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
+        },
+        "handover_mode": "bbm",
+        "mbb_overlap_ticks": 3,
+        "mbb_reserve": 0,
+    }
+}
+
 
 @pytest.fixture
 def addressing():
@@ -52,6 +65,7 @@ def flat_session():
             area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
         ),
         time=TimeConfig(compression=1),
+        scheduling=_EXPLICIT_SCHEDULING,
     )
 
 
@@ -73,6 +87,7 @@ def stripe_session():
             ),
         ),
         time=TimeConfig(compression=5),
+        scheduling=_EXPLICIT_SCHEDULING,
     )
 
 

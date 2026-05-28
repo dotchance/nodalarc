@@ -23,6 +23,19 @@ from nodalarc.models.session import (
     TimeConfig,
 )
 
+_EXPLICIT_SCHEDULING = {
+    "ground": {
+        "selection_policy": {"name": "highest-elevation", "params": {}},
+        "handover_policy": {
+            "name": "hysteresis",
+            "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
+        },
+        "handover_mode": "bbm",
+        "mbb_overlap_ticks": 3,
+        "mbb_reserve": 0,
+    }
+}
+
 
 def _make_session() -> SessionConfig:
     return SessionConfig(
@@ -37,6 +50,7 @@ def _make_session() -> SessionConfig:
             area_assignment=AreaAssignmentConfig(strategy="flat"),
         ),
         time=TimeConfig(),
+        scheduling=_EXPLICIT_SCHEDULING,
         convergence=ConvergenceConfig(),
     )
 

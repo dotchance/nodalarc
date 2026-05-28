@@ -17,7 +17,9 @@ from datetime import datetime
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.geo import compute_latency_ms, compute_range_km
 from nodalarc.models.link_decisions import (
+    GroundAllocationEvent,
     GroundLinkDecisionSnapshot,
+    GroundPolicyAudit,
     GroundVisibilityDecisionWire,
     UnscheduledPair,
 )
@@ -37,6 +39,8 @@ def build_link_decision_snapshot(
     *,
     decisions: GroundVisibilityDecisionMap,
     unscheduled_pairs: tuple[UnscheduledPair, ...],
+    policy_audit: GroundPolicyAudit,
+    allocation_events: tuple[GroundAllocationEvent, ...],
     sim_time: datetime,
     snapshot_seq: int,
     epoch_id: int,
@@ -68,6 +72,8 @@ def build_link_decision_snapshot(
         epoch_id=epoch_id,
         decisions=wire_decisions,
         unscheduled_pairs=unscheduled_pairs,
+        policy_audit=policy_audit,
+        allocation_events=allocation_events,
     )
 
 

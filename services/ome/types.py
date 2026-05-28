@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from nodalarc.body_frames import BODY_FRAMES, SupportedBody
+from nodalarc.body_frames import BODY_FRAMES, SupportedSurfaceBody
 from nodalarc.models.link_decisions import (
     GroundVisibilityRejectingEndpoint,
     GroundVisibilityRejectReason,
@@ -48,7 +48,7 @@ class GroundVisibilityDecision:
 
     pair: tuple[str, str]
     tenant_id: str
-    reference_body: SupportedBody
+    reference_body: SupportedSurfaceBody
     visible: bool
     range_km: float
     elevation_deg: float

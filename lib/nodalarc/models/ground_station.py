@@ -10,7 +10,8 @@ Three formats are supported:
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from nodalarc.body_frames import SupportedBody
+from nodalarc.body_frames import SupportedSurfaceBody
+from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.terminal_physics import TerminalBoresight
 
 MAX_GROUND_TERMINAL_COUNT = 128
@@ -46,10 +47,11 @@ class GroundSegment(BaseModel):
     """
 
     tenant_id: str = "default"
-    reference_body: SupportedBody = "earth"
+    reference_body: SupportedSurfaceBody = "earth"
     mobility: str = "fixed"  # "fixed", "terrestrial", "maritime", "aerial"
     service_priority: int = 10  # Lower = higher priority. Headroom: 1, 5, 10, 20...
-    hysteresis: HysteresisParameters = HysteresisParameters()
+    selection_policy: SelectionPolicySpec | None = None
+    handover_policy: HandoverPolicySpec | None = None
 
     @field_validator("service_priority")
     @classmethod
@@ -114,6 +116,8 @@ class GroundTerminalDef(BaseModel):
     boresight: TerminalBoresight | None = None
     frequency_band: str | None = None  # For future environmental modeling
     band: str | None = None  # Shorthand band identifier (Ka, Ku, E, V)
+    gateway_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
+    user_terminal_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
 
     @field_validator("count")
     @classmethod
@@ -134,6 +138,13 @@ class GroundTerminalDef(BaseModel):
     def _positive_tracking_capacity(cls, v: int) -> int:
         if v < 1:
             raise ValueError(f"tracking_capacity must be >= 1, got {v}")
+        return v
+
+    @field_validator("gateway_beam_quota", "user_terminal_beam_quota")
+    @classmethod
+    def _positive_future_quota(cls, v: int | None) -> int | None:
+        if v is not None and v < 1:
+            raise ValueError(f"future beam quota fields must be >= 1, got {v}")
         return v
 
     @field_validator("max_range_km")
@@ -176,7 +187,6 @@ class GroundStationConfig(GroundSegment):
     lon_deg: float
     alt_m: float = 0.0
     min_elevation_deg: float | None = None  # Override default
-    scheduling_policy: str | None = None  # Override default
     terminals: list[GroundTerminalDef] | None = None  # Override default
     terrestrial_prefixes: list[TerrestrialPrefix] | None = None  # Override template
 
@@ -218,7 +228,8 @@ class GroundStationFile(BaseModel):
 
     default_terminals: list[GroundTerminalDef]
     default_min_elevation_deg: float = 25.0
-    default_scheduling_policy: str = "highest-elevation"
+    default_selection_policy: SelectionPolicySpec | None = None
+    default_handover_policy: HandoverPolicySpec | None = None
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None
     stations: list[GroundStationConfig]
 
@@ -257,7 +268,8 @@ class GroundStationSetConfig(BaseModel):
     default_terminals: list[GroundTerminalDef] | None = None
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None
     default_min_elevation_deg: float | None = None
-    default_scheduling_policy: str | None = None
+    default_selection_policy: SelectionPolicySpec | None = None
+    default_handover_policy: HandoverPolicySpec | None = None
 
     @model_validator(mode="after")
     def _validate_set(self):

@@ -14,9 +14,30 @@ import json
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
+from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.ground_station import HysteresisParameters
 from ome.ground_allocator import allocate_ground_links
 from ome.visibility import GroundVisibility
+
+
+def _policy_kwargs(gs_id: str) -> dict:
+    return {
+        "gs_selection_policies": {gs_id: SelectionPolicySpec(name="highest-elevation")},
+        "gs_handover_policies": {
+            gs_id: HandoverPolicySpec(name="hysteresis", params=HysteresisParameters().model_dump())
+        },
+        "ranking_order": ("service_priority", "selection_score", "lex_pair"),
+        "handover_mode": "bbm",
+        "mbb_preemption": "off",
+        "successor_abort_policy": "hard_release",
+        "cross_tenant_displacement": "off",
+        "bbm_acquire_timeout_ticks": 1,
+        "ignored_capacity_fields": (),
+    }
+
+
+def _sat_body_pools(sat_terminals: dict[str, int]) -> dict[str, dict[str, tuple[int, ...]]]:
+    return {sat_id: {"earth": tuple(range(count))} for sat_id, count in sat_terminals.items()}
 
 
 class TestGroundAllocatorDeterminism:
@@ -63,9 +84,9 @@ class TestGroundAllocatorDeterminism:
                 pending_teardowns={},
                 gs_terminal_counts={gs_id: 1},
                 sat_ground_terminals={sat_a: 1, sat_b: 1},
-                gs_policies={gs_id: "highest-elevation"},
+                sat_ground_terminal_indices_by_body=_sat_body_pools({sat_a: 1, sat_b: 1}),
+                **_policy_kwargs(gs_id),
                 gs_min_elevations={gs_id: 25.0},
-                gs_hysteresis={gs_id: HysteresisParameters()},
                 gs_service_priorities={gs_id: 10},
                 gs_tenant_ids={gs_id: "default"},
                 gs_reference_bodies={gs_id: "earth"},
@@ -116,9 +137,9 @@ class TestGroundAllocatorDeterminism:
             pending_teardowns={},
             gs_terminal_counts={gs_id: 1},
             sat_ground_terminals={sat_a: 1, sat_b: 1},
-            gs_policies={gs_id: "highest-elevation"},
+            sat_ground_terminal_indices_by_body=_sat_body_pools({sat_a: 1, sat_b: 1}),
+            **_policy_kwargs(gs_id),
             gs_min_elevations={gs_id: 25.0},
-            gs_hysteresis={gs_id: HysteresisParameters()},
             gs_service_priorities={gs_id: 10},
             gs_tenant_ids={gs_id: "default"},
             gs_reference_bodies={gs_id: "earth"},

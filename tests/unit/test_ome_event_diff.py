@@ -9,10 +9,29 @@ from datetime import UTC, datetime
 
 import pytest
 from nodalarc.geo import compute_latency_ms
+from nodalarc.models.link_decisions import GroundPolicyAudit
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import GroundAllocationResult
 from ome.isl_engine import IslFeasibilityResult, ScheduledIsl
 from ome.types import GroundVisibilityDecision, MbbTeardown
+
+
+def _policy_audit() -> GroundPolicyAudit:
+    return GroundPolicyAudit(
+        selection_policies={"gs-den": "highest-elevation"},
+        selection_policy_params={"gs-den": {}},
+        handover_policies={"gs-den": "hysteresis"},
+        handover_policy_params={"gs-den": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0}},
+        ranking_order=("service_priority", "selection_score", "lex_pair"),
+        handover_mode="bbm",
+        mbb_preemption="off",
+        successor_abort_policy="hard_release",
+        cross_tenant_displacement="off",
+        mbb_overlap_ticks=3,
+        mbb_reserve=0,
+        bbm_acquire_timeout_ticks=1,
+        ignored_capacity_fields=(),
+    )
 
 
 def _decision(
@@ -122,6 +141,8 @@ def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
         pending_teardowns={},
         scheduled_pairs=frozenset({pair}),
         unscheduled_pairs=(),
+        policy_audit=_policy_audit(),
+        allocation_events=(),
     )
 
     diff = diff_ground_visibility_events(
@@ -151,6 +172,8 @@ def test_ground_event_diff_marks_mbb_teardown_state():
         pending_teardowns={pair: MbbTeardown(10, successor)},
         scheduled_pairs=frozenset({pair, successor}),
         unscheduled_pairs=(),
+        policy_audit=_policy_audit(),
+        allocation_events=(),
     )
 
     diff = diff_ground_visibility_events(
@@ -186,6 +209,8 @@ def test_ground_event_diff_propagates_visibility_reject_reason_for_invisible_pai
         pending_teardowns={},
         scheduled_pairs=frozenset(),
         unscheduled_pairs=(),
+        policy_audit=_policy_audit(),
+        allocation_events=(),
     )
 
     diff = diff_ground_visibility_events(
@@ -230,6 +255,8 @@ def test_ground_event_diff_propagates_unscheduled_reason_for_visible_but_unalloc
                 capacity_constraint=None,
             ),
         ),
+        policy_audit=_policy_audit(),
+        allocation_events=(),
     )
 
     diff = diff_ground_visibility_events(
@@ -263,6 +290,8 @@ def test_ground_event_diff_fails_loud_when_allocator_omits_attribution_for_visib
         pending_teardowns={},
         scheduled_pairs=frozenset(),
         unscheduled_pairs=(),  # allocator omitted attribution
+        policy_audit=_policy_audit(),
+        allocation_events=(),
     )
 
     with pytest.raises(ValueError, match="did not attribute an unscheduled_reason"):
@@ -287,6 +316,8 @@ def test_ground_event_diff_clears_unscheduled_reason_for_scheduled_pair():
         pending_teardowns={},
         scheduled_pairs=frozenset({pair}),
         unscheduled_pairs=(),
+        policy_audit=_policy_audit(),
+        allocation_events=(),
     )
 
     diff = diff_ground_visibility_events(

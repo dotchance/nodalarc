@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from nodalarc.body_frames import SupportedBody
+from nodalarc.body_frames import SupportedSurfaceBody
 
 GroundBoresightMode = Literal["local_vertical", "configured_topocentric", "steerable_envelope"]
 SatGroundBoresightMode = Literal["nadir"]
@@ -90,5 +90,5 @@ class SatGroundTerminalBoresight(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    target_body: SupportedBody
+    target_body: SupportedSurfaceBody
     mode: SatGroundBoresightMode

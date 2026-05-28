@@ -36,6 +36,17 @@ routing:
   protocol: isis
   area_assignment:
     strategy: flat
+scheduling:
+  ground:
+    selection_policy:
+      name: highest-elevation
+      params: {{}}
+    handover_policy:
+      name: none
+      params: {{}}
+    handover_mode: bbm
+    mbb_overlap_ticks: 3
+    mbb_reserve: 0
 """)
 
     return {
@@ -200,6 +211,17 @@ routing:
   protocol: isis
   area_assignment:
     strategy: flat
+scheduling:
+  ground:
+    selection_policy:
+      name: highest-elevation
+      params: {{}}
+    handover_policy:
+      name: none
+      params: {{}}
+    handover_mode: bbm
+    mbb_overlap_ticks: 3
+    mbb_reserve: 0
 """)
         try:
             (sessions_dir / "escape.yaml").symlink_to(outside)
@@ -343,6 +365,17 @@ routing:
   protocol: isis
   area_assignment:
     strategy: flat
+scheduling:
+  ground:
+    selection_policy:
+      name: highest-elevation
+      params: {{}}
+    handover_policy:
+      name: none
+      params: {{}}
+    handover_mode: bbm
+    mbb_overlap_ticks: 3
+    mbb_reserve: 0
 """)
         mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
         dirs = mgr._collect_data_dirs()

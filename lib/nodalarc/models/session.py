@@ -6,7 +6,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from nodalarc.models.ground_station import TerrestrialPrefixTemplate
+from nodalarc.models.ground_policy import (
+    CrossTenantDisplacementPolicy,
+    HandoverPolicySpec,
+    MbbPreemptionPolicy,
+    RankingComponent,
+    SelectionPolicySpec,
+    SuccessorAbortPolicy,
+)
+from nodalarc.models.ground_station import HysteresisParameters, TerrestrialPrefixTemplate
 
 
 class SessionMeta(BaseModel):
@@ -126,7 +134,7 @@ class SimulationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = 2
-    fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1"
+    ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
     acknowledge_geometry_only: bool = False
 
     @field_validator("schema_version")
@@ -169,17 +177,33 @@ class OrbitConfig(BaseModel):
 
 
 class GroundSchedulingConfig(BaseModel):
-    """Ground handover and allocation behavior."""
+    """Ground handover and allocation behavior.
+
+    Phase 3 keeps mechanism and policy separate. This model is only the
+    operator-configured policy surface; the OME allocator consumes the resolved
+    specs and dispatches to registered pure policy hooks.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    policy: Literal["highest-elevation", "lowest-elevation", "longest-remaining-pass"] = (
-        "highest-elevation"
+    selection_policy: SelectionPolicySpec = Field(default_factory=SelectionPolicySpec)
+    handover_policy: HandoverPolicySpec = Field(
+        default_factory=lambda: HandoverPolicySpec(
+            name="hysteresis",
+            params=HysteresisParameters().model_dump(),
+        )
     )
+    ranking_order: list[RankingComponent] = Field(
+        default_factory=lambda: ["service_priority", "selection_score", "lex_pair"]
+    )
+
     handover_mode: Literal["bbm", "mbb"] = "bbm"
     mbb_overlap_ticks: int = 3
     mbb_reserve: int = 0
-    lookahead_horizon_ticks: int = 0
+    mbb_preemption: MbbPreemptionPolicy = "off"
+    successor_abort_policy: SuccessorAbortPolicy = "hard_release"
+    cross_tenant_displacement: CrossTenantDisplacementPolicy = "off"
+    bbm_acquire_timeout_ticks: int = 1
 
     @field_validator("mbb_overlap_ticks")
     @classmethod
@@ -195,24 +219,70 @@ class GroundSchedulingConfig(BaseModel):
             raise ValueError("scheduling.ground.mbb_reserve must be >= 0")
         return value
 
-    @field_validator("lookahead_horizon_ticks")
+    @field_validator("bbm_acquire_timeout_ticks")
     @classmethod
-    def _non_negative_lookahead(cls, value: int) -> int:
-        if value < 0:
-            raise ValueError("scheduling.ground.lookahead_horizon_ticks must be >= 0")
+    def _strict_bbm_acquire_timeout(cls, value: int) -> int:
+        if value != 1:
+            raise ValueError(
+                "scheduling.ground.bbm_acquire_timeout_ticks values other than 1 are "
+                "reserved extension points; Phase 3 has no specified multi-tick BBMGap "
+                "wait-state algorithm"
+            )
         return value
 
     @model_validator(mode="after")
-    def _mbb_requires_overlap_capacity(self):
+    def _resolve_policy_surface(self):
+        selection_params = dict(self.selection_policy.params)
+        if self.selection_policy.name in ("highest-elevation", "lowest-elevation"):
+            if selection_params:
+                raise ValueError(
+                    f"selection_policy.name={self.selection_policy.name!r} requires empty params"
+                )
+        elif self.selection_policy.name == "longest-remaining-pass":
+            extra = sorted(set(selection_params) - {"lookahead_horizon_ticks"})
+            if extra:
+                raise ValueError(
+                    "selection_policy.name='longest-remaining-pass' received unsupported "
+                    f"params: {', '.join(extra)}"
+                )
+            horizon = selection_params.get("lookahead_horizon_ticks")
+            if horizon is None or int(horizon) <= 0:
+                raise ValueError(
+                    "longest-remaining-pass requires "
+                    "scheduling.ground.selection_policy.params.lookahead_horizon_ticks > 0"
+                )
+            selection_params["lookahead_horizon_ticks"] = int(horizon)
+            self.selection_policy.params = selection_params
+        else:  # pragma: no cover - Literal should make this unreachable.
+            raise ValueError(f"Unknown selection_policy.name={self.selection_policy.name!r}")
+
+        if self.handover_policy.name == "none":
+            if self.handover_policy.params:
+                raise ValueError("handover_policy.name='none' requires empty params")
+        elif self.handover_policy.name == "hysteresis":
+            self.handover_policy.params = HysteresisParameters(
+                **self.handover_policy.params
+            ).model_dump()
+        else:  # pragma: no cover - Literal should make this unreachable.
+            raise ValueError(f"Unknown handover_policy.name={self.handover_policy.name!r}")
+
+        if not self.ranking_order:
+            raise ValueError("scheduling.ground.ranking_order must not be empty")
+        if self.ranking_order[-1] != "lex_pair":
+            raise ValueError("scheduling.ground.ranking_order must end with 'lex_pair'")
+        if len(self.ranking_order) == 1:
+            raise ValueError(
+                "scheduling.ground.ranking_order must include at least one decision "
+                "component before 'lex_pair'"
+            )
+        if len(set(self.ranking_order)) != len(self.ranking_order):
+            raise ValueError("scheduling.ground.ranking_order must not contain duplicates")
+
         if self.handover_mode == "mbb":
             if self.mbb_overlap_ticks <= 0:
                 raise ValueError("MBB handover requires mbb_overlap_ticks > 0")
             if self.mbb_reserve <= 0:
                 raise ValueError("MBB handover requires mbb_reserve > 0")
-        if self.policy == "longest-remaining-pass" and self.lookahead_horizon_ticks <= 0:
-            raise ValueError(
-                "longest-remaining-pass requires scheduling.ground.lookahead_horizon_ticks > 0"
-            )
         return self
 
 
@@ -413,3 +483,31 @@ class SessionConfig(BaseModel):
     placement: PlacementConfig = PlacementConfig()
     mi: MiConfig = MiConfig()
     convergence: ConvergenceConfig = ConvergenceConfig()  # backward compat — use mi.convergence
+
+    @model_validator(mode="after")
+    def _require_explicit_ground_policy_surface(self):
+        missing: list[str] = []
+        if (
+            "scheduling" not in self.model_fields_set
+            or "ground" not in self.scheduling.model_fields_set
+        ):
+            missing.extend(
+                [
+                    "scheduling.ground.selection_policy",
+                    "scheduling.ground.handover_policy",
+                ]
+            )
+        else:
+            ground_fields = self.scheduling.ground.model_fields_set
+            if "selection_policy" not in ground_fields:
+                missing.append("scheduling.ground.selection_policy")
+            if "handover_policy" not in ground_fields:
+                missing.append("scheduling.ground.handover_policy")
+        if missing:
+            raise ValueError(
+                "Ground scheduling policy must be explicit; missing "
+                + ", ".join(missing)
+                + ". Phase 3 does not silently choose candidate selection or "
+                "incumbent handover policy."
+            )
+        return self

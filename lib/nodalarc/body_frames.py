@@ -9,8 +9,8 @@ from typing import Literal
 
 from nodalarc.constants import WGS84_A, WGS84_B
 
-SupportedBody = Literal["earth", "luna", "mars"]
-SUPPORTED_BODY_NAMES: tuple[SupportedBody, ...] = ("earth", "luna", "mars")
+SupportedSurfaceBody = Literal["earth", "luna", "mars"]
+SUPPORTED_BODY_NAMES: tuple[SupportedSurfaceBody, ...] = ("earth", "luna", "mars")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,20 +42,19 @@ MARS_BODY_FRAME = BodyFrame(
     rotation_rate_rad_s=7.0882181e-5,
 )
 
-BODY_FRAMES: dict[SupportedBody, BodyFrame] = {
+BODY_FRAMES: dict[SupportedSurfaceBody, BodyFrame] = {
     "earth": EARTH_BODY_FRAME,
     "luna": LUNA_BODY_FRAME,
     "mars": MARS_BODY_FRAME,
 }
 
 
-def body_frame_for(reference_body: SupportedBody | str) -> BodyFrame:
+def body_frame_for(reference_body: SupportedSurfaceBody | str) -> BodyFrame:
     """Return the configured body frame or fail loud for unsupported bodies."""
-
     try:
         return BODY_FRAMES[reference_body]
     except KeyError as exc:
         raise ValueError(
-            f"Unsupported reference_body={reference_body!r} for physical_v1 "
-            f"ground visibility. Supported bodies: {sorted(BODY_FRAMES)!r}."
+            f"Unsupported reference_body={reference_body!r} for terminal_physics "
+            f"ground visibility. Supported surface bodies: {sorted(BODY_FRAMES)!r}."
         ) from exc

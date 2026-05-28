@@ -24,8 +24,10 @@ default_min_elevation_deg: 25
 # Scheduling policy when multiple satellites are visible simultaneously.
 # Options: "highest-elevation" (prefer best signal), "lowest-elevation" (prefer
 # satellites lower on the horizon), "longest-remaining-pass" (uses OME pass
-# lookahead; requires scheduling.ground.lookahead_horizon_ticks in session YAML).
-default_scheduling_policy: highest-elevation
+# lookahead; requires selection_policy.params.lookahead_horizon_ticks).
+default_selection_policy:
+  name: highest-elevation
+  params: {}
 
 # Default terrestrial prefix templates for ground station routing.
 # {gs_index} is replaced with the station's 0-based index.
@@ -62,7 +64,9 @@ stations:
     # Override the default elevation mask for polar geometry
     min_elevation_deg: 10
     # Use the low-elevation heuristic since passes are shorter at high latitudes
-    scheduling_policy: lowest-elevation
+    selection_policy:
+      name: lowest-elevation
+      params: {}
     # Override terminal capacity while preserving compatibility with the
     # optical satellite ground terminals in configs/constellations/custom-example.yaml.
     terminals:

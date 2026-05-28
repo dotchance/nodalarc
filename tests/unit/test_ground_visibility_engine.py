@@ -11,12 +11,21 @@ from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.geo import geodetic_to_ecef
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.addressing import AddressingScheme
+from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile, GroundTerminalDef
+from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from ome.event_stream import build_step_context
 from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
 from ome.propagation_engine import PropagatedState
 from ome.visibility import GroundVisibility
+
+
+def _ground_scheduling() -> GroundSchedulingConfig:
+    return GroundSchedulingConfig(
+        selection_policy=SelectionPolicySpec(name="highest-elevation", params={}),
+        handover_policy=HandoverPolicySpec(name="none", params={}),
+    )
 
 
 def _state(node_id: str, geo: GeoPosition, velocity: Vec3 | None = None) -> PropagatedState:
@@ -47,7 +56,7 @@ def _physical_kwargs(
     max_tracking_rate_deg_s: float = 6.0,
 ) -> dict:
     return {
-        "simulation_fidelity": "physical_v1",
+        "ground_link_model": "terminal_physics",
         "gs_terminal_profiles": {
             gs_id: TerminalPhysicsProfile(
                 profile_id=f"{gs_id}.terminals",
@@ -271,7 +280,7 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
         },
         gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
         gs_min_elevations={"gs-equator": 25.0},
-        gs_policies={"gs-equator": "longest-remaining-pass"},
+        gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
         pass_lookahead=GroundPassLookahead(
             satellites=(),
             addressing=object(),
@@ -280,9 +289,9 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
             step_seconds=1,
             horizon_ticks=5,
             propagator_id="test",
-            simulation_fidelity="geometry_only",
+            ground_link_model="geometry_only",
         ),
-        simulation_fidelity="geometry_only",
+        ground_link_model="geometry_only",
         **_gs_default_kwargs(),
     )
 
@@ -301,7 +310,7 @@ def test_longest_remaining_pass_without_lookahead_fails_loudly():
             sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
             gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
             gs_min_elevations={"gs-equator": 25.0},
-            gs_policies={"gs-equator": "longest-remaining-pass"},
+            gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
             **_gs_default_kwargs(),
             **_physical_kwargs(),
         )
@@ -329,7 +338,7 @@ def test_satellite_profiles_select_matching_target_body_for_cislunar_relay():
         gs_min_elevations={gs_id: 25.0},
         gs_tenant_ids={gs_id: "default"},
         gs_reference_bodies={gs_id: "luna"},
-        simulation_fidelity="physical_v1",
+        ground_link_model="terminal_physics",
         gs_terminal_profiles={
             gs_id: TerminalPhysicsProfile(
                 profile_id=f"{gs_id}.terminals",
@@ -461,7 +470,8 @@ satellite_type:
         gs_file=gs_file,
         neighbors=frozenset(),
         propagator_id="keplerian-circular",
-        simulation_fidelity="physical_v1",
+        ground_scheduling=_ground_scheduling(),
+        ground_link_model="terminal_physics",
     )
 
     sat_id = addressing.sat_id(0, 0)
@@ -484,7 +494,7 @@ satellite_type:
         gs_min_elevations=ctx.gs_min_elevations,
         gs_tenant_ids=ctx.gs_tenant_ids,
         gs_reference_bodies=ctx.gs_reference_bodies,
-        simulation_fidelity="physical_v1",
+        ground_link_model="terminal_physics",
         gs_terminal_profiles=ctx.gs_terminal_profiles,
         sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
     )

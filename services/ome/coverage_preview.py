@@ -42,7 +42,8 @@ from nodalarc.models.coverage import (
     IslFailureBreakdown,
     IslPreview,
 )
-from nodalarc.models.session import AddressingConfig
+from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
+from nodalarc.models.session import AddressingConfig, GroundSchedulingConfig
 from nodalarc.propagator import orbital_period, propagate_keplerian
 from nodalarc.session_generator import merge_constellation_with_satellite_type
 
@@ -54,6 +55,13 @@ log = logging.getLogger(__name__)
 
 _PREVIEW_STEP_SECONDS = 10
 _FAILURE_SCAN_SAMPLES = 10
+
+
+def _preview_ground_scheduling() -> GroundSchedulingConfig:
+    return GroundSchedulingConfig(
+        selection_policy=SelectionPolicySpec(name="highest-elevation", params={}),
+        handover_policy=HandoverPolicySpec(name="none", params={}),
+    )
 
 
 def compute_coverage_preview(
@@ -107,6 +115,8 @@ def compute_coverage_preview(
         if isinstance(constellation, TLEConstellation)
         else "keplerian-circular",
         step_seconds=_PREVIEW_STEP_SECONDS,
+        ground_scheduling=_preview_ground_scheduling(),
+        ground_link_model="geometry_only",
         **vis_params,
     )
     events = window.events

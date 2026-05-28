@@ -18,7 +18,9 @@ from datetime import UTC, datetime
 
 import pytest
 from nodalarc.models.link_decisions import (
+    GroundAllocationEvent,
     GroundLinkDecisionSnapshot,
+    GroundPolicyAudit,
     GroundVisibilityDecisionWire,
     UnscheduledPair,
 )
@@ -33,6 +35,24 @@ from pydantic import ValidationError
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _policy_audit() -> GroundPolicyAudit:
+    return GroundPolicyAudit(
+        selection_policies={"gs-a": "highest-elevation"},
+        selection_policy_params={"gs-a": {}},
+        handover_policies={"gs-a": "hysteresis"},
+        handover_policy_params={"gs-a": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0}},
+        ranking_order=("service_priority", "selection_score", "lex_pair"),
+        handover_mode="bbm",
+        mbb_preemption="off",
+        successor_abort_policy="hard_release",
+        cross_tenant_displacement="off",
+        mbb_overlap_ticks=3,
+        mbb_reserve=0,
+        bbm_acquire_timeout_ticks=1,
+        ignored_capacity_fields=(),
+    )
 
 
 def _decision_kwargs_wire() -> dict:
@@ -160,7 +180,7 @@ class TestGroundVisibilityDecisionHotPath:
         meaning is 'constraint not applied for this decision'.
 
         The terminal profile fields may also be None when the decision
-        was computed under `geometry_only` fidelity (no terminal
+        was computed under `geometry_only` ground-link model (no terminal
         constraint profile applied)."""
         kwargs = _decision_kwargs_hot()
         kwargs["azimuth_deg"] = None
@@ -338,6 +358,52 @@ class TestUnscheduledPair:
 
 
 # ---------------------------------------------------------------------------
+# GroundAllocationEvent
+# ---------------------------------------------------------------------------
+
+
+def _allocation_event_kwargs() -> dict:
+    return {
+        "category": "bbm_gap",
+        "pair": ("gs-a", "sat-1"),
+        "tenant_id": "default",
+        "reference_body": "earth",
+        "message": "BBM released incumbent before successor acquire",
+        "successor_pair": ("gs-a", "sat-2"),
+        "challenger_pair": ("gs-a", "sat-2"),
+        "policy_kind": "handover_mode",
+        "policy_name": "bbm",
+    }
+
+
+class TestGroundAllocationEvent:
+    def test_policy_name_is_typed_by_kind(self) -> None:
+        event = GroundAllocationEvent(**_allocation_event_kwargs())
+        assert event.policy_kind == "handover_mode"
+        assert event.policy_name == "bbm"
+
+    def test_policy_kind_and_name_must_be_paired(self) -> None:
+        kwargs = _allocation_event_kwargs()
+        kwargs["policy_kind"] = None
+        with pytest.raises(ValidationError, match="policy_kind and policy_name"):
+            GroundAllocationEvent(**kwargs)
+
+    def test_policy_name_must_match_policy_kind_taxonomy(self) -> None:
+        kwargs = _allocation_event_kwargs()
+        kwargs["policy_kind"] = "successor_abort_policy"
+        kwargs["policy_name"] = "bbm"
+        with pytest.raises(ValidationError, match="not valid for"):
+            GroundAllocationEvent(**kwargs)
+
+    def test_unimplemented_event_categories_are_not_wire_values(self) -> None:
+        for category in ("blocked", "mbb_preempted"):
+            kwargs = _allocation_event_kwargs()
+            kwargs["category"] = category
+            with pytest.raises(ValidationError):
+                GroundAllocationEvent(**kwargs)
+
+
+# ---------------------------------------------------------------------------
 # GroundLinkDecisionSnapshot
 # ---------------------------------------------------------------------------
 
@@ -361,6 +427,8 @@ class TestLinkDecisionSnapshot:
             "epoch_id": 1,
             "decisions": (GroundVisibilityDecisionWire(**_decision_kwargs_wire()),),
             "unscheduled_pairs": (unscheduled_for_decision,),
+            "policy_audit": _policy_audit(),
+            "allocation_events": (),
         }
 
     def test_construction(self) -> None:

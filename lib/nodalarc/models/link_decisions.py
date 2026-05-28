@@ -35,11 +35,18 @@ construction time, the producer is wrong; fix the producer.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from nodalarc.body_frames import SupportedBody
+from nodalarc.body_frames import SupportedSurfaceBody
+from nodalarc.models.ground_policy import (
+    CrossTenantDisplacementPolicy,
+    HandoverPolicyName,
+    MbbPreemptionPolicy,
+    SelectionPolicyName,
+    SuccessorAbortPolicy,
+)
 from nodalarc.models.terminal_physics import GroundBoresightMode, SatGroundBoresightMode
 
 GroundVisibilityRejectReason = Literal[
@@ -79,7 +86,11 @@ GroundUnscheduledReason = Literal[
     "hysteresis_hold",
     "incumbent_held",
     "bbm_no_spare",
+    "mbb_overlap_locked",
     "replaced_by_successor",
+    "successor_aborted",
+    "failed_successor",
+    "failed_acquire",
 ]
 """Allocation reason a visible GROUND pair is not currently scheduled.
 
@@ -93,7 +104,120 @@ A pair in active MBB teardown overlap is `(visible=True,
 scheduled=True, scheduling_state="teardown")` and is NOT in
 `unscheduled_pairs` — teardown is a scheduling state, not an
 unscheduled-reason. The post-teardown released pair is
-`replaced_by_successor`."""
+`replaced_by_successor`. A candidate blocked by an active MBB overlap with
+`mbb_preemption=off` uses `mbb_overlap_locked`. Successor failure states
+use `successor_aborted`,
+`failed_successor`, or `failed_acquire` and are also surfaced as
+`GroundAllocationEvent` entries so operators can distinguish a deliberate
+replacement from a failed handover."""
+
+
+GroundAllocationEventCategory = Literal[
+    "successor_aborted",
+    "failed_successor",
+    "failed_acquire",
+    "incumbent_lost",
+    "bbm_gap",
+]
+"""Operator-facing ground-allocation transition/audit event category.
+
+Visible-but-unscheduled candidates are represented by `UnscheduledPair` with
+a typed `GroundUnscheduledReason`; they are not duplicated as `blocked`
+allocation events. `bbm_gap` is emitted on every BBM displacement; Phase 3
+represents it as an immediate one-tick release/acquire transition, not a
+multi-tick wait state. MBB preemption is not an event category until
+`MbbPreemptionPolicy` widens beyond `off`; when that policy exists, add
+`mbb_preempted` here and emit it from the preemption decision path.
+"""
+
+GroundAllocationPolicyKind = Literal[
+    "selection_policy",
+    "handover_policy",
+    "handover_mode",
+    "successor_abort_policy",
+    "mbb_preemption",
+    "cross_tenant_displacement",
+]
+GroundHandoverModeName = Literal["bbm", "mbb"]
+GroundAllocationPolicyName = (
+    SelectionPolicyName
+    | HandoverPolicyName
+    | GroundHandoverModeName
+    | SuccessorAbortPolicy
+    | MbbPreemptionPolicy
+    | CrossTenantDisplacementPolicy
+)
+GROUND_ALLOCATION_POLICY_NAMES_BY_KIND: dict[str, frozenset[str]] = {
+    "selection_policy": frozenset(get_args(SelectionPolicyName)),
+    "handover_policy": frozenset(get_args(HandoverPolicyName)),
+    "handover_mode": frozenset(get_args(GroundHandoverModeName)),
+    "successor_abort_policy": frozenset(get_args(SuccessorAbortPolicy)),
+    "mbb_preemption": frozenset(get_args(MbbPreemptionPolicy)),
+    "cross_tenant_displacement": frozenset(get_args(CrossTenantDisplacementPolicy)),
+}
+
+
+class GroundPolicyAudit(BaseModel):
+    """Resolved policy surface applied to one ground decision snapshot.
+
+    Per-policy params are keyed by GS id and interpreted through the
+    corresponding policy name in selection_policies / handover_policies.
+    Consumers must branch on the policy name before reading policy-specific
+    params; the params bag is not a global schema shared by every policy.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    selection_policies: dict[str, str]
+    selection_policy_params: dict[str, dict[str, Any]]
+    handover_policies: dict[str, str]
+    handover_policy_params: dict[str, dict[str, Any]]
+    ranking_order: tuple[str, ...]
+    handover_mode: str
+    mbb_preemption: str
+    successor_abort_policy: str
+    cross_tenant_displacement: str
+    mbb_overlap_ticks: int
+    mbb_reserve: int
+    bbm_acquire_timeout_ticks: int
+    ignored_capacity_fields: tuple[str, ...]
+
+
+class GroundAllocationEvent(BaseModel):
+    """Typed non-steady transition produced by the ground allocator.
+
+    `policy_kind` names the taxonomy for `policy_name`. Events that are not
+    caused by a policy decision, such as physical incumbent visibility loss,
+    set both fields to `None`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    category: GroundAllocationEventCategory
+    pair: tuple[str, str]
+    tenant_id: str
+    reference_body: SupportedSurfaceBody
+    message: str
+    successor_pair: tuple[str, str] | None
+    challenger_pair: tuple[str, str] | None
+    policy_kind: GroundAllocationPolicyKind | None
+    policy_name: GroundAllocationPolicyName | None
+
+    @model_validator(mode="after")
+    def _policy_name_matches_kind(self) -> GroundAllocationEvent:
+        if (self.policy_kind is None) != (self.policy_name is None):
+            raise ValueError("policy_kind and policy_name must either both be set or both be None")
+
+        if self.policy_kind is None or self.policy_name is None:
+            return self
+
+        allowed = GROUND_ALLOCATION_POLICY_NAMES_BY_KIND[self.policy_kind]
+        if self.policy_name not in allowed:
+            raise ValueError(
+                f"policy_name={self.policy_name!r} is not valid for "
+                f"policy_kind={self.policy_kind!r}"
+            )
+        return self
 
 
 ObserverFrame = Literal["body_local"]
@@ -103,7 +227,7 @@ Phase 2 computes ground-link look angles in the body-local topocentric
 frame anchored to the observer's `reference_body` (ENU at Earth,
 MCMF-local-vertical at Luna, etc.). Configured boresights are expressed
 in that same topocentric frame; no inertial observer-frame mode exists
-in physical_v1."""
+in terminal_physics."""
 
 
 class GroundVisibilityDecisionWire(BaseModel):
@@ -117,7 +241,7 @@ class GroundVisibilityDecisionWire(BaseModel):
     `None` to mean "this constraint was not in effect for the decision"
     (e.g., a `geometry_only` session does not declare `max_range_km`,
     so the field is `None`); they never mean "we forgot to populate
-    this." A `physical_v1` session must populate every applied
+    this." A `terminal_physics` session must populate every applied
     constraint that the GS or sat terminal declares.
 
     Terminal profile fields explained:
@@ -146,7 +270,7 @@ class GroundVisibilityDecisionWire(BaseModel):
 
     pair: tuple[str, str]
     tenant_id: str
-    reference_body: SupportedBody
+    reference_body: SupportedSurfaceBody
     visible: bool
     range_km: float
     elevation_deg: float
@@ -158,13 +282,13 @@ class GroundVisibilityDecisionWire(BaseModel):
     applied_gs_max_range_km: float | None = Field(
         description=(
             "Ground terminal max_range_km applied to this decision; None only when "
-            "terminal constraints were not applied, e.g. geometry_only fidelity."
+            "terminal constraints were not applied, e.g. geometry_only ground-link model."
         ),
     )
     applied_sat_max_range_km: float | None = Field(
         description=(
             "Satellite ground-terminal max_range_km applied to this decision; None only "
-            "when terminal constraints were not applied, e.g. geometry_only fidelity."
+            "when terminal constraints were not applied, e.g. geometry_only ground-link model."
         ),
     )
     applied_gs_field_of_regard_deg: float | None = Field(
@@ -298,7 +422,7 @@ class UnscheduledPair(BaseModel):
 
     pair: tuple[str, str]
     tenant_id: str
-    reference_body: SupportedBody
+    reference_body: SupportedSurfaceBody
     unscheduled_reason: GroundUnscheduledReason
     incumbent_pair: tuple[str, str] | None
     capacity_constraint: str | None
@@ -357,6 +481,8 @@ class GroundLinkDecisionSnapshot(BaseModel):
     epoch_id: int
     decisions: tuple[GroundVisibilityDecisionWire, ...]
     unscheduled_pairs: tuple[UnscheduledPair, ...]
+    policy_audit: GroundPolicyAudit
+    allocation_events: tuple[GroundAllocationEvent, ...]
 
     @model_validator(mode="after")
     def _decisions_have_unique_pairs(self) -> GroundLinkDecisionSnapshot:

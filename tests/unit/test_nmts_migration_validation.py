@@ -40,6 +40,11 @@ def test_ground_segment_validation():
     with pytest.raises(ValidationError, match="Input should be"):
         GroundStationConfig(name="gs", lat_deg=0, lon_deg=0, reference_body="pluto")
 
+    # Lagrange labels are not surface bodies and are rejected by the same schema
+    # boundary as any unsupported reference_body.
+    with pytest.raises(ValidationError, match="Input should be"):
+        GroundStationConfig(name="gs", lat_deg=0, lon_deg=0, reference_body="eml2")
+
 
 def test_hysteresis_parameters_validation():
     """Verify range validation for hysteresis parameters."""

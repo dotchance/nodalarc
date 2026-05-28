@@ -128,18 +128,18 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
     )
 
 
-def _enforce_simulation_fidelity_contract(session: SessionConfig) -> None:
+def _enforce_ground_link_model_contract(session: SessionConfig) -> None:
     """Fail before OME run if geometry-only physics is not explicitly acknowledged."""
-    if session.simulation.fidelity != "geometry_only":
+    if session.simulation.ground_link_model != "geometry_only":
         return
     if not session.simulation.acknowledge_geometry_only:
         raise ValueError(
-            "simulation.fidelity=geometry_only requires "
+            "simulation.ground_link_model=geometry_only requires "
             "simulation.acknowledge_geometry_only: true. Ground links would "
             "otherwise run without range, field-of-regard, or tracking-rate checks."
         )
     logging.warning(
-        "simulation.fidelity=geometry_only: ground links use LOS/elevation only; "
+        "simulation.ground_link_model=geometry_only: ground links use LOS/elevation only; "
         "range, field-of-regard, and tracking-rate constraints are not enforced"
     )
 
@@ -205,13 +205,9 @@ _seeking: bool = False  # True while seek in progress — mutex for pause/set_sp
 def run(session_path: str, output_dir: str | None = None) -> Path:
     """Run the OME pipeline (single window, batch mode) and return the output path."""
     cfg = _load_session_config(session_path)
-    _enforce_simulation_fidelity_contract(cfg.session)
+    _enforce_ground_link_model_contract(cfg.session)
     epoch_unix = resolve_session_epoch(cfg.session.time)
     _validate_sgp4_tle_freshness(cfg, epoch_unix)
-    mbb_dispatch = cfg.session.scheduling.ground.handover_mode == "mbb"
-    mbb_overlap_ticks = cfg.session.scheduling.ground.mbb_overlap_ticks
-    mbb_reserve = cfg.session.scheduling.ground.mbb_reserve if mbb_dispatch else 0
-
     events = precompute_timeline(
         satellites=cfg.satellites,
         addressing=cfg.addressing,
@@ -221,15 +217,10 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         duration_s=cfg.period,
         propagator_id=cfg.propagator_id,
         step_seconds=cfg.session.time.step_seconds,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
-        ground_policy_lookahead_horizon_ticks=(
-            cfg.session.scheduling.ground.lookahead_horizon_ticks
-        ),
+        ground_scheduling=cfg.session.scheduling.ground,
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
-        default_ground_policy=cfg.session.scheduling.ground.policy,
-        simulation_fidelity=cfg.session.simulation.fidelity,
+        ground_link_model=cfg.session.simulation.ground_link_model,
     )
 
     out_dir = Path(output_dir) if output_dir else Path("output")
@@ -733,11 +724,8 @@ def _run_pacing(
         propagator_id=cfg.propagator_id,
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
-        ground_policy_lookahead_horizon_ticks=session.scheduling.ground.lookahead_horizon_ticks,
-        default_ground_policy=session.scheduling.ground.policy,
-        simulation_fidelity=session.simulation.fidelity,
+        ground_scheduling=session.scheduling.ground,
+        ground_link_model=session.simulation.ground_link_model,
     )
 
     step_seconds = session.time.step_seconds
@@ -992,6 +980,8 @@ def _run_pacing(
     initial_decision_snap = build_link_decision_snapshot(
         decisions={},
         unscheduled_pairs=(),
+        policy_audit=step_ctx.ground_policy_audit,
+        allocation_events=(),
         sim_time=initial_sim_time,
         snapshot_seq=snapshot_seq,
         epoch_id=_epoch_id,
@@ -1085,6 +1075,8 @@ def _run_pacing(
                 seek_decision_snap = build_link_decision_snapshot(
                     decisions={},
                     unscheduled_pairs=(),
+                    policy_audit=step_ctx.ground_policy_audit,
+                    allocation_events=(),
                     sim_time=datetime.fromtimestamp(epoch_unix, UTC),
                     snapshot_seq=snapshot_seq,
                     epoch_id=_epoch_id,
@@ -1221,6 +1213,8 @@ def _run_pacing(
                 decision_snap = build_link_decision_snapshot(
                     decisions=step_result.ground_decisions,
                     unscheduled_pairs=step_result.ground_allocation.unscheduled_pairs,
+                    policy_audit=step_result.ground_allocation.policy_audit,
+                    allocation_events=step_result.ground_allocation.allocation_events,
                     sim_time=sim_time,
                     snapshot_seq=snapshot_seq,
                     epoch_id=_epoch_id,

@@ -28,10 +28,14 @@ def _optical_ground_stations() -> dict:
                 "count": 1,
                 "bandwidth_mbps": 1000,
                 "tracking_capacity": 1,
+                "max_range_km": 2000,
+                "field_of_regard_deg": 120,
+                "max_tracking_rate_deg_s": 1.5,
+                "boresight": {"mode": "local_vertical"},
             }
         ],
         "default_min_elevation_deg": 25,
-        "default_scheduling_policy": "highest-elevation",
+        "default_selection_policy": {"name": "highest-elevation", "params": {}},
         "default_terrestrial_prefixes": {
             "ipv4_template": "172.16.{gs_index}.0/24",
             "ipv6_template": "fd10::{gs_index}:0/112",
@@ -57,6 +61,18 @@ def four_node_timeline(tmp_path):
         "orbit": {"propagator": "keplerian-circular"},
         "constellation": "configs/constellations/custom-example.yaml",
         "ground_stations": _optical_ground_stations(),
+        "scheduling": {
+            "ground": {
+                "selection_policy": {"name": "highest-elevation", "params": {}},
+                "handover_policy": {
+                    "name": "hysteresis",
+                    "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
+                },
+                "handover_mode": "bbm",
+                "mbb_overlap_ticks": 3,
+                "mbb_reserve": 0,
+            }
+        },
         "routing": {
             "protocol": "isis",
             "extensions": ["sr"],

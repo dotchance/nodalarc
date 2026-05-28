@@ -22,6 +22,7 @@ from nodalarc.models.constellation import (
     TLEConstellation,
 )
 from nodalarc.models.events import ValidationResult
+from nodalarc.models.ground_policy import SelectionPolicySpec
 from nodalarc.models.ground_station import (
     GroundStationConfig,
     GroundStationFile,
@@ -45,6 +46,19 @@ from nodalarc.session_validator import (
 from nodalarc.stack_resolver import ResolvedStack, resolve_stack
 
 from tests.conftest import CONFIGS_DIR
+
+_EXPLICIT_SCHEDULING = {
+    "ground": {
+        "selection_policy": {"name": "highest-elevation", "params": {}},
+        "handover_policy": {
+            "name": "hysteresis",
+            "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
+        },
+        "handover_mode": "bbm",
+        "mbb_overlap_ticks": 3,
+        "mbb_reserve": 0,
+    }
+}
 
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
@@ -93,6 +107,7 @@ def _make_session(
             bfd_rx_interval=bfd_rx_interval,
         ),
         time=TimeConfig(step_seconds=step_seconds),
+        scheduling=_EXPLICIT_SCHEDULING,
         placement=PlacementConfig(
             policy=placement_policy,
             planes_per_group=planes_per_group,
@@ -100,9 +115,14 @@ def _make_session(
     )
 
 
+def _selection_policy(name: str, *, horizon: int | None = None) -> SelectionPolicySpec:
+    params = {"lookahead_horizon_ticks": horizon} if horizon is not None else {}
+    return SelectionPolicySpec(name=name, params=params)
+
+
 def _make_gs_file(
     stations: list[GroundStationConfig] | None = None,
-    default_scheduling_policy: str = "highest-elevation",
+    default_selection_policy: SelectionPolicySpec | None = None,
 ) -> GroundStationFile:
     if stations is None:
         stations = [
@@ -131,7 +151,7 @@ def _make_gs_file(
                 **GROUND_PHYSICAL_TERMINAL_FIELDS,
             )
         ],
-        default_scheduling_policy=default_scheduling_policy,
+        default_selection_policy=default_selection_policy,
         stations=stations,
     )
 
@@ -510,15 +530,16 @@ class TestE004:
 
 
 # ---------------------------------------------------------------------------
-# E005: Invalid scheduling_policy
+# E005: Invalid selection_policy
 # ---------------------------------------------------------------------------
 
 
 class TestE005:
     def test_invalid_scheduling_policy(self):
-        """Typo'd scheduling_policy = error."""
+        """Typo'd selection_policy = error when a caller bypasses model validation."""
         session = _make_session()
-        gs = _make_gs_file(default_scheduling_policy="best-signal")
+        bad_policy = SelectionPolicySpec.model_construct(name="best-signal", params={})
+        gs = _make_gs_file(default_selection_policy=bad_policy)
         sats = _make_satellites()
         constellation = _make_constellation()
         stack = _make_resolved_stack()
@@ -536,12 +557,13 @@ class TestE005:
         assert "best-signal" in errors[0].message
 
     def test_invalid_station_scheduling_policy(self):
-        """Per-station invalid scheduling_policy = error."""
+        """Per-station invalid selection_policy = error when validation is bypassed."""
+        bad_policy = SelectionPolicySpec.model_construct(name="round-robin", params={})
         station = GroundStationConfig(
             name="bad-policy",
             lat_deg=34.0,
             lon_deg=-118.0,
-            scheduling_policy="round-robin",
+            selection_policy=bad_policy,
         )
         gs = _make_gs_file(stations=[station])
         session = _make_session()
@@ -562,9 +584,10 @@ class TestE005:
         assert "round-robin" in errors[0].message
 
     def test_valid_scheduling_policies_pass(self):
-        """All valid scheduling policies produce no E005."""
+        """All valid selection policies produce no E005."""
         for policy in VALID_SCHEDULING_POLICIES:
-            gs = _make_gs_file(default_scheduling_policy=policy)
+            horizon = 600 if policy == "longest-remaining-pass" else None
+            gs = _make_gs_file(default_selection_policy=_selection_policy(policy, horizon=horizon))
             session = _make_session()
             sats = _make_satellites()
             constellation = _make_constellation()
@@ -590,7 +613,11 @@ class TestE005:
 class TestE009:
     def test_longest_remaining_pass_default_policy_requires_lookahead_horizon(self):
         session = _make_session()
-        gs = _make_gs_file(default_scheduling_policy="longest-remaining-pass")
+        bad_policy = SelectionPolicySpec.model_construct(
+            name="longest-remaining-pass",
+            params={},
+        )
+        gs = _make_gs_file().model_copy(update={"default_selection_policy": bad_policy})
         sats = _make_satellites()
         constellation = _make_constellation()
         stack = _make_resolved_stack()
@@ -603,16 +630,16 @@ class TestE009:
 
     def test_longest_remaining_pass_station_override_requires_lookahead_horizon(self):
         session = _make_session()
-        gs = _make_gs_file(
-            stations=[
-                GroundStationConfig(
-                    name="dwell-policy",
-                    lat_deg=34.0,
-                    lon_deg=-118.0,
-                    scheduling_policy="longest-remaining-pass",
-                )
-            ]
+        bad_policy = SelectionPolicySpec.model_construct(
+            name="longest-remaining-pass",
+            params={},
         )
+        station = GroundStationConfig(
+            name="dwell-policy",
+            lat_deg=34.0,
+            lon_deg=-118.0,
+        ).model_copy(update={"selection_policy": bad_policy})
+        gs = _make_gs_file(stations=[station])
         sats = _make_satellites()
         constellation = _make_constellation()
         stack = _make_resolved_stack()
@@ -621,12 +648,16 @@ class TestE009:
 
         errors = [r for r in results if r.level == "error" and r.code == "E009"]
         assert len(errors) == 1
-        assert "stations.dwell-policy.scheduling_policy" in errors[0].message
+        assert "stations.dwell-policy.selection_policy" in errors[0].message
 
     def test_longest_remaining_pass_with_lookahead_horizon_passes(self):
         session = _make_session()
-        session.scheduling.ground.lookahead_horizon_ticks = 600
-        gs = _make_gs_file(default_scheduling_policy="longest-remaining-pass")
+        gs = _make_gs_file(
+            default_selection_policy=_selection_policy(
+                "longest-remaining-pass",
+                horizon=600,
+            )
+        )
         sats = _make_satellites()
         constellation = _make_constellation()
         stack = _make_resolved_stack()
@@ -635,6 +666,67 @@ class TestE009:
 
         e009 = [r for r in results if r.code == "E009"]
         assert e009 == []
+
+
+# ---------------------------------------------------------------------------
+# E022: selection_score ranking requires compatible policy score scales
+# ---------------------------------------------------------------------------
+
+
+class TestE022:
+    def test_selection_score_ranking_rejects_incompatible_policy_score_scales(self):
+        session = _make_session()
+        stations = [
+            GroundStationConfig(
+                name="dwell-gs",
+                lat_deg=34.0,
+                lon_deg=-118.0,
+                selection_policy=_selection_policy("longest-remaining-pass", horizon=600),
+            ),
+            GroundStationConfig(
+                name="elevation-gs",
+                lat_deg=35.0,
+                lon_deg=-117.0,
+                selection_policy=_selection_policy("highest-elevation"),
+            ),
+        ]
+        gs = _make_gs_file(stations=stations)
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E022"]
+        assert len(errors) == 1
+        assert "incompatible score scales" in errors[0].message
+        assert errors[0].field_path == "scheduling.ground.ranking_order"
+
+    def test_per_gs_rank_ranking_allows_incompatible_raw_policy_score_scales(self):
+        session = _make_session()
+        session.scheduling.ground.ranking_order = ["service_priority", "per_gs_rank", "lex_pair"]
+        stations = [
+            GroundStationConfig(
+                name="dwell-gs",
+                lat_deg=34.0,
+                lon_deg=-118.0,
+                selection_policy=_selection_policy("longest-remaining-pass", horizon=600),
+            ),
+            GroundStationConfig(
+                name="elevation-gs",
+                lat_deg=35.0,
+                lon_deg=-117.0,
+                selection_policy=_selection_policy("highest-elevation"),
+            ),
+        ]
+        gs = _make_gs_file(stations=stations)
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        assert [r for r in results if r.code == "E022"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -760,14 +852,14 @@ class TestE011:
 
 
 # ---------------------------------------------------------------------------
-# E020/E021: Ground physics fidelity gates
+# E020/E021: Ground-link model gates
 # ---------------------------------------------------------------------------
 
 
 class TestGroundPhysicsFidelityGates:
     def test_geometry_only_requires_explicit_acknowledgement(self):
         session = _make_session()
-        session.simulation.fidelity = "geometry_only"
+        session.simulation.ground_link_model = "geometry_only"
         session.simulation.acknowledge_geometry_only = False
         gs = _make_gs_file()
         sats = _make_satellites()
@@ -782,7 +874,7 @@ class TestGroundPhysicsFidelityGates:
 
     def test_acknowledged_geometry_only_warns_but_does_not_emit_e020(self):
         session = _make_session()
-        session.simulation.fidelity = "geometry_only"
+        session.simulation.ground_link_model = "geometry_only"
         session.simulation.acknowledge_geometry_only = True
         gs = _make_gs_file()
         sats = _make_satellites()
@@ -795,7 +887,7 @@ class TestGroundPhysicsFidelityGates:
         warnings = [r for r in results if r.level == "warning" and r.code == "W009"]
         assert len(warnings) == 1
 
-    def test_physical_v1_requires_ground_station_terminal_physics(self):
+    def test_terminal_physics_requires_ground_station_terminal_physics(self):
         session = _make_session()
         gs = _make_gs_file(
             stations=[
@@ -825,7 +917,7 @@ class TestGroundPhysicsFidelityGates:
         assert "ground_stations.missing-physics.terminals[0]" in errors[0].message
         assert "max_range_km" in errors[0].message
 
-    def test_physical_v1_requires_satellite_terminal_physics(self):
+    def test_terminal_physics_requires_satellite_terminal_physics(self):
         session = _make_session()
         gs = _make_gs_file()
         sats = _make_satellites()
@@ -841,7 +933,42 @@ class TestGroundPhysicsFidelityGates:
         assert "field_of_regard_deg" in errors[0].message
         assert "boresight" in errors[0].message
 
-    def test_physical_v1_skips_e021_for_pure_isl_satellites(self):
+    def test_terminal_physics_rejects_same_target_satellite_terminal_heterogeneity(self):
+        session = _make_session()
+        gs = _make_gs_file()
+        sats = _make_satellites(count=1, ground_terminals=2)
+        sats[0].ground_terminal_count = 2
+        sats[0].ground_terminals = (
+            GroundTerminal(
+                type="rf",
+                count=1,
+                bandwidth_mbps=1000.0,
+                max_range_km=2000.0,
+                field_of_regard_deg=120.0,
+                max_tracking_rate_deg_s=1.5,
+                boresight=SatGroundTerminalBoresight(target_body="earth", mode="nadir"),
+            ),
+            GroundTerminal(
+                type="rf",
+                count=1,
+                bandwidth_mbps=1000.0,
+                max_range_km=2500.0,
+                field_of_regard_deg=120.0,
+                max_tracking_rate_deg_s=1.5,
+                boresight=SatGroundTerminalBoresight(target_body="earth", mode="nadir"),
+            ),
+        )
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        errors = [r for r in results if r.level == "error" and r.code == "E021"]
+        assert len(errors) == 1
+        assert "target_body='earth'" in errors[0].message
+        assert "heterogeneous ground terminal physics" in errors[0].message
+
+    def test_terminal_physics_skips_e021_for_pure_isl_satellites(self):
         session = _make_session()
         gs = _make_gs_file()
         sats = _make_satellites(ground_terminals=0)
@@ -1430,12 +1557,68 @@ class TestExistingSessions:
         )
 
 
-def test_checked_in_sessions_declare_fidelity_and_geometry_ack_explicitly():
+def test_checked_in_sessions_declare_ground_link_model_and_geometry_ack_explicitly():
     for path in sorted((CONFIGS_DIR / "sessions").glob("*.yaml")):
         data = yaml.safe_load(path.read_text())
         simulation = data.get("simulation") or {}
-        assert "fidelity" in simulation, f"{path} must explicitly declare simulation.fidelity"
-        if simulation["fidelity"] == "geometry_only":
+        assert "ground_link_model" in simulation, (
+            f"{path} must explicitly declare simulation.ground_link_model"
+        )
+        if simulation["ground_link_model"] == "geometry_only":
             assert simulation.get("acknowledge_geometry_only") is True, (
                 f"{path} uses geometry_only without explicit acknowledgement"
             )
+
+
+def test_checked_in_sessions_include_non_default_ground_policy_example():
+    examples: list[tuple[str, str]] = []
+    for path in sorted((CONFIGS_DIR / "sessions").glob("*.yaml")):
+        data = yaml.safe_load(path.read_text())
+        ground = (data.get("scheduling") or {}).get("ground") or {}
+        selection = (ground.get("selection_policy") or {}).get("name")
+        handover = (ground.get("handover_policy") or {}).get("name")
+        if selection != "highest-elevation" or handover != "hysteresis":
+            examples.append((path.name, f"selection={selection}, handover={handover}"))
+
+    assert examples, (
+        "checked-in sessions must include at least one non-default ground policy example"
+    )
+
+
+# ---------------------------------------------------------------------------
+# W010: Future beam quota fields accepted but not enforced yet
+# ---------------------------------------------------------------------------
+
+
+class TestW010:
+    def test_future_capacity_fields_warn_but_do_not_block(self):
+        session = _make_session()
+        gs = _make_gs_file(
+            stations=[
+                GroundStationConfig(
+                    name="beam-quota",
+                    lat_deg=34.0,
+                    lon_deg=-118.0,
+                    terminals=[
+                        GroundTerminalDef(
+                            type="rf",
+                            count=1,
+                            bandwidth_mbps=1000,
+                            tracking_capacity=1,
+                            gateway_beam_quota=4,
+                            **GROUND_PHYSICAL_TERMINAL_FIELDS,
+                        )
+                    ],
+                )
+            ]
+        )
+        sats = _make_satellites()
+        constellation = _make_constellation()
+        stack = _make_resolved_stack()
+
+        results = validate_session_readiness(session, constellation, sats, gs, stack)
+
+        warnings = [r for r in results if r.level == "warning" and r.code == "W010"]
+        assert len(warnings) == 1
+        assert "gateway_beam_quota" in warnings[0].message
+        assert [r for r in results if r.level == "error"] == []

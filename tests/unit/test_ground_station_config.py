@@ -19,7 +19,8 @@ class TestGroundStationFileLoading:
         gs = GroundStationFile.model_validate(data)
         assert len(gs.stations) == 4
         assert gs.default_min_elevation_deg == 25
-        assert gs.default_scheduling_policy == "highest-elevation"
+        assert gs.default_selection_policy is not None
+        assert gs.default_selection_policy.name == "highest-elevation"
 
     def test_station_names_unique(self):
         data = yaml.safe_load((CONFIGS_DIR / "ground-stations/custom-example.yaml").read_text())
@@ -62,7 +63,8 @@ class TestPolarStationOverrides:
 
         # Per-station overrides
         assert polar.min_elevation_deg == 10
-        assert polar.scheduling_policy == "lowest-elevation"
+        assert polar.selection_policy is not None
+        assert polar.selection_policy.name == "lowest-elevation"
 
         # Per-station terminal override preserves the example's optical
         # satellite/ground compatibility while changing capacity.

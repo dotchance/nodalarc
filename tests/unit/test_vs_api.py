@@ -1175,6 +1175,24 @@ def _decision_snapshot_payload() -> dict:
                 "capacity_constraint": None,
             }
         ],
+        "policy_audit": {
+            "selection_policies": {"gs-den": "highest-elevation"},
+            "selection_policy_params": {"gs-den": {}},
+            "handover_policies": {"gs-den": "hysteresis"},
+            "handover_policy_params": {
+                "gs-den": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0}
+            },
+            "ranking_order": ["service_priority", "selection_score", "lex_pair"],
+            "handover_mode": "bbm",
+            "mbb_preemption": "off",
+            "successor_abort_policy": "hard_release",
+            "cross_tenant_displacement": "off",
+            "mbb_overlap_ticks": 3,
+            "mbb_reserve": 0,
+            "bbm_acquire_timeout_ticks": 1,
+            "ignored_capacity_fields": [],
+        },
+        "allocation_events": [],
     }
 
 

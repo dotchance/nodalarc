@@ -19,6 +19,7 @@ from nodalarc.constellation_loader import SatelliteNode, isl_terminal_for_interf
 from nodalarc.ground_terminals import (
     TerminalPhysicsProfile,
     ground_terminal_type,
+    satellite_terminal_index_pools_by_target_body,
     station_ground_terminal_capacity,
     station_ground_terminal_type,
     terminal_physics_profile,
@@ -33,13 +34,17 @@ from nodalarc.models.events import (
     NodePosition,
     SessionEphemeris,
 )
-from nodalarc.models.ground_station import GroundStationFile
+from nodalarc.models.ground_policy import HandoverPolicySpec, RankingComponent, SelectionPolicySpec
+from nodalarc.models.ground_station import GroundStationFile, HysteresisParameters
+from nodalarc.models.link_decisions import GroundPolicyAudit
+from nodalarc.models.session import GroundSchedulingConfig
 
 from ome.event_diff import diff_ground_visibility_events, diff_isl_visibility_events
 from ome.ground_allocator import (
     GroundAllocationResult,
     allocate_ground_links,
 )
+from ome.ground_selection_policies import validate_selection_score_scale_compatibility
 from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
 from ome.isl_engine import (
     IslFeasibilityResult,
@@ -139,8 +144,6 @@ class TimelineEvent:
 
 from dataclasses import dataclass
 
-from nodalarc.models.ground_station import HysteresisParameters
-
 
 @dataclass(frozen=True)
 class StepContext:
@@ -151,12 +154,22 @@ class StepContext:
     gs_positions: dict[str, tuple[EcefVec3, GeoPosition]]
     gs_min_elevations: dict[str, float]
     gs_terminal_counts: dict[str, int]
-    gs_policies: dict[str, str]
-    gs_hysteresis: dict[str, HysteresisParameters]
+    gs_selection_policies: dict[str, SelectionPolicySpec]
+    gs_selection_policy_names: dict[str, str]
+    gs_handover_policies: dict[str, HandoverPolicySpec]
     gs_service_priorities: dict[str, int]
-    simulation_fidelity: Literal["geometry_only", "physical_v1"]
+    ground_ranking_order: tuple[RankingComponent, ...]
+    ground_handover_mode: Literal["bbm", "mbb"]
+    ground_mbb_preemption: str
+    ground_successor_abort_policy: str
+    ground_cross_tenant_displacement: str
+    ground_bbm_acquire_timeout_ticks: int
+    ignored_ground_capacity_fields: tuple[str, ...]
+    ground_policy_audit: GroundPolicyAudit
+    ground_link_model: Literal["geometry_only", "terminal_physics"]
     gs_terminal_profiles: dict[str, TerminalPhysicsProfile]
     sat_ground_terminal_profiles: dict[str, tuple[TerminalPhysicsProfile, ...]]
+    sat_ground_terminal_indices_by_body: dict[str, dict[str, tuple[int, ...]]]
     # Per-GS tenant scope (Direction 2 — multi-tenant from day one) and
     # reference body (Direction 3 — multi-body from day one). Both
     # already exist on GroundStationConfig; the StepContext carries them
@@ -227,35 +240,106 @@ class TimelineWindowResult:
     predictive: bool = False
 
 
+def _future_capacity_field_paths(terminals: tuple[object, ...], *, base_path: str) -> list[str]:
+    paths: list[str] = []
+    for idx, terminal in enumerate(terminals):
+        for field_name in ("gateway_beam_quota", "user_terminal_beam_quota"):
+            if getattr(terminal, field_name, None) is not None:
+                paths.append(f"{base_path}[{idx}].{field_name}")
+    return paths
+
+
+def _normalize_handover_policy(policy: HandoverPolicySpec) -> HandoverPolicySpec:
+    if policy.name == "none":
+        if policy.params:
+            raise ValueError("handover_policy.name='none' requires empty params")
+        return policy.model_copy(deep=True)
+    if policy.name == "hysteresis":
+        return HandoverPolicySpec(
+            name="hysteresis",
+            params=HysteresisParameters(**policy.params).model_dump(),
+        )
+    raise ValueError(f"Unknown handover_policy.name={policy.name!r}")
+
+
+def _build_policy_audit(
+    *,
+    gs_selection_policies: dict[str, SelectionPolicySpec],
+    gs_handover_policies: dict[str, HandoverPolicySpec],
+    ground_scheduling: GroundSchedulingConfig,
+    mbb_reserve: int,
+    ignored_capacity_fields: tuple[str, ...],
+) -> GroundPolicyAudit:
+    return GroundPolicyAudit(
+        selection_policies={k: v.name for k, v in sorted(gs_selection_policies.items())},
+        selection_policy_params={
+            k: dict(v.params) for k, v in sorted(gs_selection_policies.items())
+        },
+        handover_policies={k: v.name for k, v in sorted(gs_handover_policies.items())},
+        handover_policy_params={k: dict(v.params) for k, v in sorted(gs_handover_policies.items())},
+        ranking_order=tuple(ground_scheduling.ranking_order),
+        handover_mode=ground_scheduling.handover_mode,
+        mbb_preemption=ground_scheduling.mbb_preemption,
+        successor_abort_policy=ground_scheduling.successor_abort_policy,
+        cross_tenant_displacement=ground_scheduling.cross_tenant_displacement,
+        mbb_overlap_ticks=ground_scheduling.mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
+        bbm_acquire_timeout_ticks=ground_scheduling.bbm_acquire_timeout_ticks,
+        ignored_capacity_fields=ignored_capacity_fields,
+    )
+
+
 def build_step_context(
     satellites: list[SatelliteNode],
     addressing: AddressingScheme,
     gs_file: GroundStationFile | None,
     neighbors: frozenset[tuple[str, NeighborAssignment]],
     propagator_id: PropagatorId,
-    mbb_overlap_ticks: int = 3,
-    mbb_reserve: int = 0,
-    ground_policy_lookahead_horizon_ticks: int = 0,
+    ground_scheduling: GroundSchedulingConfig | None = None,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
-    default_ground_policy: str | None = None,
-    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1",
+    ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     by_node = neighbors_by_node(neighbors)
+    has_ground_stations = gs_file is not None and bool(gs_file.stations)
+    if has_ground_stations and ground_scheduling is None:
+        raise ValueError(
+            "build_step_context requires explicit ground_scheduling when ground stations "
+            "exist; Phase 3 does not silently choose selection or handover policy"
+        )
+    ground_scheduling = ground_scheduling or GroundSchedulingConfig()
+    effective_mbb_reserve = (
+        ground_scheduling.mbb_reserve if ground_scheduling.handover_mode == "mbb" else 0
+    )
 
     sat_isl_terminals: dict[str, int] = {}
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]] = {}
     sat_ground_terminals: dict[str, int] = {}
     sat_ground_terminal_types: dict[str, str] = {}
     sat_ground_terminal_profiles: dict[str, tuple[TerminalPhysicsProfile, ...]] = {}
-    has_ground_stations = gs_file is not None and bool(gs_file.stations)
-    require_ground_physics = simulation_fidelity == "physical_v1" and has_ground_stations
+    sat_ground_terminal_indices_by_body: dict[str, dict[str, tuple[int, ...]]] = {}
+    ignored_capacity_fields: list[str] = []
+    require_ground_physics = ground_link_model == "terminal_physics" and has_ground_stations
+    terminal_pool_link_model: Literal["geometry_only", "terminal_physics"] = (
+        "terminal_physics" if require_ground_physics else "geometry_only"
+    )
     for sat in satellites:
         nid = addressing.sat_id(sat.plane, sat.slot)
         sat_isl_terminals[nid] = sat.isl_terminal_count
         sat_ground_terminals[nid] = sat.ground_terminal_count
+        sat_ground_terminal_indices_by_body[nid] = satellite_terminal_index_pools_by_target_body(
+            tuple(sat.ground_terminals),
+            total_count=sat.ground_terminal_count,
+            ground_link_model=terminal_pool_link_model,
+        )
         if sat.ground_terminals:
+            ignored_capacity_fields.extend(
+                _future_capacity_field_paths(
+                    tuple(sat.ground_terminals),
+                    base_path=f"satellites.{nid}.ground_terminals",
+                )
+            )
             sat_ground_terminal_types[nid] = ground_terminal_type(sat.ground_terminals)
             sat_ground_terminal_profiles[nid] = terminal_physics_profiles(
                 tuple(sat.ground_terminals),
@@ -279,8 +363,9 @@ def build_step_context(
     gs_positions: dict[str, tuple[EcefVec3, GeoPosition]] = {}
     gs_min_elevations: dict[str, float] = {}
     gs_terminal_counts: dict[str, int] = {}
-    gs_policies: dict[str, str] = {}
-    gs_hysteresis: dict[str, HysteresisParameters] = {}
+    gs_selection_policies: dict[str, SelectionPolicySpec] = {}
+    gs_selection_policy_names: dict[str, str] = {}
+    gs_handover_policies: dict[str, HandoverPolicySpec] = {}
     gs_service_priorities: dict[str, int] = {}
     gs_tenant_ids: dict[str, str] = {}
     gs_reference_bodies: dict[str, str] = {}
@@ -288,10 +373,17 @@ def build_step_context(
     gs_terminal_profiles: dict[str, TerminalPhysicsProfile] = {}
     ground_pair_terminal_types: dict[tuple[str, str], str] = {}
     if gs_file:
-        default_gs_policy = (
-            default_ground_policy
-            if default_ground_policy is not None
-            else gs_file.default_scheduling_policy
+        default_selection_policy = (
+            gs_file.default_selection_policy or ground_scheduling.selection_policy
+        ).model_copy(deep=True)
+        default_handover_policy = _normalize_handover_policy(
+            gs_file.default_handover_policy or ground_scheduling.handover_policy
+        )
+        ignored_capacity_fields.extend(
+            _future_capacity_field_paths(
+                tuple(gs_file.default_terminals),
+                base_path="ground_stations.default_terminals",
+            )
         )
         for _i, station in enumerate(gs_file.stations):
             node_id = addressing.gs_id(station.name)
@@ -306,18 +398,28 @@ def build_step_context(
             gs_terminal_counts[node_id] = station_ground_terminal_capacity(gs_file, station)
             gs_terminal_types[node_id] = station_ground_terminal_type(gs_file, station)
             effective_terminals = station.terminals or gs_file.default_terminals
+            if station.terminals is not None:
+                ignored_capacity_fields.extend(
+                    _future_capacity_field_paths(
+                        tuple(station.terminals),
+                        base_path=f"ground_stations.stations.{station.name}.terminals",
+                    )
+                )
             gs_terminal_profiles[node_id] = terminal_physics_profile(
                 tuple(effective_terminals),
                 profile_id=f"{node_id}.terminals",
                 endpoint="ground",
                 require_constraints=require_ground_physics,
             )
-            gs_policies[node_id] = (
-                station.scheduling_policy
-                if station.scheduling_policy is not None
-                else default_gs_policy
+            selection_policy = (station.selection_policy or default_selection_policy).model_copy(
+                deep=True
             )
-            gs_hysteresis[node_id] = station.hysteresis
+            handover_policy = _normalize_handover_policy(
+                station.handover_policy or default_handover_policy
+            )
+            gs_selection_policies[node_id] = selection_policy
+            gs_selection_policy_names[node_id] = selection_policy.name
+            gs_handover_policies[node_id] = handover_policy
             gs_service_priorities[node_id] = station.service_priority
             gs_tenant_ids[node_id] = station.tenant_id
             gs_reference_bodies[node_id] = station.reference_body
@@ -332,18 +434,50 @@ def build_step_context(
                 pair = (min(gs_id, sat_id), max(gs_id, sat_id))
                 ground_pair_terminal_types[pair] = gs_type
 
+    validate_selection_score_scale_compatibility(
+        policies=gs_selection_policies,
+        ranking_order=tuple(ground_scheduling.ranking_order),
+    )
+
+    lookahead_horizon_ticks = 0
+    for policy in gs_selection_policies.values():
+        if policy.name == "longest-remaining-pass":
+            lookahead_horizon_ticks = max(
+                lookahead_horizon_ticks,
+                int(policy.params["lookahead_horizon_ticks"]),
+            )
+
+    ignored_capacity_tuple = tuple(sorted(set(ignored_capacity_fields)))
+    policy_audit = _build_policy_audit(
+        gs_selection_policies=gs_selection_policies,
+        gs_handover_policies=gs_handover_policies,
+        ground_scheduling=ground_scheduling,
+        mbb_reserve=effective_mbb_reserve,
+        ignored_capacity_fields=ignored_capacity_tuple,
+    )
+
     return StepContext(
         satellites=satellites,
         addressing=addressing,
         gs_positions=gs_positions,
         gs_min_elevations=gs_min_elevations,
         gs_terminal_counts=gs_terminal_counts,
-        gs_policies=gs_policies,
-        gs_hysteresis=gs_hysteresis,
+        gs_selection_policies=gs_selection_policies,
+        gs_selection_policy_names=gs_selection_policy_names,
+        gs_handover_policies=gs_handover_policies,
         gs_service_priorities=gs_service_priorities,
-        simulation_fidelity=simulation_fidelity,
+        ground_ranking_order=tuple(ground_scheduling.ranking_order),
+        ground_handover_mode=ground_scheduling.handover_mode,
+        ground_mbb_preemption=ground_scheduling.mbb_preemption,
+        ground_successor_abort_policy=ground_scheduling.successor_abort_policy,
+        ground_cross_tenant_displacement=ground_scheduling.cross_tenant_displacement,
+        ground_bbm_acquire_timeout_ticks=ground_scheduling.bbm_acquire_timeout_ticks,
+        ignored_ground_capacity_fields=ignored_capacity_tuple,
+        ground_policy_audit=policy_audit,
+        ground_link_model=ground_link_model,
         gs_terminal_profiles=gs_terminal_profiles,
         sat_ground_terminal_profiles=sat_ground_terminal_profiles,
+        sat_ground_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
         gs_tenant_ids=gs_tenant_ids,
         gs_reference_bodies=gs_reference_bodies,
         ground_pair_terminal_types=ground_pair_terminal_types,
@@ -354,9 +488,9 @@ def build_step_context(
         propagator_id=propagator_id,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
-        ground_policy_lookahead_horizon_ticks=ground_policy_lookahead_horizon_ticks,
+        mbb_overlap_ticks=ground_scheduling.mbb_overlap_ticks,
+        mbb_reserve=effective_mbb_reserve,
+        ground_policy_lookahead_horizon_ticks=lookahead_horizon_ticks,
     )
 
 
@@ -442,7 +576,7 @@ def compute_step(
         gs_min_elevations=ctx.gs_min_elevations,
         gs_tenant_ids=ctx.gs_tenant_ids,
         gs_reference_bodies=ctx.gs_reference_bodies,
-        gs_policies=ctx.gs_policies,
+        gs_selection_policy_names=ctx.gs_selection_policy_names,
         pass_lookahead=(
             GroundPassLookahead(
                 satellites=tuple(ctx.satellites),
@@ -452,15 +586,15 @@ def compute_step(
                 step_seconds=step_seconds,
                 horizon_ticks=ctx.ground_policy_lookahead_horizon_ticks,
                 propagator_id=ctx.propagator_id,
-                simulation_fidelity=ctx.simulation_fidelity,
+                ground_link_model=ctx.ground_link_model,
                 gs_reference_bodies=ctx.gs_reference_bodies,
                 gs_terminal_profiles=ctx.gs_terminal_profiles,
                 sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
             )
-            if "longest-remaining-pass" in set(ctx.gs_policies.values())
+            if "longest-remaining-pass" in set(ctx.gs_selection_policy_names.values())
             else None
         ),
-        simulation_fidelity=ctx.simulation_fidelity,
+        ground_link_model=ctx.ground_link_model,
         gs_terminal_profiles=ctx.gs_terminal_profiles,
         sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
     )
@@ -473,15 +607,23 @@ def compute_step(
         current_associations=current_associations,
         pending_teardowns=mbb_pending_teardowns,
         gs_terminal_counts=ctx.gs_terminal_counts,
-        gs_policies=ctx.gs_policies,
+        gs_selection_policies=ctx.gs_selection_policies,
         gs_min_elevations=ctx.gs_min_elevations,
-        gs_hysteresis=ctx.gs_hysteresis,
+        gs_handover_policies=ctx.gs_handover_policies,
         gs_service_priorities=ctx.gs_service_priorities,
         gs_tenant_ids=ctx.gs_tenant_ids,
         gs_reference_bodies=ctx.gs_reference_bodies,
         sat_ground_terminals=ctx.sat_ground_terminals,
+        sat_ground_terminal_indices_by_body=ctx.sat_ground_terminal_indices_by_body,
+        ranking_order=ctx.ground_ranking_order,
+        handover_mode=ctx.ground_handover_mode,
         mbb_overlap_ticks=ctx.mbb_overlap_ticks,
         mbb_reserve=ctx.mbb_reserve,
+        mbb_preemption=ctx.ground_mbb_preemption,
+        successor_abort_policy=ctx.ground_successor_abort_policy,
+        cross_tenant_displacement=ctx.ground_cross_tenant_displacement,
+        bbm_acquire_timeout_ticks=ctx.ground_bbm_acquire_timeout_ticks,
+        ignored_capacity_fields=ctx.ignored_ground_capacity_fields,
     )
     # 8. Emit ground visibility events on state changes (triple state).
     ground_diff = diff_ground_visibility_events(
@@ -588,13 +730,10 @@ def precompute_timeline_window(
     duration_s: float,
     propagator_id: PropagatorId,
     step_seconds: int = 1,
-    mbb_overlap_ticks: int = 3,
-    mbb_reserve: int = 0,
-    ground_policy_lookahead_horizon_ticks: int = 0,
+    ground_scheduling: GroundSchedulingConfig | None = None,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
-    default_ground_policy: str | None = None,
-    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1",
+    ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
     initial_isl_state: dict[tuple[str, str], tuple[bool, bool]] | None = None,
     initial_gs_state: dict[tuple[str, str], tuple[bool, bool, str]] | None = None,
     initial_associations: dict[tuple[str, str], tuple[int, int]] | None = None,
@@ -614,13 +753,10 @@ def precompute_timeline_window(
         gs_file=gs_file,
         neighbors=neighbors,
         propagator_id=propagator_id,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
-        ground_policy_lookahead_horizon_ticks=ground_policy_lookahead_horizon_ticks,
+        ground_scheduling=ground_scheduling,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
-        default_ground_policy=default_ground_policy,
-        simulation_fidelity=simulation_fidelity,
+        ground_link_model=ground_link_model,
     )
     return precompute_timeline_window_from_context(
         ctx,
@@ -645,13 +781,10 @@ def precompute_timeline(
     duration_s: float,
     propagator_id: PropagatorId,
     step_seconds: int = 1,
-    mbb_overlap_ticks: int = 3,
-    mbb_reserve: int = 0,
-    ground_policy_lookahead_horizon_ticks: int = 0,
+    ground_scheduling: GroundSchedulingConfig | None = None,
     polar_seam_enabled: bool = False,
     latitude_threshold_deg: float = 70.0,
-    default_ground_policy: str | None = None,
-    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1",
+    ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
 ) -> list[TimelineEvent]:
     """Single-window convenience wrapper.
 
@@ -666,13 +799,10 @@ def precompute_timeline(
         duration_s=duration_s,
         propagator_id=propagator_id,
         step_seconds=step_seconds,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        mbb_reserve=mbb_reserve,
-        ground_policy_lookahead_horizon_ticks=ground_policy_lookahead_horizon_ticks,
+        ground_scheduling=ground_scheduling,
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
-        default_ground_policy=default_ground_policy,
-        simulation_fidelity=simulation_fidelity,
+        ground_link_model=ground_link_model,
     )
     return result.events
 

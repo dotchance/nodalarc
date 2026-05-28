@@ -366,8 +366,27 @@ class TestAuthoritySubsetInvariantHappyPath:
 
 from nodalarc.models.link_decisions import (
     GroundLinkDecisionSnapshot,
+    GroundPolicyAudit,
     GroundVisibilityDecisionWire,
 )
+
+
+def _policy_audit() -> GroundPolicyAudit:
+    return GroundPolicyAudit(
+        selection_policies={"gs-multi": "highest-elevation"},
+        selection_policy_params={"gs-multi": {}},
+        handover_policies={"gs-multi": "hysteresis"},
+        handover_policy_params={"gs-multi": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0}},
+        ranking_order=("service_priority", "selection_score", "lex_pair"),
+        handover_mode="bbm",
+        mbb_preemption="off",
+        successor_abort_policy="hard_release",
+        cross_tenant_displacement="off",
+        mbb_overlap_ticks=3,
+        mbb_reserve=0,
+        bbm_acquire_timeout_ticks=1,
+        ignored_capacity_fields=(),
+    )
 
 
 def _make_decision_wire(pair: tuple[str, str]) -> GroundVisibilityDecisionWire:
@@ -427,6 +446,8 @@ class TestPairedDecisionSnapshot:
             epoch_id=epoch_id,
             decisions=(_make_decision_wire(("gs-multi", "sat-old")),),
             unscheduled_pairs=(),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
         )
 
     def test_no_decision_snapshot_returns_none(self) -> None:

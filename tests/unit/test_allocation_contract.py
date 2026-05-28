@@ -54,6 +54,7 @@ class TestAllocationContractInvariants:
             gs_file=gs_file,
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
         )
 
         isl_state: dict = {}
@@ -108,6 +109,7 @@ class TestAllocationContractInvariants:
             gs_file=gs_file,
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
         )
 
         isl_state: dict = {}
@@ -150,6 +152,7 @@ class TestAllocationContractInvariants:
             gs_file=gs_file,
             neighbors=neighbors,
             propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
         )
 
         # Run with hysteresis (stateful fold)

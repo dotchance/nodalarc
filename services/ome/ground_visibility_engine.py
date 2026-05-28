@@ -50,7 +50,7 @@ class GroundPassLookahead:
     step_seconds: int
     horizon_ticks: int
     propagator_id: str
-    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1"
+    ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
     gs_reference_bodies: Mapping[str, str] | None = None
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
     sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None
@@ -69,7 +69,7 @@ def _require_complete_profile(
         or profile.boresight is None
         or profile.profile_id is None
     ):
-        raise ValueError(f"physical_v1 ground visibility has incomplete {label} for {node_id}")
+        raise ValueError(f"terminal_physics ground visibility has incomplete {label} for {node_id}")
     return profile
 
 
@@ -78,12 +78,12 @@ def _physical_profile(
     node_id: str,
     *,
     label: str,
-    fidelity: Literal["geometry_only", "physical_v1"],
+    ground_link_model: Literal["geometry_only", "terminal_physics"],
 ) -> TerminalPhysicsProfile | None:
-    if fidelity == "geometry_only":
+    if ground_link_model == "geometry_only":
         return None
     if profiles is None or node_id not in profiles:
-        raise ValueError(f"physical_v1 ground visibility is missing {label} for {node_id}")
+        raise ValueError(f"terminal_physics ground visibility is missing {label} for {node_id}")
     return _require_complete_profile(profiles[node_id], node_id=node_id, label=label)
 
 
@@ -98,18 +98,18 @@ def _sat_physical_profile(
     sat_id: str,
     *,
     reference_body: str,
-    fidelity: Literal["geometry_only", "physical_v1"],
+    ground_link_model: Literal["geometry_only", "terminal_physics"],
 ) -> TerminalPhysicsProfile | None:
-    if fidelity == "geometry_only":
+    if ground_link_model == "geometry_only":
         return None
     if profiles is None or sat_id not in profiles:
         raise ValueError(
-            f"physical_v1 ground visibility is missing satellite ground terminal profile for {sat_id}"
+            f"terminal_physics ground visibility is missing satellite ground terminal profile for {sat_id}"
         )
     options = _profile_options(profiles[sat_id])
     if not options:
         raise ValueError(
-            f"physical_v1 ground visibility is missing satellite ground terminal profile for {sat_id}"
+            f"terminal_physics ground visibility is missing satellite ground terminal profile for {sat_id}"
         )
     matches = [profile for profile in options if profile.target_body == reference_body]
     if len(matches) != 1:
@@ -173,13 +173,13 @@ def _estimate_remaining_visible_seconds(
                 lookahead.gs_terminal_profiles,
                 gs_id,
                 label="ground terminal profile",
-                fidelity=lookahead.simulation_fidelity,
+                ground_link_model=lookahead.ground_link_model,
             )
             sat_profile = _sat_physical_profile(
                 lookahead.sat_ground_terminal_profiles,
                 sat_id,
                 reference_body=reference_body,
-                fidelity=lookahead.simulation_fidelity,
+                ground_link_model=lookahead.ground_link_model,
             )
             kwargs = {}
             if gs_profile is not None and sat_profile is not None:
@@ -220,9 +220,9 @@ def evaluate_ground_visibility(
     gs_min_elevations: Mapping[str, float],
     gs_tenant_ids: Mapping[str, str],
     gs_reference_bodies: Mapping[str, str],
-    gs_policies: Mapping[str, str] | None = None,
+    gs_selection_policy_names: Mapping[str, str] | None = None,
     pass_lookahead: GroundPassLookahead | None = None,
-    simulation_fidelity: Literal["geometry_only", "physical_v1"] = "physical_v1",
+    ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None,
     sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None,
 ) -> GroundVisibilityEvaluation:
@@ -236,7 +236,7 @@ def evaluate_ground_visibility(
     consumers must not receive decisions whose tenant or body context
     is unknown.
 
-    In `physical_v1`, both endpoint terminal profiles are required and
+    In `terminal_physics`, both endpoint terminal profiles are required and
     range, field-of-regard, and topocentric tracking-rate constraints are
     applied before a pair is allowed into the allocator. In
     `geometry_only`, those fields are deliberately absent and the caller
@@ -246,12 +246,12 @@ def evaluate_ground_visibility(
     decisions: dict[tuple[str, str], GroundVisibilityDecision] = {}
     visible_per_station: dict[str, list[GroundVisibility]] = {}
 
-    policies = gs_policies or {}
-    if gs_policies is not None:
-        missing_policies = sorted(set(gs_positions) - set(gs_policies))
+    selection_policy_names = gs_selection_policy_names or {}
+    if gs_selection_policy_names is not None:
+        missing_policies = sorted(set(gs_positions) - set(gs_selection_policy_names))
         if missing_policies:
             raise ValueError(
-                f"Ground visibility is missing scheduling policy for {', '.join(missing_policies)}"
+                f"Ground visibility is missing selection policy name for {', '.join(missing_policies)}"
             )
     missing_min_elev = sorted(set(gs_positions) - set(gs_min_elevations))
     if missing_min_elev:
@@ -273,11 +273,11 @@ def evaluate_ground_visibility(
             f"{', '.join(missing_body)} — Direction 3 requires every decision "
             "to be anchored to a specific body"
         )
-    if simulation_fidelity == "physical_v1" and gs_positions:
+    if ground_link_model == "terminal_physics" and gs_positions:
         missing_gs_profiles = sorted(set(gs_positions) - set(gs_terminal_profiles or {}))
         if missing_gs_profiles:
             raise ValueError(
-                "physical_v1 ground visibility is missing ground terminal profiles for "
+                "terminal_physics ground visibility is missing ground terminal profiles for "
                 f"{', '.join(missing_gs_profiles)}"
             )
         missing_sat_profiles = sorted(
@@ -285,12 +285,14 @@ def evaluate_ground_visibility(
         )
         if missing_sat_profiles:
             raise ValueError(
-                "physical_v1 ground visibility is missing satellite ground terminal profiles for "
+                "terminal_physics ground visibility is missing satellite ground terminal profiles for "
                 f"{', '.join(missing_sat_profiles)}"
             )
 
     longest_pass_station_ids = {
-        gs_id for gs_id in gs_positions if policies.get(gs_id) == "longest-remaining-pass"
+        gs_id
+        for gs_id in gs_positions
+        if selection_policy_names.get(gs_id) == "longest-remaining-pass"
     }
     if longest_pass_station_ids and pass_lookahead is None:
         raise ValueError(
@@ -316,13 +318,13 @@ def evaluate_ground_visibility(
                 gs_terminal_profiles,
                 gs_id,
                 label="ground terminal profile",
-                fidelity=simulation_fidelity,
+                ground_link_model=ground_link_model,
             )
             sat_profile = _sat_physical_profile(
                 sat_ground_terminal_profiles,
                 sat_id,
                 reference_body=reference_body,
-                fidelity=simulation_fidelity,
+                ground_link_model=ground_link_model,
             )
             gs_max_range_km = None
             sat_max_range_km = None

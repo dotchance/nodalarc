@@ -23,12 +23,31 @@ from datetime import UTC, datetime
 import pytest
 from nodalarc.models.link_decisions import (
     GroundLinkDecisionSnapshot,
+    GroundPolicyAudit,
     GroundVisibilityDecisionWire,
     UnscheduledPair,
 )
 from ome.snapshot_builder import build_link_decision_snapshot
 from ome.types import GroundVisibilityDecision
 from pydantic import ValidationError
+
+
+def _policy_audit() -> GroundPolicyAudit:
+    return GroundPolicyAudit(
+        selection_policies={"gs-a": "highest-elevation"},
+        selection_policy_params={"gs-a": {}},
+        handover_policies={"gs-a": "hysteresis"},
+        handover_policy_params={"gs-a": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0}},
+        ranking_order=("service_priority", "selection_score", "lex_pair"),
+        handover_mode="bbm",
+        mbb_preemption="off",
+        successor_abort_policy="hard_release",
+        cross_tenant_displacement="off",
+        mbb_overlap_ticks=3,
+        mbb_reserve=0,
+        bbm_acquire_timeout_ticks=1,
+        ignored_capacity_fields=(),
+    )
 
 
 def _hot_decision(
@@ -73,6 +92,8 @@ class TestBuildLinkDecisionSnapshot:
         snap = build_link_decision_snapshot(
             decisions={},
             unscheduled_pairs=(),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
             sim_time=SIM,
             snapshot_seq=1,
             epoch_id=0,
@@ -93,6 +114,8 @@ class TestBuildLinkDecisionSnapshot:
         snap = build_link_decision_snapshot(
             decisions={pair: hot},
             unscheduled_pairs=(),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
             sim_time=SIM,
             snapshot_seq=42,
             epoch_id=3,
@@ -137,6 +160,8 @@ class TestBuildLinkDecisionSnapshot:
         snap = build_link_decision_snapshot(
             decisions=decisions,
             unscheduled_pairs=(),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
             sim_time=SIM,
             snapshot_seq=10,
             epoch_id=0,
@@ -164,6 +189,8 @@ class TestBuildLinkDecisionSnapshot:
             build_link_decision_snapshot(
                 decisions={},
                 unscheduled_pairs=(unscheduled,),
+                policy_audit=_policy_audit(),
+                allocation_events=(),
                 sim_time=SIM,
                 snapshot_seq=5,
                 epoch_id=0,
@@ -185,6 +212,8 @@ class TestBuildLinkDecisionSnapshot:
         snap = build_link_decision_snapshot(
             decisions={pair: decision},
             unscheduled_pairs=(unscheduled,),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
             sim_time=SIM,
             snapshot_seq=5,
             epoch_id=0,
@@ -198,6 +227,8 @@ class TestBuildLinkDecisionSnapshot:
         snap = build_link_decision_snapshot(
             decisions={pair: _hot_decision(pair)},
             unscheduled_pairs=(),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
             sim_time=SIM,
             snapshot_seq=99,
             epoch_id=2,
@@ -213,6 +244,8 @@ class TestBuildLinkDecisionSnapshot:
         snap = build_link_decision_snapshot(
             decisions={},
             unscheduled_pairs=(),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
             sim_time=SIM,
             snapshot_seq=7,
             epoch_id=4,
@@ -272,6 +305,8 @@ class TestLinkDecisionSnapshotConsistency:
                 epoch_id=0,
                 decisions=(_wire_decision(pair), _wire_decision(pair)),
                 unscheduled_pairs=(),
+                policy_audit=_policy_audit(),
+                allocation_events=(),
             )
 
     def test_unscheduled_pair_without_matching_decision_rejected(self) -> None:
@@ -291,6 +326,8 @@ class TestLinkDecisionSnapshotConsistency:
                         capacity_constraint=None,
                     ),
                 ),
+                policy_audit=_policy_audit(),
+                allocation_events=(),
             )
 
     def test_unscheduled_pair_pointing_at_invisible_decision_rejected(self) -> None:
@@ -311,6 +348,8 @@ class TestLinkDecisionSnapshotConsistency:
                         capacity_constraint=None,
                     ),
                 ),
+                policy_audit=_policy_audit(),
+                allocation_events=(),
             )
 
     def test_unscheduled_pair_tenant_mismatch_rejected(self) -> None:
@@ -331,6 +370,8 @@ class TestLinkDecisionSnapshotConsistency:
                         capacity_constraint=None,
                     ),
                 ),
+                policy_audit=_policy_audit(),
+                allocation_events=(),
             )
 
     def test_unscheduled_pair_body_mismatch_rejected(self) -> None:
@@ -351,6 +392,8 @@ class TestLinkDecisionSnapshotConsistency:
                         capacity_constraint=None,
                     ),
                 ),
+                policy_audit=_policy_audit(),
+                allocation_events=(),
             )
 
     def test_duplicate_unscheduled_pair_rejected(self) -> None:
@@ -379,6 +422,8 @@ class TestLinkDecisionSnapshotConsistency:
                         capacity_constraint=None,
                     ),
                 ),
+                policy_audit=_policy_audit(),
+                allocation_events=(),
             )
 
     def test_valid_snapshot_with_consistent_unscheduled_pair(self) -> None:
@@ -398,6 +443,8 @@ class TestLinkDecisionSnapshotConsistency:
                     capacity_constraint=None,
                 ),
             ),
+            policy_audit=_policy_audit(),
+            allocation_events=(),
         )
         assert len(snap.decisions) == 1
         assert len(snap.unscheduled_pairs) == 1

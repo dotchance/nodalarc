@@ -10,6 +10,22 @@ from pydantic import ValidationError
 
 from tests.conftest import FIXTURES_DIR
 
+
+def _ground_scheduling(**overrides):
+    ground = {
+        "selection_policy": {"name": "highest-elevation", "params": {}},
+        "handover_policy": {
+            "name": "hysteresis",
+            "params": {"discount_factor": 1.15, "mask_fade_range_deg": 5.0},
+        },
+        "handover_mode": "bbm",
+        "mbb_overlap_ticks": 3,
+        "mbb_reserve": 0,
+    }
+    ground.update(overrides)
+    return ground
+
+
 _SAMPLE_SESSION = {
     "session": {"name": "test-session"},
     "constellation": "configs/constellations/iridium-small-36.yaml",
@@ -21,6 +37,7 @@ _SAMPLE_SESSION = {
         "area_assignment": {"strategy": "flat", "gs_area_id": "49.0001"},
     },
     "time": {"step_seconds": 1},
+    "scheduling": {"ground": _ground_scheduling()},
     "traffic_flows": [
         {
             "flow_id": "test",
@@ -48,7 +65,7 @@ class TestSessionConfigLoading:
         assert config.addressing.gs_id_template == "gs-{name}"
         assert config.time.step_seconds == 1
         assert config.simulation.schema_version == 2
-        assert config.simulation.fidelity == "physical_v1"
+        assert config.simulation.ground_link_model == "terminal_physics"
         assert config.simulation.acknowledge_geometry_only is False
         assert config.orbit.propagator == "keplerian-circular"
         assert config.dispatch.latency_authority == "ome"
@@ -59,6 +76,20 @@ class TestSessionConfigLoading:
         assert config.convergence.stability_period_s == 2.0
         assert config.convergence.timeout_s == 30.0
         assert config.convergence.probe_interval_ms == 100
+
+    def test_ground_policy_surface_must_be_explicit(self):
+        data = dict(_SAMPLE_SESSION)
+        data.pop("scheduling")
+        with pytest.raises(ValidationError, match="Ground scheduling policy must be explicit"):
+            SessionConfig.model_validate(data)
+
+    def test_handover_policy_must_be_explicit(self):
+        data = dict(_SAMPLE_SESSION)
+        ground = _ground_scheduling()
+        ground.pop("handover_policy")
+        data["scheduling"] = {"ground": ground}
+        with pytest.raises(ValidationError, match="scheduling.ground.handover_policy"):
+            SessionConfig.model_validate(data)
 
     def test_round_trip(self):
         config = SessionConfig.model_validate(_SAMPLE_SESSION)
@@ -112,17 +143,19 @@ class TestEngineConfigValidation:
         with pytest.raises(ValidationError, match="schema_version must be 2"):
             SessionConfig.model_validate(data)
 
-    def test_simulation_fidelity_is_ground_physics_mode_not_propagator_knob(self):
+    def test_ground_link_model_is_ground_physics_mode_not_propagator_knob(self):
         data = dict(_SAMPLE_SESSION)
-        data["simulation"] = {"schema_version": 2, "fidelity": "j2-mean-elements"}
+        data["simulation"] = {"schema_version": 2, "ground_link_model": "j2-mean-elements"}
         with pytest.raises(ValidationError, match="Input should be"):
             SessionConfig.model_validate(data)
 
-    def test_geometry_only_fidelity_requires_validator_acknowledgement_not_model_default(self):
+    def test_geometry_only_ground_link_model_requires_validator_acknowledgement_not_model_default(
+        self,
+    ):
         data = dict(_SAMPLE_SESSION)
-        data["simulation"] = {"schema_version": 2, "fidelity": "geometry_only"}
+        data["simulation"] = {"schema_version": 2, "ground_link_model": "geometry_only"}
         config = SessionConfig.model_validate(data)
-        assert config.simulation.fidelity == "geometry_only"
+        assert config.simulation.ground_link_model == "geometry_only"
         assert config.simulation.acknowledge_geometry_only is False
 
     def test_unknown_propagator_rejected(self):
@@ -167,11 +200,11 @@ class TestEngineConfigValidation:
     def test_mbb_requires_reserve_and_overlap(self):
         data = dict(_SAMPLE_SESSION)
         data["scheduling"] = {
-            "ground": {
-                "handover_mode": "mbb",
-                "mbb_overlap_ticks": 0,
-                "mbb_reserve": 0,
-            }
+            "ground": _ground_scheduling(
+                handover_mode="mbb",
+                mbb_overlap_ticks=0,
+                mbb_reserve=0,
+            )
         }
         with pytest.raises(ValidationError, match="MBB handover requires"):
             SessionConfig.model_validate(data)
@@ -212,12 +245,66 @@ class TestEngineConfigValidation:
         with pytest.raises(ValidationError, match="always"):
             SessionConfig.model_validate(data)
 
+    def test_ranking_order_must_end_with_lex_pair(self):
+        data = dict(_SAMPLE_SESSION)
+        data["scheduling"] = {
+            "ground": _ground_scheduling(
+                ranking_order=["selection_score", "service_priority"],
+            )
+        }
+        with pytest.raises(ValidationError, match="lex_pair"):
+            SessionConfig.model_validate(data)
+
+    def test_ranking_order_accepts_operator_component_order(self):
+        data = dict(_SAMPLE_SESSION)
+        data["scheduling"] = {
+            "ground": _ground_scheduling(
+                ranking_order=["selection_score", "service_priority", "lex_pair"],
+            )
+        }
+        config = SessionConfig.model_validate(data)
+        assert config.scheduling.ground.ranking_order == [
+            "selection_score",
+            "service_priority",
+            "lex_pair",
+        ]
+
+    def test_reserved_cross_tenant_displacement_policy_is_rejected(self):
+        data = dict(_SAMPLE_SESSION)
+        data["scheduling"] = {
+            "ground": _ground_scheduling(
+                cross_tenant_displacement="by_service_priority",
+            )
+        }
+        with pytest.raises(ValidationError, match="cross_tenant_displacement"):
+            SessionConfig.model_validate(data)
+
+    def test_reserved_mbb_preemption_policy_is_rejected(self):
+        data = dict(_SAMPLE_SESSION)
+        data["scheduling"] = {
+            "ground": _ground_scheduling(
+                mbb_preemption="by_priority",
+            )
+        }
+        with pytest.raises(ValidationError, match="mbb_preemption"):
+            SessionConfig.model_validate(data)
+
+    def test_multi_tick_bbm_acquire_timeout_is_rejected_until_wait_state_exists(self):
+        data = dict(_SAMPLE_SESSION)
+        data["scheduling"] = {
+            "ground": _ground_scheduling(
+                bbm_acquire_timeout_ticks=2,
+            )
+        }
+        with pytest.raises(ValidationError, match="bbm_acquire_timeout_ticks"):
+            SessionConfig.model_validate(data)
+
     def test_longest_remaining_pass_requires_lookahead_horizon(self):
         data = dict(_SAMPLE_SESSION)
         data["scheduling"] = {
-            "ground": {
-                "policy": "longest-remaining-pass",
-            }
+            "ground": _ground_scheduling(
+                selection_policy={"name": "longest-remaining-pass", "params": {}},
+            )
         }
         with pytest.raises(ValidationError, match="lookahead_horizon_ticks"):
             SessionConfig.model_validate(data)
@@ -225,14 +312,16 @@ class TestEngineConfigValidation:
     def test_longest_remaining_pass_accepts_explicit_lookahead_horizon(self):
         data = dict(_SAMPLE_SESSION)
         data["scheduling"] = {
-            "ground": {
-                "policy": "longest-remaining-pass",
-                "lookahead_horizon_ticks": 600,
-            }
+            "ground": _ground_scheduling(
+                selection_policy={
+                    "name": "longest-remaining-pass",
+                    "params": {"lookahead_horizon_ticks": 600},
+                },
+            )
         }
         config = SessionConfig.model_validate(data)
-        assert config.scheduling.ground.policy == "longest-remaining-pass"
-        assert config.scheduling.ground.lookahead_horizon_ticks == 600
+        assert config.scheduling.ground.selection_policy.name == "longest-remaining-pass"
+        assert config.scheduling.ground.selection_policy.params["lookahead_horizon_ticks"] == 600
 
 
 class TestSessionFromFixture:

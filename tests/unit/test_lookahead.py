@@ -66,6 +66,7 @@ def test_lookahead_submit_and_get_result():
         gs_file=gs_file,
         neighbors=neighbors,
         propagator_id=session.orbit.propagator,
+        ground_scheduling=session.scheduling.ground,
     )
 
     la.submit(
@@ -104,6 +105,7 @@ def test_lookahead_cancel_discards_result():
         gs_file=gs_file,
         neighbors=neighbors,
         propagator_id=session.orbit.propagator,
+        ground_scheduling=session.scheduling.ground,
     )
 
     la.submit(
@@ -141,6 +143,7 @@ def test_lookahead_is_ready():
         gs_file=gs_file,
         neighbors=neighbors,
         propagator_id=session.orbit.propagator,
+        ground_scheduling=session.scheduling.ground,
     )
 
     assert not la.is_ready()

@@ -10,6 +10,7 @@ terminal occupancy, and pending teardown behavior are covered together.
 from __future__ import annotations
 
 import pytest
+from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.ground_station import HysteresisParameters
 from ome.ground_allocator import (
     _compute_effective_discount,
@@ -18,6 +19,36 @@ from ome.ground_allocator import (
 )
 from ome.types import MbbTeardown
 from ome.visibility import GroundVisibility
+
+
+def _selection_policy(name: str) -> SelectionPolicySpec:
+    params = {"lookahead_horizon_ticks": 600} if name == "longest-remaining-pass" else {}
+    return SelectionPolicySpec(name=name, params=params)
+
+
+def _handover_policy() -> HandoverPolicySpec:
+    return HandoverPolicySpec(
+        name="hysteresis",
+        params=HysteresisParameters(discount_factor=1.15, mask_fade_range_deg=5.0).model_dump(),
+    )
+
+
+def _policy_kwargs(policy: str, handover_mode: str) -> dict:
+    return {
+        "gs_selection_policies": {"gs-test": _selection_policy(policy)},
+        "gs_handover_policies": {"gs-test": _handover_policy()},
+        "ranking_order": ("service_priority", "selection_score", "lex_pair"),
+        "handover_mode": handover_mode,
+        "mbb_preemption": "off",
+        "successor_abort_policy": "hard_release",
+        "cross_tenant_displacement": "off",
+        "bbm_acquire_timeout_ticks": 1,
+        "ignored_capacity_fields": (),
+    }
+
+
+def _sat_body_pools(sat_terminals: dict[str, int]) -> dict[str, dict[str, tuple[int, ...]]]:
+    return {sat_id: {"earth": tuple(range(count))} for sat_id, count in sat_terminals.items()}
 
 
 def _visible_gv(sat_id: str, elevation_deg: float, range_km: float) -> GroundVisibility:
@@ -118,6 +149,7 @@ class TestHysteresisDiscount:
         min_elev: float = 25.0,
         mbb_reserve: int = 1,
     ):
+        sat_terminals = {gv.sat_id: 1 for gv in visible}
         return allocate_ground_links(
             step=10,
             visible_per_station={"gs-test": visible},
@@ -125,18 +157,13 @@ class TestHysteresisDiscount:
             current_associations=current or {},
             pending_teardowns={},
             gs_terminal_counts={"gs-test": gs_terminals},
-            gs_policies={"gs-test": policy},
+            **_policy_kwargs(policy, "mbb" if mbb_reserve > 0 else "bbm"),
             gs_min_elevations={"gs-test": min_elev},
-            gs_hysteresis={
-                "gs-test": HysteresisParameters(
-                    discount_factor=1.15,
-                    mask_fade_range_deg=5.0,
-                )
-            },
             gs_service_priorities={"gs-test": 10},
             gs_tenant_ids={"gs-test": "default"},
             gs_reference_bodies={"gs-test": "earth"},
-            sat_ground_terminals={gv.sat_id: 1 for gv in visible},
+            sat_ground_terminals=sat_terminals,
+            sat_ground_terminal_indices_by_body=_sat_body_pools(sat_terminals),
             mbb_overlap_ticks=3,
             mbb_reserve=mbb_reserve,
         )

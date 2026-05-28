@@ -2,21 +2,44 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Ground-link allocation engine.
 
-This module owns the policy and terminal-index state for ground handover.
-It deliberately does not propagate satellites or evaluate visibility. Its
-input is the set of physically visible GS/satellite candidates for one OME
-tick; its output is the allocation state that event generation and snapshots
-can audit.
+This module owns the OME allocation role for ground links: given physical
+visibility decisions and prior scheduling state, it applies operator-selected
+selection and handover policy to produce the authoritative terminal allocation
+for one tick. It does not propagate or evaluate orbital physics, and it does
+not publish NATS events.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
+from nodalarc.models.ground_policy import (
+    CrossTenantDisplacementPolicy,
+    HandoverPolicySpec,
+    MbbPreemptionPolicy,
+    RankingComponent,
+    SelectionPolicySpec,
+    SuccessorAbortPolicy,
+)
 from nodalarc.models.ground_station import HysteresisParameters
-from nodalarc.models.link_decisions import GroundUnscheduledReason, UnscheduledPair
+from nodalarc.models.link_decisions import (
+    GroundAllocationEvent,
+    GroundAllocationEventCategory,
+    GroundAllocationPolicyKind,
+    GroundAllocationPolicyName,
+    GroundPolicyAudit,
+    GroundUnscheduledReason,
+    UnscheduledPair,
+)
 
+from ome.ground_handover_policies import (
+    HandoverContext,
+    compute_effective_hysteresis_discount,
+    evaluate_handover,
+)
+from ome.ground_selection_policies import SelectionContext, score_candidate
 from ome.types import MbbTeardown, MbbTeardownState
 from ome.visibility import GroundVisibility
 
@@ -25,19 +48,50 @@ from ome.visibility import GroundVisibility
 class GroundAllocationResult:
     """Result of the ground allocation pass for one OME tick.
 
-    ``unscheduled_pairs`` carries one entry per visible pair that the
-    allocator considered but did not schedule, with the attributed
-    reason. Active MBB teardown pairs (scheduled, draining) are NOT in
-    ``unscheduled_pairs`` — they remain in ``associations`` and
-    ``scheduled_pairs`` with ``scheduling_state="teardown"`` on the
-    event/snapshot. Only the post-teardown released pair appears here
-    (as ``replaced_by_successor``).
+    ``unscheduled_pairs`` carries one entry per visible pair that the allocator
+    considered but did not schedule, with the attributed reason. Active MBB
+    teardown pairs remain scheduled and are represented in ``pending_teardowns``
+    rather than as unscheduled pairs.
     """
 
     associations: dict[tuple[str, str], tuple[int, int]]
     pending_teardowns: MbbTeardownState
     scheduled_pairs: frozenset[tuple[str, str]]
     unscheduled_pairs: tuple[UnscheduledPair, ...]
+    policy_audit: GroundPolicyAudit
+    allocation_events: tuple[GroundAllocationEvent, ...]
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    pair: tuple[str, str]
+    gs_id: str
+    sat_id: str
+    visibility: GroundVisibility
+    selection_score: float
+    service_priority: int
+    per_gs_rank: int
+    rank_key: tuple
+
+
+@dataclass(frozen=True)
+class _Rejected:
+    reason: GroundUnscheduledReason
+    incumbent_pair: tuple[str, str] | None
+    capacity_constraint: str | None
+
+
+# Terminal handover failure/release reasons are final for the tick. Later
+# allocator passes may reconsider capacity or hysteresis rejections after a
+# same-tick release, but these state-machine outcomes must not be overwritten.
+_LOCKED_REJECTION_REASONS: frozenset[GroundUnscheduledReason] = frozenset(
+    {
+        "replaced_by_successor",
+        "successor_aborted",
+        "failed_successor",
+        "failed_acquire",
+    }
+)
 
 
 def _compute_pair_score(
@@ -45,7 +99,8 @@ def _compute_pair_score(
     policy: str,
     remaining_visible_s: float | None = None,
 ) -> float:
-    """Score a GS/satellite pair. Always positive, higher is better."""
+    """Legacy test helper for pure selection scoring. Higher is better."""
+
     if policy == "highest-elevation":
         return elevation_deg
     if policy == "lowest-elevation":
@@ -65,20 +120,17 @@ def _compute_effective_discount(
     min_elevation_deg: float,
     hyst: HysteresisParameters,
 ) -> float:
-    """Compute the hysteresis discount factor with mask-edge fade.
+    """Legacy test helper for hysteresis hold-score calculation."""
 
-    INVARIANT: elevation_deg is the raw physical elevation, never a
-    policy-adjusted score. The fade is a geometric property of the link's
-    proximity to the elevation mask.
-    """
-    fade_bottom = min_elevation_deg
-    fade_top = min_elevation_deg + hyst.mask_fade_range_deg
-    if elevation_deg <= fade_bottom:
-        return 1.0
-    if elevation_deg >= fade_top:
-        return hyst.discount_factor
-    t = (elevation_deg - fade_bottom) / hyst.mask_fade_range_deg
-    return 1.0 + (hyst.discount_factor - 1.0) * t
+    return compute_effective_hysteresis_discount(
+        elevation_deg=elevation_deg,
+        min_elevation_deg=min_elevation_deg,
+        params=hyst,
+    )
+
+
+def _normalized_pair(gs_id: str, sat_id: str) -> tuple[str, str]:
+    return (min(gs_id, sat_id), max(gs_id, sat_id))
 
 
 def _ground_and_satellite_ids(
@@ -86,179 +138,278 @@ def _ground_and_satellite_ids(
     ground_station_ids: set[str],
 ) -> tuple[str, str]:
     """Return `(ground_station_id, satellite_id)` for a normalized pair."""
+
+    if pair[0] in ground_station_ids and pair[1] in ground_station_ids:
+        raise ValueError(f"Pair {pair!r} contains two ground-station ids")
     if pair[0] in ground_station_ids:
         return pair[0], pair[1]
-    return pair[1], pair[0]
+    if pair[1] in ground_station_ids:
+        return pair[1], pair[0]
+    raise ValueError(f"Pair {pair!r} does not contain a known ground-station id")
 
 
-def _find_gs_incumbent(
-    new_associations: Mapping[tuple[str, str], tuple[int, int]],
-    new_pending_teardowns: Mapping[tuple[str, str], MbbTeardown],
-    ground_station_ids: set[str],
-    gs_id: str,
-) -> tuple[str, str] | None:
-    """Return one steady-state (non-teardown) incumbent on the given GS, if any.
-
-    Used to attribute `hysteresis_hold` and `incumbent_held` rejections — the
-    operator should see WHICH incumbent the candidate lost to.
-    """
-    for ap in sorted(new_associations):
-        if ap in new_pending_teardowns:
-            continue
-        ap_gs, _ = _ground_and_satellite_ids(ap, ground_station_ids)
-        if ap_gs == gs_id:
-            return ap
-    return None
+def _validate_ranking_order(
+    ranking_order: Sequence[RankingComponent],
+) -> tuple[RankingComponent, ...]:
+    order = tuple(ranking_order)
+    if not order:
+        raise ValueError("ground allocator ranking_order must not be empty")
+    if order[-1] != "lex_pair":
+        raise ValueError("ground allocator ranking_order must end with 'lex_pair'")
+    if len(order) == 1:
+        raise ValueError(
+            "ground allocator ranking_order needs a decision component before lex_pair"
+        )
+    if len(set(order)) != len(order):
+        raise ValueError("ground allocator ranking_order must not contain duplicates")
+    return order
 
 
-def _find_sat_incumbent(
-    new_associations: Mapping[tuple[str, str], tuple[int, int]],
-    ground_station_ids: set[str],
-    sat_id: str,
-) -> tuple[str, str] | None:
-    """Return one association that consumed the given sat's ground-terminal capacity, if any."""
-    for ap in sorted(new_associations):
-        _, ap_sat = _ground_and_satellite_ids(ap, ground_station_ids)
-        if ap_sat == sat_id:
-            return ap
-    return None
-
-
-def _attribute_rejected_pairs(
+def _candidate_rank_key(
     *,
-    visible_set: set[tuple[str, str]],
-    new_associations: Mapping[tuple[str, str], tuple[int, int]],
-    new_pending_teardowns: Mapping[tuple[str, str], MbbTeardown],
-    pending_teardowns: MbbTeardownState,
-    gs_occupied: Mapping[str, set[int]],
-    sat_capacity: Mapping[str, int],
-    gs_terminal_counts: Mapping[str, int],
+    candidate: _Candidate,
+    ranking_order: Sequence[RankingComponent],
+) -> tuple:
+    values: list[object] = []
+    for component in ranking_order:
+        if component == "service_priority":
+            values.append(candidate.service_priority)
+        elif component == "selection_score":
+            values.append(-candidate.selection_score)
+        elif component == "per_gs_rank":
+            values.append(candidate.per_gs_rank)
+        elif component == "lex_pair":
+            values.append(candidate.pair)
+        else:  # pragma: no cover - Literal/model validation should prevent this.
+            raise ValueError(f"Unknown ranking component {component!r}")
+    return tuple(values)
+
+
+def _build_candidates(
+    *,
+    step: int,
+    visible_per_station: Mapping[str, list[GroundVisibility]],
+    gs_selection_policies: Mapping[str, SelectionPolicySpec],
+    gs_service_priorities: Mapping[str, int],
+    ranking_order: Sequence[RankingComponent],
+) -> tuple[list[_Candidate], dict[tuple[str, str], _Candidate], set[tuple[str, str]]]:
+    by_gs: dict[str, list[_Candidate]] = {}
+    visible_set: set[tuple[str, str]] = set()
+    candidate_by_pair: dict[tuple[str, str], _Candidate] = {}
+
+    for gs_id, visible_sats in sorted(visible_per_station.items()):
+        if gs_id not in gs_selection_policies:
+            raise ValueError(f"Ground allocator is missing selection policy for {gs_id}")
+        if gs_id not in gs_service_priorities:
+            raise ValueError(f"Ground allocator is missing service_priority for {gs_id}")
+        station_candidates: list[_Candidate] = []
+        for gv in visible_sats:
+            if not gv.visible:
+                raise ValueError(
+                    f"visible_per_station[{gs_id!r}] contains invisible satellite "
+                    f"{gv.sat_id!r}; visibility filtering belongs to the physics role"
+                )
+            pair = _normalized_pair(gs_id, gv.sat_id)
+            if pair in visible_set:
+                raise ValueError(f"Duplicate ground visibility candidate for pair {pair!r}")
+            visible_set.add(pair)
+            policy = gs_selection_policies[gs_id]
+            score = score_candidate(
+                policy=policy,
+                visibility=gv,
+                context=SelectionContext(step=step, gs_id=gs_id, sat_id=gv.sat_id),
+            )
+            station_candidates.append(
+                _Candidate(
+                    pair=pair,
+                    gs_id=gs_id,
+                    sat_id=gv.sat_id,
+                    visibility=gv,
+                    selection_score=score,
+                    service_priority=gs_service_priorities[gs_id],
+                    per_gs_rank=-1,
+                    rank_key=(),
+                )
+            )
+        by_gs[gs_id] = station_candidates
+
+    ranked: list[_Candidate] = []
+    for _gs_id, station_candidates in by_gs.items():
+        station_candidates.sort(key=lambda c: (-c.selection_score, c.pair))
+        for idx, candidate in enumerate(station_candidates):
+            ranked_candidate = _Candidate(
+                pair=candidate.pair,
+                gs_id=candidate.gs_id,
+                sat_id=candidate.sat_id,
+                visibility=candidate.visibility,
+                selection_score=candidate.selection_score,
+                service_priority=candidate.service_priority,
+                per_gs_rank=idx,
+                rank_key=(),
+            )
+            ranked.append(ranked_candidate)
+
+    ranked_with_keys: list[_Candidate] = []
+    for candidate in ranked:
+        keyed = _Candidate(
+            pair=candidate.pair,
+            gs_id=candidate.gs_id,
+            sat_id=candidate.sat_id,
+            visibility=candidate.visibility,
+            selection_score=candidate.selection_score,
+            service_priority=candidate.service_priority,
+            per_gs_rank=candidate.per_gs_rank,
+            rank_key=_candidate_rank_key(candidate=candidate, ranking_order=ranking_order),
+        )
+        ranked_with_keys.append(keyed)
+        candidate_by_pair[keyed.pair] = keyed
+
+    ranked_with_keys.sort(key=lambda c: c.rank_key)
+    return ranked_with_keys, candidate_by_pair, visible_set
+
+
+def _terminal_totals_for_pair(
+    *,
+    pair: tuple[str, str],
     ground_station_ids: set[str],
+    gs_terminal_counts: Mapping[str, int],
+    sat_ground_terminals: Mapping[str, int],
+) -> tuple[str, str, int, int]:
+    gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
+    if gs_id not in gs_terminal_counts:
+        raise ValueError(f"Missing ground terminal count for {gs_id}")
+    if sat_id not in sat_ground_terminals:
+        raise ValueError(f"Missing satellite ground terminal count for {sat_id}")
+    return gs_id, sat_id, gs_terminal_counts[gs_id], sat_ground_terminals[sat_id]
+
+
+def _record_rejection(
+    rejected: dict[tuple[str, str], _Rejected],
+    pair: tuple[str, str],
+    *,
+    reason: GroundUnscheduledReason,
+    incumbent_pair: tuple[str, str] | None,
+    capacity_constraint: str | None,
+) -> None:
+    rejected[pair] = _Rejected(
+        reason=reason,
+        incumbent_pair=incumbent_pair,
+        capacity_constraint=capacity_constraint,
+    )
+
+
+def _make_event(
+    *,
+    category: GroundAllocationEventCategory,
+    pair: tuple[str, str],
+    gs_id: str,
     gs_tenant_ids: Mapping[str, str],
     gs_reference_bodies: Mapping[str, str],
-    mbb_reserve: int,
+    message: str,
+    successor_pair: tuple[str, str] | None = None,
+    challenger_pair: tuple[str, str] | None = None,
+    policy_kind: GroundAllocationPolicyKind | None = None,
+    policy_name: GroundAllocationPolicyName | None = None,
+) -> GroundAllocationEvent:
+    return GroundAllocationEvent(
+        category=category,
+        pair=pair,
+        tenant_id=gs_tenant_ids[gs_id],
+        reference_body=gs_reference_bodies[gs_id],
+        message=message,
+        successor_pair=successor_pair,
+        challenger_pair=challenger_pair,
+        policy_kind=policy_kind,
+        policy_name=policy_name,
+    )
+
+
+def _policy_audit(
+    *,
+    gs_selection_policies: Mapping[str, SelectionPolicySpec],
+    gs_handover_policies: Mapping[str, HandoverPolicySpec],
+    ranking_order: Sequence[RankingComponent],
+    handover_mode: Literal["bbm", "mbb"],
+    mbb_preemption: MbbPreemptionPolicy,
+    successor_abort_policy: SuccessorAbortPolicy,
+    cross_tenant_displacement: CrossTenantDisplacementPolicy,
     mbb_overlap_ticks: int,
-    step: int,
-) -> tuple[UnscheduledPair, ...]:
-    """Attribute a typed rejection reason to every visible pair that did not allocate.
+    mbb_reserve: int,
+    bbm_acquire_timeout_ticks: int,
+    ignored_capacity_fields: Sequence[str],
+) -> GroundPolicyAudit:
+    return GroundPolicyAudit(
+        selection_policies={k: v.name for k, v in sorted(gs_selection_policies.items())},
+        selection_policy_params={
+            k: dict(v.params) for k, v in sorted(gs_selection_policies.items())
+        },
+        handover_policies={k: v.name for k, v in sorted(gs_handover_policies.items())},
+        handover_policy_params={k: dict(v.params) for k, v in sorted(gs_handover_policies.items())},
+        ranking_order=tuple(ranking_order),
+        handover_mode=handover_mode,
+        mbb_preemption=mbb_preemption,
+        successor_abort_policy=successor_abort_policy,
+        cross_tenant_displacement=cross_tenant_displacement,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
+        bbm_acquire_timeout_ticks=bbm_acquire_timeout_ticks,
+        ignored_capacity_fields=tuple(sorted(ignored_capacity_fields)),
+    )
 
-    The attribution inspects the post-allocation state of the allocator
-    (which terminals are occupied, what survived the candidate walk) and
-    picks the reason that best fits each rejected pair.
 
-    Returns a tuple sorted by pair for deterministic NATS payloads —
-    Direction 4 (multi-compute-node) requires that two Scheduler replicas
-    receiving the same `GroundLinkDecisionSnapshot` see the same ordering.
+def _normalize_satellite_terminal_pools(
+    *,
+    sat_ground_terminals: Mapping[str, int],
+    sat_ground_terminal_indices_by_body: Mapping[str, Mapping[str, Sequence[int]]],
+) -> dict[str, dict[str, tuple[int, ...]]]:
+    """Validate the satellite terminal indices available for each target body."""
 
-    The final `else` branch raises rather than returning a default. The
-    plan demands no silent fall-throughs: if the allocator cannot
-    attribute a rejection to one of the typed reasons, the producer is
-    wrong and must fail loud so we can fix the attribution logic, not
-    hide it behind a generic value.
-    """
-    rejected = sorted(visible_set - set(new_associations.keys()))
-    out: list[UnscheduledPair] = []
-
-    for pair in rejected:
-        gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
-        tenant_id = gs_tenant_ids[gs_id]
-        reference_body = gs_reference_bodies[gs_id]
-        reason: GroundUnscheduledReason
-
-        # Case 1: this pair was in an MBB teardown that just expired.
-        # The OME has released the slot for a successor. The pair is
-        # still visible but no longer allocated.
-        if pair in pending_teardowns:
-            teardown = pending_teardowns[pair]
-            elapsed = step - teardown.start_step
-            if elapsed >= mbb_overlap_ticks:
-                out.append(
-                    UnscheduledPair(
-                        pair=pair,
-                        tenant_id=tenant_id,
-                        reference_body=reference_body,
-                        unscheduled_reason="replaced_by_successor",
-                        incumbent_pair=teardown.successor_pair,
-                        capacity_constraint=None,
-                    )
-                )
-                continue
-
-        # Case 2: the satellite's ground-terminal capacity is exhausted
-        # globally. A co-located ground station got there first.
-        if sat_capacity.get(sat_id, 0) <= 0:
-            incumbent = _find_sat_incumbent(new_associations, ground_station_ids, sat_id)
-            out.append(
-                UnscheduledPair(
-                    pair=pair,
-                    tenant_id=tenant_id,
-                    reference_body=reference_body,
-                    unscheduled_reason="sat_capacity",
-                    incumbent_pair=incumbent,
-                    capacity_constraint=f"{sat_id}.ground_terminals",
-                )
-            )
-            continue
-
-        # Case 3: GS-side resource constraint.
-        tc = gs_terminal_counts[gs_id]
-        gs_physical = len(gs_occupied.get(gs_id, set()))
-        gs_steady = sum(
-            1
-            for ap in new_associations
-            if _ground_and_satellite_ids(ap, ground_station_ids)[0] == gs_id
-            and ap not in new_pending_teardowns
-        )
-        logical_room = gs_steady < (tc - mbb_reserve)
-        physical_room = gs_physical < tc
-        incumbent = _find_gs_incumbent(
-            new_associations, new_pending_teardowns, ground_station_ids, gs_id
+    missing = sorted(set(sat_ground_terminals) - set(sat_ground_terminal_indices_by_body))
+    if missing:
+        raise ValueError(
+            "Ground allocator is missing satellite ground-terminal index pools for "
+            + ", ".join(missing)
         )
 
-        if not physical_room and tc == 1:
-            # Single-terminal GS with an incumbent occupying the only slot.
-            # The allocator has no BBM-displacement path for this case
-            # (verified in the foundations plan as Finding 2).
-            reason = "bbm_no_spare"
-        elif not logical_room and physical_room:
-            # Displacement was eligible (physical_room true, no logical
-            # room) but the displacement check did not promote this
-            # candidate. The incumbent's discount-boosted score won, or
-            # priorities did not allow the swap. Phase 1.3 attributes
-            # both as `hysteresis_hold` — Phase 3 of the foundations
-            # plan refines the selection-vs-handover split, at which
-            # point we will distinguish `hysteresis_hold` from
-            # `incumbent_held` more precisely.
-            reason = "hysteresis_hold"
-        elif not physical_room:
-            # Multi-terminal GS with all physical terminals occupied
-            # (steady + overlap). No room to add even with logical-room
-            # allowance.
-            reason = "gs_capacity"
-        else:
-            # sat has capacity, GS has both logical and physical room —
-            # the allocator should have scheduled this pair. The merge
-            # loop missed it. This is a logic bug we want to surface.
+    normalized: dict[str, dict[str, tuple[int, ...]]] = {}
+    for sat_id, total in sorted(sat_ground_terminals.items()):
+        if total < 0:
+            raise ValueError(f"Satellite {sat_id} ground terminal count must be >= 0")
+        body_map = sat_ground_terminal_indices_by_body[sat_id]
+        if total > 0 and not body_map:
             raise ValueError(
-                f"Allocator could not attribute rejection reason for {pair} — "
-                f"sat_capacity[{sat_id}]={sat_capacity.get(sat_id, 0)} > 0, "
-                f"gs_steady={gs_steady}, gs_physical={gs_physical}, tc={tc}, "
-                f"mbb_reserve={mbb_reserve}. This is an allocator logic bug; "
-                "fix the attribution rather than hiding it behind a default."
+                f"Satellite {sat_id} has {total} ground terminal(s) but no target-body pools"
             )
+        normalized[sat_id] = {}
+        for reference_body, indices in sorted(body_map.items()):
+            pool = tuple(int(idx) for idx in indices)
+            if len(set(pool)) != len(pool):
+                raise ValueError(
+                    f"Satellite {sat_id} target_body={reference_body!r} terminal pool "
+                    "contains duplicate indices"
+                )
+            invalid = [idx for idx in pool if idx < 0 or idx >= total]
+            if invalid:
+                raise ValueError(
+                    f"Satellite {sat_id} target_body={reference_body!r} terminal pool "
+                    f"contains out-of-range indices {invalid}; valid range is 0..{total - 1}"
+                )
+            normalized[sat_id][str(reference_body)] = pool
+    return normalized
 
-        out.append(
-            UnscheduledPair(
-                pair=pair,
-                tenant_id=tenant_id,
-                reference_body=reference_body,
-                unscheduled_reason=reason,
-                incumbent_pair=incumbent,
-                capacity_constraint=f"{gs_id}.terminals" if reason != "hysteresis_hold" else None,
-            )
+
+def _visible_incumbent_for_pair(
+    *,
+    pair: tuple[str, str],
+    candidate_by_pair: Mapping[tuple[str, str], _Candidate],
+) -> _Candidate:
+    candidate = candidate_by_pair.get(pair)
+    if candidate is None:
+        raise ValueError(
+            f"Internal allocator invariant violated: current association {pair!r} "
+            "is visible but has no selection candidate."
         )
-
-    return tuple(out)
+    return candidate
 
 
 def allocate_ground_links(
@@ -269,250 +420,627 @@ def allocate_ground_links(
     current_associations: Mapping[tuple[str, str], tuple[int, int]],
     pending_teardowns: MbbTeardownState,
     gs_terminal_counts: Mapping[str, int],
-    gs_policies: Mapping[str, str],
+    gs_selection_policies: Mapping[str, SelectionPolicySpec],
     gs_min_elevations: Mapping[str, float],
-    gs_hysteresis: Mapping[str, HysteresisParameters],
+    gs_handover_policies: Mapping[str, HandoverPolicySpec],
     gs_service_priorities: Mapping[str, int],
     gs_tenant_ids: Mapping[str, str],
     gs_reference_bodies: Mapping[str, str],
     sat_ground_terminals: Mapping[str, int],
+    sat_ground_terminal_indices_by_body: Mapping[str, Mapping[str, Sequence[int]]],
+    ranking_order: Sequence[RankingComponent],
+    handover_mode: Literal["bbm", "mbb"],
     mbb_overlap_ticks: int,
     mbb_reserve: int,
+    mbb_preemption: MbbPreemptionPolicy,
+    successor_abort_policy: SuccessorAbortPolicy,
+    cross_tenant_displacement: CrossTenantDisplacementPolicy,
+    bbm_acquire_timeout_ticks: int,
+    ignored_capacity_fields: Sequence[str],
 ) -> GroundAllocationResult:
     """Allocate ground links for one tick.
 
-    The allocator preserves active links when still visible, supports
-    hysteresis-aware replacement, and tracks make-before-break overlap state.
-    It fails loudly for unknown policies via `_compute_pair_score`; policy
-    misspellings must never silently change handover behavior.
-
-    Direction 2 (multi-tenant) and Direction 3 (multi-body) require every
-    unscheduled-pair record to carry tenant scope and body anchor. Missing
-    per-GS ``tenant_id`` or ``reference_body`` is fatal at the producer
-    boundary — no silent fall-through to a default.
+    This function is the state-machine mechanism. Operator policy enters only
+    through named policy specs, ranking_order, and handover mode parameters.
+    Scheduler state, Node Agent state, and orbital physics do not enter this
+    function.
     """
-    missing_tenant = sorted(set(visible_per_station) - set(gs_tenant_ids))
+
+    if step < 0:
+        raise ValueError("Ground allocator step must be non-negative")
+    if handover_mode not in ("bbm", "mbb"):
+        raise ValueError(f"Unknown handover_mode={handover_mode!r}")
+    if mbb_preemption != "off":
+        raise ValueError(
+            f"mbb_preemption={mbb_preemption!r} is not implemented in Phase 3; "
+            "the schema must reject unsupported preemption policies"
+        )
+    if cross_tenant_displacement != "off":
+        raise ValueError(
+            f"cross_tenant_displacement={cross_tenant_displacement!r} is not implemented "
+            "in Phase 3; cross-tenant preemption needs an explicit priority policy"
+        )
+    if successor_abort_policy not in ("hard_release", "soft_retain"):
+        raise ValueError(f"Unknown successor_abort_policy={successor_abort_policy!r}")
+    if bbm_acquire_timeout_ticks != 1:
+        raise ValueError(
+            "bbm_acquire_timeout_ticks values other than 1 require the future "
+            "multi-tick BBMGap wait-state algorithm"
+        )
+    if mbb_overlap_ticks < 0:
+        raise ValueError("mbb_overlap_ticks must be >= 0")
+    if mbb_reserve < 0:
+        raise ValueError("mbb_reserve must be >= 0")
+    if handover_mode == "mbb" and (mbb_overlap_ticks <= 0 or mbb_reserve <= 0):
+        raise ValueError("MBB handover requires mbb_overlap_ticks > 0 and mbb_reserve > 0")
+
+    order = _validate_ranking_order(ranking_order)
+
+    visible_gs = set(visible_per_station)
+    missing_tenant = sorted(visible_gs - set(gs_tenant_ids))
     if missing_tenant:
         raise ValueError(
             "Ground allocator is missing tenant_id for "
-            f"{', '.join(missing_tenant)} — Direction 2 requires every "
-            "unscheduled-pair record to carry tenant scope"
+            f"{', '.join(missing_tenant)}; every unscheduled pair needs tenant scope"
         )
-    missing_body = sorted(set(visible_per_station) - set(gs_reference_bodies))
+    missing_body = sorted(visible_gs - set(gs_reference_bodies))
     if missing_body:
         raise ValueError(
             "Ground allocator is missing reference_body for "
-            f"{', '.join(missing_body)} — Direction 3 requires every "
-            "unscheduled-pair record to be anchored to a specific body"
+            f"{', '.join(missing_body)}; every unscheduled pair needs a body anchor"
         )
-    gs_scheduled: dict[tuple[str, str], bool] = {}
-    sat_capacity: dict[str, int] = dict(sat_ground_terminals)
+    missing_handover = sorted(visible_gs - set(gs_handover_policies))
+    if missing_handover:
+        raise ValueError(
+            f"Ground allocator is missing handover_policy for {', '.join(missing_handover)}"
+        )
+    missing_min_elevation = sorted(visible_gs - set(gs_min_elevations))
+    if missing_min_elevation:
+        raise ValueError(
+            f"Ground allocator is missing min elevation for {', '.join(missing_min_elevation)}"
+        )
 
-    scored_pairs: list[tuple[int, float, str, str, float, int]] = []
-    score_lookup: dict[tuple[str, str], tuple[float, int]] = {}
-    for gs_id, visible_sats in visible_per_station.items():
-        policy = gs_policies[gs_id]
-        min_elev = gs_min_elevations[gs_id]
-        hyst = gs_hysteresis[gs_id]
-        priority = gs_service_priorities[gs_id]
+    if handover_mode == "mbb":
+        invalid = sorted(gs for gs, count in gs_terminal_counts.items() if count <= mbb_reserve)
+        if invalid:
+            raise ValueError(
+                "MBB handover requires every active ground station to have terminal "
+                "capacity greater than mbb_reserve; invalid: " + ", ".join(invalid)
+            )
 
-        for gv in visible_sats:
-            score = _compute_pair_score(gv.elevation_deg, policy, gv.remaining_visible_s)
-            pair = (min(gs_id, gv.sat_id), max(gs_id, gv.sat_id))
+    policy_audit = _policy_audit(
+        gs_selection_policies=gs_selection_policies,
+        gs_handover_policies=gs_handover_policies,
+        ranking_order=order,
+        handover_mode=handover_mode,
+        mbb_preemption=mbb_preemption,
+        successor_abort_policy=successor_abort_policy,
+        cross_tenant_displacement=cross_tenant_displacement,
+        mbb_overlap_ticks=mbb_overlap_ticks,
+        mbb_reserve=mbb_reserve,
+        bbm_acquire_timeout_ticks=bbm_acquire_timeout_ticks,
+        ignored_capacity_fields=ignored_capacity_fields,
+    )
 
-            if pair in current_associations:
-                discount = _compute_effective_discount(gv.elevation_deg, min_elev, hyst)
-                score *= discount
+    candidates, candidate_by_pair, visible_set = _build_candidates(
+        step=step,
+        visible_per_station=visible_per_station,
+        gs_selection_policies=gs_selection_policies,
+        gs_service_priorities=gs_service_priorities,
+        ranking_order=order,
+    )
 
-            sat_gnd_cap = sat_ground_terminals[gv.sat_id]
-            scored_pairs.append((priority, score, gs_id, gv.sat_id, gv.range_km, sat_gnd_cap))
-            score_lookup[pair] = (score, priority)
-
-    # Final tiebreaker (gs_id, sat_id) ensures deterministic allocation when
-    # priority, score, and satellite capacity are equal. Without this, dict
-    # iteration order from upstream (hash-seed-dependent in older Pythons,
-    # insertion-order in 3.7+ but still input-dependent) decides which pair
-    # wins a contested terminal — producing different VisibilityEvent sequences
-    # from identical session configs.
-    scored_pairs.sort(key=lambda x: (x[0], -x[1], x[5], x[2], x[3]))
-
-    visible_set: set[tuple[str, str]] = {
-        (min(gs, sat), max(gs, sat)) for _, _, gs, sat, _, _ in scored_pairs
-    }
-
-    # Physical occupancy is derived from all current associations, including
-    # links that may be released later in this tick. This preserves terminal
-    # exclusivity during MBB overlap.
-    gs_occupied: dict[str, set[int]] = {}
-    sat_gnd_occupied: dict[str, set[int]] = {}
-    for pair, (gs_idx, sat_idx) in current_associations.items():
-        gs_id_ca, sat_id_ca = _ground_and_satellite_ids(pair, ground_station_ids)
-        gs_occupied.setdefault(gs_id_ca, set()).add(gs_idx)
-        sat_gnd_occupied.setdefault(sat_id_ca, set()).add(sat_idx)
-
+    sat_terminal_pools = _normalize_satellite_terminal_pools(
+        sat_ground_terminals=sat_ground_terminals,
+        sat_ground_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
+    )
+    gs_occupied: dict[str, set[int]] = {gs: set() for gs in gs_terminal_counts}
+    sat_occupied: dict[str, set[int]] = {sat: set() for sat in sat_ground_terminals}
     new_associations: dict[tuple[str, str], tuple[int, int]] = {}
     new_pending_teardowns: MbbTeardownState = {}
+    rejected: dict[tuple[str, str], _Rejected] = {}
+    allocation_events: list[GroundAllocationEvent] = []
+    drop_current_pairs: set[tuple[str, str]] = set()
 
-    # Step A: steady-state continuity. Existing visible non-teardown links keep
-    # their physical terminal indices before new candidates compete.
-    for pair, (gs_idx, sat_idx) in current_associations.items():
-        gs_id_a, sat_id_a = _ground_and_satellite_ids(pair, ground_station_ids)
+    def add_existing(pair: tuple[str, str], indices: tuple[int, int]) -> None:
+        gs_id, sat_id, gs_total, sat_total = _terminal_totals_for_pair(
+            pair=pair,
+            ground_station_ids=ground_station_ids,
+            gs_terminal_counts=gs_terminal_counts,
+            sat_ground_terminals=sat_ground_terminals,
+        )
+        gs_idx, sat_idx = indices
+        if not 0 <= gs_idx < gs_total:
+            raise ValueError(f"Association {pair!r} has invalid GS terminal index {gs_idx}")
+        if not 0 <= sat_idx < sat_total:
+            raise ValueError(f"Association {pair!r} has invalid satellite terminal index {sat_idx}")
+        if gs_idx in gs_occupied.setdefault(gs_id, set()):
+            raise ValueError(f"Duplicate GS terminal occupancy {gs_id}.term{gs_idx}")
+        reference_body = gs_reference_bodies[gs_id]
+        sat_pool = sat_terminal_pools[sat_id].get(reference_body, ())
+        if sat_idx not in sat_pool:
+            raise ValueError(
+                f"Association {pair!r} uses satellite terminal index {sat_idx}, but "
+                f"{sat_id}.ground_terminals has no such index for "
+                f"reference_body={reference_body!r}"
+            )
+        if sat_idx in sat_occupied.setdefault(sat_id, set()):
+            raise ValueError(f"Duplicate satellite ground terminal occupancy {sat_id}.gnd{sat_idx}")
+        gs_occupied[gs_id].add(gs_idx)
+        sat_occupied[sat_id].add(sat_idx)
+        new_associations[pair] = indices
 
-        if pair in pending_teardowns:
-            continue
-        if pair not in visible_set:
-            gs_occupied.setdefault(gs_id_a, set()).discard(gs_idx)
-            sat_gnd_occupied.setdefault(sat_id_a, set()).discard(sat_idx)
-            continue
+    def remove_association(pair: tuple[str, str]) -> tuple[int, int]:
+        indices = new_associations.pop(pair)
+        gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
+        gs_idx, sat_idx = indices
+        gs_occupied.setdefault(gs_id, set()).discard(gs_idx)
+        sat_occupied.setdefault(sat_id, set()).discard(sat_idx)
+        new_pending_teardowns.pop(pair, None)
+        return indices
 
-        new_associations[pair] = (gs_idx, sat_idx)
-        sat_capacity[sat_id_a] -= 1
-        gs_scheduled[pair] = True
+    def sat_terminal_pool(candidate: _Candidate) -> tuple[int, ...]:
+        reference_body = gs_reference_bodies[candidate.gs_id]
+        return sat_terminal_pools.get(candidate.sat_id, {}).get(reference_body, ())
 
-    # Expire/free MBB teardown occupancy before allocating new or overlapping
-    # links. Remaining teardown entries still consume physical terminals.
-    valid_teardowns: MbbTeardownState = {}
-    for pair, teardown in pending_teardowns.items():
+    def sat_capacity_constraint(candidate: _Candidate) -> str:
+        reference_body = gs_reference_bodies[candidate.gs_id]
+        return f"{candidate.sat_id}.ground_terminals[{reference_body}]"
+
+    def next_sat_terminal_index(candidate: _Candidate) -> int | None:
+        occupied = sat_occupied.setdefault(candidate.sat_id, set())
+        return next((idx for idx in sat_terminal_pool(candidate) if idx not in occupied), None)
+
+    def satellite_has_capacity(candidate: _Candidate) -> bool:
+        return next_sat_terminal_index(candidate) is not None
+
+    def allocate_new(candidate: _Candidate) -> bool:
+        gs_occ = gs_occupied.setdefault(candidate.gs_id, set())
+        sat_occ = sat_occupied.setdefault(candidate.sat_id, set())
+        gs_total = gs_terminal_counts[candidate.gs_id]
+        gs_idx = next((i for i in range(gs_total) if i not in gs_occ), None)
+        sat_idx = next_sat_terminal_index(candidate)
+        if gs_idx is None or sat_idx is None:
+            return False
+        gs_occ.add(gs_idx)
+        sat_occ.add(sat_idx)
+        new_associations[candidate.pair] = (gs_idx, sat_idx)
+        rejected.pop(candidate.pair, None)
+        return True
+
+    def steady_limit(gs_id: str) -> int:
+        tc = gs_terminal_counts[gs_id]
+        return tc - mbb_reserve if handover_mode == "mbb" else tc
+
+    def steady_pairs_for_gs(gs_id: str) -> list[tuple[str, str]]:
+        return [
+            pair
+            for pair in new_associations
+            if pair not in new_pending_teardowns
+            and _ground_and_satellite_ids(pair, ground_station_ids)[0] == gs_id
+        ]
+
+    def worst_steady_incumbent(gs_id: str) -> _Candidate | None:
+        incumbents = [
+            _visible_incumbent_for_pair(pair=pair, candidate_by_pair=candidate_by_pair)
+            for pair in steady_pairs_for_gs(gs_id)
+        ]
+        if not incumbents:
+            return None
+        return max(incumbents, key=lambda c: c.rank_key)
+
+    def rejection_locked(pair: tuple[str, str]) -> bool:
+        rejection = rejected.get(pair)
+        return rejection is not None and rejection.reason in _LOCKED_REJECTION_REASONS
+
+    def protected_mbb_pairs() -> set[tuple[str, str]]:
+        protected = set(new_pending_teardowns)
+        protected.update(teardown.successor_pair for teardown in new_pending_teardowns.values())
+        return protected
+
+    def protected_mbb_pair_for_gs(gs_id: str) -> tuple[str, str] | None:
+        for pair in sorted(protected_mbb_pairs()):
+            pair_gs, _pair_sat = _ground_and_satellite_ids(pair, ground_station_ids)
+            if pair_gs == gs_id:
+                return pair
+        return None
+
+    def same_partition(candidate: _Candidate, pair: tuple[str, str]) -> bool:
+        pair_gs, _pair_sat = _ground_and_satellite_ids(pair, ground_station_ids)
+        return (
+            gs_tenant_ids[pair_gs] == gs_tenant_ids[candidate.gs_id]
+            and gs_reference_bodies[pair_gs] == gs_reference_bodies[candidate.gs_id]
+        )
+
+    def sat_occupants_for_candidate(candidate: _Candidate) -> list[_Candidate]:
+        target_pool = set(sat_terminal_pool(candidate))
+        occupants: list[_Candidate] = []
+        for pair, (_gs_idx, sat_idx) in sorted(new_associations.items()):
+            _pair_gs, pair_sat = _ground_and_satellite_ids(pair, ground_station_ids)
+            if pair_sat == candidate.sat_id and sat_idx in target_pool:
+                occupants.append(
+                    _visible_incumbent_for_pair(pair=pair, candidate_by_pair=candidate_by_pair)
+                )
+        return occupants
+
+    def sat_capacity_blocker(candidate: _Candidate) -> tuple[str, str] | None:
+        occupants = sat_occupants_for_candidate(candidate)
+        if not occupants:
+            return None
+        return max(occupants, key=lambda c: c.rank_key).pair
+
+    def displaceable_sat_incumbent(candidate: _Candidate) -> _Candidate | None:
+        protected = protected_mbb_pairs()
+        incumbents = [
+            incumbent
+            for incumbent in sat_occupants_for_candidate(candidate)
+            if incumbent.pair not in protected
+            and same_partition(candidate, incumbent.pair)
+            and candidate.rank_key < incumbent.rank_key
+        ]
+        if not incumbents:
+            return None
+        return max(incumbents, key=lambda c: c.rank_key)
+
+    def emit_bbm_gap(incumbent: _Candidate, challenger: _Candidate) -> None:
+        allocation_events.append(
+            _make_event(
+                category="bbm_gap",
+                pair=incumbent.pair,
+                gs_id=challenger.gs_id,
+                gs_tenant_ids=gs_tenant_ids,
+                gs_reference_bodies=gs_reference_bodies,
+                message=(
+                    f"BBM released incumbent {incumbent.pair!r} before acquiring "
+                    f"challenger {challenger.pair!r}; timeout_ticks={bbm_acquire_timeout_ticks}. "
+                    "Phase 3 BBMGap is an immediate one-tick release/acquire transition."
+                ),
+                successor_pair=challenger.pair,
+                challenger_pair=challenger.pair,
+                policy_kind="handover_mode",
+                policy_name="bbm",
+            )
+        )
+
+    def emit_incumbent_lost(pair: tuple[str, str], message: str) -> None:
+        gs_id, _sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
+        allocation_events.append(
+            _make_event(
+                category="incumbent_lost",
+                pair=pair,
+                gs_id=gs_id,
+                gs_tenant_ids=gs_tenant_ids,
+                gs_reference_bodies=gs_reference_bodies,
+                message=message,
+            )
+        )
+
+    # Prior-state recovery: resolve in-flight MBB teardown state before new
+    # candidates compete. This is a state-machine transition, not selection.
+    for pair in sorted(pending_teardowns):
         if pair not in current_associations:
-            continue
-        gs_id_td, sat_id_td = _ground_and_satellite_ids(pair, ground_station_ids)
-        gs_idx, sat_idx = current_associations[pair]
+            raise ValueError(f"Pending teardown {pair!r} is missing from current associations")
+        teardown = pending_teardowns[pair]
+        if teardown.start_step > step:
+            raise ValueError(f"Pending teardown {pair!r} starts in the future")
+        gs_id, _sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
+        successor = teardown.successor_pair
+        if successor == pair:
+            raise ValueError(f"Pending teardown {pair!r} names itself as successor")
+        pair_visible = pair in visible_set
+        successor_visible = successor in visible_set
+        successor_current = successor in current_associations and successor not in pending_teardowns
         elapsed = step - teardown.start_step
 
-        if elapsed >= mbb_overlap_ticks or pair not in visible_set:
-            gs_occupied.setdefault(gs_id_td, set()).discard(gs_idx)
-            sat_gnd_occupied.setdefault(sat_id_td, set()).discard(sat_idx)
-        else:
-            valid_teardowns[pair] = teardown
-
-    # Step B/C: merge continuing overlap and new candidates into one
-    # deterministic walk. Overlap wins over brand-new candidates at equal
-    # priority/score so MBB teardown state remains stable for its window.
-    merged: list[tuple[int, int, float, tuple[str, str], str, int, tuple[str, str] | None]] = []
-    for prio, score, gs_id, sat_id, _range_km, _cap in scored_pairs:
-        pair = (min(gs_id, sat_id), max(gs_id, sat_id))
-        if pair in new_associations:
-            continue
-        if pair in valid_teardowns:
-            teardown = valid_teardowns[pair]
-            merged.append(
-                (prio, 1, -score, pair, "overlap", teardown.start_step, teardown.successor_pair)
-            )
-        else:
-            merged.append((prio, 2, -score, pair, "new", 0, None))
-
-    merged.sort()
-
-    for prio, _rank, neg_score, pair, kind, start_tick_m, successor_m in merged:
-        gs_id_m, sat_id_m = _ground_and_satellite_ids(pair, ground_station_ids)
-
-        if kind == "overlap":
-            gs_idx, sat_idx = current_associations[pair]
-            if sat_capacity[sat_id_m] > 0:
-                new_associations[pair] = (gs_idx, sat_idx)
-                sat_capacity[sat_id_m] -= 1
-                if successor_m is None:
-                    raise ValueError(f"MBB teardown {pair} is missing successor link")
-                new_pending_teardowns[pair] = MbbTeardown(
-                    start_step=start_tick_m,
-                    successor_pair=successor_m,
+        if not successor_visible or not successor_current:
+            category = "failed_successor" if not successor_current else "successor_aborted"
+            allocation_events.append(
+                _make_event(
+                    category=category,
+                    pair=pair,
+                    gs_id=gs_id,
+                    gs_tenant_ids=gs_tenant_ids,
+                    gs_reference_bodies=gs_reference_bodies,
+                    message=(
+                        f"MBB successor {successor!r} did not survive prior-state recovery; "
+                        f"successor_abort_policy={successor_abort_policy}"
+                    ),
+                    successor_pair=successor,
+                    policy_kind="successor_abort_policy",
+                    policy_name=successor_abort_policy,
                 )
-                gs_scheduled[pair] = True
-            else:
-                gs_occupied.setdefault(gs_id_m, set()).discard(gs_idx)
-                sat_gnd_occupied.setdefault(sat_id_m, set()).discard(sat_idx)
-        else:
-            tc = gs_terminal_counts[gs_id_m]
-            gs_steady = sum(
-                1
-                for p in new_associations
-                if _ground_and_satellite_ids(p, ground_station_ids)[0] == gs_id_m
-                and p not in new_pending_teardowns
             )
-            gs_physical = len(gs_occupied.get(gs_id_m, set()))
-            logical_room = gs_steady < (tc - mbb_reserve)
-            physical_room = gs_physical < tc
+            if not pair_visible:
+                emit_incumbent_lost(
+                    pair,
+                    f"Scheduled MBB incumbent {pair!r} lost physical visibility during "
+                    "prior-state recovery",
+                )
+            if successor_current and not successor_visible:
+                emit_incumbent_lost(
+                    successor,
+                    f"Scheduled MBB successor {successor!r} lost physical visibility "
+                    "during prior-state recovery",
+                )
+            if successor_visible and not successor_current:
+                successor_gs, _successor_sat = _ground_and_satellite_ids(
+                    successor, ground_station_ids
+                )
+                allocation_events.append(
+                    _make_event(
+                        category="failed_acquire",
+                        pair=successor,
+                        gs_id=successor_gs,
+                        gs_tenant_ids=gs_tenant_ids,
+                        gs_reference_bodies=gs_reference_bodies,
+                        message=(
+                            f"MBB successor {successor!r} was visible but was not present "
+                            "in current associations during prior-state recovery"
+                        ),
+                        successor_pair=successor,
+                        policy_kind="successor_abort_policy",
+                        policy_name=successor_abort_policy,
+                    )
+                )
+            drop_current_pairs.add(pair)
+            drop_current_pairs.add(successor)
+            if successor_visible:
+                _record_rejection(
+                    rejected,
+                    successor,
+                    reason="failed_acquire",
+                    incumbent_pair=pair,
+                    capacity_constraint=None,
+                )
+            if pair_visible and successor_abort_policy == "soft_retain":
+                add_existing(pair, current_associations[pair])
+            elif pair_visible:
+                _record_rejection(
+                    rejected,
+                    pair,
+                    reason=category,
+                    incumbent_pair=successor,
+                    capacity_constraint=None,
+                )
+            continue
 
-            if logical_room and physical_room and sat_capacity[sat_id_m] > 0:
-                gs_occ = gs_occupied.get(gs_id_m, set())
-                sat_occ = sat_gnd_occupied.get(sat_id_m, set())
-                sat_cap_total = sat_ground_terminals[sat_id_m]
-                gs_idx = next((i for i in range(tc) if i not in gs_occ), None)
-                sat_idx = next((i for i in range(sat_cap_total) if i not in sat_occ), None)
-                if gs_idx is not None and sat_idx is not None:
-                    new_associations[pair] = (gs_idx, sat_idx)
-                    gs_occupied.setdefault(gs_id_m, set()).add(gs_idx)
-                    sat_gnd_occupied.setdefault(sat_id_m, set()).add(sat_idx)
-                    sat_capacity[sat_id_m] -= 1
-                    gs_scheduled[pair] = True
+        if elapsed >= mbb_overlap_ticks or not pair_visible:
+            drop_current_pairs.add(pair)
+            if not pair_visible:
+                emit_incumbent_lost(
+                    pair,
+                    f"Scheduled MBB teardown pair {pair!r} lost physical visibility",
+                )
+            if pair_visible:
+                _record_rejection(
+                    rejected,
+                    pair,
+                    reason="replaced_by_successor",
+                    incumbent_pair=successor,
+                    capacity_constraint=None,
+                )
+            continue
 
-            elif not logical_room and physical_room and sat_capacity[sat_id_m] > 0:
-                worst_pair: tuple[str, str] | None = None
-                worst_score = float("inf")
-                worst_prio = 0
-                for p in new_associations:
-                    p_gs, _p_sat = _ground_and_satellite_ids(p, ground_station_ids)
-                    if p_gs != gs_id_m or p in new_pending_teardowns:
-                        continue
-                    p_score, p_prio = score_lookup[p]
-                    if p_score < worst_score:
-                        worst_pair, worst_score, worst_prio = p, p_score, p_prio
+        add_existing(pair, current_associations[pair])
+        new_pending_teardowns[pair] = teardown
 
-                score = -neg_score
-                if worst_pair is not None and score > worst_score and prio <= worst_prio:
-                    gs_occ = gs_occupied.get(gs_id_m, set())
-                    sat_occ = sat_gnd_occupied.get(sat_id_m, set())
-                    sat_cap_total = sat_ground_terminals[sat_id_m]
-                    gs_idx = next((i for i in range(tc) if i not in gs_occ), None)
-                    sat_idx = next((i for i in range(sat_cap_total) if i not in sat_occ), None)
-                    if gs_idx is not None and sat_idx is not None:
-                        new_associations[pair] = (gs_idx, sat_idx)
-                        gs_occupied.setdefault(gs_id_m, set()).add(gs_idx)
-                        sat_gnd_occupied.setdefault(sat_id_m, set()).add(sat_idx)
-                        sat_capacity[sat_id_m] -= 1
-                        new_pending_teardowns[worst_pair] = MbbTeardown(
-                            start_step=step,
-                            successor_pair=pair,
-                        )
-                        gs_scheduled[pair] = True
+    # Steady-state continuity: visible current links not in teardown survive as
+    # incumbents. They may still be displaced later by handover policy.
+    for pair, indices in sorted(current_associations.items()):
+        if pair in pending_teardowns or pair in drop_current_pairs:
+            continue
+        if pair not in visible_set:
+            emit_incumbent_lost(
+                pair,
+                f"Scheduled incumbent {pair!r} lost physical visibility",
+            )
+            continue
+        add_existing(pair, indices)
 
-    # Successor-aware abort check: if the replacement link did not survive the
-    # allocation walk, the old link cannot remain in teardown state.
-    for pair in list(new_pending_teardowns.keys()):
-        successor = new_pending_teardowns[pair].successor_pair
-        if successor not in new_associations or successor in new_pending_teardowns:
-            del new_pending_teardowns[pair]
-
-    # Mark every allocated link scheduled even if it reached the output via
-    # continuity rather than the candidate walk.
-    for pair in new_associations:
-        if pair not in gs_scheduled:
-            gs_scheduled[pair] = True
-
-    # Attribute the rejection reason for every visible pair that did not
-    # end up scheduled. The attribution is end-of-allocation: it inspects
-    # the FINAL state (which terminals were occupied, what survived the
-    # candidate walk) and assigns a typed reason. Missing attribution is
-    # a fatal logic bug — see the final `else` of `_attribute_rejection`.
-    unscheduled_list = _attribute_rejected_pairs(
-        visible_set=visible_set,
-        new_associations=new_associations,
-        new_pending_teardowns=new_pending_teardowns,
-        pending_teardowns=pending_teardowns,
-        gs_occupied=gs_occupied,
-        sat_capacity=sat_capacity,
-        gs_terminal_counts=gs_terminal_counts,
-        ground_station_ids=ground_station_ids,
-        gs_tenant_ids=gs_tenant_ids,
-        gs_reference_bodies=gs_reference_bodies,
-        mbb_reserve=mbb_reserve,
-        mbb_overlap_ticks=mbb_overlap_ticks,
-        step=step,
+    # Fail-safe convergence cap. Typical ticks complete in one or two passes;
+    # the cap prevents a logic bug from spinning forever.
+    max_candidate_passes = max(
+        1,
+        len(candidates) + len(current_associations) + len(pending_teardowns) + 1,
     )
+    for _pass_idx in range(max_candidate_passes):
+        progress = False
+        for candidate in candidates:
+            if candidate.pair in new_associations or rejection_locked(candidate.pair):
+                continue
+
+            gs_id = candidate.gs_id
+            sat_id = candidate.sat_id
+            tc = gs_terminal_counts[gs_id]
+
+            protected_pair = protected_mbb_pair_for_gs(gs_id)
+            if protected_pair is not None:
+                _record_rejection(
+                    rejected,
+                    candidate.pair,
+                    reason="mbb_overlap_locked",
+                    incumbent_pair=protected_pair,
+                    capacity_constraint=f"{gs_id}.terminals",
+                )
+                continue
+
+            sat_displacement: _Candidate | None = None
+            if not satellite_has_capacity(candidate):
+                sat_displacement = displaceable_sat_incumbent(candidate)
+                if sat_displacement is None:
+                    _record_rejection(
+                        rejected,
+                        candidate.pair,
+                        reason="sat_capacity",
+                        incumbent_pair=sat_capacity_blocker(candidate),
+                        capacity_constraint=sat_capacity_constraint(candidate),
+                    )
+                    continue
+
+            gs_displacement: _Candidate | None = None
+            steady_count = len(steady_pairs_for_gs(gs_id))
+            logical_room = steady_count < steady_limit(gs_id)
+            physical_room = len(gs_occupied.get(gs_id, set())) < tc
+
+            if not logical_room:
+                incumbent = worst_steady_incumbent(gs_id)
+                if incumbent is None:
+                    _record_rejection(
+                        rejected,
+                        candidate.pair,
+                        reason="gs_capacity",
+                        incumbent_pair=None,
+                        capacity_constraint=f"{gs_id}.terminals",
+                    )
+                    continue
+
+                handover_policy = gs_handover_policies[gs_id]
+                decision = evaluate_handover(
+                    policy=handover_policy,
+                    incumbent_score=incumbent.selection_score,
+                    challenger_score=candidate.selection_score,
+                    context=HandoverContext(
+                        step=step,
+                        gs_id=gs_id,
+                        incumbent_pair=incumbent.pair,
+                        challenger_pair=candidate.pair,
+                        incumbent_visibility=incumbent.visibility,
+                        challenger_visibility=candidate.visibility,
+                        min_elevation_deg=gs_min_elevations[gs_id],
+                    ),
+                )
+                if decision.action == "hold":
+                    if decision.unscheduled_reason is None:
+                        raise ValueError(
+                            f"Handover policy {handover_policy.name!r} held {candidate.pair!r} "
+                            "but did not provide an unscheduled reason"
+                        )
+                    _record_rejection(
+                        rejected,
+                        candidate.pair,
+                        reason=decision.unscheduled_reason,
+                        incumbent_pair=incumbent.pair,
+                        capacity_constraint=None,
+                    )
+                    continue
+                if decision.action != "displace":
+                    raise ValueError(
+                        f"Handover policy {handover_policy.name!r} returned unknown action "
+                        f"{decision.action!r}"
+                    )
+                gs_displacement = incumbent
+                if handover_mode == "mbb" and not physical_room:
+                    _record_rejection(
+                        rejected,
+                        candidate.pair,
+                        reason="bbm_no_spare",
+                        incumbent_pair=incumbent.pair,
+                        capacity_constraint=f"{gs_id}.terminals",
+                    )
+                    continue
+            elif not physical_room:
+                _record_rejection(
+                    rejected,
+                    candidate.pair,
+                    reason="gs_capacity",
+                    incumbent_pair=protected_pair,
+                    capacity_constraint=f"{gs_id}.terminals",
+                )
+                continue
+
+            if gs_displacement is not None and handover_mode == "bbm":
+                remove_association(gs_displacement.pair)
+                if gs_displacement.pair in visible_set:
+                    _record_rejection(
+                        rejected,
+                        gs_displacement.pair,
+                        reason="replaced_by_successor",
+                        incumbent_pair=candidate.pair,
+                        capacity_constraint=None,
+                    )
+                emit_bbm_gap(gs_displacement, candidate)
+                progress = True
+
+            if sat_displacement is not None:
+                remove_association(sat_displacement.pair)
+                _record_rejection(
+                    rejected,
+                    sat_displacement.pair,
+                    reason="sat_capacity",
+                    incumbent_pair=candidate.pair,
+                    capacity_constraint=sat_capacity_constraint(candidate),
+                )
+                progress = True
+
+            if not allocate_new(candidate):
+                raise ValueError(
+                    f"Allocator selected {candidate.pair!r} after capacity arbitration "
+                    "but could not allocate endpoint terminal indices"
+                )
+            progress = True
+
+            if gs_displacement is not None and handover_mode == "mbb":
+                new_pending_teardowns[gs_displacement.pair] = MbbTeardown(
+                    start_step=step,
+                    successor_pair=candidate.pair,
+                )
+
+        if not progress:
+            break
+    else:
+        raise ValueError(
+            "Ground allocator did not converge after deterministic capacity arbitration passes"
+        )
+
+    unscheduled: list[UnscheduledPair] = []
+    for pair in sorted(visible_set - set(new_associations)):
+        gs_id, sat_id = _ground_and_satellite_ids(pair, ground_station_ids)
+        rejection = rejected.get(pair)
+        if rejection is None:
+            candidate = candidate_by_pair.get(pair)
+            if candidate is None:
+                raise ValueError(
+                    f"Visible unscheduled pair {pair!r} has no allocation candidate; "
+                    "visibility and allocation inputs are inconsistent"
+                )
+            if not satellite_has_capacity(candidate):
+                rejection = _Rejected(
+                    reason="sat_capacity",
+                    incumbent_pair=sat_capacity_blocker(candidate),
+                    capacity_constraint=sat_capacity_constraint(candidate),
+                )
+            elif (
+                len(steady_pairs_for_gs(gs_id)) >= steady_limit(gs_id)
+                or len(gs_occupied.get(gs_id, set())) >= gs_terminal_counts[gs_id]
+            ):
+                incumbent = worst_steady_incumbent(gs_id)
+                rejection = _Rejected(
+                    reason="gs_capacity",
+                    incumbent_pair=incumbent.pair if incumbent else None,
+                    capacity_constraint=f"{gs_id}.terminals",
+                )
+            else:
+                raise ValueError(
+                    f"Allocator could not attribute rejection reason for {pair!r}. "
+                    "This is an allocator logic bug; fix attribution rather than "
+                    "emitting a generic reason."
+                )
+        unscheduled.append(
+            UnscheduledPair(
+                pair=pair,
+                tenant_id=gs_tenant_ids[gs_id],
+                reference_body=gs_reference_bodies[gs_id],
+                unscheduled_reason=rejection.reason,
+                incumbent_pair=rejection.incumbent_pair,
+                capacity_constraint=rejection.capacity_constraint,
+            )
+        )
 
     return GroundAllocationResult(
         associations=new_associations,
         pending_teardowns=new_pending_teardowns,
-        scheduled_pairs=frozenset(pair for pair, scheduled in gs_scheduled.items() if scheduled),
-        unscheduled_pairs=unscheduled_list,
+        scheduled_pairs=frozenset(new_associations),
+        unscheduled_pairs=tuple(unscheduled),
+        policy_audit=policy_audit,
+        allocation_events=tuple(allocation_events),
     )

@@ -78,7 +78,11 @@ UnscheduledReason = Literal[
     "hysteresis_hold",
     "incumbent_held",
     "bbm_no_spare",
+    "mbb_overlap_locked",
     "replaced_by_successor",
+    "successor_aborted",
+    "failed_successor",
+    "failed_acquire",
 ]
 """Full union of allocation rejection reasons across ground + ISL.
 
@@ -96,8 +100,9 @@ is the type used on ``UnscheduledPair``."""
 # ``isl_terminal_capacity``) cannot land on a ground event, and a
 # ground-only value (``elevation_below_min``, ``gs_capacity``,
 # ``sat_capacity``, ``hysteresis_hold``, ``incumbent_held``,
-# ``bbm_no_spare``, ``replaced_by_successor``) cannot land on an ISL
-# event. The overlap set (``ok``, ``los_blocked``, ``range_exceeded``,
+# ``bbm_no_spare``, ``mbb_overlap_locked``,
+# ``replaced_by_successor``, ``successor_aborted``, ``failed_successor``,
+# ``failed_acquire``) cannot land on an ISL event. The overlap set (``ok``, ``los_blocked``, ``range_exceeded``,
 # ``field_of_regard``, ``tracking_exceeded``) is legitimately shared
 # because the underlying physics gate applies to both terminal types.
 _GROUND_REJECT_REASONS: frozenset[str] = frozenset(
@@ -129,7 +134,11 @@ _GROUND_UNSCHEDULED_REASONS: frozenset[str] = frozenset(
         "hysteresis_hold",
         "incumbent_held",
         "bbm_no_spare",
+        "mbb_overlap_locked",
         "replaced_by_successor",
+        "successor_aborted",
+        "failed_successor",
+        "failed_acquire",
     }
 )
 _ISL_UNSCHEDULED_REASONS: frozenset[str] = frozenset({"isl_terminal_capacity"})
@@ -153,9 +162,11 @@ class VisibilityEvent(BaseModel):
     - ``unscheduled_reason``: scheduling attribution. ``None`` when the
       pair is allocated (``scheduled=True``) or invisible. One of
       ``"gs_capacity"``, ``"sat_capacity"``, ``"hysteresis_hold"``,
-      ``"incumbent_held"``, ``"bbm_no_spare"``, or
-      ``"replaced_by_successor"`` when the pair is visible but the
-      allocator did not schedule it.
+      ``"incumbent_held"``, ``"bbm_no_spare"``,
+      ``"mbb_overlap_locked"``, ``"replaced_by_successor"``,
+      ``"successor_aborted"``,
+      ``"failed_successor"``, or ``"failed_acquire"`` when the pair is
+      visible but the allocator did not schedule it.
 
     Field-level consistency invariants:
     - ``visible == (visibility_reject_reason == "ok")``.

@@ -16,7 +16,9 @@ from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.constellation import GroundTerminal
+from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile, GroundTerminalDef
+from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.orbital import elements_from_params
 from ome.event_stream import build_step_context, compute_step
@@ -28,6 +30,13 @@ from ome.visibility import (
     compute_topocentric_angular_velocity,
     has_line_of_sight,
 )
+
+
+def _ground_scheduling() -> GroundSchedulingConfig:
+    return GroundSchedulingConfig(
+        selection_policy=SelectionPolicySpec(name="highest-elevation", params={}),
+        handover_policy=HandoverPolicySpec(name="none", params={}),
+    )
 
 
 def _terminal_profiles() -> tuple[TerminalPhysicsProfile, TerminalPhysicsProfile]:
@@ -223,7 +232,7 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
             )
         ],
         default_min_elevation_deg=25.0,
-        default_scheduling_policy="highest-elevation",
+        default_selection_policy=SelectionPolicySpec(name="highest-elevation"),
         stations=[
             GroundStationConfig(
                 name="overhead",
@@ -239,7 +248,8 @@ def test_compute_step_schedules_only_pairs_that_pass_applied_ground_physics():
         gs_file=gs_file,
         neighbors=frozenset(),
         propagator_id="keplerian-circular",
-        simulation_fidelity="physical_v1",
+        ground_scheduling=_ground_scheduling(),
+        ground_link_model="terminal_physics",
     )
 
     pair = ("gs-overhead", "sat-P00S00")

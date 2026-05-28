@@ -11,6 +11,8 @@ from nodalarc.constellation_loader import (
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.constellation import ConstellationConfig
 from nodalarc.models.events import ClockTick, VisibilityEvent
+from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
+from nodalarc.models.session import GroundSchedulingConfig
 from ome.event_stream import (
     precompute_timeline,
     read_timeline_jsonl,
@@ -22,6 +24,13 @@ from tests.conftest import CONFIGS_DIR
 
 adapter = TypeAdapter(ConstellationConfig)
 EPOCH = 1735689600.0
+
+
+def _ground_scheduling() -> GroundSchedulingConfig:
+    return GroundSchedulingConfig(
+        selection_policy=SelectionPolicySpec(name="highest-elevation", params={}),
+        handover_policy=HandoverPolicySpec(name="none", params={}),
+    )
 
 
 @pytest.fixture
@@ -48,7 +57,7 @@ def four_node_timeline():
                 }
             ],
             "default_min_elevation_deg": 25,
-            "default_scheduling_policy": "highest-elevation",
+            "default_selection_policy": {"name": "highest-elevation", "params": {}},
             "stations": [
                 {
                     "name": "equator",
@@ -68,6 +77,7 @@ def four_node_timeline():
         duration_s=60.0,  # Short: 60 seconds
         propagator_id="keplerian-circular",
         step_seconds=10,
+        ground_scheduling=_ground_scheduling(),
     )
     return events
 

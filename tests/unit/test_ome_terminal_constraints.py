@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from nodalarc.constellation_loader import SatelliteNode
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment
+from nodalarc.models.link_decisions import GroundPolicyAudit
 from nodalarc.orbital import elements_from_params
 from ome.event_stream import StepContext, compute_step
 from ome.isl_engine import IslTerminalConstraints
@@ -46,12 +47,36 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
         gs_positions={},
         gs_min_elevations={},
         gs_terminal_counts={},
-        gs_policies={},
-        gs_hysteresis={},
+        gs_selection_policies={},
+        gs_selection_policy_names={},
+        gs_handover_policies={},
         gs_service_priorities={},
-        simulation_fidelity="physical_v1",
+        ground_ranking_order=("service_priority", "selection_score", "lex_pair"),
+        ground_handover_mode="bbm",
+        ground_mbb_preemption="off",
+        ground_successor_abort_policy="hard_release",
+        ground_cross_tenant_displacement="off",
+        ground_bbm_acquire_timeout_ticks=1,
+        ignored_ground_capacity_fields=(),
+        ground_policy_audit=GroundPolicyAudit(
+            selection_policies={},
+            selection_policy_params={},
+            handover_policies={},
+            handover_policy_params={},
+            ranking_order=("service_priority", "selection_score", "lex_pair"),
+            handover_mode="bbm",
+            mbb_preemption="off",
+            successor_abort_policy="hard_release",
+            cross_tenant_displacement="off",
+            mbb_overlap_ticks=3,
+            mbb_reserve=0,
+            bbm_acquire_timeout_ticks=1,
+            ignored_capacity_fields=(),
+        ),
+        ground_link_model="terminal_physics",
         gs_terminal_profiles={},
         sat_ground_terminal_profiles={},
+        sat_ground_terminal_indices_by_body={node_a: {}, node_b: {}},
         gs_tenant_ids={},
         gs_reference_bodies={},
         ground_pair_terminal_types={},

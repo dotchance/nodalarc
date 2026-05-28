@@ -1,7 +1,7 @@
 session:
-  name: starlink-576-isis-te
-constellation: configs/constellations/starlink-576.yaml
-ground_stations: configs/ground-stations/sets/starlink-scale.yaml
+  name: starlink-176-no-hysteresis-test
+constellation: configs/constellations/starlink-176.yaml
+ground_stations: configs/ground-stations/sets/handover-test.yaml
 simulation:
   schema_version: 2
   ground_link_model: terminal_physics
@@ -13,10 +13,8 @@ scheduling:
       name: highest-elevation
       params: {}
     handover_policy:
-      name: hysteresis
-      params:
-        discount_factor: 1.15
-        mask_fade_range_deg: 5.0
+      name: none
+      params: {}
     handover_mode: bbm
     mbb_overlap_ticks: 0
     mbb_reserve: 0
@@ -32,7 +30,5 @@ routing:
     - traffic-engineering
   area_assignment:
     strategy: per-plane
-placement:
-  policy: planePerNode
 time:
   step_seconds: 1

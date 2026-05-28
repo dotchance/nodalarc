@@ -72,7 +72,8 @@ class TestIndividualStationDetails:
     def test_mcmurdo_polar_config(self):
         s = load_ground_station_individual("mcmurdo")
         assert s.min_elevation_deg == 15
-        assert s.scheduling_policy == "lowest-elevation"
+        assert s.selection_policy is not None
+        assert s.selection_policy.name == "lowest-elevation"
         assert s.terminals is not None
         assert s.terminals[0].type == "rf"
 
@@ -88,13 +89,14 @@ class TestIndividualStationDetails:
     def test_svalbard_polar_config(self):
         s = load_ground_station_individual("svalbard")
         assert s.min_elevation_deg == 15
-        assert s.scheduling_policy == "lowest-elevation"
+        assert s.selection_policy is not None
+        assert s.selection_policy.name == "lowest-elevation"
         assert s.terminals[0].type == "rf"
 
     def test_ashburn_defaults(self):
         s = load_ground_station_individual("ashburn")
         assert s.min_elevation_deg == 25.0
-        assert s.scheduling_policy is None  # uses default
+        assert s.selection_policy is None  # uses default
         assert s.terrestrial_prefixes is not None
         assert s.terrestrial_prefixes[0].prefix == "172.16.2.0/24"
         assert s.terrestrial_prefixes[0].metric == 10

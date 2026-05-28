@@ -92,6 +92,15 @@ def _make_session_yaml(
             "area_assignment": {"strategy": strategy},
         },
         "time": {"step_seconds": step_seconds},
+        "scheduling": {
+            "ground": {
+                "selection_policy": {"name": "highest-elevation", "params": {}},
+                "handover_policy": {"name": "none", "params": {}},
+                "handover_mode": "bbm",
+                "mbb_overlap_ticks": 3,
+                "mbb_reserve": 0,
+            }
+        },
     }
     if placement_policy:
         d["placement"] = {"policy": placement_policy}
@@ -609,6 +618,15 @@ def _make_inline_spec(
             "area_assignment": {"strategy": "flat"},
         },
         "time": {"step_seconds": 1},
+        "scheduling": {
+            "ground": {
+                "selection_policy": {"name": "highest-elevation", "params": {}},
+                "handover_policy": {"name": "none", "params": {}},
+                "handover_mode": "bbm",
+                "mbb_overlap_ticks": 3,
+                "mbb_reserve": 0,
+            }
+        },
     }
     return {"sessionYaml": yaml.dump(session, default_flow_style=False)}
 

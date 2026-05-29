@@ -99,8 +99,11 @@ describe("GroundStationCard", () => {
     render(<GroundStationCard facts={denverGap} />);
     expect(screen.getByText("Expected no-link")).toBeTruthy();
     expect(screen.queryByText("Faulted")).toBeNull();
-    // The funnel ladder is shown, binding gate included.
-    expect(screen.getByText("Elevation mask")).toBeTruthy();
+    // Co-linear collapse: under vertical boresight the ladder folds elevation + FoR
+    // into one FoR-limited row against the 30 deg effective floor — no contradictory
+    // "elevation pass / FoR fail" ladder rows. (FoR still appears once in the envelope
+    // panel; the ladder-row absence is covered precisely by displayLadder unit tests.)
+    expect(screen.getByText("Elevation (FoR-limited)")).toBeTruthy();
     // The Denver insight: the configured mask is called out as non-binding.
     expect(screen.getByText(/has no effect/i)).toBeTruthy();
   });

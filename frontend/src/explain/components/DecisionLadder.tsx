@@ -2,14 +2,15 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** L2: the full decision funnel — every gate, binding one emphasized. */
 
-import type { LadderGate } from "../types";
+import { displayLadder } from "../derive";
+import type { DecisionFacts } from "../types";
 import { GateRow } from "./GateRow";
 
-export function DecisionLadder({ ladder, tone }: { ladder: LadderGate[]; tone?: string }) {
+export function DecisionLadder({ facts, tone }: { facts: DecisionFacts; tone?: string }) {
   return (
     <div className="decision-ladder">
-      {ladder.map((g) => (
-        <GateRow key={g.gate} row={g} bindingTone={tone} />
+      {displayLadder(facts).map(({ row, label }) => (
+        <GateRow key={row.gate} row={row} label={label} bindingTone={tone} />
       ))}
     </div>
   );

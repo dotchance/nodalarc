@@ -18,7 +18,15 @@ const MARK: Record<LadderGate["state"], string> = {
   not_applicable: "–",
 };
 
-export function GateRow({ row, bindingTone }: { row: LadderGate; bindingTone?: string }) {
+export function GateRow({
+  row,
+  label,
+  bindingTone,
+}: {
+  row: LadderGate;
+  label?: string;
+  bindingTone?: string;
+}) {
   const markColor =
     row.state === "pass"
       ? "var(--accent-green)"
@@ -33,7 +41,7 @@ export function GateRow({ row, bindingTone }: { row: LadderGate; bindingTone?: s
         {MARK[row.state]}
       </span>
       <span className="gate-name" style={nameStyle}>
-        {GATE_LABELS[row.gate]}
+        {label ?? GATE_LABELS[row.gate]}
       </span>
       <span className="gate-detail">
         <MarginPill gate={row} />

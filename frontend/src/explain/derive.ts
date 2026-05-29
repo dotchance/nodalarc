@@ -132,3 +132,61 @@ export function headline(facts: DecisionFacts): string {
   }
   return filled;
 }
+
+export interface DisplayRow {
+  row: LadderGate;
+  label?: string;
+}
+
+/**
+ * Ladder rows for display, collapsing co-linear gates. Under a local_vertical
+ * boresight, elevation mask and field-of-regard are the SAME axis — FoR imposes
+ * an effective elevation floor. Showing them as independent rows produces the
+ * "elevation passed / FoR failed" contradiction for a 25-30 deg satellite. Here
+ * they fold into one row measured against the effective floor, so the ladder
+ * agrees with the effective-envelope panel. Non-vertical (steerable) boresights
+ * keep the rows separate — there they genuinely decouple.
+ */
+export function displayLadder(facts: DecisionFacts): DisplayRow[] {
+  const env = facts.envelope;
+  const hasElev = facts.ladder.some((g) => g.gate === "elevation_mask");
+  const hasFor = facts.ladder.some((g) => g.gate === "field_of_regard");
+  const collapse =
+    env != null &&
+    env.boresight_mode === "local_vertical" &&
+    env.effective_min_elevation_deg != null &&
+    hasElev &&
+    hasFor;
+
+  if (!collapse) return facts.ladder.map((row) => ({ row }));
+
+  const floor = env!.effective_min_elevation_deg!;
+  const elevRow = facts.ladder.find((g) => g.gate === "elevation_mask")!;
+  const forRow = facts.ladder.find((g) => g.gate === "field_of_regard")!;
+  const elevation = elevRow.actual;
+  const forLimited = env!.binding_source === "field_of_regard";
+
+  const merged: LadderGate = {
+    gate: "elevation_mask",
+    state: elevation == null ? "not_evaluated" : elevation >= floor ? "pass" : "fail",
+    actual: elevation,
+    threshold: floor,
+    rejecting_endpoint: forLimited ? forRow.rejecting_endpoint : elevRow.rejecting_endpoint,
+    reason_code:
+      elevation != null && elevation < floor
+        ? forLimited
+          ? "field_of_regard"
+          : "elevation_below_min"
+        : null,
+    producer: "ome_visibility",
+    is_binding: elevRow.is_binding || forRow.is_binding,
+  };
+  const label = forLimited ? "Elevation (FoR-limited)" : "Elevation mask";
+
+  const out: DisplayRow[] = [];
+  for (const row of facts.ladder) {
+    if (row.gate === "field_of_regard") continue;
+    out.push(row.gate === "elevation_mask" ? { row: merged, label } : { row });
+  }
+  return out;
+}

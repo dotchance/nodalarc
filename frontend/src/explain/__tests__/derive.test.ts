@@ -3,7 +3,8 @@
 /** The client-side meaning layer: family classification, margin formatting, headline. */
 
 import { describe, it, expect } from "vitest";
-import { deriveFamily, deriveSeverity, formatMargin, headline } from "../derive";
+import type { FunnelGate, GateState } from "../families";
+import { deriveFamily, deriveSeverity, displayLadder, formatMargin, headline } from "../derive";
 import type { ActuationFacts, DecisionFacts, LadderGate } from "../types";
 
 function facts(over: Partial<DecisionFacts>): DecisionFacts {
@@ -135,5 +136,82 @@ describe("headline", () => {
     const h = headline(facts({ binding_gate: null, pair: ["gs-denver", "sat-P00S03"], actuation: act({ state: "clean", kernel_up: true }) }));
     expect(h).toContain("sat-P00S03");
     expect(h.toLowerCase()).toContain("connected");
+  });
+});
+
+describe("displayLadder co-linearity collapse", () => {
+  const env = (over: Partial<NonNullable<DecisionFacts["envelope"]>> = {}) => ({
+    reference_body: "earth",
+    configured_min_elevation_deg: 25,
+    effective_min_elevation_deg: 30,
+    binding_source: "field_of_regard",
+    dead_knobs: ["min_elevation_deg"],
+    max_range_km: 2000,
+    field_of_regard_deg: 120,
+    boresight_mode: "local_vertical",
+    tracking_rate_deg_s: 1.5,
+    ...over,
+  });
+
+  const lrow = (
+    gate: FunnelGate,
+    state: GateState,
+    actual: number | null,
+    is_binding = false,
+    reason: string | null = null,
+  ): LadderGate => ({
+    gate,
+    state,
+    actual,
+    threshold: gate === "elevation_mask" ? 25 : gate === "field_of_regard" ? 60 : null,
+    rejecting_endpoint: null,
+    reason_code: reason,
+    producer: "ome_visibility",
+    is_binding,
+  });
+
+  it("folds elevation+FoR into one FoR-limited row at 27 deg — no pass/fail contradiction", () => {
+    const rows = displayLadder(
+      facts({
+        envelope: env(),
+        ladder: [
+          lrow("line_of_sight", "pass", 27),
+          lrow("elevation_mask", "pass", 27),
+          lrow("field_of_regard", "fail", 63, true, "field_of_regard"),
+        ],
+      }),
+    );
+    expect(rows.some((r) => r.row.gate === "field_of_regard")).toBe(false);
+    const elev = rows.find((r) => r.row.gate === "elevation_mask")!;
+    expect(elev.label).toBe("Elevation (FoR-limited)");
+    expect(elev.row.state).toBe("fail");
+    expect(elev.row.threshold).toBe(30);
+    expect(elev.row.is_binding).toBe(true);
+  });
+
+  it("passes the collapsed row when above the effective floor", () => {
+    const rows = displayLadder(
+      facts({
+        envelope: env(),
+        ladder: [lrow("elevation_mask", "pass", 31.6), lrow("field_of_regard", "pass", 58.4)],
+      }),
+    );
+    const elev = rows.find((r) => r.row.gate === "elevation_mask")!;
+    expect(elev.row.state).toBe("pass");
+    expect(rows.some((r) => r.row.gate === "field_of_regard")).toBe(false);
+  });
+
+  it("does NOT collapse under a non-vertical boresight — gates genuinely decouple", () => {
+    const rows = displayLadder(
+      facts({
+        envelope: env({ boresight_mode: "steered" }),
+        ladder: [
+          lrow("elevation_mask", "pass", 27),
+          lrow("field_of_regard", "fail", 63, true, "field_of_regard"),
+        ],
+      }),
+    );
+    expect(rows.some((r) => r.row.gate === "elevation_mask")).toBe(true);
+    expect(rows.some((r) => r.row.gate === "field_of_regard")).toBe(true);
   });
 });

@@ -58,7 +58,7 @@ export function GroundStationCard({ facts }: { facts: DecisionFacts }) {
       ) : null}
 
       <h3>Decision ladder</h3>
-      <DecisionLadder ladder={facts.ladder} tone={tone.css} />
+      <DecisionLadder facts={facts} tone={tone.css} />
     </div>
   );
 }

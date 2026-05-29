@@ -13,11 +13,13 @@ from nodalarc.db.queries import (
     insert_latency_update,
     insert_link_down,
     insert_link_up,
+    insert_ome_lifecycle_event,
     insert_operator_intervention_event,
     insert_probe_result,
     query_adapter_events,
     query_convergence_events,
     query_link_events,
+    query_ome_lifecycle_events,
     query_probe_results,
     set_metadata,
 )
@@ -70,6 +72,8 @@ class TestSchemaCreation:
             "adapter_events",
             "session_metadata",
             "config_changes",
+            "ome_lifecycle_events",
+            "operator_interventions",
         }
         assert expected.issubset(table_names)
 
@@ -83,6 +87,8 @@ class TestSchemaCreation:
         assert "idx_convergence_sim_time" in index_names
         assert "idx_probe_results_flow" in index_names
         assert "idx_adapter_events_node" in index_names
+        assert "idx_ome_lifecycle_session" in index_names
+        assert "idx_ome_lifecycle_pair" in index_names
 
     def test_wal_mode_enabled(self, tmp_path):
         db_path = tmp_path / "wal_test.db"
@@ -364,6 +370,72 @@ class TestConcurrentAccess:
         assert not errors
         assert all(r == 10 for r in results)
         conn_write.close()
+
+
+class TestOmeLifecyclePersistence:
+    def test_lifecycle_terminal_ops_event_is_append_only_session_record(self, db):
+        event = {
+            "timestamp": WALL.isoformat(),
+            "session_id": "session-a",
+            "source": "ome",
+            "hostname": "ome-0",
+            "level": "info",
+            "code": "MBB_TEARDOWN_TERMINAL",
+            "message": "MBB teardown completed",
+            "details": {
+                "session_id": "session-a",
+                "epoch_id": 7,
+                "snapshot_seq": 42,
+                "allocator_step": 123,
+                "master_sim_time": T1.isoformat(),
+                "gs_id": "gs-den",
+                "teardown_id": "gs-den:sat-old->gs-den:sat-new",
+                "old_pair": ["gs-den", "sat-old"],
+                "successor_pair": ["gs-den", "sat-new"],
+                "terminal_outcome": "teardown_completed",
+                "source_allocation_event_category": "teardown_completed",
+                "authority_before": {},
+                "authority_after": {},
+            },
+        }
+        second = {
+            **event,
+            "timestamp": T2.isoformat(),
+            "details": {
+                **event["details"],
+                "allocator_step": 124,
+                "terminal_outcome": "successor_aborted",
+            },
+        }
+
+        first_id = insert_ome_lifecycle_event(db, event)
+        second_id = insert_ome_lifecycle_event(db, second)
+
+        rows = query_ome_lifecycle_events(db, session_id="session-a")
+        assert first_id != second_id
+        assert [row["terminal_outcome"] for row in rows] == [
+            "teardown_completed",
+            "successor_aborted",
+        ]
+        assert rows[0]["epoch_id"] == 7
+        assert rows[0]["snapshot_seq"] == 42
+        assert rows[0]["old_pair"] == '["gs-den", "sat-old"]'
+
+    def test_non_terminal_or_non_ome_ops_event_is_not_persisted(self, db):
+        assert (
+            insert_ome_lifecycle_event(
+                db,
+                {
+                    "timestamp": WALL.isoformat(),
+                    "session_id": "session-a",
+                    "source": "scheduler",
+                    "code": "MBB_TEARDOWN_TERMINAL",
+                    "details": {"terminal_outcome": "teardown_completed"},
+                },
+            )
+            is None
+        )
+        assert query_ome_lifecycle_events(db) == []
 
 
 class TestOperatorInterventionPersistence:

@@ -461,6 +461,7 @@ def _build_snapshot() -> dict | None:
             playback_speed=ctx.playback_speed,
             stale=ctx.is_stale(),
             actuation_notices=list(ctx.actuation_notices_by_key.values()),
+            ome_lifecycle_notices=list(ctx.ome_lifecycle_notices_by_key.values()),
             actuation_health=ctx.build_actuation_health(),
         )
         result = json.loads(snapshot.model_dump_json())

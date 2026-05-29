@@ -351,3 +351,45 @@ class TestComputeStepMatchesWindow:
         assert set(source.ground_state) < set(result.ground_decisions)
         assert all(result.ground_decisions[pair].visible for pair in source.ground_state)
         assert len(source.ground_state) < len(result.ground_decisions)
+
+    def test_ground_reason_completeness_audit_for_every_considered_pair(self):
+        """Every considered ground pair has exactly one truth axis.
+
+        Invisible pairs are physical decisions and need a visibility reject
+        reason. Visible unscheduled pairs are scheduling decisions and need an
+        unscheduled reason. Scheduled/teardown pairs must be represented in the
+        allocation state, not hidden in a missing-reason gap.
+        """
+        session, cc, gs_file, sats, addressing, neighbors = _load_test_session()
+        epoch_unix = 1704067200.0
+        step_seconds = session.time.step_seconds
+
+        ctx = build_step_context(
+            satellites=sats,
+            addressing=addressing,
+            gs_file=gs_file,
+            neighbors=neighbors,
+            propagator_id=session.orbit.propagator,
+            ground_scheduling=session.scheduling.ground,
+        )
+        result = compute_step(ctx, epoch_unix, 0, step_seconds, 0.0, {}, {})
+        allocation = result.ground_allocation
+        unscheduled = {item.pair: item for item in allocation.unscheduled_pairs}
+
+        assert result.ground_decisions
+        for pair, decision in result.ground_decisions.items():
+            if not decision.visible:
+                assert decision.reject_reason != "ok", pair
+                assert pair not in allocation.scheduled_pairs
+                assert pair not in unscheduled
+                continue
+
+            assert decision.reject_reason == "ok", pair
+            scheduled = pair in allocation.scheduled_pairs
+            unscheduled_item = unscheduled.get(pair)
+            if scheduled:
+                assert pair in allocation.associations, pair
+                assert unscheduled_item is None, pair
+            else:
+                assert unscheduled_item is not None, pair
+                assert unscheduled_item.unscheduled_reason, pair

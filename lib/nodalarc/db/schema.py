@@ -96,6 +96,25 @@ CREATE TABLE IF NOT EXISTS snapshots (
 );
 """
 
+
+DDL_OME_LIFECYCLE_EVENTS = """
+CREATE TABLE IF NOT EXISTS ome_lifecycle_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    epoch_id INTEGER NOT NULL,
+    snapshot_seq INTEGER,
+    allocator_step INTEGER NOT NULL,
+    sim_time TEXT NOT NULL,
+    event_time TEXT NOT NULL,
+    gs_id TEXT NOT NULL,
+    old_pair TEXT NOT NULL,
+    successor_pair TEXT NOT NULL,
+    terminal_outcome TEXT NOT NULL,
+    event_code TEXT NOT NULL,
+    event_json TEXT NOT NULL
+);
+"""
+
 DDL_OPERATOR_INTERVENTIONS = """
 CREATE TABLE IF NOT EXISTS operator_interventions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,6 +141,9 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_adapter_events_sim_time ON adapter_events(sim_time);",
     "CREATE INDEX IF NOT EXISTS idx_adapter_events_node ON adapter_events(node_id);",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_sim_time ON snapshots(sim_time);",
+    "CREATE INDEX IF NOT EXISTS idx_ome_lifecycle_session ON ome_lifecycle_events(session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_ome_lifecycle_pair ON ome_lifecycle_events(session_id, old_pair, successor_pair);",
+    "CREATE INDEX IF NOT EXISTS idx_ome_lifecycle_outcome ON ome_lifecycle_events(terminal_outcome);",
     "CREATE INDEX IF NOT EXISTS idx_operator_interventions_session ON operator_interventions(session_id);",
     "CREATE INDEX IF NOT EXISTS idx_operator_interventions_id ON operator_interventions(intervention_id);",
     "CREATE INDEX IF NOT EXISTS idx_operator_interventions_gs ON operator_interventions(gs_id);",
@@ -135,6 +157,7 @@ ALL_DDL = [
     DDL_SESSION_METADATA,
     DDL_CONFIG_CHANGES,
     DDL_SNAPSHOTS,
+    DDL_OME_LIFECYCLE_EVENTS,
     DDL_OPERATOR_INTERVENTIONS,
 ]
 

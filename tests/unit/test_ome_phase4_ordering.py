@@ -15,6 +15,7 @@ import ome.main as ome_main
 import pytest
 from nodalarc.models.events import (
     ClockTick,
+    OpsEvent,
     PlaybackControlCommand,
     PlaybackState,
     SessionEphemeris,
@@ -26,6 +27,7 @@ from nodalarc.nats_channels import (
     link_state_snapshot_subject,
     ome_clock_subject,
     ome_visibility_subject,
+    ops_event_subject,
     playback_state_subject,
     scheduling_checkpoint_subject,
     session_ephemeris_subject,
@@ -37,7 +39,7 @@ from ome.event_stream import StepResult
 from ome.ground_allocator import GroundAllocationResult
 from ome.main import _load_session_config, _run_pacing
 from ome.snapshot_builder import LinkSnapshotSource
-from ome.types import GroundVisibilityDecision
+from ome.types import GroundVisibilityDecision, MbbTeardownLifecycleEvent
 
 
 @pytest.fixture(autouse=True)
@@ -151,7 +153,11 @@ def _decision(pair: tuple[str, str], *, visible: bool = False) -> GroundVisibili
 
 
 def _fixed_step_result(
-    *, sim_time: datetime, step: int, pair: tuple[str, str] | None = None
+    *,
+    sim_time: datetime,
+    step: int,
+    pair: tuple[str, str] | None = None,
+    lifecycle_events=(),
 ) -> StepResult:
     pair = pair or ("gs-fixed", "sat-fixed")
     decision = _decision(pair, visible=True)
@@ -162,6 +168,7 @@ def _fixed_step_result(
         unscheduled_pairs=(),
         policy_audit=_policy_audit(),
         allocation_events=(),
+        lifecycle_events=tuple(lifecycle_events),
     )
     return StepResult(
         events=[],
@@ -446,6 +453,86 @@ def test_initial_epoch_ordering_oracle_uses_fixed_step_result(monkeypatch):
         (("gs-fixed", "sat-fixed"), True)
     ]
     assert playback.state == "playing"
+
+
+def test_initial_epoch_lifecycle_event_uses_ops_enqueue_after_snapshot(monkeypatch):
+    session_path = Path("configs/sessions/demo-36-ospf.yaml")
+    if not session_path.exists():
+        pytest.skip("demo-36-ospf.yaml not available")
+
+    import nats
+
+    async def _fake_connect(*args, **kwargs):
+        return _NoCheckpointNc()
+
+    monkeypatch.setattr(nats, "connect", _fake_connect)
+    init_platform_config(Path("configs/platform.yaml"))
+
+    cfg = _phase4_cfg(session_path, "phase6-lifecycle-enqueue")
+    session_id = require_session_run_id(cfg.session)
+    sim_time = datetime(2030, 1, 1, 0, 0, 0, tzinfo=UTC)
+    old_pair = ("gs-fixed", "sat-old")
+    successor_pair = ("gs-fixed", "sat-fixed")
+    lifecycle = MbbTeardownLifecycleEvent(
+        category="teardown_completed",
+        old_pair=old_pair,
+        successor_pair=successor_pair,
+        gs_id="gs-fixed",
+        message="MBB teardown completed",
+        source_allocation_event_category="teardown_completed",
+        authority_before={
+            "old_pair": {
+                "pair": list(old_pair),
+                "scheduled": True,
+                "pending_teardown": True,
+                "visible": True,
+                "terminal_indices": [0, 0],
+            },
+            "successor_pair": {
+                "pair": list(successor_pair),
+                "scheduled": True,
+                "pending_teardown": False,
+                "visible": True,
+                "terminal_indices": [1, 0],
+            },
+        },
+    )
+    fixed_result = _fixed_step_result(
+        sim_time=sim_time,
+        step=0,
+        pair=successor_pair,
+        lifecycle_events=(lifecycle,),
+    )
+    shutdown = threading.Event()
+
+    def _fixed_compute_step(_ctx, _epoch_unix, _step, *_args, **_kwargs):
+        shutdown.set()
+        return fixed_result
+
+    monkeypatch.setattr(ome_event_stream, "compute_step", _fixed_compute_step)
+    records = _PassiveQueue()
+
+    _run_pacing(
+        str(session_path),
+        output_dir=None,
+        event_queue=records,
+        shutdown_event=shutdown,
+        preloaded_cfg=cfg,
+    )
+
+    subjects = [subject for subject, _payload in records.records]
+    lifecycle_subject = ops_event_subject(session_id, "ome", "MBB_TEARDOWN_TERMINAL")
+    snapshot_index = subjects.index(link_state_snapshot_subject(session_id))
+    lifecycle_index = subjects.index(lifecycle_subject)
+    checkpoint_index = subjects.index(scheduling_checkpoint_subject(session_id))
+
+    assert snapshot_index < lifecycle_index < checkpoint_index
+    event = OpsEvent.model_validate_json(records.records[lifecycle_index][1])
+    assert event.source == "ome"
+    assert event.code == "MBB_TEARDOWN_TERMINAL"
+    assert event.details["terminal_outcome"] == "teardown_completed"
+    assert event.details["snapshot_seq"] == 1
+    assert event.details["authority_before"]["old_pair"]["pending_teardown"] is True
 
 
 def test_seek_step0_compute_failure_logs_epoch_and_target_without_new_snapshot(monkeypatch, caplog):

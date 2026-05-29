@@ -46,6 +46,7 @@ import json
 import logging
 import os
 import socket
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -199,7 +200,9 @@ class Dispatcher:
         sat_ground_terminal_capacities: dict[str, int] | None = None,
         mbb_dispatch: bool = False,
         rtt_to_one_way_policy: Literal["half-rtt"] = "half-rtt",
+        now: Callable[[], datetime] | None = None,
     ) -> None:
+        self._now = now if now is not None else lambda: datetime.now(UTC)
         self._interface_map = interface_map
         self._bandwidth_map = bandwidth_map
         self._loc = pod_locator
@@ -227,7 +230,7 @@ class Dispatcher:
         self._wiring_generation = wiring_generation
         self._hostname = socket.gethostname()
         self._scheduler_instance_id = (
-            f"{self._hostname}-{os.getpid()}-{int(datetime.now(UTC).timestamp() * 1000)}"
+            f"{self._hostname}-{os.getpid()}-{int(self._now().timestamp() * 1000)}"
         )
         self._js = None
         self._nc = None
@@ -339,9 +342,9 @@ class Dispatcher:
 
         # Per-ground-station actuation truth. OME authority changes never clear
         # this state; only read-only kernel proof or explicit operator repair can.
-        now = datetime.now(UTC)
+        now_value = self._now()
         self._gs_actuation: dict[str, GroundActuationState] = {
-            gs_id: GroundActuationState(gs_id=gs_id, since=now)
+            gs_id: GroundActuationState(gs_id=gs_id, since=now_value)
             for gs_id in sorted(self._gs_capacities)
         }
         self._gs_stale_link_infos: dict[tuple[str, str], ActiveLinkInfo] = {}
@@ -1184,7 +1187,7 @@ class Dispatcher:
             details.model_dump(mode="json") if hasattr(details, "model_dump") else details
         )
         event = OpsEvent(
-            timestamp=datetime.now(UTC),
+            timestamp=self._now(),
             session_id=self._session_id,
             source="scheduler",
             hostname=self._hostname,
@@ -1293,7 +1296,7 @@ class Dispatcher:
         reason: str = "read-only kernel proof matched Scheduler authority",
     ) -> None:
         before = self._ground_state(gs_id)
-        after = GroundActuationState(gs_id=gs_id, since=datetime.now(UTC))
+        after = GroundActuationState(gs_id=gs_id, since=self._now())
         self._gs_actuation[gs_id] = after
         self._gs_stale_link_infos = {
             pair: info
@@ -1325,7 +1328,7 @@ class Dispatcher:
         The wiring gate is the proof boundary here: reaching this point means
         startup verified the generation's managed kernel state.
         """
-        sim_time = self._current_sim_time or datetime.now(UTC)
+        sim_time = self._current_sim_time or self._now()
         for gs_id in sorted(self._gs_capacities):
             await self._mark_gs_clean(
                 gs_id=gs_id,
@@ -1355,7 +1358,7 @@ class Dispatcher:
         recovery = SchedulerRecoveryStatus(
             verify_attempt_count=prior_attempts,
             last_verify_result=before.recovery.last_verify_result,
-            next_verify_after=next_verify_time(max(1, prior_attempts + 1)),
+            next_verify_after=next_verify_time(max(1, prior_attempts + 1), now=self._now),
             verify_exhausted=False,
             operator_action_required=False,
             active_intervention_id=intervention_id,
@@ -1367,7 +1370,7 @@ class Dispatcher:
             gs_id=gs_id,
             state=state_name,
             reason_code=code.value,
-            since=datetime.now(UTC),
+            since=self._now(),
             affected_pairs=frozenset(affected_pairs),
             stale_pairs=frozenset(stale),
             node_agent_results=tuple(result.node_agent_details()) if result else (),
@@ -1604,7 +1607,7 @@ class Dispatcher:
         recovery = SchedulerRecoveryStatus(
             verify_attempt_count=attempts,
             last_verify_result="failed",
-            next_verify_after=None if exhausted else next_verify_time(attempts + 1),
+            next_verify_after=None if exhausted else next_verify_time(attempts + 1, now=self._now),
             verify_exhausted=exhausted,
             operator_action_required=exhausted,
             active_intervention_id=intervention_id,
@@ -1652,7 +1655,7 @@ class Dispatcher:
                 continue
             if state.recovery.verify_exhausted or state.recovery.operator_action_required:
                 continue
-            if datetime.now(UTC) >= next_time:
+            if self._now() >= next_time:
                 await self._verify_gs_against_current_authority(gs_id=gs_id, sim_time=sim_time)
 
     async def _publish_fold_diagnostics(self, sim_time: datetime) -> None:
@@ -2137,7 +2140,7 @@ class Dispatcher:
 
     async def _run_operator_repair_locked(self, cmd: OperatorRepairCommand) -> None:
         gs_id = cmd.gs_id
-        sim_time = self._current_sim_time or datetime.now(UTC)
+        sim_time = self._current_sim_time or self._now()
         before = self._repair_original_states.pop(cmd.intervention_id, self._ground_state(gs_id))
         active_recovery = SchedulerRecoveryStatus(
             verify_attempt_count=0,
@@ -2298,7 +2301,7 @@ class Dispatcher:
             failed_recovery = SchedulerRecoveryStatus(
                 verify_attempt_count=0,
                 last_verify_result="operator_repair_failed",
-                next_verify_after=next_verify_time(1),
+                next_verify_after=next_verify_time(1, now=self._now),
                 verify_exhausted=False,
                 operator_action_required=False,
                 active_intervention_id=None,

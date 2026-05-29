@@ -25,6 +25,7 @@ NATS Streams ──subscribe──→ VS-API ──WebSocket/REST──→ Clien
 |---------------|---------|
 | NODALARC_OME | ClockTick for timing, VisibilityEvents for event log |
 | NODALARC_LINKS | LinkUp/Down for event log, LinkStateSnapshot for current link state |
+| NODALARC_OPS | Operational event log, Scheduler actuation health, and OME MBB terminal lifecycle events persisted to SQLite |
 | NODALARC_SESSION | SessionEphemeris (cached, forwarded to clients on connect), PlaybackState |
 
 ## REST Endpoints

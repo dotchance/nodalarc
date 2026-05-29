@@ -136,6 +136,7 @@ class SimulationConfig(BaseModel):
     schema_version: int = 2
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
     acknowledge_geometry_only: bool = False
+    acknowledge_bbm_handover_gap: bool = False
 
     @field_validator("schema_version")
     @classmethod

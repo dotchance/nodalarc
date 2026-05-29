@@ -15,10 +15,6 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-
-# ---------------------------------------------------------------------------
-# Session config bundle — shared between run() and _run_pacing()
-# ---------------------------------------------------------------------------
 from typing import TYPE_CHECKING, NamedTuple
 
 import yaml
@@ -31,12 +27,18 @@ from nodalarc.constellation_loader import (
     load_constellation,
     load_ground_stations,
 )
+from nodalarc.ground_terminals import station_ground_terminal_capacity
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.constellation import ConstellationConfig
-from nodalarc.models.events import PlaybackControlCommand
+from nodalarc.models.events import OpsEvent, PlaybackControlCommand
 from nodalarc.models.ground_station import GroundStationFile
-from nodalarc.models.session import SessionConfig, resolve_session_epoch
+from nodalarc.models.ome_lifecycle import (
+    MbbPairAuthority,
+    MbbTeardownLifecycleDetails,
+    OmeOpsCode,
+)
+from nodalarc.models.session import GroundSchedulingConfig, SessionConfig, resolve_session_epoch
 from nodalarc.nats_channels import MAX_TIME_ACCEL, MIN_TIME_ACCEL
 from nodalarc.session_identity import require_session_run_id
 from nodalarc.tle import tle_age_days
@@ -46,7 +48,7 @@ from ome.event_stream import (
     write_timeline_jsonl,
 )
 from ome.propagator import orbital_period
-from ome.types import MbbTeardownState
+from ome.types import MbbTeardownLifecycleEvent, MbbTeardownState
 
 if TYPE_CHECKING:
     from ome.event_stream import StepContext, TimelineWindowResult
@@ -144,6 +146,55 @@ def _enforce_ground_link_model_contract(session: SessionConfig) -> None:
         "simulation.ground_link_model=geometry_only: ground links use LOS/elevation only; "
         "range, field-of-regard, and tracking-rate constraints are not enforced"
     )
+
+
+def _mbb_capacity_shortfalls(
+    ground_scheduling: GroundSchedulingConfig,
+    gs_file: GroundStationFile | None,
+) -> list[str]:
+    if gs_file is None or ground_scheduling.handover_mode != "mbb":
+        return []
+    required_capacity = ground_scheduling.mbb_reserve + 1
+    shortfalls: list[str] = []
+    for station in gs_file.stations:
+        capacity = station_ground_terminal_capacity(gs_file, station)
+        if capacity < required_capacity:
+            shortfalls.append(
+                f"gs-{station.name}(capacity={capacity}, required>={required_capacity})"
+            )
+    return shortfalls
+
+
+def _effective_ground_scheduling_for_runtime(
+    session: SessionConfig,
+    gs_file: GroundStationFile | None,
+) -> GroundSchedulingConfig:
+    """Return the OME runtime ground scheduling policy after explicit acknowledgements.
+
+    Physical MBB on insufficient terminal capacity is impossible. If the operator
+    explicitly acknowledges a BBM gap, OME runs BBM as the effective runtime mode
+    and surfaces the degraded behavior; otherwise startup fails before publishing
+    false authority.
+    """
+    ground = session.scheduling.ground
+    shortfalls = _mbb_capacity_shortfalls(ground, gs_file)
+    if not shortfalls:
+        return ground
+    if not session.simulation.acknowledge_bbm_handover_gap:
+        raise RuntimeError(
+            "MBB handover requested but these ground stations do not have enough "
+            "terminal capacity for physical overlap: "
+            + ", ".join(shortfalls)
+            + ". Refusing to degrade silently; fix the model, select "
+            "scheduling.ground.handover_mode='bbm', or explicitly set "
+            "simulation.acknowledge_bbm_handover_gap: true."
+        )
+    logging.warning(
+        "MBB handover requested but physical overlap is impossible for %s; "
+        "simulation.acknowledge_bbm_handover_gap=true, running effective BBM/degraded mode",
+        ", ".join(shortfalls),
+    )
+    return ground.model_copy(update={"handover_mode": "bbm", "mbb_reserve": 0})
 
 
 def _validate_sgp4_tle_freshness(cfg: _SessionBundle, epoch_unix: float) -> None:
@@ -308,6 +359,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
     _enforce_ground_link_model_contract(cfg.session)
     epoch_unix = resolve_session_epoch(cfg.session.time)
     _validate_sgp4_tle_freshness(cfg, epoch_unix)
+    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(cfg.session, cfg.gs_file)
     events = precompute_timeline(
         satellites=cfg.satellites,
         addressing=cfg.addressing,
@@ -317,7 +369,7 @@ def run(session_path: str, output_dir: str | None = None) -> Path:
         duration_s=cfg.period,
         propagator_id=cfg.propagator_id,
         step_seconds=cfg.session.time.step_seconds,
-        ground_scheduling=cfg.session.scheduling.ground,
+        ground_scheduling=effective_ground_scheduling,
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
         ground_link_model=cfg.session.simulation.ground_link_model,
@@ -624,6 +676,7 @@ def _run_pacing(
         link_state_snapshot_subject,
         ome_clock_subject,
         ome_visibility_subject,
+        ops_event_subject,
         playback_state_subject,
         scheduling_checkpoint_subject,
         session_ephemeris_subject,
@@ -714,6 +767,10 @@ def _run_pacing(
     subj_ephemeris = session_ephemeris_subject(session_id)
     subj_playback = playback_state_subject(session_id)
     subj_checkpoint = scheduling_checkpoint_subject(session_id)
+    subj_mbb_lifecycle = ops_event_subject(
+        session_id, "ome", OmeOpsCode.MBB_TEARDOWN_TERMINAL.value
+    )
+    ome_hostname = os.environ.get("HOSTNAME") or os.uname().nodename
     logging.debug("OME session_id=%s — NATS subjects scoped", session_id)
 
     # Initialize Pacemaker rate from static compression (R-OME-008B Part 1).
@@ -750,15 +807,158 @@ def _run_pacing(
             shutdown_event.set()
             raise SystemExit(1) from None
 
+    def _ground_pair_gs_id(pair: tuple[str, str]) -> str:
+        if pair[0] in step_ctx.gs_positions:
+            return pair[0]
+        if pair[1] in step_ctx.gs_positions:
+            return pair[1]
+        raise ValueError(f"MBB lifecycle pair {pair!r} does not contain a known ground station")
+
+    def _pair_authority(
+        pair: tuple[str, str],
+        *,
+        associations: dict[tuple[str, str], tuple[int, int]],
+        teardowns: MbbTeardownState,
+        decisions=None,
+    ) -> MbbPairAuthority:
+        indices = associations.get(pair)
+        decision = decisions.get(pair) if decisions is not None else None
+        return MbbPairAuthority(
+            pair=list(pair),
+            scheduled=pair in associations,
+            pending_teardown=pair in teardowns,
+            visible=decision.visible if decision is not None else None,
+            terminal_indices=list(indices) if indices is not None else None,
+        )
+
+    def _authority_after(
+        lifecycle_event: MbbTeardownLifecycleEvent,
+        step_result,
+    ) -> dict[str, MbbPairAuthority]:
+        return {
+            "old_pair": _pair_authority(
+                lifecycle_event.old_pair,
+                associations=step_result.associations,
+                teardowns=step_result.pending_teardowns,
+                decisions=step_result.ground_decisions,
+            ),
+            "successor_pair": _pair_authority(
+                lifecycle_event.successor_pair,
+                associations=step_result.associations,
+                teardowns=step_result.pending_teardowns,
+                decisions=step_result.ground_decisions,
+            ),
+        }
+
+    def _authority_before_from_lifecycle(
+        lifecycle_event: MbbTeardownLifecycleEvent,
+    ) -> dict[str, MbbPairAuthority]:
+        return {
+            key: MbbPairAuthority.model_validate(value)
+            for key, value in lifecycle_event.authority_before.items()
+        }
+
+    def _enqueue_ome_lifecycle_ops_event(details: MbbTeardownLifecycleDetails) -> None:
+        event = OpsEvent(
+            timestamp=datetime.now(UTC),
+            session_id=session_id,
+            source="ome",
+            hostname=ome_hostname,
+            level="info",
+            code=OmeOpsCode.MBB_TEARDOWN_TERMINAL.value,
+            message=details.message,
+            details=details.model_dump(mode="json"),
+        )
+        _enqueue(subj_mbb_lifecycle, event.model_dump_json().encode())
+
+    def _publish_mbb_lifecycle_events(step_result, *, epoch_id: int) -> None:
+        for lifecycle_event in step_result.ground_allocation.lifecycle_events:
+            details = MbbTeardownLifecycleDetails(
+                session_id=session_id,
+                epoch_id=epoch_id,
+                snapshot_seq=snapshot_seq,
+                allocator_step=step_result.step,
+                master_sim_time=step_result.sim_time,
+                gs_id=lifecycle_event.gs_id,
+                teardown_id=lifecycle_event.teardown_id,
+                old_pair=list(lifecycle_event.old_pair),
+                successor_pair=list(lifecycle_event.successor_pair),
+                terminal_outcome=lifecycle_event.category,
+                source_allocation_event_category=lifecycle_event.source_allocation_event_category,
+                message=lifecycle_event.message,
+                authority_before=_authority_before_from_lifecycle(lifecycle_event),
+                authority_after=_authority_after(lifecycle_event, step_result),
+                ground_policy_audit_ref={"epoch_id": epoch_id, "snapshot_seq": snapshot_seq},
+                terminal_indices={
+                    key: list(value) for key, value in lifecycle_event.terminal_indices.items()
+                },
+            )
+            _enqueue_ome_lifecycle_ops_event(details)
+
+    def _publish_epoch_invalidation_lifecycle_events(
+        *,
+        old_epoch_id: int,
+        old_step: int,
+        old_sim_time: datetime,
+        seek_target_sim_time: datetime,
+        associations: dict[tuple[str, str], tuple[int, int]],
+        teardowns: MbbTeardownState,
+    ) -> None:
+        for old_pair, teardown in sorted(teardowns.items()):
+            successor_pair = teardown.successor_pair
+            gs_id = _ground_pair_gs_id(old_pair)
+            authority_before = {
+                "old_pair": _pair_authority(
+                    old_pair, associations=associations, teardowns=teardowns
+                ),
+                "successor_pair": _pair_authority(
+                    successor_pair, associations=associations, teardowns=teardowns
+                ),
+            }
+            message = (
+                f"MBB teardown {old_pair!r}->{successor_pair!r} invalidated by seek "
+                f"from epoch_id={old_epoch_id} to target={seek_target_sim_time.isoformat()}"
+            )
+            details = MbbTeardownLifecycleDetails(
+                session_id=session_id,
+                epoch_id=old_epoch_id,
+                snapshot_seq=snapshot_seq if snapshot_seq > 0 else None,
+                allocator_step=old_step,
+                master_sim_time=old_sim_time,
+                gs_id=gs_id,
+                teardown_id=(
+                    f"{old_pair[0]}:{old_pair[1]}->{successor_pair[0]}:{successor_pair[1]}"
+                ),
+                old_pair=list(old_pair),
+                successor_pair=list(successor_pair),
+                terminal_outcome="teardown_invalidated_by_epoch",
+                source_allocation_event_category=None,
+                message=message,
+                authority_before=authority_before,
+                authority_after=None,
+                seek_target_sim_time=seek_target_sim_time,
+                ground_policy_audit_ref={"epoch_id": old_epoch_id, "snapshot_seq": snapshot_seq}
+                if snapshot_seq > 0
+                else None,
+                terminal_indices={
+                    key: list(value)
+                    for key, value in (
+                        ("old_pair", associations.get(old_pair)),
+                        ("successor_pair", associations.get(successor_pair)),
+                    )
+                    if value is not None
+                },
+            )
+            _enqueue_ome_lifecycle_ops_event(details)
+
     # Build StepContext for per-step computation (Physicist role)
     from collections import deque
     from statistics import quantiles
 
     from ome.event_stream import build_step_context, compute_step
 
-    mbb_dispatch = session.scheduling.ground.handover_mode == "mbb"
-    mbb_overlap_ticks = session.scheduling.ground.mbb_overlap_ticks
-    mbb_reserve = session.scheduling.ground.mbb_reserve if mbb_dispatch else 0
+    effective_ground_scheduling = _effective_ground_scheduling_for_runtime(session, cfg.gs_file)
+    mbb_overlap_ticks = effective_ground_scheduling.mbb_overlap_ticks
 
     step_ctx = build_step_context(
         satellites=cfg.satellites,
@@ -768,7 +968,7 @@ def _run_pacing(
         propagator_id=cfg.propagator_id,
         polar_seam_enabled=cfg.polar_seam_enabled,
         latitude_threshold_deg=cfg.latitude_threshold_deg,
-        ground_scheduling=session.scheduling.ground,
+        ground_scheduling=effective_ground_scheduling,
         ground_link_model=session.simulation.ground_link_model,
     )
 
@@ -786,25 +986,6 @@ def _run_pacing(
             snapshot_interval_s,
             session.dispatch.max_latency_age_ticks,
         )
-
-    # --- MBB capability validation (R-OME-004a) ---
-    if mbb_dispatch and cfg.gs_file:
-        invalid_mbb_stations: list[str] = []
-        for station in cfg.gs_file.stations:
-            gs_id = cfg.addressing.gs_id(station.name)
-            cap = step_ctx.gs_terminal_counts[gs_id]
-            required_capacity = mbb_reserve + 1
-            if cap < required_capacity:
-                invalid_mbb_stations.append(
-                    f"{gs_id}(capacity={cap}, required>={required_capacity})"
-                )
-        if invalid_mbb_stations:
-            raise RuntimeError(
-                "MBB handover requested but these ground stations do not have "
-                "enough terminal capacity for one steady link plus the configured "
-                f"reserve: {', '.join(invalid_mbb_stations)}. Refusing to degrade "
-                "to BBM; fix the model or select scheduling.ground.handover_mode='bbm'."
-            )
 
     # Lookahead uses the same StepContext object as the live pacing loop. That
     # keeps predictive windows on the same propagation, visibility, allocation,
@@ -1072,7 +1253,10 @@ def _run_pacing(
     logging.debug("Published SessionEphemeris epoch_id=%d (%d nodes)", _epoch_id, len(eph.nodes))
 
     initial_epoch_id = _epoch_id
+    active_epoch_id = initial_epoch_id
     _publish_link_authority(initial_step_result, epoch_id=initial_epoch_id)
+    if recovered_checkpoint is None and initial_step_result.ground_allocation.lifecycle_events:
+        _publish_mbb_lifecycle_events(initial_step_result, epoch_id=initial_epoch_id)
     _publish_checkpoint(initial_step_result, epoch_id=initial_epoch_id)
 
     initial_playback_state = "paused" if _paused else "playing"
@@ -1112,6 +1296,20 @@ def _run_pacing(
             if seek_to is not None:
                 _seek_target = None
                 seek_epoch_id = _epoch_id
+                old_epoch_id = active_epoch_id
+                old_step = max(0, step - 1)
+                old_epoch_unix = epoch_unix
+                old_sim_time = datetime.fromtimestamp(old_epoch_unix + old_step * step_seconds, UTC)
+                seek_target_sim_time = datetime.fromtimestamp(seek_to, UTC)
+                if mbb_pending_teardowns:
+                    _publish_epoch_invalidation_lifecycle_events(
+                        old_epoch_id=old_epoch_id,
+                        old_step=old_step,
+                        old_sim_time=old_sim_time,
+                        seek_target_sim_time=seek_target_sim_time,
+                        associations=current_associations,
+                        teardowns=mbb_pending_teardowns,
+                    )
                 epoch_unix = seek_to
                 isl_state = {}
                 gs_state = {}
@@ -1173,6 +1371,8 @@ def _run_pacing(
                 eph = build_session_ephemeris(step_ctx, epoch_unix, seek_epoch_id)
                 _enqueue(subj_ephemeris, eph.model_dump_json().encode())
                 _publish_link_authority(seek_result, epoch_id=seek_epoch_id)
+                if seek_result.ground_allocation.lifecycle_events:
+                    _publish_mbb_lifecycle_events(seek_result, epoch_id=seek_epoch_id)
                 _publish_checkpoint(seek_result, epoch_id=seek_epoch_id)
 
                 ps = PlaybackState(epoch_id=seek_epoch_id, state="playing")
@@ -1180,6 +1380,7 @@ def _run_pacing(
                 _publish_clock_tick(seek_result, current_rate, epoch_id=seek_epoch_id)
                 if _epoch_id == seek_epoch_id and _seek_target is None:
                     _seeking = False  # Clear seeking mutex only for the committed active seek
+                    active_epoch_id = seek_epoch_id
 
                 logging.info(
                     "Seek committed: new epoch %s epoch_id=%d snapshot_seq=%d",
@@ -1262,13 +1463,23 @@ def _run_pacing(
             # ClockTick with real wall_time (not precomputed placeholder)
             _publish_clock_tick(step_result, current_rate, epoch_id=tick_epoch_id)
 
-            # LinkStateSnapshot at interval
+            # LinkStateSnapshot at interval, and immediately for terminal MBB
+            # lifecycle outcomes so the OpsEvent can reference a same-tick
+            # GroundPolicyAudit by (epoch_id, snapshot_seq).
             sim_s = step * step_seconds
-            if sim_s - last_snapshot_sim_s >= snapshot_interval_s or force_first_snapshot:
+            force_lifecycle_snapshot = bool(step_result.ground_allocation.lifecycle_events)
+            if (
+                sim_s - last_snapshot_sim_s >= snapshot_interval_s
+                or force_first_snapshot
+                or force_lifecycle_snapshot
+            ):
                 # Companion GroundLinkDecisionSnapshot is published by the same
                 # helper with the same (epoch_id, snapshot_seq, sim_time). Both
                 # snapshots are serialized from committed StepResult state.
                 _publish_link_authority(step_result, epoch_id=tick_epoch_id)
+
+            if step_result.ground_allocation.lifecycle_events:
+                _publish_mbb_lifecycle_events(step_result, epoch_id=tick_epoch_id)
 
             # Retain the latest authoritative scheduling state every tick, not
             # only at snapshot cadence. Otherwise a crash between snapshots can

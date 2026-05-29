@@ -40,7 +40,7 @@ from ome.ground_handover_policies import (
     evaluate_handover,
 )
 from ome.ground_selection_policies import SelectionContext, score_candidate
-from ome.types import MbbTeardown, MbbTeardownState
+from ome.types import MbbTeardown, MbbTeardownLifecycleEvent, MbbTeardownState
 from ome.visibility import GroundVisibility
 
 
@@ -60,6 +60,7 @@ class GroundAllocationResult:
     unscheduled_pairs: tuple[UnscheduledPair, ...]
     policy_audit: GroundPolicyAudit
     allocation_events: tuple[GroundAllocationEvent, ...]
+    lifecycle_events: tuple[MbbTeardownLifecycleEvent, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -540,6 +541,7 @@ def allocate_ground_links(
     new_pending_teardowns: MbbTeardownState = {}
     rejected: dict[tuple[str, str], _Rejected] = {}
     allocation_events: list[GroundAllocationEvent] = []
+    lifecycle_events: list[MbbTeardownLifecycleEvent] = []
     drop_current_pairs: set[tuple[str, str]] = set()
 
     def add_existing(pair: tuple[str, str], indices: tuple[int, int]) -> None:
@@ -715,6 +717,53 @@ def allocate_ground_links(
             )
         )
 
+    def authority_before_for_pairs(
+        old_pair: tuple[str, str], successor_pair: tuple[str, str]
+    ) -> dict[str, dict[str, object]]:
+        def one(pair: tuple[str, str]) -> dict[str, object]:
+            indices = current_associations.get(pair)
+            return {
+                "pair": list(pair),
+                "scheduled": pair in current_associations,
+                "pending_teardown": pair in pending_teardowns,
+                "visible": pair in visible_set,
+                "terminal_indices": list(indices) if indices is not None else None,
+            }
+
+        return {
+            "old_pair": one(old_pair),
+            "successor_pair": one(successor_pair),
+        }
+
+    def emit_mbb_lifecycle_terminal(
+        *,
+        category: GroundAllocationEventCategory,
+        old_pair: tuple[str, str],
+        successor_pair: tuple[str, str],
+        gs_id: str,
+        message: str,
+        source_allocation_event_category: GroundAllocationEventCategory | None = None,
+    ) -> None:
+        lifecycle_events.append(
+            MbbTeardownLifecycleEvent(
+                category=category,
+                old_pair=old_pair,
+                successor_pair=successor_pair,
+                gs_id=gs_id,
+                message=message,
+                source_allocation_event_category=source_allocation_event_category or category,
+                authority_before=authority_before_for_pairs(old_pair, successor_pair),
+                terminal_indices={
+                    key: tuple(value)
+                    for key, value in (
+                        ("old_pair", current_associations.get(old_pair)),
+                        ("successor_pair", current_associations.get(successor_pair)),
+                    )
+                    if value is not None
+                },
+            )
+        )
+
     # Prior-state recovery: resolve in-flight MBB teardown state before new
     # candidates compete. This is a state-machine transition, not selection.
     for pair in sorted(pending_teardowns):
@@ -734,6 +783,10 @@ def allocate_ground_links(
 
         if not successor_visible or not successor_current:
             category = "failed_successor" if not successor_current else "successor_aborted"
+            message = (
+                f"MBB successor {successor!r} did not survive prior-state recovery; "
+                f"successor_abort_policy={successor_abort_policy}"
+            )
             allocation_events.append(
                 _make_event(
                     category=category,
@@ -741,14 +794,18 @@ def allocate_ground_links(
                     gs_id=gs_id,
                     gs_tenant_ids=gs_tenant_ids,
                     gs_reference_bodies=gs_reference_bodies,
-                    message=(
-                        f"MBB successor {successor!r} did not survive prior-state recovery; "
-                        f"successor_abort_policy={successor_abort_policy}"
-                    ),
+                    message=message,
                     successor_pair=successor,
                     policy_kind="successor_abort_policy",
                     policy_name=successor_abort_policy,
                 )
+            )
+            emit_mbb_lifecycle_terminal(
+                category=category,
+                old_pair=pair,
+                successor_pair=successor,
+                gs_id=gs_id,
+                message=message,
             )
             if not pair_visible:
                 emit_incumbent_lost(
@@ -806,6 +863,30 @@ def allocate_ground_links(
 
         if elapsed >= mbb_overlap_ticks or not pair_visible:
             drop_current_pairs.add(pair)
+            completion_message = (
+                f"MBB teardown completed for old pair {pair!r}; successor {successor!r} "
+                f"remains scheduled; elapsed_ticks={elapsed}; old_pair_visible={pair_visible}"
+            )
+            allocation_events.append(
+                _make_event(
+                    category="teardown_completed",
+                    pair=pair,
+                    gs_id=gs_id,
+                    gs_tenant_ids=gs_tenant_ids,
+                    gs_reference_bodies=gs_reference_bodies,
+                    message=completion_message,
+                    successor_pair=successor,
+                    policy_kind="handover_mode",
+                    policy_name="mbb",
+                )
+            )
+            emit_mbb_lifecycle_terminal(
+                category="teardown_completed",
+                old_pair=pair,
+                successor_pair=successor,
+                gs_id=gs_id,
+                message=completion_message,
+            )
             if not pair_visible:
                 emit_incumbent_lost(
                     pair,
@@ -984,6 +1065,23 @@ def allocate_ground_links(
                     start_step=step,
                     successor_pair=candidate.pair,
                 )
+                allocation_events.append(
+                    _make_event(
+                        category="mbb_overlap_started",
+                        pair=gs_displacement.pair,
+                        gs_id=gs_id,
+                        gs_tenant_ids=gs_tenant_ids,
+                        gs_reference_bodies=gs_reference_bodies,
+                        message=(
+                            f"MBB overlap started for incumbent {gs_displacement.pair!r} "
+                            f"with successor {candidate.pair!r}; overlap_ticks={mbb_overlap_ticks}"
+                        ),
+                        successor_pair=candidate.pair,
+                        challenger_pair=candidate.pair,
+                        policy_kind="handover_mode",
+                        policy_name="mbb",
+                    )
+                )
 
         if not progress:
             break
@@ -1043,4 +1141,5 @@ def allocate_ground_links(
         unscheduled_pairs=tuple(unscheduled),
         policy_audit=policy_audit,
         allocation_events=tuple(allocation_events),
+        lifecycle_events=tuple(lifecycle_events),
     )

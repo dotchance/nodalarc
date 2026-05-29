@@ -113,6 +113,9 @@ replacement from a failed handover."""
 
 
 GroundAllocationEventCategory = Literal[
+    "mbb_overlap_started",
+    "teardown_completed",
+    "teardown_invalidated_by_epoch",
     "successor_aborted",
     "failed_successor",
     "failed_acquire",
@@ -123,11 +126,15 @@ GroundAllocationEventCategory = Literal[
 
 Visible-but-unscheduled candidates are represented by `UnscheduledPair` with
 a typed `GroundUnscheduledReason`; they are not duplicated as `blocked`
-allocation events. `bbm_gap` is emitted on every BBM displacement; Phase 3
-represents it as an immediate one-tick release/acquire transition, not a
-multi-tick wait state. MBB preemption is not an event category until
-`MbbPreemptionPolicy` widens beyond `off`; when that policy exists, add
-`mbb_preempted` here and emit it from the preemption decision path.
+allocation events. `mbb_overlap_started` is the per-tick diagnostic for MBB
+overlap entry. `teardown_completed` and `teardown_invalidated_by_epoch` are
+terminal MBB lifecycle categories; the durable terminal record is emitted as an
+OME OpsEvent, while this allocation-event vocabulary remains the shared reason
+source. `bbm_gap` is emitted on every BBM displacement; Phase 3 represents it
+as an immediate one-tick release/acquire transition, not a multi-tick wait
+state. MBB preemption is not an event category until `MbbPreemptionPolicy`
+widens beyond `off`; when that policy exists, add `mbb_preempted` here and emit
+it from the preemption decision path.
 """
 
 GroundAllocationPolicyKind = Literal[

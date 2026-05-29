@@ -183,6 +183,12 @@ def test_mbb_replacement_starts_teardown_when_challenger_beats_hysteresis():
     }
     assert result.pending_teardowns == {old_pair: MbbTeardown(10, new_pair)}
     assert result.scheduled_pairs == frozenset({old_pair, new_pair})
+    start_events = [
+        event for event in result.allocation_events if event.category == "mbb_overlap_started"
+    ]
+    assert len(start_events) == 1
+    assert start_events[0].pair == old_pair
+    assert start_events[0].successor_pair == new_pair
 
 
 def test_hysteresis_prevents_mbb_replacement_when_challenger_does_not_clear_margin():
@@ -261,6 +267,12 @@ def test_pending_teardown_expires_after_overlap_window():
     assert result.associations == {new_pair: (1, 0)}
     assert result.pending_teardowns == {}
     assert result.scheduled_pairs == frozenset({new_pair})
+    completed = [
+        event for event in result.lifecycle_events if event.category == "teardown_completed"
+    ]
+    assert len(completed) == 1
+    assert completed[0].old_pair == old_pair
+    assert completed[0].successor_pair == new_pair
 
 
 # ---------------------------------------------------------------------------
@@ -723,6 +735,10 @@ def test_mbb_failed_successor_hard_release_drops_visible_old_pair():
     assert result.pending_teardowns == {}
     assert result.unscheduled_pairs[0].unscheduled_reason == "failed_successor"
     assert result.allocation_events[0].category == "failed_successor"
+    assert len(result.lifecycle_events) == 1
+    assert result.lifecycle_events[0].category == "failed_successor"
+    assert result.lifecycle_events[0].old_pair == old_pair
+    assert result.lifecycle_events[0].successor_pair == successor_pair
 
 
 def test_mbb_visible_successor_missing_from_current_emits_failed_acquire_event():
@@ -774,6 +790,9 @@ def test_mbb_visible_successor_missing_from_current_emits_failed_acquire_event()
     assert failed_acquire.policy_name == "hard_release"
     rejected = {u.pair: u for u in result.unscheduled_pairs}
     assert rejected[successor_pair].unscheduled_reason == "failed_acquire"
+    assert len(result.lifecycle_events) == 1
+    assert result.lifecycle_events[0].category == "failed_successor"
+    assert result.lifecycle_events[0].source_allocation_event_category == "failed_successor"
 
 
 def test_mbb_failed_successor_soft_retain_keeps_visible_old_pair():
@@ -815,6 +834,8 @@ def test_mbb_failed_successor_soft_retain_keeps_visible_old_pair():
     assert result.pending_teardowns == {}
     assert result.unscheduled_pairs == ()
     assert result.allocation_events[0].category == "failed_successor"
+    assert len(result.lifecycle_events) == 1
+    assert result.lifecycle_events[0].category == "failed_successor"
     assert result.policy_audit.successor_abort_policy == "soft_retain"
 
 

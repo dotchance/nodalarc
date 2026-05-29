@@ -100,13 +100,20 @@ def evaluate_isl_feasibility(
     for node_id in node_order:
         state_a = sat_states.get(node_id)
         if state_a is None:
-            continue
+            raise ValueError(
+                f"ISL feasibility missing propagated state for endpoint {node_id!r}; "
+                "refusing to convert absent physics into a no-link decision"
+            )
 
         for assignment_a in by_node.get(node_id, []):
             peer_id = assignment_a.peer_node_id
             state_b = sat_states.get(peer_id)
             if state_b is None:
-                continue
+                raise ValueError(
+                    f"ISL feasibility missing propagated state for endpoint {peer_id!r} "
+                    f"while evaluating {node_id!r}->{peer_id!r}; refusing to convert "
+                    "absent physics into a no-link decision"
+                )
 
             pair = (min(node_id, peer_id), max(node_id, peer_id))
             if pair[0] != node_id:

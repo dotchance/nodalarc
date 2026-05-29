@@ -1466,3 +1466,51 @@ class TestActuationHealth:
             "actuation_blocked",
             "kernel_dirty",
         }
+
+
+class TestOmeLifecycleNotices:
+    def test_ome_lifecycle_terminal_event_becomes_operator_notice(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        event = {
+            "timestamp": "2026-05-27T12:00:00+00:00",
+            "session_id": "test",
+            "source": "ome",
+            "hostname": "ome-0",
+            "level": "warning",
+            "code": "MBB_TEARDOWN_TERMINAL",
+            "message": "MBB successor aborted",
+            "details": {
+                "gs_id": "gs-den",
+                "teardown_id": "gs-den:sat-old->gs-den:sat-new",
+                "terminal_outcome": "successor_aborted",
+                "epoch_id": 3,
+                "snapshot_seq": 9,
+                "allocator_step": 44,
+                "master_sim_time": "2026-05-27T12:00:00+00:00",
+                "old_pair": ["gs-den", "sat-old"],
+                "successor_pair": ["gs-den", "sat-new"],
+                "authority_before": {"old_pair": {"scheduled": True}},
+                "authority_after": {"old_pair": {"scheduled": False}},
+            },
+        }
+
+        ctx._update_ome_lifecycle_notice(event)
+
+        notice = ctx.ome_lifecycle_notices_by_key[
+            (
+                "gs-den",
+                "gs-den:sat-old->gs-den:sat-new",
+            )
+        ]
+        assert notice["terminal_outcome"] == "successor_aborted"
+        assert notice["old_pair"] == ["gs-den", "sat-old"]
+        assert notice["last_event"] == event
+
+    def test_non_lifecycle_ops_event_does_not_create_notice(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx._update_ome_lifecycle_notice(
+            {"source": "scheduler", "code": "MBB_TEARDOWN_TERMINAL", "details": {}}
+        )
+        assert ctx.ome_lifecycle_notices_by_key == {}

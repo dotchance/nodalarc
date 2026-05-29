@@ -36,7 +36,7 @@ from typing import Literal
 
 import nats
 import yaml
-from nodalarc.db.queries import insert_operator_intervention_event
+from nodalarc.db.queries import insert_ome_lifecycle_event, insert_operator_intervention_event
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
@@ -153,6 +153,7 @@ class SessionContext:
         self.session_ops_events: deque = deque(maxlen=500)
         self.actuation_notices_by_key: dict[tuple[str, str], dict] = {}
         self.actuation_latest_by_gs: dict[tuple[str, str], dict] = {}
+        self.ome_lifecycle_notices_by_key: dict[tuple[str, str], dict] = {}
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
         self._ready = asyncio.Event()
@@ -650,7 +651,9 @@ class SessionContext:
         with self.state_lock:
             self.session_ops_events.append(data)
             self._update_actuation_notice(data)
+            self._update_ome_lifecycle_notice(data)
         self._persist_operator_intervention(data)
+        self._persist_ome_lifecycle_event(data)
 
     def _update_actuation_notice(self, event: dict) -> None:
         if event.get("source") != "scheduler":
@@ -695,6 +698,36 @@ class SessionContext:
         }
         self.actuation_notices_by_key[key] = notice
 
+    def _update_ome_lifecycle_notice(self, event: dict) -> None:
+        if event.get("source") != "ome" or event.get("code") != "MBB_TEARDOWN_TERMINAL":
+            return
+        details = event.get("details") or {}
+        gs_id = details.get("gs_id")
+        teardown_id = details.get("teardown_id")
+        outcome = details.get("terminal_outcome")
+        if not gs_id or not teardown_id or not outcome:
+            return
+        notice = {
+            "gs_id": gs_id,
+            "teardown_id": teardown_id,
+            "terminal_outcome": outcome,
+            "reason_code": event.get("code", ""),
+            "message": event.get("message", ""),
+            "since": event.get("timestamp"),
+            "epoch_id": details.get("epoch_id"),
+            "snapshot_seq": details.get("snapshot_seq"),
+            "allocator_step": details.get("allocator_step"),
+            "master_sim_time": details.get("master_sim_time"),
+            "old_pair": details.get("old_pair", []),
+            "successor_pair": details.get("successor_pair", []),
+            "source_allocation_event_category": details.get("source_allocation_event_category"),
+            "authority_before": details.get("authority_before", {}),
+            "authority_after": details.get("authority_after"),
+            "seek_target_sim_time": details.get("seek_target_sim_time"),
+            "last_event": event,
+        }
+        self.ome_lifecycle_notices_by_key[(gs_id, teardown_id)] = notice
+
     def _persist_operator_intervention(self, event: dict) -> None:
         details = event.get("details") or {}
         if not details.get("intervention_id") or not self.db_path:
@@ -707,6 +740,20 @@ class SessionContext:
                 conn.close()
         except Exception as exc:
             log.error("Failed to persist operator intervention event: %s", exc)
+
+    def _persist_ome_lifecycle_event(self, event: dict) -> None:
+        if event.get("source") != "ome" or event.get("code") != "MBB_TEARDOWN_TERMINAL":
+            return
+        if not self.db_path:
+            return
+        try:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                insert_ome_lifecycle_event(conn, event)
+            finally:
+                conn.close()
+        except Exception as exc:
+            log.error("Failed to persist OME lifecycle event: %s", exc)
 
     def build_actuation_health(self) -> dict:
         by_instance: dict[str, dict] = {}

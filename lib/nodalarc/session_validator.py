@@ -453,31 +453,54 @@ def _check_e010(
         return []
 
     required_capacity = ground.mbb_reserve + 1
-    results: list[ValidationResult] = []
+    shortfalls: list[tuple[str, int]] = []
     for station in ground_stations.stations:
         capacity = station_ground_terminal_capacity(ground_stations, station)
-        if capacity >= required_capacity:
-            continue
-        results.append(
+        if capacity < required_capacity:
+            shortfalls.append((station.name, capacity))
+    if not shortfalls:
+        return []
+
+    details = ", ".join(f"{name}(capacity={cap})" for name, cap in shortfalls)
+    if session.simulation.acknowledge_bbm_handover_gap:
+        return [
             ValidationResult(
-                level="error",
-                code="E010",
+                level="warning",
+                code="W004",
                 message=(
-                    f"MBB handover requested, but station '{station.name}' has "
-                    f"ground terminal capacity {capacity}. With mbb_reserve="
-                    f"{ground.mbb_reserve}, MBB requires capacity >= {required_capacity} "
-                    "so one steady link can exist while the reserved terminal is held "
-                    "for make-before-break overlap."
+                    "MBB handover requested, but one or more ground stations cannot "
+                    f"support physical overlap: {details}. The session explicitly "
+                    "acknowledges degraded BBM behavior and must run with effective "
+                    "handover_mode='bbm'."
                 ),
                 remediation=(
-                    f"Increase terminal count/tracking_capacity for station '{station.name}', "
-                    "lower mbb_reserve, or set scheduling.ground.handover_mode to 'bbm'."
+                    "For zero-loss MBB, increase terminal count/tracking_capacity or "
+                    "lower mbb_reserve. For degraded BBM, keep "
+                    "simulation.acknowledge_bbm_handover_gap: true and expect a typed gap."
                 ),
-                field_path="scheduling.ground.handover_mode",
+                field_path="simulation.acknowledge_bbm_handover_gap",
             )
-        )
+        ]
 
-    return results
+    name, capacity = shortfalls[0]
+    return [
+        ValidationResult(
+            level="error",
+            code="E010",
+            message=(
+                f"MBB handover requested, but station '{name}' has ground terminal "
+                f"capacity {capacity}. With mbb_reserve={ground.mbb_reserve}, MBB "
+                f"requires capacity >= {required_capacity} so one steady link can "
+                "exist while the reserved terminal is held for make-before-break overlap."
+            ),
+            remediation=(
+                f"Increase terminal count/tracking_capacity for station '{name}', lower "
+                "mbb_reserve, set scheduling.ground.handover_mode to 'bbm', or explicitly "
+                "set simulation.acknowledge_bbm_handover_gap: true to run degraded BBM."
+            ),
+            field_path="scheduling.ground.handover_mode",
+        )
+    ]
 
 
 def _check_e011(

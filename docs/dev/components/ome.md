@@ -37,9 +37,10 @@ The OME is the physics engine. It takes a constellation definition and ground st
 | `nodalarc.ome.visibility` | NODALARC_OME | VisibilityEvent (link visible/invisible) | Per event |
 | `nodalarc.ome.clock` | NODALARC_OME | ClockTick (sim_time, epoch_id) | Every tick |
 | `nodalarc.ome.heartbeat` | NODALARC_OME | HeartbeatTick | Periodic |
-| `nodalarc.links.state` | NODALARC_LINKS | LinkStateSnapshot (complete link state) | Every 5 sim-seconds |
+| `nodalarc.links.state` | NODALARC_LINKS | LinkStateSnapshot (complete forwarding state) | Snapshot interval and every terminal MBB lifecycle tick |
 | `nodalarc.session.ephemeris` | NODALARC_SESSION | SessionEphemeris (orbital elements) | Once per epoch |
 | `nodalarc.session.playback` | NODALARC_SESSION | PlaybackState (playing/paused/seeking) | On state change |
+| `nodalarc.ops.{session}.ome.MBB_TEARDOWN_TERMINAL` | NODALARC_OPS | Typed terminal MBB lifecycle OpsEvent | On teardown completion, successor abort, or epoch invalidation |
 
 ## Window Computation
 

@@ -67,6 +67,7 @@ class TestSessionConfigLoading:
         assert config.simulation.schema_version == 2
         assert config.simulation.ground_link_model == "terminal_physics"
         assert config.simulation.acknowledge_geometry_only is False
+        assert config.simulation.acknowledge_bbm_handover_gap is False
         assert config.orbit.propagator == "keplerian-circular"
         assert config.dispatch.latency_authority == "ome"
         assert config.dispatch.substrate_compensation.rtt_to_one_way == "half-rtt"
@@ -76,6 +77,12 @@ class TestSessionConfigLoading:
         assert config.convergence.stability_period_s == 2.0
         assert config.convergence.timeout_s == 30.0
         assert config.convergence.probe_interval_ms == 100
+
+    def test_bbm_handover_gap_acknowledgement_is_explicit_simulation_field(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"acknowledge_bbm_handover_gap": True}
+        config = SessionConfig.model_validate(data)
+        assert config.simulation.acknowledge_bbm_handover_gap is True
 
     def test_ground_policy_surface_must_be_explicit(self):
         data = dict(_SAMPLE_SESSION)
@@ -157,6 +164,7 @@ class TestEngineConfigValidation:
         config = SessionConfig.model_validate(data)
         assert config.simulation.ground_link_model == "geometry_only"
         assert config.simulation.acknowledge_geometry_only is False
+        assert config.simulation.acknowledge_bbm_handover_gap is False
 
     def test_unknown_propagator_rejected(self):
         data = dict(_SAMPLE_SESSION)

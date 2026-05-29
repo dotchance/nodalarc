@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from nodalarc.body_frames import BODY_FRAMES, SupportedSurfaceBody
 from nodalarc.models.link_decisions import (
+    GroundAllocationEventCategory,
     GroundVisibilityRejectingEndpoint,
     GroundVisibilityRejectReason,
     ObserverFrame,
@@ -24,6 +25,25 @@ class MbbTeardown:
 
 
 MbbTeardownState = dict[tuple[str, str], MbbTeardown]
+
+
+@dataclass(frozen=True)
+class MbbTeardownLifecycleEvent:
+    """Allocator/Pacemaker terminal MBB teardown fact before OpsEvent wrapping."""
+
+    category: GroundAllocationEventCategory
+    old_pair: tuple[str, str]
+    successor_pair: tuple[str, str]
+    gs_id: str
+    message: str
+    source_allocation_event_category: GroundAllocationEventCategory | None = None
+    authority_before: dict[str, dict[str, object]] = field(default_factory=dict)
+    terminal_indices: dict[str, tuple[int, int]] = field(default_factory=dict)
+    seek_target_sim_time_unix: float | None = None
+
+    @property
+    def teardown_id(self) -> str:
+        return f"{self.old_pair[0]}:{self.old_pair[1]}->{self.successor_pair[0]}:{self.successor_pair[1]}"
 
 
 @dataclass(frozen=True, slots=True)

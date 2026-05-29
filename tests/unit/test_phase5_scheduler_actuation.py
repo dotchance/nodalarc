@@ -414,6 +414,49 @@ def test_seek_epoch_reset_does_not_clear_dirty_actuation_state() -> None:
     assert d._gs_actuation["gs-multi"].state == GroundActuationStateName.KERNEL_DIRTY
 
 
+def test_read_only_kernel_proof_clears_dirty_ground_station() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._desired_links[pair] = _info()
+    d._gs_actuation["gs-multi"] = GroundActuationState(
+        gs_id="gs-multi",
+        state=GroundActuationStateName.KERNEL_DIRTY,
+        reason_code="KERNEL_DIRTY",
+        recovery=RecoveryStatus(verify_attempt_count=2),
+    )
+    d._send_kernel_inventory = AsyncMock(
+        return_value=_success_result(pair=pair, operation="KernelInventory")
+    )
+    d._js.publish = AsyncMock()
+
+    verified = asyncio.run(
+        d._verify_gs_against_current_authority(gs_id="gs-multi", sim_time=SIM_TIME)
+    )
+
+    assert verified is True
+    assert d._gs_actuation["gs-multi"].state == GroundActuationStateName.CLEAN
+    d._send_kernel_inventory.assert_awaited_once()
+
+
+def test_no_footprint_cleanup_clears_dirty_without_inventing_kernel_probe() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._gs_actuation["gs-multi"] = GroundActuationState(
+        gs_id="gs-multi",
+        state=GroundActuationStateName.KERNEL_DIRTY,
+        reason_code="KERNEL_DIRTY",
+    )
+    d._send_kernel_inventory = AsyncMock()
+    d._js.publish = AsyncMock()
+
+    verified = asyncio.run(
+        d._verify_gs_against_current_authority(gs_id="gs-multi", sim_time=SIM_TIME)
+    )
+
+    assert verified is True
+    assert d._gs_actuation["gs-multi"].state == GroundActuationStateName.CLEAN
+    d._send_kernel_inventory.assert_not_called()
+
+
 def test_auto_verify_exhaustion_requires_operator_action_and_does_not_clear_dirty() -> None:
     d = _make_dispatcher_with_two_terminal_gs()
     pair = ("gs-multi", "sat-old")
@@ -501,6 +544,43 @@ def test_operator_repair_reconciles_to_current_authority_and_proves_final_gs_sta
     assert new_pair in d._actual_links
     assert verify_calls[0] == (set(), {old_pair})
     assert verify_calls[-1] == ({new_pair}, set())
+
+
+def test_kernel_verify_due_gate_and_backoff_use_injected_clock() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    base = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
+    current = {"now": base}
+    d._now = lambda: current["now"]
+    d._desired_links[pair] = _info()
+    d._gs_actuation["gs-multi"] = GroundActuationState(
+        gs_id="gs-multi",
+        state=GroundActuationStateName.KERNEL_DIRTY,
+        reason_code="KERNEL_DIRTY",
+        recovery=RecoveryStatus(next_verify_after=base),
+    )
+    d._send_kernel_inventory = AsyncMock(
+        return_value=_actuation_result(
+            pair=pair,
+            link_type="ground",
+            gs_id="gs-multi",
+            failure=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+            operation="KernelInventory",
+        )
+    )
+    d._js.publish = AsyncMock()
+
+    current["now"] = base.replace(hour=11, minute=59, second=59)
+    asyncio.run(d._run_due_kernel_verifications(sim_time=SIM_TIME))
+    d._send_kernel_inventory.assert_not_called()
+
+    current["now"] = base
+    asyncio.run(d._run_due_kernel_verifications(sim_time=SIM_TIME))
+
+    d._send_kernel_inventory.assert_awaited_once()
+    state = d._gs_actuation["gs-multi"]
+    assert state.recovery.verify_attempt_count == 1
+    assert state.recovery.next_verify_after == base.replace(hour=12, minute=0, second=10)
 
 
 def test_authority_subset_violation_halts_callback_path_and_queues_sentinel() -> None:

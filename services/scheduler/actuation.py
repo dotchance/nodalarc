@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -352,6 +352,11 @@ def _pair_failure_class(
     return ActuationFailureClass.NONE
 
 
-def next_verify_time(attempt_count: int) -> datetime:
+def next_verify_time(
+    attempt_count: int,
+    *,
+    now: Callable[[], datetime] | None = None,
+) -> datetime:
     delay = min(300, 5 * (2 ** max(0, attempt_count - 1)))
-    return datetime.now(UTC) + timedelta(seconds=delay)
+    base = now() if now is not None else datetime.now(UTC)
+    return base + timedelta(seconds=delay)

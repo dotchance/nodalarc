@@ -186,6 +186,17 @@ MATRIX = [
     },
 ]
 
+MBB_ACCEPTANCE_SESSION = Path("configs/sessions/starlink-176-mbb-test.yaml")
+MBB_BAD_OPS_CODES = {
+    "KERNEL_DIRTY",
+    "ACTUATION_BLOCKED",
+    "ACTUATION_HALTED",
+    "AUTHORITY_SUBSET_VIOLATION",
+    "OPERATOR_REPAIR_REQUESTED",
+    "OPERATOR_REPAIR_SUCCEEDED",
+    "OPERATOR_REPAIR_FAILED",
+}
+
 
 def get_token(retries: int = 12, delay: float = 5.0) -> str:
     for _attempt in range(retries):
@@ -538,6 +549,167 @@ def check_nodalpath_mpls(token: str, perm: dict) -> dict:
     }
 
 
+def _active_ground_pair(token: str) -> tuple[str, str, str] | None:
+    resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token), timeout=10)
+    state = resp.json()
+    nodes = state.get("nodes", [])
+    links = state.get("links", [])
+    if isinstance(links, dict):
+        links = list(links.values())
+    gs_nodes = [n for n in nodes if n.get("node_id", "").startswith("gs-")]
+    for link in links:
+        if link.get("state") != "active":
+            continue
+        a = link.get("node_a", "")
+        b = link.get("node_b", "")
+        if a.startswith("gs-") and b.startswith("sat-"):
+            dst_ip = _derive_loopback_ip(b, gs_nodes)
+            if dst_ip:
+                return a, b, dst_ip
+        if a.startswith("sat-") and b.startswith("gs-"):
+            dst_ip = _derive_loopback_ip(a, gs_nodes)
+            if dst_ip:
+                return b, a, dst_ip
+    return None
+
+
+def _kubectl_exec(node_id: str, command: str, *, timeout: int = 20) -> dict:
+    import subprocess
+
+    result = subprocess.run(
+        f"{KUBECTL} exec -n nodalarc {node_id.lower()} -c frr -- {command}",
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        shell=True,
+    )
+    return {
+        "rc": result.returncode,
+        "stdout": result.stdout[-1000:],
+        "stderr": result.stderr[-1000:],
+    }
+
+
+def check_mbb_convergence_preconditions(token: str) -> dict:
+    pair = _active_ground_pair(token)
+    if pair is None:
+        return {"result": "FAIL", "reason": "No active ground pair for MBB probe"}
+    src, dst, dst_ip = pair
+    neigh = _kubectl_exec(src, "vtysh -c 'show isis neighbor'", timeout=20)
+    fib = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=20)
+    neighbor_up = neigh["rc"] == 0 and "Up" in neigh["stdout"]
+    fib_ready = fib["rc"] == 0 and dst_ip in fib["stdout"]
+    return {
+        "result": "PASS" if neighbor_up and fib_ready else "FAIL",
+        "src": src,
+        "dst": dst,
+        "dst_ip": dst_ip,
+        "isis_neighbor_up": neighbor_up,
+        "fib_ready": fib_ready,
+        "isis_stdout": neigh["stdout"],
+        "fib_stdout": fib["stdout"],
+    }
+
+
+def check_zero_loss_mbb_ping(token: str, *, count: int = 60, interval_s: float = 0.2) -> dict:
+    pair = _active_ground_pair(token)
+    if pair is None:
+        return {"result": "FAIL", "reason": "No active ground pair for zero-loss probe"}
+    src, dst, dst_ip = pair
+    ping = _kubectl_exec(src, f"ping -c {count} -i {interval_s} -W 1 {dst_ip}", timeout=90)
+    stats = ""
+    for line in ping["stdout"].splitlines():
+        if "packets transmitted" in line:
+            stats = line.strip()
+            break
+    zero_loss = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
+    return {
+        "result": "PASS" if zero_loss else "FAIL",
+        "src": src,
+        "dst": dst,
+        "dst_ip": dst_ip,
+        "count": count,
+        "interval_s": interval_s,
+        "stats": stats,
+        "stdout": ping["stdout"],
+        "stderr": ping["stderr"],
+    }
+
+
+def check_mbb_lifecycle_and_ops(token: str, *, wait_s: int = 180) -> dict:
+    deadline = time.monotonic() + wait_s
+    last_events: list[dict] = []
+    while time.monotonic() < deadline:
+        resp = requests.get(
+            f"{BASE_URL}/api/v1/ops/events?limit=500", headers=headers(token), timeout=10
+        )
+        events = resp.json()
+        last_events = events
+        lifecycle = [
+            event
+            for event in events
+            if event.get("source") == "ome" and event.get("code") == "MBB_TEARDOWN_TERMINAL"
+        ]
+        completed = [
+            event
+            for event in lifecycle
+            if (event.get("details") or {}).get("terminal_outcome") == "teardown_completed"
+        ]
+        bad = [event for event in events if event.get("code") in MBB_BAD_OPS_CODES]
+        if completed or bad:
+            return {
+                "result": "PASS" if completed and not bad else "FAIL",
+                "lifecycle_count": len(lifecycle),
+                "completed_count": len(completed),
+                "bad_ops_codes": [event.get("code") for event in bad],
+                "last_lifecycle": lifecycle[-3:],
+            }
+        time.sleep(5)
+    return {
+        "result": "FAIL",
+        "reason": f"No completed MBB lifecycle event within {wait_s}s",
+        "event_count": len(last_events),
+    }
+
+
+def run_mbb_acceptance() -> dict:
+    evidence: dict = {
+        "id": "C-J",
+        "label": "zero-loss-mbb-acceptance",
+        "session_file": str(MBB_ACCEPTANCE_SESSION),
+        "started_at": datetime.now(UTC).isoformat(),
+    }
+    if not MBB_ACCEPTANCE_SESSION.exists():
+        return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
+    try:
+        token = get_token()
+        yaml_str = MBB_ACCEPTANCE_SESSION.read_text()
+        evidence["yaml_length"] = len(yaml_str)
+        evidence["deploy_response"] = deploy_session(token, yaml_str)
+        ready_result = wait_for_ready(token, timeout=600)
+        evidence["ready_result"] = ready_result
+        if ready_result.get("phase") != "Ready":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Did not reach Ready: {ready_result}"
+            return evidence
+
+        time.sleep(30)
+        token = get_token()
+        evidence["convergence_preconditions"] = check_mbb_convergence_preconditions(token)
+        evidence["zero_loss_ping"] = check_zero_loss_mbb_ping(token)
+        evidence["lifecycle_and_ops"] = check_mbb_lifecycle_and_ops(token)
+        passed = all(
+            evidence[key].get("result") == "PASS"
+            for key in ("convergence_preconditions", "zero_loss_ping", "lifecycle_and_ops")
+        )
+        evidence["result"] = "PASS" if passed else "FAIL"
+    except Exception as exc:
+        evidence["result"] = "ERROR"
+        evidence["error"] = str(exc)
+    evidence["finished_at"] = datetime.now(UTC).isoformat()
+    return evidence
+
+
 def run_permutation(perm: dict) -> dict:
     """Run a single E2E permutation."""
     perm_id = perm["id"]
@@ -703,6 +875,16 @@ def main():
             else:
                 failed += 1
 
+        if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":
+            evidence = run_mbb_acceptance()
+            results.append(evidence)
+            evidence_file = evidence_dir / "phase6-cj-zero-loss-mbb.json"
+            evidence_file.write_text(json.dumps(evidence, indent=2))
+            if evidence["result"] == "PASS":
+                passed += 1
+            else:
+                failed += 1
+
         # Write summary
         run_end = datetime.now(UTC)
         duration_s = (run_end - run_start).total_seconds()
@@ -711,7 +893,7 @@ def main():
             "start_time": run_start.isoformat(),
             "end_time": run_end.isoformat(),
             "duration_s": round(duration_s, 1),
-            "total": len(MATRIX),
+            "total": len(results),
             "passed": passed,
             "failed": failed,
             "xfailed": xfailed,
@@ -736,7 +918,7 @@ def main():
         print("=" * 60)
         xfail_str = f", {xfailed} xfail" if xfailed else ""
         print(
-            f"E2E Matrix: {passed}/{len(MATRIX)} passed, {failed}/{len(MATRIX)} failed{xfail_str}"
+            f"E2E Matrix: {passed}/{len(results)} passed, {failed}/{len(results)} failed{xfail_str}"
         )
         print(f"Duration: {duration_s:.0f}s")
         print(f"Run token: {run_token}")

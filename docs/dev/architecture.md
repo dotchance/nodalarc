@@ -123,11 +123,19 @@ smuggle state through side channels.
 | Stream | Contents | Retention model |
 | --- | --- | --- |
 | `NODALARC_OME` | VisibilityEvent, ClockTick, HeartbeatTick | Limits-based history for two orbital periods |
-| `NODALARC_LINKS` | LinkUp, LinkDown, LatencyUpdate, LinkStateSnapshot | Latest snapshot per subject, bounded event history |
+| `NODALARC_LINKS` | LinkUp, LinkDown, LatencyUpdate, LinkStateSnapshot, GroundLinkDecisionSnapshot | Replace-not-merge latest state per subject; bounded link-event history |
 | `NODALARC_SESSION` | SessionEphemeris, PlaybackState | Latest value per subject |
 | `NODALARC_MI` | Measurement and instrumentation events | Bounded event history |
-| `NODALARC_OPS` | Operational events | Four-hour transient history |
+| `NODALARC_OPS` | Operational events, including OME MBB terminal lifecycle events | Four-hour transient transport; terminal lifecycle events that matter after the run are persisted by VS-API into SQLite/session artifacts |
 | `NODALARC_DEBUG` | On-demand debug events | Five-minute transient history |
+
+
+MBB lifecycle terminal facts do not live only in `NODALARC_LINKS`.
+`LinkStateSnapshot` and `GroundLinkDecisionSnapshot` are current-state,
+replace-not-merge subjects; later ticks overwrite them. When an MBB teardown
+completes, aborts, or is invalidated by a seek, the OME publishes a typed
+`MBB_TEARDOWN_TERMINAL` `OpsEvent` on `NODALARC_OPS`, and VS-API persists it
+into `ome_lifecycle_events` for post-run analysis.
 
 Core NATS request/reply is used where persistence would be wrong:
 

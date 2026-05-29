@@ -370,6 +370,58 @@ def query_nearest_snapshot(conn: sqlite3.Connection, sim_time: str) -> dict | No
 
 
 # ---------------------------------------------------------------------------
+# OME lifecycle events
+# ---------------------------------------------------------------------------
+
+
+def insert_ome_lifecycle_event(conn: sqlite3.Connection, event: dict) -> int | None:
+    """Persist one OME terminal lifecycle OpsEvent for post-run analysis."""
+    if event.get("source") != "ome" or event.get("code") != "MBB_TEARDOWN_TERMINAL":
+        return None
+    details = event.get("details") or {}
+    outcome = details.get("terminal_outcome")
+    if not outcome:
+        return None
+    cur = conn.execute(
+        """INSERT INTO ome_lifecycle_events (
+               session_id, epoch_id, snapshot_seq, allocator_step, sim_time, event_time,
+               gs_id, old_pair, successor_pair, terminal_outcome, event_code, event_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            event.get("session_id", ""),
+            int(details.get("epoch_id", 0)),
+            details.get("snapshot_seq"),
+            int(details.get("allocator_step", 0)),
+            details.get("master_sim_time", ""),
+            event.get("timestamp", ""),
+            details.get("gs_id", ""),
+            json.dumps(details.get("old_pair") or [], sort_keys=True),
+            json.dumps(details.get("successor_pair") or [], sort_keys=True),
+            outcome,
+            event.get("code", ""),
+            json.dumps(event, sort_keys=True),
+        ),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def query_ome_lifecycle_events(
+    conn: sqlite3.Connection, session_id: str | None = None
+) -> list[dict]:
+    """Return persisted OME lifecycle events in emission order."""
+    conn.row_factory = sqlite3.Row
+    if session_id:
+        rows = conn.execute(
+            "SELECT * FROM ome_lifecycle_events WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM ome_lifecycle_events ORDER BY id").fetchall()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
 # Operator interventions
 # ---------------------------------------------------------------------------
 

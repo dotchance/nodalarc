@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 from nodalarc.models.addressing import NeighborAssignment
 from ome.isl_engine import (
     IslFeasibilityResult,
@@ -45,6 +46,42 @@ def _constraints(role: str, tracking: float = 4.0) -> IslTerminalConstraints:
         field_of_regard_deg=360.0,
         terminal_type="rf",
     )
+
+
+def test_isl_feasibility_fails_loud_when_node_state_missing():
+    with pytest.raises(ValueError, match="missing propagated state.*sat-A"):
+        evaluate_isl_feasibility(
+            node_order=["sat-A", "sat-B"],
+            sat_states={"sat-B": _state("sat-B", Vec3(7121.0, 0.0, 0.0), Vec3(0.0, 7.59, 0.0))},
+            by_node={
+                "sat-A": [_assignment("isl0", "sat-B", "intra_plane_isl", 1)],
+                "sat-B": [_assignment("isl0", "sat-A", "intra_plane_isl", 1)],
+            },
+            terminal_constraints={
+                "sat-A": {"isl0": _constraints("intra-plane")},
+                "sat-B": {"isl0": _constraints("intra-plane")},
+            },
+            polar_seam_enabled=False,
+            latitude_threshold_deg=70.0,
+        )
+
+
+def test_isl_feasibility_fails_loud_when_peer_state_missing():
+    with pytest.raises(ValueError, match="missing propagated state.*sat-B.*sat-A.*sat-B"):
+        evaluate_isl_feasibility(
+            node_order=["sat-A"],
+            sat_states={"sat-A": _state("sat-A", Vec3(6921.0, 0.0, 0.0), Vec3(0.0, 7.59, 0.0))},
+            by_node={
+                "sat-A": [_assignment("isl0", "sat-B", "intra_plane_isl", 1)],
+                "sat-B": [_assignment("isl0", "sat-A", "intra_plane_isl", 1)],
+            },
+            terminal_constraints={
+                "sat-A": {"isl0": _constraints("intra-plane")},
+                "sat-B": {"isl0": _constraints("intra-plane")},
+            },
+            polar_seam_enabled=False,
+            latitude_threshold_deg=70.0,
+        )
 
 
 def test_cross_plane_feasibility_applies_cross_plane_tracking_limit():

@@ -6,7 +6,7 @@ StateSnapshot is the complete payload sent over WebSocket at ~1Hz.
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -229,4 +229,5 @@ class StateSnapshot(BaseModel):
     playback_speed: float = 1.0
     stale: bool = False
     actuation_notices: list[ActuationNotice] = Field(default_factory=list)
+    ome_lifecycle_notices: list[dict[str, Any]] = Field(default_factory=list)
     actuation_health: ActuationHealth | None = None

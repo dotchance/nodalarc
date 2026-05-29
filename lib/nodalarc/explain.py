@@ -246,19 +246,25 @@ def compose_gs_explanation(
     actuation_pass: bool | None
 
     if scheduled:
-        # OME wants this pair up. Connected if proven up; diverged otherwise.
+        # OME wants this pair up. The per-GS actuation ROSTER (recoverable Scheduler
+        # truth) decides clean vs fault — NOT the OME link snapshot, which is OME's
+        # model of forwarding state, not kernel proof. A GS the Scheduler reports
+        # dirty/blocked is faulted even when the snapshot shows the pair up; otherwise
+        # an unactuated link would mask as connected — the divergence this UX exists to
+        # reveal. (Per-pair recoverable actual-kernel state is a separate follow-on; the
+        # roster already catches the dirty/blocked masking case.)
         focal = scheduled[0]
         kernel_up = _ordered_pair(focal.pair) in active_pairs
         ome_desired = True
         viable_withheld = False
-        if kernel_up:
-            binding_gate = None
-            binding_reason = None
-            actuation_pass = True
-        else:
+        if actuation_state in ("kernel_dirty", "actuation_blocked") or not kernel_up:
             binding_gate = "actuation_proof"
             binding_reason = actuation_state
             actuation_pass = False
+        else:
+            binding_gate = None
+            binding_reason = None
+            actuation_pass = True
     elif withheld:
         # Connectivity was available but policy/capacity withheld it (the message to surface).
         focal = withheld[0]
@@ -270,8 +276,14 @@ def compose_gs_explanation(
         kernel_up = _ordered_pair(focal.pair) in active_pairs
         actuation_pass = None
     else:
-        # Nothing viable. Lead with the rejected pair closest to coming into view.
-        focal = max(decisions, key=lambda d: d.elevation_deg)
+        # Nothing viable. Lead with the rejected pair closest to connecting — the one
+        # that got FURTHEST through the funnel before stopping (binding-gate depth),
+        # tie-broken by elevation. Raw elevation alone is wrong: a high satellite can be
+        # badly range/FoR-bound while a lower one is a degree under its binding gate.
+        def _reject_depth(d: GroundVisibilityDecisionWire) -> int:
+            return _GATE_INDEX.get(_REJECT_GATE.get(d.reject_reason, "line_of_sight"), 0)
+
+        focal = max(decisions, key=lambda d: (_reject_depth(d), d.elevation_deg))
         binding_gate = _REJECT_GATE.get(focal.reject_reason)
         binding_reason = focal.reject_reason
         viable_withheld = False

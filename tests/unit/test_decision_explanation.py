@@ -227,3 +227,58 @@ def test_no_decision_for_gs_returns_none():
         )
         is None
     )
+
+
+def test_dirty_roster_overrides_snapshot_up():
+    # The OME link snapshot shows the pair up, but the Scheduler roster reports the GS
+    # kernel-dirty. The card must read faulted, not connected — the snapshot is OME's
+    # model, the roster is the actuation truth. Guards the masking bug.
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-P00S03", visible=True, range_km=960.0, elevation_deg=31.6, reject_reason="ok"
+            )
+        ]
+    )
+    facts = compose_gs_explanation(
+        gs_id=GS,
+        snapshot=snap,
+        active_pairs=frozenset({(GS, "sat-P00S03")}),  # OME snapshot: up
+        actuation_state_by_gs={GS: "kernel_dirty"},  # Scheduler roster: dirty
+    )
+    assert facts is not None
+    assert facts.binding_gate == "actuation_proof"
+    assert facts.actuation.state == "kernel_dirty"
+    assert _gate(facts, "actuation_proof").state == "fail"
+
+
+def test_closest_rejected_ranks_by_funnel_depth_not_raw_elevation():
+    # sat-hi: higher elevation but range-bound (stopped at the range gate).
+    # sat-lo: lower elevation but elevation-bound (got past range, stopped at elevation).
+    # The pair that got further through the funnel is closest to connecting, so sat-lo
+    # leads despite sat-hi's higher elevation.
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-hi",
+                visible=False,
+                range_km=2500.0,
+                elevation_deg=40.0,
+                reject_reason="range_exceeded",
+                rejecting_endpoint="both",
+            ),
+            _decision(
+                "sat-lo",
+                visible=False,
+                range_km=1200.0,
+                elevation_deg=20.0,
+                reject_reason="elevation_below_min",
+            ),
+        ]
+    )
+    facts = compose_gs_explanation(
+        gs_id=GS, snapshot=snap, active_pairs=frozenset(), actuation_state_by_gs={}
+    )
+    assert facts is not None
+    assert facts.pair == (GS, "sat-lo")
+    assert facts.binding_reason_code == "elevation_below_min"

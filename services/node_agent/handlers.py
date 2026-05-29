@@ -237,6 +237,22 @@ def _publish_command_event(
 ) -> None:
     failed = [outcome for outcome in outcomes if not outcome.success]
     if not failed:
+        if operation == "SetLatency":
+            log.debug(
+                "SetLatency applied [operation_id=%s, entries=%d]",
+                envelope.operation_id,
+                len(outcomes),
+                extra={
+                    "code": "COMMAND_APPLIED",
+                    "details": {
+                        "operation_id": envelope.operation_id,
+                        "wiring_generation": envelope.wiring_generation,
+                        "command_type": operation,
+                        "entry_count": len(outcomes),
+                    },
+                },
+            )
+            return
         ops_events.publish(
             level="info",
             code="COMMAND_APPLIED",

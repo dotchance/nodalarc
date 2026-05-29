@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 from nodalarc.proto import node_agent_pb2
+from node_agent import ops_events
 from node_agent.command_contract import RuntimeFence
 from node_agent.handlers import (
     handle_batch_link_down,
@@ -308,11 +309,16 @@ class TestBatchLinkUp:
 
 
 class TestSetLatency:
-    def test_empty_request_succeeds(self):
+    def test_empty_request_succeeds_without_operator_ops_event(self, monkeypatch):
+        published = []
+        monkeypatch.setattr(ops_events, "publish", lambda **kwargs: published.append(kwargs))
+
         req = node_agent_pb2.SetLatencyRequest(envelope=_env("SetLatency", "test-empty-lat"))
         resp = handle_set_latency(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+
         assert resp.success is True
         assert resp.entries_updated == 0
+        assert published == []
 
     def test_nonexistent_pid_returns_error(self):
         req = node_agent_pb2.SetLatencyRequest(
@@ -329,3 +335,26 @@ class TestSetLatency:
         resp = handle_set_latency(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
         assert resp.success is False
         assert resp.entries_updated == 0
+
+    def test_failed_request_still_publishes_operator_ops_event(self, monkeypatch):
+        published = []
+        monkeypatch.setattr(ops_events, "publish", lambda **kwargs: published.append(kwargs))
+
+        req = node_agent_pb2.SetLatencyRequest(
+            envelope=_env("SetLatency", "test-bad-lat"),
+            entries=[
+                node_agent_pb2.LatencyEntry(
+                    node_id="sat-P00S00",
+                    interface_name="isl0",
+                    latency_ms=5.0,
+                    link_type=node_agent_pb2.LINK_TYPE_ISL,
+                ),
+            ],
+        )
+        resp = handle_set_latency(req, pid_map=EMPTY_PID_MAP, fence=FENCE)
+
+        assert resp.success is False
+        assert len(published) == 1
+        assert published[0]["level"] in {"warning", "critical"}
+        assert published[0]["code"] in {"COMMAND_FAILED", "DIRTY_KERNEL"}
+        assert published[0]["details"]["command_type"] == "SetLatency"

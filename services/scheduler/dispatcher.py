@@ -73,6 +73,7 @@ from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     STREAM_LINK_EVENTS,
     STREAM_OME_EVENTS,
+    actuation_state_subject,
     ground_link_decision_snapshot_subject,
     latency_update_subject,
     link_down_subject,
@@ -1205,6 +1206,21 @@ class Dispatcher:
             ops_event_subject(self._session_id, "scheduler", code.value),
             event.model_dump_json().encode(),
         )
+        # Per-GS actuation STATE is also published to a retained, replace-not-merge
+        # subject (MaxMsgsPerSubject=1 on NODALARC_LINKS) so VS-API recovers the full
+        # health roster via LAST_PER_SUBJECT on (re)subscribe. The ops event above is
+        # the append-only audit log; this is the recoverable current state. Only the
+        # per-GS state codes are retained — transient/halt codes stay log-only.
+        gs_id = details_dict.get("gs_id") if isinstance(details_dict, dict) else None
+        if gs_id and code in (
+            SchedulerOpsCode.ACTUATION_CLEAN,
+            SchedulerOpsCode.ACTUATION_BLOCKED,
+            SchedulerOpsCode.KERNEL_DIRTY,
+        ):
+            await js.publish(
+                actuation_state_subject(self._session_id, gs_id),
+                event.model_dump_json().encode(),
+            )
 
     async def _halt_dispatcher(
         self,

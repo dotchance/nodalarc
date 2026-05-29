@@ -143,6 +143,25 @@ def latency_update_subject(session_id: str) -> str:
     return f"nodalarc.links.{session_id}.latency"
 
 
+def actuation_state_subject(session_id: str, gs_id: str) -> str:
+    """Per-GS retained actuation state (latest only).
+
+    Lives under ``nodalarc.links.>`` so it rides the NODALARC_LINKS stream, where
+    MaxMsgsPerSubject=1 keeps only the latest message per subject — i.e. the
+    current actuation state per ground station, replace-not-merge. Distinct from
+    the append-only ops event log (ops_event_subject): the Scheduler publishes the
+    audit event there AND the current state here, so VS-API can recover the full
+    per-GS health roster via LAST_PER_SUBJECT on (re)subscribe instead of missing
+    the one-time startup roster.
+    """
+    return f"nodalarc.links.{session_id}.actuation.{gs_id}"
+
+
+def actuation_state_subscribe_subject(session_id: str) -> str:
+    """Wildcard for recovering every ground station's retained actuation state."""
+    return f"nodalarc.links.{session_id}.actuation.>"
+
+
 def session_ephemeris_subject(session_id: str) -> str:
     """Session ephemeris subject for a specific session."""
     return f"nodalarc.session.{session_id}.ephemeris"

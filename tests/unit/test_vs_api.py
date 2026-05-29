@@ -1467,6 +1467,31 @@ class TestActuationHealth:
             "kernel_dirty",
         }
 
+    def test_retained_actuation_state_recovers_roster_without_log_side_effects(self):
+        # Fix for the empty /ops/health: per-GS actuation state is recovered from the
+        # retained NODALARC_LINKS subject (LAST_PER_SUBJECT), so the roster rebuilds on
+        # subscribe even though the Scheduler's one-time startup clean roster predates
+        # the VS-API ops (NEW) subscription. Recovery must not touch the event log.
+        import asyncio
+        from unittest.mock import MagicMock
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        msg = MagicMock()
+        msg.data = json.dumps(
+            self._event(instance="sched-1", gs_id="gs-den", code="ACTUATION_CLEAN", after="clean")
+        ).encode()
+
+        asyncio.run(ctx._on_actuation_state(msg))
+
+        health = ctx.build_actuation_health()
+        inst = health["scheduler_instances"][0]
+        assert inst["scheduler_instance_id"] == "sched-1"
+        assert inst["status"] == "clean"
+        assert [gs["gs_id"] for gs in inst["ground_stations"]] == ["gs-den"]
+        # Retained-state recovery must not append to the append-only ops event log.
+        assert len(ctx.session_ops_events) == 0
+
 
 class TestOmeLifecycleNotices:
     def test_ome_lifecycle_terminal_event_becomes_operator_notice(self):

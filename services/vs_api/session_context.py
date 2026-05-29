@@ -52,6 +52,7 @@ from nodalarc.nats_channels import (
     STREAM_OME_EVENTS,
     STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
+    actuation_state_subscribe_subject,
     almanac_event_subject,
     ground_link_decision_snapshot_subject,
     latency_update_subject,
@@ -358,6 +359,20 @@ class SessionContext:
                     cb=self._on_session_ops_event,
                 )
             )
+            # Per-GS actuation STATE on NODALARC_LINKS (MaxMsgsPerSubject=1), recovered
+            # via LAST_PER_SUBJECT so the full health roster is rebuilt on (re)subscribe.
+            # The ops subscription above (NEW) is the live audit log and misses the
+            # Scheduler's one-time startup clean roster; this retained subject closes
+            # that recovery gap. Health roster only — no event-log/persist side effects.
+            self._subscriptions.append(
+                await js.subscribe(
+                    actuation_state_subscribe_subject(sid),
+                    stream=STREAM_LINK_EVENTS,
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                    cb=self._on_actuation_state,
+                )
+            )
 
             log.info(
                 "SessionContext subscribed: session_id=%s, %d subjects, policy=%s",
@@ -654,6 +669,19 @@ class SessionContext:
             self._update_ome_lifecycle_notice(data)
         self._persist_operator_intervention(data)
         self._persist_ome_lifecycle_event(data)
+
+    async def _on_actuation_state(self, msg) -> None:
+        """Retained per-GS actuation state (LAST_PER_SUBJECT recovery).
+
+        Populates the health roster ONLY. The append-only event log, operator-
+        intervention persistence, and lifecycle notices are owned by
+        _on_session_ops_event on the ops stream; replaying retained state must not
+        re-append log entries or re-persist interventions. _update_actuation_notice
+        is idempotent, so a live event arriving on both subjects is harmless.
+        """
+        data = json.loads(msg.data)
+        with self.state_lock:
+            self._update_actuation_notice(data)
 
     def _update_actuation_notice(self, event: dict) -> None:
         if event.get("source") != "scheduler":

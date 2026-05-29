@@ -8,7 +8,7 @@ StateSnapshot is the complete payload sent over WebSocket at ~1Hz.
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class NodeState(BaseModel):
@@ -133,6 +133,60 @@ class RecentEvent(BaseModel):
     summary: str
 
 
+class ActuationNotice(BaseModel):
+    """User-visible Scheduler actuation problem for one ground station."""
+
+    model_config = ConfigDict(frozen=True)
+
+    gs_id: str
+    actuation_state: str
+    reason_code: str
+    message: str
+    since: str | None = None
+    blocking_new_ground_link_up: bool
+    affected_pairs: list[list[str]] = Field(default_factory=list)
+    desired_pairs_for_gs: list[list[str]] = Field(default_factory=list)
+    actual_pairs_for_gs: list[list[str]] = Field(default_factory=list)
+    ome_visible_scheduled_pairs_for_gs: list[list[str]] = Field(default_factory=list)
+    recovery_status: dict = Field(default_factory=dict)
+    last_event: dict = Field(default_factory=dict)
+
+
+class ActuationHealthGroundStation(BaseModel):
+    """Latest actuation state for one GS on one Scheduler instance."""
+
+    model_config = ConfigDict(frozen=True)
+
+    gs_id: str
+    actuation_state: str
+    since: str | None = None
+    reason_code: str | None = None
+    blocking_new_ground_link_up: bool
+    recovery_status: dict = Field(default_factory=dict)
+    last_event: dict = Field(default_factory=dict)
+
+
+class ActuationHealthInstance(BaseModel):
+    """Aggregated actuation health for one Scheduler instance."""
+
+    model_config = ConfigDict(frozen=True)
+
+    scheduler_instance_id: str
+    hostname: str
+    status: str
+    ground_stations: list[ActuationHealthGroundStation] = Field(default_factory=list)
+
+
+class ActuationHealth(BaseModel):
+    """Session-level Scheduler actuation health."""
+
+    model_config = ConfigDict(frozen=True)
+
+    session_id: str
+    wiring_generation: str
+    scheduler_instances: list[ActuationHealthInstance] = Field(default_factory=list)
+
+
 class AlmanacState(BaseModel):
     """NodalPath almanac push tracking state."""
 
@@ -174,3 +228,5 @@ class StateSnapshot(BaseModel):
     playback_paused: bool = False
     playback_speed: float = 1.0
     stale: bool = False
+    actuation_notices: list[ActuationNotice] = Field(default_factory=list)
+    actuation_health: ActuationHealth | None = None

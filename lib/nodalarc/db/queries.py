@@ -367,3 +367,55 @@ def query_nearest_snapshot(conn: sqlite3.Connection, sim_time: str) -> dict | No
     ).fetchone()["d"]
 
     return _to_dict(before) if dist_before <= dist_after else _to_dict(after)
+
+
+# ---------------------------------------------------------------------------
+# Operator interventions
+# ---------------------------------------------------------------------------
+
+
+def insert_operator_intervention_event(conn: sqlite3.Connection, event: dict) -> int | None:
+    """Append one durable causal event for an operator intervention.
+
+    Operator repair is deliberately not invisible self-healing. Later analysis
+    must be able to reconstruct the full chain: request, authority snapshot,
+    repair mutations, verification, and final state. Therefore this is
+    append-only and also marks the session as intervened in metadata.
+    """
+    details = event.get("details") or {}
+    intervention_id = details.get("intervention_id")
+    if not intervention_id:
+        return None
+    event_time = event.get("timestamp") or ""
+    status = event.get("code") or "UNKNOWN"
+    cur = conn.execute(
+        """INSERT INTO operator_interventions (
+               intervention_id, session_id, wiring_generation, scheduler_instance_id,
+               hostname, gs_id, status, reason, event_time, event_code, event_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            intervention_id,
+            event.get("session_id", ""),
+            details.get("wiring_generation", ""),
+            details.get("scheduler_instance_id", ""),
+            event.get("hostname", ""),
+            details.get("gs_id", ""),
+            status,
+            details.get("reason"),
+            event_time,
+            status,
+            json.dumps(event, sort_keys=True),
+        ),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO session_metadata (key, value) VALUES (?, ?)",
+        ("operator_intervened", "true"),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def upsert_operator_intervention_event(conn: sqlite3.Connection, event: dict) -> int | None:
+    """Backward-compatible alias for the append-only intervention writer."""
+    return insert_operator_intervention_event(conn, event)
+    conn.commit()

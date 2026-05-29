@@ -163,6 +163,11 @@ def scenario_inject_subject(session_id: str) -> str:
     return f"nodalarc.scheduler.{session_id}.scenario"
 
 
+def scheduler_repair_subject(session_id: str) -> str:
+    """Explicit operator repair command subject for one Scheduler session."""
+    return f"nodalarc.scheduler.{session_id}.repair"
+
+
 def convergence_result_subject(session_id: str) -> str:
     """MI convergence result subject for a specific session."""
     return f"nodalarc.mi.{session_id}.convergence"
@@ -210,6 +215,7 @@ SUBJECT_LATENCY_UPDATE = latency_update_subject(_DEFAULT_SESSION_ID)
 SUBJECT_SESSION_EPHEMERIS = session_ephemeris_subject(_DEFAULT_SESSION_ID)
 SUBJECT_PLAYBACK_STATE = playback_state_subject(_DEFAULT_SESSION_ID)
 SUBJECT_SCHEDULING_CHECKPOINT = scheduling_checkpoint_subject(_DEFAULT_SESSION_ID)
+SUBJECT_SCHEDULER_REPAIR = scheduler_repair_subject(_DEFAULT_SESSION_ID)
 
 # MI publications (JetStream — retained)
 SUBJECT_CONVERGENCE_RESULT = convergence_result_subject(_DEFAULT_SESSION_ID)

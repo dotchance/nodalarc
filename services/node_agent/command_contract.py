@@ -16,6 +16,7 @@ from nodalarc.proto import node_agent_pb2
 KIND_BATCH_LINK_DOWN = "BatchLinkDown"
 KIND_BATCH_LINK_UP = "BatchLinkUp"
 KIND_SET_LATENCY = "SetLatency"
+KIND_KERNEL_INVENTORY = "KernelInventory"
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,46 @@ def validate_set_latency_request(request, *, fence: RuntimeFence) -> None:
         if entry.link_type == node_agent_pb2.LINK_TYPE_GROUND:
             _require_nonempty(entry.gs_id, "gs_id")
             _require_nonempty(entry.sat_id, "sat_id")
+
+
+def validate_kernel_inventory_request(request, *, fence: RuntimeFence) -> None:
+    validate_envelope(request, expected_kind=KIND_KERNEL_INVENTORY, fence=fence)
+    _require_nonempty(request.gs_id, "gs_id")
+    for entry in request.entries:
+        _require_nonempty(entry.node_id, "node_id")
+        _require_nonempty(entry.interface_name, "interface_name")
+        _validate_link_type(entry.link_type)
+        _validate_locality(entry.locality)
+        if entry.link_type != node_agent_pb2.LINK_TYPE_GROUND:
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                "KernelInventory in Phase 5 supports ground entries only",
+            )
+        _require_nonempty(entry.gs_id, "gs_id")
+        _require_nonempty(entry.sat_id, "sat_id")
+        _require_nonempty(entry.peer_node_id, "peer_node_id")
+        _require_nonempty(entry.peer_interface_name, "peer_interface_name")
+        if entry.gs_id != request.gs_id:
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                f"entry gs_id {entry.gs_id!r} does not match request gs_id {request.gs_id!r}",
+            )
+        if entry.expected_admin_up:
+            if entry.latency_ms < 0:
+                raise CommandContractError(
+                    node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                    "latency_ms must be >= 0 for expected-up verification",
+                )
+            if entry.bandwidth_mbps <= 0:
+                raise CommandContractError(
+                    node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                    "bandwidth_mbps must be > 0 for expected-up verification",
+                )
+        if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE and entry.vni <= 0:
+            raise CommandContractError(
+                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                "KernelInventory CROSS_NODE entry requires vni > 0",
+            )
 
 
 def envelope(

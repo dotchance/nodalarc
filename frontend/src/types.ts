@@ -109,6 +109,45 @@ export interface OpsEvent {
   details?: Record<string, unknown> | null;
 }
 
+
+export interface ActuationNotice {
+  gs_id: string;
+  actuation_state: string;
+  reason_code: string;
+  message: string;
+  since: string | null;
+  blocking_new_ground_link_up: boolean;
+  affected_pairs: string[][];
+  desired_pairs_for_gs: string[][];
+  actual_pairs_for_gs: string[][];
+  ome_visible_scheduled_pairs_for_gs: string[][];
+  recovery_status: Record<string, unknown>;
+  last_event: Record<string, unknown>;
+}
+
+export interface ActuationHealthGroundStation {
+  gs_id: string;
+  actuation_state: string;
+  since: string | null;
+  reason_code: string | null;
+  blocking_new_ground_link_up: boolean;
+  recovery_status: Record<string, unknown>;
+  last_event: Record<string, unknown>;
+}
+
+export interface ActuationHealthInstance {
+  scheduler_instance_id: string;
+  hostname: string;
+  status: string;
+  ground_stations: ActuationHealthGroundStation[];
+}
+
+export interface ActuationHealth {
+  session_id: string;
+  wiring_generation: string;
+  scheduler_instances: ActuationHealthInstance[];
+}
+
 export interface AlmanacState {
   last_topology_state_id: string | null;
   last_push_sim_time: string | null;
@@ -138,6 +177,8 @@ export interface StateSnapshot {
   playback_paused: boolean;
   playback_speed: number;
   stale: boolean;
+  actuation_notices?: ActuationNotice[];
+  actuation_health?: ActuationHealth | null;
   ops_events?: OpsEvent[];
   debug_events?: OpsEvent[];
   debug_sources?: string[];

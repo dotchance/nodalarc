@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 import threading
 import time as _time
 from collections import deque
@@ -35,6 +36,7 @@ from typing import Literal
 
 import nats
 import yaml
+from nodalarc.db.queries import insert_operator_intervention_event
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
@@ -149,6 +151,8 @@ class SessionContext:
         self.almanac: AlmanacState = AlmanacState()
         self.continuous_tracer = None
         self.session_ops_events: deque = deque(maxlen=500)
+        self.actuation_notices_by_key: dict[tuple[str, str], dict] = {}
+        self.actuation_latest_by_gs: dict[tuple[str, str], dict] = {}
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
         self._ready = asyncio.Event()
@@ -643,7 +647,116 @@ class SessionContext:
 
     async def _on_session_ops_event(self, msg) -> None:
         data = json.loads(msg.data)
-        self.session_ops_events.append(data)
+        with self.state_lock:
+            self.session_ops_events.append(data)
+            self._update_actuation_notice(data)
+        self._persist_operator_intervention(data)
+
+    def _update_actuation_notice(self, event: dict) -> None:
+        if event.get("source") != "scheduler":
+            return
+        details = event.get("details") or {}
+        gs_id = details.get("gs_id")
+        instance_id = details.get("scheduler_instance_id")
+        if not gs_id or not instance_id:
+            return
+        after = details.get("actuation_state_after") or "unknown"
+        key = (instance_id, gs_id)
+        generation = details.get("wiring_generation")
+        if event.get("code") == "ACTUATION_CLEAN":
+            # Single Scheduler owner per session. A startup clean roster from a
+            # new instance replaces stale per-GS health from a dead instance.
+            for old_key, old_event in list(self.actuation_latest_by_gs.items()):
+                old_instance, old_gs = old_key
+                old_generation = (old_event.get("details") or {}).get("wiring_generation")
+                if old_gs == gs_id and old_instance != instance_id and old_generation == generation:
+                    self.actuation_latest_by_gs.pop(old_key, None)
+                    self.actuation_notices_by_key.pop(old_key, None)
+        self.actuation_latest_by_gs[key] = event
+        if after == "clean" or event.get("code") == "ACTUATION_CLEAN":
+            self.actuation_notices_by_key.pop(key, None)
+            return
+        recovery = details.get("recovery_status") or {}
+        notice = {
+            "gs_id": gs_id,
+            "actuation_state": after,
+            "reason_code": event.get("code", ""),
+            "message": event.get("message", ""),
+            "since": event.get("timestamp"),
+            "blocking_new_ground_link_up": after != "clean",
+            "affected_pairs": details.get("affected_pairs", []),
+            "desired_pairs_for_gs": details.get("desired_pairs_for_gs", []),
+            "actual_pairs_for_gs": details.get("actual_pairs_for_gs", []),
+            "ome_visible_scheduled_pairs_for_gs": details.get(
+                "ome_visible_scheduled_pairs_for_gs", []
+            ),
+            "recovery_status": recovery,
+            "last_event": event,
+        }
+        self.actuation_notices_by_key[key] = notice
+
+    def _persist_operator_intervention(self, event: dict) -> None:
+        details = event.get("details") or {}
+        if not details.get("intervention_id") or not self.db_path:
+            return
+        try:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                insert_operator_intervention_event(conn, event)
+            finally:
+                conn.close()
+        except Exception as exc:
+            log.error("Failed to persist operator intervention event: %s", exc)
+
+    def build_actuation_health(self) -> dict:
+        by_instance: dict[str, dict] = {}
+        latest_items = list(self.actuation_latest_by_gs.items())
+        for (instance_id, gs_id), event in latest_items:
+            details = event.get("details") or {}
+            hostname = details.get("hostname") or event.get("hostname", "")
+            state = details.get("actuation_state_after") or "unknown"
+            inst = by_instance.setdefault(
+                instance_id,
+                {
+                    "scheduler_instance_id": instance_id,
+                    "hostname": hostname,
+                    "status": "clean",
+                    "ground_stations": [],
+                },
+            )
+            inst["ground_stations"].append(
+                {
+                    "gs_id": gs_id,
+                    "actuation_state": state,
+                    "since": event.get("timestamp"),
+                    "reason_code": event.get("code"),
+                    "blocking_new_ground_link_up": state != "clean",
+                    "recovery_status": details.get("recovery_status") or {},
+                    "last_event": event,
+                }
+            )
+        for inst in by_instance.values():
+            states = {gs["actuation_state"] for gs in inst["ground_stations"]}
+            if "kernel_dirty" in states:
+                inst["status"] = "dirty"
+            elif "actuation_blocked" in states:
+                inst["status"] = "degraded"
+            elif "unknown" in states:
+                inst["status"] = "unknown"
+            else:
+                inst["status"] = "clean"
+            inst["ground_stations"].sort(key=lambda item: item["gs_id"])
+        latest_events = [event for _key, event in latest_items]
+        latest_events.sort(key=lambda item: item.get("timestamp", ""))
+        latest = latest_events[-1] if latest_events else {}
+        details = latest.get("details") or {}
+        return {
+            "session_id": self.session_id,
+            "wiring_generation": details.get("wiring_generation", ""),
+            "scheduler_instances": sorted(
+                by_instance.values(), key=lambda item: item["scheduler_instance_id"]
+            ),
+        }
 
     # ------------------------------------------------------------------
     # Internal helpers

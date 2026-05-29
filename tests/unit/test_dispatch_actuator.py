@@ -173,7 +173,7 @@ def test_send_batch_up_publishes_link_up_only_after_all_interface_acks():
     pool = _Pool()
     js = _Js()
 
-    added = asyncio.run(
+    result = asyncio.run(
         send_batch_up(
             pairs={PAIR},
             desired=_desired(),
@@ -192,7 +192,8 @@ def test_send_batch_up_publishes_link_up_only_after_all_interface_acks():
         )
     )
 
-    assert added == {PAIR}
+    assert result.succeeded_pairs == {PAIR}
+    assert result.failed_pairs == set()
     assert len(js.published) == 1
     subject, event = js.published[0]
     assert subject == "links.up"
@@ -208,7 +209,7 @@ def test_send_batch_up_requires_every_interface_ack_for_pair_success():
     pool = _Pool(fail_node="sat-b")
     js = _Js()
 
-    added = asyncio.run(
+    result = asyncio.run(
         send_batch_up(
             pairs={PAIR},
             desired=_desired(),
@@ -227,7 +228,8 @@ def test_send_batch_up_requires_every_interface_ack_for_pair_success():
         )
     )
 
-    assert added == set()
+    assert result.succeeded_pairs == set()
+    assert result.failed_pairs == {PAIR}
     assert js.published == []
 
 
@@ -237,7 +239,7 @@ def test_send_batch_up_chunks_large_single_agent_batches():
     pool = _Pool()
     js = _Js()
 
-    added = asyncio.run(
+    result = asyncio.run(
         send_batch_up(
             pairs=set(desired),
             desired=desired,
@@ -257,7 +259,8 @@ def test_send_batch_up_chunks_large_single_agent_batches():
     )
 
     requests = pool.stubs["agent-one"].requests
-    assert added == set(desired)
+    assert result.succeeded_pairs == set(desired)
+    assert result.failed_pairs == set()
     assert len(requests) == 2
     assert all(len(req.interfaces) <= MAX_NODE_AGENT_INTERFACES_PER_COMMAND for req in requests)
     assert requests[0].envelope.operation_id.endswith("-part001of002")
@@ -283,7 +286,7 @@ def test_ground_latency_update_updates_both_local_shaped_interfaces():
     pool = _Pool()
     js = _Js()
 
-    updated = asyncio.run(
+    result = asyncio.run(
         send_authoritative_latency_updates(
             pairs={pair},
             desired=desired,
@@ -301,7 +304,8 @@ def test_ground_latency_update_updates_both_local_shaped_interfaces():
         )
     )
 
-    assert updated == {pair}
+    assert result.succeeded_pairs == {pair}
+    assert result.failed_pairs == set()
     stub = pool.stubs["agent-sat-a"]
     req = stub.requests[0]
     assert req.envelope.session_id == SESSION_ID

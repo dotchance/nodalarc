@@ -189,3 +189,49 @@ message SetLatencyResponse {
   NodeAgentErrorCode error_code = 5;
   bool dirty_kernel = 6;
 }
+
+// --- KernelInventory (read-only verification) ---
+
+message KernelInventoryEntry {
+  string node_id = 1;
+  string interface_name = 2;
+  LinkType link_type = 3;
+  string gs_id = 4;
+  string sat_id = 5;
+  string peer_node_id = 6;
+  string peer_interface_name = 7;
+  Locality locality = 8;
+  int32 vni = 9;
+  double latency_ms = 10;
+  double bandwidth_mbps = 11;
+  bool expected_admin_up = 12;
+}
+
+message KernelInventoryRequest {
+  CommandEnvelope envelope = 1;
+  string target_sim_time = 2;
+  string gs_id = 3;
+  repeated KernelInventoryEntry entries = 4;
+}
+
+message KernelInventoryEntryResult {
+  string node_id = 1;
+  string interface_name = 2;
+  bool success = 3;
+  NodeAgentErrorCode error_code = 4;
+  string error_message = 5;
+  bool verified = 6;
+  bool dirty_kernel = 7;
+  string proof_summary = 8;
+  repeated string proof_evidence = 9;
+}
+
+message KernelInventoryResponse {
+  bool success = 1;
+  string error_message = 2;
+  int32 entries_verified = 3;
+  float apply_time_ms = 4;
+  repeated KernelInventoryEntryResult entry_results = 5;
+  NodeAgentErrorCode error_code = 6;
+  bool dirty_kernel = 7;
+}

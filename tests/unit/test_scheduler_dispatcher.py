@@ -299,14 +299,15 @@ class TestDispatcherActiveLinks:
 
         assert ("gs-ashburn", "sat-P00S00") not in d._active_links
 
-    def test_isl_deallocation_does_not_remove(self):
+    def test_isl_deallocation_removes_unscheduled_pair(self):
         d, _ = _make_dispatcher()
         info = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
         d._desired_links[("sat-P00S00", "sat-P00S01")] = info
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
-        # ISL pair still visible but allocator did not schedule it
-        # (terminal capacity exhausted by symmetric allocation).
+        # ISL pair still visible but allocator did not schedule it.
+        # Phase 5 treats OME scheduled=false as authority: desired state
+        # must not keep forwarding-plane links the OME did not schedule.
         vis = _make_vis(
             "sat-P00S00",
             "sat-P00S01",
@@ -318,7 +319,7 @@ class TestDispatcherActiveLinks:
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
-        assert ("sat-P00S00", "sat-P00S01") in d._active_links
+        assert ("sat-P00S00", "sat-P00S01") not in d._active_links
 
 
 class TestDispatcherLinkStateSnapshot:
@@ -473,8 +474,9 @@ class TestDispatcherLiveDispatch:
         )
         pub = MockNats()
 
-        with pytest.raises(Exception, match="agent unreachable"):
+        with pytest.raises(Exception, match="Fatal actuation failure"):
             asyncio.run(d._dispatch_batch([vis], [], pub))
+        assert "agent unreachable" in str(d._dispatch_blocked_reason) or d._dispatch_blocked_reason
 
         assert ("sat-P00S00", "sat-P00S01") not in d._active_links
         link_up_msgs = [m for m in pub.messages if m[0] == "nodalarc.links.up"]
@@ -521,9 +523,10 @@ class TestDispatcherLiveDispatch:
 
         pool.get_stub.return_value.async_batch_link_up = AsyncMock(side_effect=partial_up)
 
-        added = asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+        result = asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
 
-        assert added == set()
+        assert result.succeeded_pairs == set()
+        assert result.failed_pairs == {pair}
         assert not d._js.publish.called
 
     def test_batch_up_requires_per_interface_ack_identity(self):
@@ -550,8 +553,10 @@ class TestDispatcherLiveDispatch:
             )
         )
 
-        with pytest.raises(RuntimeError, match="did not identify every requested interface"):
-            asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+        result = asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+        assert result.succeeded_pairs == set()
+        assert result.failed_pairs == {pair}
+        assert result.unknown_outcome is True
 
     def test_batch_up_stale_generation_response_blocks_dispatch(self):
         d, pool = _make_dispatcher()
@@ -589,8 +594,10 @@ class TestDispatcherLiveDispatch:
 
         pool.get_stub.return_value.async_batch_link_up = AsyncMock(side_effect=stale_up)
 
-        with pytest.raises(RuntimeError, match="rejected command fence"):
-            asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+        result = asyncio.run(d._send_batch_up({pair}, desired, "sim", sim_time, d._nc))
+        assert result.succeeded_pairs == set()
+        assert result.failed_pairs == {pair}
+        assert result.fence_failure is True
 
         assert not d._js.publish.called
 

@@ -18,6 +18,7 @@ import logging
 import os
 import secrets
 import sqlite3
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -52,6 +53,7 @@ from nodalarc.db.queries import (
     query_probe_results,
 )
 from nodalarc.db.schema import create_tables
+from nodalarc.models.scheduler_ops import OperatorRepairCommand
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
     LinkState,
@@ -68,6 +70,7 @@ from nodalarc.nats_channels import (
     debug_ctrl_subject,
     nats_url,
     sanitize_session_id,
+    scheduler_repair_subject,
 )
 from nodalarc.platform_config import get_platform_config
 from nodalarc.project_info import project_attribution, project_version
@@ -457,6 +460,8 @@ def _build_snapshot() -> dict | None:
             playback_paused=ctx.playback_paused,
             playback_speed=ctx.playback_speed,
             stale=ctx.is_stale(),
+            actuation_notices=list(ctx.actuation_notices_by_key.values()),
+            actuation_health=ctx.build_actuation_health(),
         )
         result = json.loads(snapshot.model_dump_json())
         # System + session OpsEvents merged for the log panel
@@ -1131,6 +1136,69 @@ def about() -> dict:
 def get_auth_token() -> dict:
     """Return the current API key. Unauthenticated — dev-mode only."""
     return {"token": _API_KEY}
+
+
+@app.get("/api/v1/ops/health", dependencies=[Depends(_require_api_key)])
+def get_ops_health() -> dict:
+    """Return latest Scheduler actuation health derived from typed OpsEvents."""
+    ctx = _active_context
+    if ctx is None:
+        return {"session_id": "", "wiring_generation": "", "scheduler_instances": []}
+    with ctx.state_lock:
+        return ctx.build_actuation_health()
+
+
+@app.post("/api/v1/ops/repair", dependencies=[Depends(_require_api_key)])
+async def request_operator_repair(body: dict) -> dict:
+    """Explicit operator-triggered GS repair routed to the reporting Scheduler."""
+    ctx = _active_context
+    nc = _nats_connection
+    if ctx is None:
+        return JSONResponse(status_code=503, content={"error": "No active session"})
+    if nc is None:
+        return JSONResponse(status_code=503, content={"error": "NATS not connected"})
+    gs_id = body.get("gs_id", "")
+    reason = body.get("reason", "")
+    if not gs_id or not reason:
+        return JSONResponse(status_code=400, content={"error": "gs_id and reason are required"})
+    with ctx.state_lock:
+        matching = [
+            event
+            for (_instance, event_gs), event in ctx.actuation_latest_by_gs.items()
+            if event_gs == gs_id
+        ]
+        latest = matching[-1] if matching else {}
+    details = latest.get("details") or {}
+    scheduler_instance_id = body.get("scheduler_instance_id") or details.get(
+        "scheduler_instance_id"
+    )
+    wiring_generation = body.get("wiring_generation") or details.get("wiring_generation")
+    if not scheduler_instance_id or not wiring_generation:
+        return JSONResponse(
+            status_code=409,
+            content={"error": "No Scheduler actuation state is available for that GS"},
+        )
+    cmd = OperatorRepairCommand(
+        session_id=ctx.session_id,
+        wiring_generation=wiring_generation,
+        scheduler_instance_id=scheduler_instance_id,
+        gs_id=gs_id,
+        reason=reason,
+        intervention_id=body.get("intervention_id") or str(uuid.uuid4()),
+    )
+    try:
+        resp = await nc.request(
+            scheduler_repair_subject(ctx.session_id),
+            cmd.model_dump_json().encode(),
+            timeout=10,
+        )
+        return json.loads(resp.data)
+    except TimeoutError:
+        return JSONResponse(
+            status_code=504, content={"error": "Scheduler repair request timed out"}
+        )
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
 @app.get("/api/v1/ops/events", dependencies=[Depends(_require_api_key)])

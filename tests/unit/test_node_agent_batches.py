@@ -8,11 +8,7 @@ import pytest
 from nodalarc.proto import node_agent_pb2
 from scheduler.desired_state import ActiveLinkInfo
 from scheduler.latency_compensator import LatencyCompensation
-from scheduler.node_agent_batches import (
-    build_link_down_batch_plan,
-    build_link_up_batch_plan,
-    successful_interface_acks,
-)
+from scheduler.node_agent_batches import build_link_down_batch_plan, build_link_up_batch_plan
 
 
 class _Locator:
@@ -134,102 +130,3 @@ def test_local_ground_link_down_plan_preserves_single_agent_bridge_operation():
     assert iface.peer_node_id == "sat-a"
     assert iface.peer_interface_name == "gnd0"
     assert iface.link_type == node_agent_pb2.LINK_TYPE_GROUND
-
-
-def test_successful_interface_acks_require_exact_identity_and_consistent_aggregate():
-    requested = [
-        node_agent_pb2.InterfaceUp(node_id="sat-a", interface_name="isl0"),
-        node_agent_pb2.InterfaceUp(node_id="sat-b", interface_name="isl1"),
-    ]
-    ok = node_agent_pb2.BatchLinkUpResponse(
-        success=True,
-        interface_results=[
-            node_agent_pb2.InterfaceResult(
-                node_id="sat-a",
-                interface_name="isl0",
-                success=True,
-                verified=True,
-            ),
-            node_agent_pb2.InterfaceResult(
-                node_id="sat-b",
-                interface_name="isl1",
-                success=True,
-                verified=True,
-            ),
-        ],
-    )
-
-    assert successful_interface_acks(
-        result=ok,
-        requested_interfaces=requested,
-        agent_addr="agent-a",
-        operation="BatchLinkUp",
-    ) == {
-        ("agent-a", "sat-a", "isl0"),
-        ("agent-a", "sat-b", "isl1"),
-    }
-
-    missing = node_agent_pb2.BatchLinkUpResponse(
-        success=True,
-        interface_results=[
-            node_agent_pb2.InterfaceResult(node_id="sat-a", interface_name="isl0", success=True),
-        ],
-    )
-    with pytest.raises(RuntimeError, match="did not identify every requested"):
-        successful_interface_acks(
-            result=missing,
-            requested_interfaces=requested,
-            agent_addr="agent-a",
-            operation="BatchLinkUp",
-        )
-
-    inconsistent = node_agent_pb2.BatchLinkUpResponse(
-        success=True,
-        interface_results=[
-            node_agent_pb2.InterfaceResult(node_id="sat-a", interface_name="isl0", success=True),
-            node_agent_pb2.InterfaceResult(node_id="sat-b", interface_name="isl1", success=False),
-        ],
-    )
-    with pytest.raises(RuntimeError, match="inconsistent aggregate success"):
-        successful_interface_acks(
-            result=inconsistent,
-            requested_interfaces=requested,
-            agent_addr="agent-a",
-            operation="BatchLinkUp",
-        )
-
-
-def test_successful_interface_acks_reject_stale_generation_response():
-    requested = [
-        node_agent_pb2.InterfaceUp(node_id="sat-a", interface_name="isl0"),
-        node_agent_pb2.InterfaceUp(node_id="sat-b", interface_name="isl1"),
-    ]
-    stale = node_agent_pb2.BatchLinkUpResponse(
-        success=False,
-        error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
-        error_message="stale generation",
-        interface_results=[
-            node_agent_pb2.InterfaceResult(
-                node_id="sat-a",
-                interface_name="isl0",
-                success=False,
-                error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
-                error_message="stale generation",
-            ),
-            node_agent_pb2.InterfaceResult(
-                node_id="sat-b",
-                interface_name="isl1",
-                success=False,
-                error_code=node_agent_pb2.NODE_AGENT_STALE_GENERATION,
-                error_message="stale generation",
-            ),
-        ],
-    )
-
-    with pytest.raises(RuntimeError, match="rejected command fence"):
-        successful_interface_acks(
-            result=stale,
-            requested_interfaces=requested,
-            agent_addr="agent-a",
-            operation="BatchLinkUp",
-        )

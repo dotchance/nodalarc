@@ -76,5 +76,13 @@ class NodeAgentClient:
         resp.ParseFromString(resp_bytes)
         return resp
 
+    async def async_kernel_inventory(
+        self, request: node_agent_pb2.KernelInventoryRequest
+    ) -> node_agent_pb2.KernelInventoryResponse:
+        resp_bytes = await self._request_async(b"KernelInventory", request.SerializeToString())
+        resp = node_agent_pb2.KernelInventoryResponse()
+        resp.ParseFromString(resp_bytes)
+        return resp
+
     def close(self) -> None:
         pass  # Shared connection — closed by Scheduler

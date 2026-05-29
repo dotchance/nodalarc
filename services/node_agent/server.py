@@ -19,6 +19,7 @@ from node_agent.command_contract import RuntimeFence
 from node_agent.handlers import (
     handle_batch_link_down,
     handle_batch_link_up,
+    handle_kernel_inventory,
     handle_set_latency,
 )
 
@@ -73,6 +74,15 @@ def _batch_up_failure(code: int, message: str, *, dirty_kernel: bool = False) ->
 
 def _set_latency_failure(code: int, message: str, *, dirty_kernel: bool = False) -> bytes:
     return node_agent_pb2.SetLatencyResponse(
+        success=False,
+        error_code=code,
+        error_message=message,
+        dirty_kernel=dirty_kernel,
+    ).SerializeToString()
+
+
+def _kernel_inventory_failure(code: int, message: str, *, dirty_kernel: bool = False) -> bytes:
+    return node_agent_pb2.KernelInventoryResponse(
         success=False,
         error_code=code,
         error_message=message,
@@ -185,6 +195,36 @@ def dispatch(data: bytes, pid_map: dict[str, int], fence: RuntimeFence) -> bytes
                 dirty_kernel=True,
             )
             return _set_latency_failure(
+                node_agent_pb2.NODE_AGENT_INTERNAL_ERROR,
+                f"dispatch failed: {exc}",
+                dirty_kernel=True,
+            )
+
+    if msg_type == b"KernelInventory":
+        try:
+            request = node_agent_pb2.KernelInventoryRequest()
+            request.ParseFromString(payload)
+            response = handle_kernel_inventory(request, context=None, pid_map=pid_map, fence=fence)
+            return response.SerializeToString()
+        except DecodeError as exc:
+            log.warning("Bad protobuf for %s: %s", msg_type, exc)
+            _publish_transport_event(
+                code="COMMAND_REJECTED",
+                message=f"Bad protobuf for KernelInventory: {exc}",
+                fence=fence,
+            )
+            return _kernel_inventory_failure(
+                node_agent_pb2.NODE_AGENT_BAD_PROTOBUF, f"bad protobuf: {exc}"
+            )
+        except Exception as exc:
+            log.error("Node Agent dispatch failed for %s: %s", msg_type, exc, exc_info=True)
+            _publish_transport_event(
+                code="DIRTY_KERNEL",
+                message=f"KernelInventory dispatch failed: {exc}",
+                fence=fence,
+                dirty_kernel=True,
+            )
+            return _kernel_inventory_failure(
                 node_agent_pb2.NODE_AGENT_INTERNAL_ERROR,
                 f"dispatch failed: {exc}",
                 dirty_kernel=True,

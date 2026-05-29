@@ -24,6 +24,8 @@ interface TopBarProps {
 
 export function TopBar({ snapshot, connected: _connected, historicalMode, onToggleHistorical, activeSessionName, switching, onOpenCatalog, playbackPaused, playbackSpeed, playbackLoading, onPlaybackPause, onPlaybackResume, onPlaybackSetSpeed, onSeekToNow }: TopBarProps) {
   const healthStatus = snapshot?.network_health.status ?? "unknown";
+  const actuationNotices = snapshot?.actuation_notices ?? [];
+  const actuationDirty = actuationNotices.some((n) => n.actuation_state === "kernel_dirty");
   const healthColor =
     healthStatus === "converged"
       ? "var(--ws-connected)"
@@ -99,6 +101,17 @@ export function TopBar({ snapshot, connected: _connected, historicalMode, onTogg
           </span>
         )}
       </span>
+      {actuationNotices.length > 0 && (
+        <span
+          style={{
+            color: actuationDirty ? "var(--ws-disconnected)" : "var(--ws-reconnecting)",
+            fontWeight: 600,
+          }}
+          title={actuationNotices.map((n) => `${n.gs_id}: ${n.reason_code}`).join("\n")}
+        >
+          Actuation {actuationNotices.length}
+        </span>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: 8 }}>
         <button
           onClick={playbackPaused ? onPlaybackResume : onPlaybackPause}

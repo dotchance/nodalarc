@@ -388,13 +388,14 @@ class TestGsDeallocationDispatchBatch:
 
         assert ("gs-ashburn", "sat-P00S00") not in d._active_links
 
-    def test_isl_deallocation_not_removed(self):
+    def test_isl_deallocation_removed_when_ome_unschedules_pair(self):
         d = _make_dispatcher()
         info = ActiveLinkInfo("isl0", "isl1", 3.0, 1000.0, link_type="isl")
         d._desired_links[("sat-P00S00", "sat-P00S01")] = info
         d._active_links[("sat-P00S00", "sat-P00S01")] = info
 
-        # ISL pair still visible but terminal-capacity-bound.
+        # ISL pair still visible but OME did not schedule it. Phase 5
+        # treats scheduled=false as authoritative for forwarding state.
         vis = _make_vis(
             "sat-P00S00",
             "sat-P00S01",
@@ -406,7 +407,7 @@ class TestGsDeallocationDispatchBatch:
 
         asyncio.run(d._dispatch_batch([vis], [], MockNats()))
 
-        assert ("sat-P00S00", "sat-P00S01") in d._active_links
+        assert ("sat-P00S00", "sat-P00S01") not in d._active_links
 
 
 class TestGsDeallocationConsistency:

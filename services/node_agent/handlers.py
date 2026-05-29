@@ -42,6 +42,7 @@ from node_agent.command_contract import (
     RuntimeFence,
     validate_batch_link_down_request,
     validate_batch_link_up_request,
+    validate_kernel_inventory_request,
     validate_set_latency_request,
     worst_error_code,
 )
@@ -1039,6 +1040,191 @@ def handle_batch_link_up(
         interface_results=[
             _interface_result(iface, outcome)
             for iface, outcome in zip(request.interfaces, ordered_outcomes, strict=True)
+        ],
+    )
+
+
+def _kernel_inventory_entry_result(
+    entry, outcome: EntryOutcome
+) -> node_agent_pb2.KernelInventoryEntryResult:
+    return node_agent_pb2.KernelInventoryEntryResult(
+        node_id=entry.node_id,
+        interface_name=entry.interface_name,
+        success=outcome.success,
+        error_code=outcome.error_code,
+        error_message=outcome.error_message,
+        verified=outcome.verified,
+        dirty_kernel=outcome.dirty_kernel,
+        proof_summary=outcome.proof_summary,
+        proof_evidence=list(outcome.proof_evidence),
+    )
+
+
+def _verify_kernel_inventory_entry(
+    entry: node_agent_pb2.KernelInventoryEntry,
+    pid_map: dict[str, int] | None = None,
+) -> EntryOutcome:
+    """Read-only GS-facing verification for Phase 5 actuation recovery."""
+    try:
+        if pid_map is None:
+            raise ValueError("pid_map is None — wiring not complete?")
+        pm = pid_map
+        gs_ifname, sat_ifname = _extract_ground_ifaces(entry)
+        is_sat = entry.node_id == entry.sat_id
+        local_pid = _require_pid(entry.node_id, pm)
+        host_ifname = (
+            ground_bridge._sat_host_veth(entry.sat_id, sat_ifname)
+            if is_sat
+            else ground_bridge._gs_host_veth(entry.gs_id, gs_ifname)
+        )
+        local_ifname = sat_ifname if is_sat else gs_ifname
+
+        if entry.expected_admin_up:
+            proofs = [
+                kernel_verifier.verify_host_interface_state(host_ifname, admin_up=True),
+                kernel_verifier.verify_qdisc(
+                    local_pid,
+                    local_ifname,
+                    delay_ms=entry.latency_ms,
+                    rate_mbps=entry.bandwidth_mbps,
+                ),
+            ]
+            if entry.locality == node_agent_pb2.LOCALITY_LOCAL:
+                # LOCAL ground links are verified on the one agent that owns
+                # both pod namespaces and both host-side veths.
+                gs_pid = _require_pid(entry.gs_id, pm)
+                sat_pid = _require_pid(entry.sat_id, pm)
+                gs_port = ground_bridge._gs_host_veth(entry.gs_id, gs_ifname)
+                sat_host = ground_bridge._sat_host_veth(entry.sat_id, sat_ifname)
+                proofs.extend(
+                    [
+                        kernel_verifier.verify_host_interface_state(gs_port, admin_up=True),
+                        kernel_verifier.verify_host_interface_state(sat_host, admin_up=True),
+                        kernel_verifier.verify_mirred(gs_port, sat_host),
+                        kernel_verifier.verify_mirred(sat_host, gs_port),
+                        kernel_verifier.verify_qdisc(
+                            gs_pid,
+                            gs_ifname,
+                            delay_ms=entry.latency_ms,
+                            rate_mbps=entry.bandwidth_mbps,
+                        ),
+                        kernel_verifier.verify_qdisc(
+                            sat_pid,
+                            sat_ifname,
+                            delay_ms=entry.latency_ms,
+                            rate_mbps=entry.bandwidth_mbps,
+                        ),
+                    ]
+                )
+            elif entry.vni:
+                vxlan_if, _, _ = vxlan._host_ifnames(entry.vni)
+                proofs.extend(
+                    [
+                        kernel_verifier.verify_mirred(host_ifname, vxlan_if),
+                        kernel_verifier.verify_mirred(vxlan_if, host_ifname),
+                    ]
+                )
+            return _combine_proofs("KernelInventory expected-up verified", proofs)
+
+        proofs = [
+            kernel_verifier.verify_host_interface_state(host_ifname, admin_up=False),
+            kernel_verifier.verify_pod_interface_exists(local_pid, local_ifname),
+        ]
+        if entry.locality == node_agent_pb2.LOCALITY_LOCAL:
+            sat_pid = _require_pid(entry.sat_id, pm)
+            gs_port = ground_bridge._gs_host_veth(entry.gs_id, gs_ifname)
+            sat_host = ground_bridge._sat_host_veth(entry.sat_id, sat_ifname)
+            proofs.extend(
+                [
+                    kernel_verifier.verify_host_interface_state(gs_port, admin_up=False),
+                    kernel_verifier.verify_host_interface_state(sat_host, admin_up=False),
+                    kernel_verifier.verify_pod_interface_exists(sat_pid, sat_ifname),
+                ]
+            )
+        return _combine_proofs("KernelInventory expected-down verified", proofs)
+    except Exception as exc:
+        msg = f"KernelInventory failed {entry.node_id}/{entry.interface_name}: {exc}"
+        log.warning(msg)
+        return _fail(node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED, msg, dirty_kernel=True)
+
+
+def handle_kernel_inventory(
+    request: node_agent_pb2.KernelInventoryRequest,
+    context=None,
+    pid_map: dict[str, int] | None = None,
+    fence: RuntimeFence | None = None,
+) -> node_agent_pb2.KernelInventoryResponse:
+    """Handle read-only KernelInventory verification for Phase 5."""
+    start = _time.monotonic()
+    if fence is None:
+        raise ValueError("RuntimeFence is required")
+    try:
+        validate_kernel_inventory_request(request, fence=fence)
+    except CommandContractError as exc:
+        ops_events.publish(
+            level="warning",
+            code="COMMAND_REJECTED",
+            message=f"KernelInventory rejected: {exc.message}",
+            session_id=fence.session_id,
+            details={
+                "operation_id": request.envelope.operation_id,
+                "wiring_generation": fence.wiring_generation,
+                "command_type": "KernelInventory",
+                "error_code": _error_code_name(exc.code),
+            },
+        )
+        return node_agent_pb2.KernelInventoryResponse(
+            success=False,
+            error_code=exc.code,
+            error_message=exc.message,
+            dirty_kernel=False,
+        )
+
+    if pid_map is None:
+        raise ValueError("pid_map is None — wiring not complete?")
+
+    futures = {
+        _BATCH_POOL.submit(_verify_kernel_inventory_entry, entry, pid_map): entry
+        for entry in request.entries
+    }
+    outcomes: dict[tuple[str, str], EntryOutcome] = {}
+    for fut in as_completed(futures):
+        entry = futures[fut]
+        try:
+            outcomes[_iface_key(entry)] = fut.result(timeout=10)
+        except Exception as exc:
+            outcomes[_iface_key(entry)] = _fail(
+                node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED,
+                f"KernelInventory exception for {entry.node_id}/{entry.interface_name}: {exc}",
+                dirty_kernel=True,
+            )
+
+    ordered_outcomes = [
+        outcomes.get(
+            _iface_key(entry),
+            _fail(node_agent_pb2.NODE_AGENT_INTERNAL_ERROR, "not attempted", dirty_kernel=True),
+        )
+        for entry in request.entries
+    ]
+    elapsed = (_time.monotonic() - start) * 1000
+    errors = [outcome.error_message for outcome in ordered_outcomes if not outcome.success]
+    error_msg = "; ".join(errors)
+    success = all(outcome.success for outcome in ordered_outcomes)
+    _publish_command_event(
+        operation="KernelInventory",
+        envelope=request.envelope,
+        outcomes=ordered_outcomes,
+    )
+    return node_agent_pb2.KernelInventoryResponse(
+        success=success,
+        error_code=_aggregate_response_code(ordered_outcomes),
+        error_message=error_msg,
+        dirty_kernel=_dirty(ordered_outcomes),
+        entries_verified=sum(1 for outcome in ordered_outcomes if outcome.success),
+        apply_time_ms=elapsed,
+        entry_results=[
+            _kernel_inventory_entry_result(entry, outcome)
+            for entry, outcome in zip(request.entries, ordered_outcomes, strict=True)
         ],
     )
 

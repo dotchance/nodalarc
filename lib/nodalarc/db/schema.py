@@ -96,6 +96,23 @@ CREATE TABLE IF NOT EXISTS snapshots (
 );
 """
 
+DDL_OPERATOR_INTERVENTIONS = """
+CREATE TABLE IF NOT EXISTS operator_interventions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    intervention_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    wiring_generation TEXT NOT NULL,
+    scheduler_instance_id TEXT NOT NULL,
+    hostname TEXT NOT NULL,
+    gs_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    event_time TEXT NOT NULL,
+    event_code TEXT NOT NULL,
+    event_json TEXT NOT NULL
+);
+"""
+
 INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_link_events_sim_time ON link_events(sim_time);",
     "CREATE INDEX IF NOT EXISTS idx_link_events_nodes ON link_events(node_a, node_b);",
@@ -105,6 +122,9 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_adapter_events_sim_time ON adapter_events(sim_time);",
     "CREATE INDEX IF NOT EXISTS idx_adapter_events_node ON adapter_events(node_id);",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_sim_time ON snapshots(sim_time);",
+    "CREATE INDEX IF NOT EXISTS idx_operator_interventions_session ON operator_interventions(session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_operator_interventions_id ON operator_interventions(intervention_id);",
+    "CREATE INDEX IF NOT EXISTS idx_operator_interventions_gs ON operator_interventions(gs_id);",
 ]
 
 ALL_DDL = [
@@ -115,6 +135,7 @@ ALL_DDL = [
     DDL_SESSION_METADATA,
     DDL_CONFIG_CHANGES,
     DDL_SNAPSHOTS,
+    DDL_OPERATOR_INTERVENTIONS,
 ]
 
 

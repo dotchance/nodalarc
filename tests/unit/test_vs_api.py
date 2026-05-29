@@ -1375,3 +1375,94 @@ class TestLinkDecisionsEndpoint:
 
         r = TestClient(m.app).get("/api/v1/ground-link-decisions", params={"node_a": "gs-den"})
         assert r.status_code == 400
+
+
+class TestActuationHealth:
+    def _event(
+        self,
+        *,
+        instance: str,
+        gs_id: str,
+        code: str,
+        after: str,
+        generation: str = "sha256:" + "a" * 64,
+        timestamp: str = "2026-05-27T12:00:00+00:00",
+    ) -> dict:
+        return {
+            "timestamp": timestamp,
+            "session_id": "test",
+            "source": "scheduler",
+            "hostname": instance + "-host",
+            "level": "info",
+            "code": code,
+            "message": f"{gs_id} {after}",
+            "details": {
+                "session_id": "test",
+                "wiring_generation": generation,
+                "scheduler_instance_id": instance,
+                "hostname": instance + "-host",
+                "gs_id": gs_id,
+                "operation": "KernelInventory",
+                "failure_class": "none",
+                "actuation_state_after": after,
+                "recovery_status": {},
+            },
+        }
+
+    def test_startup_clean_roster_replaces_dead_instance_for_same_gs(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        old_dirty = self._event(
+            instance="sched-old",
+            gs_id="gs-den",
+            code="KERNEL_DIRTY",
+            after="kernel_dirty",
+        )
+        new_clean = self._event(
+            instance="sched-new",
+            gs_id="gs-den",
+            code="ACTUATION_CLEAN",
+            after="clean",
+            timestamp="2026-05-27T12:00:05+00:00",
+        )
+
+        ctx._update_actuation_notice(old_dirty)
+        assert ("sched-old", "gs-den") in ctx.actuation_latest_by_gs
+        ctx._update_actuation_notice(new_clean)
+
+        health = ctx.build_actuation_health()
+        assert ("sched-old", "gs-den") not in ctx.actuation_latest_by_gs
+        assert ctx.actuation_notices_by_key == {}
+        assert [inst["scheduler_instance_id"] for inst in health["scheduler_instances"]] == [
+            "sched-new"
+        ]
+        assert health["scheduler_instances"][0]["status"] == "clean"
+
+    def test_health_reports_worst_state_across_known_ground_stations(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        ctx._update_actuation_notice(
+            self._event(instance="sched-1", gs_id="gs-a", code="ACTUATION_CLEAN", after="clean")
+        )
+        ctx._update_actuation_notice(
+            self._event(
+                instance="sched-1",
+                gs_id="gs-b",
+                code="ACTUATION_BLOCKED",
+                after="actuation_blocked",
+            )
+        )
+        ctx._update_actuation_notice(
+            self._event(instance="sched-1", gs_id="gs-c", code="KERNEL_DIRTY", after="kernel_dirty")
+        )
+
+        health = ctx.build_actuation_health()
+
+        inst = health["scheduler_instances"][0]
+        assert inst["status"] == "dirty"
+        assert [gs["gs_id"] for gs in inst["ground_stations"]] == ["gs-a", "gs-b", "gs-c"]
+        assert {gs["actuation_state"] for gs in inst["ground_stations"]} == {
+            "clean",
+            "actuation_blocked",
+            "kernel_dirty",
+        }

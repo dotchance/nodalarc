@@ -34,6 +34,217 @@
       "title": "ActiveFlow",
       "type": "object"
     },
+    "ActuationHealth": {
+      "description": "Session-level Scheduler actuation health.",
+      "properties": {
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "wiring_generation": {
+          "title": "Wiring Generation",
+          "type": "string"
+        },
+        "scheduler_instances": {
+          "items": {
+            "$ref": "#/$defs/ActuationHealthInstance"
+          },
+          "title": "Scheduler Instances",
+          "type": "array"
+        }
+      },
+      "required": [
+        "session_id",
+        "wiring_generation"
+      ],
+      "title": "ActuationHealth",
+      "type": "object"
+    },
+    "ActuationHealthGroundStation": {
+      "description": "Latest actuation state for one GS on one Scheduler instance.",
+      "properties": {
+        "gs_id": {
+          "title": "Gs Id",
+          "type": "string"
+        },
+        "actuation_state": {
+          "title": "Actuation State",
+          "type": "string"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Since"
+        },
+        "reason_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason Code"
+        },
+        "blocking_new_ground_link_up": {
+          "title": "Blocking New Ground Link Up",
+          "type": "boolean"
+        },
+        "recovery_status": {
+          "additionalProperties": true,
+          "title": "Recovery Status",
+          "type": "object"
+        },
+        "last_event": {
+          "additionalProperties": true,
+          "title": "Last Event",
+          "type": "object"
+        }
+      },
+      "required": [
+        "gs_id",
+        "actuation_state",
+        "blocking_new_ground_link_up"
+      ],
+      "title": "ActuationHealthGroundStation",
+      "type": "object"
+    },
+    "ActuationHealthInstance": {
+      "description": "Aggregated actuation health for one Scheduler instance.",
+      "properties": {
+        "scheduler_instance_id": {
+          "title": "Scheduler Instance Id",
+          "type": "string"
+        },
+        "hostname": {
+          "title": "Hostname",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "ground_stations": {
+          "items": {
+            "$ref": "#/$defs/ActuationHealthGroundStation"
+          },
+          "title": "Ground Stations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "scheduler_instance_id",
+        "hostname",
+        "status"
+      ],
+      "title": "ActuationHealthInstance",
+      "type": "object"
+    },
+    "ActuationNotice": {
+      "description": "User-visible Scheduler actuation problem for one ground station.",
+      "properties": {
+        "gs_id": {
+          "title": "Gs Id",
+          "type": "string"
+        },
+        "actuation_state": {
+          "title": "Actuation State",
+          "type": "string"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Since"
+        },
+        "blocking_new_ground_link_up": {
+          "title": "Blocking New Ground Link Up",
+          "type": "boolean"
+        },
+        "affected_pairs": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Affected Pairs",
+          "type": "array"
+        },
+        "desired_pairs_for_gs": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Desired Pairs For Gs",
+          "type": "array"
+        },
+        "actual_pairs_for_gs": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Actual Pairs For Gs",
+          "type": "array"
+        },
+        "ome_visible_scheduled_pairs_for_gs": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Ome Visible Scheduled Pairs For Gs",
+          "type": "array"
+        },
+        "recovery_status": {
+          "additionalProperties": true,
+          "title": "Recovery Status",
+          "type": "object"
+        },
+        "last_event": {
+          "additionalProperties": true,
+          "title": "Last Event",
+          "type": "object"
+        }
+      },
+      "required": [
+        "gs_id",
+        "actuation_state",
+        "reason_code",
+        "message",
+        "blocking_new_ground_link_up"
+      ],
+      "title": "ActuationNotice",
+      "type": "object"
+    },
     "LinkState": {
       "description": "State of a single link between two nodes.",
       "properties": {
@@ -492,6 +703,10 @@
       "title": "Schema Version",
       "type": "integer"
     },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
     "nodes": {
       "items": {
         "$ref": "#/$defs/NodeState"
@@ -592,12 +807,31 @@
       "default": false,
       "title": "Stale",
       "type": "boolean"
+    },
+    "actuation_notices": {
+      "items": {
+        "$ref": "#/$defs/ActuationNotice"
+      },
+      "title": "Actuation Notices",
+      "type": "array"
+    },
+    "actuation_health": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActuationHealth"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     }
   },
   "required": [
     "sim_time",
     "wall_time",
     "schema_version",
+    "session_id",
     "nodes",
     "links",
     "traced_paths",

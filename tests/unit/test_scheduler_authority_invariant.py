@@ -236,18 +236,13 @@ class TestCAReproFailedReplacement:
         d._apply_events_to_desired([release_event])
         return d
 
-    def test_safety_net_retains_old_pair_in_desired_links(self) -> None:
-        """Phase 1.4 must NOT change production behavior. The safety
-        net at lines 926-932 of dispatcher.py fires and keeps the old
-        pair alive in _desired_links. (Phase 5 removes this.)"""
+    def test_release_event_drops_old_pair_from_desired_links(self) -> None:
+        """Phase 5 removes the Scheduler safety net. When OME releases
+        the old pair, Scheduler desired state follows OME authority even
+        if no successor was ACKed."""
         d = self._drive_failed_replacement()
         old_pair = ("gs-multi", "sat-old")
-        assert old_pair in d._desired_links, (
-            "Phase 1.4 must preserve the current safety-net behavior. "
-            "If this assertion FLIPS, the override has been removed — "
-            "verify the foundations-plan Phase 5 work also delivered "
-            "the fail-loud actuator path."
-        )
+        assert old_pair not in d._desired_links
 
     def test_ome_view_reflects_ome_authority_release(self) -> None:
         """The OME's stated truth (visible=True, scheduled=False)
@@ -260,37 +255,17 @@ class TestCAReproFailedReplacement:
         assert visible is True, "OME said the pair is still visible"
         assert scheduled is False, "OME said the pair is no longer scheduled"
 
-    def test_authority_subset_violation_surfaces_divergence(self) -> None:
-        """The Phase 1.4 observation: divergence between _desired_links
-        and _ome_view is detectable. Phase 5 promotes this to a
-        production RuntimeError."""
+    def test_authority_subset_violation_stays_green_after_release(self) -> None:
+        """The release event no longer creates desired/OME divergence."""
         d = self._drive_failed_replacement()
-        old_pair = ("gs-multi", "sat-old")
-        violations = d.authority_subset_violation()
-        assert old_pair in violations, (
-            "C-A repro: authority_subset_violation() must surface the "
-            "pair retained by the safety net. _desired_links={pair}, "
-            "_ome_view says scheduled=False. The divergence is the "
-            "exact case the override hides; this test proves it is "
-            "observable from outside the Scheduler."
-        )
+        assert d.authority_subset_violation() == set()
 
-    def test_warning_log_is_emitted_for_audit_trail(self, caplog) -> None:
-        """The override path logs a WARNING. Operators searching logs
-        for 'MBB teardown blocked' must find an entry. This is the
-        diagnostic surface that exists TODAY; the C-A repro pins it
-        so a silent regression of the log line is caught."""
-        import logging
-
-        with caplog.at_level(logging.WARNING):
-            self._drive_failed_replacement()
-        warnings = [r for r in caplog.records if "MBB teardown blocked" in r.message]
-        assert len(warnings) >= 1, (
-            "The override must log a WARNING — 'MBB teardown blocked' — "
-            "so operators can grep production logs for the divergence "
-            "rate before Phase 5 lands. Silent override is the worst "
-            "outcome."
-        )
+    def test_release_without_successor_records_typed_diagnostic(self) -> None:
+        """The old pair is dropped, and the fold records a typed diagnostic
+        for the async caller to publish as an OpsEvent."""
+        d = self._drive_failed_replacement()
+        assert d._pending_fold_diagnostics
+        assert d._pending_fold_diagnostics[-1]["code"] == "OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR"
 
 
 class TestAuthoritySubsetInvariantHappyPath:

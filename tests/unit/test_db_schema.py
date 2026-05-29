@@ -13,6 +13,7 @@ from nodalarc.db.queries import (
     insert_latency_update,
     insert_link_down,
     insert_link_up,
+    insert_operator_intervention_event,
     insert_probe_result,
     query_adapter_events,
     query_convergence_events,
@@ -363,3 +364,44 @@ class TestConcurrentAccess:
         assert not errors
         assert all(r == 10 for r in results)
         conn_write.close()
+
+
+class TestOperatorInterventionPersistence:
+    def test_intervention_events_are_append_only_and_mark_session_intervened(self, db):
+        base_event = {
+            "timestamp": T0.isoformat(),
+            "session_id": "session-a",
+            "hostname": "sched-host",
+            "code": "OPERATOR_REPAIR_REQUESTED",
+            "details": {
+                "intervention_id": "repair-1",
+                "wiring_generation": "sha256:" + "a" * 64,
+                "scheduler_instance_id": "sched-1",
+                "gs_id": "gs-den",
+                "reason": "operator requested repair",
+            },
+        }
+        second_event = {
+            **base_event,
+            "timestamp": T1.isoformat(),
+            "code": "OPERATOR_REPAIR_SUCCEEDED",
+            "details": {
+                **base_event["details"],
+                "reason": "operator repair matched current authority",
+            },
+        }
+
+        first_id = insert_operator_intervention_event(db, base_event)
+        second_id = insert_operator_intervention_event(db, second_event)
+
+        rows = db.execute(
+            "SELECT event_code FROM operator_interventions WHERE intervention_id = ? ORDER BY id",
+            ("repair-1",),
+        ).fetchall()
+        intervened = get_metadata(db, "operator_intervened")
+        assert first_id != second_id
+        assert [row[0] for row in rows] == [
+            "OPERATOR_REPAIR_REQUESTED",
+            "OPERATOR_REPAIR_SUCCEEDED",
+        ]
+        assert intervened == "true"

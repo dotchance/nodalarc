@@ -1681,6 +1681,59 @@ def get_link_decision_traces(
 
 
 @app.get(
+    "/api/v1/decision-explanation",
+    dependencies=[Depends(_require_api_key)],
+    response_model=None,
+)
+def get_decision_explanation(gs: str = Query(...)) -> dict | JSONResponse:
+    """Composed decision-explanation FACTS for one ground station.
+
+    Phase A of the link-explainability UX. VS-API composes the funnel ladder,
+    effective envelope, best-candidate, and actuation/divergence facts from the
+    committed ground-decision snapshot, the active links, and the actuation
+    roster. The client registry assigns family/severity/human text. Actuation
+    state defaults to ``unknown`` when no roster has reached VS-API — honest, not
+    faked clean. ``404`` if no snapshot has arrived or no decision covers this GS.
+    """
+    from nodalarc.explain import compose_gs_explanation
+
+    ctx = _active_context
+    if ctx is None:
+        return JSONResponse(status_code=404, content={"error": "No active session"})
+    with ctx.state_lock:
+        snapshot = ctx.latest_ground_link_decision_snapshot
+        active_pairs = frozenset(
+            tuple(sorted((link.node_a, link.node_b)))
+            for link in ctx.links.values()
+            if link.state == "active"
+        )
+        actuation_by_gs: dict[str, str] = {}
+        health = ctx.build_actuation_health()
+        for inst in health.get("scheduler_instances", []):
+            for gs_entry in inst.get("ground_stations", []):
+                gid = gs_entry.get("gs_id")
+                state = gs_entry.get("actuation_state")
+                if gid and state:
+                    actuation_by_gs[gid] = state
+    if snapshot is None:
+        return JSONResponse(
+            status_code=404, content={"error": "No GroundLinkDecisionSnapshot received yet"}
+        )
+    facts = compose_gs_explanation(
+        gs_id=gs,
+        snapshot=snapshot,
+        active_pairs=active_pairs,
+        actuation_state_by_gs=actuation_by_gs,
+    )
+    if facts is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"No ground decision covers {gs} in the latest snapshot"},
+        )
+    return json.loads(facts.model_dump_json())
+
+
+@app.get(
     "/api/v1/ground-link-decisions",
     dependencies=[Depends(_require_api_key)],
     response_model=None,

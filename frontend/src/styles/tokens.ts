@@ -79,6 +79,18 @@ export const tokens = {
   statusError: '#e85555',
   statusErrorBright: '#ff6666',
 
+  // --- Decision family tones (the Expected/Faulted color law, single source) ---
+  // The canonical no-link families. faulted is the ONLY red; a restrictive or
+  // intermittent model must read as calm, never as an error. statusDisconnected
+  // above is red and encodes the OLD connected/disconnected model — surfaces are
+  // migrating onto these family tones so a correct (expected) no-link is not red.
+  familyConnected: '#44cc66',
+  familyExpectedNoLink: '#7788aa',
+  familyEligibleUnselected: '#5b9aa8',
+  familyInFlight: '#ffaa00',
+  familyFaulted: '#ff3333',
+  familyUnknown: '#8a87a8',
+
   // --- Fail-flash timing (ms) ---
   failHoldMs: 1500,
   failFadeMs: 1000,

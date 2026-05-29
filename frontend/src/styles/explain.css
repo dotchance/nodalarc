@@ -1,0 +1,123 @@
+/* Copyright 2024-2026 .chance (dotchance)
+   Link-explainability UX. Layout + chrome only; family tones are applied inline
+   from the single FAMILY_TONE source (styles/tokens.ts). Red appears only for
+   the faulted family, never for an expected no-link. */
+
+.gs-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-left: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.gs-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.family-badge {
+  font-size: var(--font-size-xxs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: var(--font-weight-semibold);
+  border: 1px solid;
+  border-radius: 10px;
+  padding: 1px var(--space-4);
+  white-space: nowrap;
+}
+
+.gs-card-headline {
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.gs-card-actuation {
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- Decision ladder --- */
+
+.decision-ladder {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: var(--font-size-xs);
+}
+
+.gate-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+}
+
+.gate-row--binding {
+  background: var(--bg-panel-hover);
+}
+
+.gate-mark {
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.gate-name {
+  color: var(--text-secondary);
+  min-width: 110px;
+}
+
+.gate-detail {
+  margin-left: auto;
+  text-align: right;
+  color: var(--text-dim);
+}
+
+.margin-pill {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.gate-endpoint {
+  color: var(--text-dim);
+}
+
+/* --- Effective envelope --- */
+
+.env-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-value--dead {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.env-deadknob {
+  font-size: var(--font-size-xxs);
+  color: var(--accent-amber);
+  line-height: 1.4;
+  margin-top: var(--space-1);
+}
+
+/* --- Best candidate --- */
+
+.best-candidate {
+  display: flex;
+  flex-direction: column;
+}
+
+.bc-withheld {
+  font-size: var(--font-size-xxs);
+  color: var(--accent-amber);
+  line-height: 1.4;
+}
+
+.reason-text {
+  color: var(--text-primary);
+}

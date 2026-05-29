@@ -5,6 +5,8 @@
 import { useState } from "react";
 import { REST_URL } from "../config";
 import type { NodeState, StateSnapshot, Selection } from "../types";
+import { useDecisionExplanation } from "../explain/useDecisionExplanation";
+import { GroundStationCard } from "../explain/components/GroundStationCard";
 
 interface GroundStationDetailProps {
   node: NodeState;
@@ -14,6 +16,7 @@ interface GroundStationDetailProps {
 
 export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationDetailProps) {
   const [tracingFlow, setTracingFlow] = useState<string | null>(null);
+  const explanation = useDecisionExplanation(node.node_id);
 
   const connectedLinks = snapshot.links.filter(
     (l) => l.node_a === node.node_id || l.node_b === node.node_id,
@@ -48,6 +51,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   return (
     <div>
       <h2>{node.node_id}</h2>
+      {explanation.facts ? <GroundStationCard facts={explanation.facts} /> : null}
       <div className="detail-row">
         <span className="detail-label">Role</span>
         <span className="detail-value">Gateway</span>

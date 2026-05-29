@@ -39,6 +39,7 @@ import "./styles/topology.css";
 import "./styles/time-controls.css";
 import "./styles/catalog.css";
 import "./styles/wizard.css";
+import "./styles/explain.css";
 
 export function App() {
   const [ready, setReady] = useState(false);

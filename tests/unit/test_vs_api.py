@@ -730,6 +730,54 @@ class TestSubscriberResilience:
             f"Expected 6+ successful subscriptions, got {len(subscribe_calls)}"
         )
 
+    def test_retained_recovery_subscriptions_use_last_per_subject(self):
+        # The premise of both the kernel-actual fix and the actuation-roster fix is that
+        # their state SURVIVES a VS-API resubscribe — which requires
+        # DeliverPolicy.LAST_PER_SUBJECT on NODALARC_LINKS (LinkUp/LinkDown are NEW and
+        # do not survive). Pin subject + policy + stream for both retained recovery
+        # subscriptions so a silent flip to NEW — which would break recovery with no
+        # other failing test — is caught.
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from nats.js.api import DeliverPolicy
+        from nodalarc.nats_channels import (
+            STREAM_LINK_EVENTS,
+            actual_links_subscribe_subject,
+            actuation_state_subscribe_subject,
+        )
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        nc = MagicMock()
+        js_mock = MagicMock()
+        calls: dict[str, dict] = {}
+
+        async def mock_subscribe(subject, **kwargs):
+            calls[subject] = kwargs
+            sub = AsyncMock()
+            sub.unsubscribe = AsyncMock()
+            return sub
+
+        js_mock.subscribe = mock_subscribe
+        nc.jetstream.return_value = js_mock
+
+        async def run():
+            await ctx.start(nc, mode="recovery")
+            await asyncio.sleep(0.1)
+            await ctx.stop()
+
+        asyncio.run(run())
+
+        for subj in (
+            actual_links_subscribe_subject("test"),
+            actuation_state_subscribe_subject("test"),
+        ):
+            assert subj in calls, f"{subj} was not subscribed"
+            assert calls[subj]["deliver_policy"] == DeliverPolicy.LAST_PER_SUBJECT
+            assert calls[subj]["stream"] == STREAM_LINK_EVENTS
+
     def test_subscriber_crashes_on_required_stream_failure(self):
         """If a required stream (NODALARC_OME, NODALARC_LINKS, etc.)
         fails, the subscriber SHOULD crash — fail loud."""
@@ -1491,6 +1539,142 @@ class TestActuationHealth:
         assert [gs["gs_id"] for gs in inst["ground_stations"]] == ["gs-den"]
         # Retained-state recovery must not append to the append-only ops event log.
         assert len(ctx.session_ops_events) == 0
+
+
+class TestKernelActualRecovery:
+    """The decision-explanation composer reads ``kernel_up`` from the Scheduler's
+    recovered ``_actual_links`` (verified kernel truth), NOT the OME
+    ``LinkStateSnapshot`` (``ctx.links``, OME's desired/visible model). LinkUp/LinkDown
+    are NEW-delivered and don't survive a resubscribe; these guard that the retained
+    per-instance kernel-actual subject recovers correctly and that the endpoint uses
+    it — otherwise a scheduled-but-unactuated pair masks as connected.
+    """
+
+    def _deliver(self, ctx, *, instance: str, pairs, generation: str = "gen-1") -> None:
+        import asyncio
+        from unittest.mock import MagicMock
+
+        from nodalarc.models.scheduler_ops import ActualLinkSnapshot
+
+        msg = MagicMock()
+        msg.data = (
+            ActualLinkSnapshot(
+                session_id="test",
+                wiring_generation=generation,
+                scheduler_instance_id=instance,
+                hostname=instance + "-host",
+                active_pairs=[list(p) for p in pairs],
+            )
+            .model_dump_json()
+            .encode()
+        )
+        asyncio.run(ctx._on_actual_links(msg))
+
+    def test_recovers_kernel_actual_pairs_on_subscribe(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        self._deliver(ctx, instance="sched-1", pairs=[("gs-den", "sat-03")])
+        assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-03")})
+
+    def test_pairs_canonically_ordered_to_match_composer(self):
+        # The composer checks _ordered_pair(focal.pair) in active_pairs; the recovered
+        # set must be ordered the same way regardless of wire order.
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        self._deliver(ctx, instance="sched-1", pairs=[("sat-03", "gs-den")])
+        assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-03")})
+
+    def test_restart_supersedes_dead_predecessor_same_generation(self):
+        # Single-owner-per-session: a restart yields a new instance_id with the SAME
+        # wiring generation. The dead predecessor's set must be pruned, not unioned, or
+        # a pair it dropped during the gap would linger as falsely-up — exactly the
+        # masking this fix removes. (Mirrors the roster's _update_actuation_notice.)
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        self._deliver(ctx, instance="sched-old", pairs=[("gs-den", "sat-03")])
+        self._deliver(ctx, instance="sched-new", pairs=[("gs-den", "sat-09")])
+        assert "sched-old" not in ctx.actual_links_by_instance
+        assert ctx.actual_kernel_pairs() == frozenset({("gs-den", "sat-09")})
+
+    def test_empty_until_first_snapshot_is_honest_not_masked_connected(self):
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        assert ctx.actual_kernel_pairs() == frozenset()
+
+    def _ctx_with_snapshot_and_clean_roster(self):
+        from unittest.mock import MagicMock
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        import asyncio
+
+        snap_msg = MagicMock()
+        snap_msg.data = json.dumps(_decision_snapshot_payload()).encode()
+        asyncio.run(ctx._on_ground_link_decision_snapshot(snap_msg))
+        # Clean actuation roster for gs-den: isolate the kernel-actual source so the
+        # roster does not independently force a fault.
+        ctx._update_actuation_notice(
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "session_id": "test",
+                "source": "scheduler",
+                "hostname": "sched-1-host",
+                "level": "info",
+                "code": "ACTUATION_CLEAN",
+                "message": "clean",
+                "details": {
+                    "scheduler_instance_id": "sched-1",
+                    "hostname": "sched-1-host",
+                    "gs_id": "gs-den",
+                    "wiring_generation": "gen-1",
+                    "actuation_state_after": "clean",
+                    "recovery_status": {},
+                },
+            }
+        )
+        return ctx
+
+    def test_endpoint_scheduled_pair_without_kernel_actual_is_divergence_not_connected(
+        self, monkeypatch
+    ):
+        # The masking case: gs-den/sat-a is visible+scheduled (OME desires it) and the
+        # roster is clean, but NO kernel-actual set has been recovered. The Scheduler's
+        # _actual_links is the proof, not OME's snapshot — so this must read as
+        # actuation divergence, never a silently-connected pair.
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        ctx = self._ctx_with_snapshot_and_clean_roster()
+        assert ctx.actual_kernel_pairs() == frozenset()
+        monkeypatch.setattr(m, "_active_context", ctx)
+
+        r = TestClient(m.app).get("/api/v1/decision-explanation", params={"gs": "gs-den"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["pair"] == ["gs-den", "sat-a"]
+        assert body["binding_gate"] == "actuation_proof"
+        assert body["actuation"]["kernel_up"] is False
+        assert body["actuation"]["diverged"] is True
+
+    def test_endpoint_connected_only_when_pair_is_in_recovered_kernel_actual(self, monkeypatch):
+        # Same snapshot and clean roster as above; the ONLY change is recovering the
+        # kernel-actual set containing the pair. The verdict flips to connected, proving
+        # the endpoint's kernel_up is driven by recovered _actual_links — a revert to
+        # ctx.links (empty here) would leave this diverged and fail the test.
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        ctx = self._ctx_with_snapshot_and_clean_roster()
+        self._deliver(ctx, instance="sched-1", pairs=[("gs-den", "sat-a")])
+        monkeypatch.setattr(m, "_active_context", ctx)
+
+        r = TestClient(m.app).get("/api/v1/decision-explanation", params={"gs": "gs-den"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["pair"] == ["gs-den", "sat-a"]
+        assert body["binding_gate"] is None
+        assert body["actuation"]["kernel_up"] is True
+        assert body["actuation"]["diverged"] is False
 
 
 class TestOmeLifecycleNotices:

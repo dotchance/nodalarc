@@ -1690,10 +1690,13 @@ def get_decision_explanation(gs: str = Query(...)) -> dict | JSONResponse:
 
     Phase A of the link-explainability UX. VS-API composes the funnel ladder,
     effective envelope, best-candidate, and actuation/divergence facts from the
-    committed ground-decision snapshot, the active links, and the actuation
-    roster. The client registry assigns family/severity/human text. Actuation
-    state defaults to ``unknown`` when no roster has reached VS-API — honest, not
-    faked clean. ``404`` if no snapshot has arrived or no decision covers this GS.
+    committed ground-decision snapshot, the kernel-actual link set, and the
+    actuation roster. The client registry assigns family/severity/human text.
+    ``kernel_up`` comes from the Scheduler's recovered ``_actual_links`` (verified
+    kernel truth), NOT ``ctx.links`` (OME's desired/visible snapshot) — otherwise a
+    scheduled-but-unactuated pair masks as connected. Actuation state defaults to
+    ``unknown`` when no roster has reached VS-API — honest, not faked clean.
+    ``404`` if no snapshot has arrived or no decision covers this GS.
     """
     from nodalarc.explain import compose_gs_explanation
 
@@ -1702,11 +1705,7 @@ def get_decision_explanation(gs: str = Query(...)) -> dict | JSONResponse:
         return JSONResponse(status_code=404, content={"error": "No active session"})
     with ctx.state_lock:
         snapshot = ctx.latest_ground_link_decision_snapshot
-        active_pairs = frozenset(
-            tuple(sorted((link.node_a, link.node_b)))
-            for link in ctx.links.values()
-            if link.state == "active"
-        )
+        active_pairs = ctx.actual_kernel_pairs()
         actuation_by_gs: dict[str, str] = {}
         health = ctx.build_actuation_health()
         for inst in health.get("scheduler_instances", []):

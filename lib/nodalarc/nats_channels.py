@@ -162,6 +162,31 @@ def actuation_state_subscribe_subject(session_id: str) -> str:
     return f"nodalarc.links.{session_id}.actuation.>"
 
 
+def actual_links_subject(session_id: str, scheduler_instance_id: str) -> str:
+    """Per-instance retained set of kernel-actual links (latest only).
+
+    The Scheduler's ``_actual_links`` is what the Node Agents have CONFIRMED
+    active (verified=true proof) — the "kernel actual" truth, distinct from the
+    OME ``LinkStateSnapshot`` (OME's desired/visible model). LinkUp/LinkDown ride
+    ``.up``/``.down`` as ``DeliverPolicy.NEW`` events and do not survive a VS-API
+    resubscribe, so this retained, replace-not-merge subject (MaxMsgsPerSubject=1
+    on NODALARC_LINKS, recovered via LAST_PER_SUBJECT) is the only recoverable
+    source of which pairs the kernel actually has up. Keyed per
+    ``scheduler_instance_id`` so a restarted instance does not clobber a dead
+    predecessor's retained message; under the single-Scheduler-owner-per-session
+    model the consumer tracks the current owner and prunes dead predecessors
+    (N>1 live schedulers per session need the same queue-group/leader-election
+    redesign the dispatcher already notes). ``scheduler_instance_id`` is
+    ``{hostname}-{pid}-{ms}`` — no dots, so it is a single safe subject token.
+    """
+    return f"nodalarc.links.{session_id}.actual.{scheduler_instance_id}"
+
+
+def actual_links_subscribe_subject(session_id: str) -> str:
+    """Wildcard for recovering every Scheduler instance's kernel-actual link set."""
+    return f"nodalarc.links.{session_id}.actual.>"
+
+
 def session_ephemeris_subject(session_id: str) -> str:
     """Session ephemeris subject for a specific session."""
     return f"nodalarc.session.{session_id}.ephemeris"

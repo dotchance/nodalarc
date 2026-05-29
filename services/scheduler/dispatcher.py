@@ -58,13 +58,14 @@ from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.link_events import LinkDecisionProvenance
 from nodalarc.models.link_state import LinkStateSnapshot
 from nodalarc.models.scheduler_ops import (
-    ActuationFailureClass as OpsActuationFailureClass,
-)
-from nodalarc.models.scheduler_ops import (
+    ActualLinkSnapshot,
     ActuationOpsDetails,
     OperatorRepairCommand,
     OperatorRepairResponse,
     SchedulerOpsCode,
+)
+from nodalarc.models.scheduler_ops import (
+    ActuationFailureClass as OpsActuationFailureClass,
 )
 from nodalarc.models.scheduler_ops import (
     RecoveryStatus as OpsRecoveryStatus,
@@ -73,6 +74,7 @@ from nodalarc.nats_channels import (
     NATS_CONNECT_OPTIONS,
     STREAM_LINK_EVENTS,
     STREAM_OME_EVENTS,
+    actual_links_subject,
     actuation_state_subject,
     ground_link_decision_snapshot_subject,
     latency_update_subject,
@@ -689,6 +691,12 @@ class Dispatcher:
         # Load durable substrate measurement status for cross-node compensation.
         self._reload_substrate_status()
         await self._publish_startup_actuation_roster()
+        # Recoverable kernel-actual baseline for this instance: on a fresh start
+        # _actual_links is empty (rebuilt by reconcile from OME snapshots), but
+        # publishing it now means VS-API recovers an authoritative "this instance
+        # has these pairs up" via LAST_PER_SUBJECT even before the first membership
+        # change, instead of an absent subject it must guess about.
+        await self._publish_actual_links()
 
         # Scenario injection — core NATS request/reply (not JetStream).
         # Single-owner per session: if Scheduler replicas go above 1, this
@@ -1221,6 +1229,45 @@ class Dispatcher:
                 actuation_state_subject(self._session_id, gs_id),
                 event.model_dump_json().encode(),
             )
+
+    async def _publish_actual_links(self) -> None:
+        """Publish this instance's verified kernel-actual link set as recoverable state.
+
+        ``_actual_links`` is what the Node Agents have CONFIRMED active (verified=true
+        proof) — the "kernel actual" truth the link-explainability UX needs to tell a
+        scheduled-but-unactuated pair (in_flight/faulted) from a genuinely connected one.
+        LinkUp/LinkDown are DeliverPolicy.NEW and do not survive a VS-API resubscribe, so
+        this retained, replace-not-merge snapshot (MaxMsgsPerSubject=1 on NODALARC_LINKS,
+        recovered via LAST_PER_SUBJECT) is the only recoverable source of kernel-actual
+        membership. Edge-triggered by ``_publish_actual_links_if_changed`` so a stable
+        link never re-publishes and never flickers in the recovered set.
+        """
+        js = getattr(self, "_js", None)
+        if js is None:
+            return
+        snapshot = ActualLinkSnapshot(
+            session_id=self._session_id,
+            wiring_generation=self._wiring_generation,
+            scheduler_instance_id=self._scheduler_instance_id,
+            hostname=self._hostname,
+            sim_time=self._current_sim_time,
+            epoch_id=self._last_snapshot_epoch_id,
+            snapshot_seq=self._last_snapshot_seq,
+            active_pairs=self._pair_rows(set(self._actual_links)),
+        )
+        await js.publish(
+            actual_links_subject(self._session_id, self._scheduler_instance_id),
+            snapshot.model_dump_json().encode(),
+        )
+
+    async def _publish_actual_links_if_changed(self, before: frozenset[tuple[str, str]]) -> None:
+        """Publish the kernel-actual set only when membership changed vs ``before``.
+
+        Latency-only updates (same pairs, new netem) are not membership changes and
+        must not re-publish — keeps the retained set edge-triggered, not a heartbeat.
+        """
+        if frozenset(self._actual_links) != before:
+            await self._publish_actual_links()
 
     async def _halt_dispatcher(
         self,
@@ -2157,6 +2204,10 @@ class Dispatcher:
     async def _run_operator_repair_locked(self, cmd: OperatorRepairCommand) -> None:
         gs_id = cmd.gs_id
         sim_time = self._current_sim_time or self._now()
+        # Repair tears down and rewires _actual_links; capture entry membership so
+        # the recoverable kernel-actual set is republished if repair changed it —
+        # on success or on a partial-then-failed repair, not just at the next tick.
+        actual_before = frozenset(self._actual_links)
         before = self._repair_original_states.pop(cmd.intervention_id, self._ground_state(gs_id))
         active_recovery = SchedulerRecoveryStatus(
             verify_attempt_count=0,
@@ -2350,6 +2401,8 @@ class Dispatcher:
                 details=fail_details,
             )
 
+        await self._publish_actual_links_if_changed(actual_before)
+
     # ------------------------------------------------------------------
     # Reconcile-based dispatch — single path to Node Agent
     # ------------------------------------------------------------------
@@ -2534,102 +2587,124 @@ class Dispatcher:
         if forced_bbm_pairs is None:
             forced_bbm_pairs = frozenset()
 
-        await self._run_due_kernel_verifications(sim_time=sim_time)
+        # Kernel-actual membership at entry. Captured before any mutation so the
+        # finally below publishes the corrected set on EVERY exit — including a phase
+        # that popped/added _actual_links and then hit a fatal dispatch failure that
+        # raised (via _handle_actuation_result -> _halt_dispatcher). Without the
+        # finally, that raise would skip the publish and leave the retained snapshot
+        # listing a torn-down pair as still up — the exact masking this fix removes.
+        # Mirrors _run_operator_repair_locked, which publishes outside its try/except.
+        actual_before = frozenset(self._actual_links)
+        try:
+            await self._run_due_kernel_verifications(sim_time=sim_time)
 
-        diff = diff_link_state(self._actual_links, desired)
-        to_remove = self._filter_ground_down_mutations(diff.to_remove, operation="BatchLinkDown")
-        to_add = self._filter_blocked_ground_mutations(diff.to_add, operation="BatchLinkUp")
-        to_update_latency = self._filter_blocked_ground_mutations(
-            diff.to_update_latency, operation="SetLatency"
-        )
+            diff = diff_link_state(self._actual_links, desired)
+            to_remove = self._filter_ground_down_mutations(
+                diff.to_remove, operation="BatchLinkDown"
+            )
+            to_add = self._filter_blocked_ground_mutations(diff.to_add, operation="BatchLinkUp")
+            to_update_latency = self._filter_blocked_ground_mutations(
+                diff.to_update_latency, operation="SetLatency"
+            )
 
-        # Refresh authority metadata on all active links that appear in the
-        # current desired state, BEFORE the no-change early return. The numeric
-        # diff gates tc/netem re-application (no point re-applying identical
-        # delay), but authority provenance must advance on every accepted snapshot
-        # even when physics values are unchanged. Without this, a link stable for
-        # 100 ticks retains provenance from tick 1.
-        for pair, actual_info in self._actual_links.items():
-            desired_info = desired.get(pair)
-            if desired_info is None:
-                continue
-            if desired_info.authority_sim_time is None:
-                continue
-            if (
-                actual_info.authority_sim_time is not None
-                and desired_info.authority_sim_time < actual_info.authority_sim_time
-            ):
-                continue
-            actual_info.authority_sim_time = desired_info.authority_sim_time
-            actual_info.authority_source = desired_info.authority_source
-            actual_info.authority_sequence = desired_info.authority_sequence
+            # Refresh authority metadata on all active links that appear in the
+            # current desired state, BEFORE the no-change early return. The numeric
+            # diff gates tc/netem re-application (no point re-applying identical
+            # delay), but authority provenance must advance on every accepted snapshot
+            # even when physics values are unchanged. Without this, a link stable for
+            # 100 ticks retains provenance from tick 1.
+            for pair, actual_info in self._actual_links.items():
+                desired_info = desired.get(pair)
+                if desired_info is None:
+                    continue
+                if desired_info.authority_sim_time is None:
+                    continue
+                if (
+                    actual_info.authority_sim_time is not None
+                    and desired_info.authority_sim_time < actual_info.authority_sim_time
+                ):
+                    continue
+                actual_info.authority_sim_time = desired_info.authority_sim_time
+                actual_info.authority_source = desired_info.authority_source
+                actual_info.authority_sequence = desired_info.authority_sequence
 
-        if not (to_remove or to_add or to_update_latency):
-            return
+            if not (to_remove or to_add or to_update_latency):
+                return
 
-        sim_iso = sim_time.isoformat()
+            sim_iso = sim_time.isoformat()
 
-        if not self._mbb_dispatch:
-            # Two-phase BBM dispatch — sorted for deterministic replay
-            if to_remove:
-                down_result = await self._send_batch_down(
-                    to_remove, sim_iso, sim_time, nc, down_reasons
+            if not self._mbb_dispatch:
+                # Two-phase BBM dispatch — sorted for deterministic replay
+                if to_remove:
+                    down_result = await self._send_batch_down(
+                        to_remove, sim_iso, sim_time, nc, down_reasons
+                    )
+                    await self._handle_actuation_result(
+                        down_result, sim_time=sim_time, operation_context="bbm_down"
+                    )
+                    for pair in sorted(down_result.succeeded_pairs):
+                        info = self._actual_links.pop(pair, None)
+                        self._last_latencies.pop(pair, None)
+                        self._decrement_active_counts(pair, info)
+
+                if to_add:
+                    up_result = await self._send_batch_up(to_add, desired, sim_iso, sim_time, nc)
+                    await self._handle_actuation_result(
+                        up_result, sim_time=sim_time, operation_context="ground_up"
+                    )
+                    for pair in sorted(up_result.succeeded_pairs):
+                        self._actual_links[pair] = desired[pair]
+                        self._last_latencies[pair] = desired[pair].latency_ms
+                        self._increment_active_counts(pair)
+            else:
+                await self._reconcile_mbb(
+                    to_remove,
+                    to_add,
+                    desired,
+                    sim_iso,
+                    sim_time,
+                    nc,
+                    down_reasons,
+                    forced_bbm_pairs,
+                )
+
+            if to_update_latency:
+                latency_result = await self._send_authoritative_latency_updates(
+                    to_update_latency, desired, sim_time
                 )
                 await self._handle_actuation_result(
-                    down_result, sim_time=sim_time, operation_context="bbm_down"
+                    latency_result, sim_time=sim_time, operation_context="latency"
                 )
-                for pair in sorted(down_result.succeeded_pairs):
-                    info = self._actual_links.pop(pair, None)
-                    self._last_latencies.pop(pair, None)
-                    self._decrement_active_counts(pair, info)
 
-            if to_add:
-                up_result = await self._send_batch_up(to_add, desired, sim_iso, sim_time, nc)
-                await self._handle_actuation_result(
-                    up_result, sim_time=sim_time, operation_context="ground_up"
+            if to_add or to_remove:
+                added_str = ", ".join(f"{a}<->{b}" for a, b in sorted(to_add)) if to_add else ""
+                removed_str = (
+                    ", ".join(f"{a}<->{b}" for a, b in sorted(to_remove)) if to_remove else ""
                 )
-                for pair in sorted(up_result.succeeded_pairs):
-                    self._actual_links[pair] = desired[pair]
-                    self._last_latencies[pair] = desired[pair].latency_ms
-                    self._increment_active_counts(pair)
-        else:
-            await self._reconcile_mbb(
-                to_remove,
-                to_add,
-                desired,
-                sim_iso,
-                sim_time,
-                nc,
-                down_reasons,
-                forced_bbm_pairs,
-            )
-
-        if to_update_latency:
-            latency_result = await self._send_authoritative_latency_updates(
-                to_update_latency, desired, sim_time
-            )
-            await self._handle_actuation_result(
-                latency_result, sim_time=sim_time, operation_context="latency"
-            )
-
-        if to_add or to_remove:
-            added_str = ", ".join(f"{a}<->{b}" for a, b in sorted(to_add)) if to_add else ""
-            removed_str = ", ".join(f"{a}<->{b}" for a, b in sorted(to_remove)) if to_remove else ""
-            parts = []
-            if to_add:
-                parts.append(f"up=[{added_str}]")
-            if to_remove:
-                parts.append(f"down=[{removed_str}]")
-            log.info(
-                "Link state changed [%s, active=%d]",
-                ", ".join(parts),
-                len(self._actual_links),
-            )
-        else:
-            log.debug(
-                "Reconcile: no changes (%d active)",
-                len(self._actual_links),
-            )
+                parts = []
+                if to_add:
+                    parts.append(f"up=[{added_str}]")
+                if to_remove:
+                    parts.append(f"down=[{removed_str}]")
+                log.info(
+                    "Link state changed [%s, active=%d]",
+                    ", ".join(parts),
+                    len(self._actual_links),
+                )
+            else:
+                log.debug(
+                    "Reconcile: no changes (%d active)",
+                    len(self._actual_links),
+                )
+        finally:
+            # Edge-triggered: a no-op when membership is unchanged (a stable link
+            # never re-publishes), but any committed change is published even on a
+            # halt-raise. A publish failure is logged, not raised — it must not mask
+            # the in-flight dispatch exception (same guard idiom as _halt_dispatcher).
+            try:
+                await self._publish_actual_links_if_changed(actual_before)
+            except Exception:
+                log.exception("Failed to publish kernel-actual snapshot at reconcile exit")
 
     async def _send_authoritative_latency_updates(
         self,

@@ -90,6 +90,32 @@ class ActuationOpsDetails(BaseModel):
     reason: str | None = None
 
 
+class ActualLinkSnapshot(BaseModel):
+    """One Scheduler instance's verified kernel-actual link set, recoverable.
+
+    ``active_pairs`` is ``_actual_links`` — the pairs the Node Agents have
+    CONFIRMED active (verified=true proof), i.e. "kernel actual", NOT OME's
+    desired/visible model. Published replace-not-merge to a per-instance retained
+    subject (``actual_links_subject``) whenever membership changes, so VS-API
+    recovers which pairs the kernel actually has up on (re)subscribe — the only
+    recoverable kernel-actual source, since LinkUp/LinkDown are NEW-delivered.
+    Each pair is an ordered ``[node_a, node_b]`` list. ``scheduler_instance_id``
+    keys the retained subject so a restart does not clobber a dead predecessor's
+    message; the consumer tracks the current owner (single-owner-per-session).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    session_id: str
+    wiring_generation: str
+    scheduler_instance_id: str
+    hostname: str
+    sim_time: datetime | None = None
+    epoch_id: int | None = None
+    snapshot_seq: int | None = None
+    active_pairs: list[list[str]] = Field(default_factory=list)
+
+
 class ActuationNotice(BaseModel):
     model_config = ConfigDict(frozen=True)
 

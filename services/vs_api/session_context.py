@@ -52,6 +52,7 @@ from nodalarc.nats_channels import (
     STREAM_OME_EVENTS,
     STREAM_OPS_EVENTS,
     STREAM_SESSION_EVENTS,
+    actual_links_subscribe_subject,
     actuation_state_subscribe_subject,
     almanac_event_subject,
     ground_link_decision_snapshot_subject,
@@ -154,6 +155,12 @@ class SessionContext:
         self.session_ops_events: deque = deque(maxlen=500)
         self.actuation_notices_by_key: dict[tuple[str, str], dict] = {}
         self.actuation_latest_by_gs: dict[tuple[str, str], dict] = {}
+        # Recoverable kernel-actual link set per Scheduler instance: the verified
+        # _actual_links the Scheduler published (replace-not-merge per instance).
+        # value = {"generation": str, "pairs": frozenset[ordered pair]}. Unioned by
+        # actual_kernel_pairs() into the kernel-actual truth the explanation composer
+        # uses for kernel_up — NOT ctx.links, which is OME's desired/visible model.
+        self.actual_links_by_instance: dict[str, dict] = {}
         self.ome_lifecycle_notices_by_key: dict[tuple[str, str], dict] = {}
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
@@ -371,6 +378,21 @@ class SessionContext:
                     ordered_consumer=True,
                     deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
                     cb=self._on_actuation_state,
+                )
+            )
+            # Per-instance kernel-actual link set on NODALARC_LINKS (MaxMsgsPerSubject=1),
+            # recovered via LAST_PER_SUBJECT. This is the Scheduler's verified _actual_links
+            # ("kernel actual"), the only recoverable source of which pairs the kernel
+            # actually has up — LinkUp/LinkDown (NEW) do not survive a resubscribe, so
+            # without this the explanation composer falls back to the OME LinkStateSnapshot
+            # and masks scheduled-but-unactuated pairs as connected.
+            self._subscriptions.append(
+                await js.subscribe(
+                    actual_links_subscribe_subject(sid),
+                    stream=STREAM_LINK_EVENTS,
+                    ordered_consumer=True,
+                    deliver_policy=DeliverPolicy.LAST_PER_SUBJECT,
+                    cb=self._on_actual_links,
                 )
             )
 
@@ -682,6 +704,51 @@ class SessionContext:
         data = json.loads(msg.data)
         with self.state_lock:
             self._update_actuation_notice(data)
+
+    async def _on_actual_links(self, msg) -> None:
+        """Retained per-instance kernel-actual link set (LAST_PER_SUBJECT recovery).
+
+        The Scheduler's ``_actual_links`` is verified kernel truth — the only
+        recoverable source of which pairs the kernel ACTUALLY has up (LinkUp/LinkDown
+        are NEW-delivered and don't survive a resubscribe). Under the single-Scheduler-
+        owner-per-session model a same-generation peer with a different instance_id is a
+        dead predecessor (instance restart) and is pruned, mirroring
+        ``_update_actuation_notice``'s roster pruning, so a stale set never over-reports
+        kernel-up. N>1 live schedulers per session need the queue-group/leader-election
+        redesign the dispatcher already documents.
+        """
+        data = json.loads(msg.data)
+        instance_id = data.get("scheduler_instance_id")
+        if not instance_id:
+            return
+        generation = data.get("wiring_generation")
+        pairs = frozenset(
+            tuple(sorted((p[0], p[1])))
+            for p in data.get("active_pairs", [])
+            if isinstance(p, list) and len(p) == 2
+        )
+        with self.state_lock:
+            for old_instance, rec in list(self.actual_links_by_instance.items()):
+                if old_instance != instance_id and rec.get("generation") == generation:
+                    self.actual_links_by_instance.pop(old_instance, None)
+            self.actual_links_by_instance[instance_id] = {
+                "generation": generation,
+                "pairs": pairs,
+            }
+
+    def actual_kernel_pairs(self) -> frozenset[tuple[str, str]]:
+        """Scheduler-verified kernel-actual pairs for the current session owner.
+
+        Recoverable kernel truth (the Scheduler's ``_actual_links``), NOT the OME
+        ``LinkStateSnapshot``. The union form is degenerate under single-owner-per-
+        session (dead predecessors are pruned on receipt). Empty until the first
+        ``ActualLinkSnapshot`` lands — honest: an unrecovered set reports no kernel
+        links (reads as in-flight/divergence), never a masked connected. Caller must
+        hold ``state_lock`` (mirrors ``build_actuation_health``).
+        """
+        if not self.actual_links_by_instance:
+            return frozenset()
+        return frozenset().union(*(rec["pairs"] for rec in self.actual_links_by_instance.values()))
 
     def _update_actuation_notice(self, event: dict) -> None:
         if event.get("source") != "scheduler":

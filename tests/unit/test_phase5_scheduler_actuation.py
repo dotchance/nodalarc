@@ -9,7 +9,8 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
-from nodalarc.models.scheduler_ops import OperatorRepairCommand
+from nodalarc.models.scheduler_ops import ActualLinkSnapshot, OperatorRepairCommand
+from nodalarc.nats_channels import actual_links_subject
 from nodalarc.proto import node_agent_pb2
 from scheduler.actuation import (
     ActuationFailureClass,
@@ -374,6 +375,101 @@ def test_reconcile_allows_cleanup_down_for_clean_actuation_blocked_ground_statio
     assert pair not in d._actual_links
 
 
+def _actual_link_snapshots(publish_mock: AsyncMock) -> list[ActualLinkSnapshot]:
+    """Parse every ActualLinkSnapshot the dispatcher published to its .actual. subject."""
+    out: list[ActualLinkSnapshot] = []
+    for call in publish_mock.await_args_list:
+        subject = call.args[0] if call.args else call.kwargs.get("subject")
+        payload = call.args[1] if len(call.args) > 1 else call.kwargs.get("payload")
+        if subject and ".actual." in subject:
+            out.append(ActualLinkSnapshot.model_validate_json(payload))
+    return out
+
+
+def test_reconcile_publishes_recoverable_kernel_actual_on_membership_change() -> None:
+    # The link-explainability UX reads kernel_up from the Scheduler's _actual_links,
+    # recovered from a retained per-instance subject — LinkUp/LinkDown are NEW and do
+    # not survive a VS-API resubscribe. A reconcile that changes membership must
+    # publish that set, to its OWN per-instance subject, so a resubscribed VS-API can
+    # tell a connected pair from a scheduled-but-unactuated one.
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._send_batch_down = AsyncMock(
+        return_value=_success_result(pair=pair, operation="BatchLinkDown")
+    )
+    d._js.publish = AsyncMock()
+
+    asyncio.run(d._reconcile_links({}, None, SIM_TIME))
+
+    assert pair not in d._actual_links
+    snaps = _actual_link_snapshots(d._js.publish)
+    assert snaps, "expected an ActualLinkSnapshot on the retained .actual. subject"
+    # Published to this instance's own keyed subject (multi-instance: union, no clobber).
+    d._js.publish.assert_any_await(
+        actual_links_subject(d._session_id, d._scheduler_instance_id),
+        snaps[-1].model_dump_json().encode(),
+    )
+    latest = snaps[-1]
+    assert latest.scheduler_instance_id == d._scheduler_instance_id
+    assert latest.session_id == d._session_id
+    # The torn-down pair is gone from the recoverable kernel-actual set.
+    assert [pair[0], pair[1]] not in latest.active_pairs
+
+
+def test_reconcile_does_not_republish_kernel_actual_when_membership_unchanged() -> None:
+    # Edge-triggered, not a heartbeat: a no-op reconcile (desired == actual) must not
+    # touch the retained kernel-actual subject, so a stable link never flickers in the
+    # recovered set and the retained subject is not rewritten every tick.
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    info = _info()
+    d._actual_links[pair] = info
+    d._js.publish = AsyncMock()
+
+    asyncio.run(d._reconcile_links({pair: info}, None, SIM_TIME))
+
+    assert pair in d._actual_links
+    assert _actual_link_snapshots(d._js.publish) == []
+
+
+def test_reconcile_publishes_corrected_set_when_a_phase_fails_after_teardown() -> None:
+    # Split-brain guard. A dispatch phase commits a membership change (tears down
+    # old_pair) and a later phase raises a fatal failure (the real path:
+    # _handle_actuation_result -> _halt_dispatcher -> RuntimeError). The publish is in a
+    # finally, so the corrected kernel-actual set is still published before the raise
+    # propagates — otherwise the retained snapshot lists the torn-down pair as up and
+    # the explanation masks it as connected on a VS-API resubscribe. Without the
+    # finally, no snapshot is published and this fails.
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._mbb_dispatch = False
+    old_pair = ("gs-multi", "sat-old")
+    new_pair = ("gs-multi", "sat-new")
+    d._actual_links[old_pair] = _info("term0")
+    d._send_batch_down = AsyncMock(
+        return_value=_success_result(pair=old_pair, operation="BatchLinkDown")
+    )
+    d._send_batch_up = AsyncMock(
+        return_value=_success_result(pair=new_pair, operation="BatchLinkUp")
+    )
+
+    async def handle(result, *, sim_time, operation_context, intervention_id=None):
+        # The down settles cleanly (pops old_pair); the up is fatal and raises.
+        if "up" in operation_context:
+            raise RuntimeError("fatal up failure mid-reconcile")
+
+    d._handle_actuation_result = handle
+    d._js.publish = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="fatal up"):
+        asyncio.run(d._reconcile_links({new_pair: _info("term1")}, None, SIM_TIME))
+
+    assert old_pair not in d._actual_links
+    snaps = _actual_link_snapshots(d._js.publish)
+    assert snaps, "a membership change committed before a halt-raise must still publish"
+    assert [old_pair[0], old_pair[1]] not in snaps[-1].active_pairs
+
+
 def test_ground_down_gate_blocks_kernel_dirty_and_repairing_but_allows_clean_cleanup() -> None:
     d = _make_dispatcher_with_two_terminal_gs()
     pair = ("gs-multi", "sat-old")
@@ -544,6 +640,18 @@ def test_operator_repair_reconciles_to_current_authority_and_proves_final_gs_sta
     assert new_pair in d._actual_links
     assert verify_calls[0] == (set(), {old_pair})
     assert verify_calls[-1] == ({new_pair}, set())
+    # Operator repair changed membership (old_pair removed, new_pair added) — the
+    # recoverable kernel-actual set must be republished so a just-repaired GS reads
+    # connected on a VS-API resubscribe, not stale until the next ordinary reconcile.
+    snaps = _actual_link_snapshots(d._js.publish)
+    assert snaps, "operator repair that changed membership must republish kernel-actual"
+    latest = snaps[-1]
+    d._js.publish.assert_any_await(
+        actual_links_subject(d._session_id, d._scheduler_instance_id),
+        latest.model_dump_json().encode(),
+    )
+    assert [new_pair[0], new_pair[1]] in latest.active_pairs
+    assert [old_pair[0], old_pair[1]] not in latest.active_pairs
 
 
 def test_kernel_verify_due_gate_and_backoff_use_injected_clock() -> None:

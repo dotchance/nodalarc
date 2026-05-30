@@ -26,6 +26,7 @@ from nodalarc.models.decision_explanation import (
     FunnelGate,
     GateState,
     LadderGate,
+    PendingActuation,
 )
 from nodalarc.models.link_decisions import (
     GroundLinkDecisionSnapshot,
@@ -248,10 +249,9 @@ def compose_gs_explanation(
     snapshot: GroundLinkDecisionSnapshot,
     active_pairs: frozenset[Pair],
     actuation_state_by_gs: Mapping[str, ActuationStateName],
-    divergence_onset_by_pair: Mapping[Pair, datetime] | None = None,
+    pending_by_pair: Mapping[Pair, PendingActuation] | None = None,
     expected_latency_ms: float | None = None,
     fault_after_ms: float | None = None,
-    now: datetime | None = None,
     focal_pair: Pair | None = None,
 ) -> DecisionExplanationFacts | None:
     """Compose the explanation facts for one ground station, or one specific pair.
@@ -262,9 +262,9 @@ def compose_gs_explanation(
     Inspector); without it the GS card auto-selects by precedence: connected >
     scheduled-but-not-up > visible-but-withheld > closest-to-visible rejected.
 
-    ``divergence_onset_by_pair`` (wall-clock UTC, tracked by VS-API) and ``now`` let the
-    actuation facts carry how long the focal pair has been desired-but-not-actual, so the
-    client can escalate in_flight -> faulted past ``fault_after_ms``. All four are
+    ``pending_by_pair`` carries the Scheduler-owned divergence timing (origin +
+    skew-free elapsed) for each desired-but-not-kernel-actual pair, so the client can
+    escalate in_flight -> faulted past ``fault_after_ms``. All three timing/bound args are
     optional; absent them the actuation facts simply omit the timing/bounds.
     """
     decisions = [d for d in snapshot.decisions if gs_id in d.pair]
@@ -388,10 +388,11 @@ def compose_gs_explanation(
 
     diverged_since: datetime | None = None
     actuation_elapsed_ms: float | None = None
-    if diverged and divergence_onset_by_pair is not None:
-        diverged_since = divergence_onset_by_pair.get(_ordered_pair(focal.pair))
-        if diverged_since is not None and now is not None:
-            actuation_elapsed_ms = (now - diverged_since).total_seconds() * 1000.0
+    if diverged and pending_by_pair is not None:
+        pending = pending_by_pair.get(_ordered_pair(focal.pair))
+        if pending is not None:
+            diverged_since = pending.pending_since
+            actuation_elapsed_ms = pending.actuation_elapsed_ms
 
     return DecisionExplanationFacts(
         gs_id=gs_id,

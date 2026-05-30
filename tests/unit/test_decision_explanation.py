@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from nodalarc.explain import compose_gs_explanation, scheduled_pairs
+from nodalarc.models.decision_explanation import PendingActuation
 from nodalarc.models.link_decisions import (
     GroundLinkDecisionSnapshot,
     GroundPolicyAudit,
@@ -273,16 +274,16 @@ def test_divergence_carries_elapsed_and_contract_bounds():
     )
     pair = tuple(sorted((GS, "sat-P00S03")))
     onset = datetime(2026, 5, 29, 18, 8, 18, tzinfo=UTC)
-    now = datetime(2026, 5, 29, 18, 8, 18, 500000, tzinfo=UTC)  # 500 ms after onset
     facts = compose_gs_explanation(
         gs_id=GS,
         snapshot=snap,
         active_pairs=frozenset(),  # OME desires it, kernel does NOT have it -> diverged
         actuation_state_by_gs={GS: "clean"},
-        divergence_onset_by_pair={pair: onset},
+        # VS-API supplies the Scheduler-owned origin + skew-free elapsed; the composer
+        # copies them through and never reads a clock.
+        pending_by_pair={pair: PendingActuation(pending_since=onset, actuation_elapsed_ms=500.0)},
         expected_latency_ms=250.0,
         fault_after_ms=1200.0,
-        now=now,
     )
     assert facts.actuation.diverged is True
     assert facts.actuation.diverged_since == onset
@@ -305,13 +306,16 @@ def test_connected_pair_has_no_divergence_timing_but_keeps_bounds():
         snapshot=snap,
         active_pairs=frozenset({pair}),  # kernel HAS it -> connected, not diverged
         actuation_state_by_gs={GS: "clean"},
-        divergence_onset_by_pair={pair: datetime(2026, 5, 29, tzinfo=UTC)},
+        pending_by_pair={
+            pair: PendingActuation(
+                pending_since=datetime(2026, 5, 29, tzinfo=UTC), actuation_elapsed_ms=3_600_000.0
+            )
+        },
         expected_latency_ms=250.0,
         fault_after_ms=1200.0,
-        now=datetime(2026, 5, 29, 1, tzinfo=UTC),
     )
     assert facts.actuation.diverged is False
-    # No stale onset bleeds into a connected pair.
+    # No stale pending timing bleeds into a connected pair.
     assert facts.actuation.diverged_since is None
     assert facts.actuation.actuation_elapsed_ms is None
     # The contract bounds are always available to the client.

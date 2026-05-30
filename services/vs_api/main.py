@@ -1692,8 +1692,9 @@ def get_decision_explanation(
 
     Phase A of the link-explainability UX. VS-API composes the funnel ladder,
     effective envelope, best-candidate, and actuation/divergence facts from the
-    committed ground-decision snapshot, the kernel-actual link set, and the
-    actuation roster. The client registry assigns family/severity/human text.
+    committed ground-decision snapshot, the kernel-actual link set, the actuation
+    roster, and the Scheduler-owned pending clock (divergence timing, recovered from
+    the retained ActualLinkSnapshot). The client registry assigns family/severity/text.
     ``kernel_up`` comes from the Scheduler's recovered ``_actual_links`` (verified
     kernel truth), NOT ``ctx.links`` (OME's desired/visible snapshot) — otherwise a
     scheduled-but-unactuated pair masks as connected. Actuation state defaults to
@@ -1712,7 +1713,7 @@ def get_decision_explanation(
     with ctx.state_lock:
         snapshot = ctx.latest_ground_link_decision_snapshot
         active_pairs = ctx.actual_kernel_pairs()
-        onset_by_pair = dict(ctx.divergence_onset_by_pair)
+        pending_by_pair = ctx.pending_actuation(datetime.now(UTC))
         expected_latency_ms = ctx.actuation_expected_latency_ms
         fault_after_ms = ctx.actuation_fault_after_ms
         actuation_by_gs: dict[str, str] = {}
@@ -1733,10 +1734,9 @@ def get_decision_explanation(
         snapshot=snapshot,
         active_pairs=active_pairs,
         actuation_state_by_gs=actuation_by_gs,
-        divergence_onset_by_pair=onset_by_pair,
+        pending_by_pair=pending_by_pair,
         expected_latency_ms=expected_latency_ms,
         fault_after_ms=fault_after_ms,
-        now=datetime.now(UTC),
         focal_pair=focal_pair,
     )
     if facts is None:

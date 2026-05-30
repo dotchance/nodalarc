@@ -37,8 +37,9 @@ from typing import Literal
 import nats
 import yaml
 from nodalarc.db.queries import insert_ome_lifecycle_event, insert_operator_intervention_event
-from nodalarc.explain import scheduled_pairs
+from nodalarc.models.decision_explanation import PendingActuation
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
+from nodalarc.models.scheduler_ops import ActualLinkSnapshot
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
     AlmanacState,
@@ -161,16 +162,15 @@ class SessionContext:
         self.session_ops_events: deque = deque(maxlen=500)
         self.actuation_notices_by_key: dict[tuple[str, str], dict] = {}
         self.actuation_latest_by_gs: dict[tuple[str, str], dict] = {}
-        # Recoverable kernel-actual link set per Scheduler instance: the verified
-        # _actual_links the Scheduler published (replace-not-merge per instance).
-        # value = {"generation": str, "pairs": frozenset[ordered pair]}. Unioned by
-        # actual_kernel_pairs() into the kernel-actual truth the explanation composer
-        # uses for kernel_up — NOT ctx.links, which is OME's desired/visible model.
+        # Recoverable kernel-actual + pending state per Scheduler instance, replace-not-
+        # merge per instance, from the retained ActualLinkSnapshot. value = {"generation":
+        # str, "pairs": frozenset[ordered pair], "pending": dict[ordered pair, pending_since],
+        # "emitted_at": datetime|None, "received_at": datetime}. actual_kernel_pairs() unions
+        # "pairs" into kernel-actual truth (for kernel_up — NOT ctx.links, OME's model);
+        # pending_actuation() turns "pending" into the Scheduler-owned divergence clock.
+        # "received_at" (VS-API wall clock at receipt) + "emitted_at" (Scheduler publish
+        # clock) give skew-free divergence age without cross-pod NTP drift.
         self.actual_links_by_instance: dict[str, dict] = {}
-        # Wall-clock onset of each OME-desired-but-not-kernel-actual pair, stamped on
-        # snapshot arrival. Recoverable across a client refresh (server-side), so a
-        # stuck handover's in_flight -> faulted clock is not reset every browser reload.
-        self.divergence_onset_by_pair: dict[tuple[str, str], datetime] = {}
         self.ome_lifecycle_notices_by_key: dict[tuple[str, str], dict] = {}
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
@@ -583,7 +583,6 @@ class SessionContext:
                 )
                 return
             self.latest_ground_link_decision_snapshot = snapshot
-            self._recompute_divergence_onsets(datetime.now(UTC))
 
     async def _on_link_up(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()
@@ -719,36 +718,42 @@ class SessionContext:
             self._update_actuation_notice(data)
 
     async def _on_actual_links(self, msg) -> None:
-        """Retained per-instance kernel-actual link set (LAST_PER_SUBJECT recovery).
+        """Retained per-instance kernel-actual + pending link set (LAST_PER_SUBJECT recovery).
 
         The Scheduler's ``_actual_links`` is verified kernel truth — the only
         recoverable source of which pairs the kernel ACTUALLY has up (LinkUp/LinkDown
-        are NEW-delivered and don't survive a resubscribe). Under the single-Scheduler-
-        owner-per-session model a same-generation peer with a different instance_id is a
-        dead predecessor (instance restart) and is pruned, mirroring
-        ``_update_actuation_notice``'s roster pruning, so a stale set never over-reports
-        kernel-up. N>1 live schedulers per session need the queue-group/leader-election
-        redesign the dispatcher already documents.
+        are NEW-delivered and don't survive a resubscribe). The same retained snapshot
+        carries ``pending_pairs`` (the Scheduler-owned in_flight -> faulted clock) and
+        ``emitted_at``, so the divergence timing recovers atomically with the actual set.
+        We stamp ``received_at`` on receipt so ``pending_actuation`` can derive divergence
+        age skew-free. Under the single-Scheduler-owner-per-session model a same-generation
+        peer with a different instance_id is a dead predecessor (instance restart) and is
+        pruned, mirroring ``_update_actuation_notice``'s roster pruning, so a stale set
+        never over-reports kernel-up. N>1 live schedulers per session need the
+        queue-group/leader-election redesign the dispatcher already documents.
         """
-        data = json.loads(msg.data)
-        instance_id = data.get("scheduler_instance_id")
+        snap = ActualLinkSnapshot.model_validate_json(msg.data)
+        instance_id = snap.scheduler_instance_id
         if not instance_id:
             return
-        generation = data.get("wiring_generation")
-        pairs = frozenset(
-            tuple(sorted((p[0], p[1])))
-            for p in data.get("active_pairs", [])
-            if isinstance(p, list) and len(p) == 2
-        )
+        pairs = frozenset(tuple(sorted((p[0], p[1]))) for p in snap.active_pairs if len(p) == 2)
+        pending = {
+            tuple(sorted((pp.pair[0], pp.pair[1]))): pp.pending_since
+            for pp in snap.pending_pairs
+            if len(pp.pair) == 2
+        }
+        received_at = datetime.now(UTC)
         with self.state_lock:
             for old_instance, rec in list(self.actual_links_by_instance.items()):
-                if old_instance != instance_id and rec.get("generation") == generation:
+                if old_instance != instance_id and rec.get("generation") == snap.wiring_generation:
                     self.actual_links_by_instance.pop(old_instance, None)
             self.actual_links_by_instance[instance_id] = {
-                "generation": generation,
+                "generation": snap.wiring_generation,
                 "pairs": pairs,
+                "pending": pending,
+                "emitted_at": snap.emitted_at,
+                "received_at": received_at,
             }
-            self._recompute_divergence_onsets(datetime.now(UTC))
 
     def actual_kernel_pairs(self) -> frozenset[tuple[str, str]]:
         """Scheduler-verified kernel-actual pairs for the current session owner.
@@ -764,24 +769,36 @@ class SessionContext:
             return frozenset()
         return frozenset().union(*(rec["pairs"] for rec in self.actual_links_by_instance.values()))
 
-    def _recompute_divergence_onsets(self, now: datetime) -> None:
-        """Stamp/clear the wall-clock onset of every OME-desired-but-not-kernel-actual pair.
+    def pending_actuation(self, now: datetime) -> dict[tuple[str, str], PendingActuation]:
+        """Scheduler-owned divergence timing for currently-pending pairs, skew-free.
 
-        Caller holds ``state_lock``. Run on each ground-decision and kernel-actual
-        arrival: a newly diverged pair gets ``onset=now``; a pair that converged (in the
-        kernel-actual set) or that OME no longer desires is cleared. The composer turns
-        the surviving onset into the in_flight -> faulted deadline. Onset survives a
-        client refresh (server-side state) but NOT a VS-API restart — a re-observed
-        divergence re-stamps ``now``, which bounded-delays escalation, never hides it.
+        Caller holds ``state_lock``. ``pending_since`` is the Scheduler's origin (recovered
+        from the retained ActualLinkSnapshot, so it survives a VS-API restart — unlike the
+        old VS-API-observed onset). ``actuation_elapsed_ms`` is computed as
+        ``(emitted_at - pending_since)`` [a Scheduler-clock delta] +
+        ``(now - received_at)`` [a VS-API-clock delta]: each term is single-clock, so
+        cross-pod NTP skew cancels and only NATS transit (sub-ms) is unaccounted. The union
+        over instances is degenerate under single-owner-per-session; on the (degenerate)
+        collision the earliest origin wins so the most-pending pair is never masked.
         """
-        snap = self.latest_ground_link_decision_snapshot
-        desired = scheduled_pairs(snap) if snap is not None else frozenset()
-        diverged = desired - self.actual_kernel_pairs()
-        for pair in diverged:
-            self.divergence_onset_by_pair.setdefault(pair, now)
-        for pair in list(self.divergence_onset_by_pair):
-            if pair not in diverged:
-                self.divergence_onset_by_pair.pop(pair, None)
+        out: dict[tuple[str, str], PendingActuation] = {}
+        for rec in self.actual_links_by_instance.values():
+            emitted_at = rec.get("emitted_at")
+            received_at = rec.get("received_at")
+            for pair, since in rec.get("pending", {}).items():
+                if emitted_at is not None and received_at is not None:
+                    elapsed_ms = (
+                        (emitted_at - since).total_seconds() + (now - received_at).total_seconds()
+                    ) * 1000.0
+                else:
+                    # No emission stamp (legacy producer): fall back to VS-API-clock age.
+                    elapsed_ms = (now - since).total_seconds() * 1000.0
+                existing = out.get(pair)
+                if existing is None or since < existing.pending_since:
+                    out[pair] = PendingActuation(
+                        pending_since=since, actuation_elapsed_ms=max(0.0, elapsed_ms)
+                    )
+        return out
 
     def _update_actuation_notice(self, event: dict) -> None:
         if event.get("source") != "scheduler":

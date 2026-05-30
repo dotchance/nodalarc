@@ -138,19 +138,36 @@ class CandidateFacts(BaseModel):
     viable_withheld: bool
 
 
+class PendingActuation(BaseModel):
+    """Divergence timing for one desired-but-not-kernel-actual pair, fed to the composer.
+
+    The Scheduler OWNS the origin: ``pending_since`` is the wall-clock instant it folded
+    the pair into its effective-desired set without a verified kernel entry, recovered by
+    VS-API from the retained ``ActualLinkSnapshot`` (so it survives a VS-API restart —
+    the bug the old VS-API-observed onset had). ``actuation_elapsed_ms`` is VS-API's
+    skew-free age of that divergence (a same-clock Scheduler delta plus a same-clock
+    VS-API receive-to-now delta), so the composer never reads a clock and the bound is
+    compared against the actuation window it was justified for, not an end-to-end one."""
+
+    model_config = ConfigDict(frozen=True)
+
+    pending_since: datetime
+    actuation_elapsed_ms: float
+
+
 class ActuationFacts(BaseModel):
     """Realization facts. The client decides in_flight vs faulted by comparing
     ``actuation_elapsed_ms`` to ``fault_after_ms`` — the backend states the raw facts
     and carries the contract bounds; it never assigns the family.
 
-    ``diverged_since`` is the wall-clock instant (UTC) VS-API first observed this pair as
-    OME-desired but not kernel-actual; ``actuation_elapsed_ms`` is the server-computed
-    age of that divergence at compose time (skew-free — not the client's clock). Both are
-    ``None`` when the pair is not diverged, or when the onset is not yet known (e.g. right
-    after a VS-API restart). ``expected_latency_ms``/``fault_after_ms`` are the
-    ``simulation.actuation`` contract, wall-clock not sim-time: a divergence younger than
-    ``fault_after_ms`` is calm in_flight, at/older is faulted; the deadline a UI shows is
-    ``diverged_since + fault_after_ms``."""
+    ``diverged_since`` is the wall-clock instant (UTC) the SCHEDULER folded this pair into
+    its desired set without kernel proof (recovered from the retained ActualLinkSnapshot,
+    not VS-API's observation time); ``actuation_elapsed_ms`` is the skew-free age of that
+    divergence at compose time. Both are ``None`` when the pair is not diverged, or when
+    the Scheduler's pending clock has not yet reached VS-API. ``expected_latency_ms``/
+    ``fault_after_ms`` are the ``simulation.actuation`` contract, wall-clock not sim-time:
+    a divergence younger than ``fault_after_ms`` is calm in_flight, at/older is faulted;
+    the deadline a UI shows is ``diverged_since + fault_after_ms``."""
 
     model_config = ConfigDict(frozen=True)
 

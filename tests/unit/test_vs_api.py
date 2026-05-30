@@ -1550,11 +1550,13 @@ class TestKernelActualRecovery:
     it — otherwise a scheduled-but-unactuated pair masks as connected.
     """
 
-    def _deliver(self, ctx, *, instance: str, pairs, generation: str = "gen-1") -> None:
+    def _deliver(
+        self, ctx, *, instance: str, pairs, pending=None, emitted_at=None, generation: str = "gen-1"
+    ) -> None:
         import asyncio
         from unittest.mock import MagicMock
 
-        from nodalarc.models.scheduler_ops import ActualLinkSnapshot
+        from nodalarc.models.scheduler_ops import ActualLinkSnapshot, PendingActuationPair
 
         msg = MagicMock()
         msg.data = (
@@ -1564,6 +1566,11 @@ class TestKernelActualRecovery:
                 scheduler_instance_id=instance,
                 hostname=instance + "-host",
                 active_pairs=[list(p) for p in pairs],
+                pending_pairs=[
+                    PendingActuationPair(pair=list(p), pending_since=since, operation="BatchLinkUp")
+                    for p, since in (pending or [])
+                ],
+                emitted_at=emitted_at,
             )
             .model_dump_json()
             .encode()
@@ -1676,25 +1683,69 @@ class TestKernelActualRecovery:
         assert body["actuation"]["kernel_up"] is True
         assert body["actuation"]["diverged"] is False
 
-    def test_divergence_onset_stamped_then_cleared_on_convergence(self):
-        # The snapshot desires gs-den/sat-a with no kernel-actual -> onset stamped on
-        # snapshot arrival. When the pair converges (kernel-actual gains it), the onset
-        # clears, so the in_flight clock resets only on real convergence.
-        ctx = self._ctx_with_snapshot_and_clean_roster()
+    def test_pending_clock_recovered_then_cleared_on_convergence(self):
+        # The divergence clock is Scheduler-owned and arrives ON the retained
+        # ActualLinkSnapshot (pending_pairs) — VS-API no longer derives it from observing a
+        # ground-decision snapshot. A pending pair shows up in pending_actuation; once it
+        # converges (moves into active_pairs) it clears, so the in_flight clock resets only
+        # on real convergence.
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
         pair = ("gs-den", "sat-a")
-        assert pair in ctx.divergence_onset_by_pair
-        self._deliver(ctx, instance="sched-1", pairs=[pair])
-        assert pair not in ctx.divergence_onset_by_pair
+        since = datetime(2026, 5, 29, 18, 8, 18, tzinfo=UTC)
+        emitted = datetime(2026, 5, 29, 18, 8, 19, tzinfo=UTC)
+        self._deliver(
+            ctx, instance="sched-1", pairs=[], pending=[(pair, since)], emitted_at=emitted
+        )
+        recovered = ctx.pending_actuation(datetime(2026, 5, 29, 18, 8, 20, tzinfo=UTC))
+        assert pair in recovered
+        assert recovered[pair].pending_since == since
+        # Convergence: the pair is now kernel-actual and no longer pending.
+        self._deliver(ctx, instance="sched-1", pairs=[pair], pending=[], emitted_at=emitted)
+        assert ctx.pending_actuation(datetime(2026, 5, 29, 18, 8, 21, tzinfo=UTC)) == {}
+
+    def test_pending_actuation_elapsed_is_skew_free(self):
+        # elapsed = (emitted_at - pending_since)[Scheduler-clock delta] +
+        # (now - received_at)[VS-API-clock delta]. Each term is single-clock, so any
+        # constant offset between the Scheduler clock and the VS-API clock cancels — the
+        # age is correct regardless of cross-pod NTP skew. pending_since is preserved as
+        # the Scheduler-owned origin.
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        pair = ("gs-den", "sat-a")
+        since = datetime(2026, 5, 29, 18, 0, 0, tzinfo=UTC)
+        emitted = datetime(2026, 5, 29, 18, 0, 1, tzinfo=UTC)  # 1000 ms pending at emit
+        received = datetime(2026, 5, 29, 18, 0, 1, 200000, tzinfo=UTC)
+        ctx.actual_links_by_instance["sched-1"] = {
+            "generation": "gen-1",
+            "pairs": frozenset(),
+            "pending": {pair: since},
+            "emitted_at": emitted,
+            "received_at": received,
+        }
+        now = datetime(2026, 5, 29, 18, 0, 1, 700000, tzinfo=UTC)  # 500 ms after receive
+        recovered = ctx.pending_actuation(now)
+        assert recovered[pair].actuation_elapsed_ms == 1500.0  # 1000 + 500
+        assert recovered[pair].pending_since == since
 
     def test_endpoint_emits_divergence_timing_and_contract_bounds(self, monkeypatch):
         # The in_flight -> faulted facts: a diverged pair carries diverged_since +
         # server-computed elapsed + the wall-clock contract bounds, so the client can
-        # escalate at fault_after_ms without hardcoding it.
+        # escalate at fault_after_ms without hardcoding it. The timing is the Scheduler's
+        # pending clock, recovered on the retained ActualLinkSnapshot.
         import vs_api.main as m
         from fastapi.testclient import TestClient
 
         ctx = self._ctx_with_snapshot_and_clean_roster()
-        assert ("gs-den", "sat-a") in ctx.divergence_onset_by_pair
+        since = datetime(2026, 5, 29, 18, 8, 18, tzinfo=UTC)
+        emitted = datetime(2026, 5, 29, 18, 8, 18, 500000, tzinfo=UTC)  # 500 ms pending at emit
+        self._deliver(
+            ctx,
+            instance="sched-1",
+            pairs=[],
+            pending=[(("gs-den", "sat-a"), since)],
+            emitted_at=emitted,
+        )
         monkeypatch.setattr(m, "_active_context", ctx)
 
         r = TestClient(m.app).get("/api/v1/decision-explanation", params={"gs": "gs-den"})
@@ -1703,7 +1754,7 @@ class TestKernelActualRecovery:
         assert act["diverged"] is True
         assert act["diverged_since"] is not None
         assert act["actuation_elapsed_ms"] is not None
-        assert act["actuation_elapsed_ms"] >= 0.0
+        assert act["actuation_elapsed_ms"] >= 500.0  # at least the Scheduler-side pending age
         assert act["expected_latency_ms"] == 250.0
         assert act["fault_after_ms"] == 1200.0
 

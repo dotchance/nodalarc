@@ -318,7 +318,12 @@ function AppInner() {
       >
         <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
           {USE_R3F ? (
-            <R3FScene />
+            <R3FScene
+              snapshot={augmentedSnapshot}
+              ephemeris={ephemeris}
+              colorMode={colorMode}
+              onSelect={select}
+            />
           ) : (
             <GlobeView
               snapshot={augmentedSnapshot}

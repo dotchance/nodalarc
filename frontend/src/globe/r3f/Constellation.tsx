@@ -1,0 +1,147 @@
+// Copyright 2024-2026 .chance (dotchance)
+// Licensed under the Apache License, Version 2.0. See LICENSE file.
+/**
+ * Constellation — all satellites as one InstancedMesh (O(1) draw call at any scale).
+ * Reproduces globe/satellites.ts: the snapshot seeds instance slots + colors; every frame
+ * each satellite's position is PROPAGATED client-side (the reused SGP4 worker, or the
+ * main-thread propagateToSceneXYZ fallback) keyed on the EMA-interpolated sim time — NOT
+ * interpolated between snapshot positions. The truth layer (worker, propagateToSceneXYZ,
+ * simClock, geoToWorld) is reused verbatim; only the three.js object lifecycle is
+ * reimplemented declaratively. Positions are mirrored into the shared registry so links,
+ * selection, labels, and the camera read the same per-frame truth.
+ *
+ * Lives inside <Body id="earth">, so its instances are in the Earth local frame.
+ */
+
+import { useLayoutEffect, useMemo, useRef } from "react";
+import * as THREE from "three";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
+import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../../config";
+import { geoToWorld } from "../geo";
+import { interpolatedSimTimeMs } from "../../sim/simClock";
+import { isWorkerReady, readPosition, requestPropagate } from "../../sim/workerBridge";
+import { propagateToSceneXYZ } from "../../sim/orbitalMath";
+import type { SessionEphemeris } from "../../sim/ephemeris";
+import type { ColorMode, NodeState, Selection } from "../../types";
+import { removeNode, setNodeLocalPosition } from "./positions";
+
+const MAX_SATELLITES = 10_000;
+
+const _tmpMatrix = new THREE.Matrix4();
+const _tmpColor = new THREE.Color();
+const _workerPos = { x: 0, y: 0, z: 0 };
+
+function satColor(node: NodeState, mode: ColorMode): number {
+  if (mode === "area" && node.routing_area) return AREA_COLORS[node.routing_area] ?? 0xaabbcc;
+  if (mode === "plane" && node.plane != null) return getPlaneColor(node.plane);
+  return 0xccddee;
+}
+
+interface ConstellationProps {
+  nodes: NodeState[];
+  ephemeris: SessionEphemeris | null;
+  colorMode: ColorMode;
+  onSelect: (sel: Selection | null) => void;
+}
+
+export function Constellation({ nodes, ephemeris, colorMode, onSelect }: ConstellationProps) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const satIndex = useRef(new Map<string, number>());
+  const indexToId = useRef<string[]>([]);
+  const countRef = useRef(0);
+  const lastPropagateRef = useRef(0);
+
+  const geometry = useMemo(
+    () => new THREE.SphereGeometry(SAT_RADIUS, SAT_SEGMENTS, SAT_SEGMENTS),
+    [],
+  );
+  const material = useMemo(() => new THREE.MeshBasicMaterial(), []);
+
+  // Reconcile instance slots + colors on snapshot / colorMode change. useLayoutEffect so
+  // count is correct before the first paint (the args max-count would otherwise render
+  // MAX_SATELLITES garbage instances for one frame).
+  useLayoutEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    const seen = new Set<string>();
+    for (const node of nodes) {
+      if (node.node_type !== "satellite") continue;
+      seen.add(node.node_id);
+      let idx = satIndex.current.get(node.node_id);
+      if (idx === undefined) {
+        idx = countRef.current++;
+        satIndex.current.set(node.node_id, idx);
+        indexToId.current[idx] = node.node_id;
+        const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
+        _tmpMatrix.makeTranslation(p.x, p.y, p.z);
+        mesh.setMatrixAt(idx, _tmpMatrix);
+        setNodeLocalPosition(node.node_id, p.x, p.y, p.z);
+      }
+      _tmpColor.setHex(satColor(node, colorMode));
+      mesh.setColorAt(idx, _tmpColor);
+    }
+    // Satellites that vanished from the snapshot: collapse to a degenerate instance and
+    // drop from the registry so a stale position never lingers.
+    for (const [id, idx] of satIndex.current) {
+      if (!seen.has(id)) {
+        _tmpMatrix.makeScale(0, 0, 0);
+        mesh.setMatrixAt(idx, _tmpMatrix);
+        removeNode(id);
+        satIndex.current.delete(id);
+      }
+    }
+    mesh.count = countRef.current;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }, [nodes, colorMode]);
+
+  // Per-frame propagation — identical model to globe/satellites.ts animateSatellites.
+  useFrame(() => {
+    const mesh = meshRef.current;
+    if (!mesh || !ephemeris) return;
+    const now = performance.now();
+    const simMs = interpolatedSimTimeMs(now);
+    if (simMs === null) return;
+    const simTimeUnix = simMs / 1000;
+    const epochUnix = ephemeris.epoch_unix;
+    const workerReady = isWorkerReady();
+    if (workerReady && now - lastPropagateRef.current > 2000) {
+      requestPropagate(simTimeUnix, 1.0);
+      lastPropagateRef.current = now;
+    }
+    for (const [nodeId, idx] of satIndex.current) {
+      const ephNode = ephemeris.nodes[nodeId];
+      if (!ephNode || ephNode.type !== "keplerian") continue;
+      let x: number, y: number, z: number;
+      if (workerReady && readPosition(nodeId, simTimeUnix, _workerPos)) {
+        x = _workerPos.x;
+        y = _workerPos.y;
+        z = _workerPos.z;
+      } else {
+        [x, y, z] = propagateToSceneXYZ(ephNode, epochUnix, simTimeUnix);
+      }
+      _tmpMatrix.makeTranslation(x, y, z);
+      mesh.setMatrixAt(idx, _tmpMatrix);
+      setNodeLocalPosition(nodeId, x, y, z);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  });
+
+  const handleClick = (e: ThreeEvent<MouseEvent>) => {
+    if (e.instanceId === undefined) return;
+    const id = indexToId.current[e.instanceId];
+    if (!id) return;
+    e.stopPropagation();
+    onSelect({ type: "satellite", id });
+  };
+
+  return (
+    <instancedMesh
+      ref={meshRef}
+      args={[geometry, material, MAX_SATELLITES]}
+      name="satellites"
+      onClick={handleClick}
+    />
+  );
+}

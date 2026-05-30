@@ -15,9 +15,14 @@ import { DecisionLadder } from "./DecisionLadder";
 import { EffectiveEnvelopePanel } from "./EffectiveEnvelopePanel";
 import { FamilyBadge } from "./FamilyBadge";
 
+function fmtMs(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
 export function GroundStationCard({ facts }: { facts: DecisionFacts }) {
   const family = deriveFamily(facts);
   const tone = FAMILY_TONE[family];
+  const act = facts.actuation;
 
   return (
     <div className="gs-card" style={{ borderLeft: `3px solid ${tone.css}` }}>
@@ -37,6 +42,14 @@ export function GroundStationCard({ facts }: { facts: DecisionFacts }) {
               <span className="detail-label">Divergence</span>
               <span className="detail-value detail-value--failed">
                 OME desired, kernel not up
+              </span>
+            </div>
+          ) : null}
+          {act && act.diverged && act.actuation_elapsed_ms !== null && act.fault_after_ms !== null ? (
+            <div className="detail-row">
+              <span className="detail-label">Convergence</span>
+              <span className={`detail-value${family === "faulted" ? " detail-value--failed" : ""}`}>
+                {fmtMs(act.actuation_elapsed_ms)} elapsed / fault at {fmtMs(act.fault_after_ms)}
               </span>
             </div>
           ) : null}

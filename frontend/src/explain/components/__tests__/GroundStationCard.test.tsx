@@ -145,5 +145,7 @@ describe("GroundStationCard", () => {
     expect(screen.getByText("Faulted")).toBeTruthy();
     expect(screen.queryByText("Expected no-link")).toBeNull();
     expect(screen.getByText(/OME desired, kernel not up/i)).toBeTruthy();
+    // The convergence deadline: 2.0 s elapsed past the 1.2 s fault threshold.
+    expect(screen.getByText(/2\.0s elapsed \/ fault at 1\.2s/)).toBeTruthy();
   });
 });

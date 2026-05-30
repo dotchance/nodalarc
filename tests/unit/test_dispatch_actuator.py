@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime
 
 from nodalarc.models.link_events import LinkDecisionProvenance
@@ -231,6 +232,110 @@ def test_send_batch_up_requires_every_interface_ack_for_pair_success():
     assert result.succeeded_pairs == set()
     assert result.failed_pairs == {PAIR}
     assert js.published == []
+
+
+def _actuation_latency_records(caplog) -> list:
+    return [r for r in caplog.records if getattr(r, "event", None) == "actuation_latency"]
+
+
+def test_send_batch_up_logs_wall_clock_actuation_latency(caplog):
+    # Phase 2a instrumentation: every dispatched actuator batch emits its wall-clock
+    # dispatch->ACK latency with structured fields, so p50/p95/p99 per operation can
+    # be aggregated from real runs to justify the in_flight->faulted bound by
+    # measurement rather than a guessed value.
+    pool = _Pool()
+    js = _Js()
+    with caplog.at_level(logging.INFO, logger="scheduler.dispatch_actuator"):
+        result = asyncio.run(
+            send_batch_up(
+                pairs={PAIR},
+                desired=_desired(),
+                locator=_Locator(),
+                pool=pool,
+                js=js,
+                subj_link_up="links.up",
+                sim_iso=SIM_TIME.isoformat(),
+                sim_time=SIM_TIME,
+                gs_capacities={},
+                latency_compensation=_compensation,
+                validate_authority_freshness=_validate,
+                link_provenance=_provenance,
+                session_id=SESSION_ID,
+                wiring_generation=WIRING_GENERATION,
+            )
+        )
+
+    assert result.succeeded_pairs == {PAIR}
+    recs = _actuation_latency_records(caplog)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec.operation == "BatchLinkUp"
+    assert rec.pair_count == 1
+    assert rec.succeeded == 1
+    assert rec.failed == 0
+    assert isinstance(rec.actuation_latency_ms, float)
+    assert rec.actuation_latency_ms >= 0.0
+    assert rec.levelno == logging.INFO
+
+
+def test_failed_actuation_logs_latency_at_warning(caplog):
+    # A batch with failures logs its latency LOUDLY (WARNING) — a slow/failed
+    # actuation must not hide in INFO noise during measurement runs.
+    pool = _Pool(fail_node="sat-b")
+    js = _Js()
+    with caplog.at_level(logging.INFO, logger="scheduler.dispatch_actuator"):
+        result = asyncio.run(
+            send_batch_up(
+                pairs={PAIR},
+                desired=_desired(),
+                locator=_Locator(),
+                pool=pool,
+                js=js,
+                subj_link_up="links.up",
+                sim_iso=SIM_TIME.isoformat(),
+                sim_time=SIM_TIME,
+                gs_capacities={},
+                latency_compensation=_compensation,
+                validate_authority_freshness=_validate,
+                link_provenance=_provenance,
+                session_id=SESSION_ID,
+                wiring_generation=WIRING_GENERATION,
+            )
+        )
+
+    assert result.failed_pairs == {PAIR}
+    recs = _actuation_latency_records(caplog)
+    assert len(recs) == 1
+    assert recs[0].failed == 1
+    assert recs[0].levelno == logging.WARNING
+
+
+def test_no_actuation_latency_log_without_a_dispatch(caplog):
+    # No agents to dispatch to -> no RPC round-trip -> no latency record. Guards
+    # against logging spurious ~0ms "actuations" on no-op reconciles.
+    js = _Js()
+    with caplog.at_level(logging.INFO, logger="scheduler.dispatch_actuator"):
+        result = asyncio.run(
+            send_batch_up(
+                pairs=set(),
+                desired={},
+                locator=_Locator(),
+                pool=_Pool(),
+                js=js,
+                subj_link_up="links.up",
+                sim_iso=SIM_TIME.isoformat(),
+                sim_time=SIM_TIME,
+                gs_capacities={},
+                latency_compensation=_compensation,
+                validate_authority_freshness=_validate,
+                link_provenance=_provenance,
+                session_id=SESSION_ID,
+                wiring_generation=WIRING_GENERATION,
+            )
+        )
+
+    assert result.succeeded_pairs == set()
+    assert _actuation_latency_records(caplog) == []
 
 
 def test_send_batch_up_chunks_large_single_agent_batches():

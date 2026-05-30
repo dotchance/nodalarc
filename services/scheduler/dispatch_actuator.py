@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -33,6 +34,47 @@ from scheduler.latency_compensator import LatencyCompensation
 from scheduler.node_agent_batches import build_link_down_batch_plan, build_link_up_batch_plan
 
 log = logging.getLogger(__name__)
+
+
+def _log_actuation_latency(
+    *,
+    operation: str,
+    pair_count: int,
+    agent_count: int,
+    elapsed_ms: float,
+    result: ActuationResult,
+) -> None:
+    """Emit the wall-clock dispatch->ACK latency for one actuator batch.
+
+    This is the raw per-operation actuation latency (BatchLinkUp/Down/SetLatency),
+    measured in WALL-CLOCK around the Node Agent RPC round-trip (commit+dispatch ->
+    proof), NOT sim-time. Aggregate p50/p95/p99 per operation from these lines to
+    justify or tighten the actuation-latency contract
+    (simulation.actuation.fault_after_ms, the in_flight -> faulted bound) against
+    real-run data instead of guessing. Logs at WARNING when the batch had failures
+    so a slow/failed actuation is loud, INFO otherwise.
+    """
+    level = logging.WARNING if result.failed_pairs else logging.INFO
+    log.log(
+        level,
+        "Actuation latency op=%s pairs=%d agents=%d elapsed_ms=%.1f succeeded=%d failed=%d",
+        operation,
+        pair_count,
+        agent_count,
+        elapsed_ms,
+        len(result.succeeded_pairs),
+        len(result.failed_pairs),
+        extra={
+            "event": "actuation_latency",
+            "operation": operation,
+            "pair_count": pair_count,
+            "agent_count": agent_count,
+            "actuation_latency_ms": elapsed_ms,
+            "succeeded": len(result.succeeded_pairs),
+            "failed": len(result.failed_pairs),
+        },
+    )
+
 
 LinkPair = tuple[str, str]
 LatencyCompensationFn = Callable[[str, str, float], LatencyCompensation]
@@ -447,6 +489,7 @@ async def send_batch_down(
 
     agent_results: list[AgentCommandResult] = []
     agent_addrs = list(plan.agent_ifaces.keys())
+    dispatch_started = time.monotonic()
     if agent_addrs:
         agent_results = list(
             await asyncio.gather(
@@ -463,6 +506,7 @@ async def send_batch_down(
                 ]
             )
         )
+    dispatch_elapsed_ms = (time.monotonic() - dispatch_started) * 1000.0
 
     pair_link_type = {
         pair: actual_links[pair].link_type for pair in sorted_pairs if pair in actual_links
@@ -479,6 +523,14 @@ async def send_batch_down(
         pair_gs_id=pair_gs_id,
         agent_results=agent_results,
     )
+    if agent_addrs:
+        _log_actuation_latency(
+            operation="BatchLinkDown",
+            pair_count=len(sorted_pairs),
+            agent_count=len(agent_addrs),
+            elapsed_ms=dispatch_elapsed_ms,
+            result=result,
+        )
 
     now = datetime.now(UTC)
     for pair in sorted(result.succeeded_pairs):
@@ -534,6 +586,7 @@ async def send_batch_up(
 
     agent_results: list[AgentCommandResult] = []
     agent_addrs = list(plan.agent_ifaces.keys())
+    dispatch_started = time.monotonic()
     if agent_addrs:
         agent_results = list(
             await asyncio.gather(
@@ -550,6 +603,7 @@ async def send_batch_up(
                 ]
             )
         )
+    dispatch_elapsed_ms = (time.monotonic() - dispatch_started) * 1000.0
 
     pair_link_type = {pair: desired[pair].link_type for pair in sorted_pairs}
     pair_gs_id = {
@@ -563,6 +617,14 @@ async def send_batch_up(
         pair_gs_id=pair_gs_id,
         agent_results=agent_results,
     )
+    if agent_addrs:
+        _log_actuation_latency(
+            operation="BatchLinkUp",
+            pair_count=len(sorted_pairs),
+            agent_count=len(agent_addrs),
+            elapsed_ms=dispatch_elapsed_ms,
+            result=result,
+        )
 
     now = datetime.now(UTC)
     for pair in sorted(result.succeeded_pairs):
@@ -671,6 +733,7 @@ async def send_authoritative_latency_updates(
                 )
 
     agent_results: list[AgentCommandResult] = []
+    dispatch_started = time.monotonic()
     if agent_entries:
         agent_results = list(
             await asyncio.gather(
@@ -687,6 +750,7 @@ async def send_authoritative_latency_updates(
                 ]
             )
         )
+    dispatch_elapsed_ms = (time.monotonic() - dispatch_started) * 1000.0
     result = build_actuation_result(
         operation="SetLatency",
         requested_pairs=sorted_pairs,
@@ -695,6 +759,14 @@ async def send_authoritative_latency_updates(
         pair_gs_id=pair_gs_id,
         agent_results=agent_results,
     )
+    if agent_entries:
+        _log_actuation_latency(
+            operation="SetLatency",
+            pair_count=len(sorted_pairs),
+            agent_count=len(agent_entries),
+            elapsed_ms=dispatch_elapsed_ms,
+            result=result,
+        )
 
     for pair in sorted(result.succeeded_pairs):
         info = desired[pair]

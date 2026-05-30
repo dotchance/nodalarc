@@ -35,6 +35,12 @@ from nodalarc.models.link_decisions import (
 
 Pair = tuple[str, str]
 
+# Binding-reason codes the composer SYNTHESIZES for an actuation_proof binding (not raw
+# ActuationStates): a clean roster but OME-desired-and-not-kernel-up is a divergence, NOT
+# "clean". Bound to the frontend registry via tests/unit/test_explain_contract.py.
+_ACTUATION_DIVERGED = "actuation_diverged"
+ACTUATION_EXPLANATION_REASONS: tuple[str, ...] = (_ACTUATION_DIVERGED,)
+
 # Funnel order is canonical; index gives before/at/after the binding gate.
 FUNNEL_ORDER: tuple[FunnelGate, ...] = (
     "line_of_sight",
@@ -344,7 +350,7 @@ def compose_gs_explanation(
             # is proven", backwards for a red state. Emit an explicit divergence code; the
             # client escalates in_flight -> faulted on its wall-clock age.
             binding_gate = "actuation_proof"
-            binding_reason = "actuation_diverged"
+            binding_reason = _ACTUATION_DIVERGED
             actuation_pass = False
         else:
             # kernel_up and roster not failing. Connected when the roster is clean; when

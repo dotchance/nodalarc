@@ -49,9 +49,14 @@ export function deriveFamily(facts: DecisionFacts): Family {
     return "faulted";
   }
 
-  // No rejection at all: the composer only leaves binding_gate null for a
-  // scheduled pair proven up.
-  if (facts.binding_gate === null) return "connected";
+  // No rejection at all: the composer leaves binding_gate null for a scheduled pair
+  // that is kernel-up and not failing. Connected only when the roster confirms clean;
+  // kernel-up but roster-unknown is "unknown" (proven up, health unconfirmed) — never
+  // silently green, per the family contract.
+  if (facts.binding_gate === null) {
+    if (facts.actuation?.state === "unknown") return "unknown";
+    return "connected";
+  }
 
   const rec = facts.binding_reason_code ? REASON_REGISTRY[facts.binding_reason_code] : undefined;
   return rec?.family ?? "unknown";
@@ -182,10 +187,16 @@ export function displayLadder(facts: DecisionFacts): DisplayRow[] {
   const env = facts.envelope;
   const hasElev = facts.ladder.some((g) => g.gate === "elevation_mask");
   const hasFor = facts.ladder.some((g) => g.gate === "field_of_regard");
+  // Collapse elevation + FoR into one ground-floor row only when the binding constraint
+  // is ground-side (or nothing binds): the ground local-vertical FoR is co-linear with
+  // the displayed elevation floor. If the SATELLITE terminal's FoR binds, its nadir
+  // geometry is NOT co-linear with the ground floor, so keep the rows separate — folding
+  // would hide a satellite-side FoR failure behind a passing ground floor.
   const collapse =
     env != null &&
     env.ground.boresight_mode === "local_vertical" &&
     env.effective_min_elevation_deg != null &&
+    (env.binding_endpoint === "none" || env.binding_endpoint === "ground") &&
     hasElev &&
     hasFor;
 

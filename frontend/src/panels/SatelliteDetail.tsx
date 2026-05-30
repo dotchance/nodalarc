@@ -8,7 +8,6 @@ import { areaCSSColor } from "../globe/colors";
 import type { NodeState, StateSnapshot, Selection } from "../types";
 import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
 import { candidateStatus } from "../explain/derive";
-import type { Family } from "../explain/families";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
 
@@ -100,11 +99,6 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
     );
   }
 
-  const connectedGsIds = new Set(
-    gndLinks
-      .filter((l) => l.state === "active")
-      .map((l) => (l.node_a.startsWith("gs-") ? l.node_a : l.node_b)),
-  );
   const withheld = new Set(
     (decisions?.unscheduled_pairs ?? []).map((u) => _ordered(u.pair[0], u.pair[1])),
   );
@@ -114,19 +108,21 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
       u.unscheduled_reason,
     ]),
   );
+  // Candidate state comes from the OME decision + reason registry, NOT snapshot.links
+  // (OME's forwarding/authority view). A scheduled pair reads neutral here; its precise
+  // connected/faulted state comes from the kernel-actual source in the inspector — the
+  // GS card already moved off authority-as-connected and the sat panel must too.
   const candidateGs = (decisions?.decisions ?? [])
     .filter((d) => d.pair[0] === node.node_id || d.pair[1] === node.node_id)
     .map((d) => {
       const gs = d.pair[0] === node.node_id ? d.pair[1] : d.pair[0];
       const key = _ordered(d.pair[0], d.pair[1]);
-      const status: { family: Family; label: string } = connectedGsIds.has(gs)
-        ? { family: "connected", label: "connected" }
-        : candidateStatus({
-            visible: d.visible,
-            isWithheld: withheld.has(key),
-            rejectReason: d.reject_reason,
-            unscheduledReason: unschedReason.get(key) ?? null,
-          });
+      const status = candidateStatus({
+        visible: d.visible,
+        isWithheld: withheld.has(key),
+        rejectReason: d.reject_reason,
+        unscheduledReason: unschedReason.get(key) ?? null,
+      });
       return { gs, d, status };
     });
 

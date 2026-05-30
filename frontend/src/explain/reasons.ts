@@ -88,6 +88,11 @@ export const ACTUATION_STATES: readonly ActuationState[] = [
   "unknown",
 ];
 
+// Binding-reason codes the explanation COMPOSER synthesizes for an actuation_proof
+// binding (not raw ActuationStates): "actuation_diverged" = OME desires the pair but
+// the kernel has not brought it up. Bound to the backend via test_explain_contract.
+export const ACTUATION_EXPLANATION_REASONS = ["actuation_diverged"] as const;
+
 export type ActuationFailureClass =
   | "none"
   | "authority_invariant"
@@ -439,6 +444,22 @@ export const REASON_REGISTRY: Record<string, ReasonRecord> = {
     sentence: "Kernel state could not be proven after actuation; manual or proof-based recovery is required.",
     levers: [],
     producer: "node_agent",
+  }),
+  actuation_diverged: rec({
+    code: "actuation_diverged",
+    domains: ["actuation"],
+    gate: "actuation_proof",
+    layer: "actuation",
+    // Family/severity for an actuation_proof binding are decided by actuation.state +
+    // the wall-clock bound in deriveFamily/deriveSeverity, not this record; these are
+    // for consistency. The sentence is what the headline renders once it has faulted.
+    family: "in_flight",
+    severity: "info",
+    label: "Actuation diverged",
+    sentence: "OME desires this link, but the kernel has not brought it up.",
+    levers: [],
+    producer: "scheduler",
+    escalateWhenChurning: "alarm",
   }),
   unknown: rec({
     code: "unknown",

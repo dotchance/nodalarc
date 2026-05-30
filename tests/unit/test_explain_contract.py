@@ -22,6 +22,7 @@ import re
 from pathlib import Path
 from typing import get_args
 
+from nodalarc.explain import ACTUATION_EXPLANATION_REASONS
 from nodalarc.models.decision_explanation import (
     ActuationFacts,
     CandidateFacts,
@@ -115,3 +116,10 @@ def test_actuation_states_match_backend():
 
 def test_actuation_failure_classes_match_backend():
     assert _frontend_array("ACTUATION_FAILURE_CLASSES") == {m.value for m in ActuationFailureClass}
+
+
+def test_actuation_explanation_reasons_match_backend():
+    # Composer-synthesized actuation binding reasons (e.g. "actuation_diverged") must
+    # match the frontend list, or a backend rename silently drops the headline to
+    # "State unknown" while the registry record orphans.
+    assert _frontend_array("ACTUATION_EXPLANATION_REASONS") == set(ACTUATION_EXPLANATION_REASONS)

@@ -95,6 +95,18 @@ describe("deriveFamily", () => {
       deriveFamily(facts({ binding_gate: "actuation_proof", actuation: act({ state: "unknown", ome_desired: true, kernel_up: false, diverged: true }) })),
     ).toBe("unknown");
   });
+
+  it("unknown: kernel-up but roster health unconfirmed is not silently connected", () => {
+    expect(
+      deriveFamily(facts({ binding_gate: null, actuation: act({ state: "unknown", kernel_up: true, diverged: false }) })),
+    ).toBe("unknown");
+  });
+
+  it("connected: kernel-up with a clean roster still reads connected", () => {
+    expect(
+      deriveFamily(facts({ binding_gate: null, actuation: act({ state: "clean", kernel_up: true, diverged: false }) })),
+    ).toBe("connected");
+  });
 });
 
 describe("deriveSeverity", () => {
@@ -279,6 +291,20 @@ describe("displayLadder co-linearity collapse", () => {
     const rows = displayLadder(
       facts({
         envelope: env({ ground: ep("ground", { boresight_mode: "steered" }) }),
+        ladder: [
+          lrow("elevation_mask", "pass", 27),
+          lrow("field_of_regard", "fail", 63, true, "field_of_regard"),
+        ],
+      }),
+    );
+    expect(rows.some((r) => r.row.gate === "elevation_mask")).toBe(true);
+    expect(rows.some((r) => r.row.gate === "field_of_regard")).toBe(true);
+  });
+
+  it("does NOT collapse when the SATELLITE terminal's FoR binds — keeps the sat fail visible", () => {
+    const rows = displayLadder(
+      facts({
+        envelope: env({ binding_endpoint: "satellite" }),
         ladder: [
           lrow("elevation_mask", "pass", 27),
           lrow("field_of_regard", "fail", 63, true, "field_of_regard"),

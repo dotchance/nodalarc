@@ -1706,6 +1706,9 @@ def get_decision_explanation(gs: str = Query(...)) -> dict | JSONResponse:
     with ctx.state_lock:
         snapshot = ctx.latest_ground_link_decision_snapshot
         active_pairs = ctx.actual_kernel_pairs()
+        onset_by_pair = dict(ctx.divergence_onset_by_pair)
+        expected_latency_ms = ctx.actuation_expected_latency_ms
+        fault_after_ms = ctx.actuation_fault_after_ms
         actuation_by_gs: dict[str, str] = {}
         health = ctx.build_actuation_health()
         for inst in health.get("scheduler_instances", []):
@@ -1723,6 +1726,10 @@ def get_decision_explanation(gs: str = Query(...)) -> dict | JSONResponse:
         snapshot=snapshot,
         active_pairs=active_pairs,
         actuation_state_by_gs=actuation_by_gs,
+        divergence_onset_by_pair=onset_by_pair,
+        expected_latency_ms=expected_latency_ms,
+        fault_after_ms=fault_after_ms,
+        now=datetime.now(UTC),
     )
     if facts is None:
         return JSONResponse(

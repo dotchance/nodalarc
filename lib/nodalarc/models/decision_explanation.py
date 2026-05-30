@@ -116,8 +116,18 @@ class CandidateFacts(BaseModel):
 
 
 class ActuationFacts(BaseModel):
-    """Realization facts. The client decides in_flight vs faulted using the
-    C-D actuation-latency bound; the backend only states the raw facts."""
+    """Realization facts. The client decides in_flight vs faulted by comparing
+    ``actuation_elapsed_ms`` to ``fault_after_ms`` — the backend states the raw facts
+    and carries the contract bounds; it never assigns the family.
+
+    ``diverged_since`` is the wall-clock instant (UTC) VS-API first observed this pair as
+    OME-desired but not kernel-actual; ``actuation_elapsed_ms`` is the server-computed
+    age of that divergence at compose time (skew-free — not the client's clock). Both are
+    ``None`` when the pair is not diverged, or when the onset is not yet known (e.g. right
+    after a VS-API restart). ``expected_latency_ms``/``fault_after_ms`` are the
+    ``simulation.actuation`` contract, wall-clock not sim-time: a divergence younger than
+    ``fault_after_ms`` is calm in_flight, at/older is faulted; the deadline a UI shows is
+    ``diverged_since + fault_after_ms``."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -125,6 +135,10 @@ class ActuationFacts(BaseModel):
     ome_desired: bool | None
     kernel_up: bool | None
     diverged: bool | None
+    diverged_since: datetime | None = None
+    actuation_elapsed_ms: float | None = None
+    expected_latency_ms: float | None = None
+    fault_after_ms: float | None = None
 
 
 class DecisionExplanationFacts(BaseModel):

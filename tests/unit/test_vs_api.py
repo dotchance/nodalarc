@@ -1676,6 +1676,37 @@ class TestKernelActualRecovery:
         assert body["actuation"]["kernel_up"] is True
         assert body["actuation"]["diverged"] is False
 
+    def test_divergence_onset_stamped_then_cleared_on_convergence(self):
+        # The snapshot desires gs-den/sat-a with no kernel-actual -> onset stamped on
+        # snapshot arrival. When the pair converges (kernel-actual gains it), the onset
+        # clears, so the in_flight clock resets only on real convergence.
+        ctx = self._ctx_with_snapshot_and_clean_roster()
+        pair = ("gs-den", "sat-a")
+        assert pair in ctx.divergence_onset_by_pair
+        self._deliver(ctx, instance="sched-1", pairs=[pair])
+        assert pair not in ctx.divergence_onset_by_pair
+
+    def test_endpoint_emits_divergence_timing_and_contract_bounds(self, monkeypatch):
+        # The in_flight -> faulted facts: a diverged pair carries diverged_since +
+        # server-computed elapsed + the wall-clock contract bounds, so the client can
+        # escalate at fault_after_ms without hardcoding it.
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        ctx = self._ctx_with_snapshot_and_clean_roster()
+        assert ("gs-den", "sat-a") in ctx.divergence_onset_by_pair
+        monkeypatch.setattr(m, "_active_context", ctx)
+
+        r = TestClient(m.app).get("/api/v1/decision-explanation", params={"gs": "gs-den"})
+        assert r.status_code == 200
+        act = r.json()["actuation"]
+        assert act["diverged"] is True
+        assert act["diverged_since"] is not None
+        assert act["actuation_elapsed_ms"] is not None
+        assert act["actuation_elapsed_ms"] >= 0.0
+        assert act["expected_latency_ms"] == 250.0
+        assert act["fault_after_ms"] == 1200.0
+
 
 class TestOmeLifecycleNotices:
     def test_ome_lifecycle_terminal_event_becomes_operator_notice(self):

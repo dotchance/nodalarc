@@ -37,6 +37,7 @@ from typing import Literal
 import nats
 import yaml
 from nodalarc.db.queries import insert_ome_lifecycle_event, insert_operator_intervention_event
+from nodalarc.explain import scheduled_pairs
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
@@ -112,6 +113,11 @@ class SessionContext:
         self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(session)
         self.beam_falloff_exponent: float = self._load_beam_falloff_exponent(session)
 
+        # Wall-clock actuation-latency contract (simulation.actuation) — the
+        # in_flight -> faulted bound the explanation composer carries.
+        self.actuation_expected_latency_ms: float = session.simulation.actuation.expected_latency_ms
+        self.actuation_fault_after_ms: float = session.simulation.actuation.fault_after_ms
+
         self._init_runtime_state()
 
     def _init_runtime_state(self) -> None:
@@ -161,6 +167,10 @@ class SessionContext:
         # actual_kernel_pairs() into the kernel-actual truth the explanation composer
         # uses for kernel_up — NOT ctx.links, which is OME's desired/visible model.
         self.actual_links_by_instance: dict[str, dict] = {}
+        # Wall-clock onset of each OME-desired-but-not-kernel-actual pair, stamped on
+        # snapshot arrival. Recoverable across a client refresh (server-side), so a
+        # stuck handover's in_flight -> faulted clock is not reset every browser reload.
+        self.divergence_onset_by_pair: dict[tuple[str, str], datetime] = {}
         self.ome_lifecycle_notices_by_key: dict[tuple[str, str], dict] = {}
         self._subscriptions: list = []
         self._subscriber_task: asyncio.Task | None = None
@@ -180,6 +190,8 @@ class SessionContext:
         self.constellation_name = "test"
         self.gs_elevation_map = {}
         self.beam_falloff_exponent = 2.0
+        self.actuation_expected_latency_ms = 250.0
+        self.actuation_fault_after_ms = 1200.0
         self._init_runtime_state()
 
     def is_ready(self) -> bool:
@@ -571,6 +583,7 @@ class SessionContext:
                 )
                 return
             self.latest_ground_link_decision_snapshot = snapshot
+            self._recompute_divergence_onsets(datetime.now(UTC))
 
     async def _on_link_up(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()
@@ -735,6 +748,7 @@ class SessionContext:
                 "generation": generation,
                 "pairs": pairs,
             }
+            self._recompute_divergence_onsets(datetime.now(UTC))
 
     def actual_kernel_pairs(self) -> frozenset[tuple[str, str]]:
         """Scheduler-verified kernel-actual pairs for the current session owner.
@@ -749,6 +763,25 @@ class SessionContext:
         if not self.actual_links_by_instance:
             return frozenset()
         return frozenset().union(*(rec["pairs"] for rec in self.actual_links_by_instance.values()))
+
+    def _recompute_divergence_onsets(self, now: datetime) -> None:
+        """Stamp/clear the wall-clock onset of every OME-desired-but-not-kernel-actual pair.
+
+        Caller holds ``state_lock``. Run on each ground-decision and kernel-actual
+        arrival: a newly diverged pair gets ``onset=now``; a pair that converged (in the
+        kernel-actual set) or that OME no longer desires is cleared. The composer turns
+        the surviving onset into the in_flight -> faulted deadline. Onset survives a
+        client refresh (server-side state) but NOT a VS-API restart — a re-observed
+        divergence re-stamps ``now``, which bounded-delays escalation, never hides it.
+        """
+        snap = self.latest_ground_link_decision_snapshot
+        desired = scheduled_pairs(snap) if snap is not None else frozenset()
+        diverged = desired - self.actual_kernel_pairs()
+        for pair in diverged:
+            self.divergence_onset_by_pair.setdefault(pair, now)
+        for pair in list(self.divergence_onset_by_pair):
+            if pair not in diverged:
+                self.divergence_onset_by_pair.pop(pair, None)
 
     def _update_actuation_notice(self, event: dict) -> None:
         if event.get("source") != "scheduler":

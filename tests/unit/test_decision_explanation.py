@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from nodalarc.explain import compose_gs_explanation
+from nodalarc.explain import compose_gs_explanation, scheduled_pairs
 from nodalarc.models.link_decisions import (
     GroundLinkDecisionSnapshot,
     GroundPolicyAudit,
@@ -250,6 +250,98 @@ def test_dirty_roster_overrides_snapshot_up():
     assert facts.binding_gate == "actuation_proof"
     assert facts.actuation.state == "kernel_dirty"
     assert _gate(facts, "actuation_proof").state == "fail"
+
+
+def test_divergence_carries_elapsed_and_contract_bounds():
+    # A scheduled-but-not-actual pair is diverged; the actuation facts must carry how
+    # long (server-computed, skew-free) plus the wall-clock contract bounds, so the
+    # client can flip in_flight -> faulted at fault_after_ms without hardcoding it.
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-P00S03", visible=True, range_km=960.0, elevation_deg=31.6, reject_reason="ok"
+            )
+        ]
+    )
+    pair = tuple(sorted((GS, "sat-P00S03")))
+    onset = datetime(2026, 5, 29, 18, 8, 18, tzinfo=UTC)
+    now = datetime(2026, 5, 29, 18, 8, 18, 500000, tzinfo=UTC)  # 500 ms after onset
+    facts = compose_gs_explanation(
+        gs_id=GS,
+        snapshot=snap,
+        active_pairs=frozenset(),  # OME desires it, kernel does NOT have it -> diverged
+        actuation_state_by_gs={GS: "clean"},
+        divergence_onset_by_pair={pair: onset},
+        expected_latency_ms=250.0,
+        fault_after_ms=1200.0,
+        now=now,
+    )
+    assert facts.actuation.diverged is True
+    assert facts.actuation.diverged_since == onset
+    assert facts.actuation.actuation_elapsed_ms == 500.0
+    assert facts.actuation.expected_latency_ms == 250.0
+    assert facts.actuation.fault_after_ms == 1200.0
+
+
+def test_connected_pair_has_no_divergence_timing_but_keeps_bounds():
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-P00S03", visible=True, range_km=960.0, elevation_deg=31.6, reject_reason="ok"
+            )
+        ]
+    )
+    pair = tuple(sorted((GS, "sat-P00S03")))
+    facts = compose_gs_explanation(
+        gs_id=GS,
+        snapshot=snap,
+        active_pairs=frozenset({pair}),  # kernel HAS it -> connected, not diverged
+        actuation_state_by_gs={GS: "clean"},
+        divergence_onset_by_pair={pair: datetime(2026, 5, 29, tzinfo=UTC)},
+        expected_latency_ms=250.0,
+        fault_after_ms=1200.0,
+        now=datetime(2026, 5, 29, 1, tzinfo=UTC),
+    )
+    assert facts.actuation.diverged is False
+    # No stale onset bleeds into a connected pair.
+    assert facts.actuation.diverged_since is None
+    assert facts.actuation.actuation_elapsed_ms is None
+    # The contract bounds are always available to the client.
+    assert facts.actuation.fault_after_ms == 1200.0
+
+
+def test_scheduled_pairs_is_visible_minus_withheld():
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-A", visible=True, range_km=900.0, elevation_deg=40.0, reject_reason="ok"
+            ),
+            _decision(
+                "sat-B", visible=True, range_km=900.0, elevation_deg=40.0, reject_reason="ok"
+            ),
+            _decision(
+                "sat-C",
+                visible=False,
+                range_km=5000.0,
+                elevation_deg=-10.0,
+                reject_reason="elevation_below_min",
+            ),
+        ],
+        unscheduled=[
+            UnscheduledPair(
+                pair=(GS, "sat-B"),
+                tenant_id="default",
+                reference_body="earth",
+                unscheduled_reason="gs_capacity",
+                incumbent_pair=None,
+                capacity_constraint="gs-denver.terminals",
+            )
+        ],
+    )
+    sp = scheduled_pairs(snap)
+    assert tuple(sorted((GS, "sat-A"))) in sp  # visible + scheduled
+    assert tuple(sorted((GS, "sat-B"))) not in sp  # visible but withheld
+    assert tuple(sorted((GS, "sat-C"))) not in sp  # not visible
 
 
 def test_closest_rejected_ranks_by_funnel_depth_not_raw_elevation():

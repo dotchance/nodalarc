@@ -84,6 +84,40 @@ class TestSessionConfigLoading:
         config = SessionConfig.model_validate(data)
         assert config.simulation.acknowledge_bbm_handover_gap is True
 
+    def test_actuation_contract_defaults(self):
+        # The wall-clock in_flight -> faulted bound is a session contract, not a
+        # frontend constant. Defaults reflect measured single-pair actuation (~37ms p99).
+        config = SessionConfig.model_validate(_SAMPLE_SESSION)
+        assert config.simulation.actuation.expected_latency_ms == 250.0
+        assert config.simulation.actuation.fault_after_ms == 1200.0
+
+    def test_actuation_contract_overridable_per_session(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"actuation": {"expected_latency_ms": 200.0, "fault_after_ms": 1000.0}}
+        config = SessionConfig.model_validate(data)
+        assert config.simulation.actuation.expected_latency_ms == 200.0
+        assert config.simulation.actuation.fault_after_ms == 1000.0
+
+    def test_actuation_fault_threshold_must_exceed_expected(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {
+            "actuation": {"expected_latency_ms": 1000.0, "fault_after_ms": 1000.0}
+        }
+        with pytest.raises(ValidationError, match="fault_after_ms must exceed expected_latency_ms"):
+            SessionConfig.model_validate(data)
+
+    def test_actuation_bounds_must_be_positive(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"actuation": {"fault_after_ms": -5.0}}
+        with pytest.raises(ValidationError, match="must be > 0 ms"):
+            SessionConfig.model_validate(data)
+
+    def test_actuation_rejects_unknown_field(self):
+        data = dict(_SAMPLE_SESSION)
+        data["simulation"] = {"actuation": {"grace_ms": 500.0}}
+        with pytest.raises(ValidationError):
+            SessionConfig.model_validate(data)
+
     def test_ground_policy_surface_must_be_explicit(self):
         data = dict(_SAMPLE_SESSION)
         data.pop("scheduling")

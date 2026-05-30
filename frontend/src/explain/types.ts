@@ -54,6 +54,14 @@ export interface ActuationFacts {
   ome_desired: boolean | null;
   kernel_up: boolean | null;
   diverged: boolean | null;
+  /** Wall-clock UTC instant the divergence was first observed; null if not diverged. */
+  diverged_since: string | null;
+  /** Server-computed age (ms) of the divergence at compose time; null if not diverged. */
+  actuation_elapsed_ms: number | null;
+  /** simulation.actuation contract (ms): the in_flight target. */
+  expected_latency_ms: number | null;
+  /** simulation.actuation contract (ms): escalate in_flight -> faulted at/after this age. */
+  fault_after_ms: number | null;
 }
 
 export interface DecisionFacts {

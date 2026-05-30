@@ -14,6 +14,7 @@ lib/nodalarc/models/decision_explanation.py for the responsibility split.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 
 from nodalarc.models.decision_explanation import (
     ActuationFacts,
@@ -84,6 +85,17 @@ _GATE_PRODUCER = {
 def _ordered_pair(pair: tuple[str, str]) -> Pair:
     a, b = pair
     return (a, b) if a <= b else (b, a)
+
+
+def scheduled_pairs(snapshot: GroundLinkDecisionSnapshot) -> frozenset[Pair]:
+    """Ordered pairs OME currently desires up: visible and not withheld (unscheduled).
+
+    The single definition of "what OME wants up", shared by the composer's focal-pair
+    selection and by VS-API divergence-onset tracking, so the two never drift. A pair
+    diverges when it is in this set but not in the Scheduler's kernel-actual set.
+    """
+    withheld = {_ordered_pair(u.pair) for u in snapshot.unscheduled_pairs}
+    return frozenset(_ordered_pair(d.pair) for d in snapshot.decisions if d.visible) - withheld
 
 
 def _min_opt(*values: float | None) -> float | None:
@@ -215,12 +227,21 @@ def compose_gs_explanation(
     snapshot: GroundLinkDecisionSnapshot,
     active_pairs: frozenset[Pair],
     actuation_state_by_gs: Mapping[str, ActuationStateName],
+    divergence_onset_by_pair: Mapping[Pair, datetime] | None = None,
+    expected_latency_ms: float | None = None,
+    fault_after_ms: float | None = None,
+    now: datetime | None = None,
 ) -> DecisionExplanationFacts | None:
     """Compose the explanation facts for one ground station.
 
     Returns None if the snapshot covers no decision for this GS (the caller
     should 404). Focal-pair precedence: connected > scheduled-but-not-up >
     visible-but-withheld > closest-to-visible rejected.
+
+    ``divergence_onset_by_pair`` (wall-clock UTC, tracked by VS-API) and ``now`` let the
+    actuation facts carry how long the focal pair has been desired-but-not-actual, so the
+    client can escalate in_flight -> faulted past ``fault_after_ms``. All four are
+    optional; absent them the actuation facts simply omit the timing/bounds.
     """
     decisions = [d for d in snapshot.decisions if gs_id in d.pair]
     if not decisions:
@@ -300,6 +321,13 @@ def compose_gs_explanation(
 
     diverged: bool | None = (ome_desired and not kernel_up) if ome_desired is not None else None
 
+    diverged_since: datetime | None = None
+    actuation_elapsed_ms: float | None = None
+    if diverged and divergence_onset_by_pair is not None:
+        diverged_since = divergence_onset_by_pair.get(_ordered_pair(focal.pair))
+        if diverged_since is not None and now is not None:
+            actuation_elapsed_ms = (now - diverged_since).total_seconds() * 1000.0
+
     return DecisionExplanationFacts(
         gs_id=gs_id,
         pair=_ordered_pair(focal.pair),
@@ -327,6 +355,10 @@ def compose_gs_explanation(
             ome_desired=ome_desired,
             kernel_up=kernel_up,
             diverged=diverged,
+            diverged_since=diverged_since,
+            actuation_elapsed_ms=actuation_elapsed_ms,
+            expected_latency_ms=expected_latency_ms,
+            fault_after_ms=fault_after_ms,
         ),
         sim_time=snapshot.sim_time,
         snapshot_seq=snapshot.snapshot_seq,

@@ -68,7 +68,16 @@ const denverGap: DecisionFacts = {
     elevation_deg: 14,
     viable_withheld: false,
   },
-  actuation: { state: "unknown", ome_desired: false, kernel_up: false, diverged: false },
+  actuation: {
+    state: "unknown",
+    ome_desired: false,
+    kernel_up: false,
+    diverged: false,
+    diverged_since: null,
+    actuation_elapsed_ms: null,
+    expected_latency_ms: 250,
+    fault_after_ms: 1200,
+  },
   sim_time: "2026-05-29T18:08:20Z",
   snapshot_seq: 516,
   epoch_id: 0,
@@ -91,7 +100,16 @@ const faulted: DecisionFacts = {
       is_binding: true,
     },
   ]),
-  actuation: { state: "kernel_dirty", ome_desired: true, kernel_up: false, diverged: true },
+  actuation: {
+    state: "kernel_dirty",
+    ome_desired: true,
+    kernel_up: false,
+    diverged: true,
+    diverged_since: "2026-05-29T18:08:18Z",
+    actuation_elapsed_ms: 2000,
+    expected_latency_ms: 250,
+    fault_after_ms: 1200,
+  },
 };
 
 describe("GroundStationCard", () => {

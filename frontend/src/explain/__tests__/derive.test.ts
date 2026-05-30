@@ -33,6 +33,10 @@ const act = (over: Partial<ActuationFacts>): ActuationFacts => ({
   ome_desired: null,
   kernel_up: null,
   diverged: null,
+  diverged_since: null,
+  actuation_elapsed_ms: null,
+  expected_latency_ms: 250,
+  fault_after_ms: 1200,
   ...over,
 });
 
@@ -63,7 +67,19 @@ describe("deriveFamily", () => {
 
   it("in_flight: clean but diverged inside the convergence window", () => {
     expect(
-      deriveFamily(facts({ binding_gate: "actuation_proof", actuation: act({ state: "clean", ome_desired: true, kernel_up: false, diverged: true }) })),
+      deriveFamily(facts({ binding_gate: "actuation_proof", actuation: act({ state: "clean", ome_desired: true, kernel_up: false, diverged: true, actuation_elapsed_ms: 400, fault_after_ms: 1200 }) })),
+    ).toBe("in_flight");
+  });
+
+  it("faulted: clean divergence past the wall-clock bound escalates to red", () => {
+    expect(
+      deriveFamily(facts({ binding_gate: "actuation_proof", actuation: act({ state: "clean", ome_desired: true, kernel_up: false, diverged: true, actuation_elapsed_ms: 1300, fault_after_ms: 1200 }) })),
+    ).toBe("faulted");
+  });
+
+  it("in_flight: diverged but age not yet known stays calm, never red", () => {
+    expect(
+      deriveFamily(facts({ binding_gate: "actuation_proof", actuation: act({ state: "clean", ome_desired: true, kernel_up: false, diverged: true, actuation_elapsed_ms: null }) })),
     ).toBe("in_flight");
   });
 
@@ -84,6 +100,11 @@ describe("deriveSeverity", () => {
     expect(
       deriveSeverity(facts({ binding_gate: "elevation_mask", binding_reason_code: "elevation_below_min" })),
     ).toBe("info");
+  });
+  it("alarm once a divergence escalates past the bound", () => {
+    expect(
+      deriveSeverity(facts({ binding_gate: "actuation_proof", actuation: act({ state: "clean", ome_desired: true, kernel_up: false, diverged: true, actuation_elapsed_ms: 1300, fault_after_ms: 1200 }) })),
+    ).toBe("alarm");
   });
 });
 

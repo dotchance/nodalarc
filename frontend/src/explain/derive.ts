@@ -27,10 +27,12 @@ export const GATE_LABELS: Record<FunnelGate, string> = {
  * Resolve the canonical family from facts. Actuation outcome dominates when the
  * pair is OME-desired; otherwise the binding reason's registry family applies.
  *
- * in_flight vs faulted: a clean-but-diverged pair is converging (in_flight).
- * The C-D latency-bound escalation to faulted needs a convergence deadline the
- * facts do not yet carry — tracked as a follow-up; until then a clean divergence
- * reads as in_flight, never red.
+ * in_flight vs faulted: a clean-but-diverged pair is converging (in_flight) until its
+ * divergence age reaches the wall-clock actuation bound (fault_after_ms), at which point
+ * it escalates to faulted. The age and bound are carried on the facts (server-computed
+ * elapsed + the simulation.actuation contract) — never a frontend constant or the
+ * client's clock. A divergence with no age yet (e.g. just after a VS-API restart) stays
+ * the calm, non-green in_flight, never red, until the age is known.
  */
 export function deriveFamily(facts: DecisionFacts): Family {
   const act = facts.actuation;
@@ -38,7 +40,12 @@ export function deriveFamily(facts: DecisionFacts): Family {
   if (facts.binding_gate === "actuation_proof") {
     if (act?.state === "kernel_dirty" || act?.state === "actuation_blocked") return "faulted";
     if (act?.state === "unknown") return "unknown";
-    if (act?.diverged) return "in_flight";
+    if (act?.diverged) {
+      const elapsed = act.actuation_elapsed_ms;
+      const bound = act.fault_after_ms;
+      if (elapsed !== null && bound !== null && elapsed >= bound) return "faulted";
+      return "in_flight";
+    }
     return "faulted";
   }
 

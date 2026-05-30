@@ -128,6 +128,37 @@ class RoutingConfig(BaseModel):
         return self
 
 
+class ActuationConfig(BaseModel):
+    """Wall-clock actuation-latency contract for the in_flight -> faulted decision.
+
+    NOT sim-time: measured in real wall-clock from the Scheduler committing a desired
+    link change and dispatching the actuator op to confirmed kernel proof. A paused or
+    time-compressed sim does not pause real actuation latency. ``expected_latency_ms``
+    is the target (instrumentation / percentile reference); ``fault_after_ms`` is the
+    threshold past which a desired-vs-actual divergence is faulted instead of calm
+    in_flight. A platform/session contract, not a frontend constant; defaults validated
+    against measured single-pair actuation (~25-37 ms p99 on the reference cluster).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_latency_ms: float = 250.0
+    fault_after_ms: float = 1200.0
+
+    @field_validator("expected_latency_ms", "fault_after_ms")
+    @classmethod
+    def _positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("simulation.actuation latency bounds must be > 0 ms")
+        return value
+
+    @model_validator(mode="after")
+    def _fault_exceeds_expected(self):
+        if self.fault_after_ms <= self.expected_latency_ms:
+            raise ValueError("simulation.actuation.fault_after_ms must exceed expected_latency_ms")
+        return self
+
+
 class SimulationConfig(BaseModel):
     """Simulation contract fields exposed to session YAML."""
 
@@ -137,6 +168,7 @@ class SimulationConfig(BaseModel):
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
     acknowledge_geometry_only: bool = False
     acknowledge_bbm_handover_gap: bool = False
+    actuation: ActuationConfig = Field(default_factory=ActuationConfig)
 
     @field_validator("schema_version")
     @classmethod

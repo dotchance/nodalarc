@@ -36,9 +36,12 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
   useEffect(() => {
     let alive = true;
     const controller = new AbortController();
+    // Clear the previous satellite's slice immediately so a stale cross-node candidate
+    // never renders for a moment after switching satellites.
+    setDecisions(null);
     const load = async () => {
       try {
-        const snap = await fetchGroundDecisions(controller.signal);
+        const snap = await fetchGroundDecisions(node.node_id, controller.signal);
         if (alive) setDecisions(snap);
       } catch {
         // candidate list is non-essential; keep prior state on transient errors
@@ -51,7 +54,7 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
       controller.abort();
       window.clearInterval(timer);
     };
-  }, []);
+  }, [node.node_id]);
 
   useEffect(() => {
     setInspectedGs(null);
@@ -112,8 +115,9 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
   // (OME's forwarding/authority view). A scheduled pair reads neutral here; its precise
   // connected/faulted state comes from the kernel-actual source in the inspector — the
   // GS card already moved off authority-as-connected and the sat panel must too.
+  // The server already slices to this satellite's pairs (?node=), so every decision
+  // involves it.
   const candidateGs = (decisions?.decisions ?? [])
-    .filter((d) => d.pair[0] === node.node_id || d.pair[1] === node.node_id)
     .map((d) => {
       const gs = d.pair[0] === node.node_id ? d.pair[1] : d.pair[0];
       const key = _ordered(d.pair[0], d.pair[1]);

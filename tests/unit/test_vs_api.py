@@ -1352,6 +1352,75 @@ class TestLinkDecisionsEndpoint:
         assert len(body["unscheduled_pairs"]) == 1
         assert body["unscheduled_pairs"][0]["unscheduled_reason"] == "hysteresis_hold"
 
+    def test_node_slice_returns_every_pair_for_a_ground_station(self, monkeypatch):
+        # The candidate-list surface: ?node=<gs> returns the snapshot SLICED to that GS's
+        # pairs (same shape as the full snapshot, fewer rows), so a node card never polls
+        # and discards the whole GS×satellite cross-product.
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get("/api/v1/ground-link-decisions", params={"node": "gs-den"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["snapshot_seq"] == 42
+        assert {tuple(d["pair"]) for d in body["decisions"]} == {
+            ("gs-den", "sat-a"),
+            ("gs-den", "sat-b"),
+            ("gs-den", "sat-c"),
+        }
+        assert [tuple(u["pair"]) for u in body["unscheduled_pairs"]] == [("gs-den", "sat-b")]
+
+    def test_node_slice_returns_only_the_satellites_own_pairs(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get("/api/v1/ground-link-decisions", params={"node": "sat-b"})
+        assert r.status_code == 200
+        body = r.json()
+        assert [tuple(d["pair"]) for d in body["decisions"]] == [("gs-den", "sat-b")]
+        assert [tuple(u["pair"]) for u in body["unscheduled_pairs"]] == [("gs-den", "sat-b")]
+
+    def test_node_slice_with_no_candidates_is_200_empty_not_404(self, monkeypatch):
+        # A node the snapshot exists but does not cover (e.g. a satellite with no GS
+        # visibility this tick) is an honest empty result, NOT the no-snapshot 404.
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get("/api/v1/ground-link-decisions", params={"node": "sat-zzz"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["decisions"] == []
+        assert body["unscheduled_pairs"] == []
+
+    def test_node_slice_404_when_no_snapshot(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        monkeypatch.setattr(m, "_active_context", ctx)
+
+        r = TestClient(m.app).get("/api/v1/ground-link-decisions", params={"node": "gs-den"})
+        assert r.status_code == 404
+
+    def test_node_is_mutually_exclusive_with_pair_query(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_snapshot())
+
+        r = TestClient(m.app).get(
+            "/api/v1/ground-link-decisions",
+            params={"node": "gs-den", "node_a": "gs-den", "node_b": "sat-a"},
+        )
+        assert r.status_code == 400
+
     def test_per_pair_returns_scheduled_decision_with_null_unscheduled(self, monkeypatch):
         import vs_api.main as m
         from fastapi.testclient import TestClient

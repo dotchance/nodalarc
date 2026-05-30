@@ -1755,6 +1755,7 @@ def get_decision_explanation(
 def get_ground_link_decisions(
     node_a: str = Query(None),
     node_b: str = Query(None),
+    node: str = Query(None),
 ) -> dict | JSONResponse:
     """Return the latest OME GroundLinkDecisionSnapshot.
 
@@ -1770,11 +1771,20 @@ def get_ground_link_decisions(
     additionally carry ``unscheduled_reason`` plus the incumbent or
     capacity constraint the allocator chose them over.
 
-    Without ``node_a`` / ``node_b`` returns the full snapshot
-    (``sim_time``, ``snapshot_seq``, ``epoch_id``, all ground
-    decisions, all unscheduled ground pairs). With both, returns just
-    that ground pair's decision and matching unscheduled-pair record
-    (if any).
+    Three modes, mutually exclusive:
+
+    - No query: the full snapshot (``sim_time``, ``snapshot_seq``,
+      ``epoch_id``, all ground decisions, all unscheduled ground pairs).
+    - ``node`` (a single GS or satellite id): the snapshot SLICED to the
+      decisions and unscheduled pairs that node participates in — the
+      candidate-list surface for the selected node, so a node card does not
+      poll and discard the whole GS×satellite cross-product (wrong primitive
+      at thousand-satellite scale). Same shape as the full snapshot, fewer
+      rows; ``200`` with empty ``decisions``/``unscheduled_pairs`` when the
+      node has no candidates this tick (honest — the snapshot exists, the node
+      simply has none), distinct from the no-snapshot ``404``.
+    - ``node_a`` + ``node_b`` (both): just that ground pair's decision and
+      matching unscheduled-pair record (if any).
 
     ``404`` if no snapshot has been received yet; ``404`` for a
     specific pair the OME's ground decision set does not cover.
@@ -1787,6 +1797,11 @@ def get_ground_link_decisions(
             status_code=400,
             content={"error": "node_a and node_b must be provided together"},
         )
+    if node is not None and (node_a is not None or node_b is not None):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "node is mutually exclusive with node_a/node_b"},
+        )
     with ctx.state_lock:
         snapshot = ctx.latest_ground_link_decision_snapshot
     if snapshot is None:
@@ -1794,6 +1809,20 @@ def get_ground_link_decisions(
             status_code=404,
             content={"error": "No GroundLinkDecisionSnapshot received yet"},
         )
+    if node is not None:
+        return {
+            "sim_time": snapshot.sim_time.isoformat(),
+            "snapshot_seq": snapshot.snapshot_seq,
+            "epoch_id": snapshot.epoch_id,
+            "decisions": [
+                json.loads(d.model_dump_json()) for d in snapshot.decisions if node in d.pair
+            ],
+            "unscheduled_pairs": [
+                json.loads(u.model_dump_json())
+                for u in snapshot.unscheduled_pairs
+                if node in u.pair
+            ],
+        }
     if node_a and node_b:
         target = tuple(sorted((node_a, node_b)))
         decision = next((d for d in snapshot.decisions if d.pair == target), None)

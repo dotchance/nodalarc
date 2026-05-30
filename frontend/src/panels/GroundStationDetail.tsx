@@ -29,9 +29,12 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   useEffect(() => {
     let alive = true;
     const controller = new AbortController();
+    // Clear the previous GS's slice immediately so a stale cross-node candidate never
+    // renders for a moment after switching stations.
+    setDecisions(null);
     const load = async () => {
       try {
-        const snap = await fetchGroundDecisions(controller.signal);
+        const snap = await fetchGroundDecisions(node.node_id, controller.signal);
         if (alive) setDecisions(snap);
       } catch {
         // candidate list is non-essential; leave prior state on transient errors
@@ -44,7 +47,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
       controller.abort();
       window.clearInterval(timer);
     };
-  }, []);
+  }, [node.node_id]);
 
   // Reset the inspected pair when the selected GS changes.
   useEffect(() => {
@@ -100,8 +103,8 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
       u.unscheduled_reason,
     ]),
   );
+  // The server already slices to this GS's pairs (?node=), so every decision involves it.
   const candidates = (decisions?.decisions ?? [])
-    .filter((d) => d.pair[0] === node.node_id || d.pair[1] === node.node_id)
     .map((d) => {
       const sat = d.pair[0] === node.node_id ? d.pair[1] : d.pair[0];
       const key = _ordered(d.pair[0], d.pair[1]);

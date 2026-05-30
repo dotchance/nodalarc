@@ -45,16 +45,21 @@ export interface GroundDecisionsSnapshot {
 }
 
 /**
- * Fetch the latest OME ground-decision snapshot (all GS<->sat decisions the OME
- * considered) — the source for the candidate list. Null on 404 (no snapshot yet).
+ * Fetch the OME ground-decision snapshot sliced to one node's candidates — the source
+ * for a node card's candidate list. `node` is the selected GS or satellite id; the server
+ * returns only the decisions/unscheduled pairs that node participates in, so the card
+ * never polls and discards the whole GS×satellite cross-product (wrong primitive at
+ * thousand-satellite scale). Omit `node` only for the full-snapshot view. Null on 404 (no
+ * snapshot yet); a node with no candidates this tick is a 200 with empty arrays.
  */
 export async function fetchGroundDecisions(
+  node?: string | null,
   signal?: AbortSignal,
 ): Promise<GroundDecisionsSnapshot | null> {
-  const resp = await fetch(`${REST_URL}/api/v1/ground-link-decisions`, {
-    headers: authHeaders(),
-    signal,
-  });
+  const url = node
+    ? `${REST_URL}/api/v1/ground-link-decisions?node=${encodeURIComponent(node)}`
+    : `${REST_URL}/api/v1/ground-link-decisions`;
+  const resp = await fetch(url, { headers: authHeaders(), signal });
   if (resp.status === 404) return null;
   if (!resp.ok) {
     throw new Error(`ground-link-decisions ${resp.status}: ${await resp.text()}`);

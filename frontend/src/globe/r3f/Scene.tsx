@@ -27,6 +27,7 @@ import { Body } from "./Body";
 import { Earth, Starfield } from "./Earth";
 import { Constellation } from "./Constellation";
 import { GroundStations } from "./GroundStation";
+import { Links } from "./Links";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { FrameDriver } from "./FrameDriver";
 import { setEarthFrame } from "./positions";
@@ -38,6 +39,8 @@ interface SceneProps {
   colorMode: ColorMode;
   referenceFrame: ReferenceFrame;
   playbackPaused: boolean;
+  showIslLinks: boolean;
+  showGroundLinks: boolean;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
 }
@@ -48,6 +51,8 @@ export function Scene({
   colorMode,
   referenceFrame,
   playbackPaused,
+  showIslLinks,
+  showGroundLinks,
   selection,
   onSelect,
 }: SceneProps) {
@@ -102,6 +107,11 @@ export function Scene({
           onSelect={onSelect}
         />
         <GroundStations nodes={nodes} selection={selection} onSelect={onSelect} />
+        <Links
+          links={snapshot?.links ?? []}
+          showIslLinks={showIslLinks}
+          showGroundLinks={showGroundLinks}
+        />
       </Body>
       <SelectionOverlay selection={selection} />
     </Universe>

@@ -324,6 +324,8 @@ function AppInner() {
               colorMode={colorMode}
               referenceFrame={referenceFrame}
               playbackPaused={playback.paused}
+              showIslLinks={showIslLinks}
+              showGroundLinks={showGroundLinks}
               selection={selection}
               onSelect={select}
             />

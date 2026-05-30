@@ -8,28 +8,14 @@ import type { NodeState, StateSnapshot, Selection } from "../types";
 import { useDecisionExplanation } from "../explain/useDecisionExplanation";
 import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
 import { candidateStatus } from "../explain/derive";
-import { FAMILY_TONE } from "../explain/families";
+import { CandidateRow } from "../explain/components/CandidateRow";
 import { GroundStationCard } from "../explain/components/GroundStationCard";
-import { PairInspector } from "../explain/components/PairInspector";
+import { PairInspectorView } from "../explain/components/PairInspectorView";
 
 interface GroundStationDetailProps {
   node: NodeState;
   snapshot: StateSnapshot;
   onSelect: (sel: Selection | null) => void;
-}
-
-/** Hook wrapper: fetches the pair facts and renders the inspector. */
-function PairInspectorView({
-  gsId,
-  satId,
-  onBack,
-}: {
-  gsId: string;
-  satId: string;
-  onBack: () => void;
-}) {
-  const { facts } = useDecisionExplanation(gsId, satId);
-  return <PairInspector gsId={gsId} satId={satId} facts={facts} onBack={onBack} />;
 }
 
 const _ordered = (a: string, b: string): string => [a, b].sort().join("|");
@@ -136,19 +122,14 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
         <>
           <h3>Candidates ({candidates.length})</h3>
           {candidates.map(({ sat, d, status }) => (
-            <div
+            <CandidateRow
               key={sat}
-              className="candidate-row"
-              style={{ borderLeft: `3px solid ${FAMILY_TONE[status.family].css}` }}
+              node={sat}
+              family={status.family}
+              label={status.label}
+              detail={d.elevation_deg != null ? `${Math.round(d.elevation_deg)} deg el` : null}
               onClick={() => setInspectedSat(sat)}
-              title={`Inspect ${node.node_id} <-> ${sat}`}
-            >
-              <span className="candidate-sat">{sat}</span>
-              <span className="candidate-status">{status.label}</span>
-              {d.elevation_deg != null ? (
-                <span className="candidate-detail">{Math.round(d.elevation_deg)} deg el</span>
-              ) : null}
-            </div>
+            />
           ))}
         </>
       ) : null}

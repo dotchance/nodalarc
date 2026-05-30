@@ -2,15 +2,23 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Satellite detail panel — role, area, adjacencies, position. */
 
+import { useEffect, useState } from "react";
 import { translateReason } from "../translate";
 import { areaCSSColor } from "../globe/colors";
 import type { NodeState, StateSnapshot, Selection } from "../types";
+import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
+import { candidateStatus } from "../explain/derive";
+import type { Family } from "../explain/families";
+import { CandidateRow } from "../explain/components/CandidateRow";
+import { PairInspectorView } from "../explain/components/PairInspectorView";
 
 interface SatelliteDetailProps {
   node: NodeState;
   snapshot: StateSnapshot;
   onSelect: (sel: Selection | null) => void;
 }
+
+const _ordered = (a: string, b: string): string => [a, b].sort().join("|");
 
 function linkTypeLabel(linkType: string | null): string {
   switch (linkType) {
@@ -23,6 +31,33 @@ function linkTypeLabel(linkType: string | null): string {
 }
 
 export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailProps) {
+  const [inspectedGs, setInspectedGs] = useState<string | null>(null);
+  const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        const snap = await fetchGroundDecisions(controller.signal);
+        if (alive) setDecisions(snap);
+      } catch {
+        // candidate list is non-essential; keep prior state on transient errors
+      }
+    };
+    void load();
+    const timer = window.setInterval(load, 2000);
+    return () => {
+      alive = false;
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    setInspectedGs(null);
+  }, [node.node_id]);
+
   // Find connected links
   const connectedLinks = snapshot.links.filter(
     (l) => l.node_a === node.node_id || l.node_b === node.node_id,
@@ -54,6 +89,46 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
     const key = nodeA < nodeB ? `${nodeA}:${nodeB}` : `${nodeB}:${nodeA}`;
     onSelect({ type: "link", id: key });
   };
+
+  if (inspectedGs) {
+    return (
+      <PairInspectorView
+        gsId={inspectedGs}
+        satId={node.node_id}
+        onBack={() => setInspectedGs(null)}
+      />
+    );
+  }
+
+  const connectedGsIds = new Set(
+    gndLinks
+      .filter((l) => l.state === "active")
+      .map((l) => (l.node_a.startsWith("gs-") ? l.node_a : l.node_b)),
+  );
+  const withheld = new Set(
+    (decisions?.unscheduled_pairs ?? []).map((u) => _ordered(u.pair[0], u.pair[1])),
+  );
+  const unschedReason = new Map(
+    (decisions?.unscheduled_pairs ?? []).map((u) => [
+      _ordered(u.pair[0], u.pair[1]),
+      u.unscheduled_reason,
+    ]),
+  );
+  const candidateGs = (decisions?.decisions ?? [])
+    .filter((d) => d.pair[0] === node.node_id || d.pair[1] === node.node_id)
+    .map((d) => {
+      const gs = d.pair[0] === node.node_id ? d.pair[1] : d.pair[0];
+      const key = _ordered(d.pair[0], d.pair[1]);
+      const status: { family: Family; label: string } = connectedGsIds.has(gs)
+        ? { family: "connected", label: "connected" }
+        : candidateStatus({
+            visible: d.visible,
+            isWithheld: withheld.has(key),
+            rejectReason: d.reject_reason,
+            unscheduledReason: unschedReason.get(key) ?? null,
+          });
+      return { gs, d, status };
+    });
 
   return (
     <div>
@@ -143,6 +218,22 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
           })}
         </>
       )}
+
+      {candidateGs.length > 0 ? (
+        <>
+          <h3>Candidate Ground Stations ({candidateGs.length})</h3>
+          {candidateGs.map(({ gs, d, status }) => (
+            <CandidateRow
+              key={gs}
+              node={gs}
+              family={status.family}
+              label={status.label}
+              detail={d.elevation_deg != null ? `${Math.round(d.elevation_deg)} deg el` : null}
+              onClick={() => setInspectedGs(gs)}
+            />
+          ))}
+        </>
+      ) : null}
 
       <h3>Position</h3>
       <div className="detail-row">

@@ -39,6 +39,7 @@ function Controls() {
 export function Universe({ children }: { children?: ReactNode }) {
   return (
     <Canvas
+      flat
       camera={{
         fov: CAMERA_FOV,
         position: [0, CAMERA_DISTANCE * 0.5, CAMERA_DISTANCE * 0.87],

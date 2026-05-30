@@ -90,6 +90,30 @@ class ActuationOpsDetails(BaseModel):
     reason: str | None = None
 
 
+class PendingActuationPair(BaseModel):
+    """One pair the Scheduler desires up but the kernel has not yet proven active.
+
+    The Scheduler OWNS this timing. ``pending_since`` is the Scheduler's wall-clock
+    instant (UTC) the pair entered the effective-desired set without a verified
+    ``_actual_links`` entry — the origin of the actuation window the in_flight ->
+    faulted bound measures. It is NOT VS-API's snapshot-observation time and NOT OME
+    visibility time (both of which mismatched the bound and re-clocked on VS-API
+    restart). Rides the retained ``ActualLinkSnapshot`` so VS-API RECOVERS the
+    divergence clock on resubscribe and only ever derives elapsed from it, never
+    re-stamps it. ``operation`` is the pending direction (``BatchLinkUp``);
+    ``epoch_id``/``snapshot_seq`` are the snapshot identity at fold time, for
+    provenance and stale-epoch discard.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pair: list[str]
+    pending_since: datetime
+    operation: str
+    epoch_id: int | None = None
+    snapshot_seq: int | None = None
+
+
 class ActualLinkSnapshot(BaseModel):
     """One Scheduler instance's verified kernel-actual link set, recoverable.
 
@@ -102,6 +126,14 @@ class ActualLinkSnapshot(BaseModel):
     Each pair is an ordered ``[node_a, node_b]`` list. ``scheduler_instance_id``
     keys the retained subject so a restart does not clobber a dead predecessor's
     message; the consumer tracks the current owner (single-owner-per-session).
+
+    ``pending_pairs`` carries the Scheduler-owned in_flight -> faulted clock for every
+    desired-but-not-kernel-actual pair (see ``PendingActuationPair``); it rides the same
+    retained snapshot so the divergence timing recovers atomically with the actual set
+    and never split-brains across two messages. ``emitted_at`` is the Scheduler's
+    wall-clock publish instant: VS-API combines it with each pair's ``pending_since`` (a
+    same-clock delta) and its own receive-to-now delta to compute divergence age WITHOUT
+    cross-pod clock skew — ``pending_since`` stays the load-bearing origin.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -114,6 +146,8 @@ class ActualLinkSnapshot(BaseModel):
     epoch_id: int | None = None
     snapshot_seq: int | None = None
     active_pairs: list[list[str]] = Field(default_factory=list)
+    pending_pairs: list[PendingActuationPair] = Field(default_factory=list)
+    emitted_at: datetime | None = None
 
 
 class ActuationNotice(BaseModel):

@@ -62,6 +62,7 @@ from nodalarc.models.scheduler_ops import (
     ActuationOpsDetails,
     OperatorRepairCommand,
     OperatorRepairResponse,
+    PendingActuationPair,
     SchedulerOpsCode,
 )
 from nodalarc.models.scheduler_ops import (
@@ -293,6 +294,14 @@ class Dispatcher:
         # Written ONLY by the dispatch worker after Node Agent ACK.
         self._actual_links: dict[tuple[str, str], ActiveLinkInfo] = {}
 
+        # Scheduler-owned in_flight -> faulted clock: per-pair wall-clock origin of a
+        # desired-but-not-kernel-actual pair, captured at fold time. value =
+        # (pending_since, epoch_id, snapshot_seq). The Scheduler owns this because it
+        # owns actuation (explainability Ownership Boundaries); VS-API used to derive it
+        # from when it observed a snapshot — an end-to-end measure that mismatched the
+        # actuation bound and reset on VS-API restart. Published on ActualLinkSnapshot.
+        self._pending_since: dict[tuple[str, str], tuple[datetime, int, int]] = {}
+
         # Incremental active-link counters for O(1) MBB capacity checks.
         # Re-baselined from _actual_links on every LinkStateSnapshot.
         self._gs_active_count: dict[str, int] = {}
@@ -471,6 +480,11 @@ class Dispatcher:
         self._pending_visibility_events.clear()
         self._last_visibility_sim_time = None
         self._last_snapshot_sim_time = None
+        # The old epoch's desired-but-not-actual pairs are void: their pending_since
+        # references a pre-seek desire. _actual_links survives (actuator truth); the
+        # first post-seek reconcile re-stamps any still-divergent pair against the new
+        # epoch, so the divergence clock never carries a stale-epoch origin.
+        self._pending_since.clear()
 
     def _discard_pending_dispatch_intents(self) -> int:
         """Best-effort cleanup of queued old-epoch intents.
@@ -1254,19 +1268,67 @@ class Dispatcher:
             epoch_id=self._last_snapshot_epoch_id,
             snapshot_seq=self._last_snapshot_seq,
             active_pairs=self._pair_rows(set(self._actual_links)),
+            pending_pairs=self._pending_pair_rows(),
+            emitted_at=self._now(),
         )
         await js.publish(
             actual_links_subject(self._session_id, self._scheduler_instance_id),
             snapshot.model_dump_json().encode(),
         )
 
-    async def _publish_actual_links_if_changed(self, before: frozenset[tuple[str, str]]) -> None:
-        """Publish the kernel-actual set only when membership changed vs ``before``.
+    def _pending_pair_rows(self) -> list[PendingActuationPair]:
+        """The desired-but-not-kernel-actual pairs as wire records, sorted for replay."""
+        return [
+            PendingActuationPair(
+                pair=[pair[0], pair[1]],
+                pending_since=since,
+                operation="BatchLinkUp",
+                epoch_id=epoch_id,
+                snapshot_seq=snapshot_seq,
+            )
+            for pair, (since, epoch_id, snapshot_seq) in sorted(self._pending_since.items())
+        ]
 
-        Latency-only updates (same pairs, new netem) are not membership changes and
-        must not re-publish — keeps the retained set edge-triggered, not a heartbeat.
+    def _update_pending_since(self, desired: dict[tuple[str, str], ActiveLinkInfo]) -> None:
+        """Maintain the in_flight -> faulted clock for desired-but-not-actual pairs.
+
+        A pair the Scheduler desires up but ``_actual_links`` has NOT proven gets a
+        wall-clock ``pending_since`` stamped ONCE — the actuation-window origin — and
+        clears when the kernel proves it (enters ``_actual_links``) or it leaves desired.
+        ``setdefault`` semantics preserve the first stamp across stable ticks so a stuck
+        pair's age keeps growing; a converge-then-diverge handover re-stamps fresh. This
+        is the divergence timing the bound measures, owned by the actuation owner.
         """
-        if frozenset(self._actual_links) != before:
+        pending = set(desired) - set(self._actual_links)
+        for pair in pending:
+            if pair not in self._pending_since:
+                self._pending_since[pair] = (
+                    self._now(),
+                    self._last_snapshot_epoch_id,
+                    self._last_snapshot_seq,
+                )
+        for pair in list(self._pending_since):
+            if pair not in pending:
+                del self._pending_since[pair]
+
+    async def _publish_actual_links_if_changed(
+        self,
+        actual_before: frozenset[tuple[str, str]],
+        pending_before: frozenset[tuple[str, str]],
+    ) -> None:
+        """Publish the kernel-actual + pending set only when membership changed.
+
+        Latency-only updates (same pairs, new netem) are not membership changes and must
+        not re-publish — keeps the retained set edge-triggered, not a heartbeat. The
+        pending set is part of membership: a pair that diverges (enters pending) or
+        converges (leaves pending) changes the retained snapshot even when ``_actual_links``
+        is momentarily unchanged, so both befores gate the trigger. ``pending_since``
+        timestamps never mutate once stamped, so comparing the key sets is sufficient.
+        """
+        if (
+            frozenset(self._actual_links) != actual_before
+            or frozenset(self._pending_since) != pending_before
+        ):
             await self._publish_actual_links()
 
     async def _halt_dispatcher(
@@ -2208,6 +2270,7 @@ class Dispatcher:
         # the recoverable kernel-actual set is republished if repair changed it —
         # on success or on a partial-then-failed repair, not just at the next tick.
         actual_before = frozenset(self._actual_links)
+        pending_before = frozenset(self._pending_since)
         before = self._repair_original_states.pop(cmd.intervention_id, self._ground_state(gs_id))
         active_recovery = SchedulerRecoveryStatus(
             verify_attempt_count=0,
@@ -2401,7 +2464,11 @@ class Dispatcher:
                 details=fail_details,
             )
 
-        await self._publish_actual_links_if_changed(actual_before)
+        # Repair changed kernel-actual; recompute the divergence clock against current
+        # desired (a repaired-up pair leaves pending, a still-down one keeps its origin)
+        # before the edge-publish.
+        self._update_pending_since(self._desired_links)
+        await self._publish_actual_links_if_changed(actual_before, pending_before)
 
     # ------------------------------------------------------------------
     # Reconcile-based dispatch — single path to Node Agent
@@ -2595,6 +2662,7 @@ class Dispatcher:
         # listing a torn-down pair as still up — the exact masking this fix removes.
         # Mirrors _run_operator_repair_locked, which publishes outside its try/except.
         actual_before = frozenset(self._actual_links)
+        pending_before = frozenset(self._pending_since)
         try:
             await self._run_due_kernel_verifications(sim_time=sim_time)
 
@@ -2697,12 +2765,16 @@ class Dispatcher:
                     len(self._actual_links),
                 )
         finally:
-            # Edge-triggered: a no-op when membership is unchanged (a stable link
-            # never re-publishes), but any committed change is published even on a
-            # halt-raise. A publish failure is logged, not raised — it must not mask
-            # the in-flight dispatch exception (same guard idiom as _halt_dispatcher).
+            # Recompute the divergence clock against the desired we just reconciled
+            # toward, then edge-publish. Both run in finally so a halt-raise still
+            # records pending and publishes the corrected set. A no-op when neither the
+            # actual nor the pending membership changed (a stable link never
+            # re-publishes); any committed change is published even on a halt-raise. A
+            # publish failure is logged, not raised — it must not mask the in-flight
+            # dispatch exception (same guard idiom as _halt_dispatcher).
+            self._update_pending_since(desired)
             try:
-                await self._publish_actual_links_if_changed(actual_before)
+                await self._publish_actual_links_if_changed(actual_before, pending_before)
             except Exception:
                 log.exception("Failed to publish kernel-actual snapshot at reconcile exit")
 

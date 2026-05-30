@@ -470,6 +470,125 @@ def test_reconcile_publishes_corrected_set_when_a_phase_fails_after_teardown() -
     assert [old_pair[0], old_pair[1]] not in snaps[-1].active_pairs
 
 
+# --- #4: Scheduler-owned in_flight -> faulted divergence clock (pending_since) ----------
+
+PENDING_TIME = datetime(2026, 5, 27, 12, 0, 30, tzinfo=UTC)
+
+
+def _failed_up(pair: tuple[str, str]) -> ActuationResult:
+    """An up that the Node Agent did NOT confirm — pair stays out of _actual_links."""
+    return _actuation_result(
+        pair=pair,
+        link_type="ground",
+        gs_id="gs-multi",
+        failure=ActuationFailureClass.GROUND_CLEAN_FAILURE,
+        operation="BatchLinkUp",
+    )
+
+
+def test_reconcile_stamps_and_publishes_pending_since_for_unactuated_desired_pair() -> None:
+    # #4: the divergence clock is Scheduler-owned. A pair OME/Scheduler desire up but the
+    # kernel never confirms must appear in pending_pairs with a Scheduler-stamped
+    # pending_since (the actuation-window origin) plus emitted_at — VS-API derives the
+    # divergence AGE from these, it does not own the timing.
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._mbb_dispatch = False
+    d._now = lambda: PENDING_TIME
+    d._last_snapshot_epoch_id = 3
+    d._last_snapshot_seq = 9021
+    d._handle_actuation_result = AsyncMock()
+    d._js.publish = AsyncMock()
+    pair = ("gs-multi", "sat-new")
+    d._send_batch_up = AsyncMock(return_value=_failed_up(pair))
+
+    asyncio.run(d._reconcile_links({pair: _info("term1")}, None, SIM_TIME))
+
+    assert pair not in d._actual_links  # kernel never confirmed it
+    assert pair in d._pending_since
+    latest = _actual_link_snapshots(d._js.publish)[-1]
+    assert [pair[0], pair[1]] not in latest.active_pairs
+    assert latest.emitted_at == PENDING_TIME
+    pend = {tuple(p.pair): p for p in latest.pending_pairs}
+    assert (pair[0], pair[1]) in pend
+    rec = pend[(pair[0], pair[1])]
+    assert rec.pending_since == PENDING_TIME
+    assert rec.operation == "BatchLinkUp"
+    assert rec.epoch_id == 3
+    assert rec.snapshot_seq == 9021
+
+
+def test_pending_since_clears_when_the_kernel_confirms_the_pair() -> None:
+    # Convergence clears the clock: once the Node Agent proves the pair up it is connected,
+    # not in_flight — it must leave pending_pairs and appear in active_pairs.
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._mbb_dispatch = False
+    d._handle_actuation_result = AsyncMock()
+    d._js.publish = AsyncMock()
+    pair = ("gs-multi", "sat-new")
+    info = _info("term1")
+
+    d._send_batch_up = AsyncMock(return_value=_failed_up(pair))
+    asyncio.run(d._reconcile_links({pair: info}, None, SIM_TIME))
+    assert pair in d._pending_since
+
+    d._send_batch_up = AsyncMock(return_value=_success_result(pair=pair, operation="BatchLinkUp"))
+    asyncio.run(d._reconcile_links({pair: info}, None, SIM_TIME))
+
+    assert pair in d._actual_links
+    assert pair not in d._pending_since
+    latest = _actual_link_snapshots(d._js.publish)[-1]
+    assert [pair[0], pair[1]] in latest.active_pairs
+    assert all(tuple(p.pair) != pair for p in latest.pending_pairs)
+
+
+def test_pending_since_clears_when_a_pair_leaves_desired_unactuated() -> None:
+    # OME stops desiring a pair before it ever came up: not a fault, just gone. The clock
+    # must clear so a never-actuated, no-longer-desired pair does not fault forever.
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._mbb_dispatch = False
+    d._handle_actuation_result = AsyncMock()
+    d._js.publish = AsyncMock()
+    pair = ("gs-multi", "sat-new")
+    d._send_batch_up = AsyncMock(return_value=_failed_up(pair))
+
+    asyncio.run(d._reconcile_links({pair: _info("term1")}, None, SIM_TIME))
+    assert pair in d._pending_since
+
+    asyncio.run(d._reconcile_links({}, None, SIM_TIME))
+    assert pair not in d._pending_since
+
+
+def test_pending_since_origin_is_stamped_once_across_stable_ticks() -> None:
+    # The origin is the FIRST divergence instant, not the latest tick: a pair stuck
+    # pending across ticks keeps its original pending_since so its age keeps growing.
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._mbb_dispatch = False
+    d._handle_actuation_result = AsyncMock()
+    d._js.publish = AsyncMock()
+    pair = ("gs-multi", "sat-new")
+    info = _info("term1")
+    d._send_batch_up = AsyncMock(return_value=_failed_up(pair))
+
+    t1 = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
+    t2 = datetime(2026, 5, 27, 12, 0, 5, tzinfo=UTC)
+    d._now = lambda: t1
+    asyncio.run(d._reconcile_links({pair: info}, None, SIM_TIME))
+    d._now = lambda: t2
+    asyncio.run(d._reconcile_links({pair: info}, None, SIM_TIME))
+
+    assert d._pending_since[pair][0] == t1  # origin preserved, not advanced to t2
+
+
+def test_seek_epoch_reset_clears_pending_since() -> None:
+    # A seek voids the old epoch's desires; their pending_since must not survive into the
+    # new epoch (it would carry a stale-epoch origin). _actual_links survives (actuator
+    # truth); the first post-seek reconcile re-stamps any still-divergent pair.
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._pending_since[("gs-multi", "sat-new")] = (SIM_TIME, 1, 5)
+    d._reset_epoch_local_authority()
+    assert d._pending_since == {}
+
+
 def test_ground_down_gate_blocks_kernel_dirty_and_repairing_but_allows_clean_cleanup() -> None:
     d = _make_dispatcher_with_two_terminal_gs()
     pair = ("gs-multi", "sat-old")

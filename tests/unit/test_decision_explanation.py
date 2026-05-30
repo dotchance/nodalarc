@@ -318,6 +318,75 @@ def test_connected_pair_has_no_divergence_timing_but_keeps_bounds():
     assert facts.actuation.fault_after_ms == 1200.0
 
 
+def test_pair_inspector_composes_the_requested_pair_not_the_auto_focal():
+    # Under one GS: a visible-but-withheld pair (capacity) and a physically rejected
+    # pair (range). The GS card auto-selects the withheld one by precedence; the pair
+    # inspector composes whichever pair is requested — node_focus="pair".
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-vis", visible=True, range_km=900.0, elevation_deg=40.0, reject_reason="ok"
+            ),
+            _decision(
+                "sat-rej",
+                visible=False,
+                range_km=2407.0,
+                elevation_deg=3.0,
+                reject_reason="range_exceeded",
+                rejecting_endpoint="both",
+            ),
+        ],
+        unscheduled=[
+            UnscheduledPair(
+                pair=(GS, "sat-vis"),
+                tenant_id="default",
+                reference_body="earth",
+                unscheduled_reason="gs_capacity",
+                incumbent_pair=None,
+                capacity_constraint="gs-denver.terminals",
+            )
+        ],
+    )
+    gs_facts = compose_gs_explanation(
+        gs_id=GS, snapshot=snap, active_pairs=frozenset(), actuation_state_by_gs={}
+    )
+    assert gs_facts.node_focus == "gs"
+    assert gs_facts.pair == tuple(sorted((GS, "sat-vis")))
+    assert gs_facts.binding_gate == "capacity"
+
+    pair_facts = compose_gs_explanation(
+        gs_id=GS,
+        snapshot=snap,
+        active_pairs=frozenset(),
+        actuation_state_by_gs={},
+        focal_pair=tuple(sorted((GS, "sat-rej"))),
+    )
+    assert pair_facts.node_focus == "pair"
+    assert pair_facts.pair == tuple(sorted((GS, "sat-rej")))
+    assert pair_facts.binding_gate == "range"
+    assert pair_facts.binding_reason_code == "range_exceeded"
+
+
+def test_pair_inspector_returns_none_for_a_pair_absent_from_the_snapshot():
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-P00S03", visible=True, range_km=960.0, elevation_deg=31.6, reject_reason="ok"
+            )
+        ]
+    )
+    assert (
+        compose_gs_explanation(
+            gs_id=GS,
+            snapshot=snap,
+            active_pairs=frozenset(),
+            actuation_state_by_gs={},
+            focal_pair=tuple(sorted((GS, "sat-absent"))),
+        )
+        is None
+    )
+
+
 def test_envelope_binding_endpoint_targets_the_satellite_terminal():
     # Finding #5: when the SATELLITE terminal is the rejecting endpoint, the envelope
     # names binding_endpoint=satellite and carries the sat terminal's constraints, so

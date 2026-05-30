@@ -246,12 +246,15 @@ def compose_gs_explanation(
     expected_latency_ms: float | None = None,
     fault_after_ms: float | None = None,
     now: datetime | None = None,
+    focal_pair: Pair | None = None,
 ) -> DecisionExplanationFacts | None:
-    """Compose the explanation facts for one ground station.
+    """Compose the explanation facts for one ground station, or one specific pair.
 
-    Returns None if the snapshot covers no decision for this GS (the caller
-    should 404). Focal-pair precedence: connected > scheduled-but-not-up >
-    visible-but-withheld > closest-to-visible rejected.
+    Returns None if the snapshot covers no decision for this GS (the caller should
+    404), or — when ``focal_pair`` is given — no decision for that exact pair. With
+    ``focal_pair`` the facts describe that pair (``node_focus="pair"``, the Per-Pair
+    Inspector); without it the GS card auto-selects by precedence: connected >
+    scheduled-but-not-up > visible-but-withheld > closest-to-visible rejected.
 
     ``divergence_onset_by_pair`` (wall-clock UTC, tracked by VS-API) and ``now`` let the
     actuation facts carry how long the focal pair has been desired-but-not-actual, so the
@@ -281,7 +284,41 @@ def compose_gs_explanation(
     kernel_up: bool | None
     actuation_pass: bool | None
 
-    if scheduled:
+    def _category(d: GroundVisibilityDecisionWire) -> str:
+        op = _ordered_pair(d.pair)
+        if d.visible and op not in unscheduled:
+            return "scheduled"
+        if d.visible:
+            return "withheld"
+        return "rejected"
+
+    # Focal-pair SELECTION: a pair inspector composes for exactly the requested pair;
+    # the GS card auto-selects by precedence (scheduled > withheld > closest rejected).
+    # The branch BODIES below are identical either way — only which pair is focal differs.
+    if focal_pair is not None:
+        target = next((d for d in decisions if _ordered_pair(d.pair) == focal_pair), None)
+        if target is None:
+            return None
+        focal = target
+        category = _category(focal)
+    elif scheduled:
+        focal = scheduled[0]
+        category = "scheduled"
+    elif withheld:
+        focal = withheld[0]
+        category = "withheld"
+    else:
+        # Closest-to-connecting rejected pair: the one that got FURTHEST through the
+        # funnel (binding-gate depth), tie-broken by elevation. Raw elevation alone is
+        # wrong: a high satellite can be badly range/FoR-bound while a lower one is a
+        # degree under its binding gate.
+        def _reject_depth(d: GroundVisibilityDecisionWire) -> int:
+            return _GATE_INDEX.get(_REJECT_GATE.get(d.reject_reason, "line_of_sight"), 0)
+
+        focal = max(decisions, key=lambda d: (_reject_depth(d), d.elevation_deg))
+        category = "rejected"
+
+    if category == "scheduled":
         # OME wants this pair up. The per-GS actuation ROSTER (recoverable Scheduler
         # truth) decides clean vs fault — NOT the OME link snapshot, which is OME's
         # model of forwarding state, not kernel proof. A GS the Scheduler reports
@@ -289,7 +326,6 @@ def compose_gs_explanation(
         # an unactuated link would mask as connected — the divergence this UX exists to
         # reveal. (Per-pair recoverable actual-kernel state is a separate follow-on; the
         # roster already catches the dirty/blocked masking case.)
-        focal = scheduled[0]
         kernel_up = _ordered_pair(focal.pair) in active_pairs
         ome_desired = True
         viable_withheld = False
@@ -301,9 +337,8 @@ def compose_gs_explanation(
             binding_gate = None
             binding_reason = None
             actuation_pass = True
-    elif withheld:
+    elif category == "withheld":
         # Connectivity was available but policy/capacity withheld it (the message to surface).
-        focal = withheld[0]
         u = unscheduled[_ordered_pair(focal.pair)]
         binding_gate = _UNSCHEDULED_GATE.get(u.unscheduled_reason, "handover_policy")
         binding_reason = u.unscheduled_reason
@@ -312,14 +347,7 @@ def compose_gs_explanation(
         kernel_up = _ordered_pair(focal.pair) in active_pairs
         actuation_pass = None
     else:
-        # Nothing viable. Lead with the rejected pair closest to connecting — the one
-        # that got FURTHEST through the funnel before stopping (binding-gate depth),
-        # tie-broken by elevation. Raw elevation alone is wrong: a high satellite can be
-        # badly range/FoR-bound while a lower one is a degree under its binding gate.
-        def _reject_depth(d: GroundVisibilityDecisionWire) -> int:
-            return _GATE_INDEX.get(_REJECT_GATE.get(d.reject_reason, "line_of_sight"), 0)
-
-        focal = max(decisions, key=lambda d: (_reject_depth(d), d.elevation_deg))
+        # Physically rejected (not visible) — the closest-to-connecting near-miss.
         binding_gate = _REJECT_GATE.get(focal.reject_reason)
         binding_reason = focal.reject_reason
         viable_withheld = False
@@ -346,7 +374,7 @@ def compose_gs_explanation(
     return DecisionExplanationFacts(
         gs_id=gs_id,
         pair=_ordered_pair(focal.pair),
-        node_focus="gs",
+        node_focus="pair" if focal_pair is not None else "gs",
         reference_body=reference_body,
         tenant_id=tenant_id,
         binding_gate=binding_gate,

@@ -1707,6 +1707,33 @@ class TestKernelActualRecovery:
         assert act["expected_latency_ms"] == 250.0
         assert act["fault_after_ms"] == 1200.0
 
+    def test_endpoint_pair_inspector_composes_the_requested_pair(self, monkeypatch):
+        # ?sat=Y composes that exact pair (node_focus="pair"), not the GS auto-focal.
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        ctx = self._ctx_with_snapshot_and_clean_roster()
+        monkeypatch.setattr(m, "_active_context", ctx)
+        client = TestClient(m.app)
+
+        gs_only = client.get("/api/v1/decision-explanation", params={"gs": "gs-den"}).json()
+        assert gs_only["node_focus"] == "gs"
+        assert gs_only["pair"] == ["gs-den", "sat-a"]  # scheduled focal by precedence
+
+        # The withheld pair sat-b, inspected directly.
+        r = client.get("/api/v1/decision-explanation", params={"gs": "gs-den", "sat": "sat-b"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["node_focus"] == "pair"
+        assert body["pair"] == ["gs-den", "sat-b"]
+        assert body["binding_gate"] == "handover_policy"  # hysteresis_hold
+
+        # A pair absent from the snapshot -> 404.
+        missing = client.get(
+            "/api/v1/decision-explanation", params={"gs": "gs-den", "sat": "sat-zzz"}
+        )
+        assert missing.status_code == 404
+
 
 class TestOmeLifecycleNotices:
     def test_ome_lifecycle_terminal_event_becomes_operator_notice(self):

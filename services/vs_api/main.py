@@ -1685,8 +1685,10 @@ def get_link_decision_traces(
     dependencies=[Depends(_require_api_key)],
     response_model=None,
 )
-def get_decision_explanation(gs: str = Query(...)) -> dict | JSONResponse:
-    """Composed decision-explanation FACTS for one ground station.
+def get_decision_explanation(
+    gs: str = Query(...), sat: str | None = Query(None)
+) -> dict | JSONResponse:
+    """Composed decision-explanation FACTS for one ground station, or one pair.
 
     Phase A of the link-explainability UX. VS-API composes the funnel ladder,
     effective envelope, best-candidate, and actuation/divergence facts from the
@@ -1696,7 +1698,11 @@ def get_decision_explanation(gs: str = Query(...)) -> dict | JSONResponse:
     kernel truth), NOT ``ctx.links`` (OME's desired/visible snapshot) — otherwise a
     scheduled-but-unactuated pair masks as connected. Actuation state defaults to
     ``unknown`` when no roster has reached VS-API — honest, not faked clean.
-    ``404`` if no snapshot has arrived or no decision covers this GS.
+
+    With ``sat`` the facts describe that exact GS<->sat pair (the Per-Pair Inspector,
+    ``node_focus="pair"``); without it the GS card auto-selects its focal pair by
+    precedence. ``404`` if no snapshot has arrived, or no decision covers the GS (or
+    the requested pair).
     """
     from nodalarc.explain import compose_gs_explanation
 
@@ -1721,6 +1727,7 @@ def get_decision_explanation(gs: str = Query(...)) -> dict | JSONResponse:
         return JSONResponse(
             status_code=404, content={"error": "No GroundLinkDecisionSnapshot received yet"}
         )
+    focal_pair = tuple(sorted((gs, sat))) if sat else None
     facts = compose_gs_explanation(
         gs_id=gs,
         snapshot=snapshot,
@@ -1730,6 +1737,7 @@ def get_decision_explanation(gs: str = Query(...)) -> dict | JSONResponse:
         expected_latency_ms=expected_latency_ms,
         fault_after_ms=fault_after_ms,
         now=datetime.now(UTC),
+        focal_pair=focal_pair,
     )
     if facts is None:
         return JSONResponse(

@@ -144,3 +144,81 @@
 .reason-text {
   color: var(--text-primary);
 }
+
+/* --- Candidate list + Per-Pair Inspector --- */
+
+.candidate-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.candidate-row:hover {
+  background: var(--bg-panel-hover);
+}
+
+.candidate-sat {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.candidate-status {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xxs);
+}
+
+.candidate-detail {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: var(--font-size-xxs);
+}
+
+.pair-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pair-inspector-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.pair-inspector-back {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--space-3);
+  cursor: pointer;
+  font-size: var(--font-size-xxs);
+}
+
+.pair-inspector-back:hover {
+  background: var(--bg-panel-hover);
+}
+
+.pair-inspector-pair {
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.pair-inspector-truth {
+  display: flex;
+  flex-direction: column;
+}
+
+.pair-inspector-provenance {
+  font-size: var(--font-size-xxs);
+  color: var(--text-dim);
+  margin-top: var(--space-1);
+}
+
+.pair-inspector-empty {
+  font-size: var(--font-size-xs);
+  color: var(--text-dim);
+}

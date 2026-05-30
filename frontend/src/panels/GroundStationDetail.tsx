@@ -2,11 +2,15 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Ground station detail panel — role, area, terminals, uplinks, flows. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { REST_URL } from "../config";
 import type { NodeState, StateSnapshot, Selection } from "../types";
 import { useDecisionExplanation } from "../explain/useDecisionExplanation";
+import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
+import { candidateStatus } from "../explain/derive";
+import { FAMILY_TONE } from "../explain/families";
 import { GroundStationCard } from "../explain/components/GroundStationCard";
+import { PairInspector } from "../explain/components/PairInspector";
 
 interface GroundStationDetailProps {
   node: NodeState;
@@ -14,9 +18,52 @@ interface GroundStationDetailProps {
   onSelect: (sel: Selection | null) => void;
 }
 
+/** Hook wrapper: fetches the pair facts and renders the inspector. */
+function PairInspectorView({
+  gsId,
+  satId,
+  onBack,
+}: {
+  gsId: string;
+  satId: string;
+  onBack: () => void;
+}) {
+  const { facts } = useDecisionExplanation(gsId, satId);
+  return <PairInspector gsId={gsId} satId={satId} facts={facts} onBack={onBack} />;
+}
+
+const _ordered = (a: string, b: string): string => [a, b].sort().join("|");
+
 export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationDetailProps) {
   const [tracingFlow, setTracingFlow] = useState<string | null>(null);
+  const [inspectedSat, setInspectedSat] = useState<string | null>(null);
+  const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
   const explanation = useDecisionExplanation(node.node_id);
+
+  useEffect(() => {
+    let alive = true;
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        const snap = await fetchGroundDecisions(controller.signal);
+        if (alive) setDecisions(snap);
+      } catch {
+        // candidate list is non-essential; leave prior state on transient errors
+      }
+    };
+    void load();
+    const timer = window.setInterval(load, 2000);
+    return () => {
+      alive = false;
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  // Reset the inspected pair when the selected GS changes.
+  useEffect(() => {
+    setInspectedSat(null);
+  }, [node.node_id]);
 
   const connectedLinks = snapshot.links.filter(
     (l) => l.node_a === node.node_id || l.node_b === node.node_id,
@@ -48,10 +95,63 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
     setTracingFlow(null);
   };
 
+  if (inspectedSat) {
+    return (
+      <PairInspectorView
+        gsId={node.node_id}
+        satId={inspectedSat}
+        onBack={() => setInspectedSat(null)}
+      />
+    );
+  }
+
+  const withheld = new Set(
+    (decisions?.unscheduled_pairs ?? []).map((u) => _ordered(u.pair[0], u.pair[1])),
+  );
+  const unschedReason = new Map(
+    (decisions?.unscheduled_pairs ?? []).map((u) => [
+      _ordered(u.pair[0], u.pair[1]),
+      u.unscheduled_reason,
+    ]),
+  );
+  const candidates = (decisions?.decisions ?? [])
+    .filter((d) => d.pair[0] === node.node_id || d.pair[1] === node.node_id)
+    .map((d) => {
+      const sat = d.pair[0] === node.node_id ? d.pair[1] : d.pair[0];
+      const key = _ordered(d.pair[0], d.pair[1]);
+      const status = candidateStatus({
+        visible: d.visible,
+        isWithheld: withheld.has(key),
+        rejectReason: d.reject_reason,
+        unscheduledReason: unschedReason.get(key) ?? null,
+      });
+      return { sat, d, status };
+    });
+
   return (
     <div>
       <h2>{node.node_id}</h2>
       {explanation.facts ? <GroundStationCard facts={explanation.facts} /> : null}
+      {candidates.length > 0 ? (
+        <>
+          <h3>Candidates ({candidates.length})</h3>
+          {candidates.map(({ sat, d, status }) => (
+            <div
+              key={sat}
+              className="candidate-row"
+              style={{ borderLeft: `3px solid ${FAMILY_TONE[status.family].css}` }}
+              onClick={() => setInspectedSat(sat)}
+              title={`Inspect ${node.node_id} <-> ${sat}`}
+            >
+              <span className="candidate-sat">{sat}</span>
+              <span className="candidate-status">{status.label}</span>
+              {d.elevation_deg != null ? (
+                <span className="candidate-detail">{Math.round(d.elevation_deg)} deg el</span>
+              ) : null}
+            </div>
+          ))}
+        </>
+      ) : null}
       <div className="detail-row">
         <span className="detail-label">Role</span>
         <span className="detail-value">Gateway</span>

@@ -4,7 +4,14 @@
 
 import { describe, it, expect } from "vitest";
 import type { FunnelGate, GateState } from "../families";
-import { deriveFamily, deriveSeverity, displayLadder, formatMargin, headline } from "../derive";
+import {
+  candidateStatus,
+  deriveFamily,
+  deriveSeverity,
+  displayLadder,
+  formatMargin,
+  headline,
+} from "../derive";
 import type { ActuationFacts, DecisionFacts, EnvelopeEndpoint, LadderGate } from "../types";
 
 function facts(over: Partial<DecisionFacts>): DecisionFacts {
@@ -105,6 +112,39 @@ describe("deriveSeverity", () => {
     expect(
       deriveSeverity(facts({ binding_gate: "actuation_proof", actuation: act({ state: "clean", ome_desired: true, kernel_up: false, diverged: true, actuation_elapsed_ms: 1300, fault_after_ms: 1200 }) })),
     ).toBe("alarm");
+  });
+});
+
+describe("candidateStatus", () => {
+  it("rejected (not visible) takes the reject reason's registry family", () => {
+    expect(
+      candidateStatus({
+        visible: false,
+        isWithheld: false,
+        rejectReason: "elevation_below_min",
+        unscheduledReason: null,
+      }),
+    ).toEqual({ family: "expected_no_link", label: "elevation_below_min" });
+  });
+  it("withheld (visible) takes the unscheduled reason's registry family", () => {
+    expect(
+      candidateStatus({
+        visible: true,
+        isWithheld: true,
+        rejectReason: "ok",
+        unscheduledReason: "gs_capacity",
+      }),
+    ).toEqual({ family: "eligible_unselected", label: "gs_capacity" });
+  });
+  it("scheduled (visible, not withheld) reads neutral — actuation is not in the raw decision", () => {
+    expect(
+      candidateStatus({
+        visible: true,
+        isWithheld: false,
+        rejectReason: "ok",
+        unscheduledReason: null,
+      }),
+    ).toEqual({ family: "unknown", label: "scheduled" });
   });
 });
 

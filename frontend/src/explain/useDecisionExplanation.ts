@@ -16,11 +16,14 @@ export interface DecisionExplanationState {
 
 /**
  * Fetch decision-explanation facts for `gsId`, refreshing on an interval so the
- * card tracks the live sim. `refreshKey` (e.g. snapshot sim_time) forces an
- * immediate refetch when the world advances. Passing null clears the state.
+ * card tracks the live sim. When `satId` is given, fetches that exact pair (the
+ * Per-Pair Inspector) instead of the GS focal. `refreshKey` (e.g. snapshot
+ * sim_time) forces an immediate refetch when the world advances. Passing a null
+ * `gsId` clears the state.
  */
 export function useDecisionExplanation(
   gsId: string | null,
+  satId?: string | null,
   refreshKey?: string | number,
 ): DecisionExplanationState {
   const [state, setState] = useState<DecisionExplanationState>({
@@ -37,12 +40,13 @@ export function useDecisionExplanation(
     }
     let alive = true;
     const myGs = gsId;
+    const mySat = satId ?? null;
     const controller = new AbortController();
     seq.current += 1;
 
     const load = async () => {
       try {
-        const facts = await fetchDecisionExplanation(myGs, controller.signal);
+        const facts = await fetchDecisionExplanation(myGs, mySat, controller.signal);
         if (alive) setState({ facts, loading: false, error: null });
       } catch (err) {
         if (alive && !controller.signal.aborted) {
@@ -59,7 +63,7 @@ export function useDecisionExplanation(
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [gsId, refreshKey]);
+  }, [gsId, satId, refreshKey]);
 
   return state;
 }

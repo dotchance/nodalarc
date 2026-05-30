@@ -117,6 +117,30 @@ export function bindingRow(facts: DecisionFacts): LadderGate | null {
   return facts.ladder.find((g) => g.is_binding) ?? null;
 }
 
+/**
+ * Lightweight family + label for a candidate row in the GS candidate list, derived
+ * from the raw OME decision (the precise family + funnel come from the inspector).
+ * A scheduled pair's actuation is not in the raw decision, so it reads neutral
+ * ("unknown") in the list rather than a possibly-false green. Family for rejected /
+ * withheld rows comes from the reason registry — single source, no drift.
+ */
+export function candidateStatus(o: {
+  visible: boolean;
+  isWithheld: boolean;
+  rejectReason: string;
+  unscheduledReason: string | null;
+}): { family: Family; label: string } {
+  if (o.visible && o.isWithheld) {
+    const rec = o.unscheduledReason ? REASON_REGISTRY[o.unscheduledReason] : undefined;
+    return { family: rec?.family ?? "eligible_unselected", label: o.unscheduledReason ?? "withheld" };
+  }
+  if (o.visible) {
+    return { family: "unknown", label: "scheduled" };
+  }
+  const rec = REASON_REGISTRY[o.rejectReason];
+  return { family: rec?.family ?? "expected_no_link", label: o.rejectReason };
+}
+
 /** A one-line headline for the focal pair, built from the binding reason + facts. */
 export function headline(facts: DecisionFacts): string {
   const fam = deriveFamily(facts);

@@ -5,6 +5,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Shell } from "./layout/Shell";
 import { GlobeView } from "./globe/GlobeView";
+import { Scene as R3FScene } from "./globe/r3f/Scene";
 import { VisualizationErrorBoundary } from "./globe/VisualizationErrorBoundary";
 import { TopologyView } from "./topology/TopologyView";
 import { InfoPanel } from "./panels/InfoPanel";
@@ -40,6 +41,12 @@ import "./styles/time-controls.css";
 import "./styles/catalog.css";
 import "./styles/wizard.css";
 import "./styles/explain.css";
+
+// UX-2 migration flag: `?r3f` mounts the declarative R3F scene instead of the imperative
+// globe, so the in-progress migration can be exercised without disturbing the live globe.
+// Removed when the R3F scene reaches parity and becomes the default (migration Phase H).
+const USE_R3F =
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("r3f");
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -310,22 +317,26 @@ function AppInner() {
         style={{ display: (viewMode === "topology" || viewMode === "dashboard") ? "none" : undefined }}
       >
         <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
-          <GlobeView
-            snapshot={augmentedSnapshot}
-            ephemeris={ephemeris}
-            playbackState={playbackState}
-            selection={selection}
-            onSelect={select}
-            colorMode={colorMode}
-            globeMode={globeMode}
-            showGroundLinks={showGroundLinks}
-            showIslLinks={showIslLinks}
-            showSatPaths={showSatPaths}
-            referenceFrame={referenceFrame}
-            playbackPaused={playback.paused}
-            actionsRef={globeActionsRef}
-            onFatalError={handleVisualizationFatalError}
-          />
+          {USE_R3F ? (
+            <R3FScene />
+          ) : (
+            <GlobeView
+              snapshot={augmentedSnapshot}
+              ephemeris={ephemeris}
+              playbackState={playbackState}
+              selection={selection}
+              onSelect={select}
+              colorMode={colorMode}
+              globeMode={globeMode}
+              showGroundLinks={showGroundLinks}
+              showIslLinks={showIslLinks}
+              showSatPaths={showSatPaths}
+              referenceFrame={referenceFrame}
+              playbackPaused={playback.paused}
+              actionsRef={globeActionsRef}
+              onFatalError={handleVisualizationFatalError}
+            />
+          )}
         </VisualizationErrorBoundary>
       </div>
       <div

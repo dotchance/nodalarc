@@ -1,22 +1,58 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * Universe: the scene root — the R3F Canvas, camera rig, and lighting. Children are
- * bodies (and, later, inter-body relay paths and the selection overlay). The scene
- * is a declarative function of data; R3F reconciles the underlying three.js objects
- * and their GPU lifecycle. The floating-origin camera rebase is added here when a
- * second body lands; Earth + LEO needs no rebase today.
+ * Universe: the scene root — the R3F Canvas, camera rig, OrbitControls, lighting, and
+ * background. Children are bodies (and, later, inter-body relay paths and the selection
+ * overlay). Camera and controls reproduce the legacy globe (config.ts) at the shared
+ * 100-units-per-Earth-radius scale. preserveDrawingBuffer is required for the screenshot
+ * GlobeAction. The floating-origin camera rebase is added here when a second body lands.
  */
 
-import type { ReactNode } from "react";
-import { Canvas } from "@react-three/fiber";
+import { Suspense, useEffect, useRef, type ReactNode } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import {
+  CAMERA_FOV,
+  CAMERA_DISTANCE,
+  CAMERA_MIN_DISTANCE,
+  CAMERA_MAX_DISTANCE,
+} from "../../config";
+
+/** OrbitControls (three addon) wired to R3F's camera + canvas, matching legacy damping. */
+function Controls() {
+  const camera = useThree((s) => s.camera);
+  const gl = useThree((s) => s.gl);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  useEffect(() => {
+    const controls = new OrbitControls(camera, gl.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.minDistance = CAMERA_MIN_DISTANCE;
+    controls.maxDistance = CAMERA_MAX_DISTANCE;
+    controlsRef.current = controls;
+    return () => controls.dispose();
+  }, [camera, gl]);
+  useFrame(() => controlsRef.current?.update());
+  return null;
+}
 
 export function Universe({ children }: { children?: ReactNode }) {
   return (
-    <Canvas camera={{ position: [0, 0, 3], fov: 50, near: 0.01, far: 1000 }} dpr={[1, 2]}>
-      <ambientLight intensity={0.45} />
-      <directionalLight position={[5, 3, 5]} intensity={1.0} />
-      {children}
+    <Canvas
+      camera={{
+        fov: CAMERA_FOV,
+        position: [0, CAMERA_DISTANCE * 0.5, CAMERA_DISTANCE * 0.87],
+        near: 0.1,
+        far: 10000,
+      }}
+      gl={{ antialias: true, preserveDrawingBuffer: true }}
+      dpr={[1, 2]}
+    >
+      <color attach="background" args={["#0d0d1a"]} />
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[1000, 300, 1000]} intensity={1.0} />
+      <Controls />
+      <Suspense fallback={null}>{children}</Suspense>
     </Canvas>
   );
 }

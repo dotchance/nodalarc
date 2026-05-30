@@ -26,6 +26,8 @@ import { Universe } from "./Universe";
 import { Body } from "./Body";
 import { Earth, Starfield } from "./Earth";
 import { Constellation } from "./Constellation";
+import { GroundStations } from "./GroundStation";
+import { SelectionOverlay } from "./SelectionOverlay";
 import { FrameDriver } from "./FrameDriver";
 import { setEarthFrame } from "./positions";
 import { EARTH_RADIUS_KM } from "./units";
@@ -36,6 +38,7 @@ interface SceneProps {
   colorMode: ColorMode;
   referenceFrame: ReferenceFrame;
   playbackPaused: boolean;
+  selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
 }
 
@@ -45,6 +48,7 @@ export function Scene({
   colorMode,
   referenceFrame,
   playbackPaused,
+  selection,
   onSelect,
 }: SceneProps) {
   const earthGroupRef = useRef<THREE.Group>(null);
@@ -97,7 +101,9 @@ export function Scene({
           colorMode={colorMode}
           onSelect={onSelect}
         />
+        <GroundStations nodes={nodes} selection={selection} onSelect={onSelect} />
       </Body>
+      <SelectionOverlay selection={selection} />
     </Universe>
   );
 }

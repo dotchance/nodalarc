@@ -324,6 +324,7 @@ function AppInner() {
               colorMode={colorMode}
               referenceFrame={referenceFrame}
               playbackPaused={playback.paused}
+              selection={selection}
               onSelect={select}
             />
           ) : (

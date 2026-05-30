@@ -318,6 +318,51 @@ def test_connected_pair_has_no_divergence_timing_but_keeps_bounds():
     assert facts.actuation.fault_after_ms == 1200.0
 
 
+def test_clean_divergence_uses_a_divergence_reason_not_clean():
+    # Finding #1: a scheduled pair OME wants, roster clean, kernel not up is a divergence.
+    # binding_reason must NOT be "clean" (the registry renders that "the link is proven" —
+    # backwards once the divergence escalates to faulted).
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-P00S03", visible=True, range_km=960.0, elevation_deg=31.6, reject_reason="ok"
+            )
+        ]
+    )
+    facts = compose_gs_explanation(
+        gs_id=GS, snapshot=snap, active_pairs=frozenset(), actuation_state_by_gs={GS: "clean"}
+    )
+    assert facts.binding_gate == "actuation_proof"
+    assert facts.actuation.state == "clean"
+    assert facts.actuation.diverged is True
+    assert facts.binding_reason_code == "actuation_diverged"
+    assert facts.binding_reason_code != "clean"
+
+
+def test_gs_card_surfaces_a_diverged_scheduled_pair_over_a_connected_one():
+    # Finding #3: two scheduled pairs, first up, second diverged. The GS focal must be
+    # the diverged one — never hide a faulting pair behind a connected first entry.
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-up", visible=True, range_km=900.0, elevation_deg=40.0, reject_reason="ok"
+            ),
+            _decision(
+                "sat-down", visible=True, range_km=950.0, elevation_deg=35.0, reject_reason="ok"
+            ),
+        ]
+    )
+    facts = compose_gs_explanation(
+        gs_id=GS,
+        snapshot=snap,
+        active_pairs=frozenset({tuple(sorted((GS, "sat-up")))}),
+        actuation_state_by_gs={GS: "clean"},
+    )
+    assert facts.pair == tuple(sorted((GS, "sat-down")))
+    assert facts.binding_gate == "actuation_proof"
+    assert facts.actuation.diverged is True
+
+
 def test_pair_inspector_composes_the_requested_pair_not_the_auto_focal():
     # Under one GS: a visible-but-withheld pair (capacity) and a physically rejected
     # pair (range). The GS card auto-selects the withheld one by precedence; the pair

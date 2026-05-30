@@ -302,7 +302,12 @@ def compose_gs_explanation(
         focal = target
         category = _category(focal)
     elif scheduled:
-        focal = scheduled[0]
+        # Surface the WORST scheduled pair: a diverged (not-yet-kernel-up) one over a
+        # connected one, so a multi-terminal GS never hides a faulting pair behind a
+        # connected first entry. (Roster dirty/blocked is GS-level, applies to all.)
+        focal = next(
+            (d for d in scheduled if _ordered_pair(d.pair) not in active_pairs), scheduled[0]
+        )
         category = "scheduled"
     elif withheld:
         focal = withheld[0]
@@ -329,11 +334,22 @@ def compose_gs_explanation(
         kernel_up = _ordered_pair(focal.pair) in active_pairs
         ome_desired = True
         viable_withheld = False
-        if actuation_state in ("kernel_dirty", "actuation_blocked") or not kernel_up:
+        if actuation_state in ("kernel_dirty", "actuation_blocked"):
             binding_gate = "actuation_proof"
             binding_reason = actuation_state
             actuation_pass = False
+        elif not kernel_up:
+            # OME desires it and the roster is not failing, but the kernel does not have
+            # it: a real divergence. NOT binding_reason="clean" — that renders "the link
+            # is proven", backwards for a red state. Emit an explicit divergence code; the
+            # client escalates in_flight -> faulted on its wall-clock age.
+            binding_gate = "actuation_proof"
+            binding_reason = "actuation_diverged"
+            actuation_pass = False
         else:
+            # kernel_up and roster not failing. Connected when the roster is clean; when
+            # the roster is unknown the client renders "unknown" (proven up but health
+            # unconfirmed), never silently clean — driven by actuation.state, not a gate.
             binding_gate = None
             binding_reason = None
             actuation_pass = True

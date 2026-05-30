@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from nodalarc.explain import compose_gs_explanation, scheduled_pairs
+from nodalarc.explain import compose_gs_explanation
 from nodalarc.models.decision_explanation import PendingActuation
 from nodalarc.models.link_decisions import (
     GroundLinkDecisionSnapshot,
@@ -461,40 +461,6 @@ def test_envelope_binding_endpoint_targets_the_satellite_terminal():
     assert env.satellite.terminal_profile == "sat-P00S05.ground_terminals"
     assert env.satellite.max_range_km == 2000.0
     assert env.ground.terminal_profile == "gs-denver.terminals"
-
-
-def test_scheduled_pairs_is_visible_minus_withheld():
-    snap = _snapshot(
-        [
-            _decision(
-                "sat-A", visible=True, range_km=900.0, elevation_deg=40.0, reject_reason="ok"
-            ),
-            _decision(
-                "sat-B", visible=True, range_km=900.0, elevation_deg=40.0, reject_reason="ok"
-            ),
-            _decision(
-                "sat-C",
-                visible=False,
-                range_km=5000.0,
-                elevation_deg=-10.0,
-                reject_reason="elevation_below_min",
-            ),
-        ],
-        unscheduled=[
-            UnscheduledPair(
-                pair=(GS, "sat-B"),
-                tenant_id="default",
-                reference_body="earth",
-                unscheduled_reason="gs_capacity",
-                incumbent_pair=None,
-                capacity_constraint="gs-denver.terminals",
-            )
-        ],
-    )
-    sp = scheduled_pairs(snap)
-    assert tuple(sorted((GS, "sat-A"))) in sp  # visible + scheduled
-    assert tuple(sorted((GS, "sat-B"))) not in sp  # visible but withheld
-    assert tuple(sorted((GS, "sat-C"))) not in sp  # not visible
 
 
 def test_closest_rejected_ranks_by_funnel_depth_not_raw_elevation():

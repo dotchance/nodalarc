@@ -732,7 +732,19 @@ class SessionContext:
         never over-reports kernel-up. N>1 live schedulers per session need the
         queue-group/leader-election redesign the dispatcher already documents.
         """
-        snap = ActualLinkSnapshot.model_validate_json(msg.data)
+        try:
+            snap = ActualLinkSnapshot.model_validate_json(msg.data)
+        except ValidationError as exc:
+            # Retained LAST_PER_SUBJECT message: a schema-incompatible snapshot from a
+            # prior-deploy Scheduler must be tolerated, not crash-looped — wait for the
+            # current Scheduler to republish. Mirrors _on_session_ephemeris.
+            log.warning(
+                "Ignoring schema-incompatible retained ActualLinkSnapshot on %s; "
+                "waiting for the Scheduler to republish: %s",
+                msg.subject,
+                exc,
+            )
+            return
         instance_id = snap.scheduler_instance_id
         if not instance_id:
             return

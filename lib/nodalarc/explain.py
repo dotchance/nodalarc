@@ -95,17 +95,6 @@ def _ordered_pair(pair: tuple[str, str]) -> Pair:
     return (a, b) if a <= b else (b, a)
 
 
-def scheduled_pairs(snapshot: GroundLinkDecisionSnapshot) -> frozenset[Pair]:
-    """Ordered pairs OME currently desires up: visible and not withheld (unscheduled).
-
-    The single definition of "what OME wants up", shared by the composer's focal-pair
-    selection and by VS-API divergence-onset tracking, so the two never drift. A pair
-    diverges when it is in this set but not in the Scheduler's kernel-actual set.
-    """
-    withheld = {_ordered_pair(u.pair) for u in snapshot.unscheduled_pairs}
-    return frozenset(_ordered_pair(d.pair) for d in snapshot.decisions if d.visible) - withheld
-
-
 def _min_opt(*values: float | None) -> float | None:
     present = [v for v in values if v is not None]
     return min(present) if present else None

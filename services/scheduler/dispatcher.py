@@ -302,6 +302,14 @@ class Dispatcher:
         # actuation bound and reset on VS-API restart. Published on ActualLinkSnapshot.
         self._pending_since: dict[tuple[str, str], tuple[datetime, int, int]] = {}
 
+        # Set when a membership change is detected, cleared only after a SUCCESSFUL
+        # publish. A publish that raises (swallowed at the reconcile finally so it never
+        # masks the in-flight dispatch exception) leaves this True, so the next reconcile
+        # re-publishes even with no further membership change — otherwise a dropped
+        # convergence publish would strand a converged pair in VS-API's retained pending
+        # set, where it ages past fault_after_ms and falsely renders faulted-red.
+        self._actual_links_publish_dirty: bool = False
+
         # Incremental active-link counters for O(1) MBB capacity checks.
         # Re-baselined from _actual_links on every LinkStateSnapshot.
         self._gs_active_count: dict[str, int] = {}
@@ -1275,6 +1283,9 @@ class Dispatcher:
             actual_links_subject(self._session_id, self._scheduler_instance_id),
             snapshot.model_dump_json().encode(),
         )
+        # Reached only on a successful publish; a raise above leaves the dirty flag set
+        # so the next reconcile retries the publish.
+        self._actual_links_publish_dirty = False
 
     def _pending_pair_rows(self) -> list[PendingActuationPair]:
         """The desired-but-not-kernel-actual pairs as wire records, sorted for replay."""
@@ -1324,11 +1335,18 @@ class Dispatcher:
         converges (leaves pending) changes the retained snapshot even when ``_actual_links``
         is momentarily unchanged, so both befores gate the trigger. ``pending_since``
         timestamps never mutate once stamped, so comparing the key sets is sufficient.
+
+        A detected change marks the publish dirty; the dirty flag also forces a publish
+        when a PRIOR attempt was dropped (swallowed exception), so a lost convergence edge
+        self-heals on the next reconcile instead of being lost until the next membership
+        change. A stable set with no prior failure is neither changed nor dirty -> no-op.
         """
         if (
             frozenset(self._actual_links) != actual_before
             or frozenset(self._pending_since) != pending_before
         ):
+            self._actual_links_publish_dirty = True
+        if self._actual_links_publish_dirty:
             await self._publish_actual_links()
 
     async def _halt_dispatcher(
@@ -2464,10 +2482,12 @@ class Dispatcher:
                 details=fail_details,
             )
 
-        # Repair changed kernel-actual; recompute the divergence clock against current
-        # desired (a repaired-up pair leaves pending, a still-down one keeps its origin)
-        # before the edge-publish.
-        self._update_pending_since(self._desired_links)
+        # Repair changed kernel-actual; recompute the divergence clock against the SAME
+        # effective desired the reconcile worker uses (raw desired minus operator
+        # overrides), so a deliberately-withheld pair is never stamped pending here and
+        # then flashed faulted — the two writers of _pending_since must agree on "desired".
+        # A repaired-up pair leaves pending; a still-down one keeps its origin.
+        self._update_pending_since(self._effective_desired_links())
         await self._publish_actual_links_if_changed(actual_before, pending_before)
 
     # ------------------------------------------------------------------

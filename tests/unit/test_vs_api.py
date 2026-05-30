@@ -1775,27 +1775,33 @@ class TestKernelActualRecovery:
 
     def test_pending_actuation_elapsed_is_skew_free(self):
         # elapsed = (emitted_at - pending_since)[Scheduler-clock delta] +
-        # (now - received_at)[VS-API-clock delta]. Each term is single-clock, so any
-        # constant offset between the Scheduler clock and the VS-API clock cancels — the
-        # age is correct regardless of cross-pod NTP skew. pending_since is preserved as
-        # the Scheduler-owned origin.
-        ctx = SessionContext.__new__(SessionContext)
-        ctx._init_state_only()
+        # (now - received_at)[VS-API-clock delta]. Each term is single-clock, so a constant
+        # offset between the Scheduler clock and the VS-API clock cancels. Proven by
+        # shifting BOTH Scheduler-clock stamps (pending_since, emitted_at) by an arbitrary
+        # skew and asserting the age is invariant; pending_since is preserved as the
+        # Scheduler-owned origin (in the Scheduler's frame).
+        from datetime import timedelta
+
         pair = ("gs-den", "sat-a")
-        since = datetime(2026, 5, 29, 18, 0, 0, tzinfo=UTC)
-        emitted = datetime(2026, 5, 29, 18, 0, 1, tzinfo=UTC)  # 1000 ms pending at emit
+        # VS-API clock (the reference frame), held fixed across skews.
         received = datetime(2026, 5, 29, 18, 0, 1, 200000, tzinfo=UTC)
-        ctx.actual_links_by_instance["sched-1"] = {
-            "generation": "gen-1",
-            "pairs": frozenset(),
-            "pending": {pair: since},
-            "emitted_at": emitted,
-            "received_at": received,
-        }
         now = datetime(2026, 5, 29, 18, 0, 1, 700000, tzinfo=UTC)  # 500 ms after receive
-        recovered = ctx.pending_actuation(now)
-        assert recovered[pair].actuation_elapsed_ms == 1500.0  # 1000 + 500
-        assert recovered[pair].pending_since == since
+        for skew in (timedelta(0), timedelta(hours=1), timedelta(minutes=-30)):
+            ctx = SessionContext.__new__(SessionContext)
+            ctx._init_state_only()
+            since = datetime(2026, 5, 29, 18, 0, 0, tzinfo=UTC) + skew  # Scheduler clock
+            emitted = since + timedelta(milliseconds=1000)  # 1000 ms pending at emit
+            ctx.actual_links_by_instance["sched-1"] = {
+                "generation": "gen-1",
+                "pairs": frozenset(),
+                "pending": {pair: since},
+                "emitted_at": emitted,
+                "received_at": received,
+            }
+            recovered = ctx.pending_actuation(now)
+            # 1000 ms (Scheduler-side, skew-invariant) + 500 ms (VS-API-side) = 1500 ms.
+            assert recovered[pair].actuation_elapsed_ms == 1500.0, f"skew {skew} leaked"
+            assert recovered[pair].pending_since == since
 
     def test_endpoint_emits_divergence_timing_and_contract_bounds(self, monkeypatch):
         # The in_flight -> faulted facts: a diverged pair carries diverged_since +

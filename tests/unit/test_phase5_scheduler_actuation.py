@@ -589,6 +589,53 @@ def test_seek_epoch_reset_clears_pending_since() -> None:
     assert d._pending_since == {}
 
 
+def test_pending_since_excludes_operator_overridden_pairs() -> None:
+    # Re-review #A: the divergence clock must be recomputed against EFFECTIVE desired (raw
+    # minus operator overrides), the source the reconcile worker uses. A pair an operator
+    # deliberately held down is not "in flight" — stamping it pending would flash it
+    # faulted-red. Guards both writers of _pending_since against drifting onto raw desired.
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-new")
+    d._desired_links = {pair: _info("term1")}
+    d._override_pairs = {pair: "operator_down"}
+    d._update_pending_since(d._effective_desired_links())
+    assert pair not in d._pending_since
+    # Sanity: lift the override and the same pair IS pending — proving the override is the
+    # discriminator, not an unrelated filter.
+    d._override_pairs = {}
+    d._update_pending_since(d._effective_desired_links())
+    assert pair in d._pending_since
+
+
+def test_dropped_publish_self_heals_on_next_reconcile() -> None:
+    # Re-review #C: a swallowed publish failure on a convergence tick must not strand the
+    # converged set. The dirty flag forces a republish on the next reconcile even with no
+    # further membership change, so VS-API's retained pending set cannot age into a false
+    # fault for a pair the kernel actually settled.
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._mbb_dispatch = False
+    d._handle_actuation_result = AsyncMock()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._send_batch_down = AsyncMock(
+        return_value=_success_result(pair=pair, operation="BatchLinkDown")
+    )
+
+    # First reconcile tears the pair down (membership change) but the publish fails.
+    d._js.publish = AsyncMock(side_effect=RuntimeError("nats unavailable"))
+    asyncio.run(d._reconcile_links({}, None, SIM_TIME))
+    assert pair not in d._actual_links
+    assert d._actual_links_publish_dirty is True  # dropped publish, marked for retry
+
+    # Second reconcile: NO further membership change, but the dirty flag forces a republish.
+    d._js.publish = AsyncMock()
+    asyncio.run(d._reconcile_links({}, None, SIM_TIME))
+    snaps = _actual_link_snapshots(d._js.publish)
+    assert snaps, "a dropped publish must self-heal on the next reconcile"
+    assert [pair[0], pair[1]] not in snaps[-1].active_pairs
+    assert d._actual_links_publish_dirty is False
+
+
 def test_ground_down_gate_blocks_kernel_dirty_and_repairing_but_allows_clean_cleanup() -> None:
     d = _make_dispatcher_with_two_terminal_gs()
     pair = ("gs-multi", "sat-old")

@@ -126,7 +126,7 @@ export function Constellation({ nodes, ephemeris, colorMode, onSelect }: Constel
       setNodeLocalPosition(nodeId, x, y, z);
     }
     mesh.instanceMatrix.needsUpdate = true;
-  });
+  }, -1); // after FrameDriver (-2) sets the frame rotation, before world-position consumers
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     if (e.instanceId === undefined) return;

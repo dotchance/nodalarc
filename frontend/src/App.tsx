@@ -322,6 +322,8 @@ function AppInner() {
               snapshot={augmentedSnapshot}
               ephemeris={ephemeris}
               colorMode={colorMode}
+              referenceFrame={referenceFrame}
+              playbackPaused={playback.paused}
               onSelect={select}
             />
           ) : (

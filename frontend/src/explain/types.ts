@@ -27,6 +27,17 @@ export interface LadderGate {
   is_binding: boolean;
 }
 
+/** One terminal's raw pointing/range constraints — carried for both endpoints so a
+ * hint targets the terminal that actually binds, not always the ground station. */
+export interface EnvelopeEndpoint {
+  node_role: "ground" | "satellite";
+  terminal_profile: string | null;
+  boresight_mode: string | null;
+  field_of_regard_deg: number | null;
+  max_tracking_rate_deg_s: number | null;
+  max_range_km: number | null;
+}
+
 export interface EffectiveEnvelopeFacts {
   reference_body: string;
   configured_min_elevation_deg: number | null;
@@ -34,9 +45,10 @@ export interface EffectiveEnvelopeFacts {
   binding_source: string | null;
   dead_knobs: string[];
   max_range_km: number | null;
-  field_of_regard_deg: number | null;
-  boresight_mode: string | null;
-  tracking_rate_deg_s: number | null;
+  ground: EnvelopeEndpoint;
+  satellite: EnvelopeEndpoint;
+  /** Which terminal the binding gate rejected at — where the "what to change" lever points. */
+  binding_endpoint: RejectingEndpoint;
 }
 
 export interface CandidateFacts {

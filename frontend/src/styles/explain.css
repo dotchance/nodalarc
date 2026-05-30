@@ -105,6 +105,29 @@
   margin-top: var(--space-1);
 }
 
+.env-terminal {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-2);
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--border);
+}
+
+.env-terminal--binding {
+  border-left-color: var(--accent-amber);
+}
+
+.env-terminal-head {
+  font-size: var(--font-size-xxs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+}
+
+.env-terminal-binds {
+  color: var(--accent-amber);
+  font-weight: var(--font-weight-semibold);
+}
+
 /* --- Best candidate --- */
 
 .best-candidate {

@@ -153,6 +153,14 @@ def test_denver_gap_is_expected_no_link_with_for_derived_floor():
     assert env.effective_min_elevation_deg == 30.0
     assert env.binding_source == "field_of_regard"
     assert env.dead_knobs == ("min_elevation_deg",)
+    # Both terminals' raw constraints are carried; the GS local-vertical FoR floors
+    # elevation, the sat nadir terminal does not collapse to one scalar.
+    assert env.ground.node_role == "ground"
+    assert env.ground.boresight_mode == "local_vertical"
+    assert env.ground.field_of_regard_deg == 120.0
+    assert env.satellite.boresight_mode == "nadir"
+    assert env.satellite.terminal_profile == "sat-P00S02.ground_terminals"
+    assert env.binding_endpoint == "none"  # focal fixture's rejecting_endpoint
     # Ladder respects funnel order: LOS before elevation passes, elevation is the fail.
     assert _gate(facts, "line_of_sight").state == "pass"
     assert _gate(facts, "elevation_mask").state == "fail"
@@ -308,6 +316,33 @@ def test_connected_pair_has_no_divergence_timing_but_keeps_bounds():
     assert facts.actuation.actuation_elapsed_ms is None
     # The contract bounds are always available to the client.
     assert facts.actuation.fault_after_ms == 1200.0
+
+
+def test_envelope_binding_endpoint_targets_the_satellite_terminal():
+    # Finding #5: when the SATELLITE terminal is the rejecting endpoint, the envelope
+    # names binding_endpoint=satellite and carries the sat terminal's constraints, so
+    # the "what to change" lever points at the sat, not the GS.
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-P00S05",
+                visible=False,
+                range_km=2407.0,
+                elevation_deg=3.0,
+                reject_reason="range_exceeded",
+                rejecting_endpoint="satellite",
+            ),
+        ]
+    )
+    facts = compose_gs_explanation(
+        gs_id=GS, snapshot=snap, active_pairs=frozenset(), actuation_state_by_gs={}
+    )
+    env = facts.envelope
+    assert env.binding_endpoint == "satellite"
+    assert env.satellite.node_role == "satellite"
+    assert env.satellite.terminal_profile == "sat-P00S05.ground_terminals"
+    assert env.satellite.max_range_km == 2000.0
+    assert env.ground.terminal_profile == "gs-denver.terminals"
 
 
 def test_scheduled_pairs_is_visible_minus_withheld():

@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import type { FunnelGate, GateState } from "../families";
 import { deriveFamily, deriveSeverity, displayLadder, formatMargin, headline } from "../derive";
-import type { ActuationFacts, DecisionFacts, LadderGate } from "../types";
+import type { ActuationFacts, DecisionFacts, EnvelopeEndpoint, LadderGate } from "../types";
 
 function facts(over: Partial<DecisionFacts>): DecisionFacts {
   return {
@@ -161,6 +161,19 @@ describe("headline", () => {
 });
 
 describe("displayLadder co-linearity collapse", () => {
+  const ep = (
+    role: "ground" | "satellite",
+    over: Partial<EnvelopeEndpoint> = {},
+  ): EnvelopeEndpoint => ({
+    node_role: role,
+    terminal_profile: role === "ground" ? "gs.terminals" : "sat.terminals",
+    boresight_mode: role === "ground" ? "local_vertical" : "nadir",
+    field_of_regard_deg: 120,
+    max_tracking_rate_deg_s: 1.5,
+    max_range_km: 2000,
+    ...over,
+  });
+
   const env = (over: Partial<NonNullable<DecisionFacts["envelope"]>> = {}) => ({
     reference_body: "earth",
     configured_min_elevation_deg: 25,
@@ -168,9 +181,9 @@ describe("displayLadder co-linearity collapse", () => {
     binding_source: "field_of_regard",
     dead_knobs: ["min_elevation_deg"],
     max_range_km: 2000,
-    field_of_regard_deg: 120,
-    boresight_mode: "local_vertical",
-    tracking_rate_deg_s: 1.5,
+    ground: ep("ground"),
+    satellite: ep("satellite"),
+    binding_endpoint: "none" as const,
     ...over,
   });
 
@@ -225,7 +238,7 @@ describe("displayLadder co-linearity collapse", () => {
   it("does NOT collapse under a non-vertical boresight — gates genuinely decouple", () => {
     const rows = displayLadder(
       facts({
-        envelope: env({ boresight_mode: "steered" }),
+        envelope: env({ ground: ep("ground", { boresight_mode: "steered" }) }),
         ladder: [
           lrow("elevation_mask", "pass", 27),
           lrow("field_of_regard", "fail", 63, true, "field_of_regard"),

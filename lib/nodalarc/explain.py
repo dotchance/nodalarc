@@ -22,6 +22,7 @@ from nodalarc.models.decision_explanation import (
     CandidateFacts,
     DecisionExplanationFacts,
     EffectiveEnvelopeFacts,
+    EnvelopeEndpoint,
     FunnelGate,
     GateState,
     LadderGate,
@@ -215,9 +216,23 @@ def _effective_envelope(d: GroundVisibilityDecisionWire) -> EffectiveEnvelopeFac
         binding_source=binding_source,
         dead_knobs=dead_knobs,
         max_range_km=_min_opt(d.applied_gs_max_range_km, d.applied_sat_max_range_km),
-        field_of_regard_deg=gs_for,
-        boresight_mode=d.applied_gs_boresight_mode,
-        tracking_rate_deg_s=d.applied_gs_max_tracking_rate_deg_s,
+        ground=EnvelopeEndpoint(
+            node_role="ground",
+            terminal_profile=d.applied_gs_terminal_profile,
+            boresight_mode=d.applied_gs_boresight_mode,
+            field_of_regard_deg=d.applied_gs_field_of_regard_deg,
+            max_tracking_rate_deg_s=d.applied_gs_max_tracking_rate_deg_s,
+            max_range_km=d.applied_gs_max_range_km,
+        ),
+        satellite=EnvelopeEndpoint(
+            node_role="satellite",
+            terminal_profile=d.applied_sat_terminal_profile,
+            boresight_mode=d.applied_sat_boresight_mode,
+            field_of_regard_deg=d.applied_sat_field_of_regard_deg,
+            max_tracking_rate_deg_s=d.applied_sat_max_tracking_rate_deg_s,
+            max_range_km=d.applied_sat_max_range_km,
+        ),
+        binding_endpoint=d.rejecting_endpoint,
     )
 
 

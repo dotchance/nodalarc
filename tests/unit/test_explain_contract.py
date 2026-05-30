@@ -1,15 +1,19 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""Cross-language contract: the frontend reason registry must mirror the REAL
-backend reason vocabularies, not a hand-copied snapshot of itself.
+"""Cross-language contract: the frontend must mirror the REAL backend wire shape
+and reason vocabularies, not a hand-copied snapshot of itself.
 
-The frontend's registry-completeness test (registry.test.ts) only proves the
-registry covers the frontend's OWN union arrays — tautological if those arrays
-drift from Python. This test closes the loop from the other side: it extracts
-the authoritative Python reason codes (Literal members / StrEnum values) and the
-literal arrays declared in frontend/src/explain/reasons.ts, and asserts they are
-identical in BOTH directions. Add a backend reason code and forget the frontend,
-and this fails — which is the whole point.
+Two drift surfaces are guarded:
+  1. Reason vocabularies — the frontend registry covering its OWN union arrays
+     (registry.test.ts) is tautological if those arrays drift from Python. This
+     extracts the authoritative Python reason codes (Literal / StrEnum members) and
+     the literal arrays in frontend/src/explain/reasons.ts and asserts they match
+     in BOTH directions.
+  2. Wire-shape field names — the TS interfaces in frontend/src/explain/types.ts
+     are a no-mapping mirror of the backend DecisionExplanationFacts models. A
+     snake_case field rename on either side would silently make the frontend read
+     `undefined`; this asserts the field-name sets are identical per model.
+Add a backend field or reason code and forget the frontend, and this fails.
 """
 
 from __future__ import annotations
@@ -18,6 +22,14 @@ import re
 from pathlib import Path
 from typing import get_args
 
+from nodalarc.models.decision_explanation import (
+    ActuationFacts,
+    CandidateFacts,
+    DecisionExplanationFacts,
+    EffectiveEnvelopeFacts,
+    EnvelopeEndpoint,
+    LadderGate,
+)
 from nodalarc.models.link_decisions import (
     GroundAllocationEventCategory,
     GroundUnscheduledReason,
@@ -26,6 +38,43 @@ from nodalarc.models.link_decisions import (
 from nodalarc.models.scheduler_ops import ActuationFailureClass, ActuationState
 
 _REASONS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/reasons.ts"
+_TYPES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/types.ts"
+
+# Each backend model and the TS interface that mirrors its wire shape.
+_WIRE_MODELS = [
+    (DecisionExplanationFacts, "DecisionFacts"),
+    (LadderGate, "LadderGate"),
+    (EffectiveEnvelopeFacts, "EffectiveEnvelopeFacts"),
+    (EnvelopeEndpoint, "EnvelopeEndpoint"),
+    (CandidateFacts, "CandidateFacts"),
+    (ActuationFacts, "ActuationFacts"),
+]
+
+
+def _ts_interface_fields(name: str) -> set[str]:
+    """Field names declared in an exported TS interface (skipping comments)."""
+    text = _TYPES_TS.read_text(encoding="utf-8")
+    match = re.search(rf"export interface {name} \{{\n(.*?)\n\}}", text, re.DOTALL)
+    assert match, f"interface {name} not found in {_TYPES_TS}"
+    fields: set[str] = set()
+    for raw in match.group(1).splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("//", "*", "/")):
+            continue
+        field = re.match(r"(\w+)\??\s*:", line)
+        if field:
+            fields.add(field.group(1))
+    return fields
+
+
+def test_wire_shape_field_names_match_backend():
+    for model, ts_name in _WIRE_MODELS:
+        py_fields = set(model.model_fields)
+        ts_fields = _ts_interface_fields(ts_name)
+        assert py_fields == ts_fields, (
+            f"{model.__name__} <-> TS {ts_name} field drift: "
+            f"py-only={py_fields - ts_fields}, ts-only={ts_fields - py_fields}"
+        )
 
 
 def _frontend_array(const_name: str) -> set[str]:

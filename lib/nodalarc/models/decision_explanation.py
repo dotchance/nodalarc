@@ -72,14 +72,37 @@ class LadderGate(BaseModel):
     is_binding: bool
 
 
+class EnvelopeEndpoint(BaseModel):
+    """One terminal's raw pointing/range constraints.
+
+    Carried for BOTH endpoints so the "what to change" lever targets the terminal that
+    actually binds — the satellite terminal can be the limiting constraint, not always
+    the ground station. A satellite's nadir boresight does not collapse to a ground
+    elevation floor, so its envelope is shown as the raw pointing/range constraints
+    rather than pretending it is one scalar (see the UX plan, Effective Envelope).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    node_role: Literal["ground", "satellite"]
+    terminal_profile: str | None
+    boresight_mode: str | None
+    field_of_regard_deg: float | None
+    max_tracking_rate_deg_s: float | None
+    max_range_km: float | None
+
+
 class EffectiveEnvelopeFacts(BaseModel):
     """The combined envelope a user cannot infer by eye.
 
-    Under a local-vertical boresight, elevation and field-of-regard collapse to a
+    Under a local-vertical GROUND boresight, elevation and field-of-regard collapse to a
     single floor: `effective_min_elevation_deg = max(configured_min_elevation,
     90 - FoR/2)`. `binding_source` names which constraint produced the floor and
-    `dead_knobs` lists configured values that are non-binding because another
-    constraint dominates (e.g. a 25 deg mask under a FoR-derived 30 deg floor).
+    `dead_knobs` lists configured values that are non-binding because another constraint
+    dominates (e.g. a 25 deg mask under a FoR-derived 30 deg floor). The collapse is
+    ground-specific; `ground`/`satellite` carry each terminal's raw constraints and
+    `binding_endpoint` names which terminal the binding gate rejected at, so a hint
+    points at the terminal that actually limits the link.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -90,9 +113,9 @@ class EffectiveEnvelopeFacts(BaseModel):
     binding_source: str | None
     dead_knobs: tuple[str, ...]
     max_range_km: float | None
-    field_of_regard_deg: float | None
-    boresight_mode: str | None
-    tracking_rate_deg_s: float | None
+    ground: EnvelopeEndpoint
+    satellite: EnvelopeEndpoint
+    binding_endpoint: GroundVisibilityRejectingEndpoint
 
 
 class CandidateFacts(BaseModel):

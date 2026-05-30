@@ -160,7 +160,7 @@ export function displayLadder(facts: DecisionFacts): DisplayRow[] {
   const hasFor = facts.ladder.some((g) => g.gate === "field_of_regard");
   const collapse =
     env != null &&
-    env.boresight_mode === "local_vertical" &&
+    env.ground.boresight_mode === "local_vertical" &&
     env.effective_min_elevation_deg != null &&
     hasElev &&
     hasFor;

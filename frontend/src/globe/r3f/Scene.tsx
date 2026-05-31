@@ -14,7 +14,7 @@
  * of <Body>. Mounted only behind the `?r3f` flag until parity + cutover.
  */
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { onSnapshot, setPlaybackPaused } from "../../sim/simClock";
 import {
@@ -36,11 +36,15 @@ import { FlowPaths } from "./FlowPaths";
 import { CoverageFootprint } from "./CoverageFootprint";
 import { Trails } from "./Trails";
 import { AllOrbits } from "./AllOrbits";
+import { OrbitPins } from "./OrbitPins";
 import { Labels } from "./Labels";
+import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { FrameDriver } from "./FrameDriver";
 import { setEarthFrame } from "./positions";
 import { EARTH_RADIUS_KM } from "./units";
+
+const MAX_PINS = 7;
 
 interface SceneProps {
   snapshot: StateSnapshot | null;
@@ -74,6 +78,21 @@ export function Scene({
   const earthGroupRef = useRef<THREE.Group>(null);
   const starGroupRef = useRef<THREE.Group>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
+
+  // ctrl/cmd-click orbit pins (capped, oldest evicted) + hover tooltip state.
+  const [pinnedIds, setPinnedIds] = useState<string[]>([]);
+  const [hover, setHover] = useState<HoverInfo | null>(null);
+  const togglePin = useCallback((id: string) => {
+    setPinnedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-MAX_PINS),
+    );
+  }, []);
+
+  // Drop pins on session/constellation switch (they reference the old constellation's sats).
+  const constellation = snapshot?.constellation_name ?? null;
+  useEffect(() => {
+    setPinnedIds([]);
+  }, [constellation]);
 
   // Register the Earth body group as the world frame for the position registry.
   useEffect(() => {
@@ -123,6 +142,12 @@ export function Scene({
           earthFrame={earthGroupRef}
           referenceFrame={referenceFrame}
         />
+        <OrbitPins
+          pinnedIds={pinnedIds}
+          nodes={nodes}
+          earthFrame={earthGroupRef}
+          referenceFrame={referenceFrame}
+        />
         <Body id="earth" radiusKm={EARTH_RADIUS_KM} ref={earthGroupRef}>
           <Earth globeMode={globeMode} simTimeIso={snapshot?.sim_time ?? null} />
           <Constellation
@@ -130,8 +155,15 @@ export function Scene({
             ephemeris={ephemeris}
             colorMode={colorMode}
             onSelect={onSelect}
+            onTogglePin={togglePin}
+            onHover={setHover}
           />
-          <GroundStations nodes={nodes} selection={selection} onSelect={onSelect} />
+          <GroundStations
+            nodes={nodes}
+            selection={selection}
+            onSelect={onSelect}
+            onHover={setHover}
+          />
           <GroundTracks nodes={nodes} enabled={false} />
           <Links
             links={snapshot?.links ?? []}
@@ -163,6 +195,7 @@ export function Scene({
           overflow: "hidden",
         }}
       />
+      <Tooltip hover={hover} />
     </div>
   );
 }

@@ -24,6 +24,7 @@ import { propagateToSceneXYZ } from "../../sim/orbitalMath";
 import type { SessionEphemeris } from "../../sim/ephemeris";
 import type { ColorMode, NodeState, Selection } from "../../types";
 import { removeNode, setNodeLocalPosition } from "./positions";
+import type { HoverInfo } from "./Tooltip";
 
 const MAX_SATELLITES = 10_000;
 
@@ -42,9 +43,20 @@ interface ConstellationProps {
   ephemeris: SessionEphemeris | null;
   colorMode: ColorMode;
   onSelect: (sel: Selection | null) => void;
+  /** ctrl/cmd-click toggles an orbit pin for the satellite instead of selecting it. */
+  onTogglePin: (id: string) => void;
+  /** Hover a satellite -> tooltip; null clears it. */
+  onHover: (info: HoverInfo | null) => void;
 }
 
-export function Constellation({ nodes, ephemeris, colorMode, onSelect }: ConstellationProps) {
+export function Constellation({
+  nodes,
+  ephemeris,
+  colorMode,
+  onSelect,
+  onTogglePin,
+  onHover,
+}: ConstellationProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const satIndex = useRef(new Map<string, number>());
   const indexToId = useRef<string[]>([]);
@@ -128,12 +140,23 @@ export function Constellation({ nodes, ephemeris, colorMode, onSelect }: Constel
     mesh.instanceMatrix.needsUpdate = true;
   }, -1); // after FrameDriver (-2) sets the frame rotation, before world-position consumers
 
+  const byId = useMemo(() => new Map(nodes.map((n) => [n.node_id, n])), [nodes]);
+
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     if (e.instanceId === undefined) return;
     const id = indexToId.current[e.instanceId];
     if (!id) return;
     e.stopPropagation();
-    onSelect({ type: "satellite", id });
+    // ctrl/cmd-click toggles an orbit pin (legacy gpuPicker behavior); plain click selects.
+    if (e.nativeEvent.ctrlKey || e.nativeEvent.metaKey) onTogglePin(id);
+    else onSelect({ type: "satellite", id });
+  };
+
+  const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
+    if (e.instanceId === undefined) return;
+    const id = indexToId.current[e.instanceId];
+    const node = id ? byId.get(id) : undefined;
+    if (node) onHover({ node, x: e.nativeEvent.clientX, y: e.nativeEvent.clientY });
   };
 
   return (
@@ -142,6 +165,8 @@ export function Constellation({ nodes, ephemeris, colorMode, onSelect }: Constel
       args={[geometry, material, MAX_SATELLITES]}
       name="satellites"
       onClick={handleClick}
+      onPointerMove={handlePointerMove}
+      onPointerOut={() => onHover(null)}
     />
   );
 }

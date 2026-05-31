@@ -23,6 +23,7 @@ import { computeConeRadius } from "../groundStations";
 import { useDecisionExplanation } from "../../explain/useDecisionExplanation";
 import { EARTH_RADIUS_RENDER } from "./units";
 import { removeNode, setNodeLocalPosition } from "./positions";
+import type { HoverInfo } from "./Tooltip";
 import type { NodeState, Selection } from "../../types";
 
 const GS_HEX = `#${GS_COLOR.toString(16).padStart(6, "0")}`;
@@ -74,6 +75,7 @@ interface GroundStationProps {
   /** Configured mask (deg) for the selected GS, from the decision explanation. */
   configuredMinElevDeg: number | null;
   onSelect: (sel: Selection | null) => void;
+  onHover: (info: HoverInfo | null) => void;
 }
 
 function GroundStation({
@@ -84,6 +86,7 @@ function GroundStation({
   effectiveMinElevDeg,
   configuredMinElevDeg,
   onSelect,
+  onHover,
 }: GroundStationProps) {
   const geom = useMemo(() => {
     const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
@@ -133,7 +136,13 @@ function GroundStation({
 
   return (
     <group>
-      <sprite scale={[GS_SIZE, GS_SIZE, 1]} position={geom.position} onClick={handleClick}>
+      <sprite
+        scale={[GS_SIZE, GS_SIZE, 1]}
+        position={geom.position}
+        onClick={handleClick}
+        onPointerMove={(e) => onHover({ node, x: e.nativeEvent.clientX, y: e.nativeEvent.clientY })}
+        onPointerOut={() => onHover(null)}
+      >
         <spriteMaterial map={texture} sizeAttenuation />
       </sprite>
       {/* Effective coverage cone (the binding floor) — filled disc + strong outline. */}
@@ -174,9 +183,10 @@ interface GroundStationsProps {
   nodes: NodeState[];
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
+  onHover: (info: HoverInfo | null) => void;
 }
 
-export function GroundStations({ nodes, selection, onSelect }: GroundStationsProps) {
+export function GroundStations({ nodes, selection, onSelect, onHover }: GroundStationsProps) {
   const texture = useMemo(() => makeGsTexture(), []);
   useEffect(() => () => texture.dispose(), [texture]);
 
@@ -201,6 +211,7 @@ export function GroundStations({ nodes, selection, onSelect }: GroundStationsPro
             effectiveMinElevDeg={isSelected ? (env?.effective_min_elevation_deg ?? null) : null}
             configuredMinElevDeg={isSelected ? (env?.configured_min_elevation_deg ?? null) : null}
             onSelect={onSelect}
+            onHover={onHover}
           />
         );
       })}

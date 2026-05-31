@@ -85,6 +85,17 @@ export function Scene({
   actionsRef,
 }: SceneProps) {
   const earthGroupRef = useRef<THREE.Group>(null);
+  // Register the Earth body group as the world frame the position registry maps local→world
+  // through. MUST be a callback ref, not a mount effect: <Body> is behind <Suspense> (Earth
+  // textures), so it is NOT yet mounted when Scene's effects first run — a one-shot
+  // setEarthFrame(earthGroupRef.current) would register null and never re-fire, leaving
+  // getNodeWorldPosition on its local fallback (labels/links/trails/orbits unrotated while the
+  // satellite dots get the frame rotation from the scene graph → mirrored in earth-inertial).
+  // The callback fires when the group actually attaches (post-Suspense) and clears on detach.
+  const registerEarthFrame = useCallback((group: THREE.Group | null) => {
+    earthGroupRef.current = group;
+    setEarthFrame(group);
+  }, []);
   const starGroupRef = useRef<THREE.Group>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
@@ -133,12 +144,6 @@ export function Scene({
     if (playbackState?.state === "seeking") setSeeking(true);
     else if (playbackState?.state === "playing") setSeeking(false);
   }, [playbackState]);
-
-  // Register the Earth body group as the world frame for the position registry.
-  useEffect(() => {
-    setEarthFrame(earthGroupRef.current);
-    return () => setEarthFrame(null);
-  }, []);
 
   // Feed the shared EMA clock on each snapshot (drives propagation timing + interpolation).
   useEffect(() => {
@@ -206,7 +211,7 @@ export function Scene({
           earthFrame={earthGroupRef}
           referenceFrame={referenceFrame}
         />
-        <Body id="earth" radiusKm={EARTH_RADIUS_KM} ref={earthGroupRef}>
+        <Body id="earth" radiusKm={EARTH_RADIUS_KM} ref={registerEarthFrame}>
           <Earth globeMode={globeMode} simTimeIso={snapshot?.sim_time ?? null} />
           <Constellation
             nodes={nodes}

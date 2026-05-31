@@ -26,6 +26,7 @@ import type { ColorMode, NodeState, Selection } from "../../types";
 import { FAMILY_TONE } from "../../explain/families";
 import type { SatRelation } from "../../explain/gsCandidateRelations";
 import { removeNode, setNodeLocalPosition } from "./positions";
+import { useBodyFrame } from "./BodyFrame";
 import type { HoverInfo } from "./Tooltip";
 
 const MAX_SATELLITES = 10_000;
@@ -67,6 +68,11 @@ export function Constellation({
   const indexToId = useRef<string[]>([]);
   const countRef = useRef(0);
   const lastPropagateRef = useRef(0);
+  // The body these satellites live in — written with each position so the registry resolves them
+  // through this body's frame (no Earth assumption). Read via a ref so the useFrame closure is stable.
+  const bodyId = useBodyFrame().id;
+  const bodyIdRef = useRef(bodyId);
+  bodyIdRef.current = bodyId;
 
   const geometry = useMemo(
     () => new THREE.SphereGeometry(SAT_RADIUS, SAT_SEGMENTS, SAT_SEGMENTS),
@@ -93,7 +99,7 @@ export function Constellation({
         const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
         _tmpMatrix.makeTranslation(p.x, p.y, p.z);
         mesh.setMatrixAt(idx, _tmpMatrix);
-        setNodeLocalPosition(node.node_id, p.x, p.y, p.z);
+        setNodeLocalPosition(node.node_id, bodyId, p.x, p.y, p.z);
       }
       // When a GS is selected, the scene blooms for it: candidate sats take their relation's
       // family tone, far/irrelevant sats dim so the eye goes to the candidates (spec on-select).
@@ -120,7 +126,7 @@ export function Constellation({
     mesh.count = countRef.current;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [nodes, colorMode, relations]);
+  }, [nodes, colorMode, relations, bodyId]);
 
   // Per-frame propagation — identical model to globe/satellites.ts animateSatellites.
   useFrame(() => {
@@ -149,7 +155,7 @@ export function Constellation({
       }
       _tmpMatrix.makeTranslation(x, y, z);
       mesh.setMatrixAt(idx, _tmpMatrix);
-      setNodeLocalPosition(nodeId, x, y, z);
+      setNodeLocalPosition(nodeId, bodyIdRef.current, x, y, z);
     }
     mesh.instanceMatrix.needsUpdate = true;
   }, -1); // after FrameDriver (-2) sets the frame rotation, before world-position consumers

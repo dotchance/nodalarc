@@ -7,11 +7,19 @@
  * in its local frame. Appearance is a child, not built in, so the same <Body> frame
  * renders any body by composing the matching appearance component. Adding Mars or a lunar
  * constellation is adding a <Body> subtree, not a new imperative subsystem.
+ *
+ * Each Body REGISTERS its group as the position registry's frame for its body id (setBodyFrame),
+ * via a callback ref so it fires the moment the group attaches — Body sits behind the Earth-texture
+ * <Suspense>, so a one-shot effect would race the mount and register null (the bug that mirrored
+ * the globe). The callback also forwards the group to the parent ref (FrameDriver / orbit layers
+ * drive its rotation). Every body owns its own registration; the registry resolves each node
+ * through ITS body's frame.
  */
 
-import { forwardRef, type ReactNode } from "react";
+import { forwardRef, useCallback, type ReactNode } from "react";
 import * as THREE from "three";
 import { BodyFrameProvider, type BodyFrameValue } from "./BodyFrame";
+import { setBodyFrame } from "./positions";
 import { kmToRender } from "./units";
 
 interface BodyProps {
@@ -29,9 +37,19 @@ export const Body = forwardRef<THREE.Group, BodyProps>(function Body(
 ) {
   const radiusRender = kmToRender(radiusKm);
   const frame: BodyFrameValue = { id, radiusKm, radiusRender };
+
+  const attach = useCallback(
+    (group: THREE.Group | null) => {
+      setBodyFrame(id, group);
+      if (typeof ref === "function") ref(group);
+      else if (ref) ref.current = group;
+    },
+    [id, ref],
+  );
+
   return (
     <BodyFrameProvider value={frame}>
-      <group ref={ref} name={`body-${id}`} position={position}>
+      <group ref={attach} name={`body-${id}`} position={position}>
         {children}
       </group>
     </BodyFrameProvider>

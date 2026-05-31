@@ -25,6 +25,7 @@ import { groundStationFamily, type GsFamily } from "../../explain/groundStationF
 import type { EffectiveEnvelopeFacts } from "../../explain/types";
 import { EARTH_RADIUS_RENDER } from "./units";
 import { removeNode, setNodeLocalPosition } from "./positions";
+import { useBodyFrame } from "./BodyFrame";
 import type { HoverInfo } from "./Tooltip";
 import type { ActuationNotice, LinkState, NodeState, Selection } from "../../types";
 
@@ -93,6 +94,7 @@ function GroundStation({
   onHover,
 }: GroundStationProps) {
   const spriteRef = useRef<THREE.Sprite>(null);
+  const bodyId = useBodyFrame().id;
   const faulted = family.family === "faulted";
   // Pulse the glyph only for a true fault (spec: "Fault pulse only for real faults"). Driven by
   // the R3F render clock (wall-clock), so it keeps alerting even when the sim is paused.
@@ -142,9 +144,9 @@ function GroundStation({
   ]);
 
   useEffect(() => {
-    setNodeLocalPosition(node.node_id, geom.position[0], geom.position[1], geom.position[2]);
+    setNodeLocalPosition(node.node_id, bodyId, geom.position[0], geom.position[1], geom.position[2]);
     return () => removeNode(node.node_id);
-  }, [node.node_id, geom.position]);
+  }, [node.node_id, bodyId, geom.position]);
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();

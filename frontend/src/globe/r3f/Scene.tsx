@@ -49,7 +49,6 @@ import { Labels } from "./Labels";
 import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { FrameDriver } from "./FrameDriver";
-import { setEarthFrame } from "./positions";
 import { EARTH_RADIUS_KM } from "./units";
 
 const MAX_PINS = 7;
@@ -88,18 +87,10 @@ export function Scene({
   onSelect,
   actionsRef,
 }: SceneProps) {
+  // The Earth body group, used by FrameDriver / AllOrbits / OrbitPins to drive its view-frame
+  // rotation. <Body> populates this ref AND self-registers its frame in the position registry
+  // (setBodyFrame, via its own callback ref) the moment the group attaches post-Suspense.
   const earthGroupRef = useRef<THREE.Group>(null);
-  // Register the Earth body group as the world frame the position registry maps local→world
-  // through. MUST be a callback ref, not a mount effect: <Body> is behind <Suspense> (Earth
-  // textures), so it is NOT yet mounted when Scene's effects first run — a one-shot
-  // setEarthFrame(earthGroupRef.current) would register null and never re-fire, leaving
-  // getNodeWorldPosition on its local fallback (labels/links/trails/orbits unrotated while the
-  // satellite dots get the frame rotation from the scene graph → mirrored in earth-inertial).
-  // The callback fires when the group actually attaches (post-Suspense) and clears on detach.
-  const registerEarthFrame = useCallback((group: THREE.Group | null) => {
-    earthGroupRef.current = group;
-    setEarthFrame(group);
-  }, []);
   const starGroupRef = useRef<THREE.Group>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
@@ -232,7 +223,7 @@ export function Scene({
           earthFrame={earthGroupRef}
           referenceFrame={referenceFrame}
         />
-        <Body id="earth" radiusKm={EARTH_RADIUS_KM} ref={registerEarthFrame}>
+        <Body id="earth" radiusKm={EARTH_RADIUS_KM} ref={earthGroupRef}>
           <Earth globeMode={globeMode} simTimeIso={snapshot?.sim_time ?? null} />
           <Constellation
             nodes={nodes}

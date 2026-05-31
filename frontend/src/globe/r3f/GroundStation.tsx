@@ -14,29 +14,30 @@
  * camera can find it. Rendered inside <Body id="earth">; one sprite/cone per GS (few GS).
  */
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { type ThreeEvent } from "@react-three/fiber";
+import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { GS_COLOR, GS_SIZE } from "../../config";
 import { geoToWorld } from "../geo";
 import { computeConeRadius } from "../groundStations";
 import { useDecisionExplanation } from "../../explain/useDecisionExplanation";
+import { FAMILY_TONE } from "../../explain/families";
+import { groundStationFamily, type GsFamily } from "../../explain/groundStationFamily";
 import { EARTH_RADIUS_RENDER } from "./units";
 import { removeNode, setNodeLocalPosition } from "./positions";
 import type { HoverInfo } from "./Tooltip";
-import type { NodeState, Selection } from "../../types";
+import type { ActuationNotice, LinkState, NodeState, Selection } from "../../types";
 
-const GS_HEX = `#${GS_COLOR.toString(16).padStart(6, "0")}`;
-
-/** The shared 64x64 antenna glyph texture (globe/groundStations.ts getSharedTexture). */
+/** The shared 64x64 antenna glyph texture. Drawn WHITE so the per-GS spriteMaterial.color tints
+ *  it to the canonical family tone (globe/groundStations.ts getSharedTexture, recolored). */
 function makeGsTexture(): THREE.CanvasTexture {
   const size = 64;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d")!;
-  ctx.strokeStyle = GS_HEX;
-  ctx.fillStyle = GS_HEX;
+  ctx.strokeStyle = "#ffffff";
+  ctx.fillStyle = "#ffffff";
   ctx.lineWidth = 3;
   ctx.beginPath();
   ctx.arc(size / 2, size * 0.7, 8, 0, Math.PI * 2);
@@ -74,6 +75,8 @@ interface GroundStationProps {
   effectiveMinElevDeg: number | null;
   /** Configured mask (deg) for the selected GS, from the decision explanation. */
   configuredMinElevDeg: number | null;
+  /** Default-state canonical family (snapshot-derived) — drives glyph tone + fault pulse. */
+  family: GsFamily;
   onSelect: (sel: Selection | null) => void;
   onHover: (info: HoverInfo | null) => void;
 }
@@ -85,9 +88,23 @@ function GroundStation({
   texture,
   effectiveMinElevDeg,
   configuredMinElevDeg,
+  family,
   onSelect,
   onHover,
 }: GroundStationProps) {
+  const spriteRef = useRef<THREE.Sprite>(null);
+  const faulted = family.family === "faulted";
+  // Pulse the glyph only for a true fault (spec: "Fault pulse only for real faults"). Driven by
+  // the R3F render clock (wall-clock), so it keeps alerting even when the sim is paused.
+  useFrame((state) => {
+    const s = spriteRef.current;
+    if (!s) return;
+    const scale = faulted ? GS_SIZE * (1 + 0.25 * Math.sin(state.clock.elapsedTime * 6)) : GS_SIZE;
+    s.scale.set(scale, scale, 1);
+  });
+
+  // Taxonomy caption for the hover tooltip — same family label the inspector/logs use.
+  const caption = `${FAMILY_TONE[family.family].label}${family.reason ? `. ${family.reason}` : ""}`;
   const geom = useMemo(() => {
     const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
     const outward = p.clone().normalize();
@@ -140,13 +157,16 @@ function GroundStation({
   return (
     <group>
       <sprite
+        ref={spriteRef}
         scale={[GS_SIZE, GS_SIZE, 1]}
         position={geom.position}
         onClick={handleClick}
-        onPointerMove={(e) => onHover({ node, x: e.nativeEvent.clientX, y: e.nativeEvent.clientY })}
+        onPointerMove={(e) =>
+          onHover({ node, x: e.nativeEvent.clientX, y: e.nativeEvent.clientY, caption })
+        }
         onPointerOut={() => onHover(null)}
       >
-        <spriteMaterial map={texture} sizeAttenuation />
+        <spriteMaterial map={texture} color={FAMILY_TONE[family.family].hex} sizeAttenuation />
       </sprite>
       {/* Effective coverage cone (the binding floor) — filled disc + strong outline. */}
       <mesh position={geom.conePosition} quaternion={geom.coneQuaternion} visible={selected}>
@@ -185,11 +205,21 @@ function GroundStation({
 interface GroundStationsProps {
   nodes: NodeState[];
   selection: Selection | null;
+  /** Active links + Scheduler actuation notices from the snapshot — drive default-state family. */
+  links: LinkState[];
+  actuationNotices: ActuationNotice[];
   onSelect: (sel: Selection | null) => void;
   onHover: (info: HoverInfo | null) => void;
 }
 
-export function GroundStations({ nodes, selection, onSelect, onHover }: GroundStationsProps) {
+export function GroundStations({
+  nodes,
+  selection,
+  links,
+  actuationNotices,
+  onSelect,
+  onHover,
+}: GroundStationsProps) {
   const texture = useMemo(() => makeGsTexture(), []);
   useEffect(() => () => texture.dispose(), [texture]);
 
@@ -213,6 +243,7 @@ export function GroundStations({ nodes, selection, onSelect, onHover }: GroundSt
             texture={texture}
             effectiveMinElevDeg={isSelected ? (env?.effective_min_elevation_deg ?? null) : null}
             configuredMinElevDeg={isSelected ? (env?.configured_min_elevation_deg ?? null) : null}
+            family={groundStationFamily(node.node_id, links, actuationNotices)}
             onSelect={onSelect}
             onHover={onHover}
           />

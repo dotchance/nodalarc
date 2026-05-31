@@ -13,13 +13,17 @@ export interface HoverInfo {
   node: NodeState;
   x: number;
   y: number;
+  /** Canonical taxonomy sentence (family label + reason) — same words the inspector/logs use.
+   *  When set it replaces the raw geometry line (the spec's "use the same taxonomy labels"). */
+  caption?: string;
 }
 
 export function Tooltip({ hover }: { hover: HoverInfo | null }) {
   if (!hover) return null;
   const n = hover.node;
-  const text =
-    n.node_type === "satellite"
+  const text = hover.caption
+    ? `${n.node_id}: ${hover.caption}`
+    : n.node_type === "satellite"
       ? `${n.node_id}\n${n.isl_count} ISLs, ${n.gnd_count} GND, Area ${n.routing_area ?? "none"}`
       : `${n.node_id}\n${n.lat_deg.toFixed(1)}°, ${n.lon_deg.toFixed(1)}°`;
   return (

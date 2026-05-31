@@ -224,6 +224,8 @@ export function Scene({
           <GroundStations
             nodes={nodes}
             selection={selection}
+            links={snapshot?.links ?? []}
+            actuationNotices={snapshot?.actuation_notices ?? []}
             onSelect={onSelect}
             onHover={setHover}
           />

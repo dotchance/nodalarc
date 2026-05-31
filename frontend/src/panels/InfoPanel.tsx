@@ -16,12 +16,21 @@ import type { StateSnapshot, Selection, TracedPath } from "../types";
 interface InfoPanelProps {
   snapshot: StateSnapshot | null;
   selection: Selection | null;
+  /** The anchor GS for Selected Pair Mode: when a sat is selected, open straight to its pair. */
+  anchorGsId?: string | null;
   onSelect: (sel: Selection | null) => void;
   onFlyTo?: (nodeId: string) => void;
   onTraceResult?: (path: TracedPath | null) => void;
 }
 
-export function InfoPanel({ snapshot, selection, onSelect, onFlyTo, onTraceResult }: InfoPanelProps) {
+export function InfoPanel({
+  snapshot,
+  selection,
+  anchorGsId,
+  onSelect,
+  onFlyTo,
+  onTraceResult,
+}: InfoPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [splitPct, setSplitPct] = useState(50); // percentage for detail section
   const draggingRef = useRef(false);
@@ -62,7 +71,12 @@ export function InfoPanel({ snapshot, selection, onSelect, onFlyTo, onTraceResul
   } else if (selection.type === "satellite") {
     const node = snapshot.nodes.find((n) => n.node_id === selection.id);
     detailSection = node ? (
-      <SatelliteDetail node={node} snapshot={snapshot} onSelect={onSelect} />
+      <SatelliteDetail
+        node={node}
+        snapshot={snapshot}
+        anchorGsId={anchorGsId}
+        onSelect={onSelect}
+      />
     ) : (
       <NetworkSummary snapshot={snapshot} onSelect={onSelect} />
     );

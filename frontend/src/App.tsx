@@ -59,7 +59,7 @@ export function App() {
 function AppInner() {
   const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, historicalMode, setHistoricalMode, fetchHistorical, sendMessage } =
     useSnapshot();
-  const { selection, select, clearSelection } = useSelection();
+  const { selection, select, clearSelection, anchorGsId } = useSelection();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -449,6 +449,7 @@ function AppInner() {
     <InfoPanel
       snapshot={augmentedSnapshot}
       selection={selection}
+      anchorGsId={anchorGsId}
       onSelect={select}
       onFlyTo={handleFlyToNode}
       onTraceResult={setUserTrace}

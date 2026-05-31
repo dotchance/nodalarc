@@ -15,6 +15,8 @@ import { FamilyBadge } from "../explain/components/FamilyBadge";
 interface SatelliteDetailProps {
   node: NodeState;
   snapshot: StateSnapshot;
+  /** Anchor GS (Selected Pair Mode): when set, the card opens straight to the GS<->sat pair. */
+  anchorGsId?: string | null;
   onSelect: (sel: Selection | null) => void;
 }
 
@@ -30,7 +32,7 @@ function linkTypeLabel(linkType: string | null): string {
   }
 }
 
-export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailProps) {
+export function SatelliteDetail({ node, snapshot, anchorGsId, onSelect }: SatelliteDetailProps) {
   const [inspectedGs, setInspectedGs] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
 
@@ -57,9 +59,12 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
     };
   }, [node.node_id]);
 
+  // Selected Pair Mode: when a GS is anchored (it was selected, then this sat was clicked), open
+  // straight to the GS<->sat pair; otherwise the normal sat card. Re-seeds per satellite, so each
+  // sat selected while the GS is anchored shows its pair (the user can still Back out per sat).
   useEffect(() => {
-    setInspectedGs(null);
-  }, [node.node_id]);
+    setInspectedGs(anchorGsId ?? null);
+  }, [node.node_id, anchorGsId]);
 
   // Find connected links
   const connectedLinks = snapshot.links.filter(

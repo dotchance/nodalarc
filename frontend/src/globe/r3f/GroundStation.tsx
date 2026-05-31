@@ -138,6 +138,23 @@ export function GroundStations({ nodes, selection, onSelect }: GroundStationsPro
   // Cone footprint sized to the constellation's orbital altitude (first sat, fallback 550).
   const orbitalAltKm = nodes.find((n) => n.node_type === "satellite")?.alt_km ?? 550;
 
+  // TEMP r3f-debug — remove after diagnosis. Reveals the runtime cone inputs/size.
+  useEffect(() => {
+    const sat = nodes.find((n) => n.node_type === "satellite");
+    const gs = gsNodes[0];
+    // eslint-disable-next-line no-console
+    console.log("[r3f-debug] cone:", {
+      orbitalAltKm,
+      firstSatAltKm: sat?.alt_km,
+      satCount: nodes.filter((n) => n.node_type === "satellite").length,
+      gsSample: gs?.node_id,
+      gsMinElevDeg: gs?.min_elevation_deg,
+      coneRadiusUnits: gs ? computeConeRadius(gs.min_elevation_deg ?? 25, orbitalAltKm) : null,
+      earthRadiusRenderUnits: EARTH_RADIUS_RENDER,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orbitalAltKm, gsNodes.length]);
+
   return (
     <>
       {gsNodes.map((node) => (

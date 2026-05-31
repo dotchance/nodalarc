@@ -14,6 +14,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import type { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { useFrame, useThree } from "@react-three/fiber";
 import { LinkBatch } from "./linkBatch";
 import { getNodeLocalPosition } from "./positions";
@@ -47,8 +48,26 @@ export function Links({ links, showIslLinks, showGroundLinks }: LinksProps) {
     batch.setResolution(size.width, size.height);
   }, [batch, size]);
 
-  useFrame(() => {
+  const debuggedRef = useRef(false);
+  useFrame((state) => {
     batch.animate(showIslLinks, showGroundLinks, performance.now());
+    // TEMP r3f-debug — remove after diagnosis. Reveals the fat-line draw-time state.
+    const obj = batch.object3d;
+    if (!debuggedRef.current && obj) {
+      debuggedRef.current = true;
+      const mat = obj.material as LineMaterial;
+      const v = new THREE.Vector4();
+      state.gl.getViewport(v);
+      // eslint-disable-next-line no-console
+      console.log("[r3f-debug] links:", {
+        resolution: [mat.resolution.x, mat.resolution.y],
+        linewidth: mat.linewidth,
+        worldUnits: mat.worldUnits,
+        instanceCount: (obj.geometry as THREE.InstancedBufferGeometry).instanceCount,
+        viewport: [v.z, v.w],
+        dpr: state.gl.getPixelRatio(),
+      });
+    }
   });
 
   return <group ref={groupRef} />;

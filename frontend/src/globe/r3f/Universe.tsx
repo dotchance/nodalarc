@@ -50,9 +50,13 @@ function Controls({ controlsRef }: { controlsRef?: MutableRefObject<OrbitControl
 export function Universe({
   children,
   controlsRef,
+  onPointerMissed,
 }: {
   children?: ReactNode;
   controlsRef?: MutableRefObject<OrbitControls | null>;
+  /** Canvas-level miss handler: fires on a click that hit no interactive object (empty space /
+   *  Earth / a non-pickable beam) — the hook the LinkPicker uses for link-select + deselect. */
+  onPointerMissed?: (event: MouseEvent) => void;
 }) {
   return (
     <Canvas
@@ -65,6 +69,7 @@ export function Universe({
       }}
       gl={{ antialias: true, preserveDrawingBuffer: true }}
       dpr={[1, 2]}
+      onPointerMissed={onPointerMissed}
     >
       <color attach="background" args={["#0d0d1a"]} />
       {/* Ambient fill only; the sun directional lives in <Earth> (earth frame), positioned by

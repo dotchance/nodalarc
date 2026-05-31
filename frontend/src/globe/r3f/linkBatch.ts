@@ -60,7 +60,7 @@ export function linkKey(a: string, b: string): string {
   return a < b ? `${a}:${b}` : `${b}:${a}`;
 }
 
-function isGroundLink(nodeA: string, nodeB: string): boolean {
+export function isGroundLink(nodeA: string, nodeB: string): boolean {
   return nodeA.startsWith("gs-") || nodeB.startsWith("gs-");
 }
 

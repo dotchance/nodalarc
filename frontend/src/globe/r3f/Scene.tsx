@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { onSnapshot, setPlaybackPaused } from "../../sim/simClock";
+import { onSnapshot, setPlaybackPaused, resetSimClock } from "../../sim/simClock";
 import {
   destroyWorkerBridge,
   initWorkerBridge,
@@ -40,6 +40,7 @@ import { CoverageFootprint } from "./CoverageFootprint";
 import { Trails } from "./Trails";
 import { AllOrbits } from "./AllOrbits";
 import { OrbitPins } from "./OrbitPins";
+import { LinkPicker } from "./LinkPicker";
 import { Labels } from "./Labels";
 import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
@@ -87,6 +88,9 @@ export function Scene({
   const starGroupRef = useRef<THREE.Group>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  // The LinkPicker (inside the Canvas) publishes its hit-test-and-select here; the Canvas-level
+  // onPointerMissed below invokes it on a background click. No-op until the LinkPicker mounts.
+  const missedRef = useRef<(event: MouseEvent) => void>(() => {});
 
   // ctrl/cmd-click orbit pins (capped, oldest evicted) + hover tooltip state.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
@@ -97,11 +101,29 @@ export function Scene({
     );
   }, []);
 
-  // Drop pins on session/constellation switch (they reference the old constellation's sats).
+  // Session/constellation switch reset (the legacy GlobeView did this in one block): drop the
+  // pins (they reference the old constellation's sats) and reset the EMA sim-clock so the prior
+  // session's smoothed rate does not bleed into the new one. Trails + link batch reset
+  // declaratively via their resetKeys below; orbit rings re-seed on their own.
   const constellation = snapshot?.constellation_name ?? null;
+  const nodes = snapshot?.nodes ?? [];
   useEffect(() => {
     setPinnedIds([]);
+    resetSimClock();
   }, [constellation]);
+
+  // Prune pins for satellites that have left the constellation mid-session, so a stale id never
+  // lingers (legacy reclaimed the instance slot every frame). Same-ref return = no re-render.
+  useEffect(() => {
+    setPinnedIds((prev) => {
+      if (prev.length === 0) return prev;
+      const live = new Set(
+        nodes.filter((n) => n.node_type === "satellite").map((n) => n.node_id),
+      );
+      const next = prev.filter((id) => live.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [nodes]);
 
   // Epoch-suspension overlay (PRD seek protocol). "seeking" shows the overlay; only "playing"
   // clears it ("paused" leaves it as-is) — legacy GlobeView verbatim. Trails flush on seek is
@@ -139,14 +161,21 @@ export function Scene({
 
   useEffect(() => () => destroyWorkerBridge(), []);
 
-  const nodes = snapshot?.nodes ?? [];
-
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      <Universe controlsRef={controlsRef}>
+      <Universe controlsRef={controlsRef} onPointerMissed={(e) => missedRef.current(e)}>
         {actionsRef && (
           <GlobeActionsBridge actionsRef={actionsRef} controlsRef={controlsRef} />
         )}
+        {/* Click a beam to select the link; click empty space / Earth to deselect (legacy
+            gpuPicker link path + onSelect(null)-on-miss). Sats/GS are picked by their own handlers. */}
+        <LinkPicker
+          links={snapshot?.links ?? []}
+          showIslLinks={showIslLinks}
+          showGroundLinks={showGroundLinks}
+          onSelect={onSelect}
+          handlerRef={missedRef}
+        />
         <FrameDriver
           earthFrame={earthGroupRef}
           starFrame={starGroupRef}
@@ -156,12 +185,14 @@ export function Scene({
           <Starfield />
         </group>
         {/* World-frame trails + full-constellation orbit rings (scene-root). Trail history is
-            world-space, so flush it on epoch change (resetKey) AND on reference-frame toggle —
-            mixing points from two frames is meaningless (legacy flushTrails on frame toggle). */}
+            world-space + session-scoped, so flush it on epoch change, reference-frame toggle, AND
+            constellation switch — mixing points from two frames or two constellations is
+            meaningless (legacy flushTrails on each of those). epoch_id stays 0 across a plain
+            switch, so constellation must be in the key in its own right. */}
         <Trails
           enabled={showTrails}
           nodes={nodes}
-          resetKey={`${ephemeris?.epoch_id ?? "none"}|${referenceFrame}`}
+          resetKey={`${ephemeris?.epoch_id ?? "none"}|${referenceFrame}|${constellation ?? "none"}`}
         />
         <AllOrbits
           nodes={nodes}
@@ -197,6 +228,7 @@ export function Scene({
             kernelActualPairs={snapshot?.kernel_actual_pairs ?? []}
             showIslLinks={showIslLinks}
             showGroundLinks={showGroundLinks}
+            resetKey={constellation ?? "none"}
           />
           <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} />
           <CoverageFootprint selection={selection} nodes={nodes} />

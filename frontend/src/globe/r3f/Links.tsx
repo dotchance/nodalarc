@@ -28,11 +28,22 @@ interface LinksProps {
   kernelActualPairs: [string, string][];
   showIslLinks: boolean;
   showGroundLinks: boolean;
+  /** Bump (e.g. constellation name) to drop the whole batch on a session switch — its links map
+   *  and buffer slots are session-scoped and must not carry over (legacy clearLinks). */
+  resetKey?: string | number;
 }
 
-export function Links({ links, kernelActualPairs, showIslLinks, showGroundLinks }: LinksProps) {
+export function Links({
+  links,
+  kernelActualPairs,
+  showIslLinks,
+  showGroundLinks,
+  resetKey,
+}: LinksProps) {
   const groupRef = useRef<THREE.Group>(null);
-  const batch = useMemo(() => new LinkBatch(getNodeLocalPosition), []);
+  // Keyed on resetKey: a new constellation builds a fresh batch; the [batch] cleanup below
+  // disposes the old one (removes its LineSegments2 + clears its links map + buffers).
+  const batch = useMemo(() => new LinkBatch(getNodeLocalPosition), [resetKey]);
   const size = useThree((s) => s.size);
   const sizeRef = useRef(size);
   sizeRef.current = size;

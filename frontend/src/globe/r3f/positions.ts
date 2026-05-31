@@ -55,15 +55,25 @@ export function getNodeLocalPosition(nodeId: string, target: THREE.Vector3): boo
   return true;
 }
 
-/** Fill `target` with the node's world position (local through the body world matrix). */
+/**
+ * Fill `target` with the node's world position (local through the body world matrix), or return
+ * false if it is not yet resolvable.
+ *
+ * CONTRACT — fail loud, never silently wrong: world position is UNAVAILABLE until the body frame
+ * is registered (setEarthFrame). We deliberately do NOT fall back to the raw local coordinate
+ * when no frame is set: that local value is in a DIFFERENT frame than the one the satellite dots
+ * render in (scene-graph children of the rotated body group), so handing it back would put every
+ * world-frame consumer (labels, orbit rings, trails, selection, link-picking, camera) on a frame
+ * the renderer doesn't share — invisibly in earth-fixed (rotation 0), but mirrored in
+ * earth-inertial. Returning false makes consumers skip (a loud, obvious "absent") instead of
+ * rendering a plausible-but-wrong position. The frame is registered the moment <Body> mounts, so
+ * the unavailable window is the pre-mount frame where there are no positions to read anyway.
+ */
 export function getNodeWorldPosition(nodeId: string, target: THREE.Vector3): boolean {
+  if (!earthFrame) return false;
   if (!getNodeLocalPosition(nodeId, _tmpLocal)) return false;
-  if (earthFrame) {
-    earthFrame.updateWorldMatrix(true, false);
-    target.copy(_tmpLocal);
-    earthFrame.localToWorld(target);
-  } else {
-    target.copy(_tmpLocal);
-  }
+  earthFrame.updateWorldMatrix(true, false);
+  target.copy(_tmpLocal);
+  earthFrame.localToWorld(target);
   return true;
 }

@@ -1,25 +1,10 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
-/** Translate VS-API reason codes into networking language for display. */
-
-/** VF spec Section 8.4 — reason code translation table */
-const REASON_MAP: Record<string, string> = {
-  vis_gained: "satellites in range",
-  vis_lost: "satellites out of range",
-  tracking_exceeded: "relative motion too fast",
-  terminal_exhausted: "no free terminal",
-  scenario_inject_down: "injected failure",
-  scenario_inject_up: "injected recovery",
-  scenario_reconciliation: "scenario ended, reconciled",
-  satellite_loss: "satellite lost",
-  gs_below_horizon: "satellite below horizon",
-  gs_above_horizon: "satellite in view",
-};
-
-export function translateReason(reason: string | null): string {
-  if (!reason) return "unknown";
-  return REASON_MAP[reason] ?? reason;
-}
+/** Display formatters for non-decision values (link type, durations, timestamps).
+ *
+ * Link-event reason text is NOT here: it moved to the single family-classified registry
+ * src/explain/linkEvents.ts (linkEventLabel). The old REASON_MAP was a parallel, untaxonomized
+ * vocabulary that conflicted with the registry — removed so there is one source. */
 
 /** VF spec Section 8.4 — link type translation */
 const LINK_TYPE_MAP: Record<string, string> = {

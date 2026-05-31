@@ -3,7 +3,8 @@
 /** Link detail panel — state, metrics, flow paths, history. */
 
 import { useEffect, useState } from "react";
-import { translateReason, translateLinkType } from "../translate";
+import { translateLinkType } from "../translate";
+import { linkEventLabel } from "../explain/linkEvents";
 import { REST_URL } from "../config";
 import type { LinkState, StateSnapshot } from "../types";
 
@@ -73,7 +74,7 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
       </div>
       <div className="detail-row">
         <span className="detail-label">Reason</span>
-        <span className="detail-value">{translateReason(link.link_reason)}</span>
+        <span className="detail-value">{linkEventLabel(link.link_reason)}</span>
       </div>
       <div className="detail-row">
         <span className="detail-label">Type</span>
@@ -121,7 +122,7 @@ export function LinkDetail({ link, snapshot }: LinkDetailProps) {
                 {h.sim_time?.substring(11, 19) ?? ""}
               </span>
               <span className="detail-value" style={{ fontSize: 10 }}>
-                {h.event_type} — {translateReason(h.reason)}
+                {h.event_type} — {linkEventLabel(h.reason)}
               </span>
             </div>
           ))}

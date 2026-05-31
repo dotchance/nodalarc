@@ -36,10 +36,12 @@ from nodalarc.models.link_decisions import (
     GroundUnscheduledReason,
     GroundVisibilityRejectReason,
 )
+from nodalarc.models.link_events import LINK_EVENT_REASONS
 from nodalarc.models.scheduler_ops import ActuationFailureClass, ActuationState
 
 _REASONS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/reasons.ts"
 _TYPES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/types.ts"
+_LINK_EVENTS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/linkEvents.ts"
 
 # Each backend model and the TS interface that mirrors its wire shape.
 _WIRE_MODELS = [
@@ -92,6 +94,18 @@ def _literal_values(literal_type: object) -> set[str]:
 
 def test_reasons_ts_exists():
     assert _REASONS_TS.is_file(), f"frontend reason registry missing at {_REASONS_TS}"
+
+
+def _link_event_codes_ts() -> set[str]:
+    """The `code: "..."` values of the frontend LINK_EVENT_REGISTRY records."""
+    text = _LINK_EVENTS_TS.read_text(encoding="utf-8")
+    return set(re.findall(r'code:\s*"([^"]+)"', text))
+
+
+def test_link_event_reasons_match_backend():
+    """The link-lifecycle vocabulary cannot drift between backend and the frontend registry."""
+    assert _LINK_EVENTS_TS.is_file(), f"frontend link-event registry missing at {_LINK_EVENTS_TS}"
+    assert _link_event_codes_ts() == set(LINK_EVENT_REASONS)
 
 
 def test_visibility_reject_reasons_match_backend():

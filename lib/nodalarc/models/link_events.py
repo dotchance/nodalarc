@@ -10,6 +10,29 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+# The authoritative vocabulary of LinkUp/LinkDown `reason` codes (the link-lifecycle vocabulary,
+# distinct from the ground-decision funnel reasons in link_decisions.py). Kept as a constant — not
+# a Literal on the wire field — so a live Scheduler emitting a not-yet-listed code degrades to the
+# raw code in the UI rather than crashing validation; the frontend mirrors this set in
+# explain/linkEvents.ts (LINK_EVENT_REASONS) and the cross-language contract test asserts they match
+# so the two vocabularies cannot silently drift.
+LINK_EVENT_REASONS: frozenset[str] = frozenset(
+    {
+        # up
+        "vis_gained",
+        "gs_above_horizon",
+        "scenario_inject_up",
+        "scenario_reconciliation",
+        # down
+        "vis_lost",
+        "gs_below_horizon",
+        "tracking_exceeded",
+        "terminal_exhausted",
+        "scenario_inject_down",
+        "satellite_loss",
+    }
+)
+
 
 class LinkDecisionProvenance(BaseModel):
     """Physics and substrate inputs that explain an applied link decision.

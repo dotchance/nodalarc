@@ -3,7 +3,7 @@
 /** Satellite detail panel — role, area, adjacencies, position. */
 
 import { useEffect, useState } from "react";
-import { translateReason } from "../translate";
+import { linkEventLabel } from "../explain/linkEvents";
 import { areaCSSColor } from "../globe/colors";
 import type { NodeState, StateSnapshot, Selection } from "../types";
 import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
@@ -183,7 +183,7 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
                     {stateUp ? "UP" : "DOWN"}
                   </span>
                   {" "}{l.latency_ms.toFixed(1)}ms {linkTypeLabel(l.link_type)}
-                  {!stateUp && l.link_reason ? ` — ${translateReason(l.link_reason)}` : ""}
+                  {!stateUp && l.link_reason ? ` — ${linkEventLabel(l.link_reason)}` : ""}
                 </span>
               </div>
             );
@@ -211,7 +211,7 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
                   onClick={() => selectLink(l.node_a, l.node_b)}
                   title="Select link"
                 >
-                  {l.latency_ms.toFixed(1)}ms — {translateReason(l.link_reason)}
+                  {l.latency_ms.toFixed(1)}ms — {linkEventLabel(l.link_reason)}
                 </span>
               </div>
             );

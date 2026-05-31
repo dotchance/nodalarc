@@ -84,7 +84,7 @@ function AppInner() {
     openCatalog, closeCatalog, activeSessionName, sessionStatus,
     viewMode, setViewMode, colorMode, setColorMode,
     showGroundLinks, setShowGroundLinks, showIslLinks, setShowIslLinks,
-    showSatPaths, setShowSatPaths, setShowTrails,
+    showSatPaths, setShowSatPaths, showTrails, setShowTrails,
     globeMode, setGlobeMode, referenceFrame, toggleReferenceFrame, toggleView,
     cliDrawerOpen, setCliDrawerOpen, logPanelOpen, setLogPanelOpen,
     filterOpen, setFilterOpen,
@@ -326,6 +326,8 @@ function AppInner() {
               playbackPaused={playback.paused}
               showIslLinks={showIslLinks}
               showGroundLinks={showGroundLinks}
+              showSatPaths={showSatPaths}
+              showTrails={showTrails}
               selection={selection}
               onSelect={select}
             />

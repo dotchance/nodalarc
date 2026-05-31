@@ -71,7 +71,11 @@ export function OrbitPins({ pinnedIds, nodes, earthFrame, referenceFrame }: Orbi
   };
 
   const pinKey = useMemo(() => [...pinnedIds].sort().join(","), [pinnedIds]);
-  const byId = useMemo(() => new Map(nodes.map((n) => [n.node_id, n])), [nodes]);
+  // Read node data through a ref: a pinned ring is seeded ONCE (at pin time / frame toggle) and is
+  // static thereafter — the satellite moves along it. Rebuilding on every snapshot (byId in deps)
+  // recomputed the same ring needlessly. Seed triggers are pinKey + referenceFrame only.
+  const byIdRef = useRef(new Map<string, NodeState>());
+  byIdRef.current = useMemo(() => new Map(nodes.map((n) => [n.node_id, n])), [nodes]);
 
   // Re-seed the rings when the pin set or the reference frame changes (the live rotation is
   // read from the Earth body group at seed time). Static between (the legacy seed/reseed model).
@@ -86,7 +90,7 @@ export function OrbitPins({ pinnedIds, nodes, earthFrame, referenceFrame }: Orbi
     const col = new Float32Array(pinnedIds.length * FLOATS_PER_ORBIT);
     let n = 0;
     for (const id of pinnedIds) {
-      const ns = byId.get(id);
+      const ns = byIdRef.current.get(id);
       if (!ns || ns.vel_x_km_s == null || ns.vel_y_km_s == null || ns.vel_z_km_s == null) continue;
       if (ns.plane == null) continue;
       if (!getNodeWorldPosition(id, _worldPos) || !getNodeLocalPosition(id, _localPos)) continue;
@@ -120,14 +124,13 @@ export function OrbitPins({ pinnedIds, nodes, earthFrame, referenceFrame }: Orbi
       n < pinnedIds.length ? pos.subarray(0, used) : pos,
       n < pinnedIds.length ? col.subarray(0, used) : col,
     );
+    // Opaque + depth-writing, matching the legacy orbitPins.ts material (LineMaterial defaults):
+    // a pinned ring is depth-tested against the Earth so its far side is occluded, not drawn over.
     const material = new LineMaterial({
       color: 0xffffff,
       vertexColors: true,
       linewidth: 6,
       worldUnits: false,
-      transparent: true,
-      opacity: 0.85,
-      depthWrite: false,
       resolution: new THREE.Vector2(size.width, size.height),
     });
     const batch = new LineSegments2(geometry, material);
@@ -135,7 +138,7 @@ export function OrbitPins({ pinnedIds, nodes, earthFrame, referenceFrame }: Orbi
     group.add(batch);
     batchRef.current = batch;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinKey, referenceFrame, byId]);
+  }, [pinKey, referenceFrame]);
 
   // Keep the fat-line resolution in sync with the canvas.
   useEffect(() => {

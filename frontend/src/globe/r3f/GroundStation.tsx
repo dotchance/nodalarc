@@ -131,6 +131,9 @@ function GroundStation({
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
+    // A modified click is reserved for satellite orbit-pinning; swallow it on a GS (the legacy
+    // gpuPicker returns on a modified click for anything that is not a satellite).
+    if (e.nativeEvent.ctrlKey || e.nativeEvent.metaKey) return;
     onSelect({ type: "ground_station", id: node.node_id });
   };
 

@@ -21,7 +21,7 @@ export function Tooltip({ hover }: { hover: HoverInfo | null }) {
   const text =
     n.node_type === "satellite"
       ? `${n.node_id}\n${n.isl_count} ISLs, ${n.gnd_count} GND, Area ${n.routing_area ?? "none"}`
-      : `${n.node_id}\n${n.lat_deg.toFixed(2)}°, ${n.lon_deg.toFixed(2)}°`;
+      : `${n.node_id}\n${n.lat_deg.toFixed(1)}°, ${n.lon_deg.toFixed(1)}°`;
   return (
     <div
       style={{

@@ -42,11 +42,12 @@ import "./styles/catalog.css";
 import "./styles/wizard.css";
 import "./styles/explain.css";
 
-// UX-2 migration flag: `?r3f` mounts the declarative R3F scene instead of the imperative
-// globe, so the in-progress migration can be exercised without disturbing the live globe.
-// Removed when the R3F scene reaches parity and becomes the default (migration Phase H).
+// UX-2 cutover: the declarative R3F scene is now the default globe. `?legacy` opts back into
+// the imperative globe as a one-flag fallback during the multi-body/fly-between capability build;
+// the legacy globe (and this flag) are deleted once that work proves R3F in real use.
 const USE_R3F =
-  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("r3f");
+  typeof window === "undefined" ||
+  !new URLSearchParams(window.location.search).has("legacy");
 
 export function App() {
   const [ready, setReady] = useState(false);

@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nodalarc.body_frames import SupportedSurfaceBody
+
 
 class NodeState(BaseModel):
     """State of a single node in the constellation."""
@@ -33,6 +35,12 @@ class NodeState(BaseModel):
     prefix: str | None = None  # Ground station advertised prefix
     min_elevation_deg: float | None = None  # Ground stations only
     beam_falloff_exponent: float | None = None  # Satellites only, from satellite type
+    # Parameterization (D2/D3 from day one): which celestial body this node is anchored to and
+    # which tenant owns it. Carried on the render contract so the globe groups/frames by body and
+    # tints by tenant without an Earth/default assumption. Defaults keep single-shell Earth
+    # sessions unchanged; multi-shell / lunar sessions set them per node.
+    reference_body: SupportedSurfaceBody = "earth"
+    tenant_id: str = "default"
 
 
 class LinkState(BaseModel):

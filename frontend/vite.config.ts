@@ -14,6 +14,18 @@ function requiredBuildHash(command: string): string {
 export default defineConfig(({ command }) => {
   const buildHash = requiredBuildHash(command);
 
+  // Dev-only: when VITE_DEV_PROXY_TARGET is set (e.g. http://192.168.10.201:8080), the dev
+  // server proxies /api and /ws to a live VS-API so the frontend can iterate against a
+  // running session with full HMR — no container rebuild. Same-origin via the proxy, so no
+  // CORS. Has no effect on production builds (which never use `server`) or normal dev.
+  const devProxyTarget = process.env.VITE_DEV_PROXY_TARGET?.trim();
+  const proxy = devProxyTarget
+    ? {
+        "/api": { target: devProxyTarget, changeOrigin: true },
+        "/ws": { target: devProxyTarget.replace(/^http/, "ws"), ws: true, changeOrigin: true },
+      }
+    : undefined;
+
   return {
     envPrefix: "VITE_",
     define: {
@@ -30,6 +42,7 @@ export default defineConfig(({ command }) => {
     server: {
       port: 3000,
       host: "0.0.0.0",
+      proxy,
     },
   };
 });

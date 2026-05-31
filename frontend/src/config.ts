@@ -13,7 +13,16 @@ export const KM_PER_UNIT = 6371 / EARTH_RADIUS;
 // Vite build-time env vars, then auto-derive from browser hostname.
 const _cfg = (window as any).NODALARC_CONFIG || {};
 const _host = typeof window !== "undefined" ? window.location.hostname : "localhost";
-export const REST_URL = _cfg.vsApiUrl || import.meta.env.VITE_VSAPI_REST_URL as string || `http://${_host}:8080`;
+// Dev server (vite): route REST/WS through the page origin so the dev proxy
+// (VITE_DEV_PROXY_TARGET in vite.config.ts) forwards to a live VS-API — same-origin, no
+// CORS, full HMR, no container rebuild. Production keeps host:8080 / NODALARC_CONFIG.
+const _devOrigin =
+  import.meta.env.DEV && typeof window !== "undefined" ? window.location.origin : null;
+export const REST_URL =
+  _cfg.vsApiUrl ||
+  (import.meta.env.VITE_VSAPI_REST_URL as string) ||
+  _devOrigin ||
+  `http://${_host}:8080`;
 
 /** API key for authentication. Read from env at build time or sessionStorage at runtime. */
 function _getApiKey(): string {
@@ -51,14 +60,27 @@ export async function fetchApiKey(): Promise<string> {
 }
 
 /** Build WebSocket URL with auth token as query parameter. */
+const _devWsOrigin =
+  import.meta.env.DEV && typeof window !== "undefined"
+    ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/v1/state`
+    : null;
+
 export function getWsUrl(): string {
-  const base = _cfg.wsUrl || import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
+  const base =
+    _cfg.wsUrl ||
+    (import.meta.env.VITE_VSAPI_WS_URL as string) ||
+    _devWsOrigin ||
+    `ws://${_host}:8080/ws/v1/state`;
   const key = getApiKey();
   return key ? `${base}?token=${encodeURIComponent(key)}` : base;
 }
 
 /** WS_URL kept for backwards compatibility (diagnostics display). */
-export const WS_URL = _cfg.wsUrl || import.meta.env.VITE_VSAPI_WS_URL as string || `ws://${_host}:8080/ws/v1/state`;
+export const WS_URL =
+  _cfg.wsUrl ||
+  (import.meta.env.VITE_VSAPI_WS_URL as string) ||
+  _devWsOrigin ||
+  `ws://${_host}:8080/ws/v1/state`;
 
 /** Return headers object with Authorization if API key is set. */
 export function authHeaders(extra?: Record<string, string>): Record<string, string> {

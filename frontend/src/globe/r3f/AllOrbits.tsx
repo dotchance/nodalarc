@@ -121,6 +121,14 @@ export function AllOrbits({ nodes, show, earthFrame, referenceFrame }: AllOrbits
 
   useEffect(() => teardown, [teardown]);
 
+  // Reference-frame toggle: the rings are world-space great circles seeded with the frame's
+  // angular velocity, so they are invalid in the new frame (mirrors legacy clearAllOrbits on
+  // frame toggle → lazy recreate). Tear down; the next useFrame rebuilds with the new frame's
+  // parameters. The count gate alone never catches this — the sat set is unchanged on a toggle.
+  useEffect(() => {
+    teardown();
+  }, [referenceFrame, teardown]);
+
   // Rebuild the batch from the current satellite set, mirroring allOrbits.ts updateAllOrbits.
   // Returns false if no rings were produced (count gate keeps retrying next frame).
   const rebuild = (

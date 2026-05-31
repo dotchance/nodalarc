@@ -8,7 +8,7 @@
  * GlobeAction. The floating-origin camera rebase is added here when a second body lands.
  */
 
-import { Suspense, useEffect, useRef, type ReactNode } from "react";
+import { Suspense, useEffect, useRef, type MutableRefObject, type ReactNode } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
@@ -18,25 +18,42 @@ import {
   CAMERA_MAX_DISTANCE,
 } from "../../config";
 
-/** OrbitControls (three addon) wired to R3F's camera + canvas, matching legacy damping. */
-function Controls() {
+/**
+ * OrbitControls (three addon) wired to R3F's camera + canvas, matching legacy damping. The
+ * live instance is published into `controlsRef` so the GlobeActions bridge can drive camera
+ * flights (target + update). Mounted LAST among the scene's default-priority useFrame
+ * subscribers so `controls.update()` runs after the follow-cam and projection consumers have
+ * had their say this frame — reproducing the legacy loop order (controls.update at the end).
+ */
+function Controls({ controlsRef }: { controlsRef?: MutableRefObject<OrbitControls | null> }) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
-  const controlsRef = useRef<OrbitControls | null>(null);
+  const localRef = useRef<OrbitControls | null>(null);
   useEffect(() => {
     const controls = new OrbitControls(camera, gl.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.minDistance = CAMERA_MIN_DISTANCE;
     controls.maxDistance = CAMERA_MAX_DISTANCE;
-    controlsRef.current = controls;
-    return () => controls.dispose();
-  }, [camera, gl]);
-  useFrame(() => controlsRef.current?.update());
+    localRef.current = controls;
+    if (controlsRef) controlsRef.current = controls;
+    return () => {
+      controls.dispose();
+      localRef.current = null;
+      if (controlsRef && controlsRef.current === controls) controlsRef.current = null;
+    };
+  }, [camera, gl, controlsRef]);
+  useFrame(() => localRef.current?.update());
   return null;
 }
 
-export function Universe({ children }: { children?: ReactNode }) {
+export function Universe({
+  children,
+  controlsRef,
+}: {
+  children?: ReactNode;
+  controlsRef?: MutableRefObject<OrbitControls | null>;
+}) {
   return (
     <Canvas
       flat
@@ -53,8 +70,9 @@ export function Universe({ children }: { children?: ReactNode }) {
       {/* Ambient fill only; the sun directional lives in <Earth> (earth frame), positioned by
           the sim-time sun model so the terminator tracks the frame rotation. */}
       <ambientLight intensity={0.5} />
-      <Controls />
       <Suspense fallback={null}>{children}</Suspense>
+      {/* Controls LAST so controls.update() runs after this frame's follow-cam + consumers. */}
+      <Controls controlsRef={controlsRef} />
     </Canvas>
   );
 }

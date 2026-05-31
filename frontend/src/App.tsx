@@ -325,12 +325,14 @@ function AppInner() {
               globeMode={globeMode}
               referenceFrame={referenceFrame}
               playbackPaused={playback.paused}
+              playbackState={playbackState}
               showIslLinks={showIslLinks}
               showGroundLinks={showGroundLinks}
               showSatPaths={showSatPaths}
               showTrails={showTrails}
               selection={selection}
               onSelect={select}
+              actionsRef={globeActionsRef}
             />
           ) : (
             <GlobeView

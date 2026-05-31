@@ -14,8 +14,9 @@
  * of <Body>. Mounted only behind the `?r3f` flag until parity + cutover.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import * as THREE from "three";
+import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { onSnapshot, setPlaybackPaused } from "../../sim/simClock";
 import {
   destroyWorkerBridge,
@@ -23,9 +24,11 @@ import {
   requestFlush,
   sendEphemeris,
 } from "../../sim/workerBridge";
-import type { SessionEphemeris } from "../../sim/ephemeris";
+import type { PlaybackStateMsg, SessionEphemeris } from "../../sim/ephemeris";
 import type { ColorMode, GlobeMode, ReferenceFrame, Selection, StateSnapshot } from "../../types";
+import type { GlobeActions } from "../GlobeView";
 import { Universe } from "./Universe";
+import { GlobeActionsBridge } from "./GlobeActionsBridge";
 import { Body } from "./Body";
 import { Earth, Starfield } from "./Earth";
 import { Constellation } from "./Constellation";
@@ -53,12 +56,15 @@ interface SceneProps {
   globeMode: GlobeMode;
   referenceFrame: ReferenceFrame;
   playbackPaused: boolean;
+  playbackState: PlaybackStateMsg | null;
   showIslLinks: boolean;
   showGroundLinks: boolean;
   showSatPaths: boolean;
   showTrails: boolean;
   selection: Selection | null;
   onSelect: (sel: Selection | null) => void;
+  /** Imperative camera/screenshot handle the rest of the app drives (Toolbar, keyboard, fly-to). */
+  actionsRef?: MutableRefObject<GlobeActions | null>;
 }
 
 export function Scene({
@@ -68,16 +74,19 @@ export function Scene({
   globeMode,
   referenceFrame,
   playbackPaused,
+  playbackState,
   showIslLinks,
   showGroundLinks,
   showSatPaths,
   showTrails,
   selection,
   onSelect,
+  actionsRef,
 }: SceneProps) {
   const earthGroupRef = useRef<THREE.Group>(null);
   const starGroupRef = useRef<THREE.Group>(null);
   const labelContainerRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
 
   // ctrl/cmd-click orbit pins (capped, oldest evicted) + hover tooltip state.
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
@@ -93,6 +102,15 @@ export function Scene({
   useEffect(() => {
     setPinnedIds([]);
   }, [constellation]);
+
+  // Epoch-suspension overlay (PRD seek protocol). "seeking" shows the overlay; only "playing"
+  // clears it ("paused" leaves it as-is) — legacy GlobeView verbatim. Trails flush on seek is
+  // handled by the resetKey below (a seek resets the epoch, so epoch_id changes).
+  const [seeking, setSeeking] = useState(false);
+  useEffect(() => {
+    if (playbackState?.state === "seeking") setSeeking(true);
+    else if (playbackState?.state === "playing") setSeeking(false);
+  }, [playbackState]);
 
   // Register the Earth body group as the world frame for the position registry.
   useEffect(() => {
@@ -125,7 +143,10 @@ export function Scene({
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      <Universe>
+      <Universe controlsRef={controlsRef}>
+        {actionsRef && (
+          <GlobeActionsBridge actionsRef={actionsRef} controlsRef={controlsRef} />
+        )}
         <FrameDriver
           earthFrame={earthGroupRef}
           starFrame={starGroupRef}
@@ -134,8 +155,14 @@ export function Scene({
         <group ref={starGroupRef} name="starFrame">
           <Starfield />
         </group>
-        {/* World-frame trails + full-constellation orbit rings (scene-root). */}
-        <Trails enabled={showTrails} nodes={nodes} resetKey={ephemeris?.epoch_id} />
+        {/* World-frame trails + full-constellation orbit rings (scene-root). Trail history is
+            world-space, so flush it on epoch change (resetKey) AND on reference-frame toggle —
+            mixing points from two frames is meaningless (legacy flushTrails on frame toggle). */}
+        <Trails
+          enabled={showTrails}
+          nodes={nodes}
+          resetKey={`${ephemeris?.epoch_id ?? "none"}|${referenceFrame}`}
+        />
         <AllOrbits
           nodes={nodes}
           show={showSatPaths}
@@ -175,12 +202,7 @@ export function Scene({
           <CoverageFootprint selection={selection} nodes={nodes} />
         </Body>
         <SelectionOverlay selection={selection} />
-        <Labels
-          nodes={nodes}
-          satLabelsEnabled
-          gsLabelsEnabled
-          containerRef={labelContainerRef}
-        />
+        <Labels nodes={nodes} containerRef={labelContainerRef} />
       </Universe>
       {/* HTML label overlay — Labels (inside the canvas) projects positions into these divs. */}
       <div
@@ -196,6 +218,35 @@ export function Scene({
         }}
       />
       <Tooltip hover={hover} />
+      {/* Epoch-suspension overlay during a seek (PRD seek protocol) — legacy "Recalculating Epoch". */}
+      {seeking && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "rgba(0, 0, 0, 0.6)",
+            pointerEvents: "none",
+            zIndex: 10,
+          }}
+        >
+          <div
+            style={{
+              color: "#fff",
+              fontSize: "1.5rem",
+              fontFamily: "monospace",
+              padding: "1rem 2rem",
+              border: "1px solid rgba(255, 255, 255, 0.3)",
+              borderRadius: "8px",
+              backgroundColor: "rgba(0, 0, 0, 0.7)",
+            }}
+          >
+            Recalculating Epoch...
+          </div>
+        </div>
+      )}
     </div>
   );
 }

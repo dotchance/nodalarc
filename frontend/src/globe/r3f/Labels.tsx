@@ -23,7 +23,8 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
-import { isOccludedByEarth } from "../labels";
+import { isOccludedByEarth, getLabelsEnabled } from "../labels";
+import { getGsLabelsEnabled } from "../groundStations";
 import { getNodeWorldPosition } from "./positions";
 import { EARTH_RADIUS_RENDER } from "./units";
 import type { NodeState } from "../../types";
@@ -85,13 +86,11 @@ function createGsLabel(nodeId: string): HTMLDivElement {
 
 interface LabelsProps {
   nodes: NodeState[];
-  satLabelsEnabled: boolean;
-  gsLabelsEnabled: boolean;
   /** The position-absolute overlay div (sibling of the canvas) this component owns its labels in. */
   containerRef: React.RefObject<HTMLDivElement | null>;
 }
 
-export function Labels({ nodes, satLabelsEnabled, gsLabelsEnabled, containerRef }: LabelsProps) {
+export function Labels({ nodes, containerRef }: LabelsProps) {
   const camera = useThree((s) => s.camera);
 
   // The label divs this component owns, keyed by node_id. Mutated in useFrame as nodes appear
@@ -101,10 +100,6 @@ export function Labels({ nodes, satLabelsEnabled, gsLabelsEnabled, containerRef 
   const gsLabels = useRef(new Map<string, HTMLDivElement>());
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
-  const satEnabledRef = useRef(satLabelsEnabled);
-  satEnabledRef.current = satLabelsEnabled;
-  const gsEnabledRef = useRef(gsLabelsEnabled);
-  gsEnabledRef.current = gsLabelsEnabled;
 
   // Dispose: remove every owned div from the DOM on unmount (lifecycle ownership).
   useEffect(() => {
@@ -128,8 +123,11 @@ export function Labels({ nodes, satLabelsEnabled, gsLabelsEnabled, containerRef 
     const cx = width / 2;
     const cy = height / 2;
 
-    const satEnabled = satEnabledRef.current;
-    const gsEnabled = gsEnabledRef.current;
+    // Read the canonical label-toggle state each frame (the module-global the keyboard handler
+    // writes via setLabelsEnabled / setGsLabelsEnabled, regardless of which globe is mounted) —
+    // exactly as the legacy animateLabels / updateGSLabels do. No React state, no re-render.
+    const satEnabled = getLabelsEnabled();
+    const gsEnabled = getGsLabelsEnabled();
 
     // --- Reconcile divs: create for newly-seen nodes, remove for departed nodes. ---
     const seenSats = new Set<string>();

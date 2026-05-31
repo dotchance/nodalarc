@@ -14,10 +14,13 @@
  * of <Body>. Mounted only behind the `?r3f` flag until parity + cutover.
  */
 
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { onSnapshot, setPlaybackPaused, resetSimClock } from "../../sim/simClock";
+import { useDecisionExplanation } from "../../explain/useDecisionExplanation";
+import { useGroundCandidates } from "../../explain/useGroundCandidates";
+import { gsCandidateRelations } from "../../explain/gsCandidateRelations";
 import {
   destroyWorkerBridge,
   initWorkerBridge,
@@ -41,6 +44,7 @@ import { Trails } from "./Trails";
 import { AllOrbits } from "./AllOrbits";
 import { OrbitPins } from "./OrbitPins";
 import { LinkPicker } from "./LinkPicker";
+import { LeadLine } from "./LeadLine";
 import { Labels } from "./Labels";
 import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
@@ -118,6 +122,23 @@ export function Scene({
   // declaratively via their resetKeys below; orbit rings re-seed on their own.
   const constellation = snapshot?.constellation_name ?? null;
   const nodes = snapshot?.nodes ?? [];
+
+  // On-select decision data, lifted here so the globe is internally single-sourced: the GS
+  // envelope cone, the best-candidate lead-line, and the per-sat relation tinting all read from
+  // ONE decision-explanation + ONE ground-candidates fetch for the selected GS — and from the SAME
+  // client + classifier the node card uses, so a satellite never reads one family on the glyph and
+  // another in the panel. Only fetched when a GS is selected (selectedGsId null otherwise).
+  const selectedGsId = selection?.type === "ground_station" ? selection.id : null;
+  const simTime = snapshot?.sim_time;
+  const facts = useDecisionExplanation(selectedGsId, null, simTime).facts;
+  const envelope = facts?.envelope ?? null;
+  const bestCandidateSat = facts?.best_candidate?.pair.find((n) => n !== selectedGsId) ?? null;
+  const candidates = useGroundCandidates(selectedGsId, simTime).data;
+  const relations = useMemo(
+    () =>
+      selectedGsId ? gsCandidateRelations(selectedGsId, candidates, snapshot?.links ?? []) : null,
+    [selectedGsId, candidates, snapshot?.links],
+  );
   useEffect(() => {
     setPinnedIds([]);
     resetSimClock();
@@ -220,15 +241,19 @@ export function Scene({
             onSelect={onSelect}
             onTogglePin={togglePin}
             onHover={setHover}
+            relations={relations}
           />
           <GroundStations
             nodes={nodes}
             selection={selection}
             links={snapshot?.links ?? []}
             actuationNotices={snapshot?.actuation_notices ?? []}
+            envelope={envelope}
             onSelect={onSelect}
             onHover={setHover}
           />
+          {/* GS -> best-candidate lead-line (on-select bloom). */}
+          <LeadLine gsId={selectedGsId} satId={bestCandidateSat} />
           <GroundTracks nodes={nodes} enabled={false} />
           <Links
             links={snapshot?.links ?? []}

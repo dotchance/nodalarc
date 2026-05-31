@@ -20,9 +20,9 @@ import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { GS_COLOR, GS_SIZE } from "../../config";
 import { geoToWorld } from "../geo";
 import { computeConeRadius } from "../groundStations";
-import { useDecisionExplanation } from "../../explain/useDecisionExplanation";
 import { FAMILY_TONE } from "../../explain/families";
 import { groundStationFamily, type GsFamily } from "../../explain/groundStationFamily";
+import type { EffectiveEnvelopeFacts } from "../../explain/types";
 import { EARTH_RADIUS_RENDER } from "./units";
 import { removeNode, setNodeLocalPosition } from "./positions";
 import type { HoverInfo } from "./Tooltip";
@@ -208,6 +208,9 @@ interface GroundStationsProps {
   /** Active links + Scheduler actuation notices from the snapshot — drive default-state family. */
   links: LinkState[];
   actuationNotices: ActuationNotice[];
+  /** The selected GS's effective envelope (binding floor + configured mask), lifted from Scene
+   *  so the cone, the lead-line, and the sat tinting share ONE decision-explanation fetch. */
+  envelope: EffectiveEnvelopeFacts | null;
   onSelect: (sel: Selection | null) => void;
   onHover: (info: HoverInfo | null) => void;
 }
@@ -217,6 +220,7 @@ export function GroundStations({
   selection,
   links,
   actuationNotices,
+  envelope,
   onSelect,
   onHover,
 }: GroundStationsProps) {
@@ -226,9 +230,7 @@ export function GroundStations({
   const gsNodes = nodes.filter((n) => n.node_type === "ground_station");
   const orbitalAltKm = nodes.find((n) => n.node_type === "satellite")?.alt_km ?? 550;
 
-  // The selected GS's effective envelope (binding floor + configured mask) drives its cone.
   const selectedGsId = selection?.type === "ground_station" ? selection.id : null;
-  const env = useDecisionExplanation(selectedGsId).facts?.envelope ?? null;
 
   return (
     <>
@@ -241,8 +243,8 @@ export function GroundStations({
             selected={isSelected}
             orbitalAltKm={orbitalAltKm}
             texture={texture}
-            effectiveMinElevDeg={isSelected ? (env?.effective_min_elevation_deg ?? null) : null}
-            configuredMinElevDeg={isSelected ? (env?.configured_min_elevation_deg ?? null) : null}
+            effectiveMinElevDeg={isSelected ? (envelope?.effective_min_elevation_deg ?? null) : null}
+            configuredMinElevDeg={isSelected ? (envelope?.configured_min_elevation_deg ?? null) : null}
             family={groundStationFamily(node.node_id, links, actuationNotices)}
             onSelect={onSelect}
             onHover={onHover}

@@ -23,6 +23,8 @@ import { isWorkerReady, readPosition, requestPropagate } from "../../sim/workerB
 import { propagateToSceneXYZ } from "../../sim/orbitalMath";
 import type { SessionEphemeris } from "../../sim/ephemeris";
 import type { ColorMode, NodeState, Selection } from "../../types";
+import { FAMILY_TONE } from "../../explain/families";
+import type { SatRelation } from "../../explain/gsCandidateRelations";
 import { removeNode, setNodeLocalPosition } from "./positions";
 import type { HoverInfo } from "./Tooltip";
 
@@ -47,6 +49,8 @@ interface ConstellationProps {
   onTogglePin: (id: string) => void;
   /** Hover a satellite -> tooltip; null clears it. */
   onHover: (info: HoverInfo | null) => void;
+  /** On-select bloom: per-sat relation to the selected GS (family tone). null = no GS selected. */
+  relations: Map<string, SatRelation> | null;
 }
 
 export function Constellation({
@@ -56,6 +60,7 @@ export function Constellation({
   onSelect,
   onTogglePin,
   onHover,
+  relations,
 }: ConstellationProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const satIndex = useRef(new Map<string, number>());
@@ -90,7 +95,16 @@ export function Constellation({
         mesh.setMatrixAt(idx, _tmpMatrix);
         setNodeLocalPosition(node.node_id, p.x, p.y, p.z);
       }
-      _tmpColor.setHex(satColor(node, colorMode));
+      // When a GS is selected, the scene blooms for it: candidate sats take their relation's
+      // family tone, far/irrelevant sats dim so the eye goes to the candidates (spec on-select).
+      // Otherwise the normal colorMode.
+      if (relations) {
+        const r = relations.get(node.node_id);
+        if (r) _tmpColor.setHex(FAMILY_TONE[r.family].hex);
+        else _tmpColor.setHex(satColor(node, colorMode)).multiplyScalar(0.28);
+      } else {
+        _tmpColor.setHex(satColor(node, colorMode));
+      }
       mesh.setColorAt(idx, _tmpColor);
     }
     // Satellites that vanished from the snapshot: collapse to a degenerate instance and
@@ -106,7 +120,7 @@ export function Constellation({
     mesh.count = countRef.current;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [nodes, colorMode]);
+  }, [nodes, colorMode, relations]);
 
   // Per-frame propagation — identical model to globe/satellites.ts animateSatellites.
   useFrame(() => {
@@ -156,7 +170,14 @@ export function Constellation({
     if (e.instanceId === undefined) return;
     const id = indexToId.current[e.instanceId];
     const node = id ? byId.get(id) : undefined;
-    if (node) onHover({ node, x: e.nativeEvent.clientX, y: e.nativeEvent.clientY });
+    if (!node) return;
+    // While a GS is selected, a candidate sat's tooltip carries its relation (the rejected-near
+    // "FoR bound by 3°" the spec calls for) — same taxonomy words as the card.
+    const r = id ? relations?.get(id) : undefined;
+    const caption = r
+      ? `${FAMILY_TONE[r.family].label}${r.reason ? `. ${r.reason}` : ""}`
+      : undefined;
+    onHover({ node, x: e.nativeEvent.clientX, y: e.nativeEvent.clientY, caption });
   };
 
   return (

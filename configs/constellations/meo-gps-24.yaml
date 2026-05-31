@@ -1,0 +1,17 @@
+# MEO-GPS-24 — GPS-like medium-Earth-orbit constellation.
+#
+# 6 planes x 4 satellites = 24 total, 20,200 km altitude, 55 deg inclination.
+# Walker-delta. A MEO regime (~12 h period) for the multi-regime demo: an order
+# of magnitude higher than LEO, slow ground-relative motion, large footprints.
+mode: parametric
+name: meo-gps-24
+satellite_type: meo-geo-rf
+orbit:
+  altitude_km: 20200
+  inclination_deg: 55
+  pattern: walker-delta
+planes:
+  count: 6
+  raan_spacing_deg: 60
+  sats_per_plane: 4
+  phase_offset_deg: 15

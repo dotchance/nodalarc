@@ -1,0 +1,31 @@
+# MEO/GEO long-range platform for the multi-regime demo.
+#
+# LEO satellite types cap ISL ~5,000 km and ground ~2,000 km — far short of the
+# geometry at 20,000-36,000 km orbits (adjacent GEO sats ~32,000 km apart;
+# GS-to-GEO slant range up to ~41,000 km). This platform sizes the terminals for
+# the MEO/GEO regimes so intra-shell ISLs and ground contacts can actually form.
+# rf ground terminal matches the rf ground-station sets (e.g. global).
+satellite_type:
+  name: meo-geo-rf
+  description: "Long-range MEO/GEO platform: optical ISL + Ka-band rf ground, ranges sized for 20,000-36,000 km orbits."
+
+  isl_terminals:
+    - type: optical
+      count: 4
+      max_range_km: 45000
+      bandwidth_mbps: 100
+      max_tracking_rate_deg_s: 2.8
+      field_of_regard_deg: 140
+
+  ground_terminals:
+    - type: rf
+      count: 1
+      bandwidth_mbps: 1000
+      max_range_km: 45000
+      field_of_regard_deg: 120
+      max_tracking_rate_deg_s: 1.5
+      boresight:
+        target_body: earth
+        mode: nadir
+      band: Ka
+      beam_falloff_exponent: 2.2

@@ -607,6 +607,36 @@ def test_pending_since_excludes_operator_overridden_pairs() -> None:
     assert pair in d._pending_since
 
 
+def test_pending_clock_is_published_before_the_up_await() -> None:
+    # Publish-before-await: a pair being brought up must have its pending_since stamped AND
+    # published BEFORE the (possibly slow/hung) BatchLinkUp await, so VS-API has the
+    # Scheduler-owned elapsed and can fault the pair at fault_after_ms even while the up is
+    # still in flight. Without this, a diverged pair has no elapsed and reads as calm
+    # in_flight on the client for the whole duration of a stuck up.
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._mbb_dispatch = False
+    d._handle_actuation_result = AsyncMock()
+    d._js.publish = AsyncMock()
+    pair = ("gs-multi", "sat-new")
+    observed: dict = {}
+
+    async def capturing_up(to_add, desired, sim_iso, sim_time, nc):
+        # State observed at the instant the up is dispatched (i.e. before it completes).
+        observed["stamped"] = pair in d._pending_since
+        snaps = _actual_link_snapshots(d._js.publish)
+        published_pairs = [tuple(p.pair) for s in snaps for p in s.pending_pairs]
+        observed["published_pending"] = pair in published_pairs
+        return _failed_up(pair)
+
+    d._send_batch_up = capturing_up
+    asyncio.run(d._reconcile_links({pair: _info("term1")}, None, SIM_TIME))
+
+    assert observed["stamped"] is True, "pending_since must be stamped before the up await"
+    assert observed["published_pending"] is True, (
+        "pending clock must be published before the up await"
+    )
+
+
 def test_dropped_publish_self_heals_on_next_reconcile() -> None:
     # Re-review #C: a swallowed publish failure on a convergence tick must not strand the
     # converged set. The dirty flag forces a republish on the next reconcile even with no

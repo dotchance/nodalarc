@@ -421,9 +421,14 @@ class TestDispatcherLiveDispatch:
         assert stub.async_batch_link_up.called
         assert ("sat-P00S00", "sat-P00S01") in d._active_links
         assert d._js.publish.called
-        published_subject = d._js.publish.call_args_list[0][0][0]
-        assert "up" in published_subject
-        payload = d._js.publish.call_args_list[0][0][1]
+        # The retained ActualLinkSnapshot is now published BEFORE the up await
+        # (publish-before-await for the divergence clock), so the LinkUp event is no longer
+        # the first publish — locate it by subject rather than assuming index 0.
+        up_calls = [
+            c for c in d._js.publish.call_args_list if "up" in c[0][0] and ".actual." not in c[0][0]
+        ]
+        assert up_calls, "expected a LinkUp publish"
+        payload = up_calls[0][0][1]
         event = LinkUp.model_validate(json.loads(payload.decode()))
         assert event.provenance is not None
         assert event.provenance.geometry_authority == "ome"

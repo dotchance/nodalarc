@@ -2719,6 +2719,22 @@ class Dispatcher:
             if not (to_remove or to_add or to_update_latency):
                 return
 
+            # Publish-before-await: stamp the in_flight->faulted clock for the pairs we are
+            # about to bring up and publish it BEFORE the dispatch awaits. A slow or hung
+            # BatchLinkUp / MBB phase-2 up otherwise leaves VS-API with no Scheduler-owned
+            # elapsed for the whole duration of the await, and a diverged pair with no
+            # elapsed reads as calm in_flight on the client — so a stuck up would never fault
+            # at fault_after_ms (the exact masking the divergence clock exists to prevent).
+            # Re-baseline the publish guards so the finally republishes only on a
+            # dispatch-driven change (converged/torn-down pairs), not the same set twice.
+            self._update_pending_since(desired)
+            try:
+                await self._publish_actual_links_if_changed(actual_before, pending_before)
+            except Exception:
+                log.exception("Failed to publish pending clock before dispatch awaits")
+            actual_before = frozenset(self._actual_links)
+            pending_before = frozenset(self._pending_since)
+
             sim_iso = sim_time.isoformat()
 
             if not self._mbb_dispatch:

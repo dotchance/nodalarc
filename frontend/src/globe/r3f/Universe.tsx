@@ -50,8 +50,9 @@ export function Universe({ children }: { children?: ReactNode }) {
       dpr={[1, 2]}
     >
       <color attach="background" args={["#0d0d1a"]} />
+      {/* Ambient fill only; the sun directional lives in <Earth> (earth frame), positioned by
+          the sim-time sun model so the terminator tracks the frame rotation. */}
       <ambientLight intensity={0.5} />
-      <directionalLight position={[1000, 300, 1000]} intensity={1.0} />
       <Controls />
       <Suspense fallback={null}>{children}</Suspense>
     </Canvas>

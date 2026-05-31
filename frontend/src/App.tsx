@@ -322,6 +322,7 @@ function AppInner() {
               snapshot={augmentedSnapshot}
               ephemeris={ephemeris}
               colorMode={colorMode}
+              globeMode={globeMode}
               referenceFrame={referenceFrame}
               playbackPaused={playback.paused}
               showIslLinks={showIslLinks}

@@ -24,7 +24,7 @@ import {
   sendEphemeris,
 } from "../../sim/workerBridge";
 import type { SessionEphemeris } from "../../sim/ephemeris";
-import type { ColorMode, ReferenceFrame, Selection, StateSnapshot } from "../../types";
+import type { ColorMode, GlobeMode, ReferenceFrame, Selection, StateSnapshot } from "../../types";
 import { Universe } from "./Universe";
 import { Body } from "./Body";
 import { Earth, Starfield } from "./Earth";
@@ -46,6 +46,7 @@ interface SceneProps {
   snapshot: StateSnapshot | null;
   ephemeris: SessionEphemeris | null;
   colorMode: ColorMode;
+  globeMode: GlobeMode;
   referenceFrame: ReferenceFrame;
   playbackPaused: boolean;
   showIslLinks: boolean;
@@ -60,6 +61,7 @@ export function Scene({
   snapshot,
   ephemeris,
   colorMode,
+  globeMode,
   referenceFrame,
   playbackPaused,
   showIslLinks,
@@ -122,7 +124,7 @@ export function Scene({
           referenceFrame={referenceFrame}
         />
         <Body id="earth" radiusKm={EARTH_RADIUS_KM} ref={earthGroupRef}>
-          <Earth />
+          <Earth globeMode={globeMode} simTimeIso={snapshot?.sim_time ?? null} />
           <Constellation
             nodes={nodes}
             ephemeris={ephemeris}

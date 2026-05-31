@@ -1,22 +1,25 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * Earth visuals — the blue-marble textured sphere + the backside rim-glow atmosphere,
- * and the inertial starfield. Geometry, shaders, and constants reproduce the legacy
- * imperative globe (globe/earth.ts) verbatim for visual parity. The day/night shader,
- * political/day-night globe modes, the sun model, and country boundaries are added in a
- * later phase; this phase is the default blue-marble appearance.
+ * Earth visuals — reproduces globe/earth.ts + globe/boundaries.ts. Three globe modes
+ * (blue-marble | day-night | political) selected by `globeMode`:
+ *   blue-marble: Phong-lit textured sphere (sun directional + ambient), boundaries hidden.
+ *   day-night:   custom terminator shader (city lights on the night side), sun light off
+ *                (the shader does its own lighting), boundaries shown.
+ *   political:   both Earth meshes hidden; country boundaries over the scene background.
+ * Atmosphere (backside rim glow) is always on; the starfield is inertial (scene root).
  *
- * <Earth> is a body APPEARANCE component, rendered as a child of <Body> so it lives in
- * the Earth local frame. <Starfield> is inertial and lives at the scene root.
+ * The sun directional light lives in the Earth body frame and is positioned from sim_time by
+ * the approximate UTC declination/hour-angle model (NOT gmst — that drives the frame
+ * rotation); its post-rotation world direction feeds the day/night shader each frame.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import { useLoader } from "@react-three/fiber";
+import { useFrame, useLoader } from "@react-three/fiber";
+import type { GlobeMode } from "../../types";
 import { EARTH_RADIUS_RENDER } from "./units";
 
-// Backside rim-glow atmosphere shader (globe/earth.ts createAtmosphere) — verbatim.
 const ATMO_VERT = `
 varying vec3 vNormal;
 varying vec3 vViewDir;
@@ -37,6 +40,36 @@ void main() {
 }
 `;
 
+// Day/night terminator shader (globe/earth.ts createDayNightEarth) — verbatim.
+const DAYNIGHT_VERT = `
+varying vec2 vUv;
+varying vec3 vWorldNormal;
+void main() {
+  vUv = uv;
+  vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+const DAYNIGHT_FRAG = `
+uniform sampler2D u_dayMap;
+uniform sampler2D u_nightMap;
+uniform vec3 u_sunDirection;
+varying vec2 vUv;
+varying vec3 vWorldNormal;
+void main() {
+  vec3 N = normalize(vWorldNormal);
+  float NdotL = dot(N, u_sunDirection);
+  float blend = smoothstep(-0.15, 0.15, NdotL);
+  vec3 dayColor = texture2D(u_dayMap, vUv).rgb;
+  vec3 nightColor = texture2D(u_nightMap, vUv).rgb;
+  float dayShading = 0.3 + 0.7 * max(0.0, NdotL);
+  dayColor *= dayShading;
+  nightColor *= 0.8;
+  vec3 color = mix(nightColor, dayColor, blend);
+  gl_FragColor = vec4(color, 1.0);
+}
+`;
+
 function Atmosphere() {
   return (
     <mesh>
@@ -53,19 +86,164 @@ function Atmosphere() {
   );
 }
 
-/** The blue-marble Earth + its atmosphere shell, in the Earth local frame. */
-export function Earth() {
-  const dayTexture = useLoader(THREE.TextureLoader, "/earth-blue-marble.jpg");
+/** Sun directional light (in the Earth body frame) + the day/night shader's sun direction.
+ *  Position from the approximate UTC sun model; world direction synced each frame. */
+function Sun({
+  simTimeIso,
+  intensity,
+  dayNightMaterial,
+}: {
+  simTimeIso: string | null;
+  intensity: number;
+  dayNightMaterial: THREE.ShaderMaterial | null;
+}) {
+  const lightRef = useRef<THREE.DirectionalLight>(null);
+  const worldPos = useMemo(() => new THREE.Vector3(), []);
+
+  // Reposition the sun on sim_time change (globe/earth.ts updateSunPosition).
+  useEffect(() => {
+    const light = lightRef.current;
+    if (!light || !simTimeIso) return;
+    const date = new Date(simTimeIso);
+    if (Number.isNaN(date.getTime())) return;
+    const startOfYear = new Date(date.getFullYear(), 0, 0);
+    const dayOfYear = (date.getTime() - startOfYear.getTime()) / 86400000;
+    const declRad = ((-23.44 * Math.PI) / 180) * Math.cos(((2 * Math.PI) / 365) * (dayOfYear + 10));
+    const hourUTC = date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
+    const hourAngle = ((hourUTC - 12) / 24) * 2 * Math.PI;
+    const dist = EARTH_RADIUS_RENDER * 50;
+    light.position.set(
+      dist * Math.cos(declRad) * Math.cos(hourAngle),
+      dist * Math.sin(declRad),
+      dist * Math.cos(declRad) * Math.sin(hourAngle),
+    );
+  }, [simTimeIso]);
+
+  // After the frame rotation (FrameDriver -2), feed the post-rotation sun world direction
+  // into the day/night shader. Default priority runs after the rotation is set this frame.
+  useFrame(() => {
+    const light = lightRef.current;
+    if (!light || !dayNightMaterial) return;
+    light.getWorldPosition(worldPos).normalize();
+    dayNightMaterial.uniforms.u_sunDirection!.value.copy(worldPos);
+  });
+
+  return <directionalLight ref={lightRef} color={0xffffff} intensity={intensity} />;
+}
+
+/** Country boundaries (globe/boundaries.ts): Natural Earth 110m as one LineSegments at
+ *  R*1.001, shown in political + day-night modes. Loaded once, async. */
+function Boundaries({ visible }: { visible: boolean }) {
+  const ref = useRef<THREE.LineSegments>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const r = EARTH_RADIUS_RENDER * 1.001;
+    const toXYZ = (lon: number, lat: number): [number, number, number] => {
+      const latR = (lat * Math.PI) / 180;
+      const lonR = (lon * Math.PI) / 180;
+      return [
+        r * Math.cos(latR) * Math.cos(lonR),
+        r * Math.sin(latR),
+        -r * Math.cos(latR) * Math.sin(lonR),
+      ];
+    };
+    void (async () => {
+      try {
+        const resp = await fetch("/ne_110m_countries.geojson");
+        if (!resp.ok) return;
+        const geojson = await resp.json();
+        if (!alive) return;
+        const verts: number[] = [];
+        for (const feature of geojson.features ?? []) {
+          const geom = feature.geometry;
+          if (!geom) continue;
+          const polys: number[][][] =
+            geom.type === "Polygon"
+              ? geom.coordinates
+              : geom.type === "MultiPolygon"
+                ? geom.coordinates.flat()
+                : [];
+          for (const ring of polys) {
+            let prev: [number, number, number] | null = null;
+            for (const coord of ring) {
+              if (coord[0] === undefined || coord[1] === undefined) continue;
+              const pt = toXYZ(coord[0], coord[1]);
+              if (prev) verts.push(prev[0], prev[1], prev[2], pt[0], pt[1], pt[2]);
+              prev = pt;
+            }
+          }
+        }
+        if (!verts.length || !ref.current) return;
+        const g = new THREE.BufferGeometry();
+        g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(verts), 3));
+        ref.current.geometry.dispose();
+        ref.current.geometry = g;
+      } catch {
+        /* boundaries are non-essential */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  return (
+    <lineSegments ref={ref} visible={visible} renderOrder={2}>
+      <bufferGeometry />
+      <lineBasicMaterial color={0x88aacc} transparent opacity={0.55} depthWrite={false} />
+    </lineSegments>
+  );
+}
+
+/** The Earth body appearance — blue-marble + day/night meshes + atmosphere + sun + borders. */
+export function Earth({
+  globeMode,
+  simTimeIso,
+}: {
+  globeMode: GlobeMode;
+  simTimeIso: string | null;
+}) {
+  const textures = useLoader(THREE.TextureLoader, ["/earth-blue-marble.jpg", "/earth-night.jpg"]);
+  const dayTexture = textures[0]!;
+  const nightTexture = textures[1]!;
   useMemo(() => {
     dayTexture.colorSpace = THREE.SRGBColorSpace;
-  }, [dayTexture]);
+    nightTexture.colorSpace = THREE.SRGBColorSpace;
+  }, [dayTexture, nightTexture]);
+
+  const dayNightMaterial = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        uniforms: {
+          u_dayMap: { value: dayTexture },
+          u_nightMap: { value: nightTexture },
+          u_sunDirection: { value: new THREE.Vector3(1, 0, 0) },
+        },
+        vertexShader: DAYNIGHT_VERT,
+        fragmentShader: DAYNIGHT_FRAG,
+      }),
+    [dayTexture, nightTexture],
+  );
+
+  const showBlueMarble = globeMode === "blue-marble";
+  const showDayNight = globeMode === "day-night";
+  const showBoundaries = globeMode === "political" || globeMode === "day-night";
+  // Day-night mode does its own lighting in the shader; other modes use the sun directional.
+  const sunIntensity = showDayNight ? 0.0 : 1.0;
+
   return (
     <>
-      <mesh>
+      <mesh visible={showBlueMarble}>
         <sphereGeometry args={[EARTH_RADIUS_RENDER, 64, 64]} />
         <meshPhongMaterial map={dayTexture} shininess={5} />
       </mesh>
+      <mesh visible={showDayNight} material={dayNightMaterial}>
+        <sphereGeometry args={[EARTH_RADIUS_RENDER, 64, 64]} />
+      </mesh>
       <Atmosphere />
+      <Boundaries visible={showBoundaries} />
+      <Sun simTimeIso={simTimeIso} intensity={sunIntensity} dayNightMaterial={dayNightMaterial} />
     </>
   );
 }

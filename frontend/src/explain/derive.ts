@@ -7,7 +7,7 @@
  * the Expected/Faulted classification happens.
  */
 
-import type { Family, FunnelGate, Severity } from "./families";
+import type { Family, FunnelGate, Producer, Severity } from "./families";
 import { REASON_REGISTRY } from "./reasons";
 import type { DecisionFacts, LadderGate } from "./types";
 
@@ -21,6 +21,15 @@ export const GATE_LABELS: Record<FunnelGate, string> = {
   capacity: "Capacity",
   handover_policy: "Handover policy",
   actuation_proof: "Actuation proof",
+};
+
+/** Operator-facing label for the authoritative producer of a gate's verdict (the spec's
+ *  "which component owns this" — single source for the Per-Pair Inspector's provenance). */
+export const PRODUCER_LABELS: Record<Producer, string> = {
+  ome_visibility: "OME visibility",
+  ome_allocator: "OME allocator",
+  scheduler: "Scheduler",
+  node_agent: "Node Agent",
 };
 
 /**

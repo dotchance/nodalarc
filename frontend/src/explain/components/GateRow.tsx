@@ -7,7 +7,7 @@
  * used here for an expected no-link.
  */
 
-import { GATE_LABELS } from "../derive";
+import { GATE_LABELS, PRODUCER_LABELS } from "../derive";
 import type { LadderGate } from "../types";
 import { MarginPill } from "./MarginPill";
 
@@ -48,6 +48,11 @@ export function GateRow({
         {row.rejecting_endpoint && row.rejecting_endpoint !== "none" ? (
           <span className="gate-endpoint"> · {row.rejecting_endpoint}</span>
         ) : null}
+        {/* Provenance: which component owns this gate's verdict (spec Per-Pair Inspector). */}
+        <span className="gate-producer" title="Producer of this verdict">
+          {" "}
+          · {PRODUCER_LABELS[row.producer]}
+        </span>
       </span>
     </div>
   );

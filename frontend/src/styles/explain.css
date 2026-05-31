@@ -86,6 +86,11 @@
   color: var(--text-dim);
 }
 
+.gate-producer {
+  color: var(--text-dim);
+  font-size: var(--font-size-xxs);
+}
+
 /* --- Effective envelope --- */
 
 .env-panel {

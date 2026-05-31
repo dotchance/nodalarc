@@ -10,6 +10,7 @@ import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/c
 import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
 import { PairInspectorView } from "../explain/components/PairInspectorView";
+import { FamilyBadge } from "../explain/components/FamilyBadge";
 
 interface SatelliteDetailProps {
   node: NodeState;
@@ -69,6 +70,13 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
   );
   const gndLinks = connectedLinks.filter(
     (l) => l.node_a.startsWith("gs-") || l.node_b.startsWith("gs-"),
+  );
+
+  // A true actuator/proof fault involving this satellite (spec: "fault badge if true actuator/proof
+  // fault exists"). Sourced from the Scheduler actuation notices (kernel dirty / dispatch blocked),
+  // NOT OME link authority — only a real, blocking actuation problem reads as a fault.
+  const satFault = (snapshot.actuation_notices ?? []).find(
+    (n) => n.blocking_new_ground_link_up && n.affected_pairs.some((p) => p.includes(node.node_id)),
   );
 
   // Determine role: Router vs Router (ABR)
@@ -133,6 +141,12 @@ export function SatelliteDetail({ node, snapshot, onSelect }: SatelliteDetailPro
   return (
     <div>
       <h2>{node.node_id}</h2>
+      {satFault ? (
+        <div className="detail-row" style={{ alignItems: "center", gap: 8 }}>
+          <FamilyBadge family="faulted" />
+          <span className="detail-value">{satFault.message}</span>
+        </div>
+      ) : null}
       <div className="detail-row">
         <span className="detail-label">Role</span>
         <span className="detail-value">{role}</span>

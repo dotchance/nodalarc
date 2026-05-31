@@ -85,7 +85,9 @@ export const tokens = {
   // above is red and encodes the OLD connected/disconnected model — surfaces are
   // migrating onto these family tones so a correct (expected) no-link is not red.
   familyConnected: '#44cc66',
-  familyExpectedNoLink: '#7788aa',
+  // Brighter steel-blue than the old muted #7788aa: a calm "no-link is fine" tone that still
+  // holds contrast as a globe glyph against both dark ocean and tan land (the old slate vanished).
+  familyExpectedNoLink: '#7aa7e8',
   familyEligibleUnselected: '#5b9aa8',
   familyInFlight: '#ffaa00',
   familyFaulted: '#ff3333',

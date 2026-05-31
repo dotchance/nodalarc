@@ -217,6 +217,13 @@ class StateSnapshot(BaseModel):
     session_id: str
     nodes: list[NodeState]
     links: list[LinkState]
+    # Scheduler-verified kernel-actual pairs (ordered [a, b]) recovered from the retained
+    # ActualLinkSnapshot — the kernel-PROVEN link set, distinct from `links` (OME's
+    # admin/carrier model). The globe renders a proven link as a solid beam and an
+    # OME-desired-but-not-proven link dimmed, so a beam never reads connected while the
+    # decision card says in_flight/faulted. Empty until the first ActualLinkSnapshot lands
+    # (honest: nothing proven), never a masked connected.
+    kernel_actual_pairs: list[list[str]] = Field(default_factory=list)
     traced_paths: list[TracedPath]
     active_flows: list[ActiveFlow]
     recent_events: list[RecentEvent]

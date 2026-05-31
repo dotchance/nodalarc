@@ -109,6 +109,7 @@ export function Scene({
         <GroundStations nodes={nodes} selection={selection} onSelect={onSelect} />
         <Links
           links={snapshot?.links ?? []}
+          kernelActualPairs={snapshot?.kernel_actual_pairs ?? []}
           showIslLinks={showIslLinks}
           showGroundLinks={showGroundLinks}
         />

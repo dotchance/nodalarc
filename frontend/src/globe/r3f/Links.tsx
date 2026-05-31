@@ -8,30 +8,43 @@
  * every frame. The fat-line material resolution tracks the actual canvas size (not the
  * window), so split-pane layouts render correct line widths.
  *
+ * Truth gate: a link renders solid only when it is in the Scheduler-verified kernel-actual
+ * set (`kernelActualPairs`); an OME-desired-but-not-kernel-proven link is dimmed, so a beam
+ * never reads connected while the decision card says in_flight/faulted.
+ *
  * Default useFrame priority (after FrameDriver -2 and Constellation -1) so the endpoint
  * positions it reads from the registry are this frame's.
  */
 
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import type { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { useFrame, useThree } from "@react-three/fiber";
-import { LinkBatch } from "./linkBatch";
+import { LinkBatch, linkKey } from "./linkBatch";
 import { getNodeLocalPosition } from "./positions";
 import type { LinkState } from "../../types";
 
 interface LinksProps {
   links: LinkState[];
+  kernelActualPairs: [string, string][];
   showIslLinks: boolean;
   showGroundLinks: boolean;
 }
 
-export function Links({ links, showIslLinks, showGroundLinks }: LinksProps) {
+export function Links({ links, kernelActualPairs, showIslLinks, showGroundLinks }: LinksProps) {
   const groupRef = useRef<THREE.Group>(null);
   const batch = useMemo(() => new LinkBatch(getNodeLocalPosition), []);
   const size = useThree((s) => s.size);
   const sizeRef = useRef(size);
   sizeRef.current = size;
+
+  // Kernel-PROVEN link keys (matching LinkBatch's sorted key) — beams in this set render
+  // solid, others dimmed. Read each frame via a ref so the useFrame closure stays stable.
+  const kernelActual = useMemo(
+    () => new Set(kernelActualPairs.map(([a, b]) => linkKey(a, b))),
+    [kernelActualPairs],
+  );
+  const kernelActualRef = useRef(kernelActual);
+  kernelActualRef.current = kernelActual;
 
   useEffect(() => () => batch.dispose(), [batch]);
 
@@ -48,26 +61,8 @@ export function Links({ links, showIslLinks, showGroundLinks }: LinksProps) {
     batch.setResolution(size.width, size.height);
   }, [batch, size]);
 
-  const debuggedRef = useRef(false);
-  useFrame((state) => {
-    batch.animate(showIslLinks, showGroundLinks, performance.now());
-    // TEMP r3f-debug — remove after diagnosis. Reveals the fat-line draw-time state.
-    const obj = batch.object3d;
-    if (!debuggedRef.current && obj) {
-      debuggedRef.current = true;
-      const mat = obj.material as LineMaterial;
-      const v = new THREE.Vector4();
-      state.gl.getViewport(v);
-      // eslint-disable-next-line no-console
-      console.log("[r3f-debug] links:", {
-        resolution: [mat.resolution.x, mat.resolution.y],
-        linewidth: mat.linewidth,
-        worldUnits: mat.worldUnits,
-        instanceCount: (obj.geometry as THREE.InstancedBufferGeometry).instanceCount,
-        viewport: [v.z, v.w],
-        dpr: state.gl.getPixelRatio(),
-      });
-    }
+  useFrame(() => {
+    batch.animate(showIslLinks, showGroundLinks, performance.now(), kernelActualRef.current);
   });
 
   return <group ref={groupRef} />;

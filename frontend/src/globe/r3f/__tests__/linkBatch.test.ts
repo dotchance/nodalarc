@@ -90,6 +90,22 @@ describe("LinkBatch", () => {
     expect(segIsNaN(buf, e.bufferIndex, 16)).toBe(true);
   });
 
+  it("renders a kernel-proven link full color and an unproven one dimmed", () => {
+    batch.update([link("sat-a", "sat-b", "active")], parent, 0);
+    const e = batch._debugEntry("sat-a", "sat-b")!;
+    // Proven (key in the kernel-actual set) -> full ISL color.
+    batch.animate(true, true, 0, new Set(["sat-a:sat-b"]));
+    const provenR = batch._debugColors()![e.bufferIndex * 6] ?? 0;
+    // OME-active but NOT kernel-proven -> dimmed.
+    batch.animate(true, true, 0, new Set());
+    const dimR = batch._debugColors()![e.bufferIndex * 6] ?? 0;
+    expect(provenR).toBeGreaterThan(0);
+    expect(dimR).toBeCloseTo(provenR * 0.35, 5);
+    // null gate (legacy) -> full color, no dimming.
+    batch.animate(true, true, 0, null);
+    expect(batch._debugColors()![e.bufferIndex * 6] ?? 0).toBeCloseTo(provenR, 5);
+  });
+
   it("a link that disappears from the snapshot flashes then hides past the fade window", () => {
     batch.update([link("sat-a", "sat-b", "active")], parent, 0);
     batch.animate(true, true, 0);

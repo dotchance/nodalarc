@@ -35,6 +35,8 @@ import type { LinkState } from "../../types";
 const SEGMENTS_PER_ISL = 16;
 const MIN_ISL_SLOTS = 200;
 const MIN_GROUND_SLOTS = 100;
+/** Brightness factor for an OME-desired link the kernel has not proven (in-flight/desired). */
+const UNPROVEN_DIM = 0.35;
 
 const ISL_R = ((LINK_ISL_COLOR >> 16) & 0xff) / 255;
 const ISL_G = ((LINK_ISL_COLOR >> 8) & 0xff) / 255;
@@ -287,8 +289,18 @@ export class LinkBatch {
     }
   }
 
-  /** Per-frame: resolve endpoints, write positions/colors, upload in place. */
-  animate(showIslLinks: boolean, showGroundLinks: boolean, now: number): void {
+  /** Per-frame: resolve endpoints, write positions/colors, upload in place.
+   *
+   * `kernelActual` (when provided) is the Scheduler-verified kernel-PROVEN link key set: a
+   * proven link renders at full color, an OME-desired-but-not-proven link is DIMMED so a beam
+   * never reads connected while the decision card says in_flight/faulted (truth over
+   * availability). Null disables gating (every active link full color — legacy behavior). */
+  animate(
+    showIslLinks: boolean,
+    showGroundLinks: boolean,
+    now: number,
+    kernelActual: ReadonlySet<string> | null = null,
+  ): void {
     const pos = this.positionBuffer;
     const col = this.colorBuffer;
     if (!this.initialized || !pos || !col || !this.geometry || !this.batch) return;
@@ -344,8 +356,16 @@ export class LinkBatch {
           entry.failTime = null;
         }
       } else if (entry.state === "active") {
-        if (entry.isGround) writeColor(col, entry.bufferIndex, entry.segmentCount, GND_R, GND_G, GND_B);
-        else writeColor(col, entry.bufferIndex, entry.segmentCount, ISL_R, ISL_G, ISL_B);
+        // Kernel-actual gate: a proven link is full color, an OME-desired-but-not-proven
+        // link is dimmed (in-flight / desired, not connected).
+        const proven =
+          kernelActual === null || kernelActual.has(linkKey(entry.nodeA, entry.nodeB));
+        const k = proven ? 1 : UNPROVEN_DIM;
+        if (entry.isGround) {
+          writeColor(col, entry.bufferIndex, entry.segmentCount, GND_R * k, GND_G * k, GND_B * k);
+        } else {
+          writeColor(col, entry.bufferIndex, entry.segmentCount, ISL_R * k, ISL_G * k, ISL_B * k);
+        }
       }
     }
     const posAttr = this.geometry.getAttribute("instanceStart") as THREE.InterleavedBufferAttribute | null;
@@ -397,5 +417,10 @@ export class LinkBatch {
   /** Test-only: read the position buffer. */
   _debugPositions(): Float32Array | null {
     return this.positionBuffer;
+  }
+
+  /** Test-only: read the color buffer. */
+  _debugColors(): Float32Array | null {
+    return this.colorBuffer;
   }
 }

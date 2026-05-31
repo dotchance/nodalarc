@@ -166,6 +166,10 @@ export interface StateSnapshot {
   session_id: string;
   nodes: NodeState[];
   links: LinkState[];
+  /** Scheduler-verified kernel-PROVEN pairs (ordered [a,b]); distinct from `links` (OME's
+   *  admin/carrier model). The globe renders proven links solid, unproven OME-desired links
+   *  dimmed — so a beam never reads connected while the card says in_flight/faulted. */
+  kernel_actual_pairs?: [string, string][];
   traced_paths: TracedPath[];
   active_flows: ActiveFlow[];
   recent_events: RecentEvent[];

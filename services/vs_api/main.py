@@ -449,6 +449,7 @@ def _build_snapshot() -> dict | None:
             session_id=ctx.session_id,
             nodes=nodes,
             links=links,
+            kernel_actual_pairs=[[a, b] for (a, b) in sorted(ctx.actual_kernel_pairs())],
             traced_paths=_traced,
             active_flows=[],
             recent_events=recent,

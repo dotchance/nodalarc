@@ -1,15 +1,17 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * Ground stations — a billboarded antenna-glyph sprite per GS plus an elevation-coverage
- * cone (ring disc + outline) shown only while the GS is selected. Reproduces
- * globe/groundStations.ts: glyph canvas, GS_COLOR, GS_SIZE, the cone radius
- * (computeConeRadius, reused), the surface offset (R*1.001), and the orientation quaternion
- * (setFromUnitVectors((0,0,-1), outward)) verbatim. GS are static in the Earth local frame;
- * each registers its local position so the selection ring / links / camera can find it.
+ * Ground stations — a billboarded antenna-glyph sprite per GS plus the elevation-coverage
+ * cone shown while the GS is selected. The cone uses the EFFECTIVE envelope floor (the
+ * binding min-elevation the composer computes — e.g. a 30° FoR-derived floor that dominates
+ * a configured 25° mask), NOT the raw configured mask, so the overlay agrees with the
+ * decision card and does not make a FoR-bound satellite look eligible (the Denver
+ * confusion). The configured mask is drawn as a faint wider reference when it differs.
  *
- * Rendered inside <Body id="earth">. GS count is small (tens), so one sprite/cone per GS is
- * fine — instancing is unnecessary here (unlike the constellation).
+ * Glyph/cone geometry (GS_COLOR, GS_SIZE, R*1.001 surface offset, (0,0,-1)->outward
+ * orientation, computeConeRadius) reproduce globe/groundStations.ts. GS are static in the
+ * Earth local frame; each registers its local position so the selection ring / links /
+ * camera can find it. Rendered inside <Body id="earth">; one sprite/cone per GS (few GS).
  */
 
 import { useEffect, useMemo } from "react";
@@ -18,6 +20,7 @@ import { type ThreeEvent } from "@react-three/fiber";
 import { GS_COLOR, GS_SIZE } from "../../config";
 import { geoToWorld } from "../geo";
 import { computeConeRadius } from "../groundStations";
+import { useDecisionExplanation } from "../../explain/useDecisionExplanation";
 import { EARTH_RADIUS_RENDER } from "./units";
 import { removeNode, setNodeLocalPosition } from "./positions";
 import type { NodeState, Selection } from "../../types";
@@ -34,16 +37,13 @@ function makeGsTexture(): THREE.CanvasTexture {
   ctx.strokeStyle = GS_HEX;
   ctx.fillStyle = GS_HEX;
   ctx.lineWidth = 3;
-  // Base circle.
   ctx.beginPath();
   ctx.arc(size / 2, size * 0.7, 8, 0, Math.PI * 2);
   ctx.fill();
-  // Dish.
   ctx.beginPath();
   ctx.moveTo(size * 0.2, size * 0.35);
   ctx.quadraticCurveTo(size / 2, size * 0.1, size * 0.8, size * 0.35);
   ctx.stroke();
-  // Stem.
   ctx.beginPath();
   ctx.moveTo(size / 2, size * 0.7);
   ctx.lineTo(size / 2, size * 0.3);
@@ -53,48 +53,78 @@ function makeGsTexture(): THREE.CanvasTexture {
   return texture;
 }
 
+function ringGeometry(radius: number): THREE.BufferGeometry {
+  const pts: number[] = [];
+  for (let i = 0; i <= 48; i++) {
+    const a = (i / 48) * Math.PI * 2;
+    pts.push(Math.cos(a) * radius, Math.sin(a) * radius, 0);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pts), 3));
+  return g;
+}
+
 interface GroundStationProps {
   node: NodeState;
   selected: boolean;
   orbitalAltKm: number;
   texture: THREE.CanvasTexture;
+  /** Effective binding floor (deg) for the selected GS, from the decision explanation. */
+  effectiveMinElevDeg: number | null;
+  /** Configured mask (deg) for the selected GS, from the decision explanation. */
+  configuredMinElevDeg: number | null;
   onSelect: (sel: Selection | null) => void;
 }
 
-function GroundStation({ node, selected, orbitalAltKm, texture, onSelect }: GroundStationProps) {
-  // Static local position + cone placement/orientation, recomputed only when the GS moves.
-  const { position, conePosition, coneQuaternion, coneRadius, ringPoints } = useMemo(() => {
+function GroundStation({
+  node,
+  selected,
+  orbitalAltKm,
+  texture,
+  effectiveMinElevDeg,
+  configuredMinElevDeg,
+  onSelect,
+}: GroundStationProps) {
+  const geom = useMemo(() => {
     const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
     const outward = p.clone().normalize();
     const surface = outward.clone().multiplyScalar(EARTH_RADIUS_RENDER * 1.001);
     const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), outward);
-    const minElev = node.min_elevation_deg ?? 25;
-    const radius = computeConeRadius(minElev, orbitalAltKm);
-    const pts: number[] = [];
-    for (let i = 0; i <= 48; i++) {
-      const a = (i / 48) * Math.PI * 2;
-      pts.push(Math.cos(a) * radius, Math.sin(a) * radius, 0);
-    }
+    // Only the selected GS has resolved envelope floors; others (cone hidden) fall back to
+    // the configured mask. Effective is the binding floor; configured is the wider mask.
+    const fallback = node.min_elevation_deg ?? 25;
+    const effElev = (selected ? effectiveMinElevDeg : null) ?? fallback;
+    const confElev = (selected ? configuredMinElevDeg : null) ?? fallback;
+    const effRadius = computeConeRadius(effElev, orbitalAltKm);
+    const confRadius = computeConeRadius(confElev, orbitalAltKm);
+    // Show the configured reference only when the mask is genuinely non-binding (the
+    // effective floor is higher → a tighter cone), i.e. the FoR-bound / dead-knob case.
+    const showConfigured = confRadius - effRadius > 0.5;
     return {
       position: [p.x, p.y, p.z] as [number, number, number],
       conePosition: [surface.x, surface.y, surface.z] as [number, number, number],
       coneQuaternion: quat,
-      coneRadius: radius,
-      ringPoints: new Float32Array(pts),
+      effRadius,
+      confRadius,
+      effRing: ringGeometry(effRadius),
+      confRing: showConfigured ? ringGeometry(confRadius) : null,
+      showConfigured,
     };
-  }, [node.lat_deg, node.lon_deg, node.alt_km, node.min_elevation_deg, orbitalAltKm]);
+  }, [
+    node.lat_deg,
+    node.lon_deg,
+    node.alt_km,
+    node.min_elevation_deg,
+    orbitalAltKm,
+    selected,
+    effectiveMinElevDeg,
+    configuredMinElevDeg,
+  ]);
 
-  const ringGeometry = useMemo(() => {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.BufferAttribute(ringPoints, 3));
-    return g;
-  }, [ringPoints]);
-
-  // Register the GS local position so the selection ring / links / camera can resolve it.
   useEffect(() => {
-    setNodeLocalPosition(node.node_id, position[0], position[1], position[2]);
+    setNodeLocalPosition(node.node_id, geom.position[0], geom.position[1], geom.position[2]);
     return () => removeNode(node.node_id);
-  }, [node.node_id, position]);
+  }, [node.node_id, geom.position]);
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
@@ -103,23 +133,39 @@ function GroundStation({ node, selected, orbitalAltKm, texture, onSelect }: Grou
 
   return (
     <group>
-      <sprite scale={[GS_SIZE, GS_SIZE, 1]} position={position} onClick={handleClick}>
+      <sprite scale={[GS_SIZE, GS_SIZE, 1]} position={geom.position} onClick={handleClick}>
         <spriteMaterial map={texture} sizeAttenuation />
       </sprite>
-      {/* Elevation coverage cone — disc + outline, visible only while selected. */}
-      <mesh position={conePosition} quaternion={coneQuaternion} visible={selected}>
-        <ringGeometry args={[0, coneRadius, 48]} />
+      {/* Effective coverage cone (the binding floor) — filled disc + strong outline. */}
+      <mesh position={geom.conePosition} quaternion={geom.coneQuaternion} visible={selected}>
+        <ringGeometry args={[0, geom.effRadius, 48]} />
         <meshBasicMaterial
           color={GS_COLOR}
           transparent
-          opacity={0.05}
+          opacity={0.06}
           side={THREE.DoubleSide}
           depthWrite={false}
         />
       </mesh>
-      <lineLoop position={conePosition} quaternion={coneQuaternion} visible={selected} geometry={ringGeometry}>
-        <lineBasicMaterial color={GS_COLOR} transparent opacity={0.2} depthWrite={false} />
+      <lineLoop
+        position={geom.conePosition}
+        quaternion={geom.coneQuaternion}
+        visible={selected}
+        geometry={geom.effRing}
+      >
+        <lineBasicMaterial color={GS_COLOR} transparent opacity={0.3} depthWrite={false} />
       </lineLoop>
+      {/* Configured-mask reference (wider, faint) — only when the mask is non-binding. */}
+      {geom.confRing && (
+        <lineLoop
+          position={geom.conePosition}
+          quaternion={geom.coneQuaternion}
+          visible={selected}
+          geometry={geom.confRing}
+        >
+          <lineBasicMaterial color={GS_COLOR} transparent opacity={0.1} depthWrite={false} />
+        </lineLoop>
+      )}
     </group>
   );
 }
@@ -135,38 +181,29 @@ export function GroundStations({ nodes, selection, onSelect }: GroundStationsPro
   useEffect(() => () => texture.dispose(), [texture]);
 
   const gsNodes = nodes.filter((n) => n.node_type === "ground_station");
-  // Cone footprint sized to the constellation's orbital altitude (first sat, fallback 550).
   const orbitalAltKm = nodes.find((n) => n.node_type === "satellite")?.alt_km ?? 550;
 
-  // TEMP r3f-debug — remove after diagnosis. Reveals the runtime cone inputs/size.
-  useEffect(() => {
-    const sat = nodes.find((n) => n.node_type === "satellite");
-    const gs = gsNodes[0];
-    // eslint-disable-next-line no-console
-    console.log("[r3f-debug] cone:", {
-      orbitalAltKm,
-      firstSatAltKm: sat?.alt_km,
-      satCount: nodes.filter((n) => n.node_type === "satellite").length,
-      gsSample: gs?.node_id,
-      gsMinElevDeg: gs?.min_elevation_deg,
-      coneRadiusUnits: gs ? computeConeRadius(gs.min_elevation_deg ?? 25, orbitalAltKm) : null,
-      earthRadiusRenderUnits: EARTH_RADIUS_RENDER,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orbitalAltKm, gsNodes.length]);
+  // The selected GS's effective envelope (binding floor + configured mask) drives its cone.
+  const selectedGsId = selection?.type === "ground_station" ? selection.id : null;
+  const env = useDecisionExplanation(selectedGsId).facts?.envelope ?? null;
 
   return (
     <>
-      {gsNodes.map((node) => (
-        <GroundStation
-          key={node.node_id}
-          node={node}
-          selected={selection?.type === "ground_station" && selection.id === node.node_id}
-          orbitalAltKm={orbitalAltKm}
-          texture={texture}
-          onSelect={onSelect}
-        />
-      ))}
+      {gsNodes.map((node) => {
+        const isSelected = selectedGsId === node.node_id;
+        return (
+          <GroundStation
+            key={node.node_id}
+            node={node}
+            selected={isSelected}
+            orbitalAltKm={orbitalAltKm}
+            texture={texture}
+            effectiveMinElevDeg={isSelected ? (env?.effective_min_elevation_deg ?? null) : null}
+            configuredMinElevDeg={isSelected ? (env?.configured_min_elevation_deg ?? null) : null}
+            onSelect={onSelect}
+          />
+        );
+      })}
     </>
   );
 }

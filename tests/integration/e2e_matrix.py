@@ -883,6 +883,36 @@ def _packet_handover_correlation(output: dict, terminal_observation: dict | None
     }
 
 
+def _routing_layer_outcome(overlap: dict | None) -> str:
+    if overlap is None:
+        return "overlap_not_sampled"
+    if overlap.get("successor_fib_ready"):
+        return "successor_fib_ready"
+    if not overlap.get("neighbor_up"):
+        return "successor_adjacency_not_up"
+    route_dev = overlap.get("route_dev")
+    successor_if = overlap.get("successor_interface")
+    if route_dev is None:
+        return "no_kernel_route"
+    if successor_if and route_dev != successor_if:
+        return "fib_still_points_to_other_interface"
+    return "successor_fib_not_ready"
+
+
+def _select_terminal_probe(
+    probes: list[dict],
+    overlap_by_key: dict[str, dict],
+) -> tuple[str, dict | None] | tuple[None, None]:
+    if not probes:
+        return None, None
+    with_ready_fib = [
+        probe for probe in probes if overlap_by_key.get(probe["key"], {}).get("successor_fib_ready")
+    ]
+    with_overlap = [probe for probe in probes if probe["key"] in overlap_by_key]
+    selected = (with_ready_fib or with_overlap or probes)[0]
+    return selected["key"], overlap_by_key.get(selected["key"])
+
+
 def _ping_packet_outcome(stdout: str, stderr: str, returncode: int | None) -> dict:
     stats = ""
     for line in stdout.splitlines():
@@ -1062,22 +1092,35 @@ def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float =
                     and details.get("terminal_outcome") == "teardown_completed"
                 ):
                     terminal_by_src[src] = event
+                    selected_terminal_key, selected_overlap = _select_terminal_probe(
+                        probes_by_src[src], overlap_by_key
+                    )
+                    if selected_terminal_key is None:
+                        continue
+                    observed_mono = time.monotonic()
                     for probe in probes_by_src[src]:
                         key = probe["key"]
                         overlap = overlap_by_key.get(key)
-                        if overlap and overlap.get("successor_fib_ready"):
-                            observed_mono = time.monotonic()
-                            terminal_observation_by_key[key] = {
-                                "event_timestamp": event.get("timestamp"),
-                                "observed_wall_time": datetime.now(UTC).isoformat(),
-                                "estimated_ping_seq": int(
-                                    (observed_mono - proc_started_mono[key]) / interval_s
-                                ),
-                            }
-                            if selected_key is None:
-                                selected_key = key
-                                terminal_seen_at = observed_mono
-                                break
+                        terminal_observation_by_key[key] = {
+                            "event_timestamp": event.get("timestamp"),
+                            "observed_wall_time": datetime.now(UTC).isoformat(),
+                            "estimated_ping_seq": int(
+                                (observed_mono - proc_started_mono[key]) / interval_s
+                            ),
+                            "routing_layer_outcome": _routing_layer_outcome(overlap),
+                        }
+                    if selected_key is None:
+                        selected_key = selected_terminal_key
+                        terminal_seen_at = observed_mono
+                        if selected_overlap is None:
+                            overlap_by_key.setdefault(
+                                selected_terminal_key,
+                                {
+                                    "observed_wall_time": datetime.now(UTC).isoformat(),
+                                    "routing_layer_outcome": "overlap_not_sampled",
+                                    "successor_fib_ready": False,
+                                },
+                            )
             if selected_key is not None and terminal_seen_at is not None:
                 if time.monotonic() - terminal_seen_at >= 5:
                     break
@@ -1111,7 +1154,7 @@ def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float =
     if selected_key is None:
         return {
             "result": "FAIL",
-            "reason": "No probed GS completed an MBB teardown with successor FIB ready",
+            "reason": "No probed GS completed an MBB teardown during the packet window",
             "probes": probes,
             "overlap_by_key": overlap_by_key,
             "terminal_gs_ids": sorted(terminal_by_src),
@@ -1138,6 +1181,7 @@ def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float =
         "reply_count": output.get("reply_count"),
         "missing_ranges": output.get("missing_ranges"),
         "overlap_proof": overlap,
+        "routing_layer_outcome": _routing_layer_outcome(overlap),
         "terminal_event": terminal_by_src.get(probe["src"]),
         "terminal_observation": terminal_observation,
         "packet_handover_correlation": _packet_handover_correlation(output, terminal_observation),
@@ -1171,6 +1215,7 @@ def check_mbb_packet_behavior(
                 "stats": evidence.get("stats"),
                 "packet_outcome": evidence.get("packet_outcome"),
                 "terminal_gs_ids": evidence.get("terminal_gs_ids"),
+                "routing_layer_outcome": evidence.get("routing_layer_outcome"),
             }
         )
         if evidence.get("result") == "PASS":
@@ -1323,6 +1368,56 @@ def _wait_for_actuation_state(
     }
 
 
+def _wait_for_scheduler_actuation_roster(token: str, *, wait_s: int = 180) -> dict:
+    """Wait until the scheduler has published the startup clean roster for all GSes."""
+
+    deadline = time.monotonic() + wait_s
+    last: dict = {}
+    while time.monotonic() < deadline:
+        state = request_json("GET", "/api/v1/state", token=token)
+        ground_ids = {
+            node.get("node_id")
+            for node in state.get("nodes", [])
+            if str(node.get("node_id", "")).startswith("gs-")
+        }
+        health = request_json("GET", "/api/v1/ops/health", token=token)
+        instances = health.get("scheduler_instances", [])
+        rosters = []
+        for inst in instances:
+            entries = inst.get("ground_stations", [])
+            clean_ids = {
+                entry.get("gs_id") for entry in entries if entry.get("actuation_state") == "clean"
+            }
+            rosters.append(
+                {
+                    "scheduler_instance_id": inst.get("scheduler_instance_id"),
+                    "clean_count": len(clean_ids),
+                    "entry_count": len(entries),
+                    "missing_ground_ids": sorted(ground_ids - clean_ids),
+                }
+            )
+            if ground_ids and ground_ids <= clean_ids:
+                return {
+                    "result": "PASS",
+                    "ground_count": len(ground_ids),
+                    "scheduler_instance_id": inst.get("scheduler_instance_id"),
+                    "session_status": state.get("session_status"),
+                    "sim_time": state.get("sim_time"),
+                }
+        last = {
+            "ground_count": len(ground_ids),
+            "session_status": state.get("session_status"),
+            "sim_time": state.get("sim_time"),
+            "rosters": rosters,
+        }
+        time.sleep(2)
+    return {
+        "result": "FAIL",
+        "reason": f"Scheduler startup actuation roster did not complete within {wait_s}s",
+        **last,
+    }
+
+
 def _events_since(
     token: str,
     started_at: datetime,
@@ -1352,6 +1447,7 @@ def run_phase6_dirty_repair_acceptance() -> dict:
         phase6_progress("dirty-repair: deploying session")
         yaml_str = _acceptance_session_yaml(
             session_name=f"phase6-dirty-repair-{int(time.time())}",
+            clean_kernel_audit_interval_s=2.0,
         )
         evidence["deploy_response"] = deploy_session(token, yaml_str)
         if evidence["deploy_response"].get("status") != "switching":
@@ -1365,6 +1461,15 @@ def run_phase6_dirty_repair_acceptance() -> dict:
         if ready_result.get("phase") != "Ready":
             evidence["result"] = "FAIL"
             evidence["error"] = f"Did not reach Ready: {ready_result}"
+            return evidence
+
+        phase6_progress("dirty-repair: waiting for scheduler actuation roster")
+        roster = _wait_for_scheduler_actuation_roster(token, wait_s=180)
+        evidence["scheduler_actuation_roster"] = roster
+        phase6_progress(f"dirty-repair: roster result {roster.get('result')}")
+        if roster.get("result") != "PASS":
+            evidence["result"] = "FAIL"
+            evidence["error"] = "Scheduler actuation startup roster did not complete"
             return evidence
 
         phase6_progress("dirty-repair: waiting for active ground link candidate")
@@ -1705,7 +1810,10 @@ def run_mbb_acceptance() -> dict:
         return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
     try:
         token = get_token()
-        yaml_str = MBB_ACCEPTANCE_SESSION.read_text()
+        yaml_str = _acceptance_session_yaml(
+            session_name=f"phase6-cj-mbb-{int(time.time())}",
+            mbb_overlap_ticks=60,
+        )
         evidence["yaml_length"] = len(yaml_str)
         evidence["deploy_response"] = deploy_session(token, yaml_str)
         if evidence["deploy_response"].get("status") != "switching":

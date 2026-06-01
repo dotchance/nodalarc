@@ -9,11 +9,15 @@ Tests handler logic:
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from nodalarc.proto import node_agent_pb2
 from node_agent import ops_events
 from node_agent.command_contract import RuntimeFence
 from node_agent.handlers import (
+    EntryOutcome,
+    _publish_command_event,
     handle_batch_link_down,
     handle_batch_link_up,
     handle_set_latency,
@@ -34,6 +38,29 @@ def _env(kind: str, op: str) -> node_agent_pb2.CommandEnvelope:
         wiring_generation=FENCE.wiring_generation,
         operation_kind=kind,
     )
+
+
+class TestCommandEvents:
+    def test_successful_kernel_inventory_is_debug_only(self, caplog, monkeypatch):
+        published = []
+        monkeypatch.setattr(ops_events, "publish", lambda **kwargs: published.append(kwargs))
+
+        with caplog.at_level(logging.DEBUG, logger="node_agent.handlers"):
+            _publish_command_event(
+                operation="KernelInventory",
+                envelope=_env("KernelInventory", "test-kernel-inventory"),
+                outcomes=[EntryOutcome()],
+            )
+
+        assert published == []
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "code", None) == "COMMAND_APPLIED"
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.DEBUG
+        assert records[0].details["command_type"] == "KernelInventory"
 
 
 class TestBatchLinkDown:

@@ -237,9 +237,10 @@ def _publish_command_event(
 ) -> None:
     failed = [outcome for outcome in outcomes if not outcome.success]
     if not failed:
-        if operation == "SetLatency":
+        if operation in {"KernelInventory", "SetLatency"}:
             log.debug(
-                "SetLatency applied [operation_id=%s, entries=%d]",
+                "%s applied [operation_id=%s, entries=%d]",
+                operation,
                 envelope.operation_id,
                 len(outcomes),
                 extra={

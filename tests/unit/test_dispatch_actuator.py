@@ -238,14 +238,12 @@ def _actuation_latency_records(caplog) -> list:
     return [r for r in caplog.records if getattr(r, "event", None) == "actuation_latency"]
 
 
-def test_send_batch_up_logs_wall_clock_actuation_latency(caplog):
-    # Phase 2a instrumentation: every dispatched actuator batch emits its wall-clock
-    # dispatch->ACK latency with structured fields, so p50/p95/p99 per operation can
-    # be aggregated from real runs to justify the in_flight->faulted bound by
-    # measurement rather than a guessed value.
+def test_send_batch_up_logs_successful_wall_clock_actuation_latency_at_debug(caplog):
+    # Successful actuator timing is useful for targeted measurement runs, but it is
+    # high-volume control-loop telemetry and must not fill operator logs.
     pool = _Pool()
     js = _Js()
-    with caplog.at_level(logging.INFO, logger="scheduler.dispatch_actuator"):
+    with caplog.at_level(logging.DEBUG, logger="scheduler.dispatch_actuator"):
         result = asyncio.run(
             send_batch_up(
                 pairs={PAIR},
@@ -275,7 +273,7 @@ def test_send_batch_up_logs_wall_clock_actuation_latency(caplog):
     assert rec.failed == 0
     assert isinstance(rec.actuation_latency_ms, float)
     assert rec.actuation_latency_ms >= 0.0
-    assert rec.levelno == logging.INFO
+    assert rec.levelno == logging.DEBUG
 
 
 def test_failed_actuation_logs_latency_at_warning(caplog):

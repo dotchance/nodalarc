@@ -48,13 +48,13 @@ def _log_actuation_latency(
 
     This is the raw per-operation actuation latency (BatchLinkUp/Down/SetLatency),
     measured in WALL-CLOCK around the Node Agent RPC round-trip (commit+dispatch ->
-    proof), NOT sim-time. Aggregate p50/p95/p99 per operation from these lines to
-    justify or tighten the actuation-latency contract
-    (simulation.actuation.fault_after_ms, the in_flight -> faulted bound) against
-    real-run data instead of guessing. Logs at WARNING when the batch had failures
-    so a slow/failed actuation is loud, INFO otherwise.
+    proof), NOT sim-time. Aggregate p50/p95/p99 per operation from debug logs
+    during targeted measurement runs to justify or tighten the actuation-latency
+    contract (simulation.actuation.fault_after_ms, the in_flight -> faulted bound)
+    against real data instead of guessing. Logs at WARNING when the batch had
+    failures so a slow/failed actuation is loud, DEBUG otherwise.
     """
-    level = logging.WARNING if result.failed_pairs else logging.INFO
+    level = logging.WARNING if result.failed_pairs else logging.DEBUG
     log.log(
         level,
         "Actuation latency op=%s pairs=%d agents=%d elapsed_ms=%.1f succeeded=%d failed=%d",

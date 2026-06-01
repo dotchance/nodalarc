@@ -59,6 +59,9 @@ class LinkState(BaseModel):
     traffic_load_pct: float | None  # None = no probe data (distinct from 0)
     interface_a: str = ""
     interface_b: str = ""
+    scheduling_state: str = "active"
+    teardown_remaining_ticks: int | None = None
+    successor_pair: tuple[str, str] | None = None
 
 
 class LinkDecisionTrace(BaseModel):

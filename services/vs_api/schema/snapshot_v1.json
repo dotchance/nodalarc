@@ -314,6 +314,45 @@
           "default": "",
           "title": "Interface B",
           "type": "string"
+        },
+        "scheduling_state": {
+          "default": "active",
+          "title": "Scheduling State",
+          "type": "string"
+        },
+        "teardown_remaining_ticks": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Teardown Remaining Ticks"
+        },
+        "successor_pair": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Successor Pair"
         }
       },
       "required": [

@@ -533,6 +533,9 @@ class SessionContext:
                     traffic_load_pct=None,
                     interface_a=link.interface_a,
                     interface_b=link.interface_b,
+                    scheduling_state=link.scheduling_state,
+                    teardown_remaining_ticks=link.teardown_remaining_ticks,
+                    successor_pair=link.successor_pair,
                 )
                 new_traces[key] = self._trace_from_snapshot_link(link, snapshot)
 

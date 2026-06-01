@@ -41,6 +41,9 @@ export interface LinkState {
   traffic_load_pct: number | null;
   interface_a: string;
   interface_b: string;
+  scheduling_state?: string;
+  teardown_remaining_ticks?: number | null;
+  successor_pair?: [string, string] | null;
 }
 
 export interface LinkDecisionTrace {

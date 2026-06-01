@@ -13,7 +13,7 @@ import json
 import os
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -210,6 +210,10 @@ def get_token(retries: int = 12, delay: float = 5.0) -> str:
 
 def headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def phase6_progress(message: str) -> None:
+    print(f"[phase6] {message}", flush=True)
 
 
 def request_json(method: str, path: str, *, token: str | None = None, retries: int = 12, **kwargs):
@@ -603,6 +607,72 @@ def _kubectl_exec(node_id: str, command: str, *, timeout: int = 20) -> dict:
         "rc": result.returncode,
         "stdout": result.stdout[-1000:],
         "stderr": result.stderr[-1000:],
+    }
+
+
+def _run_shell(command: str, *, timeout: int = 20) -> dict:
+    import subprocess
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        shell=True,
+    )
+    return {
+        "rc": result.returncode,
+        "stdout": result.stdout.strip()[-1000:],
+        "stderr": result.stderr.strip()[-1000:],
+    }
+
+
+def _host_ground_ifname(gs_id: str, gs_ifname: str) -> str:
+    if not gs_ifname.startswith("term") or not gs_ifname[4:].isdigit():
+        raise ValueError(f"Unsupported ground terminal interface name: {gs_ifname}")
+    return f"_g{int(gs_ifname[4:])}-{gs_id.removeprefix('gs-')}"
+
+
+def _force_ground_host_interface_down(gs_id: str, gs_ifname: str, *, timeout: int = 20) -> dict:
+    host_ifname = _host_ground_ifname(gs_id, gs_ifname)
+    node_result = _run_shell(
+        f"{KUBECTL} get pod -n nodalarc {gs_id.lower()} -o jsonpath={{.spec.nodeName}}",
+        timeout=timeout,
+    )
+    node_name = node_result["stdout"]
+    if node_result["rc"] != 0 or not node_name:
+        return {
+            "rc": node_result["rc"] or 1,
+            "stdout": node_result["stdout"],
+            "stderr": node_result["stderr"],
+            "host_ifname": host_ifname,
+            "node_name": node_name,
+            "node_agent_pod": None,
+        }
+    agent_result = _run_shell(
+        f"{KUBECTL} get pods -n nodalarc -l app=nodalarc-node-agent \
+        --field-selector spec.nodeName={node_name} -o jsonpath={{.items[0].metadata.name}}",
+        timeout=timeout,
+    )
+    node_agent_pod = agent_result["stdout"]
+    if agent_result["rc"] != 0 or not node_agent_pod:
+        return {
+            "rc": agent_result["rc"] or 1,
+            "stdout": agent_result["stdout"],
+            "stderr": agent_result["stderr"],
+            "host_ifname": host_ifname,
+            "node_name": node_name,
+            "node_agent_pod": node_agent_pod or None,
+        }
+    break_result = _run_shell(
+        f"{KUBECTL} exec -n nodalarc {node_agent_pod} -c node-agent -- ip link set dev {host_ifname} down",
+        timeout=timeout,
+    )
+    return {
+        **break_result,
+        "host_ifname": host_ifname,
+        "node_name": node_name,
+        "node_agent_pod": node_agent_pod,
     }
 
 
@@ -1134,6 +1204,496 @@ def check_zero_loss_mbb_ping(
     return evidence
 
 
+def _acceptance_session_yaml(
+    *,
+    session_name: str,
+    clean_kernel_audit_interval_s: float | None = None,
+    mbb_overlap_ticks: int | None = None,
+) -> str:
+    import yaml
+
+    data = yaml.safe_load(MBB_ACCEPTANCE_SESSION.read_text())
+    data.setdefault("session", {})["name"] = session_name
+    if clean_kernel_audit_interval_s is not None:
+        data.setdefault("dispatch", {})["clean_kernel_audit_interval_s"] = (
+            clean_kernel_audit_interval_s
+        )
+    if mbb_overlap_ticks is not None:
+        data.setdefault("scheduling", {}).setdefault("ground", {})["mbb_overlap_ticks"] = (
+            mbb_overlap_ticks
+        )
+    return yaml.safe_dump(data, sort_keys=False)
+
+
+def _active_ground_link_with_interfaces(token: str, *, wait_s: int = 180) -> dict | None:
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        state = request_json("GET", "/api/v1/state", token=token)
+        decision_snapshot = request_json("GET", "/api/v1/ground-link-decisions", token=token)
+        decision_by_pair = {
+            tuple(decision.get("pair", [])): decision
+            for decision in decision_snapshot.get("decisions", [])
+            if len(decision.get("pair", [])) == 2
+        }
+        links = state.get("links", [])
+        if isinstance(links, dict):
+            links = list(links.values())
+        candidates: list[dict] = []
+        for link in links:
+            if link.get("state") != "active":
+                continue
+            a = link.get("node_a", "")
+            b = link.get("node_b", "")
+            ia = link.get("interface_a") or ""
+            ib = link.get("interface_b") or ""
+            if not ia or not ib:
+                continue
+            if a.startswith("gs-") and b.startswith("sat-"):
+                row = {"gs_id": a, "sat_id": b, "gs_ifname": ia, "sat_ifname": ib}
+            elif a.startswith("sat-") and b.startswith("gs-"):
+                row = {"gs_id": b, "sat_id": a, "gs_ifname": ib, "sat_ifname": ia}
+            else:
+                continue
+            pair = tuple(sorted((row["gs_id"], row["sat_id"])))
+            decision = decision_by_pair.get(pair) or {}
+            if decision.get("reject_reason") not in (None, "ok"):
+                continue
+            elevation = decision.get("elevation_deg")
+            if elevation is None or float(elevation) < 45.0:
+                continue
+            candidates.append(
+                {
+                    **row,
+                    "state_sim_time": state.get("sim_time"),
+                    "decision_snapshot_seq": decision_snapshot.get("snapshot_seq"),
+                    "decision_elevation_deg": elevation,
+                    "decision_range_km": decision.get("range_km"),
+                    "link": link,
+                }
+            )
+        if candidates:
+            return max(candidates, key=lambda item: float(item["decision_elevation_deg"]))
+        time.sleep(2)
+    return None
+
+
+def _actuation_entry(token: str, gs_id: str) -> dict:
+    state = request_json("GET", "/api/v1/state", token=token)
+    notices = [n for n in state.get("actuation_notices", []) if n.get("gs_id") == gs_id]
+    health = request_json("GET", "/api/v1/ops/health", token=token)
+    entries = []
+    for inst in health.get("scheduler_instances", []):
+        for entry in inst.get("ground_stations", []):
+            if entry.get("gs_id") == gs_id:
+                entries.append(
+                    {**entry, "scheduler_instance_id": inst.get("scheduler_instance_id")}
+                )
+    return {
+        "notices": notices,
+        "health_entries": entries,
+        "state_session_status": state.get("session_status"),
+        "state_sim_time": state.get("sim_time"),
+    }
+
+
+def _wait_for_actuation_state(
+    token: str,
+    gs_id: str,
+    target_state: str,
+    *,
+    wait_s: int = 180,
+) -> dict:
+    deadline = time.monotonic() + wait_s
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = _actuation_entry(token, gs_id)
+        if target_state == "clean":
+            if any(e.get("actuation_state") == "clean" for e in last.get("health_entries", [])):
+                if not last.get("notices"):
+                    return {"result": "PASS", **last}
+        elif any(e.get("actuation_state") == target_state for e in last.get("health_entries", [])):
+            return {"result": "PASS", **last}
+        elif any(n.get("actuation_state") == target_state for n in last.get("notices", [])):
+            return {"result": "PASS", **last}
+        time.sleep(2)
+    return {
+        "result": "FAIL",
+        "reason": f"{gs_id} did not reach actuation_state={target_state} within {wait_s}s",
+        **last,
+    }
+
+
+def _events_since(
+    token: str,
+    started_at: datetime,
+    *,
+    limit: int = 500,
+    source: str | None = None,
+) -> list[dict]:
+    query = f"limit={limit}"
+    if source:
+        query += f"&source={source}"
+    events = request_json("GET", f"/api/v1/ops/events?{query}", token=token)
+    return [event for event in events if _event_at_or_after(event, started_at)]
+
+
+def run_phase6_dirty_repair_acceptance() -> dict:
+    evidence: dict = {
+        "id": "P6-REPAIR",
+        "label": "forced-kernel-dirty-operator-repair",
+        "session_file": str(MBB_ACCEPTANCE_SESSION),
+        "started_at": datetime.now(UTC).isoformat(),
+    }
+    if not MBB_ACCEPTANCE_SESSION.exists():
+        return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
+    try:
+        phase6_progress("dirty-repair: acquiring token")
+        token = get_token()
+        phase6_progress("dirty-repair: deploying session")
+        yaml_str = _acceptance_session_yaml(
+            session_name=f"phase6-dirty-repair-{int(time.time())}",
+        )
+        evidence["deploy_response"] = deploy_session(token, yaml_str)
+        if evidence["deploy_response"].get("status") != "switching":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Deploy rejected: {evidence['deploy_response']}"
+            return evidence
+        phase6_progress("dirty-repair: waiting for session readiness")
+        ready_result = wait_for_ready(token, timeout=600)
+        evidence["ready_result"] = ready_result
+        phase6_progress(f"dirty-repair: readiness result {ready_result}")
+        if ready_result.get("phase") != "Ready":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Did not reach Ready: {ready_result}"
+            return evidence
+
+        phase6_progress("dirty-repair: waiting for active ground link candidate")
+        time.sleep(20)
+        token = get_token()
+        pair = _active_ground_link_with_interfaces(token, wait_s=240)
+        phase6_progress(f"dirty-repair: selected pair {pair}")
+        evidence["selected_pair"] = pair
+        if not pair:
+            evidence["result"] = "FAIL"
+            evidence["error"] = "No active ground link with interfaces found"
+            return evidence
+
+        gs_id = pair["gs_id"]
+        sat_id = pair["sat_id"]
+        gs_ifname = pair["gs_ifname"]
+        break_started = datetime.now(UTC)
+        phase6_progress(f"dirty-repair: forcing host peer for {gs_id} {gs_ifname} down")
+        break_cmd = _force_ground_host_interface_down(gs_id, gs_ifname, timeout=10)
+        evidence["forced_mutation"] = {
+            "operation": "ground host veth admin-down",
+            "gs_id": gs_id,
+            "gs_ifname": gs_ifname,
+            "sat_id": sat_id,
+            "host_ifname": break_cmd.get("host_ifname"),
+            "node_name": break_cmd.get("node_name"),
+            "node_agent_pod": break_cmd.get("node_agent_pod"),
+            "result": break_cmd,
+        }
+        if break_cmd["rc"] != 0:
+            evidence["result"] = "FAIL"
+            evidence["error"] = "Failed to induce dirty kernel state"
+            return evidence
+
+        phase6_progress(f"dirty-repair: waiting for {gs_id} kernel_dirty")
+        dirty = _wait_for_actuation_state(token, gs_id, "kernel_dirty", wait_s=240)
+        evidence["dirty_observation"] = dirty
+        phase6_progress(f"dirty-repair: dirty observation {dirty.get('result')}")
+        evidence["events_after_forced_mutation"] = _events_since(token, break_started)
+        if dirty.get("result") != "PASS":
+            evidence["result"] = "FAIL"
+            evidence["error"] = "Forced kernel mutation did not produce kernel_dirty state"
+            return evidence
+
+        intervention_id = f"phase6-repair-{int(time.time())}"
+        phase6_progress(f"dirty-repair: requesting repair {intervention_id}")
+        repair_response = request_json(
+            "POST",
+            "/api/v1/ops/repair",
+            token=token,
+            json={
+                "gs_id": gs_id,
+                "reason": "Phase 6 acceptance: repair a deliberately induced kernel mismatch",
+                "intervention_id": intervention_id,
+            },
+            retries=3,
+        )
+        evidence["repair_response"] = repair_response
+        if repair_response.get("status") != "accepted":
+            evidence["result"] = "FAIL"
+            evidence["error"] = "Operator repair was not accepted"
+            return evidence
+
+        phase6_progress(f"dirty-repair: waiting for {gs_id} clean after repair")
+        clean = _wait_for_actuation_state(token, gs_id, "clean", wait_s=180)
+        phase6_progress(f"dirty-repair: clean observation {clean.get('result')}")
+        repair_events = []
+        succeeded = False
+        failed = []
+        event_deadline = time.monotonic() + 30
+        while time.monotonic() < event_deadline:
+            scheduler_events = request_json(
+                "GET", "/api/v1/ops/events?limit=500&source=scheduler", token=token
+            )
+            repair_events = [
+                event
+                for event in scheduler_events
+                if (event.get("details") or {}).get("intervention_id") == intervention_id
+            ]
+            succeeded = any(
+                event.get("code") == "OPERATOR_REPAIR_SUCCEEDED" for event in repair_events
+            )
+            failed = [
+                event for event in repair_events if event.get("code") == "OPERATOR_REPAIR_FAILED"
+            ]
+            if succeeded or failed:
+                break
+            time.sleep(1)
+        evidence["clean_observation"] = clean
+        evidence["events_after_repair"] = repair_events
+        evidence["operator_repair_succeeded_event"] = succeeded
+        evidence["operator_repair_failed_events"] = failed
+        evidence["result"] = (
+            "PASS" if clean.get("result") == "PASS" and succeeded and not failed else "FAIL"
+        )
+        if evidence["result"] != "PASS":
+            evidence["error"] = "Operator repair did not return the GS to clean proven state"
+    except Exception as exc:
+        evidence["result"] = "ERROR"
+        evidence["error"] = str(exc)
+    evidence["finished_at"] = datetime.now(UTC).isoformat()
+    return evidence
+
+
+def _wait_for_mbb_overlap(token: str, *, wait_s: int = 600) -> dict:
+    deadline = time.monotonic() + wait_s
+    next_progress = time.monotonic() + 30
+    last_summary: dict = {}
+
+    def pair_for_gs(link: dict, gs_id: str) -> list[str] | None:
+        a = link.get("node_a", "")
+        b = link.get("node_b", "")
+        if a == gs_id and b.startswith("sat-"):
+            return [gs_id, b]
+        if b == gs_id and a.startswith("sat-"):
+            return [gs_id, a]
+        return None
+
+    while time.monotonic() < deadline:
+        decision_snapshot = request_json("GET", "/api/v1/ground-link-decisions", token=token)
+        allocation_events = decision_snapshot.get("allocation_events", [])
+        overlap_events = [
+            event
+            for event in allocation_events
+            if event.get("category") == "mbb_overlap_started"
+            and len(event.get("pair") or []) == 2
+            and len(event.get("successor_pair") or []) == 2
+        ]
+        state = request_json("GET", "/api/v1/state", token=token)
+        by_gs = _ground_links_by_gs(state)
+        teardown_candidates = []
+        multi_link_candidates = []
+        for gs_id, links in sorted(by_gs.items()):
+            links_by_pair = {
+                tuple(pair): link
+                for link in links
+                if (pair := pair_for_gs(link, gs_id)) is not None
+            }
+            for link in links:
+                is_teardown = (
+                    link.get("scheduling_state") == "teardown"
+                    or link.get("teardown_remaining_ticks") is not None
+                    or bool(link.get("successor_pair"))
+                )
+                if not is_teardown:
+                    continue
+                old_pair = pair_for_gs(link, gs_id)
+                successor_pair = link.get("successor_pair") or []
+                successor_link = (
+                    links_by_pair.get(tuple(successor_pair)) if len(successor_pair) == 2 else None
+                )
+                candidate = {
+                    "gs_id": gs_id,
+                    "old_pair": old_pair,
+                    "successor_pair": successor_pair,
+                    "sim_time": state.get("sim_time"),
+                    "decision_snapshot_seq": decision_snapshot.get("snapshot_seq"),
+                    "decision_sim_time": decision_snapshot.get("sim_time"),
+                    "teardown_link": link,
+                    "successor_link": successor_link,
+                    "active_ground_links": links,
+                    "trigger_source": "link_state_snapshot",
+                }
+                teardown_candidates.append(candidate)
+                if old_pair and successor_link:
+                    return {"result": "PASS", **candidate}
+            if len(links) >= 2:
+                multi_link_candidates.append({"gs_id": gs_id, "links": links})
+
+        if overlap_events:
+            event = overlap_events[0]
+            old_pair = list(event["pair"])
+            successor_pair = list(event["successor_pair"])
+            gs_id = old_pair[0] if str(old_pair[0]).startswith("gs-") else old_pair[1]
+            return {
+                "result": "PASS",
+                "gs_id": gs_id,
+                "old_pair": old_pair,
+                "successor_pair": successor_pair,
+                "sim_time": decision_snapshot.get("sim_time"),
+                "decision_snapshot_seq": decision_snapshot.get("snapshot_seq"),
+                "decision_sim_time": decision_snapshot.get("sim_time"),
+                "overlap_event": event,
+                "active_ground_links": by_gs.get(gs_id, []),
+                "trigger_source": "ground_allocation_event",
+            }
+
+        last_summary = {
+            "sim_time": state.get("sim_time"),
+            "decision_snapshot_seq": decision_snapshot.get("snapshot_seq"),
+            "teardown_candidates": teardown_candidates[:5],
+            "multi_link_candidates_without_teardown": multi_link_candidates[:5],
+            "allocation_events": allocation_events[:5],
+            "active_ground_gs_count": len(by_gs),
+        }
+        if time.monotonic() >= next_progress:
+            phase6_progress(
+                "seek-mbb: waiting for OME overlap start; "
+                f"active_ground_gs={len(by_gs)} multi_link={len(multi_link_candidates)} "
+                f"allocation_events={len(allocation_events)}"
+            )
+            next_progress = time.monotonic() + 30
+        time.sleep(0.2)
+    return {
+        "result": "FAIL",
+        "reason": f"No OME MBB overlap start observed within {wait_s}s",
+        **last_summary,
+    }
+
+
+def _parse_api_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _wait_for_playback_not_seeking(token: str, epoch_id: int, *, wait_s: int = 120) -> dict:
+    deadline = time.monotonic() + wait_s
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = request_json("POST", "/api/v1/playback", token=token, json={"action": "get_status"})
+        if last.get("epoch_id", -1) >= epoch_id and last.get("state") != "seeking":
+            return {"result": "PASS", "status": last}
+        time.sleep(1)
+    return {
+        "result": "FAIL",
+        "reason": f"Playback did not resume from seek epoch {epoch_id} within {wait_s}s",
+        "status": last,
+    }
+
+
+def run_phase6_seek_during_mbb_acceptance() -> dict:
+    evidence: dict = {
+        "id": "P6-SEEK-MBB",
+        "label": "seek-during-mbb-overlap",
+        "session_file": str(MBB_ACCEPTANCE_SESSION),
+        "started_at": datetime.now(UTC).isoformat(),
+    }
+    if not MBB_ACCEPTANCE_SESSION.exists():
+        return {**evidence, "result": "ERROR", "error": "MBB acceptance session missing"}
+    try:
+        phase6_progress("seek-mbb: acquiring token")
+        token = get_token()
+        yaml_str = _acceptance_session_yaml(
+            session_name=f"phase6-seek-mbb-{int(time.time())}",
+            mbb_overlap_ticks=600,
+        )
+        phase6_progress("seek-mbb: deploying session")
+        evidence["deploy_response"] = deploy_session(token, yaml_str)
+        if evidence["deploy_response"].get("status") != "switching":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Deploy rejected: {evidence['deploy_response']}"
+            return evidence
+        ready_result = wait_for_ready(token, timeout=600)
+        evidence["ready_result"] = ready_result
+        if ready_result.get("phase") != "Ready":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Did not reach Ready: {ready_result}"
+            return evidence
+
+        time.sleep(20)
+        token = get_token()
+        phase6_progress("seek-mbb: waiting for OME teardown-state overlap")
+        overlap = _wait_for_mbb_overlap(token, wait_s=900)
+        evidence["overlap_observation"] = overlap
+        phase6_progress(f"seek-mbb: overlap observation {overlap.get('result')}")
+        if overlap.get("result") != "PASS":
+            evidence["result"] = "FAIL"
+            evidence["error"] = "No MBB overlap available for seek test"
+            return evidence
+
+        current_sim = _parse_api_datetime(overlap["sim_time"])
+        seek_target = current_sim + timedelta(seconds=30)
+        phase6_progress(f"seek-mbb: requesting seek to {seek_target.isoformat()}")
+        seek_response = request_json(
+            "POST",
+            "/api/v1/playback",
+            token=token,
+            json={"action": "seek", "target_sim_time": seek_target.isoformat()},
+            retries=3,
+        )
+        evidence["seek_request"] = {
+            "target_sim_time": seek_target.isoformat(),
+            "response": seek_response,
+        }
+        if seek_response.get("state") != "seeking" or "epoch_id" not in seek_response:
+            evidence["result"] = "FAIL"
+            evidence["error"] = "Seek was not accepted into seeking state"
+            return evidence
+
+        phase6_progress("seek-mbb: waiting for playback to resume")
+        resumed = _wait_for_playback_not_seeking(token, int(seek_response["epoch_id"]), wait_s=120)
+        evidence["resume_observation"] = resumed
+        phase6_progress(f"seek-mbb: resume observation {resumed.get('result')}")
+        events = request_json("GET", "/api/v1/ops/events?limit=500", token=token)
+        lifecycle = [
+            event
+            for event in events
+            if event.get("source") == "ome" and event.get("code") == "MBB_TEARDOWN_TERMINAL"
+        ]
+        expected_old_pair = overlap.get("old_pair")
+        expected_successor_pair = overlap.get("successor_pair")
+        invalidated = [
+            event
+            for event in lifecycle
+            if (event.get("details") or {}).get("terminal_outcome")
+            == "teardown_invalidated_by_epoch"
+            and (event.get("details") or {}).get("old_pair") == expected_old_pair
+            and (event.get("details") or {}).get("successor_pair") == expected_successor_pair
+        ]
+        bad = [event for event in events if event.get("code") in MBB_BAD_OPS_CODES]
+        state_after = request_json("GET", "/api/v1/state", token=token)
+        notices_after = state_after.get("actuation_notices", [])
+        evidence["events_after_seek"] = events
+        evidence["seek_invalidated_lifecycle_events"] = invalidated
+        evidence["bad_ops_events"] = bad
+        evidence["actuation_notices_after_seek"] = notices_after
+        evidence["result"] = (
+            "PASS"
+            if resumed.get("result") == "PASS" and invalidated and not bad and not notices_after
+            else "FAIL"
+        )
+        if evidence["result"] != "PASS":
+            evidence["error"] = "Seek during MBB did not produce clean epoch invalidation evidence"
+    except Exception as exc:
+        evidence["result"] = "ERROR"
+        evidence["error"] = str(exc)
+    evidence["finished_at"] = datetime.now(UTC).isoformat()
+    return evidence
+
+
 def run_mbb_acceptance() -> dict:
     evidence: dict = {
         "id": "C-J",
@@ -1148,8 +1708,14 @@ def run_mbb_acceptance() -> dict:
         yaml_str = MBB_ACCEPTANCE_SESSION.read_text()
         evidence["yaml_length"] = len(yaml_str)
         evidence["deploy_response"] = deploy_session(token, yaml_str)
+        if evidence["deploy_response"].get("status") != "switching":
+            evidence["result"] = "FAIL"
+            evidence["error"] = f"Deploy rejected: {evidence['deploy_response']}"
+            return evidence
+        phase6_progress("seek-mbb: waiting for session readiness")
         ready_result = wait_for_ready(token, timeout=600)
         evidence["ready_result"] = ready_result
+        phase6_progress(f"seek-mbb: readiness result {ready_result}")
         if ready_result.get("phase") != "Ready":
             evidence["result"] = "FAIL"
             evidence["error"] = f"Did not reach Ready: {ready_result}"
@@ -1291,11 +1857,16 @@ def main():
     print(f"E2E Matrix starting at {datetime.now(UTC).isoformat()}")
     print(f"PID: {os.getpid()}")
 
-    # Clean ALL previous evidence. Every run starts clean.
+    # Clean previous evidence by default. Targeted acceptance runs can append
+    # retained artifacts without destroying prior proof by setting
+    # NODALARC_PRESERVE_EVIDENCE=1.
     evidence_root = Path("tests/integration/e2e-evidence")
-    if evidence_root.exists():
+    preserve_evidence = os.environ.get("NODALARC_PRESERVE_EVIDENCE") == "1"
+    if evidence_root.exists() and not preserve_evidence:
         shutil.rmtree(evidence_root)
         print(f"Deleted previous evidence at {evidence_root}")
+    elif preserve_evidence:
+        print(f"Preserving previous evidence at {evidence_root}")
 
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     evidence_dir = evidence_root / ts
@@ -1318,29 +1889,50 @@ def main():
         failed = 0
         xfailed = 0
 
-        for perm in MATRIX:
-            evidence = run_permutation(perm)
-            results.append(evidence)
+        if os.environ.get("NODALARC_PHASE6_ONLY") != "1":
+            for perm in MATRIX:
+                evidence = run_permutation(perm)
+                results.append(evidence)
 
-            # Write per-permutation evidence immediately
-            eid = perm["id"]
-            label = evidence.get("label", "unknown")
-            evidence_file = evidence_dir / f"perm-{eid:02d}-{label}.json"
-            evidence_file.write_text(json.dumps(evidence, indent=2))
+                # Write per-permutation evidence immediately
+                eid = perm["id"]
+                label = evidence.get("label", "unknown")
+                evidence_file = evidence_dir / f"perm-{eid:02d}-{label}.json"
+                evidence_file.write_text(json.dumps(evidence, indent=2))
 
-            if evidence["result"] == "PASS":
-                passed += 1
-            elif perm.get("xfail"):
-                xfailed += 1
-                evidence["result"] = "XFAIL"
-                evidence["xfail_reason"] = perm["xfail"]
-            else:
-                failed += 1
+                if evidence["result"] == "PASS":
+                    passed += 1
+                elif perm.get("xfail"):
+                    xfailed += 1
+                    evidence["result"] = "XFAIL"
+                    evidence["xfail_reason"] = perm["xfail"]
+                else:
+                    failed += 1
 
         if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":
             evidence = run_mbb_acceptance()
             results.append(evidence)
             evidence_file = evidence_dir / "phase6-cj-mbb-packet-behavior.json"
+            evidence_file.write_text(json.dumps(evidence, indent=2))
+            if evidence["result"] == "PASS":
+                passed += 1
+            else:
+                failed += 1
+
+        if os.environ.get("NODALARC_RUN_PHASE6_DIRTY_REPAIR") == "1":
+            evidence = run_phase6_dirty_repair_acceptance()
+            results.append(evidence)
+            evidence_file = evidence_dir / "phase6-dirty-repair.json"
+            evidence_file.write_text(json.dumps(evidence, indent=2))
+            if evidence["result"] == "PASS":
+                passed += 1
+            else:
+                failed += 1
+
+        if os.environ.get("NODALARC_RUN_PHASE6_SEEK_MBB") == "1":
+            evidence = run_phase6_seek_during_mbb_acceptance()
+            results.append(evidence)
+            evidence_file = evidence_dir / "phase6-seek-during-mbb.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
             if evidence["result"] == "PASS":
                 passed += 1

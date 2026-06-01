@@ -870,6 +870,9 @@ class TestSubscriberResilience:
                         "latency_ms": 3.0,
                         "bandwidth_mbps": 1000.0,
                         "link_type": "isl",
+                        "scheduling_state": "teardown",
+                        "teardown_remaining_ticks": 7,
+                        "successor_pair": ["sat-P00S00", "sat-P00S02"],
                         "sim_time": "2025-01-01T00:00:00+00:00",
                     }
                 ],
@@ -882,6 +885,9 @@ class TestSubscriberResilience:
         assert link.range_km == 900.0
         assert link.interface_a == "isl0"
         assert link.interface_b == "isl1"
+        assert link.scheduling_state == "teardown"
+        assert link.teardown_remaining_ticks == 7
+        assert link.successor_pair == ("sat-P00S00", "sat-P00S02")
         assert ctx.last_snapshot_seq == 12
 
     def test_malformed_snapshot_does_not_advance_sequence_or_replace_state(self):

@@ -5,7 +5,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -384,6 +385,20 @@ def _actual_link_snapshots(publish_mock: AsyncMock) -> list[ActualLinkSnapshot]:
         if subject and ".actual." in subject:
             out.append(ActualLinkSnapshot.model_validate_json(payload))
     return out
+
+
+def _published_ops_codes(publish_mock: AsyncMock) -> list[str]:
+    codes: list[str] = []
+    for call in publish_mock.await_args_list:
+        subject = call.args[0] if call.args else call.kwargs.get("subject")
+        payload = call.args[1] if len(call.args) > 1 else call.kwargs.get("payload")
+        if not subject or ".ops." not in subject:
+            continue
+        data = json.loads(payload.decode() if isinstance(payload, bytes) else payload)
+        code = data.get("code")
+        if code:
+            codes.append(code)
+    return codes
 
 
 def test_reconcile_publishes_recoverable_kernel_actual_on_membership_change() -> None:
@@ -901,3 +916,94 @@ def test_authority_subset_violation_halts_callback_path_and_queues_sentinel() ->
     assert d._running is False
     assert d._dispatch_blocked_reason.startswith("C-A authority subset violation")
     assert d._dispatch_queue.get_nowait() is None
+
+
+def test_clean_kernel_audit_verifies_scheduler_actual_links_without_state_change() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._send_kernel_inventory = AsyncMock(
+        return_value=_success_result(pair=pair, operation="KernelInventory")
+    )
+    d._js.publish = AsyncMock()
+
+    result = asyncio.run(d._audit_clean_ground_kernel_state(sim_time=SIM_TIME, gs_ids={"gs-multi"}))
+
+    assert result == {"gs-multi": True}
+    assert d._gs_actuation["gs-multi"].state == GroundActuationStateName.CLEAN
+    call = d._send_kernel_inventory.await_args.kwargs
+    assert set(call["expected_up"]) == {pair}
+    assert set(call["expected_down"]) == set()
+    assert _published_ops_codes(d._js.publish) == ["KERNEL_VERIFY_ATTEMPTED"]
+
+
+def test_clean_kernel_audit_mismatch_marks_kernel_dirty_and_preserves_failure_details() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._send_kernel_inventory = AsyncMock(
+        return_value=_actuation_result(
+            pair=pair,
+            link_type="ground",
+            gs_id="gs-multi",
+            failure=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+            operation="KernelInventory",
+        )
+    )
+    d._js.publish = AsyncMock()
+
+    result = asyncio.run(d._audit_clean_ground_kernel_state(sim_time=SIM_TIME, gs_ids={"gs-multi"}))
+
+    assert result == {"gs-multi": False}
+    state = d._gs_actuation["gs-multi"]
+    assert state.state == GroundActuationStateName.KERNEL_DIRTY
+    assert state.reason_code == "KERNEL_DIRTY"
+    assert state.affected_pairs == frozenset({pair})
+    assert state.recovery.next_verify_after is not None
+    codes = _published_ops_codes(d._js.publish)
+    assert codes == ["KERNEL_VERIFY_ATTEMPTED", "KERNEL_DIRTY"]
+
+
+def test_clean_kernel_audit_never_clears_existing_dirty_state_by_inference() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._gs_actuation["gs-multi"] = GroundActuationState(
+        gs_id="gs-multi",
+        state=GroundActuationStateName.KERNEL_DIRTY,
+        reason_code="KERNEL_DIRTY",
+    )
+    d._send_kernel_inventory = AsyncMock(
+        return_value=_success_result(pair=pair, operation="KernelInventory")
+    )
+    d._js.publish = AsyncMock()
+
+    result = asyncio.run(d._audit_clean_ground_kernel_state(sim_time=SIM_TIME, gs_ids={"gs-multi"}))
+
+    assert result == {}
+    assert d._gs_actuation["gs-multi"].state == GroundActuationStateName.KERNEL_DIRTY
+    d._send_kernel_inventory.assert_not_awaited()
+
+
+def test_clean_kernel_audit_due_gate_uses_injected_clock_and_is_reproducible() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    base = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
+    now = {"value": base}
+    d._now = lambda: now["value"]
+    d._clean_kernel_audit_interval_s = 60.0
+    d._last_clean_kernel_audit_at = base
+    d._send_kernel_inventory = AsyncMock(
+        return_value=_success_result(pair=pair, operation="KernelInventory")
+    )
+    d._js.publish = AsyncMock()
+
+    now["value"] = base + timedelta(seconds=59)
+    asyncio.run(d._run_due_kernel_verifications(sim_time=SIM_TIME))
+    d._send_kernel_inventory.assert_not_called()
+
+    now["value"] = base + timedelta(seconds=60)
+    asyncio.run(d._run_due_kernel_verifications(sim_time=SIM_TIME))
+    d._send_kernel_inventory.assert_awaited_once()
+    assert _published_ops_codes(d._js.publish) == ["KERNEL_VERIFY_ATTEMPTED"]

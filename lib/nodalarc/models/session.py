@@ -337,12 +337,13 @@ class SubstrateCompensationConfig(BaseModel):
 
 
 class DispatchConfig(BaseModel):
-    """Dispatch authority and latency freshness settings."""
+    """Dispatch authority, latency freshness, and kernel-proof cadence."""
 
     model_config = ConfigDict(extra="forbid")
 
     latency_authority: Literal["ome"] = "ome"
     max_latency_age_ticks: int = 1
+    clean_kernel_audit_interval_s: float = 60.0
     substrate_compensation: SubstrateCompensationConfig = Field(
         default_factory=SubstrateCompensationConfig
     )
@@ -352,6 +353,13 @@ class DispatchConfig(BaseModel):
     def _positive_latency_age(cls, value: int) -> int:
         if value < 1:
             raise ValueError("dispatch.max_latency_age_ticks must be >= 1")
+        return value
+
+    @field_validator("clean_kernel_audit_interval_s")
+    @classmethod
+    def _positive_clean_kernel_audit_interval(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("dispatch.clean_kernel_audit_interval_s must be > 0")
         return value
 
 

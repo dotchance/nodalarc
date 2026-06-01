@@ -347,6 +347,7 @@ def main() -> None:
         sat_ground_terminal_capacities=sat_ground_terminal_capacities,
         mbb_dispatch=mbb_dispatch,
         rtt_to_one_way_policy=session.dispatch.substrate_compensation.rtt_to_one_way,
+        clean_kernel_audit_interval_s=session.dispatch.clean_kernel_audit_interval_s,
         session_id=session_id,
         wiring_generation=wiring_manifest.wiring_generation,
         required_substrate_pairs=wiring_manifest.required_substrate_pairs,

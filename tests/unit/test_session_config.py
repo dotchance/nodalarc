@@ -70,6 +70,7 @@ class TestSessionConfigLoading:
         assert config.simulation.acknowledge_bbm_handover_gap is False
         assert config.orbit.propagator == "keplerian-circular"
         assert config.dispatch.latency_authority == "ome"
+        assert config.dispatch.clean_kernel_audit_interval_s == 60.0
         assert config.dispatch.substrate_compensation.rtt_to_one_way == "half-rtt"
         assert config.scheduling.ground.handover_mode == "bbm"
         assert config.observability.decision_trace.active_links == "always"
@@ -269,6 +270,12 @@ class TestEngineConfigValidation:
             }
         }
         with pytest.raises(ValidationError, match="half-rtt"):
+            SessionConfig.model_validate(data)
+
+    def test_clean_kernel_audit_interval_must_be_positive(self):
+        data = dict(_SAMPLE_SESSION)
+        data["dispatch"] = {"clean_kernel_audit_interval_s": 0}
+        with pytest.raises(ValidationError, match="clean_kernel_audit_interval_s must be > 0"):
             SessionConfig.model_validate(data)
 
     def test_time_values_must_be_positive(self):

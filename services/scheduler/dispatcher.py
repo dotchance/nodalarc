@@ -49,7 +49,7 @@ import socket
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import nats
@@ -204,6 +204,7 @@ class Dispatcher:
         sat_ground_terminal_capacities: dict[str, int] | None = None,
         mbb_dispatch: bool = False,
         rtt_to_one_way_policy: Literal["half-rtt"] = "half-rtt",
+        clean_kernel_audit_interval_s: float | None = 60.0,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._now = now if now is not None else lambda: datetime.now(UTC)
@@ -219,6 +220,10 @@ class Dispatcher:
         if rtt_to_one_way_policy != "half-rtt":
             raise ValueError(f"Unsupported RTT conversion policy: {rtt_to_one_way_policy!r}")
         self._rtt_to_one_way_policy = rtt_to_one_way_policy
+        if clean_kernel_audit_interval_s is not None and clean_kernel_audit_interval_s <= 0:
+            raise ValueError("clean_kernel_audit_interval_s must be > 0 when set")
+        self._clean_kernel_audit_interval_s = clean_kernel_audit_interval_s
+        self._last_clean_kernel_audit_at = self._now()
         if gs_terminal_capacities is None:
             log.error("FATAL: Dispatcher created with no gs_terminal_capacities")
             raise ValueError("gs_terminal_capacities is required")
@@ -1791,6 +1796,76 @@ class Dispatcher:
             )
         return False
 
+    async def _audit_clean_ground_kernel_state(
+        self,
+        *,
+        sim_time: datetime,
+        gs_ids: set[str] | frozenset[str] | list[str] | tuple[str, ...] | None = None,
+    ) -> dict[str, bool]:
+        """Read-only reconciliation audit for GSes currently believed clean.
+
+        Phase 5's KernelInventory path proved dirty recovery. Phase 6 uses the same
+        non-mutating proof boundary to audit the *clean* claim: every actual ground
+        link the Scheduler believes the kernel has up must still be provable, and
+        every tracked stale footprint must still be provably down. A mismatch does
+        not self-heal and does not clear by inference; it transitions the GS to
+        kernel_dirty with typed ops details so the operator sees the truth.
+        """
+        selected = sorted(gs_ids) if gs_ids is not None else sorted(self._gs_capacities)
+        outcomes: dict[str, bool] = {}
+        for gs_id in selected:
+            state_before = self._ground_state(gs_id)
+            if state_before.state != GroundActuationStateName.CLEAN:
+                continue
+
+            expected_up = self._actual_ground_pairs_for_gs(gs_id)
+            expected_down = self._kernel_expected_down_for_gs(gs_id, expected_up)
+            if not expected_up and not expected_down:
+                outcomes[gs_id] = True
+                continue
+
+            result = await self._send_kernel_inventory(
+                gs_id=gs_id,
+                expected_up=expected_up,
+                expected_down=expected_down,
+                sim_time=sim_time,
+            )
+            details = self._actuation_details(
+                gs_id=gs_id,
+                operation="KernelInventoryAudit",
+                failure_class=ActuationFailureClass.NONE
+                if not result.has_failures
+                else ActuationFailureClass.GROUND_KERNEL_DIRTY,
+                affected_pairs=result.failed_pairs,
+                result=result,
+                sim_time=sim_time,
+                state_before=state_before,
+                state_after=state_before,
+                reason="clean-state read-only kernel audit",
+            )
+            await self._publish_scheduler_ops(
+                code=SchedulerOpsCode.KERNEL_VERIFY_ATTEMPTED,
+                message=f"KernelInventory clean-state audit attempted for {gs_id}",
+                level="debug" if not result.has_failures else "warning",
+                details=details,
+            )
+            if result.has_failures:
+                await self._set_gs_nonclean(
+                    gs_id=gs_id,
+                    state_name=GroundActuationStateName.KERNEL_DIRTY,
+                    code=SchedulerOpsCode.KERNEL_DIRTY,
+                    operation="KernelInventoryAudit",
+                    failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
+                    affected_pairs=set(result.failed_pairs),
+                    result=result,
+                    sim_time=sim_time,
+                    reason="clean-state kernel audit mismatch",
+                )
+                outcomes[gs_id] = False
+            else:
+                outcomes[gs_id] = True
+        return outcomes
+
     async def _run_due_kernel_verifications(self, *, sim_time: datetime) -> None:
         for gs_id, state in list(self._gs_actuation.items()):
             next_time = state.recovery.next_verify_after
@@ -1800,6 +1875,14 @@ class Dispatcher:
                 continue
             if self._now() >= next_time:
                 await self._verify_gs_against_current_authority(gs_id=gs_id, sim_time=sim_time)
+
+        interval_s = self._clean_kernel_audit_interval_s
+        if interval_s is None:
+            return
+        now = self._now()
+        if (now - self._last_clean_kernel_audit_at) >= timedelta(seconds=interval_s):
+            self._last_clean_kernel_audit_at = now
+            await self._audit_clean_ground_kernel_state(sim_time=sim_time)
 
     async def _publish_fold_diagnostics(self, sim_time: datetime) -> None:
         diagnostics = self._pending_fold_diagnostics
@@ -2514,14 +2597,15 @@ class Dispatcher:
             ns = get_platform_config().kubernetes_namespace
             v1 = kubernetes.client.CoreV1Api()
             documents = load_substrate_status_documents(k8s_v1=v1, namespace=ns)
+            now = self._now()
             self._substrate_by_direction = validate_required_substrate_measurements(
                 required_pairs=self._required_substrate_pairs,
                 documents_by_source=documents,
                 session_id=self._session_id,
                 wiring_generation=self._wiring_generation,
-                now=datetime.now(UTC),
+                now=now,
             )
-            self._last_substrate_reload = datetime.now(UTC)
+            self._last_substrate_reload = now
             log.debug(
                 "Loaded substrate status: %d/%d directions",
                 len(self._substrate_by_direction),
@@ -2538,7 +2622,7 @@ class Dispatcher:
         emulator from looking healthy while silently ignoring physical
         substrate latency.
         """
-        now = datetime.now(UTC)
+        now = self._now()
         if self._required_substrate_pairs and (
             self._last_substrate_reload is None
             or (now - self._last_substrate_reload).total_seconds() >= 10.0

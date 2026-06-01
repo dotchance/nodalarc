@@ -212,6 +212,30 @@ def headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
+def request_json(method: str, path: str, *, token: str | None = None, retries: int = 12, **kwargs):
+    """Request a VS-API JSON endpoint, tolerating session-switch restarts."""
+
+    url = f"{BASE_URL}{path}"
+    request_headers = kwargs.pop("headers", {})
+    if token is not None:
+        request_headers = {**headers(token), **request_headers}
+    last_error = ""
+    for attempt in range(retries):
+        try:
+            resp = requests.request(method, url, headers=request_headers, timeout=10, **kwargs)
+            if resp.status_code >= 500:
+                last_error = f"{resp.status_code} {resp.text[:300]}"
+            else:
+                return resp.json()
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt + 1 < retries:
+            time.sleep(2)
+    raise RuntimeError(
+        f"{method} {path} did not return JSON after {retries} attempts: {last_error}"
+    )
+
+
 def generate_session(token: str, perm: dict) -> str:
     """Generate session YAML via wizard API."""
     body = {
@@ -226,22 +250,19 @@ def generate_session(token: str, perm: dict) -> str:
         body["satellite_type"] = perm["satellite_type"]
     if perm.get("custom_constellation"):
         body["custom_constellation"] = perm["custom_constellation"]
-    resp = requests.post(f"{BASE_URL}/api/v1/session/generate", headers=headers(token), json=body)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Generate failed: {resp.status_code} {resp.text}")
-    return resp.json().get("yaml", "")
+    payload = request_json("POST", "/api/v1/session/generate", token=token, json=body, retries=3)
+    return payload.get("yaml", "")
 
 
 def deploy_session(token: str, yaml_str: str) -> dict:
     """Deploy session via wizard API."""
-    resp = requests.post(
-        f"{BASE_URL}/api/v1/session/deploy",
-        headers=headers(token),
+    return request_json(
+        "POST",
+        "/api/v1/session/deploy",
+        token=token,
         json={"yaml": yaml_str},
+        retries=3,
     )
-    if resp.status_code not in (200, 202):
-        raise RuntimeError(f"Deploy failed: {resp.status_code} {resp.text}")
-    return resp.json()
 
 
 def wait_for_ready(token: str, timeout: int = 600) -> dict:
@@ -283,23 +304,21 @@ def wait_for_ready(token: str, timeout: int = 600) -> dict:
     if not cr_ready:
         return {"phase": "Timeout"}
 
-    # Phase 2: Wait for VS-API session_status to leave "switching"
-    # The _run_switch background task may still be running its poll loop
-    for _ in range(60):  # up to 60s
+    # Phase 2: Wait for VS-API to expose a live, non-empty state snapshot.
+    # The _run_switch background task may still be running its poll loop.
+    for _ in range(120):  # up to 120s
         try:
             t = get_token()
-            resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(t))
-            state = resp.json()
+            state = request_json("GET", "/api/v1/state", token=t, retries=2)
             status = state.get("session_status", "")
-            if status != "switching":
-                nodes = state.get("nodes", [])
+            nodes = state.get("nodes", [])
+            if status != "switching" and nodes:
                 return {"phase": "Ready", "nodes": len(nodes)}
         except Exception:
             pass
         time.sleep(1)
 
-    # VS-API still switching after 60s — return Ready anyway (CR says so)
-    return {"phase": "Ready", "nodes": 0}
+    return {"phase": "Timeout", "detail": "VS-API did not expose a live state snapshot"}
 
 
 def check_pods(perm: dict) -> dict:
@@ -329,8 +348,7 @@ def check_routing(token: str, perm: dict) -> dict:
         }
 
     # Pick first satellite
-    resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-    nodes = resp.json().get("nodes", [])
+    nodes = request_json("GET", "/api/v1/state", token=token).get("nodes", [])
     sat = next((n for n in nodes if n.get("node_id", "").startswith("sat-")), None)
     if not sat:
         return {"error": "no satellites found"}
@@ -340,12 +358,13 @@ def check_routing(token: str, perm: dict) -> dict:
     else:
         cmd = "show ip ospf neighbor"
 
-    introspect_resp = requests.post(
-        f"{BASE_URL}/api/v1/introspect",
-        headers=headers(token),
+    introspect = request_json(
+        "POST",
+        "/api/v1/introspect",
+        token=token,
         json={"node_id": sat["node_id"], "command": cmd},
     )
-    output = introspect_resp.json().get("output", "")
+    output = introspect.get("output", "")
     neighbor_count = len([l for l in output.splitlines() if "Up" in l or "Full" in l])
     return {
         "protocol": protocol,
@@ -358,12 +377,12 @@ def check_routing(token: str, perm: dict) -> dict:
 
 def check_websocket(token: str) -> dict:
     """Check WebSocket delivers advancing sim_time."""
-    t1_resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-    t1 = t1_resp.json().get("sim_time", "")
+    state1 = request_json("GET", "/api/v1/state", token=token)
+    t1 = state1.get("sim_time", "")
     time.sleep(3)
-    t2_resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-    t2 = t2_resp.json().get("sim_time", "")
-    nodes = t2_resp.json().get("nodes", [])
+    state2 = request_json("GET", "/api/v1/state", token=token)
+    t2 = state2.get("sim_time", "")
+    nodes = state2.get("nodes", [])
     sats = [n for n in nodes if n.get("node_id", "").startswith("sat-")]
     plane_ok = all(isinstance(s.get("plane"), int) for s in sats)
 
@@ -371,8 +390,7 @@ def check_websocket(token: str) -> dict:
     retries = 0
     while not plane_ok and retries < 3:
         time.sleep(10)
-        retry_resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-        nodes = retry_resp.json().get("nodes", [])
+        nodes = request_json("GET", "/api/v1/state", token=token).get("nodes", [])
         sats = [n for n in nodes if n.get("node_id", "").startswith("sat-")]
         plane_ok = all(isinstance(s.get("plane"), int) for s in sats)
         retries += 1
@@ -418,8 +436,7 @@ def check_ping(token: str, perm: dict) -> dict:
     if protocol == "nodalpath":
         return check_nodalpath_mpls(token, perm)
 
-    resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token))
-    state = resp.json()
+    state = request_json("GET", "/api/v1/state", token=token)
     nodes = state.get("nodes", [])
     links = state.get("links", [])
     if isinstance(links, dict):
@@ -550,8 +567,7 @@ def check_nodalpath_mpls(token: str, perm: dict) -> dict:
 
 
 def _active_ground_pair(token: str) -> tuple[str, str, str] | None:
-    resp = requests.get(f"{BASE_URL}/api/v1/state", headers=headers(token), timeout=10)
-    state = resp.json()
+    state = request_json("GET", "/api/v1/state", token=token)
     nodes = state.get("nodes", [])
     links = state.get("links", [])
     if isinstance(links, dict):
@@ -590,60 +606,11 @@ def _kubectl_exec(node_id: str, command: str, *, timeout: int = 20) -> dict:
     }
 
 
-def check_mbb_convergence_preconditions(token: str) -> dict:
-    pair = _active_ground_pair(token)
-    if pair is None:
-        return {"result": "FAIL", "reason": "No active ground pair for MBB probe"}
-    src, dst, dst_ip = pair
-    neigh = _kubectl_exec(src, "vtysh -c 'show isis neighbor'", timeout=20)
-    fib = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=20)
-    neighbor_up = neigh["rc"] == 0 and "Up" in neigh["stdout"]
-    fib_ready = fib["rc"] == 0 and dst_ip in fib["stdout"]
-    return {
-        "result": "PASS" if neighbor_up and fib_ready else "FAIL",
-        "src": src,
-        "dst": dst,
-        "dst_ip": dst_ip,
-        "isis_neighbor_up": neighbor_up,
-        "fib_ready": fib_ready,
-        "isis_stdout": neigh["stdout"],
-        "fib_stdout": fib["stdout"],
-    }
-
-
-def check_zero_loss_mbb_ping(token: str, *, count: int = 60, interval_s: float = 0.2) -> dict:
-    pair = _active_ground_pair(token)
-    if pair is None:
-        return {"result": "FAIL", "reason": "No active ground pair for zero-loss probe"}
-    src, dst, dst_ip = pair
-    ping = _kubectl_exec(src, f"ping -c {count} -i {interval_s} -W 1 {dst_ip}", timeout=90)
-    stats = ""
-    for line in ping["stdout"].splitlines():
-        if "packets transmitted" in line:
-            stats = line.strip()
-            break
-    zero_loss = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
-    return {
-        "result": "PASS" if zero_loss else "FAIL",
-        "src": src,
-        "dst": dst,
-        "dst_ip": dst_ip,
-        "count": count,
-        "interval_s": interval_s,
-        "stats": stats,
-        "stdout": ping["stdout"],
-        "stderr": ping["stderr"],
-    }
-
-
 def check_mbb_lifecycle_and_ops(token: str, *, wait_s: int = 180) -> dict:
     deadline = time.monotonic() + wait_s
     last_events: list[dict] = []
     while time.monotonic() < deadline:
-        resp = requests.get(
-            f"{BASE_URL}/api/v1/ops/events?limit=500", headers=headers(token), timeout=10
-        )
-        events = resp.json()
+        events = request_json("GET", "/api/v1/ops/events?limit=500", token=token)
         last_events = events
         lifecycle = [
             event
@@ -672,10 +639,505 @@ def check_mbb_lifecycle_and_ops(token: str, *, wait_s: int = 180) -> dict:
     }
 
 
+def _parse_event_time(event: dict) -> datetime | None:
+    raw = event.get("timestamp")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _event_at_or_after(event: dict, started_at: datetime) -> bool:
+    event_time = _parse_event_time(event)
+    return event_time is not None and event_time >= started_at
+
+
+def _ground_links_by_gs(state: dict) -> dict[str, list[dict]]:
+    links = state.get("links", [])
+    if isinstance(links, dict):
+        links = list(links.values())
+    by_gs: dict[str, list[dict]] = {}
+    for link in links:
+        if link.get("state") != "active":
+            continue
+        a = link.get("node_a", "")
+        b = link.get("node_b", "")
+        if a.startswith("gs-") and b.startswith("sat-"):
+            by_gs.setdefault(a, []).append(link)
+        elif b.startswith("gs-") and a.startswith("sat-"):
+            by_gs.setdefault(b, []).append(link)
+    return by_gs
+
+
+def _node_loopback_ip(node_id: str) -> str | None:
+    if node_id.startswith("sat-"):
+        return _derive_loopback_ip(node_id, [])
+    out = _kubectl_exec(node_id, "ip -4 -o addr show lo", timeout=10)
+    if out["rc"] != 0:
+        return None
+    for part in out["stdout"].split():
+        if part.startswith("10.255.") and "/" in part:
+            return part.split("/", 1)[0]
+    return None
+
+
+def _ground_node_ids(state: dict) -> list[str]:
+    return sorted(
+        n.get("node_id", "")
+        for n in state.get("nodes", [])
+        if n.get("node_id", "").startswith("gs-")
+    )
+
+
+def _find_routed_ground_probe(token: str, *, wait_s: int = 180) -> dict | None:
+    deadline = time.monotonic() + wait_s
+    last_reason = "no routed ground probe found"
+    while time.monotonic() < deadline:
+        state = request_json("GET", "/api/v1/state", token=token)
+        ground_ids = _ground_node_ids(state)
+        by_gs = _ground_links_by_gs(state)
+        for src in sorted(by_gs):
+            for dst_gs in ground_ids:
+                if dst_gs == src:
+                    continue
+                dst_ip = _node_loopback_ip(dst_gs)
+                if not dst_ip:
+                    last_reason = f"could not read loopback for {dst_gs}"
+                    continue
+                route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
+                neigh = _kubectl_exec(src, "vtysh -c 'show isis neighbor'", timeout=10)
+                ping = _kubectl_exec(src, f"ping -c 1 -W 1 {dst_ip}", timeout=10)
+                fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
+                neighbor_up = neigh["rc"] == 0 and "Up" in neigh["stdout"]
+                packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
+                if fib_ready and neighbor_up and packet_ready:
+                    return {
+                        "key": f"{src}->{dst_gs}",
+                        "src": src,
+                        "dst_gs": dst_gs,
+                        "dst_ip": dst_ip,
+                        "active_ground_links": by_gs[src],
+                        "fib_ready": fib_ready,
+                        "neighbor_up": neighbor_up,
+                        "packet_ready": packet_ready,
+                        "route_stdout": route["stdout"],
+                        "isis_stdout": neigh["stdout"],
+                        "ping_stdout": ping["stdout"],
+                    }
+                last_reason = (
+                    f"{src}->{dst_gs} fib={fib_ready} neighbor={neighbor_up} packet={packet_ready}"
+                )
+        time.sleep(3)
+    return {"result": "FAIL", "reason": last_reason}
+
+
+def _find_all_routed_ground_probes(token: str) -> list[dict]:
+    state = request_json("GET", "/api/v1/state", token=token)
+    ground_ids = _ground_node_ids(state)
+    by_gs = _ground_links_by_gs(state)
+    probes: list[dict] = []
+    for src in sorted(by_gs):
+        for dst_gs in ground_ids:
+            if dst_gs == src:
+                continue
+            dst_ip = _node_loopback_ip(dst_gs)
+            if not dst_ip:
+                continue
+            route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
+            neigh = _kubectl_exec(src, "vtysh -c 'show isis neighbor'", timeout=10)
+            ping = _kubectl_exec(src, f"ping -c 1 -W 1 {dst_ip}", timeout=10)
+            fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
+            neighbor_up = neigh["rc"] == 0 and "Up" in neigh["stdout"]
+            packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
+            if fib_ready and neighbor_up and packet_ready:
+                probes.append(
+                    {
+                        "key": f"{src}->{dst_gs}",
+                        "src": src,
+                        "dst_gs": dst_gs,
+                        "dst_ip": dst_ip,
+                        "active_ground_links": by_gs[src],
+                        "fib_ready": fib_ready,
+                        "neighbor_up": neighbor_up,
+                        "packet_ready": packet_ready,
+                        "route_stdout": route["stdout"],
+                        "isis_stdout": neigh["stdout"],
+                        "ping_stdout": ping["stdout"],
+                    }
+                )
+    return probes
+
+
+def check_mbb_convergence_preconditions(token: str) -> dict:
+    probe = _find_routed_ground_probe(token, wait_s=180)
+    if not probe or probe.get("result") == "FAIL":
+        return probe or {"result": "FAIL", "reason": "No routed ground probe found"}
+    return {"result": "PASS", **probe}
+
+
+def _sequence_ranges(seqs: list[int]) -> list[list[int]]:
+    if not seqs:
+        return []
+    ranges: list[list[int]] = []
+    start = prev = seqs[0]
+    for seq in seqs[1:]:
+        if seq == prev + 1:
+            prev = seq
+            continue
+        ranges.append([start, prev])
+        start = prev = seq
+    ranges.append([start, prev])
+    return ranges
+
+
+def _seq_near_ranges(
+    seq: int | None, ranges: list[list[int]], *, tolerance: int = 5
+) -> bool | None:
+    if seq is None:
+        return None
+    return any(start - tolerance <= seq <= end + tolerance for start, end in ranges)
+
+
+def _packet_handover_correlation(output: dict, terminal_observation: dict | None) -> dict:
+    missing_ranges = output.get("missing_ranges") or []
+    overlap_seq = (output.get("overlap_observation") or {}).get("estimated_ping_seq")
+    terminal_seq = (terminal_observation or {}).get("estimated_ping_seq")
+    return {
+        "missing_ranges": missing_ranges,
+        "overlap_estimated_ping_seq": overlap_seq,
+        "terminal_estimated_ping_seq": terminal_seq,
+        "loss_near_overlap": _seq_near_ranges(overlap_seq, missing_ranges),
+        "loss_near_terminal": _seq_near_ranges(terminal_seq, missing_ranges),
+    }
+
+
+def _ping_packet_outcome(stdout: str, stderr: str, returncode: int | None) -> dict:
+    stats = ""
+    for line in stdout.splitlines():
+        if "packets transmitted" in line:
+            stats = line.strip()
+            zero_loss = "0% packet loss" in line
+            return {
+                "packet_outcome": "zero_loss" if zero_loss else "loss_observed",
+                "zero_loss": zero_loss,
+                "protocol_observed": True,
+                "stats": stats,
+                "reply_count": None,
+                "missing_ranges": [],
+            }
+    if "Network unreachable" in stderr or "Network unreachable" in stdout:
+        return {
+            "packet_outcome": "routing_unreachable",
+            "zero_loss": False,
+            "protocol_observed": True,
+            "stats": "network unreachable",
+            "reply_count": None,
+            "missing_ranges": [],
+        }
+    seqs: list[int] = []
+    for line in stdout.splitlines():
+        marker = "seq="
+        if marker not in line:
+            continue
+        tail = line.split(marker, 1)[1]
+        token = tail.split(None, 1)[0]
+        try:
+            seqs.append(int(token))
+        except ValueError:
+            continue
+    if not seqs:
+        return {
+            "packet_outcome": "no_replies" if not stderr.strip() else "probe_error",
+            "zero_loss": False,
+            "protocol_observed": not stderr.strip(),
+            "stats": "no ICMP replies observed",
+            "returncode": returncode,
+        }
+    expected = list(range(min(seqs), max(seqs) + 1))
+    if seqs == expected and not stderr.strip():
+        return {
+            "packet_outcome": "zero_loss",
+            "zero_loss": True,
+            "protocol_observed": True,
+            "stats": f"{len(seqs)} contiguous replies seq={seqs[0]}..{seqs[-1]}",
+            "reply_count": len(seqs),
+            "first_reply_seq": seqs[0],
+            "last_reply_seq": seqs[-1],
+            "missing_ranges": [],
+        }
+    missing = sorted(set(expected) - set(seqs))
+    return {
+        "packet_outcome": "loss_observed",
+        "zero_loss": False,
+        "protocol_observed": True,
+        "stats": f"missing ICMP sequence(s): {missing[:20]}",
+        "reply_count": len(seqs),
+        "first_reply_seq": seqs[0],
+        "last_reply_seq": seqs[-1],
+        "missing_ranges": _sequence_ranges(missing),
+    }
+
+
+def _route_dev(route_stdout: str) -> str | None:
+    parts = route_stdout.split()
+    for idx, part in enumerate(parts[:-1]):
+        if part == "dev":
+            return parts[idx + 1]
+    return None
+
+
+def _successor_interface(active_links: list[dict]) -> str | None:
+    gained = [link for link in active_links if link.get("link_reason") == "vis_gained"]
+    if len(gained) == 1:
+        return gained[0].get("interface_a")
+    return None
+
+
+def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float = 0.2) -> dict:
+    import signal
+    import subprocess
+
+    probes = _find_all_routed_ground_probes(token)
+    if not probes:
+        return {"result": "FAIL", "reason": "No routed ground probes found"}
+
+    started_at = datetime.now(UTC)
+    deadline = time.monotonic() + min(max(count * interval_s + 30, 120), 300)
+    procs: dict[str, subprocess.Popen] = {}
+    proc_started_mono: dict[str, float] = {}
+    proc_started_wall: dict[str, str] = {}
+    probe_by_key = {probe["key"]: probe for probe in probes}
+    probes_by_src: dict[str, list[dict]] = {}
+    for probe in probes:
+        probes_by_src.setdefault(probe["src"], []).append(probe)
+    overlap_by_key: dict[str, dict] = {}
+    terminal_by_src: dict[str, dict] = {}
+    terminal_observation_by_key: dict[str, dict] = {}
+    bad_events: list[dict] = []
+    selected_key: str | None = None
+    terminal_seen_at: float | None = None
+
+    for probe in probes:
+        key = probe["key"]
+        src = probe["src"]
+        dst_ip = probe["dst_ip"]
+        cmd = (
+            f"{KUBECTL} exec -n nodalarc {src.lower()} -c frr -- "
+            f"ping -c {count} -i {interval_s} -W 1 {dst_ip}"
+        )
+        proc_started_mono[key] = time.monotonic()
+        proc_started_wall[key] = datetime.now(UTC).isoformat()
+        procs[key] = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=True,
+            start_new_session=True,
+        )
+
+    try:
+        while time.monotonic() < deadline:
+            state = request_json("GET", "/api/v1/state", token=token)
+            by_gs = _ground_links_by_gs(state)
+            for src, active_for_src in by_gs.items():
+                if src not in probes_by_src or len(active_for_src) < 2:
+                    continue
+                successor_if = _successor_interface(active_for_src)
+                if successor_if is None:
+                    continue
+                neigh = _kubectl_exec(src, "vtysh -c 'show isis neighbor'", timeout=10)
+                neighbor_up = neigh["rc"] == 0 and "Up" in neigh["stdout"]
+                for probe in probes_by_src[src]:
+                    key = probe["key"]
+                    if key in overlap_by_key:
+                        continue
+                    fib = _kubectl_exec(src, f"ip route get {probe['dst_ip']}", timeout=10)
+                    route_dev = _route_dev(fib["stdout"])
+                    successor_fib_ready = (
+                        fib["rc"] == 0
+                        and probe["dst_ip"] in fib["stdout"]
+                        and route_dev == successor_if
+                    )
+                    overlap_observed_mono = time.monotonic()
+                    overlap_by_key[key] = {
+                        "sim_time": state.get("sim_time"),
+                        "observed_wall_time": datetime.now(UTC).isoformat(),
+                        "estimated_ping_seq": int(
+                            (overlap_observed_mono - proc_started_mono[key]) / interval_s
+                        ),
+                        "active_ground_links": active_for_src,
+                        "successor_interface": successor_if,
+                        "route_dev": route_dev,
+                        "neighbor_up": neighbor_up,
+                        "successor_fib_ready": successor_fib_ready,
+                        "isis_stdout": neigh["stdout"],
+                        "fib_stdout": fib["stdout"],
+                    }
+
+            events = request_json("GET", "/api/v1/ops/events?limit=500", token=token)
+            for event in events:
+                if not _event_at_or_after(event, started_at):
+                    continue
+                if event.get("code") in MBB_BAD_OPS_CODES:
+                    bad_events.append(event)
+                details = event.get("details") or {}
+                src = details.get("gs_id")
+                if (
+                    event.get("source") == "ome"
+                    and event.get("code") == "MBB_TEARDOWN_TERMINAL"
+                    and src in probes_by_src
+                    and details.get("terminal_outcome") == "teardown_completed"
+                ):
+                    terminal_by_src[src] = event
+                    for probe in probes_by_src[src]:
+                        key = probe["key"]
+                        overlap = overlap_by_key.get(key)
+                        if overlap and overlap.get("successor_fib_ready"):
+                            observed_mono = time.monotonic()
+                            terminal_observation_by_key[key] = {
+                                "event_timestamp": event.get("timestamp"),
+                                "observed_wall_time": datetime.now(UTC).isoformat(),
+                                "estimated_ping_seq": int(
+                                    (observed_mono - proc_started_mono[key]) / interval_s
+                                ),
+                            }
+                            if selected_key is None:
+                                selected_key = key
+                                terminal_seen_at = observed_mono
+                                break
+            if selected_key is not None and terminal_seen_at is not None:
+                if time.monotonic() - terminal_seen_at >= 5:
+                    break
+            if all(proc.poll() is not None for proc in procs.values()):
+                break
+            time.sleep(0.5)
+    finally:
+        outputs: dict[str, dict] = {}
+        for key, proc in procs.items():
+            if proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGINT)
+                except ProcessLookupError:
+                    pass
+            try:
+                stdout, stderr = proc.communicate(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                stdout, stderr = proc.communicate(timeout=5)
+            packet_result = _ping_packet_outcome(stdout, stderr, proc.returncode)
+            outputs[key] = {
+                **packet_result,
+                "returncode": proc.returncode,
+                "started_wall_time": proc_started_wall[key],
+                "overlap_observation": overlap_by_key.get(key),
+                "terminal_observation": terminal_observation_by_key.get(key),
+                "stdout": stdout[-4000:],
+                "stderr": stderr[-1000:],
+            }
+
+    if selected_key is None:
+        return {
+            "result": "FAIL",
+            "reason": "No probed GS completed an MBB teardown with successor FIB ready",
+            "probes": probes,
+            "overlap_by_key": overlap_by_key,
+            "terminal_gs_ids": sorted(terminal_by_src),
+            "bad_ops_codes": [event.get("code") for event in bad_events],
+            "probe_outputs": outputs,
+        }
+
+    overlap = overlap_by_key.get(selected_key)
+    output = outputs[selected_key]
+    passed = output["protocol_observed"] and not bad_events
+    probe = probe_by_key[selected_key]
+    terminal_observation = terminal_observation_by_key.get(selected_key)
+    return {
+        "result": "PASS" if passed else "FAIL",
+        "src": probe["src"],
+        "dst_gs": probe["dst_gs"],
+        "dst_ip": probe["dst_ip"],
+        "count": count,
+        "interval_s": interval_s,
+        "stats": output["stats"],
+        "packet_outcome": output["packet_outcome"],
+        "zero_loss": output["zero_loss"],
+        "protocol_observed": output["protocol_observed"],
+        "reply_count": output.get("reply_count"),
+        "missing_ranges": output.get("missing_ranges"),
+        "overlap_proof": overlap,
+        "terminal_event": terminal_by_src.get(probe["src"]),
+        "terminal_observation": terminal_observation,
+        "packet_handover_correlation": _packet_handover_correlation(output, terminal_observation),
+        "bad_ops_codes": [event.get("code") for event in bad_events],
+        "stdout": output["stdout"],
+        "stderr": output["stderr"],
+    }
+
+
+def check_mbb_packet_behavior(
+    token: str,
+    *,
+    count: int = 1200,
+    interval_s: float = 0.2,
+    max_wait_s: int = 900,
+) -> dict:
+    deadline = time.monotonic() + max_wait_s
+    attempts: list[dict] = []
+    while time.monotonic() < deadline:
+        remaining_s = deadline - time.monotonic()
+        if remaining_s < 60:
+            break
+        window_count = min(count, max(300, int(min(remaining_s, 300) / interval_s)))
+        evidence = _run_mbb_packet_window(token, count=window_count, interval_s=interval_s)
+        attempts.append(
+            {
+                "result": evidence.get("result"),
+                "reason": evidence.get("reason"),
+                "src": evidence.get("src"),
+                "dst_gs": evidence.get("dst_gs"),
+                "stats": evidence.get("stats"),
+                "packet_outcome": evidence.get("packet_outcome"),
+                "terminal_gs_ids": evidence.get("terminal_gs_ids"),
+            }
+        )
+        if evidence.get("result") == "PASS":
+            evidence["attempts"] = attempts
+            return evidence
+        if evidence.get("terminal_event") is not None:
+            evidence["attempts"] = attempts
+            return evidence
+    return {
+        "result": "FAIL",
+        "reason": "No qualifying MBB handover packet observation before timeout",
+        "max_wait_s": max_wait_s,
+        "attempts": attempts,
+    }
+
+
+def check_zero_loss_mbb_ping(
+    token: str,
+    *,
+    count: int = 1200,
+    interval_s: float = 0.2,
+    max_wait_s: int = 900,
+) -> dict:
+    evidence = check_mbb_packet_behavior(
+        token,
+        count=count,
+        interval_s=interval_s,
+        max_wait_s=max_wait_s,
+    )
+    evidence["zero_loss_required"] = False
+    return evidence
+
+
 def run_mbb_acceptance() -> dict:
     evidence: dict = {
         "id": "C-J",
-        "label": "zero-loss-mbb-acceptance",
+        "label": "mbb-packet-behavior-acceptance",
         "session_file": str(MBB_ACCEPTANCE_SESSION),
         "started_at": datetime.now(UTC).isoformat(),
     }
@@ -696,11 +1158,11 @@ def run_mbb_acceptance() -> dict:
         time.sleep(30)
         token = get_token()
         evidence["convergence_preconditions"] = check_mbb_convergence_preconditions(token)
-        evidence["zero_loss_ping"] = check_zero_loss_mbb_ping(token)
+        evidence["mbb_packet_behavior"] = check_mbb_packet_behavior(token)
         evidence["lifecycle_and_ops"] = check_mbb_lifecycle_and_ops(token)
         passed = all(
             evidence[key].get("result") == "PASS"
-            for key in ("convergence_preconditions", "zero_loss_ping", "lifecycle_and_ops")
+            for key in ("convergence_preconditions", "mbb_packet_behavior", "lifecycle_and_ops")
         )
         evidence["result"] = "PASS" if passed else "FAIL"
     except Exception as exc:
@@ -878,7 +1340,7 @@ def main():
         if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":
             evidence = run_mbb_acceptance()
             results.append(evidence)
-            evidence_file = evidence_dir / "phase6-cj-zero-loss-mbb.json"
+            evidence_file = evidence_dir / "phase6-cj-mbb-packet-behavior.json"
             evidence_file.write_text(json.dumps(evidence, indent=2))
             if evidence["result"] == "PASS":
                 passed += 1

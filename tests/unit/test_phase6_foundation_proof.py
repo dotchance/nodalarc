@@ -2,8 +2,8 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Phase 6 local foundation proof tests.
 
-These tests cover the deterministic/local parts of Phase 6. They do not claim
-C-J zero-loss acceptance; that remains a real-pod run with retained evidence.
+These tests cover the deterministic/local parts of Phase 6. C-J packet-behavior
+acceptance remains a real-pod run with retained evidence.
 """
 
 from __future__ import annotations

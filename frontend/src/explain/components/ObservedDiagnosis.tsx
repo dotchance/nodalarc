@@ -32,7 +32,19 @@ function fmtWindow(timeline: GsDecisionTimelineFacts): string | null {
   return seconds > 0 ? `${seconds}s sim window` : "current sim tick";
 }
 
-export function ObservedDiagnosis({ timeline }: { timeline: GsDecisionTimelineFacts }) {
+const WINDOW_LIMITS = [30, 120, 720] as const;
+
+export function ObservedDiagnosis({
+  timeline,
+  selectedLimit = 120,
+  onLimitChange,
+  onSelectSat,
+}: {
+  timeline: GsDecisionTimelineFacts;
+  selectedLimit?: number;
+  onLimitChange?: (limit: number) => void;
+  onSelectSat?: (satId: string) => void;
+}) {
   const latest = timeline.samples.length ? timeline.samples[timeline.samples.length - 1] : null;
   const top = timeline.reason_counts[0] ?? null;
   const windowLabel = fmtWindow(timeline);
@@ -45,6 +57,22 @@ export function ObservedDiagnosis({ timeline }: { timeline: GsDecisionTimelineFa
           {timeline.sample_count} samples{windowLabel ? ` · ${windowLabel}` : ""}
         </span>
       </div>
+
+      {onLimitChange ? (
+        <div className="observed-diagnosis__windows" role="group" aria-label="Observed sample window">
+          {WINDOW_LIMITS.map((limit) => (
+            <button
+              key={limit}
+              type="button"
+              className={`observed-diagnosis__window${selectedLimit === limit ? " observed-diagnosis__window--active" : ""}`}
+              onClick={() => onLimitChange(limit)}
+              aria-pressed={selectedLimit === limit}
+            >
+              {limit}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {latest ? (
         <div className="detail-row">
@@ -69,12 +97,19 @@ export function ObservedDiagnosis({ timeline }: { timeline: GsDecisionTimelineFa
       <div className="observed-diagnosis__strip" aria-label="Observed decision timeline">
         {timeline.samples.map((sample) => {
           const family = STATE_FAMILY[sample.state];
+          const peer = peerOf(sample.pair, timeline.gs_id);
+          const title = `${STATE_LABEL[sample.state]}${peer ? ` · ${peer}` : ""}${sample.reason_code ? ` · ${sample.reason_code}` : ""}`;
           return (
-            <span
+            <button
               key={`${sample.epoch_id}:${sample.snapshot_seq}`}
+              type="button"
               className="observed-diagnosis__sample"
               style={{ backgroundColor: FAMILY_TONE[family].css }}
-              title={sample.reason_code ?? STATE_LABEL[sample.state]}
+              title={title}
+              disabled={!peer || !onSelectSat}
+              onClick={() => {
+                if (peer) onSelectSat?.(peer);
+              }}
             />
           );
         })}

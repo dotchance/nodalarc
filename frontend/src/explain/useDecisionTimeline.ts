@@ -14,7 +14,7 @@ export interface DecisionTimelineState {
   error: string | null;
 }
 
-export function useDecisionTimeline(gsId: string | null): DecisionTimelineState {
+export function useDecisionTimeline(gsId: string | null, limit = 120): DecisionTimelineState {
   const [state, setState] = useState<DecisionTimelineState>({
     timeline: null,
     loading: false,
@@ -31,7 +31,7 @@ export function useDecisionTimeline(gsId: string | null): DecisionTimelineState 
 
     const load = async () => {
       try {
-        const timeline = await fetchDecisionTimeline(gsId, controller.signal);
+        const timeline = await fetchDecisionTimeline(gsId, limit, controller.signal);
         if (alive) setState({ timeline, loading: false, error: null });
       } catch (err) {
         if (alive && !controller.signal.aborted) {
@@ -48,7 +48,7 @@ export function useDecisionTimeline(gsId: string | null): DecisionTimelineState 
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [gsId]);
+  }, [gsId, limit]);
 
   return state;
 }

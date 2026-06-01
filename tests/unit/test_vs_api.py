@@ -1553,6 +1553,24 @@ class TestDecisionTimelineEndpoint:
             "eligible_unselected": 1,
         }
 
+    def test_timeline_limit_returns_latest_samples(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_timeline())
+
+        r = TestClient(m.app).get(
+            "/api/v1/decision-explanation/timeline",
+            params={"gs": "gs-den", "limit": 1},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["sample_count"] == 1
+        assert body["samples"][0]["snapshot_seq"] == 43
+        assert body["reason_counts"] == [
+            {"state": "eligible_unselected", "reason_code": "gs_capacity", "count": 1}
+        ]
+
     def test_timeline_resets_on_epoch_change(self, monkeypatch):
         import asyncio
         from unittest.mock import MagicMock

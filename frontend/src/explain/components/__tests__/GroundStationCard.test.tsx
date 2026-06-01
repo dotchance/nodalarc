@@ -3,7 +3,7 @@
 /** Render contract for the GroundStationCard — families must look different. */
 
 import { afterEach, describe, it, expect } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 afterEach(cleanup);
 import { FUNNEL_GATES } from "../../families";
@@ -149,6 +149,7 @@ describe("GroundStationCard", () => {
     expect(screen.getByText(/2\.0s elapsed \/ fault at 1\.2s/)).toBeTruthy();
   });
   it("renders observed diagnosis from the bounded timeline", () => {
+    let inspected: string | null = null;
     render(
       <GroundStationCard
         facts={denverGap}
@@ -189,12 +190,22 @@ describe("GroundStationCard", () => {
             },
           ],
         }}
+        timelineLimit={30}
+        onTimelineLimitChange={() => {}}
+        onInspectSat={(sat) => {
+          inspected = sat;
+        }}
       />,
     );
 
     expect(screen.getByText("Observed diagnosis")).toBeTruthy();
     expect(screen.getByText(/2 samples/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "30" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getAllByText("Below elevation mask").length).toBeGreaterThan(0);
+    const sampleButton = screen.getAllByTitle(/sat-P00S02/)[0];
+    if (!sampleButton) throw new Error("sample button not found");
+    fireEvent.click(sampleButton);
+    expect(inspected).toBe("sat-P00S02");
   });
 
 });

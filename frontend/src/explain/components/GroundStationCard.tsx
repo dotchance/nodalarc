@@ -23,9 +23,15 @@ function fmtMs(ms: number): string {
 export function GroundStationCard({
   facts,
   timeline,
+  timelineLimit,
+  onTimelineLimitChange,
+  onInspectSat,
 }: {
   facts: DecisionFacts;
   timeline?: GsDecisionTimelineFacts | null;
+  timelineLimit?: number;
+  onTimelineLimitChange?: (limit: number) => void;
+  onInspectSat?: (satId: string) => void;
 }) {
   const family = deriveFamily(facts);
   const tone = FAMILY_TONE[family];
@@ -80,7 +86,12 @@ export function GroundStationCard({
       {timeline ? (
         <>
           <h3>Observed diagnosis</h3>
-          <ObservedDiagnosis timeline={timeline} />
+          <ObservedDiagnosis
+            timeline={timeline}
+            selectedLimit={timelineLimit}
+            onLimitChange={onTimelineLimitChange}
+            onSelectSat={onInspectSat}
+          />
         </>
       ) : null}
 

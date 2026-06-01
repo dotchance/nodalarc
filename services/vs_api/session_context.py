@@ -615,10 +615,14 @@ class SessionContext:
                 else:
                     samples.append(sample)
 
-    def ground_decision_timeline(self, gs_id: str) -> GsDecisionTimelineFacts | None:
+    def ground_decision_timeline(
+        self, gs_id: str, *, limit: int | None = None
+    ) -> GsDecisionTimelineFacts | None:
         """Return the bounded observed decision window for one GS."""
         with self.state_lock:
             samples = tuple(self.ground_decision_samples_by_gs.get(gs_id, ()))
+        if limit is not None and limit > 0:
+            samples = samples[-limit:]
         if not samples:
             return None
 

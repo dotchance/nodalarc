@@ -70,9 +70,11 @@ export async function fetchGroundDecisions(
 
 export async function fetchDecisionTimeline(
   gsId: string,
+  limit = 120,
   signal?: AbortSignal,
 ): Promise<GsDecisionTimelineFacts | null> {
-  const url = `${REST_URL}/api/v1/decision-explanation/timeline?gs=${encodeURIComponent(gsId)}`;
+  const params = new URLSearchParams({ gs: gsId, limit: String(limit) });
+  const url = `${REST_URL}/api/v1/decision-explanation/timeline?${params.toString()}`;
   const resp = await fetch(url, { headers: authHeaders(), signal });
   if (resp.status === 404) return null;
   if (!resp.ok) {

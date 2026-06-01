@@ -1753,7 +1753,9 @@ def get_decision_explanation(
     dependencies=[Depends(_require_api_key)],
     response_model=None,
 )
-def get_decision_explanation_timeline(gs: str = Query(...)) -> dict | JSONResponse:
+def get_decision_explanation_timeline(
+    gs: str = Query(...), limit: int = Query(120, ge=1, le=720)
+) -> dict | JSONResponse:
     """Bounded observed decision window for one ground station.
 
     This is not historical playback. VS-API samples the committed OME ground
@@ -1764,7 +1766,7 @@ def get_decision_explanation_timeline(gs: str = Query(...)) -> dict | JSONRespon
     ctx = _active_context
     if ctx is None:
         return JSONResponse(status_code=404, content={"error": "No active session"})
-    timeline = ctx.ground_decision_timeline(gs)
+    timeline = ctx.ground_decision_timeline(gs, limit=limit)
     if timeline is None:
         return JSONResponse(
             status_code=404,

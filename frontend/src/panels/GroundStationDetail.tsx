@@ -25,8 +25,9 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   const [tracingFlow, setTracingFlow] = useState<string | null>(null);
   const [inspectedSat, setInspectedSat] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
+  const [timelineLimit, setTimelineLimit] = useState(120);
   const explanation = useDecisionExplanation(node.node_id);
-  const decisionTimeline = useDecisionTimeline(node.node_id);
+  const decisionTimeline = useDecisionTimeline(node.node_id, timelineLimit);
 
   useEffect(() => {
     let alive = true;
@@ -123,7 +124,13 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
     <div>
       <h2>{node.node_id}</h2>
       {explanation.facts ? (
-        <GroundStationCard facts={explanation.facts} timeline={decisionTimeline.timeline} />
+        <GroundStationCard
+          facts={explanation.facts}
+          timeline={decisionTimeline.timeline}
+          timelineLimit={timelineLimit}
+          onTimelineLimitChange={setTimelineLimit}
+          onInspectSat={setInspectedSat}
+        />
       ) : null}
       {candidates.length > 0 ? (
         <>

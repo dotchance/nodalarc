@@ -1749,6 +1749,31 @@ def get_decision_explanation(
 
 
 @app.get(
+    "/api/v1/decision-explanation/timeline",
+    dependencies=[Depends(_require_api_key)],
+    response_model=None,
+)
+def get_decision_explanation_timeline(gs: str = Query(...)) -> dict | JSONResponse:
+    """Bounded observed decision window for one ground station.
+
+    This is not historical playback. VS-API samples the committed OME ground
+    decision surface as it arrives and retains only a bounded per-GS window so
+    the UI can roll up recent no-link causes without polling the full GS×sat
+    matrix.
+    """
+    ctx = _active_context
+    if ctx is None:
+        return JSONResponse(status_code=404, content={"error": "No active session"})
+    timeline = ctx.ground_decision_timeline(gs)
+    if timeline is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"No decision timeline samples for {gs}"},
+        )
+    return json.loads(timeline.model_dump_json())
+
+
+@app.get(
     "/api/v1/ground-link-decisions",
     dependencies=[Depends(_require_api_key)],
     response_model=None,

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { REST_URL } from "../config";
 import type { NodeState, StateSnapshot, Selection } from "../types";
 import { useDecisionExplanation } from "../explain/useDecisionExplanation";
+import { useDecisionTimeline } from "../explain/useDecisionTimeline";
 import { fetchGroundDecisions, type GroundDecisionsSnapshot } from "../explain/client";
 import { candidateStatus } from "../explain/derive";
 import { CandidateRow } from "../explain/components/CandidateRow";
@@ -25,6 +26,7 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   const [inspectedSat, setInspectedSat] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<GroundDecisionsSnapshot | null>(null);
   const explanation = useDecisionExplanation(node.node_id);
+  const decisionTimeline = useDecisionTimeline(node.node_id);
 
   useEffect(() => {
     let alive = true;
@@ -120,7 +122,9 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   return (
     <div>
       <h2>{node.node_id}</h2>
-      {explanation.facts ? <GroundStationCard facts={explanation.facts} /> : null}
+      {explanation.facts ? (
+        <GroundStationCard facts={explanation.facts} timeline={decisionTimeline.timeline} />
+      ) : null}
       {candidates.length > 0 ? (
         <>
           <h3>Candidates ({candidates.length})</h3>

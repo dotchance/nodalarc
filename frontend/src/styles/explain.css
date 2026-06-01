@@ -227,3 +227,32 @@
   font-size: var(--font-size-xs);
   color: var(--text-dim);
 }
+
+/* --- Observed diagnosis --- */
+.observed-diagnosis {
+  display: grid;
+  gap: 6px;
+}
+
+.observed-diagnosis__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.observed-diagnosis__strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(3px, 1fr);
+  gap: 1px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.observed-diagnosis__sample {
+  min-width: 3px;
+  opacity: 0.85;
+}

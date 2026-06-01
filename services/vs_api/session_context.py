@@ -29,7 +29,7 @@ import logging
 import sqlite3
 import threading
 import time as _time
-from collections import deque
+from collections import Counter, deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -37,7 +37,12 @@ from typing import Literal
 import nats
 import yaml
 from nodalarc.db.queries import insert_ome_lifecycle_event, insert_operator_intervention_event
-from nodalarc.models.decision_explanation import PendingActuation
+from nodalarc.explain import compose_gs_decision_timeline_sample
+from nodalarc.models.decision_explanation import (
+    GsDecisionReasonCount,
+    GsDecisionTimelineFacts,
+    PendingActuation,
+)
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
 from nodalarc.models.scheduler_ops import ActualLinkSnapshot
 from nodalarc.models.session import SessionConfig
@@ -74,6 +79,7 @@ log = logging.getLogger(__name__)
 STALE_THRESHOLD_S: float = 15.0
 CONVERGENCE_DWELL_S: float = 15.0
 BULK_CHANGE_THRESHOLD: float = 0.10
+GROUND_DECISION_SAMPLE_LIMIT: int = 720
 
 
 class SessionContext:
@@ -137,6 +143,7 @@ class SessionContext:
         # plus unscheduled_reason for visible-but-unallocated pairs.
         # None until the first snapshot lands.
         self.latest_ground_link_decision_snapshot: GroundLinkDecisionSnapshot | None = None
+        self.ground_decision_samples_by_gs: dict[str, deque] = {}
         self.recent_events: list[RecentEvent] = []
         self.network_health: NetworkHealth = NetworkHealth(
             status="no measurement",
@@ -585,7 +592,51 @@ class SessionContext:
                     current.snapshot_seq,
                 )
                 return
+            if current is not None and snapshot.epoch_id != current.epoch_id:
+                self.ground_decision_samples_by_gs.clear()
             self.latest_ground_link_decision_snapshot = snapshot
+            gs_ids = sorted(
+                {
+                    node
+                    for decision in snapshot.decisions
+                    for node in decision.pair
+                    if node.startswith("gs-")
+                }
+            )
+            for gs_id in gs_ids:
+                sample = compose_gs_decision_timeline_sample(gs_id=gs_id, snapshot=snapshot)
+                if sample is None:
+                    continue
+                samples = self.ground_decision_samples_by_gs.setdefault(
+                    gs_id, deque(maxlen=GROUND_DECISION_SAMPLE_LIMIT)
+                )
+                if samples and samples[-1].snapshot_seq == sample.snapshot_seq:
+                    samples[-1] = sample
+                else:
+                    samples.append(sample)
+
+    def ground_decision_timeline(self, gs_id: str) -> GsDecisionTimelineFacts | None:
+        """Return the bounded observed decision window for one GS."""
+        with self.state_lock:
+            samples = tuple(self.ground_decision_samples_by_gs.get(gs_id, ()))
+        if not samples:
+            return None
+
+        counts = Counter((sample.state, sample.reason_code) for sample in samples)
+        reason_counts = tuple(
+            GsDecisionReasonCount(state=state, reason_code=reason, count=count)
+            for (state, reason), count in sorted(
+                counts.items(), key=lambda item: (-item[1], item[0][0], item[0][1] or "")
+            )
+        )
+        return GsDecisionTimelineFacts(
+            gs_id=gs_id,
+            sample_count=len(samples),
+            window_started_sim_time=samples[0].sim_time,
+            window_ended_sim_time=samples[-1].sim_time,
+            samples=samples,
+            reason_counts=reason_counts,
+        )
 
     async def _on_link_up(self, msg) -> None:
         self.last_link_event_wall_time = _time.monotonic()

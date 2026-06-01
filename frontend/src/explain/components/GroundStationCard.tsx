@@ -9,17 +9,24 @@
 
 import { FAMILY_TONE } from "../families";
 import { deriveFamily, headline } from "../derive";
-import type { DecisionFacts } from "../types";
+import type { DecisionFacts, GsDecisionTimelineFacts } from "../types";
 import { BestCandidate } from "./BestCandidate";
 import { DecisionLadder } from "./DecisionLadder";
 import { EffectiveEnvelopePanel } from "./EffectiveEnvelopePanel";
 import { FamilyBadge } from "./FamilyBadge";
+import { ObservedDiagnosis } from "./ObservedDiagnosis";
 
 function fmtMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 }
 
-export function GroundStationCard({ facts }: { facts: DecisionFacts }) {
+export function GroundStationCard({
+  facts,
+  timeline,
+}: {
+  facts: DecisionFacts;
+  timeline?: GsDecisionTimelineFacts | null;
+}) {
   const family = deriveFamily(facts);
   const tone = FAMILY_TONE[family];
   const act = facts.actuation;
@@ -67,6 +74,13 @@ export function GroundStationCard({ facts }: { facts: DecisionFacts }) {
         <>
           <h3>Effective envelope</h3>
           <EffectiveEnvelopePanel envelope={facts.envelope} />
+        </>
+      ) : null}
+
+      {timeline ? (
+        <>
+          <h3>Observed diagnosis</h3>
+          <ObservedDiagnosis timeline={timeline} />
         </>
       ) : null}
 

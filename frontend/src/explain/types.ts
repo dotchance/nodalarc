@@ -93,3 +93,35 @@ export interface DecisionFacts {
   snapshot_seq: number;
   epoch_id: number;
 }
+
+
+export type DecisionSampleState = "scheduled" | "eligible_unselected" | "expected_no_link";
+
+export interface GsDecisionTimelineSample {
+  gs_id: string;
+  sim_time: string;
+  snapshot_seq: number;
+  epoch_id: number;
+  state: DecisionSampleState;
+  pair: [string, string] | null;
+  binding_gate: FunnelGate | null;
+  reason_code: string | null;
+  rejecting_endpoint: RejectingEndpoint | null;
+  range_km: number | null;
+  elevation_deg: number | null;
+}
+
+export interface GsDecisionReasonCount {
+  state: DecisionSampleState;
+  reason_code: string | null;
+  count: number;
+}
+
+export interface GsDecisionTimelineFacts {
+  gs_id: string;
+  sample_count: number;
+  window_started_sim_time: string | null;
+  window_ended_sim_time: string | null;
+  samples: GsDecisionTimelineSample[];
+  reason_counts: GsDecisionReasonCount[];
+}

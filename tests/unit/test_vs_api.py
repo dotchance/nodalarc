@@ -1500,6 +1500,94 @@ class TestLinkDecisionsEndpoint:
         assert r.status_code == 400
 
 
+class TestDecisionTimelineEndpoint:
+    """Bounded observed diagnosis samples for one GS."""
+
+    def _make_ctx_with_timeline(self):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+
+        first = MagicMock()
+        first.data = json.dumps(_decision_snapshot_payload()).encode()
+        asyncio.run(ctx._on_ground_link_decision_snapshot(first))
+
+        second_payload = _decision_snapshot_payload()
+        second_payload["snapshot_seq"] = 43
+        second_payload["sim_time"] = "2026-01-01T00:00:05+00:00"
+        second_payload["unscheduled_pairs"].append(
+            {
+                "pair": ["gs-den", "sat-a"],
+                "tenant_id": "default",
+                "reference_body": "earth",
+                "unscheduled_reason": "gs_capacity",
+                "incumbent_pair": None,
+                "capacity_constraint": "gs-den:terminals",
+            }
+        )
+        second = MagicMock()
+        second.data = json.dumps(second_payload).encode()
+        asyncio.run(ctx._on_ground_link_decision_snapshot(second))
+        return ctx
+
+    def test_timeline_rolls_up_recent_gs_decisions(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(m, "_active_context", self._make_ctx_with_timeline())
+
+        r = TestClient(m.app).get("/api/v1/decision-explanation/timeline", params={"gs": "gs-den"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["gs_id"] == "gs-den"
+        assert body["sample_count"] == 2
+        assert [sample["state"] for sample in body["samples"]] == [
+            "scheduled",
+            "eligible_unselected",
+        ]
+        assert body["samples"][1]["reason_code"] == "gs_capacity"
+        assert {c["state"]: c["count"] for c in body["reason_counts"]} == {
+            "scheduled": 1,
+            "eligible_unselected": 1,
+        }
+
+    def test_timeline_resets_on_epoch_change(self, monkeypatch):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        ctx = self._make_ctx_with_timeline()
+        next_epoch = _decision_snapshot_payload()
+        next_epoch["snapshot_seq"] = 44
+        next_epoch["epoch_id"] = 1
+        next_epoch["sim_time"] = "2026-01-01T00:00:10+00:00"
+        msg = MagicMock()
+        msg.data = json.dumps(next_epoch).encode()
+        asyncio.run(ctx._on_ground_link_decision_snapshot(msg))
+        monkeypatch.setattr(m, "_active_context", ctx)
+
+        r = TestClient(m.app).get("/api/v1/decision-explanation/timeline", params={"gs": "gs-den"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["sample_count"] == 1
+        assert body["samples"][0]["epoch_id"] == 1
+
+    def test_timeline_404_without_samples(self, monkeypatch):
+        import vs_api.main as m
+        from fastapi.testclient import TestClient
+
+        ctx = SessionContext.__new__(SessionContext)
+        ctx._init_state_only()
+        monkeypatch.setattr(m, "_active_context", ctx)
+
+        r = TestClient(m.app).get("/api/v1/decision-explanation/timeline", params={"gs": "gs-den"})
+        assert r.status_code == 404
+
+
 class TestActuationHealth:
     def _event(
         self,

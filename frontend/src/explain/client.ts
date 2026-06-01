@@ -3,7 +3,7 @@
 /** Typed VS-API client for the link-explainability endpoints. */
 
 import { REST_URL, authHeaders } from "../config";
-import type { DecisionFacts } from "./types";
+import type { DecisionFacts, GsDecisionTimelineFacts } from "./types";
 
 /**
  * Fetch composed decision-explanation facts for one ground station, or — when
@@ -65,4 +65,18 @@ export async function fetchGroundDecisions(
     throw new Error(`ground-link-decisions ${resp.status}: ${await resp.text()}`);
   }
   return (await resp.json()) as GroundDecisionsSnapshot;
+}
+
+
+export async function fetchDecisionTimeline(
+  gsId: string,
+  signal?: AbortSignal,
+): Promise<GsDecisionTimelineFacts | null> {
+  const url = `${REST_URL}/api/v1/decision-explanation/timeline?gs=${encodeURIComponent(gsId)}`;
+  const resp = await fetch(url, { headers: authHeaders(), signal });
+  if (resp.status === 404) return null;
+  if (!resp.ok) {
+    throw new Error(`decision-explanation timeline ${resp.status}: ${await resp.text()}`);
+  }
+  return (await resp.json()) as GsDecisionTimelineFacts;
 }

@@ -25,6 +25,7 @@ from nodalarc.models.decision_explanation import (
     EnvelopeEndpoint,
     FunnelGate,
     GateState,
+    GsDecisionTimelineSample,
     LadderGate,
     PendingActuation,
 )
@@ -418,4 +419,64 @@ def compose_gs_explanation(
         sim_time=snapshot.sim_time,
         snapshot_seq=snapshot.snapshot_seq,
         epoch_id=snapshot.epoch_id,
+    )
+
+
+def compose_gs_decision_timeline_sample(
+    *, gs_id: str, snapshot: GroundLinkDecisionSnapshot
+) -> GsDecisionTimelineSample | None:
+    """Summarize one committed OME decision snapshot for a GS.
+
+    The sample intentionally records only the binding observed decision for this
+    tick: scheduled if any pair is scheduled, otherwise viable-but-withheld,
+    otherwise the closest rejected candidate. It is a bounded diagnosis feed,
+    not a replay store for the full GS×satellite decision matrix.
+    """
+    decisions = [d for d in snapshot.decisions if gs_id in d.pair]
+    if not decisions:
+        return None
+
+    unscheduled: dict[Pair, UnscheduledPair] = {
+        _ordered_pair(u.pair): u for u in snapshot.unscheduled_pairs if gs_id in u.pair
+    }
+    visible = [d for d in decisions if d.visible]
+    scheduled = [d for d in visible if _ordered_pair(d.pair) not in unscheduled]
+    withheld = [d for d in visible if _ordered_pair(d.pair) in unscheduled]
+
+    if scheduled:
+        focal = scheduled[0]
+        state = "scheduled"
+        binding_gate = None
+        reason_code = None
+        rejecting_endpoint = None
+    elif withheld:
+        focal = withheld[0]
+        u = unscheduled[_ordered_pair(focal.pair)]
+        state = "eligible_unselected"
+        binding_gate = _UNSCHEDULED_GATE.get(u.unscheduled_reason, "handover_policy")
+        reason_code = u.unscheduled_reason
+        rejecting_endpoint = None
+    else:
+
+        def _reject_depth(d: GroundVisibilityDecisionWire) -> int:
+            return _GATE_INDEX.get(_REJECT_GATE.get(d.reject_reason, "line_of_sight"), 0)
+
+        focal = max(decisions, key=lambda d: (_reject_depth(d), d.elevation_deg))
+        state = "expected_no_link"
+        binding_gate = _REJECT_GATE.get(focal.reject_reason)
+        reason_code = focal.reject_reason
+        rejecting_endpoint = focal.rejecting_endpoint
+
+    return GsDecisionTimelineSample(
+        gs_id=gs_id,
+        sim_time=snapshot.sim_time,
+        snapshot_seq=snapshot.snapshot_seq,
+        epoch_id=snapshot.epoch_id,
+        state=state,  # type: ignore[arg-type]
+        pair=_ordered_pair(focal.pair),
+        binding_gate=binding_gate,
+        reason_code=reason_code,
+        rejecting_endpoint=rejecting_endpoint,
+        range_km=focal.range_km,
+        elevation_deg=focal.elevation_deg,
     )

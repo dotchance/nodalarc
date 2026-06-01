@@ -148,4 +148,53 @@ describe("GroundStationCard", () => {
     // The convergence deadline: 2.0 s elapsed past the 1.2 s fault threshold.
     expect(screen.getByText(/2\.0s elapsed \/ fault at 1\.2s/)).toBeTruthy();
   });
+  it("renders observed diagnosis from the bounded timeline", () => {
+    render(
+      <GroundStationCard
+        facts={denverGap}
+        timeline={{
+          gs_id: "gs-denver",
+          sample_count: 2,
+          window_started_sim_time: "2026-05-29T18:08:20Z",
+          window_ended_sim_time: "2026-05-29T18:08:25Z",
+          reason_counts: [
+            { state: "expected_no_link", reason_code: "elevation_below_min", count: 2 },
+          ],
+          samples: [
+            {
+              gs_id: "gs-denver",
+              sim_time: "2026-05-29T18:08:20Z",
+              snapshot_seq: 516,
+              epoch_id: 0,
+              state: "expected_no_link",
+              pair: ["gs-denver", "sat-P00S02"],
+              binding_gate: "elevation_mask",
+              reason_code: "elevation_below_min",
+              rejecting_endpoint: "none",
+              range_km: 1567,
+              elevation_deg: 14,
+            },
+            {
+              gs_id: "gs-denver",
+              sim_time: "2026-05-29T18:08:25Z",
+              snapshot_seq: 517,
+              epoch_id: 0,
+              state: "expected_no_link",
+              pair: ["gs-denver", "sat-P00S02"],
+              binding_gate: "elevation_mask",
+              reason_code: "elevation_below_min",
+              rejecting_endpoint: "none",
+              range_km: 1550,
+              elevation_deg: 15,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Observed diagnosis")).toBeTruthy();
+    expect(screen.getByText(/2 samples/)).toBeTruthy();
+    expect(screen.getAllByText("Below elevation mask").length).toBeGreaterThan(0);
+  });
+
 });

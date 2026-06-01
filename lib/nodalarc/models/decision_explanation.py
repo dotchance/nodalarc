@@ -49,6 +49,7 @@ ExplanationProducer = Literal["ome_visibility", "ome_allocator", "scheduler", "n
 ActuationStateName = Literal["clean", "actuation_blocked", "kernel_dirty", "unknown"]
 
 NodeFocus = Literal["gs", "sat", "pair"]
+DecisionSampleState = Literal["scheduled", "eligible_unselected", "expected_no_link"]
 
 
 class LadderGate(BaseModel):
@@ -206,3 +207,50 @@ class DecisionExplanationFacts(BaseModel):
     sim_time: datetime
     snapshot_seq: int
     epoch_id: int
+
+
+class GsDecisionTimelineSample(BaseModel):
+    """One bounded observed decision sample for a ground station.
+
+    This is not historical playback and does not try to reconstruct old full
+    snapshots. VS-API samples the committed OME decision surface as it arrives
+    and keeps a bounded in-memory window per GS so the UI can answer "what has
+    this station been doing recently?" without polling the full GS×sat matrix.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    gs_id: str
+    sim_time: datetime
+    snapshot_seq: int
+    epoch_id: int
+    state: DecisionSampleState
+    pair: tuple[str, str] | None
+    binding_gate: FunnelGate | None
+    reason_code: str | None
+    rejecting_endpoint: GroundVisibilityRejectingEndpoint | None
+    range_km: float | None
+    elevation_deg: float | None
+
+
+class GsDecisionReasonCount(BaseModel):
+    """Aggregated count for a reason/state in the sampled window."""
+
+    model_config = ConfigDict(frozen=True)
+
+    state: DecisionSampleState
+    reason_code: str | None
+    count: int
+
+
+class GsDecisionTimelineFacts(BaseModel):
+    """Bounded observed window for one GS, plus diagnosis roll-up facts."""
+
+    model_config = ConfigDict(frozen=True)
+
+    gs_id: str
+    sample_count: int
+    window_started_sim_time: datetime | None
+    window_ended_sim_time: datetime | None
+    samples: tuple[GsDecisionTimelineSample, ...]
+    reason_counts: tuple[GsDecisionReasonCount, ...]

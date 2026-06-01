@@ -1396,7 +1396,8 @@ def main():
                 if status == "FAIL"
                 else status
             )
-            print(f"  [{r['id']:2d}] {tag:8s} {r.get('label', '')}")
+            rid = str(r["id"]).rjust(2)
+            print(f"  [{rid}] {tag:8s} {r.get('label', '')}")
         print(f"\nEvidence: {evidence_dir}/")
         print(f"Summary:  {evidence_dir}/matrix-summary.json")
 

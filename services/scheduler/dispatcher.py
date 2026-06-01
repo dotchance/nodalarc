@@ -609,6 +609,68 @@ class Dispatcher:
                 pending_vis.clear()
                 self._last_visibility_sim_time = tick_sim_time
 
+    async def _handle_session_ephemeris(self, eph: SessionEphemeris) -> None:
+        """Apply one retained/live SessionEphemeris control-plane message."""
+        if eph.epoch_id == self._expected_epoch_id:
+            self._epoch_sync.mark_ephemeris(eph.epoch_id)
+            log.debug(
+                "SessionEphemeris epoch_id=%d loaded: %d nodes",
+                eph.epoch_id,
+                len(eph.nodes),
+            )
+            await self._check_epoch_resume()
+        else:
+            log.debug(
+                "SessionEphemeris epoch_id=%d ignored (expected %d)",
+                eph.epoch_id,
+                self._expected_epoch_id,
+            )
+
+    async def _handle_playback_state(self, ps: PlaybackState) -> None:
+        """Apply one retained/live PlaybackState control-plane message."""
+        if ps.state == "seeking" and ps.epoch_id > self._expected_epoch_id:
+            # New seek — enter SUSPENDED state and clear old-epoch
+            # Scheduler authority. _actual_links is actuator truth and is
+            # deliberately preserved for reconciliation on resume.
+            self._begin_seek_epoch(ps.epoch_id)
+            if self._watchdog_task and not self._watchdog_task.done():
+                self._watchdog_task.cancel()
+            self._watchdog_task = asyncio.create_task(self._epoch_watchdog(ps.epoch_id))
+            log.info("SUSPENDED: seeking epoch_id=%d", ps.epoch_id)
+        elif ps.state == "playing" and ps.epoch_id == self._expected_epoch_id:
+            self._epoch_sync.mark_playing(ps.epoch_id)
+            log.debug("PlaybackState(playing, epoch_id=%d) received", ps.epoch_id)
+            await self._check_epoch_resume()
+        elif ps.state == "paused":
+            log.debug("PlaybackState(paused, epoch_id=%d)", ps.epoch_id)
+
+    async def _handle_link_state_snapshot(self, snapshot: LinkStateSnapshot) -> None:
+        """Apply one retained/live authoritative LinkStateSnapshot."""
+        if self._suspended:
+            if self._epoch_sync.buffer_snapshot(snapshot):
+                log.debug(
+                    "Buffered LinkStateSnapshot seq=%d epoch_id=%d",
+                    snapshot.snapshot_seq,
+                    snapshot.epoch_id,
+                )
+                await self._check_epoch_resume()
+            return
+
+        desired = self._build_desired_from_snapshot(snapshot)
+        if desired is not None:
+            await self._assert_authority_subset_fail_loud("link-state-snapshot")
+            intent = self._build_dispatch_intent(
+                sim_time=snapshot.sim_time,
+                source="snapshot",
+                rebaseline_counts=True,
+            )
+            log.debug(
+                "Snapshot seq=%d queued: %d links desired",
+                snapshot.snapshot_seq,
+                len(intent.desired),
+            )
+            await self._dispatch_queue.put(intent)
+
     def _build_dispatch_intent(
         self,
         sim_time: datetime,
@@ -784,20 +846,7 @@ class Dispatcher:
                     exc,
                 )
                 return
-            if eph.epoch_id == self._expected_epoch_id:
-                self._epoch_sync.mark_ephemeris(eph.epoch_id)
-                log.debug(
-                    "SessionEphemeris epoch_id=%d loaded: %d nodes",
-                    eph.epoch_id,
-                    len(eph.nodes),
-                )
-                await self._check_epoch_resume()
-            else:
-                log.debug(
-                    "SessionEphemeris epoch_id=%d ignored (expected %d)",
-                    eph.epoch_id,
-                    self._expected_epoch_id,
-                )
+            await self._handle_session_ephemeris(eph)
 
         async def _on_playback_state(msg):
             try:
@@ -810,22 +859,7 @@ class Dispatcher:
                     exc,
                 )
                 return
-            if ps.state == "seeking" and ps.epoch_id > self._expected_epoch_id:
-                # New seek — enter SUSPENDED state and clear old-epoch
-                # Scheduler authority. _actual_links is actuator truth and is
-                # deliberately preserved for reconciliation on resume.
-                self._begin_seek_epoch(ps.epoch_id)
-                # Start watchdog
-                if self._watchdog_task and not self._watchdog_task.done():
-                    self._watchdog_task.cancel()
-                self._watchdog_task = asyncio.create_task(self._epoch_watchdog(ps.epoch_id))
-                log.info("SUSPENDED: seeking epoch_id=%d", ps.epoch_id)
-            elif ps.state == "playing" and ps.epoch_id == self._expected_epoch_id:
-                self._epoch_sync.mark_playing(ps.epoch_id)
-                log.debug("PlaybackState(playing, epoch_id=%d) received", ps.epoch_id)
-                await self._check_epoch_resume()
-            elif ps.state == "paused":
-                log.debug("PlaybackState(paused, epoch_id=%d)", ps.epoch_id)
+            await self._handle_playback_state(ps)
 
         async def _on_clock_tick(msg):
             data = json.loads(msg.data)
@@ -843,31 +877,7 @@ class Dispatcher:
                 )
                 return
 
-            if self._suspended:
-                # Buffer if matching epoch_id, discard otherwise
-                if self._epoch_sync.buffer_snapshot(snapshot):
-                    log.debug(
-                        "Buffered LinkStateSnapshot seq=%d epoch_id=%d",
-                        snapshot.snapshot_seq,
-                        snapshot.epoch_id,
-                    )
-                    await self._check_epoch_resume()
-                return
-
-            desired = self._build_desired_from_snapshot(snapshot)
-            if desired is not None:
-                await self._assert_authority_subset_fail_loud("link-state-snapshot")
-                intent = self._build_dispatch_intent(
-                    sim_time=snapshot.sim_time,
-                    source="snapshot",
-                    rebaseline_counts=True,
-                )
-                log.debug(
-                    "Snapshot seq=%d queued: %d links desired",
-                    snapshot.snapshot_seq,
-                    len(intent.desired),
-                )
-                await self._dispatch_queue.put(intent)
+            await self._handle_link_state_snapshot(snapshot)
 
         async def _on_ground_link_decision_snapshot(msg):
             """Phase 1.3.b passive receiver — validate and store the

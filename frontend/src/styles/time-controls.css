@@ -78,3 +78,12 @@
   width: 60px;
   font-size: var(--font-size-xs);
 }
+
+.time-status {
+  color: var(--accent-amber);
+  font-size: var(--font-size-xs);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -4,7 +4,7 @@
 
 import type { MutableRefObject } from "react";
 import type { StateSnapshot, Selection } from "../types";
-import type { GlobeActions } from "../globe/GlobeView";
+import type { GlobeActions } from "../globe/actions";
 
 interface NodePopoverProps {
   snapshot: StateSnapshot | null;

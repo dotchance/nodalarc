@@ -49,10 +49,12 @@ function Controls({ controlsRef }: { controlsRef?: MutableRefObject<OrbitControl
 
 export function Universe({
   children,
+  afterControls,
   controlsRef,
   onPointerMissed,
 }: {
   children?: ReactNode;
+  afterControls?: ReactNode;
   controlsRef?: MutableRefObject<OrbitControls | null>;
   /** Canvas-level miss handler: fires on a click that hit no interactive object (empty space /
    *  Earth / a non-pickable beam) — the hook the LinkPicker uses for link-select + deselect. */
@@ -76,8 +78,9 @@ export function Universe({
           the sim-time sun model so the terminator tracks the frame rotation. */}
       <ambientLight intensity={0.5} />
       <Suspense fallback={null}>{children}</Suspense>
-      {/* Controls LAST so controls.update() runs after this frame's follow-cam + consumers. */}
+      {/* Controls run after scene writers/follow-cam; projection consumers mount after this. */}
       <Controls controlsRef={controlsRef} />
+      <Suspense fallback={null}>{afterControls}</Suspense>
     </Canvas>
   );
 }

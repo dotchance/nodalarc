@@ -11,7 +11,7 @@
  *
  * World-frame layers (trails, all-orbits, selection ring, labels) are scene-root children;
  * earth-local layers (Earth, sats, GS, links, flows, footprint, ground tracks) are children
- * of <Body>. Mounted only behind the `?r3f` flag until parity + cutover.
+ * of <Body>. R3F is the single production globe implementation.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
@@ -29,7 +29,7 @@ import {
 } from "../../sim/workerBridge";
 import type { PlaybackStateMsg, SessionEphemeris } from "../../sim/ephemeris";
 import type { ColorMode, GlobeMode, ReferenceFrame, Selection, StateSnapshot } from "../../types";
-import type { GlobeActions } from "../GlobeView";
+import type { GlobeActions } from "../actions";
 import { Universe } from "./Universe";
 import { GlobeActionsBridge } from "./GlobeActionsBridge";
 import { Body } from "./Body";
@@ -44,7 +44,6 @@ import { Trails } from "./Trails";
 import { AllOrbits } from "./AllOrbits";
 import { OrbitPins } from "./OrbitPins";
 import { LinkPicker } from "./LinkPicker";
-import { LeadLine } from "./LeadLine";
 import { Labels } from "./Labels";
 import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
@@ -115,7 +114,7 @@ export function Scene({
   const nodes = snapshot?.nodes ?? [];
 
   // On-select decision data, lifted here so the globe is internally single-sourced: the GS
-  // envelope cone, the best-candidate lead-line, and the per-sat relation tinting all read from
+  // envelope cone and the per-sat relation tinting both read from
   // ONE decision-explanation + ONE ground-candidates fetch for the selected GS — and from the SAME
   // client + classifier the node card uses, so a satellite never reads one family on the glyph and
   // another in the panel. Only fetched when a GS is selected (selectedGsId null otherwise).
@@ -123,7 +122,6 @@ export function Scene({
   const simTime = snapshot?.sim_time;
   const facts = useDecisionExplanation(selectedGsId, null, simTime).facts;
   const envelope = facts?.envelope ?? null;
-  const bestCandidateSat = facts?.best_candidate?.pair.find((n) => n !== selectedGsId) ?? null;
   const candidates = useGroundCandidates(selectedGsId, simTime).data;
   const relations = useMemo(
     () =>
@@ -180,7 +178,11 @@ export function Scene({
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      <Universe controlsRef={controlsRef} onPointerMissed={(e) => missedRef.current(e)}>
+      <Universe
+        controlsRef={controlsRef}
+        onPointerMissed={(e) => missedRef.current(e)}
+        afterControls={<Labels nodes={nodes} containerRef={labelContainerRef} />}
+      >
         {actionsRef && (
           <GlobeActionsBridge actionsRef={actionsRef} controlsRef={controlsRef} />
         )}
@@ -243,8 +245,6 @@ export function Scene({
             onSelect={onSelect}
             onHover={setHover}
           />
-          {/* GS -> best-candidate lead-line (on-select bloom). */}
-          <LeadLine gsId={selectedGsId} satId={bestCandidateSat} />
           <GroundTracks nodes={nodes} enabled={false} />
           <Links
             links={snapshot?.links ?? []}
@@ -257,7 +257,6 @@ export function Scene({
           <CoverageFootprint selection={selection} nodes={nodes} />
         </Body>
         <SelectionOverlay selection={selection} />
-        <Labels nodes={nodes} containerRef={labelContainerRef} />
       </Universe>
       {/* HTML label overlay — Labels (inside the canvas) projects positions into these divs. */}
       <div

@@ -6,17 +6,19 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import type { RecentEvent } from "../types";
 
 interface TimeControlsProps {
-  onSeek: (simTime: string) => void;
+  onSeek: (simTime: string) => boolean | void | Promise<boolean | void>;
   startTime: string;
   endTime: string;
   events?: RecentEvent[];
   externalPlaying?: boolean;
   onPlayingChange?: (playing: boolean) => void;
+  initialProgress?: number;
+  statusMessage?: string | null;
 }
 
 const SPEEDS = [0.25, 0.5, 1, 2, 5, 10];
 
-export function TimeControls({ onSeek, startTime, endTime, events, externalPlaying, onPlayingChange }: TimeControlsProps) {
+export function TimeControls({ onSeek, startTime, endTime, events, externalPlaying, onPlayingChange, initialProgress = 1, statusMessage = null }: TimeControlsProps) {
   const [internalPlaying, setInternalPlaying] = useState(false);
   const playing = externalPlaying ?? internalPlaying;
   const setPlaying = useCallback((val: boolean | ((prev: boolean) => boolean)) => {
@@ -25,7 +27,7 @@ export function TimeControls({ onSeek, startTime, endTime, events, externalPlayi
     onPlayingChange?.(next);
   }, [playing, onPlayingChange]);
   const [speed, setSpeed] = useState(1);
-  const [progress, setProgress] = useState(0); // 0-1
+  const [progress, setProgress] = useState(() => Math.max(0, Math.min(1, initialProgress))); // 0-1
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const heatmapCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -40,12 +42,19 @@ export function TimeControls({ onSeek, startTime, endTime, events, externalPlayi
   const end = new Date(endTime).getTime();
   const duration = Math.max(end - start, 1);
 
+  useEffect(() => {
+    setProgress(Math.max(0, Math.min(1, initialProgress)));
+    setPlaying(false);
+  }, [startTime, endTime, initialProgress]);
+
   const seekTo = useCallback(
-    (p: number) => {
+    async (p: number): Promise<boolean> => {
       const clamped = Math.max(0, Math.min(1, p));
-      setProgress(clamped);
       const time = new Date(start + clamped * duration).toISOString();
-      onSeek(time);
+      const ok = await onSeek(time);
+      if (ok === false) return false;
+      setProgress(clamped);
+      return true;
     },
     [start, duration, onSeek],
   );
@@ -60,7 +69,9 @@ export function TimeControls({ onSeek, startTime, endTime, events, externalPlayi
             return 1;
           }
           const time = new Date(start + next * duration).toISOString();
-          onSeek(time);
+          void Promise.resolve(onSeek(time)).then((ok) => {
+            if (ok === false) setPlaying(false);
+          });
           return next;
         });
       }, 100);
@@ -122,7 +133,7 @@ export function TimeControls({ onSeek, startTime, endTime, events, externalPlayi
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const p = (clientX - rect.left) / rect.width;
-    seekTo(p);
+    void seekTo(p);
   };
 
   const handleScrubberDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -152,7 +163,7 @@ export function TimeControls({ onSeek, startTime, endTime, events, externalPlayi
 
   return (
     <div className="time-controls area-time-controls">
-      <button className="time-btn" onClick={() => seekTo(progress - 300000 / duration)} title="Skip back 5min">
+      <button className="time-btn" onClick={() => void seekTo(progress - 300000 / duration)} title="Skip back 5min">
         ⏮
       </button>
       <button className="time-btn" onClick={() => stepSpeed(-1)} title="Slower">
@@ -168,7 +179,7 @@ export function TimeControls({ onSeek, startTime, endTime, events, externalPlayi
       <button className="time-btn" onClick={() => stepSpeed(1)} title="Faster">
         ▶
       </button>
-      <button className="time-btn" onClick={() => seekTo(progress + 300000 / duration)} title="Skip forward 5min">
+      <button className="time-btn" onClick={() => void seekTo(progress + 300000 / duration)} title="Skip forward 5min">
         ⏭
       </button>
       <div className="time-scrubber" ref={scrubberRef} onMouseDown={handleScrubberDown}>
@@ -177,6 +188,7 @@ export function TimeControls({ onSeek, startTime, endTime, events, externalPlayi
         <div className="time-scrubber-fill" style={{ width: `${progress * 100}%` }} />
         <div className="time-scrubber-thumb" style={{ left: `${progress * 100}%` }} />
       </div>
+      {statusMessage ? <span className="time-status" title={statusMessage}>{statusMessage}</span> : null}
       <select
         className="speed-select"
         value={speed}

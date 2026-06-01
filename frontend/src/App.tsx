@@ -4,7 +4,6 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Shell } from "./layout/Shell";
-import { GlobeView } from "./globe/GlobeView";
 import { Scene as R3FScene } from "./globe/r3f/Scene";
 import { VisualizationErrorBoundary } from "./globe/VisualizationErrorBoundary";
 import { TopologyView } from "./topology/TopologyView";
@@ -42,12 +41,13 @@ import "./styles/catalog.css";
 import "./styles/wizard.css";
 import "./styles/explain.css";
 
-// UX-2 cutover: the declarative R3F scene is now the default globe. `?legacy` opts back into
-// the imperative globe as a one-flag fallback during the multi-body/fly-between capability build;
-// the legacy globe (and this flag) are deleted once that work proves R3F in real use.
-const USE_R3F =
-  typeof window === "undefined" ||
-  !new URLSearchParams(window.location.search).has("legacy");
+const HISTORICAL_WINDOW_MS = 60 * 60 * 1000;
+
+function subtractMsIso(iso: string, deltaMs: number): string {
+  const t = new Date(iso).getTime();
+  const base = Number.isFinite(t) ? t : Date.now();
+  return new Date(base - deltaMs).toISOString();
+}
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -57,7 +57,7 @@ export function App() {
 }
 
 function AppInner() {
-  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, historicalMode, setHistoricalMode, fetchHistorical, sendMessage } =
+  const { snapshot, ephemeris, playbackState, connected, hasEverConnected, kicked, sessionTransitioning, sessionError, switchDetail, historicalMode, setHistoricalMode, fetchHistorical, historicalError, sendMessage } =
     useSnapshot();
   const { selection, select, clearSelection, anchorGsId } = useSelection();
 
@@ -94,6 +94,7 @@ function AppInner() {
 
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [historicalPlaying, setHistoricalPlaying] = useState(false);
+  const [historicalRangeEnd, setHistoricalRangeEnd] = useState<string | null>(null);
   const [visualizationError, setVisualizationError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -101,7 +102,7 @@ function AppInner() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const canSplit = windowWidth >= 1920;
+  const canSplit = windowWidth >= 1280;
 
   const [userTrace, setUserTrace] = useState<TracedPath | null>(null);
   const [visiblePlanes, setVisiblePlanes] = useState<Set<number> | null>(null);
@@ -158,15 +159,23 @@ function AppInner() {
   } | null>(null);
 
   const toggleHistorical = useCallback(() => {
-    setHistoricalMode(!historicalMode);
-  }, [historicalMode, setHistoricalMode]);
+    const next = !historicalMode;
+    setHistoricalPlaying(false);
+    if (next) {
+      setHistoricalRangeEnd(snapshot?.sim_time ?? new Date().toISOString());
+    }
+    setHistoricalMode(next);
+  }, [historicalMode, setHistoricalMode, snapshot?.sim_time]);
 
   const handleFollowNode = useCallback(() => {
-    if (!selection) return;
     setFollowNode((prev: boolean) => {
-      const next = !prev;
-      globeActionsRef.current?.setFollowTarget(next ? selection.id : null);
-      return next;
+      if (prev) {
+        globeActionsRef.current?.setFollowTarget(null);
+        return false;
+      }
+      if (!selection || selection.type === "link") return false;
+      globeActionsRef.current?.setFollowTarget(selection.id);
+      return true;
     });
   }, [selection, setFollowNode]);
 
@@ -318,41 +327,22 @@ function AppInner() {
         style={{ display: (viewMode === "topology" || viewMode === "dashboard") ? "none" : undefined }}
       >
         <VisualizationErrorBoundary onError={handleVisualizationFatalError}>
-          {USE_R3F ? (
-            <R3FScene
-              snapshot={augmentedSnapshot}
-              ephemeris={ephemeris}
-              colorMode={colorMode}
-              globeMode={globeMode}
-              referenceFrame={referenceFrame}
-              playbackPaused={playback.paused}
-              playbackState={playbackState}
-              showIslLinks={showIslLinks}
-              showGroundLinks={showGroundLinks}
-              showSatPaths={showSatPaths}
-              showTrails={showTrails}
-              selection={selection}
-              onSelect={select}
-              actionsRef={globeActionsRef}
-            />
-          ) : (
-            <GlobeView
-              snapshot={augmentedSnapshot}
-              ephemeris={ephemeris}
-              playbackState={playbackState}
-              selection={selection}
-              onSelect={select}
-              colorMode={colorMode}
-              globeMode={globeMode}
-              showGroundLinks={showGroundLinks}
-              showIslLinks={showIslLinks}
-              showSatPaths={showSatPaths}
-              referenceFrame={referenceFrame}
-              playbackPaused={playback.paused}
-              actionsRef={globeActionsRef}
-              onFatalError={handleVisualizationFatalError}
-            />
-          )}
+          <R3FScene
+            snapshot={augmentedSnapshot}
+            ephemeris={ephemeris}
+            colorMode={colorMode}
+            globeMode={globeMode}
+            referenceFrame={referenceFrame}
+            playbackPaused={playback.paused}
+            playbackState={playbackState}
+            showIslLinks={showIslLinks}
+            showGroundLinks={showGroundLinks}
+            showSatPaths={showSatPaths}
+            showTrails={showTrails}
+            selection={selection}
+            onSelect={select}
+            actionsRef={globeActionsRef}
+          />
         </VisualizationErrorBoundary>
       </div>
       <div
@@ -471,14 +461,17 @@ function AppInner() {
     />
   ) : undefined;
 
+  const historicalEndTime = historicalRangeEnd ?? snapshot?.sim_time ?? new Date().toISOString();
+  const historicalStartTime = subtractMsIso(historicalEndTime, HISTORICAL_WINDOW_MS);
   const historicalControlsContent = historicalMode ? (
     <TimeControls
       onSeek={fetchHistorical}
-      startTime={snapshot?.sim_time ?? new Date().toISOString()}
-      endTime={new Date().toISOString()}
+      startTime={historicalStartTime}
+      endTime={historicalEndTime}
       events={snapshot?.recent_events}
       externalPlaying={historicalPlaying}
       onPlayingChange={setHistoricalPlaying}
+      statusMessage={historicalError}
     />
   ) : undefined;
 
@@ -492,6 +485,7 @@ function AppInner() {
       toasts={toastsContent}
       historicalControls={historicalControlsContent}
       historicalMode={historicalMode}
+      centerSplit={viewMode === "split"}
       panelOpen={panelOpen}
       onPanelToggle={handlePanelToggle}
       panelWidth={panelWidth}

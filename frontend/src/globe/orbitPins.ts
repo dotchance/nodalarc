@@ -135,7 +135,7 @@ export function toggleOrbitPin(
 }
 
 /** Re-seed every pinned orbit's ring geometry from the pinned satellite's
- *  current world pos + world velocity. Called from GlobeView.tsx on
+ *  current world pos + world velocity. Called by the active globe renderer on
  *  reference-frame toggle (plan §1.7) to preserve the user's pin list
  *  while updating ring geometry into the new frame. */
 export function reseedAllPins(

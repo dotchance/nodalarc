@@ -21,7 +21,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { getNodeWorldPosition } from "./positions";
 import { EARTH_RADIUS_RENDER } from "./units";
-import type { GlobeActions } from "../GlobeView";
+import type { GlobeActions } from "../actions";
 
 // Per-call temporaries (single-threaded; each entry re-copies from the registry before use).
 const _world = new THREE.Vector3();
@@ -128,7 +128,9 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
     _camDir.copy(camera.position).normalize();
     _camDir.lerp(_world, 0.05).normalize();
     camera.position.copy(_camDir.multiplyScalar(dist));
-    controlsRef.current?.target.set(0, 0, 0);
+    const controls = controlsRef.current;
+    controls?.target.set(0, 0, 0);
+    controls?.update();
   });
 
   return null;

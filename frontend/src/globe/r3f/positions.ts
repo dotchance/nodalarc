@@ -12,8 +12,8 @@
  *
  * <Constellation> writes each satellite's body-LOCAL position every frame; <GroundStation> writes
  * static GS positions; links, selection, labels, footprints, trails, orbits, and the camera actions
- * read from here. Only one globe is mounted at a time (the legacy globe behind ?legacy uses its own
- * positionCache), so this parallel store never coexists with it. Zero-allocation steady state:
+ * read from here. R3F is the production globe owner; the older positionCache utilities remain
+ * as shared math/test helpers until the segment-frame registry fully replaces them. Zero-allocation steady state:
  * stored Vector3s are mutated in place, callers pass a target.
  */
 

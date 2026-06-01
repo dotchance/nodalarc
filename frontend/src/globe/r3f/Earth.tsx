@@ -3,7 +3,7 @@
 /**
  * Earth visuals — reproduces globe/earth.ts + globe/boundaries.ts. Three globe modes
  * (blue-marble | day-night | political) selected by `globeMode`:
- *   blue-marble: Phong-lit textured sphere (sun directional + ambient), boundaries hidden.
+ *   blue-marble: Phong-lit textured sphere (sun directional + ambient), boundaries shown.
  *   day-night:   custom terminator shader (city lights on the night side), sun light off
  *                (the shader does its own lighting), boundaries shown.
  *   political:   both Earth meshes hidden; country boundaries over the scene background.
@@ -228,7 +228,7 @@ export function Earth({
 
   const showBlueMarble = globeMode === "blue-marble";
   const showDayNight = globeMode === "day-night";
-  const showBoundaries = globeMode === "political" || globeMode === "day-night";
+  const showBoundaries = globeMode === "blue-marble" || globeMode === "political" || globeMode === "day-night";
   // Day-night mode does its own lighting in the shader; other modes use the sun directional.
   const sunIntensity = showDayNight ? 0.0 : 1.0;
 

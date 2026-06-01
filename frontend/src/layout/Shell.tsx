@@ -27,6 +27,7 @@ interface ShellProps {
   toasts?: ReactNode;
   historicalControls?: ReactNode;
   historicalMode?: boolean;
+  centerSplit?: boolean;
   panelOpen: boolean;
   onPanelToggle: () => void;
   panelWidth: number;
@@ -42,6 +43,7 @@ export function Shell({
   toasts,
   historicalControls,
   historicalMode,
+  centerSplit = false,
   panelOpen,
   onPanelToggle,
   panelWidth,
@@ -76,7 +78,7 @@ export function Shell({
       {overlay}
       {toasts}
 
-      <div className="area-viewport">
+      <div className={`area-viewport${centerSplit ? " area-viewport--split" : ""}`}>
         {center}
         <button
           className="panel-toggle-tab"

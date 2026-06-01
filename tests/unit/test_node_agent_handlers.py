@@ -41,14 +41,14 @@ def _env(kind: str, op: str) -> node_agent_pb2.CommandEnvelope:
 
 
 class TestCommandEvents:
-    def test_successful_kernel_inventory_is_debug_only(self, caplog, monkeypatch):
+    def test_successful_command_applied_is_debug_only(self, caplog, monkeypatch):
         published = []
         monkeypatch.setattr(ops_events, "publish", lambda **kwargs: published.append(kwargs))
 
         with caplog.at_level(logging.DEBUG, logger="node_agent.handlers"):
             _publish_command_event(
-                operation="KernelInventory",
-                envelope=_env("KernelInventory", "test-kernel-inventory"),
+                operation="BatchLinkUp",
+                envelope=_env("BatchLinkUp", "test-link-up"),
                 outcomes=[EntryOutcome()],
             )
 
@@ -60,7 +60,7 @@ class TestCommandEvents:
         ]
         assert len(records) == 1
         assert records[0].levelno == logging.DEBUG
-        assert records[0].details["command_type"] == "KernelInventory"
+        assert records[0].details["command_type"] == "BatchLinkUp"
 
 
 class TestBatchLinkDown:

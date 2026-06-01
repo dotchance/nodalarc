@@ -31,6 +31,42 @@ ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
 
 
+class TestOpsEventVisibility:
+    def test_operator_stream_hides_routine_success_telemetry(self):
+        import vs_api.main as m
+
+        events = [
+            {
+                "level": "info",
+                "code": "COMMAND_APPLIED",
+                "message": "BatchLinkUp applied",
+                "details": {"command_type": "BatchLinkUp"},
+            },
+            {
+                "level": "info",
+                "code": "DISPATCH_ACTUATOR",
+                "message": "Actuation latency op=SetLatency pairs=323 agents=3 elapsed_ms=624.7 succeeded=323 failed=0",
+                "details": None,
+            },
+            {
+                "level": "warning",
+                "code": "DISPATCH_ACTUATOR",
+                "message": "Actuation latency op=BatchLinkUp pairs=3 agents=2 elapsed_ms=1200.0 succeeded=1 failed=2",
+                "details": None,
+            },
+            {
+                "level": "error",
+                "code": "COMMAND_FAILED",
+                "message": "KernelInventory failed",
+                "details": {"command_type": "KernelInventory"},
+            },
+        ]
+
+        visible = m._operator_visible_ops_events(events)
+
+        assert visible == events[2:]
+
+
 def _session_yaml_text(name: str = "demo-36-ospf.yaml") -> str:
     return Path("configs/sessions", name).read_text(encoding="utf-8")
 

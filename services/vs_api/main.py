@@ -396,6 +396,30 @@ async def _publish_system_ops_event(
     log.log(log_level, "%s", message, extra={"code": code, "details": details})
 
 
+def _is_operator_visible_ops_event(event: dict) -> bool:
+    """Return False for routine successful telemetry that does not need UI attention."""
+    level = str(event.get("level") or "").lower()
+    code = event.get("code")
+    message = str(event.get("message") or "")
+
+    if level == "debug":
+        return False
+
+    if code == "COMMAND_APPLIED" and level in {"", "info"}:
+        return False
+
+    return not (
+        code == "DISPATCH_ACTUATOR"
+        and level in {"", "info"}
+        and message.startswith("Actuation latency op=")
+        and " failed=0" in message
+    )
+
+
+def _operator_visible_ops_events(events: list[dict]) -> list[dict]:
+    return [event for event in events if _is_operator_visible_ops_event(event)]
+
+
 def _build_snapshot() -> dict | None:
     """Build a StateSnapshot dict from the active SessionContext.
 
@@ -466,8 +490,11 @@ def _build_snapshot() -> dict | None:
             actuation_health=ctx.build_actuation_health(),
         )
         result = json.loads(snapshot.model_dump_json())
-        # System + session OpsEvents merged for the log panel
-        all_ops = list(_system_ops_events) + list(ctx.session_ops_events)
+        # System + session OpsEvents merged for the log panel. Routine successful
+        # control-loop telemetry stays out of the operator-facing stream.
+        all_ops = _operator_visible_ops_events(
+            list(_system_ops_events) + list(ctx.session_ops_events)
+        )
         all_ops.sort(key=lambda e: e.get("timestamp", ""))
         result["ops_events"] = all_ops[-500:]
         if _debug_sources:
@@ -1212,7 +1239,7 @@ async def get_ops_events(
     """Return recent operational events from the NODALARC_OPS stream."""
     ctx = _active_context
     session_events = list(ctx.session_ops_events) if ctx else []
-    events = list(_system_ops_events) + session_events
+    events = _operator_visible_ops_events(list(_system_ops_events) + session_events)
     if source:
         events = [e for e in events if e.get("source") == source]
     if level:

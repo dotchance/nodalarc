@@ -237,33 +237,19 @@ def _publish_command_event(
 ) -> None:
     failed = [outcome for outcome in outcomes if not outcome.success]
     if not failed:
-        if operation in {"KernelInventory", "SetLatency"}:
-            log.debug(
-                "%s applied [operation_id=%s, entries=%d]",
-                operation,
-                envelope.operation_id,
-                len(outcomes),
-                extra={
-                    "code": "COMMAND_APPLIED",
-                    "details": {
-                        "operation_id": envelope.operation_id,
-                        "wiring_generation": envelope.wiring_generation,
-                        "command_type": operation,
-                        "entry_count": len(outcomes),
-                    },
+        log.debug(
+            "%s applied [operation_id=%s, entries=%d]",
+            operation,
+            envelope.operation_id,
+            len(outcomes),
+            extra={
+                "code": "COMMAND_APPLIED",
+                "details": {
+                    "operation_id": envelope.operation_id,
+                    "wiring_generation": envelope.wiring_generation,
+                    "command_type": operation,
+                    "entry_count": len(outcomes),
                 },
-            )
-            return
-        ops_events.publish(
-            level="info",
-            code="COMMAND_APPLIED",
-            message=f"{operation} applied",
-            session_id=envelope.session_id,
-            details={
-                "operation_id": envelope.operation_id,
-                "wiring_generation": envelope.wiring_generation,
-                "command_type": operation,
-                "entry_count": len(outcomes),
             },
         )
         return

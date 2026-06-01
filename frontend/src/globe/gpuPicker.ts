@@ -164,7 +164,7 @@ export function setupGpuPicker(
       tip.style.display = "block";
       tip.style.left = `${event.clientX + 12}px`;
       tip.style.top = `${event.clientY - 8}px`;
-      canvas.style = "pointer";
+      canvas.style.cursor = "pointer";
     } else {
       const linkHit = hitTestLinks(mouse.x, mouse.y, camera);
       if (linkHit) {
@@ -172,10 +172,10 @@ export function setupGpuPicker(
         tip.style.display = "block";
         tip.style.left = `${event.clientX + 12}px`;
         tip.style.top = `${event.clientY - 8}px`;
-        canvas.style = "pointer";
+        canvas.style.cursor = "pointer";
       } else {
         tip.style.display = "none";
-        canvas.style = "grab";
+        canvas.style.cursor = "grab";
       }
     }
   });

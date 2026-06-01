@@ -163,7 +163,7 @@ export function setupRaycaster(
       tip.style.display = "block";
       tip.style.left = `${event.clientX + 12}px`;
       tip.style.top = `${event.clientY - 8}px`;
-      canvas.style = "pointer";
+      canvas.style.cursor = "pointer";
     } else {
       // Check links via screen-space distance
       const linkHit = hitTestLinks(mouse.x, mouse.y, camera);
@@ -172,10 +172,10 @@ export function setupRaycaster(
         tip.style.display = "block";
         tip.style.left = `${event.clientX + 12}px`;
         tip.style.top = `${event.clientY - 8}px`;
-        canvas.style = "pointer";
+        canvas.style.cursor = "pointer";
       } else {
         tip.style.display = "none";
-        canvas.style = "grab";
+        canvas.style.cursor = "grab";
       }
     }
   });

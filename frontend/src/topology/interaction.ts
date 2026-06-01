@@ -25,7 +25,7 @@ export function setupInteraction(
     didDrag = false;
     lastX = e.clientX;
     lastY = e.clientY;
-    canvas.style = "grabbing";
+    canvas.style.cursor = "grabbing";
   };
 
   const onMouseMove = (e: MouseEvent) => {
@@ -53,7 +53,7 @@ export function setupInteraction(
 
   const onMouseUp = () => {
     isPanning = false;
-    canvas.style = "grab";
+    canvas.style.cursor = "grab";
   };
 
   const onWheel = (e: WheelEvent) => {

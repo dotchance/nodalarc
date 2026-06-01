@@ -146,7 +146,7 @@ export function SessionWizard({
           onSelectCustomGroundStations={wizard.selectCustomGroundStations}
           onSelectOrbitPropagator={wizard.selectOrbitPropagator}
           onPreview={wizard.previewCoverage}
-          onContinueWithoutPreview={wizardToProtocol}
+          onContinueWithoutPreview={wizard.continueToProtocol}
           canPreview={allGroupASelected}
           previewing={wizard.previewing}
         />
@@ -156,7 +156,7 @@ export function SessionWizard({
       {isGroupA && wizard.coveragePreview && (
         <CoveragePreview
           result={wizard.coveragePreview}
-          onContinue={wizardToProtocol}
+          onContinue={wizard.continueToProtocol}
           onBack={wizard.clearPreview}
         />
       )}

@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
+from nodalarc.models.scheduler_ops import SchedulerOpsCode
 from nodalarc.proto import node_agent_pb2
 
 LinkPair = tuple[str, str]
@@ -57,7 +58,7 @@ class RecoveryStatus:
 class GroundActuationState:
     gs_id: str
     state: GroundActuationStateName = GroundActuationStateName.CLEAN
-    reason_code: str = "ACTUATION_CLEAN"
+    reason_code: SchedulerOpsCode = SchedulerOpsCode.ACTUATION_CLEAN
     since: datetime = field(default_factory=lambda: datetime.now(UTC))
     affected_pairs: frozenset[LinkPair] = frozenset()
     stale_pairs: frozenset[LinkPair] = frozenset()
@@ -68,12 +69,16 @@ class GroundActuationState:
     def blocking_new_ground_link_up(self) -> bool:
         return self.state != GroundActuationStateName.CLEAN
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.reason_code, SchedulerOpsCode):
+            raise TypeError(f"reason_code must be SchedulerOpsCode, got {self.reason_code!r}")
+
     def to_notice(self) -> dict[str, Any]:
         return {
             "gs_id": self.gs_id,
             "actuation_state": self.state.value,
             "since": self.since.isoformat(),
-            "reason_code": self.reason_code,
+            "reason_code": self.reason_code.value,
             "blocking_new_ground_link_up": self.blocking_new_ground_link_up,
             "affected_pairs": [list(pair) for pair in sorted(self.affected_pairs)],
             "stale_pairs": [list(pair) for pair in sorted(self.stale_pairs)],

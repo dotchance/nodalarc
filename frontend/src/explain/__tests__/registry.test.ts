@@ -26,6 +26,9 @@ import {
   GROUND_UNSCHEDULED_REASONS,
   GROUND_VISIBILITY_REJECT_REASONS,
   REASON_REGISTRY,
+  SCHEDULER_OPS_CODES,
+  SCHEDULER_OPS_REGISTRY,
+  schedulerOpsLabel,
 } from "../reasons";
 
 const ALL_BACKEND_CODES: readonly string[] = [
@@ -63,6 +66,24 @@ describe("reason taxonomy registry — completeness", () => {
     const known = new Set(ALL_BACKEND_CODES);
     const orphans = Object.keys(REASON_REGISTRY).filter((code) => !known.has(code));
     expect(orphans, `orphan registry records: ${orphans.join(", ")}`).toEqual([]);
+  });
+});
+
+describe("scheduler ops registry — completeness", () => {
+  it("maps every emitted SchedulerOpsCode to an operator label", () => {
+    const missing = SCHEDULER_OPS_CODES.filter((code) => !(code in SCHEDULER_OPS_REGISTRY));
+    expect(missing, `unmapped scheduler ops codes: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("has no orphan op-code records", () => {
+    const known = new Set(SCHEDULER_OPS_CODES);
+    const orphans = Object.keys(SCHEDULER_OPS_REGISTRY).filter((code) => !known.has(code as never));
+    expect(orphans, `orphan scheduler ops records: ${orphans.join(", ")}`).toEqual([]);
+  });
+
+  it("renders known codes through labels and refuses to prettify unknown raw codes", () => {
+    expect(schedulerOpsLabel("KERNEL_VERIFY_EXHAUSTED")).toBe("Kernel verification exhausted");
+    expect(schedulerOpsLabel("MADE_UP_CODE")).toBe("Unknown operational condition");
   });
 });
 

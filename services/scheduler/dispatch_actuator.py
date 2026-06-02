@@ -319,6 +319,18 @@ def _ground_inventory_entries_for_pair(
     entries_by_agent: dict[str, list[node_agent_pb2.KernelInventoryEntry]] = {}
     ack_keys: set[InterfaceAck] = set()
 
+    def _remote_ip(peer_node: str) -> str:
+        if locality != node_agent_pb2.LOCALITY_CROSS_NODE:
+            return ""
+        peer_k3s = locator.k3s_node(peer_node)
+        remote_ip = locator.node_ip(peer_k3s)
+        if not remote_ip:
+            raise RuntimeError(
+                f"CROSS_NODE KernelInventory {gs_id}<->{sat_id}: "
+                f"missing IP for Kubernetes node {peer_k3s}"
+            )
+        return remote_ip
+
     def _add(agent: str, node_id: str, iface: str, peer_node: str, peer_iface: str) -> None:
         entry = node_agent_pb2.KernelInventoryEntry(
             node_id=node_id,
@@ -330,6 +342,7 @@ def _ground_inventory_entries_for_pair(
             peer_interface_name=peer_iface,
             locality=locality,
             vni=vni,
+            remote_node_ip=_remote_ip(peer_node),
             latency_ms=latency_ms,
             bandwidth_mbps=bandwidth_mbps,
             expected_admin_up=expected_admin_up,

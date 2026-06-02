@@ -135,6 +135,7 @@ def _decision(pair: tuple[str, str], *, visible: bool = False) -> GroundVisibili
         range_km=1234.5,
         elevation_deg=42.0 if visible else -5.0,
         azimuth_deg=180.0,
+        sat_off_nadir_deg=0.0,
         observer_frame="body_local",
         reject_reason="ok" if visible else "elevation_below_min",
         rejecting_endpoint="none",

@@ -11,8 +11,7 @@
  *
  * The OrbitControls instance comes from <Universe> via controlsRef (the bridge cannot construct
  * its own — there must be exactly one). The follow-cam runs at default useFrame priority, after
- * Constellation (-1) wrote positions; Universe mounts Controls LAST so controls.update() consumes
- * the follow-moved camera the same frame (legacy ordering). Renders no three.js objects.
+ * Constellation (-1) wrote positions; Universe mounts Controls LAST and owns the single controls.update() call, so the follow-moved camera is consumed in the same frame. Renders no three.js objects.
  */
 
 import { useEffect, useRef, type MutableRefObject } from "react";
@@ -128,9 +127,7 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
     _camDir.copy(camera.position).normalize();
     _camDir.lerp(_world, 0.05).normalize();
     camera.position.copy(_camDir.multiplyScalar(dist));
-    const controls = controlsRef.current;
-    controls?.target.set(0, 0, 0);
-    controls?.update();
+    controlsRef.current?.target.set(0, 0, 0);
   });
 
   return null;

@@ -224,6 +224,8 @@ class Dispatcher:
             raise ValueError("clean_kernel_audit_interval_s must be > 0 when set")
         self._clean_kernel_audit_interval_s = clean_kernel_audit_interval_s
         self._last_clean_kernel_audit_at = self._now()
+        self._recoverable_state_heartbeat_interval_s = 60.0
+        self._last_recoverable_state_heartbeat_at = self._now()
         if gs_terminal_capacities is None:
             log.error("FATAL: Dispatcher created with no gs_terminal_capacities")
             raise ValueError("gs_terminal_capacities is required")
@@ -1267,6 +1269,71 @@ class Dispatcher:
                 event.model_dump_json().encode(),
             )
 
+    def _actuation_state_code_for(self, state: GroundActuationState) -> SchedulerOpsCode:
+        if state.state == GroundActuationStateName.KERNEL_DIRTY:
+            return SchedulerOpsCode.KERNEL_DIRTY
+        if state.state == GroundActuationStateName.ACTUATION_BLOCKED:
+            return SchedulerOpsCode.ACTUATION_BLOCKED
+        return SchedulerOpsCode.ACTUATION_CLEAN
+
+    async def _publish_recoverable_actuation_state(
+        self,
+        *,
+        gs_id: str,
+        sim_time: datetime,
+        reason: str,
+    ) -> None:
+        """Publish current per-GS actuation state to the retained roster subject only.
+
+        This is not an operator event. It is the replace-not-merge recovery record
+        paired with ActualLinkSnapshot so a VS-API restart does not infer health from
+        an expired retained subject.
+        """
+        js = getattr(self, "_js", None)
+        if js is None:
+            return
+        state = self._ground_state(gs_id)
+        details = self._actuation_details(
+            gs_id=gs_id,
+            operation="RecoverableStateHeartbeat",
+            failure_class=ActuationFailureClass.NONE,
+            affected_pairs=state.affected_pairs,
+            sim_time=sim_time,
+            state_before=state,
+            state_after=state,
+            reason=reason,
+        )
+        code = self._actuation_state_code_for(state)
+        event = OpsEvent(
+            timestamp=self._now(),
+            session_id=self._session_id,
+            source="scheduler",
+            hostname=self._hostname,
+            level="debug",
+            code=code.value,
+            message=f"Ground station {gs_id} actuation state heartbeat: {state.state.value}",
+            details=details.model_dump(mode="json"),
+        )
+        await js.publish(
+            actuation_state_subject(self._session_id, gs_id),
+            event.model_dump_json().encode(),
+        )
+
+    async def _publish_recoverable_state_heartbeat(self, *, sim_time: datetime) -> None:
+        """Refresh both retained recovery subjects in lockstep.
+
+        ActualLinkSnapshot and per-GS actuation state are consumed together by VS-API.
+        Refreshing only one side can make a missing actual-kernel source look like a
+        clean roster or vice versa, so the heartbeat always writes both surfaces.
+        """
+        await self._publish_actual_links()
+        for gs_id in sorted(self._gs_capacities):
+            await self._publish_recoverable_actuation_state(
+                gs_id=gs_id,
+                sim_time=sim_time,
+                reason="recoverable state heartbeat",
+            )
+
     async def _publish_actual_links(self) -> None:
         """Publish this instance's verified kernel-actual link set as recoverable state.
 
@@ -1527,7 +1594,7 @@ class Dispatcher:
         after = GroundActuationState(
             gs_id=gs_id,
             state=state_name,
-            reason_code=code.value,
+            reason_code=code,
             since=self._now(),
             affected_pairs=frozenset(affected_pairs),
             stale_pairs=frozenset(stale),
@@ -1777,7 +1844,7 @@ class Dispatcher:
                 SchedulerOpsCode.KERNEL_VERIFY_EXHAUSTED
                 if exhausted
                 else SchedulerOpsCode.KERNEL_DIRTY
-            ).value,
+            ),
             since=state_before.since,
             affected_pairs=frozenset(result.failed_pairs),
             stale_pairs=state_before.stale_pairs,
@@ -1886,13 +1953,20 @@ class Dispatcher:
             if self._now() >= next_time:
                 await self._verify_gs_against_current_authority(gs_id=gs_id, sim_time=sim_time)
 
-        interval_s = self._clean_kernel_audit_interval_s
-        if interval_s is None:
-            return
         now = self._now()
-        if (now - self._last_clean_kernel_audit_at) >= timedelta(seconds=interval_s):
+        interval_s = self._clean_kernel_audit_interval_s
+        if interval_s is not None and (now - self._last_clean_kernel_audit_at) >= timedelta(
+            seconds=interval_s
+        ):
             self._last_clean_kernel_audit_at = now
             await self._audit_clean_ground_kernel_state(sim_time=sim_time)
+
+        heartbeat_interval_s = self._recoverable_state_heartbeat_interval_s
+        if (now - self._last_recoverable_state_heartbeat_at) >= timedelta(
+            seconds=heartbeat_interval_s
+        ):
+            self._last_recoverable_state_heartbeat_at = now
+            await self._publish_recoverable_state_heartbeat(sim_time=sim_time)
 
     async def _publish_fold_diagnostics(self, sim_time: datetime) -> None:
         diagnostics = self._pending_fold_diagnostics
@@ -2550,7 +2624,7 @@ class Dispatcher:
             self._gs_actuation[gs_id] = GroundActuationState(
                 gs_id=gs_id,
                 state=GroundActuationStateName.KERNEL_DIRTY,
-                reason_code=SchedulerOpsCode.OPERATOR_REPAIR_FAILED.value,
+                reason_code=SchedulerOpsCode.OPERATOR_REPAIR_FAILED,
                 since=current.since,
                 affected_pairs=current.affected_pairs,
                 stale_pairs=current.stale_pairs,

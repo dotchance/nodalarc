@@ -155,7 +155,7 @@ class ActuationNotice(BaseModel):
 
     gs_id: str
     actuation_state: ActuationState
-    reason_code: str
+    reason_code: SchedulerOpsCode
     message: str
     since: datetime
     blocking_new_ground_link_up: bool
@@ -173,7 +173,7 @@ class ActuationHealthGroundStation(BaseModel):
     gs_id: str
     actuation_state: ActuationState
     since: datetime | None = None
-    reason_code: str | None = None
+    reason_code: SchedulerOpsCode | None = None
     blocking_new_ground_link_up: bool
     recovery_status: RecoveryStatus = Field(default_factory=RecoveryStatus)
     last_event: dict[str, Any] = Field(default_factory=dict)

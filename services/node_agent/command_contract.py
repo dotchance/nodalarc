@@ -197,11 +197,13 @@ def validate_kernel_inventory_request(request, *, fence: RuntimeFence) -> None:
                     node_agent_pb2.NODE_AGENT_INVALID_FIELD,
                     "bandwidth_mbps must be > 0 for expected-up verification",
                 )
-        if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE and entry.vni <= 0:
-            raise CommandContractError(
-                node_agent_pb2.NODE_AGENT_INVALID_FIELD,
-                "KernelInventory CROSS_NODE entry requires vni > 0",
-            )
+        if entry.locality == node_agent_pb2.LOCALITY_CROSS_NODE:
+            if entry.vni <= 0:
+                raise CommandContractError(
+                    node_agent_pb2.NODE_AGENT_INVALID_FIELD,
+                    "KernelInventory CROSS_NODE entry requires vni > 0",
+                )
+            _require_nonempty(entry.remote_node_ip, "remote_node_ip")
 
 
 def envelope(

@@ -1,89 +1,67 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 
+import { createElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import * as THREE from "three";
-import { setupGpuPicker } from "../gpuPicker";
-import { setupRaycaster } from "../raycaster";
+import { cleanup, render, screen } from "@testing-library/react";
+import { Tooltip, type HoverInfo } from "../r3f/Tooltip";
+import type { NodeState } from "../../types";
 
-function makeCanvas(): HTMLCanvasElement {
-  const canvas = document.createElement("canvas");
-  Object.defineProperty(canvas, "getBoundingClientRect", {
-    value: () => ({ left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100 }),
-  });
-  document.body.appendChild(canvas);
-  return canvas;
+function node(nodeId: string, nodeType: string): NodeState {
+  return {
+    node_id: nodeId,
+    node_type: nodeType,
+    lat_deg: 12.3,
+    lon_deg: 45.6,
+    alt_km: 0,
+    vel_x_km_s: null,
+    vel_y_km_s: null,
+    vel_z_km_s: null,
+    plane: null,
+    slot: null,
+    routing_area: null,
+    neighbor_count: 0,
+    isl_count: 0,
+    gnd_count: 0,
+    prefix: null,
+    min_elevation_deg: null,
+    beam_falloff_exponent: null,
+  };
 }
 
-function makeSceneWithNode(nodeId: string): THREE.Scene {
-  const scene = new THREE.Scene();
-  const mesh = new THREE.Mesh(
-    new THREE.SphereGeometry(0.5, 8, 8),
-    new THREE.MeshBasicMaterial(),
-  );
-  mesh.userData["nodeId"] = nodeId;
-  mesh.userData["nodeType"] = "unknown";
-  scene.add(mesh);
-  scene.updateMatrixWorld(true);
-  return scene;
-}
-
-function makeCamera(): THREE.PerspectiveCamera {
-  const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
-  camera.position.set(0, 0, 5);
-  camera.lookAt(0, 0, 0);
-  camera.updateMatrixWorld(true);
-  return camera;
-}
-
-function hoverCenter(canvas: HTMLCanvasElement): void {
-  canvas.dispatchEvent(new MouseEvent("mousemove", { clientX: 50, clientY: 50 }));
-}
-
-function visibleTooltip(): HTMLDivElement {
-  const tips = [...document.body.querySelectorAll("div")] as HTMLDivElement[];
-  const tip = tips.find((el) => el.style.display === "block");
-  if (!tip) throw new Error("tooltip was not displayed");
-  return tip;
-}
-
-describe("globe tooltip rendering", () => {
+describe("R3F tooltip rendering", () => {
   const malicious = `normal\n<img src=x onerror=alert(1)>\n<script>alert(1)</script>\n"'&<>`;
 
   afterEach(() => {
-    document.body.replaceChildren();
+    cleanup();
   });
 
-  it("raycaster renders metadata as text, not HTML", () => {
-    const canvas = makeCanvas();
-    setupRaycaster(canvas, makeCamera(), makeSceneWithNode(malicious), () => {}, () => ({
-      rotationRad: 0,
-      angularVelocityRadS: 0,
-    }));
+  it("renders node metadata as text, not HTML", () => {
+    const hover: HoverInfo = { node: node(malicious, "ground_station"), x: 50, y: 50 };
 
-    hoverCenter(canvas);
+    render(createElement(Tooltip, { hover }));
 
-    const tip = visibleTooltip();
-    expect(tip.style.whiteSpace).toBe("pre-line");
+    const tip = screen.getByText((content) => content.includes("<script>alert(1)</script>"));
+    expect(tip).toBeInstanceOf(HTMLDivElement);
+    expect((tip as HTMLDivElement).style.whiteSpace).toBe("pre-line");
     expect(tip.textContent).toContain("\n");
-    expect(tip.textContent).toContain("<script>alert(1)</script>");
+    expect(tip.textContent).toContain("<img src=x onerror=alert(1)>");
     expect(tip.querySelector("script")).toBeNull();
     expect(tip.querySelector("img")).toBeNull();
   });
 
-  it("GPU picker renders metadata as text, not HTML", () => {
-    const canvas = makeCanvas();
-    setupGpuPicker(canvas, makeCamera(), makeSceneWithNode(malicious), () => {}, () => ({
-      rotationRad: 0,
-      angularVelocityRadS: 0,
-    }));
+  it("renders taxonomy captions as text, not HTML", () => {
+    const hover: HoverInfo = {
+      node: node("gs-denver", "ground_station"),
+      x: 50,
+      y: 50,
+      caption: malicious,
+    };
 
-    hoverCenter(canvas);
+    render(createElement(Tooltip, { hover }));
 
-    const tip = visibleTooltip();
-    expect(tip.style.whiteSpace).toBe("pre-line");
-    expect(tip.textContent).toContain("\n");
-    expect(tip.textContent).toContain("<img src=x onerror=alert(1)>");
+    const tip = screen.getByText((content) => content.includes("<script>alert(1)</script>"));
+    expect(tip.textContent).toContain("gs-denver: normal");
     expect(tip.querySelector("script")).toBeNull();
     expect(tip.querySelector("img")).toBeNull();
   });

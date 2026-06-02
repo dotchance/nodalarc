@@ -16,8 +16,15 @@ const POS: Record<string, [number, number, number]> = {
 };
 const getPos = (id: string, t: THREE.Vector3): boolean => {
   const p = POS[id];
-  if (!p) return false;
-  t.set(p[0], p[1], p[2]);
+  if (p) {
+    t.set(p[0], p[1], p[2]);
+    return true;
+  }
+  const dynamic = /^sat-(\d+)$/.exec(id);
+  if (!dynamic) return false;
+  const idx = Number(dynamic[1]);
+  const angle = (idx * Math.PI * 2) / 221;
+  t.set(100 * Math.cos(angle), 100 * Math.sin(angle), idx % 17);
   return true;
 };
 
@@ -120,4 +127,22 @@ describe("LinkBatch", () => {
     expect(batch._debugEntry("sat-a", "sat-b")?.state).toBe("inactive");
     expect(segIsNaN(batch._debugPositions()!, batch._debugEntry("sat-a", "sat-b")!.bufferIndex, 16)).toBe(true);
   });
+
+  it("grows beyond the initial ISL headroom without dropping later links", () => {
+    batch.update([], parent, 0);
+    const links = Array.from({ length: 220 }, (_, i) =>
+      link(`sat-${i}`, `sat-${i + 1}`, "active"),
+    );
+
+    batch.update(links, parent, 1000);
+    batch.animate(true, true, 1000);
+
+    const first = batch._debugEntry("sat-0", "sat-1")!;
+    const last = batch._debugEntry("sat-219", "sat-220")!;
+    expect(first.segmentCount).toBe(16);
+    expect(last.segmentCount).toBe(16);
+    expect(segIsFinite(batch._debugPositions()!, first.bufferIndex, 16)).toBe(true);
+    expect(segIsFinite(batch._debugPositions()!, last.bufferIndex, 16)).toBe(true);
+  });
+
 });

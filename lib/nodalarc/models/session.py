@@ -227,7 +227,12 @@ class GroundSchedulingConfig(BaseModel):
         )
     )
     ranking_order: list[RankingComponent] = Field(
-        default_factory=lambda: ["service_priority", "selection_score", "lex_pair"]
+        default_factory=lambda: [
+            "service_priority",
+            "selection_score",
+            "satellite_ground_terminal_capacity",
+            "lex_pair",
+        ]
     )
 
     handover_mode: Literal["bbm", "mbb"] = "bbm"
@@ -247,9 +252,23 @@ class GroundSchedulingConfig(BaseModel):
 
     @field_validator("mbb_reserve")
     @classmethod
-    def _non_negative_reserve(cls, value: int) -> int:
+    def _bounded_single_overlap_reserve(cls, value: int) -> int:
         if value < 0:
             raise ValueError("scheduling.ground.mbb_reserve must be >= 0")
+        # BIG HONESTY NOTE / MBB-002:
+        # `mbb_reserve > 1` reads like "this ground station may run two or more
+        # simultaneous make-before-break overlaps." The current allocator DOES NOT
+        # implement that. It serializes active MBB overlap per GS through
+        # `mbb_overlap_locked`, so accepting reserve=2 would reserve capacity the
+        # engine cannot use and would make the model look stronger than reality.
+        # Do not relax this validator until MBB-002 implements true multi-overlap
+        # state, terminal accounting, attribution, and tests.
+        if value > 1:
+            raise ValueError(
+                "scheduling.ground.mbb_reserve > 1 requires future MBB-002 "
+                "multi-overlap allocator support; current implementation supports "
+                "at most one concurrent MBB overlap per ground station"
+            )
         return value
 
     @field_validator("bbm_acquire_timeout_ticks")

@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Snapshot state management — wraps useWebSocket + historical mode. */
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { REST_URL, authHeaders } from "../config";
 import { useWebSocket } from "./useWebSocket";
 import type { StateSnapshot } from "../types";
@@ -56,6 +56,8 @@ export function useSnapshot(): SnapshotState {
   const [historicalMode, setHistoricalModeState] = useState(false);
   const [historicalSnapshot, setHistoricalSnapshot] = useState<StateSnapshot | null>(null);
   const [historicalError, setHistoricalError] = useState<string | null>(null);
+  const historyAbortRef = useRef<AbortController | null>(null);
+  const historyRequestSeqRef = useRef(0);
 
   const setHistoricalMode = useCallback((enabled: boolean) => {
     setHistoricalModeState(enabled);
@@ -67,6 +69,9 @@ export function useSnapshot(): SnapshotState {
 
   useEffect(() => {
     if (sessionTransitioning) {
+      historyRequestSeqRef.current += 1;
+      historyAbortRef.current?.abort();
+      historyAbortRef.current = null;
       setHistoricalModeState(false);
       setHistoricalSnapshot(null);
       setHistoricalError(null);
@@ -74,11 +79,22 @@ export function useSnapshot(): SnapshotState {
   }, [sessionTransitioning]);
 
   const fetchHistorical = useCallback(async (simTime: string): Promise<boolean> => {
+    historyRequestSeqRef.current += 1;
+    const requestSeq = historyRequestSeqRef.current;
+    historyAbortRef.current?.abort();
+    const controller = new AbortController();
+    historyAbortRef.current = controller;
+
+    const isCurrentRequest = () =>
+      historyRequestSeqRef.current === requestSeq && historyAbortRef.current === controller;
+
     try {
       const res = await fetch(`${REST_URL}/api/v1/state/${encodeURIComponent(simTime)}`, {
         headers: authHeaders(),
+        signal: controller.signal,
       });
       const data = await res.json().catch(() => null);
+      if (!isCurrentRequest()) return false;
       if (res.ok && isStateSnapshot(data)) {
         setHistoricalSnapshot(data);
         setHistoricalError(null);
@@ -90,9 +106,12 @@ export function useSnapshot(): SnapshotState {
           : `Historical state unavailable (${res.status})`;
       setHistoricalError(message);
       return false;
-    } catch {
+    } catch (err) {
+      if (controller.signal.aborted) return false;
       setHistoricalError("Historical state unavailable");
       return false;
+    } finally {
+      if (historyAbortRef.current === controller) historyAbortRef.current = null;
     }
   }, []);
 

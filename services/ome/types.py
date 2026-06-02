@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import get_args
 
 from nodalarc.body_frames import BODY_FRAMES, SupportedSurfaceBody
 from nodalarc.models.link_decisions import (
@@ -73,6 +74,7 @@ class GroundVisibilityDecision:
     range_km: float
     elevation_deg: float
     azimuth_deg: float | None
+    sat_off_nadir_deg: float | None
     observer_frame: ObserverFrame
     reject_reason: GroundVisibilityRejectReason
     rejecting_endpoint: GroundVisibilityRejectingEndpoint
@@ -163,20 +165,24 @@ class GroundVisibilityDecision:
                     f"rejecting_endpoint={self.rejecting_endpoint!r} requires "
                     "applied_sat_terminal_profile for attributable audit"
                 )
+            if (
+                self.reject_reason == "field_of_regard"
+                and self.rejecting_endpoint in ("satellite", "both")
+                and self.sat_off_nadir_deg is None
+            ):
+                raise ValueError("satellite field_of_regard rejection requires sat_off_nadir_deg")
+        if (
+            self.visible
+            and self.applied_sat_field_of_regard_deg is not None
+            and self.sat_off_nadir_deg is None
+        ):
+            raise ValueError(
+                "visible decision with satellite field_of_regard applied requires sat_off_nadir_deg"
+            )
 
 
-_GROUND_REJECT_REASONS: frozenset[str] = frozenset(
-    {
-        "ok",
-        "los_blocked",
-        "elevation_below_min",
-        "range_exceeded",
-        "field_of_regard",
-        "tracking_exceeded",
-    }
-)
-
-_GROUND_REJECTING_ENDPOINTS: frozenset[str] = frozenset({"none", "ground", "satellite", "both"})
+_GROUND_REJECT_REASONS: frozenset[str] = frozenset(get_args(GroundVisibilityRejectReason))
+_GROUND_REJECTING_ENDPOINTS: frozenset[str] = frozenset(get_args(GroundVisibilityRejectingEndpoint))
 
 
 GroundVisibilityDecisionMap = dict[tuple[str, str], GroundVisibilityDecision]

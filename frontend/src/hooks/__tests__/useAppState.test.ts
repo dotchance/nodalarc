@@ -3,10 +3,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
-vi.mock("../../globe/orbitalTrails", () => ({
-  setTrailsVisible: vi.fn(),
-}));
-
 const { useAppState } = await import("../useAppState");
 
 function makeInputs(overrides?: Record<string, unknown>) {

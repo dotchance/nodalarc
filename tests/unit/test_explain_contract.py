@@ -37,7 +37,7 @@ from nodalarc.models.link_decisions import (
     GroundVisibilityRejectReason,
 )
 from nodalarc.models.link_events import LINK_EVENT_REASONS
-from nodalarc.models.scheduler_ops import ActuationFailureClass, ActuationState
+from nodalarc.models.scheduler_ops import ActuationFailureClass, ActuationState, SchedulerOpsCode
 
 _REASONS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/reasons.ts"
 _TYPES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/types.ts"
@@ -130,6 +130,10 @@ def test_actuation_states_match_backend():
 
 def test_actuation_failure_classes_match_backend():
     assert _frontend_array("ACTUATION_FAILURE_CLASSES") == {m.value for m in ActuationFailureClass}
+
+
+def test_scheduler_ops_codes_match_backend():
+    assert _frontend_array("SCHEDULER_OPS_CODES") == {m.value for m in SchedulerOpsCode}
 
 
 def test_actuation_explanation_reasons_match_backend():

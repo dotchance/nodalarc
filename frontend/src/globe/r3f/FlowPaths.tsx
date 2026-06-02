@@ -68,6 +68,25 @@ function makeMaterial(color: number, resolution: THREE.Vector2): LineMaterial {
   });
 }
 
+function disposeReverse(entry: FlowPathEntry, group: THREE.Group | null): void {
+  if (!entry.reverseLine) return;
+  group?.remove(entry.reverseLine);
+  entry.reverseGeometry?.dispose();
+  entry.reverseMaterial?.dispose();
+  entry.reverseLine = undefined;
+  entry.reverseGeometry = undefined;
+  entry.reverseMaterial = undefined;
+  entry.reverseHops = undefined;
+  entry.reversePosBuffer = undefined;
+}
+
+function disposeEntry(entry: FlowPathEntry, group: THREE.Group | null): void {
+  group?.remove(entry.line);
+  entry.geometry.dispose();
+  entry.material.dispose();
+  disposeReverse(entry, group);
+}
+
 /** Resize a buffer to hold `hopCount` xyz triples, reusing the old one when already sized. */
 function sizeBuffer(existing: Float32Array | undefined, hopCount: number): Float32Array {
   const needed = hopCount * 3;
@@ -143,7 +162,7 @@ export function FlowPaths({ tracedPaths }: FlowPathsProps) {
           }
           existing.reversePosBuffer = sizeBuffer(existing.reversePosBuffer, path.reverse_hops!.length);
         } else {
-          existing.reverseHops = undefined;
+          disposeReverse(existing, group);
         }
         flowIndex++;
         continue;
@@ -186,14 +205,7 @@ export function FlowPaths({ tracedPaths }: FlowPathsProps) {
     // Dispose flows that left the snapshot.
     for (const [id, entry] of entries) {
       if (active.has(id)) continue;
-      group.remove(entry.line);
-      entry.geometry.dispose();
-      entry.material.dispose();
-      if (entry.reverseLine) {
-        group.remove(entry.reverseLine);
-        entry.reverseGeometry?.dispose();
-        entry.reverseMaterial?.dispose();
-      }
+      disposeEntry(entry, group);
       entries.delete(id);
     }
   }, [tracedPaths]);
@@ -212,14 +224,7 @@ export function FlowPaths({ tracedPaths }: FlowPathsProps) {
     const group = groupRef.current;
     return () => {
       for (const entry of entries.values()) {
-        if (group) group.remove(entry.line);
-        entry.geometry.dispose();
-        entry.material.dispose();
-        if (entry.reverseLine) {
-          if (group) group.remove(entry.reverseLine);
-          entry.reverseGeometry?.dispose();
-          entry.reverseMaterial?.dispose();
-        }
+        disposeEntry(entry, group);
       }
       entries.clear();
     };

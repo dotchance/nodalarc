@@ -177,6 +177,17 @@ def _effective_ground_scheduling_for_runtime(
     false authority.
     """
     ground = session.scheduling.ground
+    # BIG HONESTY NOTE / MBB-002:
+    # The runtime must not "helpfully" accept a reserve value that the allocator
+    # cannot honor. `mbb_reserve > 1` means multi-overlap MBB; today we only
+    # support one overlap per GS. Schema validation normally catches this, but OME
+    # keeps a runtime guard because SessionConfig can be mutated in tests/tools.
+    if ground.mbb_reserve > 1:
+        raise RuntimeError(
+            "scheduling.ground.mbb_reserve > 1 requires future MBB-002 multi-overlap "
+            "allocator support; current OME supports at most one concurrent MBB "
+            "overlap per ground station"
+        )
     shortfalls = _mbb_capacity_shortfalls(ground, gs_file)
     if not shortfalls:
         return ground

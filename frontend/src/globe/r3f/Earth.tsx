@@ -1,7 +1,7 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * Earth visuals — reproduces globe/earth.ts + globe/boundaries.ts. Three globe modes
+ * Earth visuals: three globe modes
  * (blue-marble | day-night | political) selected by `globeMode`:
  *   blue-marble: Phong-lit textured sphere (sun directional + ambient), boundaries shown.
  *   day-night:   custom terminator shader (city lights on the night side), sun light off
@@ -14,7 +14,7 @@
  * rotation); its post-rotation world direction feeds the day/night shader each frame.
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { useFrame, useLoader } from "@react-three/fiber";
 import type { GlobeMode } from "../../types";
@@ -131,13 +131,14 @@ function Sun({
   return <directionalLight ref={lightRef} color={0xffffff} intensity={intensity} />;
 }
 
-/** Country boundaries (globe/boundaries.ts): Natural Earth 110m as one LineSegments at
+/** Country boundaries: Natural Earth 110m as one LineSegments at
  *  R*1.001, shown in political + day-night modes. Loaded once, async. */
 function Boundaries({ visible }: { visible: boolean }) {
-  const ref = useRef<THREE.LineSegments>(null);
+  const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
 
   useEffect(() => {
     let alive = true;
+    let ownedGeometry: THREE.BufferGeometry | null = null;
     const r = EARTH_RADIUS_RENDER * 1.001;
     const toXYZ = (lon: number, lat: number): [number, number, number] => {
       const latR = (lat * Math.PI) / 180;
@@ -174,23 +175,23 @@ function Boundaries({ visible }: { visible: boolean }) {
             }
           }
         }
-        if (!verts.length || !ref.current) return;
+        if (!verts.length) return;
         const g = new THREE.BufferGeometry();
         g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(verts), 3));
-        ref.current.geometry.dispose();
-        ref.current.geometry = g;
+        ownedGeometry = g;
+        setGeometry(g);
       } catch {
         /* boundaries are non-essential */
       }
     })();
     return () => {
       alive = false;
+      ownedGeometry?.dispose();
     };
   }, []);
 
   return (
-    <lineSegments ref={ref} visible={visible} renderOrder={2}>
-      <bufferGeometry />
+    <lineSegments geometry={geometry ?? undefined} visible={visible && geometry !== null} renderOrder={2}>
       <lineBasicMaterial color={0x88aacc} transparent opacity={0.55} depthWrite={false} />
     </lineSegments>
   );
@@ -225,6 +226,7 @@ export function Earth({
       }),
     [dayTexture, nightTexture],
   );
+  useEffect(() => () => dayNightMaterial.dispose(), [dayNightMaterial]);
 
   const showBlueMarble = globeMode === "blue-marble";
   const showDayNight = globeMode === "day-night";
@@ -265,6 +267,7 @@ export function Starfield() {
     g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     return g;
   }, []);
+  useEffect(() => () => geometry.dispose(), [geometry]);
   return (
     <points geometry={geometry}>
       <pointsMaterial

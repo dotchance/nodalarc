@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
  * Trails — every satellite's orbital trail batched into ONE THREE.LineSegments draw call,
- * a faithful R3F port of globe/orbitalTrails.ts. Each satellite owns a TRAIL_LENGTH ring
+ * an R3F trail batch. Each satellite owns a TRAIL_LENGTH ring
  * buffer of disconnected segment pairs in pre-allocated Float32 position+color buffers
  * (NaN positions = hidden, vertex colors carry the newest→oldest brightness fade). The
  * trail is ARC-capped (MAX_ARC_LENGTH, time-independent) so it stays a constant visual
@@ -34,7 +34,7 @@ import { useFrame } from "@react-three/fiber";
 import type { NodeState } from "../../types";
 import { getNodeWorldPosition } from "./positions";
 
-// --- Verbatim constants from globe/orbitalTrails.ts ---
+// --- Trail ring-buffer constants ---
 const TRAIL_LENGTH = 600;
 const SAMPLE_EVERY = 2;
 const MAX_ARC_LENGTH = 1.8;
@@ -59,11 +59,11 @@ const _trailWorldPos = new THREE.Vector3();
 /**
  * The batched-trail object + buffer state, factored into an instance-scoped class (mirroring
  * LinkBatch) so the imperative ring-buffer/arc-fade algorithm — ported byte-for-byte from
- * orbitalTrails.ts — lives in one place and the React component only owns lifecycle. The
+ * the trail renderer lives in one place and the React component only owns lifecycle. The
  * THREE.LineSegments is created lazily and added to the supplied parent (like LinkBatch),
  * so R3F never co-owns the geometry/material and there is no placeholder to dispose.
  */
-class TrailBatch {
+export class TrailBatch {
   private readonly trailMetas = new Map<string, TrailMeta>();
   private readonly satIndexMap = new Map<string, number>();
   private batch: THREE.LineSegments | null = null;
@@ -271,7 +271,7 @@ class TrailBatch {
     if (this.colAttr) this.colAttr.needsUpdate = true;
   }
 
-  /** Flush all history (constellation / epoch change) — reset metas, blank the buffers. */
+  /** Flush visible history without changing satellite slot ownership. */
   flush(): void {
     for (const meta of this.trailMetas.values()) {
       meta.count = 0;
@@ -282,6 +282,19 @@ class TrailBatch {
     if (this.colorBuffer) this.colorBuffer.fill(0);
     if (this.posAttr) this.posAttr.needsUpdate = true;
     if (this.colAttr) this.colAttr.needsUpdate = true;
+  }
+
+  /**
+   * Session/constellation reset: release GPU buffers and clear slot ownership.
+   * A plain flush is not enough here: satellite ids change across sessions, and
+   * retaining the old id->slot map makes slot count grow forever.
+   */
+  resetSession(): void {
+    this.dispose();
+  }
+
+  satelliteSlotCount(): number {
+    return this.satIndexMap.size;
   }
 
   dispose(): void {
@@ -336,13 +349,14 @@ export function Trails({ enabled, nodes, resetKey }: TrailsProps) {
     [nodes],
   );
 
-  // Declarative flush: constellation / epoch change (resetKey) flips → drop all history.
+  // Declarative reset: constellation / epoch change (resetKey) flips → drop all history
+  // and clear satellite slot ownership so session switches cannot grow the slot map forever.
   useEffect(() => {
-    batch.flush();
+    batch.resetSession();
     lastFrameRef.current = null;
   }, [batch, resetKey]);
 
-  // Hide + flush when disabled (matches setTrailsVisible(false) → flushTrails()), so
+  // Hide + flush when disabled, so
   // re-enabling starts clean rather than connecting across the gap.
   useEffect(() => {
     batch.setVisible(enabled);

@@ -112,11 +112,20 @@ def _gate_numbers(
     if gate == "elevation_mask":
         return (d.elevation_deg, d.applied_min_elevation_deg)
     if gate == "field_of_regard":
+        if d.rejecting_endpoint == "satellite" and d.applied_sat_field_of_regard_deg is not None:
+            return (d.sat_off_nadir_deg, d.applied_sat_field_of_regard_deg / 2.0)
+        if d.rejecting_endpoint == "ground" and d.applied_gs_field_of_regard_deg is not None:
+            actual = (
+                90.0 - d.elevation_deg if d.applied_gs_boresight_mode == "local_vertical" else None
+            )
+            return (actual, d.applied_gs_field_of_regard_deg / 2.0)
         for_full = _min_opt(d.applied_gs_field_of_regard_deg, d.applied_sat_field_of_regard_deg)
         threshold = for_full / 2.0 if for_full is not None else None
-        # Off-boresight angle is recoverable only for a local-vertical ground boresight.
-        actual = 90.0 - d.elevation_deg if d.applied_gs_boresight_mode == "local_vertical" else None
-        return (actual, threshold)
+        if d.applied_gs_boresight_mode == "local_vertical":
+            return (90.0 - d.elevation_deg, threshold)
+        if d.applied_sat_boresight_mode == "nadir":
+            return (d.sat_off_nadir_deg, threshold)
+        return (None, threshold)
     if gate == "tracking_rate":
         # Required slew rate is not carried on the decision wire; only the limit is.
         return (

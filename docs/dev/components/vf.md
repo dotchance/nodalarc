@@ -3,7 +3,7 @@
 **Location:** `frontend/`
 **Deployment:** Kubernetes Deployment (nginx serving static assets)
 **Port:** 3000
-**Stack:** React 19, Three.js, TypeScript, Vite
+**Stack:** React 19, React Three Fiber, Three.js, TypeScript, Vite
 
 ## Responsibility
 
@@ -12,7 +12,7 @@ The VF renders the constellation visualization in the browser: 3D globe with sat
 ## Architecture
 
 ```
-VS-API WebSocket (~1 Hz) ──→ React state ──→ Three.js scene
+VS-API WebSocket (~1 Hz) ──→ React state ──→ React Three Fiber scene
                                 │
 SessionEphemeris ──→ simClock ──→ Keplerian propagation ──→ satellite positions (60fps)
 ```
@@ -39,16 +39,16 @@ All visual elements are batched into shared geometries. Draw call count is const
 | UI overlays | HTML/CSS | ~30 |
 | **Total** | | **~47** |
 
-Previous architecture: per-link `Line2` objects (261), per-satellite trail `THREE.Line` (86), per-polygon boundary `THREE.Line` (275), per-satellite orbit `Line2` (90) = 937 draw calls/frame.
+The deleted legacy renderer used per-link `Line2` objects, per-satellite trails, per-polygon boundaries, and per-satellite orbit lines. The R3F renderer keeps those primitives batched while letting React own scene lifecycle.
 
 ### Key rendering files
 
 | File | Content |
 |------|---------|
-| `src/globe/links.ts` | ISL + ground link batch (LineSegments2, bowed arcs, NaN masking) |
-| `src/globe/orbitalTrails.ts` | Trail batch (ring buffer, zero-alloc, per-vertex fade) |
-| `src/globe/boundaries.ts` | Country border batch (static LineSegments) |
-| `src/globe/allOrbits.ts` | Orbital path batch (per-plane vertex colors) |
+| `src/globe/r3f/Links.tsx` + `linkBatch.ts` | ISL + ground link batch (LineSegments2, bowed arcs, NaN masking) |
+| `src/globe/r3f/Trails.tsx` | Trail batch (ring buffer, zero-alloc, per-vertex fade) |
+| `src/globe/r3f/Earth.tsx` | Earth, country borders, atmosphere, and starfield |
+| `src/globe/r3f/AllOrbits.tsx` | Orbital path batch (per-plane vertex colors) |
 
 ### NaN Masking
 
@@ -82,7 +82,7 @@ React hooks + module-level singletons:
 - **React state** - UI state (selected node, panel visibility, color mode, toggles)
 - **Module singletons** - rendering state (Three.js objects, buffer positions, trail ring buffers)
 
-The rendering layer (Three.js) operates outside React's render cycle. React sets flags; the animation loop reads them. This avoids re-rendering the entire component tree at 60fps.
+The R3F scene owns Three.js objects through React lifecycles. Module registries are limited to shared facts such as node positions and frame transforms; caller-owned GPU objects are disposed on dependency change and unmount.
 
 ## Key Bindings
 
@@ -125,12 +125,13 @@ make deploy-vf
 ```
 src/
 ├── App.tsx              Main app, state management, keyboard actions
-├── globe/              3D globe rendering (Three.js)
-│   ├── GlobeView.tsx   Scene setup, animation loop
-│   ├── links.ts        ISL/ground link batch
-│   ├── orbitalTrails.ts  Trail ring buffer batch
-│   ├── allOrbits.ts    Orbital path batch
-│   └── boundaries.ts   Country border batch
+├── globe/              3D globe rendering
+│   ├── GlobeView.tsx   R3F canvas shell and controls
+│   └── r3f/            R3F scene primitives and batched renderers
+│       ├── Links.tsx   ISL/ground link batch
+│       ├── Trails.tsx  Trail ring buffer batch
+│       ├── AllOrbits.tsx  Orbital path batch
+│       └── Earth.tsx   Earth, borders, atmosphere, starfield
 ├── topology/           2D topology graph view
 ├── sim/                Simulation clock, Keplerian propagation
 ├── hooks/              React hooks (WebSocket, keyboard, etc.)

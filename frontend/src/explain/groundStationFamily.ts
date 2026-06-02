@@ -14,6 +14,7 @@
  * but unselected" without the decision. Pure; unit-tested.
  */
 import type { Family } from "./families";
+import { schedulerOpsLabel } from "./reasons";
 import type { ActuationNotice, LinkState } from "../types";
 
 export interface GsFamily {
@@ -29,12 +30,13 @@ export function groundStationFamily(
 ): GsFamily {
   const notice = actuationNotices.find((n) => n.gs_id === gsId);
   if (notice) {
-    // A blocking actuation problem is a real fault (kernel dirty / dispatch blocked); a
-    // non-blocking notice is a degraded / in-progress actuator state (amber), not a fault.
-    const reason = notice.message || notice.reason_code || null;
-    return notice.blocking_new_ground_link_up
-      ? { family: "faulted", reason }
-      : { family: "in_flight", reason };
+    const reason = notice.message || schedulerOpsLabel(notice.reason_code);
+    if (notice.blocking_new_ground_link_up || notice.actuation_state === "kernel_dirty" || notice.actuation_state === "actuation_blocked") {
+      return { family: "faulted", reason };
+    }
+    if (notice.actuation_state === "unknown") return { family: "unknown", reason };
+    // A retained clean heartbeat is health metadata, not a visual state. Fall through to the
+    // actual link snapshot so clean notices cannot manufacture an in-flight/degraded glyph.
   }
   const connected = links.some(
     (l) => l.state === "active" && (l.node_a === gsId || l.node_b === gsId),

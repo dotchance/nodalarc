@@ -19,7 +19,13 @@ SelectionPolicyName = Literal[
     "longest-remaining-pass",
 ]
 HandoverPolicyName = Literal["hysteresis", "none"]
-RankingComponent = Literal["service_priority", "selection_score", "per_gs_rank", "lex_pair"]
+RankingComponent = Literal[
+    "service_priority",
+    "selection_score",
+    "per_gs_rank",
+    "satellite_ground_terminal_capacity",
+    "lex_pair",
+]
 MbbPreemptionPolicy = Literal["off"]
 SuccessorAbortPolicy = Literal["hard_release", "soft_retain"]
 CrossTenantDisplacementPolicy = Literal["off"]

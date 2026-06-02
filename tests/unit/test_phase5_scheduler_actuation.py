@@ -10,8 +10,12 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from nodalarc.models.scheduler_ops import ActualLinkSnapshot, OperatorRepairCommand
-from nodalarc.nats_channels import actual_links_subject
+from nodalarc.models.scheduler_ops import (
+    ActualLinkSnapshot,
+    OperatorRepairCommand,
+    SchedulerOpsCode,
+)
+from nodalarc.nats_channels import actual_links_subject, actuation_state_subject
 from nodalarc.proto import node_agent_pb2
 from scheduler.actuation import (
     ActuationFailureClass,
@@ -268,7 +272,7 @@ def test_ground_dirty_failure_marks_only_that_gs_nonclean() -> None:
     assert d._running is True
     state = d._gs_actuation["gs-multi"]
     assert state.state == GroundActuationStateName.KERNEL_DIRTY
-    assert state.reason_code == "REPLACEMENT_LINK_UP_FAILED"
+    assert state.reason_code == SchedulerOpsCode.REPLACEMENT_LINK_UP_FAILED
     assert state.recovery.next_verify_after is not None
 
 
@@ -297,7 +301,7 @@ def test_blocked_gs_suppresses_new_ground_up_but_not_isl() -> None:
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
     )
 
     allowed = d._filter_blocked_ground_mutations(
@@ -326,7 +330,7 @@ def test_ground_latency_failure_degrades_per_gs_without_halting_scheduler() -> N
     assert d._running is True
     state = d._gs_actuation["gs-multi"]
     assert state.state == GroundActuationStateName.ACTUATION_BLOCKED
-    assert state.reason_code == "GROUND_LATENCY_UPDATE_FAILED"
+    assert state.reason_code == SchedulerOpsCode.GROUND_LATENCY_UPDATE_FAILED
 
 
 def test_reconcile_does_not_auto_down_kernel_dirty_or_repairing_ground_station() -> None:
@@ -339,7 +343,7 @@ def test_reconcile_does_not_auto_down_kernel_dirty_or_repairing_ground_station()
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
     )
     asyncio.run(d._reconcile_links({}, None, SIM_TIME))
     d._send_batch_down.assert_not_called()
@@ -348,7 +352,7 @@ def test_reconcile_does_not_auto_down_kernel_dirty_or_repairing_ground_station()
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.ACTUATION_BLOCKED,
-        reason_code="ACTUATION_BLOCKED",
+        reason_code=SchedulerOpsCode.ACTUATION_BLOCKED,
         recovery=RecoveryStatus(active_intervention_id="repair-1"),
     )
     asyncio.run(d._reconcile_links({}, None, SIM_TIME))
@@ -363,7 +367,7 @@ def test_reconcile_allows_cleanup_down_for_clean_actuation_blocked_ground_statio
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.ACTUATION_BLOCKED,
-        reason_code="ACTUATION_BLOCKED",
+        reason_code=SchedulerOpsCode.ACTUATION_BLOCKED,
     )
     d._send_batch_down = AsyncMock(
         return_value=_success_result(pair=pair, operation="BatchLinkDown")
@@ -446,6 +450,96 @@ def test_reconcile_does_not_republish_kernel_actual_when_membership_unchanged() 
 
     assert pair in d._actual_links
     assert _actual_link_snapshots(d._js.publish) == []
+
+
+def test_recoverable_state_heartbeat_refreshes_actual_links_and_actuation_roster() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._actual_links[pair] = _info()
+    d._js.publish = AsyncMock()
+
+    asyncio.run(d._publish_recoverable_state_heartbeat(sim_time=SIM_TIME))
+
+    subjects = [call.args[0] for call in d._js.publish.await_args_list]
+    assert actual_links_subject(d._session_id, d._scheduler_instance_id) in subjects
+    assert actuation_state_subject(d._session_id, "gs-multi") in subjects
+    assert all(".ops." not in subject for subject in subjects)
+
+    snaps = _actual_link_snapshots(d._js.publish)
+    assert snaps[-1].active_pairs == [[pair[0], pair[1]]]
+    actuation_payloads = [
+        call.args[1]
+        for call in d._js.publish.await_args_list
+        if call.args[0] == actuation_state_subject(d._session_id, "gs-multi")
+    ]
+    assert actuation_payloads
+    event = json.loads(actuation_payloads[-1].decode())
+    assert event["code"] == "ACTUATION_CLEAN"
+    assert event["level"] == "debug"
+    assert event["details"]["actuation_state_after"] == "clean"
+
+
+@pytest.mark.parametrize(
+    ("state_name", "reason_code", "expected_code"),
+    (
+        (GroundActuationStateName.KERNEL_DIRTY, SchedulerOpsCode.KERNEL_DIRTY, "KERNEL_DIRTY"),
+        (
+            GroundActuationStateName.ACTUATION_BLOCKED,
+            SchedulerOpsCode.ACTUATION_BLOCKED,
+            "ACTUATION_BLOCKED",
+        ),
+    ),
+)
+def test_recoverable_state_heartbeat_refreshes_nonclean_actuation_roster(
+    state_name: GroundActuationStateName,
+    reason_code: SchedulerOpsCode,
+    expected_code: str,
+) -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    d._gs_actuation["gs-multi"] = GroundActuationState(
+        gs_id="gs-multi",
+        state=state_name,
+        reason_code=reason_code,
+        affected_pairs=frozenset({pair}),
+        stale_pairs=frozenset({pair})
+        if state_name == GroundActuationStateName.KERNEL_DIRTY
+        else frozenset(),
+    )
+    d._js.publish = AsyncMock()
+
+    asyncio.run(d._publish_recoverable_state_heartbeat(sim_time=SIM_TIME))
+
+    subjects = [call.args[0] for call in d._js.publish.await_args_list]
+    assert actual_links_subject(d._session_id, d._scheduler_instance_id) in subjects
+    assert actuation_state_subject(d._session_id, "gs-multi") in subjects
+
+    actuation_payloads = [
+        call.args[1]
+        for call in d._js.publish.await_args_list
+        if call.args[0] == actuation_state_subject(d._session_id, "gs-multi")
+    ]
+    assert actuation_payloads
+    event = json.loads(actuation_payloads[-1].decode())
+    assert event["code"] == expected_code
+    assert event["level"] == "debug"
+    assert event["details"]["actuation_state_after"] == state_name.value
+    assert event["details"]["reason"] == "recoverable state heartbeat"
+    assert event["details"]["affected_pairs"] == [[pair[0], pair[1]]]
+
+
+def test_recoverable_state_heartbeat_is_due_independent_of_clean_kernel_audit() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    d._clean_kernel_audit_interval_s = None
+    d._recoverable_state_heartbeat_interval_s = 60.0
+    d._last_recoverable_state_heartbeat_at = d._now() - timedelta(seconds=61)
+    d._js.publish = AsyncMock()
+
+    asyncio.run(d._run_due_kernel_verifications(sim_time=SIM_TIME))
+
+    subjects = [call.args[0] for call in d._js.publish.await_args_list]
+    assert actual_links_subject(d._session_id, d._scheduler_instance_id) in subjects
+    assert actuation_state_subject(d._session_id, "gs-multi") in subjects
 
 
 def test_reconcile_publishes_corrected_set_when_a_phase_fails_after_teardown() -> None:
@@ -688,21 +782,21 @@ def test_ground_down_gate_blocks_kernel_dirty_and_repairing_but_allows_clean_cle
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.ACTUATION_BLOCKED,
-        reason_code="ACTUATION_BLOCKED",
+        reason_code=SchedulerOpsCode.ACTUATION_BLOCKED,
     )
     assert pair in d._filter_ground_down_mutations({pair}, operation="BatchLinkDown")
 
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
     )
     assert pair not in d._filter_ground_down_mutations({pair}, operation="BatchLinkDown")
 
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.ACTUATION_BLOCKED,
-        reason_code="ACTUATION_BLOCKED",
+        reason_code=SchedulerOpsCode.ACTUATION_BLOCKED,
         recovery=RecoveryStatus(active_intervention_id="repair-1"),
     )
     assert pair not in d._filter_ground_down_mutations({pair}, operation="BatchLinkDown")
@@ -713,7 +807,7 @@ def test_seek_epoch_reset_does_not_clear_dirty_actuation_state() -> None:
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
     )
 
     d._reset_epoch_local_authority()
@@ -728,7 +822,7 @@ def test_read_only_kernel_proof_clears_dirty_ground_station() -> None:
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
         recovery=RecoveryStatus(verify_attempt_count=2),
     )
     d._send_kernel_inventory = AsyncMock(
@@ -750,7 +844,7 @@ def test_no_footprint_cleanup_clears_dirty_without_inventing_kernel_probe() -> N
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
     )
     d._send_kernel_inventory = AsyncMock()
     d._js.publish = AsyncMock()
@@ -771,7 +865,7 @@ def test_auto_verify_exhaustion_requires_operator_action_and_does_not_clear_dirt
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
         recovery=RecoveryStatus(verify_attempt_count=4),
     )
     d._send_kernel_inventory = AsyncMock(
@@ -794,7 +888,7 @@ def test_auto_verify_exhaustion_requires_operator_action_and_does_not_clear_dirt
     assert state.state == GroundActuationStateName.KERNEL_DIRTY
     assert state.recovery.verify_exhausted is True
     assert state.recovery.operator_action_required is True
-    assert state.reason_code == "KERNEL_VERIFY_EXHAUSTED"
+    assert state.reason_code == SchedulerOpsCode.KERNEL_VERIFY_EXHAUSTED
 
 
 def test_operator_repair_reconciles_to_current_authority_and_proves_final_gs_state() -> None:
@@ -807,7 +901,7 @@ def test_operator_repair_reconciles_to_current_authority_and_proves_final_gs_sta
     dirty = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
         affected_pairs=frozenset({old_pair}),
         stale_pairs=frozenset({old_pair}),
     )
@@ -875,7 +969,7 @@ def test_kernel_verify_due_gate_and_backoff_use_injected_clock() -> None:
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
         recovery=RecoveryStatus(next_verify_after=base),
     )
     d._send_kernel_inventory = AsyncMock(
@@ -957,7 +1051,7 @@ def test_clean_kernel_audit_mismatch_marks_kernel_dirty_and_preserves_failure_de
     assert result == {"gs-multi": False}
     state = d._gs_actuation["gs-multi"]
     assert state.state == GroundActuationStateName.KERNEL_DIRTY
-    assert state.reason_code == "KERNEL_DIRTY"
+    assert state.reason_code == SchedulerOpsCode.KERNEL_DIRTY
     assert state.affected_pairs == frozenset({pair})
     assert state.recovery.next_verify_after is not None
     codes = _published_ops_codes(d._js.publish)
@@ -971,7 +1065,7 @@ def test_clean_kernel_audit_never_clears_existing_dirty_state_by_inference() -> 
     d._gs_actuation["gs-multi"] = GroundActuationState(
         gs_id="gs-multi",
         state=GroundActuationStateName.KERNEL_DIRTY,
-        reason_code="KERNEL_DIRTY",
+        reason_code=SchedulerOpsCode.KERNEL_DIRTY,
     )
     d._send_kernel_inventory = AsyncMock(
         return_value=_success_result(pair=pair, operation="KernelInventory")

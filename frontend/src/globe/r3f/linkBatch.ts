@@ -2,11 +2,9 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
  * LinkBatch — all ISL + ground links in ONE LineSegments2 draw call, ported faithfully
- * from globe/links.ts into an injectable, instance-scoped class for the R3F scene. The
- * position source (getLocalPosition) is injected so the same algorithm reads the R3F
- * position registry instead of the legacy positionCache; the parent Object3D is supplied
- * by the component via <primitive>. The legacy links.ts is left untouched for the live
- * globe and deleted at cutover — only one renders at a time.
+ * as an injectable, instance-scoped class for the R3F scene. The
+ * position source (getLocalPosition) is injected so the renderer reads the R3F
+ * position registry; the parent Object3D is supplied by the component via <primitive>.
  *
  * Behaviour reproduced verbatim: ISL = 16-segment bowed arc (lift 3% of chord), ground =
  * 1 straight segment, NaN = hidden segment, in-place interleaved-buffer upload (no

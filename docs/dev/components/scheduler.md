@@ -14,7 +14,7 @@ Three roles on a single asyncio event loop:
 
 1. **Decision Engine** - NATS JetStream callbacks maintain `_desired_links` (Scheduler's unoverridden desired topology derived from OME state and Scheduler safety policy). Produces `DispatchIntent` objects onto the queue.
 2. **Control Plane** - scenario command callback (core NATS request/reply) maintains override state (`_override_pairs`, `_override_nodes`). Produces `DispatchIntent` objects onto the queue.
-3. **Actuator** - dispatch worker reconciles `_actual_links` toward queued effective desired state. Sole writer of `_actual_links`, sole caller of Node Agent I/O, sole publisher of LinkUp/LinkDown.
+3. **Actuator** - dispatch worker reconciles `_actual_links` toward queued effective desired state. Sole automatic writer of `_actual_links`, sole automatic caller of Node Agent I/O, sole automatic publisher of LinkUp/LinkDown. Explicit operator repair is the only other Node Agent I/O path and is serialized by the same actuation lock.
 
 Communication: decision engine / control plane -> dispatch queue -> actuator.
 
@@ -46,7 +46,7 @@ class DispatchIntent:
 
 ## Reconcile Pattern
 
-`_reconcile_links(desired, nc, sim_time, down_reasons, forced_bbm_pairs)` is the **only** method that dispatches to the Node Agent.
+`_reconcile_links(desired, nc, sim_time, down_reasons, forced_bbm_pairs)` is the **only automatic** method that dispatches to the Node Agent.
 
 ```
 VisibilityEvents  --> _apply_events_to_desired() --> _build_dispatch_intent() --> queue --> worker --> _reconcile_links()
@@ -54,7 +54,7 @@ LinkStateSnapshot --> _build_desired_from_snapshot() --> _build_dispatch_intent(
 ScenarioCommand   --> _on_scenario_command() mutates overrides --> _build_dispatch_intent() --> queue --> worker --> _reconcile_links()
 ```
 
-All paths converge at the dispatch worker, which calls `_reconcile_links`. This function:
+All schedule-progression paths converge at the dispatch worker, which calls `_reconcile_links`. This function:
 1. Computes links to remove: `actual - desired`
 2. Computes links to add: `desired - actual`
 3. Dispatches fenced `BatchLinkDown` for removals (with `down_reasons`)
@@ -64,7 +64,10 @@ All paths converge at the dispatch worker, which calls `_reconcile_links`. This 
 If the Node Agent reports `dirty_kernel`, a stale generation, or an
 unverified success, dispatch fails loudly. The worker records the block reason
 and stops processing the affected generation instead of manufacturing active
-state.
+state. Read-only `KernelInventory` may be issued by the Scheduler to prove
+ground actuation state during audit/recovery; it never writes `_actual_links`.
+Explicit operator repair uses Node Agent I/O only under operator intent and the
+actuation lock, and reconciles to current OME authority.
 
 ## Queue Drain
 

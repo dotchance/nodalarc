@@ -3,7 +3,7 @@
 /**
  * CoverageFootprint — the radial-falloff coverage disc on Earth's surface beneath the
  * SELECTED satellite only (ground stations get the elevation cone in <GroundStations>,
- * never this). Faithful port of globe/coverageFootprint.ts: a CircleGeometry(radius, 96)
+ * never this). Renders a CircleGeometry(radius, 96)
  * whose radius = computeConeRadius(MIN_ELEV_DEG=25, satAltKm) — reused verbatim from
  * globe/groundStations.ts so the footprint scale matches the rest of the scene — textured
  * with the exact radial-gradient ShaderMaterial (r = length(vUv-0.5)*2; discard r>0.98;

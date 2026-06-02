@@ -143,6 +143,14 @@ function GroundStation({
     configuredMinElevDeg,
   ]);
 
+  useEffect(
+    () => () => {
+      geom.effRing.dispose();
+      geom.confRing?.dispose();
+    },
+    [geom],
+  );
+
   useEffect(() => {
     setNodeLocalPosition(node.node_id, bodyId, geom.position[0], geom.position[1], geom.position[2]);
     return () => removeNode(node.node_id);

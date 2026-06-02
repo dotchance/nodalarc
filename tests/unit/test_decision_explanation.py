@@ -26,6 +26,7 @@ def _decision(
     elevation_deg: float,
     reject_reason: str,
     rejecting_endpoint: str = "none",
+    sat_off_nadir_deg: float | None = 0.0,
 ) -> GroundVisibilityDecisionWire:
     return GroundVisibilityDecisionWire(
         pair=(GS, sat),
@@ -35,6 +36,7 @@ def _decision(
         range_km=range_km,
         elevation_deg=elevation_deg,
         azimuth_deg=180.0 if elevation_deg > -90 else None,
+        sat_off_nadir_deg=sat_off_nadir_deg,
         observer_frame="body_local",
         reject_reason=reject_reason,
         rejecting_endpoint=rejecting_endpoint,
@@ -461,6 +463,31 @@ def test_envelope_binding_endpoint_targets_the_satellite_terminal():
     assert env.satellite.terminal_profile == "sat-P00S05.ground_terminals"
     assert env.satellite.max_range_km == 2000.0
     assert env.ground.terminal_profile == "gs-denver.terminals"
+
+
+def test_satellite_field_of_regard_margin_uses_satellite_off_nadir_angle():
+    snap = _snapshot(
+        [
+            _decision(
+                "sat-P00S05",
+                visible=False,
+                range_km=1200.0,
+                elevation_deg=42.0,
+                reject_reason="field_of_regard",
+                rejecting_endpoint="satellite",
+                sat_off_nadir_deg=68.0,
+            ),
+        ]
+    )
+
+    facts = compose_gs_explanation(
+        gs_id=GS, snapshot=snap, active_pairs=frozenset(), actuation_state_by_gs={}
+    )
+
+    row = _gate(facts, "field_of_regard")
+    assert row.actual == 68.0
+    assert row.threshold == 60.0
+    assert facts.rejecting_endpoint == "satellite"
 
 
 def test_closest_rejected_ranks_by_funnel_depth_not_raw_elevation():

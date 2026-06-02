@@ -2,9 +2,9 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
  * Hover tooltip — a DOM label following the cursor for the hovered satellite or ground
- * station, reproducing the globe/gpuPicker.ts tooltip content. Rendered OUTSIDE the R3F
+ * station. Rendered OUTSIDE the R3F
  * canvas (a fixed-position div) and fed by pointer-over handlers on the scene glyphs.
- * Content is React text (never HTML) — XSS-safe, matching the legacy textContent tooltip.
+ * Content is React text, never HTML.
  */
 
 import type { NodeState } from "../../types";

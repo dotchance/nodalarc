@@ -49,9 +49,10 @@ class GroundPassLookahead:
     step: int
     step_seconds: int
     horizon_ticks: int
+    horizon_ticks_by_gs: Mapping[str, int]
+    gs_reference_bodies: Mapping[str, str]
     propagator_id: str
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
-    gs_reference_bodies: Mapping[str, str] | None = None
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
     sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None
 
@@ -144,7 +145,20 @@ def _estimate_remaining_visible_seconds(
     if lookahead.step_seconds <= 0:
         raise ValueError("Ground pass lookahead requires step_seconds > 0")
 
-    remaining = dict.fromkeys(candidates, lookahead.horizon_ticks * lookahead.step_seconds)
+    candidate_gs_ids = {gs_id for gs_id, _sat_id in candidates}
+    missing_horizons = sorted(candidate_gs_ids - set(lookahead.horizon_ticks_by_gs))
+    if missing_horizons:
+        raise ValueError(
+            f"Ground pass lookahead is missing per-GS horizon for {', '.join(missing_horizons)}"
+        )
+    missing_bodies = sorted(candidate_gs_ids - set(lookahead.gs_reference_bodies))
+    if missing_bodies:
+        raise ValueError(
+            f"Ground pass lookahead is missing reference_body for {', '.join(missing_bodies)}"
+        )
+    remaining = {
+        pair: lookahead.horizon_ticks_by_gs[pair[0]] * lookahead.step_seconds for pair in candidates
+    }
     open_pairs = set(candidates)
     if not open_pairs:
         return remaining
@@ -160,6 +174,9 @@ def _estimate_remaining_visible_seconds(
         )
 
         for gs_id, sat_id in tuple(open_pairs):
+            if tick_offset > lookahead.horizon_ticks_by_gs[gs_id]:
+                open_pairs.remove((gs_id, sat_id))
+                continue
             gs_ecef, gs_geo = gs_positions[gs_id]
             state = future_states.get(sat_id)
             if state is None:
@@ -167,7 +184,7 @@ def _estimate_remaining_visible_seconds(
                     f"Missing propagated satellite state for {sat_id}; "
                     "ground pass lookahead cannot be evaluated authoritatively"
                 )
-            reference_body = (lookahead.gs_reference_bodies or {}).get(gs_id, "earth")
+            reference_body = lookahead.gs_reference_bodies[gs_id]
             body_frame = body_frame_for(reference_body)
             gs_profile = _physical_profile(
                 lookahead.gs_terminal_profiles,
@@ -224,7 +241,7 @@ def evaluate_ground_visibility(
     pass_lookahead: GroundPassLookahead | None = None,
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics",
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None,
-    sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None,
+    sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None,
 ) -> GroundVisibilityEvaluation:
     """Evaluate geometric GS/satellite visibility for one tick.
 
@@ -373,6 +390,7 @@ def evaluate_ground_visibility(
                 range_km=gv.range_km,
                 elevation_deg=gv.elevation_deg,
                 azimuth_deg=gv.azimuth_deg,
+                sat_off_nadir_deg=gv.sat_off_nadir_deg,
                 observer_frame="body_local",
                 reject_reason=gv.reject_reason,
                 rejecting_endpoint=gv.rejecting_endpoint,
@@ -400,6 +418,7 @@ def evaluate_ground_visibility(
                         remaining_visible_s=None,
                         reject_reason=gv.reject_reason,
                         azimuth_deg=gv.azimuth_deg,
+                        sat_off_nadir_deg=gv.sat_off_nadir_deg,
                     ),
                 )
         visible_per_station[gs_id] = visible_sats
@@ -428,6 +447,7 @@ def evaluate_ground_visibility(
                     remaining_visible_s=remaining_by_pair[(gs_id, gv.sat_id)],
                     reject_reason=gv.reject_reason,
                     azimuth_deg=gv.azimuth_deg,
+                    sat_off_nadir_deg=gv.sat_off_nadir_deg,
                 )
                 for gv in visible_sats
             ]

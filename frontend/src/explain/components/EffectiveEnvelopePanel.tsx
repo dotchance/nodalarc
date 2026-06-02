@@ -8,6 +8,7 @@
  * terminal that actually limits the link (the satellite can be the binding one).
  */
 
+import { effectiveEnvelopeBindingLabel } from "../reasons";
 import type { EffectiveEnvelopeFacts, EnvelopeEndpoint } from "../types";
 
 function deg(v: number | null): string {
@@ -51,6 +52,7 @@ function TerminalEnvelope({ ep, binds }: { ep: EnvelopeEndpoint; binds: boolean 
 export function EffectiveEnvelopePanel({ envelope }: { envelope: EffectiveEnvelopeFacts }) {
   const maskDead = envelope.dead_knobs.includes("min_elevation_deg");
   const be = envelope.binding_endpoint;
+  const bindingLabel = effectiveEnvelopeBindingLabel(envelope.binding_source);
   return (
     <div className="env-panel">
       <div className="detail-row">
@@ -63,7 +65,7 @@ export function EffectiveEnvelopePanel({ envelope }: { envelope: EffectiveEnvelo
         <span className="detail-label">Effective floor</span>
         <span className="detail-value">
           {deg(envelope.effective_min_elevation_deg)}
-          {envelope.binding_source ? ` (${envelope.binding_source})` : ""}
+          {bindingLabel ? ` (${bindingLabel})` : ""}
         </span>
       </div>
       <div className="detail-row">
@@ -77,7 +79,7 @@ export function EffectiveEnvelopePanel({ envelope }: { envelope: EffectiveEnvelo
       {maskDead ? (
         <div className="env-deadknob">
           The {deg(envelope.configured_min_elevation_deg)} mask has no effect —{" "}
-          {envelope.binding_source} sets the {deg(envelope.effective_min_elevation_deg)} floor.
+          {bindingLabel ?? "A binding constraint"} sets the {deg(envelope.effective_min_elevation_deg)} floor.
         </div>
       ) : null}
     </div>

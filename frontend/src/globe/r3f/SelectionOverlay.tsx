@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
  * SelectionOverlay — the white billboarded selection ring and the additive glow for a
- * selected satellite. Reproduces globe/selection.ts: a flat RingGeometry(1.0,1.3,32) in the
+ * selected satellite. Uses a flat RingGeometry(1.0,1.3,32) in the
  * WORLD frame (scene root, so it reads world positions), renderOrder 999, tracking the
  * selected node every frame via the position registry, billboarded to the camera, pulsing
  * opacity 0.4..0.8. Scale is SAT_RADIUS*3 for a satellite, SAT_RADIUS*4 for a ground
@@ -20,7 +20,7 @@ import { SAT_RADIUS, SELECTION_COLOR } from "../../config";
 import { getNodeWorldPosition } from "./positions";
 import type { Selection } from "../../types";
 
-/** 64x64 radial-gradient glow (globe/satellites.ts getOrCreateGlowSprite). */
+/** 64x64 radial-gradient glow texture for a selected satellite. */
 function makeGlowTexture(): THREE.CanvasTexture {
   const size = 64;
   const canvas = document.createElement("canvas");

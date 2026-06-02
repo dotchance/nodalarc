@@ -65,6 +65,7 @@ def _decision_kwargs_wire() -> dict:
         "range_km": 1234.5,
         "elevation_deg": 42.0,
         "azimuth_deg": 180.0,
+        "sat_off_nadir_deg": 0.0,
         "observer_frame": "body_local",
         "reject_reason": "ok",
         "applied_min_elevation_deg": 25.0,
@@ -560,6 +561,21 @@ class TestTerminalConstraintAttribution:
             kwargs[side] = "named_profile"
             w = GroundVisibilityDecisionWire(**kwargs)
             assert getattr(w, side) == "named_profile"
+
+    def test_satellite_field_of_regard_rejection_requires_off_nadir_angle(self) -> None:
+        kwargs = _decision_kwargs_wire()
+        kwargs["visible"] = False
+        kwargs["reject_reason"] = "field_of_regard"
+        kwargs["rejecting_endpoint"] = "satellite"
+        kwargs["sat_off_nadir_deg"] = None
+        with pytest.raises(ValidationError, match="sat_off_nadir_deg"):
+            GroundVisibilityDecisionWire(**kwargs)
+
+    def test_visible_satellite_field_of_regard_decision_requires_off_nadir_angle(self) -> None:
+        kwargs = _decision_kwargs_hot()
+        kwargs["sat_off_nadir_deg"] = None
+        with pytest.raises(ValueError, match="sat_off_nadir_deg"):
+            GroundVisibilityDecision(**kwargs)
 
     def test_non_terminal_rejections_do_not_require_profile(self) -> None:
         """`los_blocked` and `elevation_below_min` are physical

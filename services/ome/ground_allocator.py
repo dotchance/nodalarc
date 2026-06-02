@@ -72,6 +72,7 @@ class _Candidate:
     selection_score: float
     service_priority: int
     per_gs_rank: int
+    satellite_ground_terminal_capacity: int
     rank_key: tuple
 
 
@@ -179,6 +180,8 @@ def _candidate_rank_key(
             values.append(-candidate.selection_score)
         elif component == "per_gs_rank":
             values.append(candidate.per_gs_rank)
+        elif component == "satellite_ground_terminal_capacity":
+            values.append(candidate.satellite_ground_terminal_capacity)
         elif component == "lex_pair":
             values.append(candidate.pair)
         else:  # pragma: no cover - Literal/model validation should prevent this.
@@ -192,6 +195,8 @@ def _build_candidates(
     visible_per_station: Mapping[str, list[GroundVisibility]],
     gs_selection_policies: Mapping[str, SelectionPolicySpec],
     gs_service_priorities: Mapping[str, int],
+    gs_reference_bodies: Mapping[str, str],
+    sat_terminal_pools: Mapping[str, Mapping[str, Sequence[int]]],
     ranking_order: Sequence[RankingComponent],
 ) -> tuple[list[_Candidate], dict[tuple[str, str], _Candidate], set[tuple[str, str]]]:
     by_gs: dict[str, list[_Candidate]] = {}
@@ -220,6 +225,7 @@ def _build_candidates(
                 visibility=gv,
                 context=SelectionContext(step=step, gs_id=gs_id, sat_id=gv.sat_id),
             )
+            reference_body = gs_reference_bodies[gs_id]
             station_candidates.append(
                 _Candidate(
                     pair=pair,
@@ -229,6 +235,9 @@ def _build_candidates(
                     selection_score=score,
                     service_priority=gs_service_priorities[gs_id],
                     per_gs_rank=-1,
+                    satellite_ground_terminal_capacity=len(
+                        sat_terminal_pools.get(gv.sat_id, {}).get(reference_body, ())
+                    ),
                     rank_key=(),
                 )
             )
@@ -246,6 +255,7 @@ def _build_candidates(
                 selection_score=candidate.selection_score,
                 service_priority=candidate.service_priority,
                 per_gs_rank=idx,
+                satellite_ground_terminal_capacity=candidate.satellite_ground_terminal_capacity,
                 rank_key=(),
             )
             ranked.append(ranked_candidate)
@@ -260,6 +270,7 @@ def _build_candidates(
             selection_score=candidate.selection_score,
             service_priority=candidate.service_priority,
             per_gs_rank=candidate.per_gs_rank,
+            satellite_ground_terminal_capacity=candidate.satellite_ground_terminal_capacity,
             rank_key=_candidate_rank_key(candidate=candidate, ranking_order=ranking_order),
         )
         ranked_with_keys.append(keyed)
@@ -472,6 +483,18 @@ def allocate_ground_links(
         raise ValueError("mbb_overlap_ticks must be >= 0")
     if mbb_reserve < 0:
         raise ValueError("mbb_reserve must be >= 0")
+    # BIG HONESTY NOTE / MBB-002:
+    # This allocator has a deliberate single-overlap state machine per GS. When a
+    # GS is already in MBBOverlap, new challengers are rejected as
+    # `mbb_overlap_locked`; a second reserved terminal is not consumed for a second
+    # parallel overlap. Letting mbb_reserve=2+ through would silently strand
+    # capacity and lie about supported gateway behavior. Remove this guard only
+    # when MBB-002 adds multi-overlap pending-teardown state and proves it.
+    if mbb_reserve > 1:
+        raise ValueError(
+            "mbb_reserve > 1 requires future MBB-002 multi-overlap allocator support; "
+            "current allocator supports at most one concurrent MBB overlap per GS"
+        )
     if handover_mode == "mbb" and (mbb_overlap_ticks <= 0 or mbb_reserve <= 0):
         raise ValueError("MBB handover requires mbb_overlap_ticks > 0 and mbb_reserve > 0")
 
@@ -523,17 +546,19 @@ def allocate_ground_links(
         ignored_capacity_fields=ignored_capacity_fields,
     )
 
+    sat_terminal_pools = _normalize_satellite_terminal_pools(
+        sat_ground_terminals=sat_ground_terminals,
+        sat_ground_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
+    )
+
     candidates, candidate_by_pair, visible_set = _build_candidates(
         step=step,
         visible_per_station=visible_per_station,
         gs_selection_policies=gs_selection_policies,
         gs_service_priorities=gs_service_priorities,
+        gs_reference_bodies=gs_reference_bodies,
+        sat_terminal_pools=sat_terminal_pools,
         ranking_order=order,
-    )
-
-    sat_terminal_pools = _normalize_satellite_terminal_pools(
-        sat_ground_terminals=sat_ground_terminals,
-        sat_ground_terminal_indices_by_body=sat_ground_terminal_indices_by_body,
     )
     gs_occupied: dict[str, set[int]] = {gs: set() for gs in gs_terminal_counts}
     sat_occupied: dict[str, set[int]] = {sat: set() for sat in sat_ground_terminals}

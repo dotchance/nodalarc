@@ -56,6 +56,7 @@ def _decision(
         range_km=range_km,
         elevation_deg=elevation_deg,
         azimuth_deg=None,
+        sat_off_nadir_deg=None,
         observer_frame="body_local",
         reject_reason=reject_reason,  # type: ignore[arg-type]
         applied_min_elevation_deg=25.0,

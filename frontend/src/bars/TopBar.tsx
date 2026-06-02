@@ -2,20 +2,10 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /** Top bar — session info, sim time, health indicator, mode selector. */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatTime, formatDuration } from "../translate";
+import { schedulerOpsLabel } from "../explain/reasons";
 import type { ActuationNotice, StateSnapshot } from "../types";
-
-
-function humanCode(code: string | null | undefined): string {
-  if (!code) return "Unknown reason";
-  return code
-    .toLowerCase()
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
 
 function pairLabel(pair: string[] | undefined): string {
   if (!pair || pair.length === 0) return "none";
@@ -56,19 +46,47 @@ function recoveryText(notice: ActuationNotice): string {
   return `Read-only kernel verification is still active for ${notice.gs_id}.`;
 }
 
-function noticeSummary(notices: ActuationNotice[], dirty: boolean): string {
-  const count = notices.length;
-  const noun = count === 1 ? "fault" : "faults";
-  return dirty ? `${count} actuation ${noun}` : `${count} actuation warning${count === 1 ? "" : "s"}`;
+function plural(count: number, singular: string, pluralWord = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : pluralWord}`;
+}
+
+function noticeSummary(notices: ActuationNotice[]): string {
+  const faultCount = notices.filter((n) => n.actuation_state === "kernel_dirty").length;
+  const warningCount = notices.length - faultCount;
+  if (faultCount > 0 && warningCount > 0) {
+    return `${plural(faultCount, "actuation fault")}, ${plural(warningCount, "warning")}`;
+  }
+  if (faultCount > 0) return plural(faultCount, "actuation fault");
+  return plural(warningCount, "actuation warning");
 }
 
 function ActuationNoticeButton({ notices, dirty }: { notices: ActuationNotice[]; dirty: boolean }) {
   const [open, setOpen] = useState(false);
-  const label = noticeSummary(notices, dirty);
-  const title = notices.map((n) => `${n.gs_id}: ${humanCode(n.reason_code)}`).join("\n");
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const label = noticeSummary(notices);
+  const title = notices.map((n) => `${n.gs_id}: ${schedulerOpsLabel(n.reason_code)}`).join("\n");
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const root = rootRef.current;
+      if (root && event.target instanceof Node && !root.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [open]);
 
   return (
-    <span style={{ position: "relative", display: "inline-flex" }}>
+    <span ref={rootRef} style={{ position: "relative", display: "inline-flex" }}>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -139,7 +157,7 @@ function ActuationNoticeButton({ notices, dirty }: { notices: ActuationNotice[];
             >
               <div><strong>Ground station:</strong> {notice.gs_id}</div>
               <div><strong>State:</strong> {notice.actuation_state}</div>
-              <div><strong>Reason:</strong> {humanCode(notice.reason_code)}</div>
+              <div><strong>Reason:</strong> {schedulerOpsLabel(notice.reason_code)}</div>
               <div>
                 <strong>Impact:</strong>{" "}
                 {notice.blocking_new_ground_link_up

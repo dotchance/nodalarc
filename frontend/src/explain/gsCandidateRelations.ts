@@ -12,7 +12,7 @@
  */
 import type { Family } from "./families";
 import { candidateStatus } from "./derive";
-import { REASON_REGISTRY } from "./reasons";
+import { reasonLabel } from "./reasons";
 import type { GroundDecisionsSnapshot } from "./client";
 import type { LinkState } from "../types";
 
@@ -20,11 +20,6 @@ export interface SatRelation {
   family: Family;
   /** Registry-resolved human reason for the hover tooltip (never a raw code), or null. */
   reason: string | null;
-}
-
-function reasonLabel(code: string | null): string | null {
-  if (!code) return null;
-  return REASON_REGISTRY[code]?.label ?? code;
 }
 
 export function gsCandidateRelations(

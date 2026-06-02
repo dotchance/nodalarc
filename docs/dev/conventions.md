@@ -128,10 +128,10 @@ state_policy = DeliverPolicy.LAST_PER_SUBJECT
 ## Frontend Conventions
 
 - React 19 with hooks (no class components)
-- Three.js for 3D rendering (raw Three.js, not React-Three-Fiber)
-- State management via React hooks + module-level singletons for rendering state
+- React Three Fiber for 3D rendering, with Three.js objects owned by React lifecycle boundaries
+- State management via React hooks plus narrow module-level registries for shared renderer facts
 - TypeScript strict mode - no `any`, no `@ts-ignore`
-- Shared geometries for batched rendering (O(1) draw calls)
+- Shared geometries for batched rendering (O(1) draw calls); dispose caller-owned GPU resources on dependency change and unmount
 
 ## What NOT to Do
 

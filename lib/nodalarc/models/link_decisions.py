@@ -282,6 +282,13 @@ class GroundVisibilityDecisionWire(BaseModel):
     range_km: float
     elevation_deg: float
     azimuth_deg: float | None
+    sat_off_nadir_deg: float | None = Field(
+        description=(
+            "Satellite ground-terminal off-nadir angle, in degrees, produced by OME "
+            "when the satellite field-of-regard constraint was evaluated; None only "
+            "when satellite FoR was not evaluated for this decision."
+        ),
+    )
     observer_frame: ObserverFrame
     reject_reason: GroundVisibilityRejectReason
     rejecting_endpoint: GroundVisibilityRejectingEndpoint
@@ -404,6 +411,20 @@ class GroundVisibilityDecisionWire(BaseModel):
                     f"rejecting_endpoint={self.rejecting_endpoint!r} requires "
                     "applied_sat_terminal_profile for attributable audit"
                 )
+            if (
+                self.reject_reason == "field_of_regard"
+                and self.rejecting_endpoint in ("satellite", "both")
+                and self.sat_off_nadir_deg is None
+            ):
+                raise ValueError("satellite field_of_regard rejection requires sat_off_nadir_deg")
+        if (
+            self.visible
+            and self.applied_sat_field_of_regard_deg is not None
+            and self.sat_off_nadir_deg is None
+        ):
+            raise ValueError(
+                "visible decision with satellite field_of_regard applied requires sat_off_nadir_deg"
+            )
         return self
 
 

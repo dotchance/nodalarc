@@ -1120,9 +1120,13 @@ def _verify_kernel_inventory_entry(
                     ]
                 )
             elif entry.vni:
+                local_ip = _discover_local_ip()
                 vxlan_if, _, _ = vxlan._host_ifnames(entry.vni)
                 proofs.extend(
                     [
+                        kernel_verifier.verify_vxlan(
+                            entry.vni, local_ip=local_ip, remote_ip=entry.remote_node_ip
+                        ),
                         kernel_verifier.verify_mirred(host_ifname, vxlan_if),
                         kernel_verifier.verify_mirred(vxlan_if, host_ifname),
                     ]
@@ -1144,6 +1148,8 @@ def _verify_kernel_inventory_entry(
                     kernel_verifier.verify_pod_interface_exists(sat_pid, sat_ifname),
                 ]
             )
+        elif entry.vni:
+            proofs.append(kernel_verifier.verify_vxlan_absent(entry.vni))
         return _combine_proofs("KernelInventory expected-down verified", proofs)
     except Exception as exc:
         msg = f"KernelInventory failed {entry.node_id}/{entry.interface_name}: {exc}"

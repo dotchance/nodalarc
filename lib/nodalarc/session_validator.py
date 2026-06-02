@@ -65,6 +65,7 @@ def validate_session_readiness(
     results.extend(_check_e008(session, constellation, satellites))
     results.extend(_check_e009(session, ground_stations))
     results.extend(_check_e010(session, ground_stations))
+    results.extend(_check_e023(session))
     results.extend(_check_e022(session, ground_stations))
     results.extend(_check_e011(satellites, ground_stations))
     results.extend(_check_e020(session))
@@ -466,7 +467,7 @@ def _check_e010(
         return [
             ValidationResult(
                 level="warning",
-                code="W004",
+                code="W011",
                 message=(
                     "MBB handover requested, but one or more ground stations cannot "
                     f"support physical overlap: {details}. The session explicitly "
@@ -499,6 +500,29 @@ def _check_e010(
                 "set simulation.acknowledge_bbm_handover_gap: true to run degraded BBM."
             ),
             field_path="scheduling.ground.handover_mode",
+        )
+    ]
+
+
+def _check_e023(session: SessionConfig) -> list[ValidationResult]:
+    """E023: mbb_reserve > 1 requires future multi-overlap MBB support."""
+    reserve = session.scheduling.ground.mbb_reserve
+    if reserve <= 1:
+        return []
+    return [
+        ValidationResult(
+            level="error",
+            code="E023",
+            message=(
+                "scheduling.ground.mbb_reserve > 1 is not implemented. The current "
+                "allocator supports at most one concurrent MBB overlap per ground station; "
+                f"configured mbb_reserve={reserve} would reserve capacity the engine cannot use."
+            ),
+            remediation=(
+                "Use mbb_reserve: 1 for current MBB handover, or wait for MBB-002 "
+                "multi-overlap allocator support before modeling multiple simultaneous overlaps."
+            ),
+            field_path="scheduling.ground.mbb_reserve",
         )
     ]
 

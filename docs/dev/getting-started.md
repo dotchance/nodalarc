@@ -124,7 +124,7 @@ tests/integration/      Integration tests
 | `services/nodalarc_operator/session_deployer.py` | Session creation: pods, placement, config delivery |
 | `services/ome/main.py` | OME entry point, pacing thread, publisher thread |
 | `frontend/src/App.tsx` | Frontend entry point |
-| `frontend/src/globe/links.ts` | ISL/ground link rendering (batched LineSegments2) |
+| `frontend/src/globe/r3f/Links.tsx` | ISL/ground link rendering (batched LineSegments2) |
 | `configs/templates/frr/` | Jinja2 templates for FRR config generation |
 | `deploy/helm/values.yaml` | Helm chart default values |
 

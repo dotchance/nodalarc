@@ -23,8 +23,8 @@ function link(a: string, b: string, state = "active"): LinkState {
 function notice(gs_id: string, blocking: boolean, reason = "kernel dirty"): ActuationNotice {
   return {
     gs_id,
-    actuation_state: blocking ? "kernel_dirty" : "in_flight",
-    reason_code: "KERNEL_DIRTY",
+    actuation_state: blocking ? "kernel_dirty" : "clean",
+    reason_code: blocking ? "KERNEL_DIRTY" : "ACTUATION_CLEAN",
     message: reason,
     since: null,
     blocking_new_ground_link_up: blocking,
@@ -44,9 +44,10 @@ describe("groundStationFamily (default-state snapshot approximation)", () => {
     expect(r.reason).toBe("BatchLinkUp failed");
   });
 
-  it("is in_flight (degraded, not faulted) for a non-blocking actuation notice", () => {
-    const r = groundStationFamily("gs-1", [], [notice("gs-1", false)]);
-    expect(r.family).toBe("in_flight");
+  it("does not let a retained clean actuation notice override actual link state", () => {
+    const r = groundStationFamily("gs-1", [link("gs-1", "sat-1")], [notice("gs-1", false)]);
+    expect(r.family).toBe("connected");
+    expect(r.reason).toBeNull();
   });
 
   it("a fault notice wins over an active link (fault dominates)", () => {

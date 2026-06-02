@@ -20,6 +20,7 @@ from node_agent.handlers import (
     _publish_command_event,
     handle_batch_link_down,
     handle_batch_link_up,
+    handle_kernel_inventory,
     handle_set_latency,
 )
 
@@ -333,6 +334,263 @@ class TestBatchLinkUp:
         assert resp.interface_results[0].success is False
         assert resp.interface_results[0].error_code == node_agent_pb2.NODE_AGENT_DEPENDENCY_MISSING
         assert "Substrate measurement unavailable" in resp.interface_results[0].error_message
+
+
+class TestKernelInventory:
+    def _request(
+        self, entry: node_agent_pb2.KernelInventoryEntry
+    ) -> node_agent_pb2.KernelInventoryRequest:
+        return node_agent_pb2.KernelInventoryRequest(
+            envelope=_env("KernelInventory", "test-kernel-inventory"),
+            target_sim_time="2026-06-01T00:00:00Z",
+            gs_id="gs-den",
+            entries=[entry],
+        )
+
+    def _cross_node_entry(
+        self, *, expected_admin_up: bool = True, remote_node_ip: str = "10.0.0.2"
+    ):
+        return node_agent_pb2.KernelInventoryEntry(
+            node_id="sat-P00S00",
+            interface_name="gnd0",
+            link_type=node_agent_pb2.LINK_TYPE_GROUND,
+            locality=node_agent_pb2.LOCALITY_CROSS_NODE,
+            gs_id="gs-den",
+            sat_id="sat-P00S00",
+            peer_node_id="gs-den",
+            peer_interface_name="term0",
+            remote_node_ip=remote_node_ip,
+            vni=1001,
+            latency_ms=4.5 if expected_admin_up else 0.0,
+            bandwidth_mbps=100.0 if expected_admin_up else 0.0,
+            expected_admin_up=expected_admin_up,
+        )
+
+    def _local_entry(self, *, expected_admin_up: bool = True):
+        return node_agent_pb2.KernelInventoryEntry(
+            node_id="gs-den",
+            interface_name="term0",
+            link_type=node_agent_pb2.LINK_TYPE_GROUND,
+            locality=node_agent_pb2.LOCALITY_LOCAL,
+            gs_id="gs-den",
+            sat_id="sat-P00S00",
+            peer_node_id="sat-P00S00",
+            peer_interface_name="gnd0",
+            latency_ms=4.5 if expected_admin_up else 0.0,
+            bandwidth_mbps=100.0 if expected_admin_up else 0.0,
+            expected_admin_up=expected_admin_up,
+        )
+
+    def test_request_rejects_isl_entries(self, monkeypatch):
+        monkeypatch.setattr(ops_events, "publish", lambda **_kwargs: None)
+        entry = self._cross_node_entry()
+        entry.link_type = node_agent_pb2.LINK_TYPE_ISL
+
+        resp = handle_kernel_inventory(
+            self._request(entry), pid_map={"sat-P00S00": 1234}, fence=FENCE
+        )
+
+        assert resp.success is False
+        assert resp.error_code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
+        assert "supports ground entries only" in resp.error_message
+        assert resp.dirty_kernel is False
+
+    def test_cross_node_request_rejects_missing_vni(self, monkeypatch):
+        monkeypatch.setattr(ops_events, "publish", lambda **_kwargs: None)
+        entry = self._cross_node_entry()
+        entry.vni = 0
+
+        resp = handle_kernel_inventory(
+            self._request(entry), pid_map={"sat-P00S00": 1234}, fence=FENCE
+        )
+
+        assert resp.success is False
+        assert resp.error_code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
+        assert "requires vni > 0" in resp.error_message
+        assert resp.dirty_kernel is False
+
+    def test_cross_node_request_requires_remote_endpoint_identity(self, monkeypatch):
+        monkeypatch.setattr(ops_events, "publish", lambda **_kwargs: None)
+        req = self._request(self._cross_node_entry(remote_node_ip=""))
+
+        resp = handle_kernel_inventory(req, pid_map={"sat-P00S00": 1234}, fence=FENCE)
+
+        assert resp.success is False
+        assert resp.error_code == node_agent_pb2.NODE_AGENT_INVALID_FIELD
+        assert "remote_node_ip" in resp.error_message
+        assert resp.dirty_kernel is False
+
+    def test_kernel_inventory_handler_is_read_only(self, monkeypatch):
+        from node_agent import ground_bridge, kernel_actuator, kernel_verifier, namespace_ops, vxlan
+
+        def _mutation_forbidden(*_args, **_kwargs):
+            raise AssertionError("KernelInventory must not mutate kernel state")
+
+        for module, names in (
+            (
+                ground_bridge,
+                (
+                    "attach_to_ground_bridge",
+                    "detach_from_ground_bridge",
+                    "attach_isl",
+                    "detach_isl",
+                    "create_ground_bridge",
+                    "create_satellite_ground_veth",
+                    "create_mediated_isl",
+                ),
+            ),
+            (
+                kernel_actuator,
+                (
+                    "create_cross_node_vxlan",
+                    "destroy_cross_node_vxlan",
+                    "attach_cross_node_ground",
+                    "detach_cross_node_ground",
+                    "detach_local_isl",
+                ),
+            ),
+            (namespace_ops, ("create_dummy_interface",)),
+            (
+                vxlan,
+                (
+                    "create_vxlan_link",
+                    "destroy_vxlan_link",
+                    "attach_cross_node_ground",
+                    "detach_cross_node_ground",
+                ),
+            ),
+        ):
+            for name in names:
+                monkeypatch.setattr(module, name, _mutation_forbidden)
+
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_host_interface_state",
+            lambda ifname, *, admin_up: kernel_verifier.Proof.ok(f"host {ifname} {admin_up}"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_qdisc",
+            lambda pid, ifname, *, delay_ms, rate_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_mirred",
+            lambda src, dst: kernel_verifier.Proof.ok(f"mirred {src}->{dst}"),
+        )
+
+        resp = handle_kernel_inventory(
+            self._request(self._local_entry()),
+            pid_map={"gs-den": 2222, "sat-P00S00": 1234},
+            fence=FENCE,
+        )
+
+        assert resp.success is True
+        assert resp.dirty_kernel is False
+        assert resp.entry_results[0].verified is True
+
+    def test_cross_node_expected_up_verifies_exact_vxlan_endpoint(self, monkeypatch):
+        from node_agent import handlers, kernel_verifier
+
+        calls: list[tuple] = []
+        monkeypatch.setenv("HOST_IP", "10.0.0.1")
+        monkeypatch.setattr(handlers, "_local_ip", None)
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_host_interface_state",
+            lambda ifname, *, admin_up: kernel_verifier.Proof.ok(f"host {ifname} {admin_up}"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_qdisc",
+            lambda pid, ifname, *, delay_ms, rate_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+        )
+
+        def _verify_vxlan(vni: int, *, local_ip: str, remote_ip: str):
+            calls.append(("vxlan", vni, local_ip, remote_ip))
+            return kernel_verifier.Proof.ok("vxlan")
+
+        monkeypatch.setattr(kernel_verifier, "verify_vxlan", _verify_vxlan)
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_mirred",
+            lambda src, dst: kernel_verifier.Proof.ok(f"mirred {src}->{dst}"),
+        )
+
+        resp = handle_kernel_inventory(
+            self._request(self._cross_node_entry()),
+            pid_map={"sat-P00S00": 1234},
+            fence=FENCE,
+        )
+
+        assert resp.success is True
+        assert resp.entries_verified == 1
+        assert calls == [("vxlan", 1001, "10.0.0.1", "10.0.0.2")]
+        assert resp.entry_results[0].verified is True
+
+    def test_cross_node_expected_down_verifies_vxlan_absence(self, monkeypatch):
+        from node_agent import kernel_verifier
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_host_interface_state",
+            lambda ifname, *, admin_up: kernel_verifier.Proof.ok(f"host {ifname} {admin_up}"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_pod_interface_exists",
+            lambda pid, ifname: kernel_verifier.Proof.ok(f"pod {ifname}"),
+        )
+
+        def _verify_absent(vni: int):
+            calls.append(("vxlan_absent", vni))
+            return kernel_verifier.Proof.ok("vxlan absent")
+
+        monkeypatch.setattr(kernel_verifier, "verify_vxlan_absent", _verify_absent)
+
+        resp = handle_kernel_inventory(
+            self._request(self._cross_node_entry(expected_admin_up=False)),
+            pid_map={"sat-P00S00": 1234},
+            fence=FENCE,
+        )
+
+        assert resp.success is True
+        assert calls == [("vxlan_absent", 1001)]
+        assert resp.entry_results[0].verified is True
+
+    def test_cross_node_proof_exception_marks_dirty(self, monkeypatch):
+        from node_agent import handlers, kernel_verifier
+
+        monkeypatch.setenv("HOST_IP", "10.0.0.1")
+        monkeypatch.setattr(handlers, "_local_ip", None)
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_host_interface_state",
+            lambda ifname, *, admin_up: kernel_verifier.Proof.ok(f"host {ifname} {admin_up}"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_qdisc",
+            lambda pid, ifname, *, delay_ms, rate_mbps=None: kernel_verifier.Proof.ok("qdisc"),
+        )
+        monkeypatch.setattr(
+            kernel_verifier,
+            "verify_vxlan",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("wrong endpoint")),
+        )
+
+        resp = handle_kernel_inventory(
+            self._request(self._cross_node_entry()),
+            pid_map={"sat-P00S00": 1234},
+            fence=FENCE,
+        )
+
+        assert resp.success is False
+        assert resp.dirty_kernel is True
+        assert resp.error_code == node_agent_pb2.NODE_AGENT_KERNEL_PROOF_FAILED
+        assert resp.entry_results[0].dirty_kernel is True
+        assert "wrong endpoint" in resp.entry_results[0].error_message
 
 
 class TestSetLatency:

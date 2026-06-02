@@ -115,6 +115,75 @@ export const ACTUATION_FAILURE_CLASSES: readonly ActuationFailureClass[] = [
   "ops_publish_failure",
 ];
 
+export const SCHEDULER_OPS_CODES = [
+  "REPLACEMENT_LINK_UP_FAILED",
+  "GROUND_LINK_UP_FAILED",
+  "GROUND_LINK_DOWN_FAILED",
+  "GROUND_LATENCY_UPDATE_FAILED",
+  "OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR",
+  "ACTUATION_BLOCKED",
+  "ACTUATION_CLEAN",
+  "KERNEL_DIRTY",
+  "KERNEL_VERIFY_ATTEMPTED",
+  "KERNEL_VERIFY_EXHAUSTED",
+  "AUTHORITY_SUBSET_VIOLATION",
+  "ACTUATION_HALTED",
+  "OPERATOR_REPAIR_REQUESTED",
+  "OPERATOR_REPAIR_STARTED",
+  "OPERATOR_REPAIR_SUCCEEDED",
+  "OPERATOR_REPAIR_FAILED",
+  "OPERATOR_REPAIR_REJECTED",
+] as const;
+export type SchedulerOpsCode = (typeof SCHEDULER_OPS_CODES)[number];
+
+export interface SchedulerOpsRecord {
+  code: SchedulerOpsCode;
+  label: string;
+  sentence: string;
+  severity: Severity;
+}
+
+function ops(code: SchedulerOpsCode, label: string, sentence: string, severity: Severity): SchedulerOpsRecord {
+  return { code, label, sentence, severity };
+}
+
+export const SCHEDULER_OPS_REGISTRY: Record<SchedulerOpsCode, SchedulerOpsRecord> = {
+  REPLACEMENT_LINK_UP_FAILED: ops("REPLACEMENT_LINK_UP_FAILED", "Replacement link-up failed", "The replacement ground link did not come up.", "alarm"),
+  GROUND_LINK_UP_FAILED: ops("GROUND_LINK_UP_FAILED", "Ground link-up failed", "A ground link-up command failed.", "alarm"),
+  GROUND_LINK_DOWN_FAILED: ops("GROUND_LINK_DOWN_FAILED", "Ground link-down failed", "A ground link-down command failed.", "alarm"),
+  GROUND_LATENCY_UPDATE_FAILED: ops("GROUND_LATENCY_UPDATE_FAILED", "Ground latency update failed", "A ground latency update failed.", "warning"),
+  OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR: ops("OLD_PAIR_DROPPED_WITHOUT_SUCCESSOR", "Old pair dropped without successor", "The old ground pair was dropped before a successor was proven up.", "alarm"),
+  ACTUATION_BLOCKED: ops("ACTUATION_BLOCKED", "Actuation blocked", "A clean actuation failure blocks new ground link changes for this station.", "warning"),
+  ACTUATION_CLEAN: ops("ACTUATION_CLEAN", "Actuation clean", "The station's desired and kernel state match.", "info"),
+  KERNEL_DIRTY: ops("KERNEL_DIRTY", "Kernel dirty", "Kernel state could not be proven clean.", "alarm"),
+  KERNEL_VERIFY_ATTEMPTED: ops("KERNEL_VERIFY_ATTEMPTED", "Kernel verification attempted", "A read-only kernel verification was attempted.", "info"),
+  KERNEL_VERIFY_EXHAUSTED: ops("KERNEL_VERIFY_EXHAUSTED", "Kernel verification exhausted", "Read-only kernel verification exhausted without proving the station clean.", "alarm"),
+  AUTHORITY_SUBSET_VIOLATION: ops("AUTHORITY_SUBSET_VIOLATION", "Authority violation", "Scheduler desired state exceeded OME authority.", "alarm"),
+  ACTUATION_HALTED: ops("ACTUATION_HALTED", "Actuation halted", "A fatal actuation condition halted dispatch.", "alarm"),
+  OPERATOR_REPAIR_REQUESTED: ops("OPERATOR_REPAIR_REQUESTED", "Operator repair requested", "An explicit operator repair was requested.", "info"),
+  OPERATOR_REPAIR_STARTED: ops("OPERATOR_REPAIR_STARTED", "Operator repair started", "Operator repair started for the station.", "info"),
+  OPERATOR_REPAIR_SUCCEEDED: ops("OPERATOR_REPAIR_SUCCEEDED", "Operator repair succeeded", "Operator repair proved the station clean.", "info"),
+  OPERATOR_REPAIR_FAILED: ops("OPERATOR_REPAIR_FAILED", "Operator repair failed", "Operator repair did not prove the station clean.", "alarm"),
+  OPERATOR_REPAIR_REJECTED: ops("OPERATOR_REPAIR_REJECTED", "Operator repair rejected", "The operator repair request was rejected.", "warning"),
+};
+
+export function schedulerOpsLabel(code: string | null | undefined): string {
+  if (!code) return "Unknown operational condition";
+  return SCHEDULER_OPS_REGISTRY[code as SchedulerOpsCode]?.label ?? "Unknown operational condition";
+}
+
+export function reasonLabel(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return REASON_REGISTRY[code]?.label ?? "Unknown reason";
+}
+
+export function effectiveEnvelopeBindingLabel(source: string | null | undefined): string | null {
+  if (!source) return null;
+  if (source === "field_of_regard") return REASON_REGISTRY["field_of_regard"]?.label ?? "Field of regard";
+  if (source === "min_elevation_mask") return REASON_REGISTRY["elevation_below_min"]?.label ?? "Elevation below minimum";
+  return "Unknown binding constraint";
+}
+
 export type ReasonDomain = "visibility" | "unscheduled" | "allocation_event" | "actuation";
 
 export interface ReasonRecord {

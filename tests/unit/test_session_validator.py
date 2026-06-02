@@ -801,7 +801,7 @@ class TestE010:
         results = validate_session_readiness(session, constellation, sats, gs, stack)
 
         assert [r for r in results if r.level == "error" and r.code == "E010"] == []
-        warnings = [r for r in results if r.level == "warning" and r.code == "W004"]
+        warnings = [r for r in results if r.level == "warning" and r.code == "W011"]
         assert len(warnings) == 1
         assert "explicitly acknowledges degraded BBM behavior" in warnings[0].message
         assert warnings[0].field_path == "simulation.acknowledge_bbm_handover_gap"
@@ -896,6 +896,50 @@ class TestE010:
 
 
 # ---------------------------------------------------------------------------
+# E023: mbb_reserve > 1 requires future multi-overlap MBB support
+# ---------------------------------------------------------------------------
+
+
+class TestE023:
+    def test_mbb_reserve_above_one_is_rejected_even_if_capacity_exists(self):
+        session = _make_session()
+        session.scheduling.ground.handover_mode = "mbb"
+        session.scheduling.ground.mbb_overlap_ticks = 3
+        # Simulate a tool mutating the parsed model after Pydantic validation.
+        session.scheduling.ground.mbb_reserve = 2
+        gs = _make_gs_file(
+            stations=[
+                GroundStationConfig(
+                    name="gateway",
+                    lat_deg=34.0,
+                    lon_deg=-118.0,
+                    terminals=[
+                        GroundTerminalDef(
+                            type="rf",
+                            count=4,
+                            bandwidth_mbps=1000,
+                            tracking_capacity=1,
+                            **GROUND_PHYSICAL_TERMINAL_FIELDS,
+                        )
+                    ],
+                )
+            ]
+        )
+
+        results = validate_session_readiness(
+            session,
+            _make_constellation(),
+            _make_satellites(),
+            gs,
+            _make_resolved_stack(),
+        )
+
+        errors = [r for r in results if r.level == "error" and r.code == "E023"]
+        assert len(errors) == 1
+        assert "at most one concurrent MBB overlap" in errors[0].message
+        assert errors[0].field_path == "scheduling.ground.mbb_reserve"
+
+
 # E011: Satellite / ground terminal type compatibility
 # ---------------------------------------------------------------------------
 

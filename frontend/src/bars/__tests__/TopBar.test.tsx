@@ -96,11 +96,50 @@ describe("TopBar actuation notices", () => {
     expect(screen.getByText("gs-buenos-aires")).toBeTruthy();
     expect(screen.getByText("State:")).toBeTruthy();
     expect(screen.getByText("kernel_dirty")).toBeTruthy();
-    expect(screen.getByText("Kernel Verify Exhausted")).toBeTruthy();
+    expect(screen.getByText("Kernel verification exhausted")).toBeTruthy();
     expect(screen.getByText(/new ground link changes are suppressed for this GS/i)).toBeTruthy();
     expect(screen.getByText("gs-buenos-aires -> sat-P00S08")).toBeTruthy();
     expect(screen.getByText("gs-buenos-aires -> sat-P06S05")).toBeTruthy();
     expect(screen.getByText(/interface\/qdisc\/mirred checks did not match desired state/i)).toBeTruthy();
     expect(screen.getByText(/run operator repair for gs-buenos-aires/i)).toBeTruthy();
   });
+  it("labels mixed actuation conditions without implying every notice is a fault", () => {
+    const snapshot = snapshotWithActuationNotice();
+    snapshot.actuation_notices = [
+      ...(snapshot.actuation_notices ?? []),
+      {
+        ...(snapshot.actuation_notices ?? [])[0]!,
+        gs_id: "gs-denver",
+        actuation_state: "actuation_blocked",
+        reason_code: "ACTUATION_BLOCKED",
+        message: "Clean actuator failure awaiting operator decision",
+        blocking_new_ground_link_up: false,
+        affected_pairs: [["gs-denver", "sat-P01S01"]],
+        desired_pairs_for_gs: [["gs-denver", "sat-P01S02"]],
+        actual_pairs_for_gs: [["gs-denver", "sat-P01S01"]],
+        ome_visible_scheduled_pairs_for_gs: [["gs-denver", "sat-P01S02"]],
+      },
+    ];
+
+    renderTopBar(snapshot);
+
+    expect(screen.getByRole("button", { name: /1 actuation fault, 1 warning/i })).toBeTruthy();
+  });
+
+  it("closes the actuation details on Escape and outside pointer down", () => {
+    renderTopBar(snapshotWithActuationNotice());
+
+    fireEvent.click(screen.getByRole("button", { name: /1 actuation fault/i }));
+    expect(screen.getByRole("dialog", { name: /actuation condition details/i })).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: /actuation condition details/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /1 actuation fault/i }));
+    expect(screen.getByRole("dialog", { name: /actuation condition details/i })).toBeTruthy();
+
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("dialog", { name: /actuation condition details/i })).toBeNull();
+  });
+
 });

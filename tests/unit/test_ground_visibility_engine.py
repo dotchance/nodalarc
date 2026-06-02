@@ -114,6 +114,7 @@ def test_ground_visibility_evaluates_all_station_satellite_pairs_with_physical_c
     assert decision.applied_sat_max_tracking_rate_deg_s == 6.0
     assert decision.applied_gs_boresight_mode == "local_vertical"
     assert decision.applied_sat_boresight_mode == "nadir"
+    assert decision.sat_off_nadir_deg == pytest.approx(0.0)
     assert decision.applied_gs_terminal_profile == "gs-equator.terminals"
     assert decision.applied_sat_terminal_profile == "sat-a.ground_terminals"
     assert result.visible_per_station["gs-equator"][0].sat_id == "sat-a"
@@ -136,6 +137,38 @@ def test_physical_visibility_rejects_range_before_allocator_candidate_set():
     assert decision.reject_reason == "range_exceeded"
     assert decision.rejecting_endpoint == "both"
     assert result.visible_per_station["gs-equator"] == []
+
+
+def test_satellite_field_of_regard_rejection_carries_off_nadir_angle():
+    gs_geo = GeoPosition(0.0, 0.0, 0.0)
+    sat_id = "sat-a"
+    physical = _physical_kwargs(max_range_km=10000.0, field_of_regard_deg=180.0)
+    physical["sat_ground_terminal_profiles"] = {
+        sat_id: TerminalPhysicsProfile(
+            profile_id=f"{sat_id}.ground_terminals",
+            max_range_km=10000.0,
+            field_of_regard_deg=1.0,
+            max_tracking_rate_deg_s=6.0,
+            boresight=SatGroundTerminalBoresight(target_body="earth", mode="nadir"),
+            target_body="earth",
+        )
+    }
+
+    result = evaluate_ground_visibility(
+        satellite_ids=(sat_id,),
+        sat_states={sat_id: _state(sat_id, GeoPosition(8.0, 0.0, 550.0))},
+        gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_min_elevations={"gs-equator": -90.0},
+        **_gs_default_kwargs(),
+        **physical,
+    )
+
+    decision = result.decisions[("gs-equator", sat_id)]
+    assert decision.visible is False
+    assert decision.reject_reason == "field_of_regard"
+    assert decision.rejecting_endpoint == "satellite"
+    assert decision.sat_off_nadir_deg is not None
+    assert decision.sat_off_nadir_deg > 0.5
 
 
 def test_physical_visibility_requires_endpoint_profiles():
@@ -288,6 +321,8 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
             step=0,
             step_seconds=1,
             horizon_ticks=5,
+            horizon_ticks_by_gs={"gs-equator": 5},
+            gs_reference_bodies={"gs-equator": "earth"},
             propagator_id="test",
             ground_link_model="geometry_only",
         ),
@@ -299,6 +334,90 @@ def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):
         gv.sat_id: gv.remaining_visible_s for gv in result.visible_per_station["gs-equator"]
     }
     assert remaining == {"sat-short": 1.0, "sat-long": 3.0}
+
+
+def test_longest_remaining_pass_uses_each_ground_station_horizon(monkeypatch):
+    def fake_check_ground_visibility(
+        gs_ecef,
+        gs_geo,
+        sat_ecef,
+        min_elevation_deg,
+        **kwargs,
+    ):
+        del gs_ecef, gs_geo, min_elevation_deg, kwargs
+        visible = sat_ecef.x < 3.0
+        return GroundVisibility(
+            sat_id="",
+            visible=visible,
+            elevation_deg=60.0 if visible else -10.0,
+            range_km=1000.0,
+            remaining_visible_s=None,
+            reject_reason="ok" if visible else "elevation_below_min",
+        )
+
+    def fake_propagate_satellites(**kwargs):
+        dt = float(kwargs["dt"])
+        return {
+            "sat-a": PropagatedState(
+                "sat-a",
+                dt,
+                EcefVec3(Vec3(dt, 0.0, 0.0)),
+                EcefVec3(Vec3(0.0, 0.0, 0.0)),
+                GeoPosition(0.0, 0.0, 550.0),
+                "test",
+            )
+        }
+
+    monkeypatch.setattr(
+        "ome.ground_visibility_engine.check_ground_visibility",
+        fake_check_ground_visibility,
+    )
+    monkeypatch.setattr(
+        "ome.ground_visibility_engine.propagate_satellites",
+        fake_propagate_satellites,
+    )
+
+    gs_geo = GeoPosition(0.0, 0.0, 0.0)
+    result = evaluate_ground_visibility(
+        satellite_ids=("sat-a",),
+        sat_states={
+            "sat-a": PropagatedState(
+                "sat-a",
+                0.0,
+                EcefVec3(Vec3(0.0, 0.0, 0.0)),
+                EcefVec3(Vec3(0.0, 0.0, 0.0)),
+                GeoPosition(0.0, 0.0, 550.0),
+                "test",
+            )
+        },
+        gs_positions={
+            "gs-short": (geodetic_to_ecef(gs_geo), gs_geo),
+            "gs-long": (geodetic_to_ecef(gs_geo), gs_geo),
+        },
+        gs_min_elevations={"gs-short": 25.0, "gs-long": 25.0},
+        gs_tenant_ids={"gs-short": "default", "gs-long": "default"},
+        gs_reference_bodies={"gs-short": "earth", "gs-long": "earth"},
+        gs_selection_policy_names={
+            "gs-short": "longest-remaining-pass",
+            "gs-long": "longest-remaining-pass",
+        },
+        pass_lookahead=GroundPassLookahead(
+            satellites=(),
+            addressing=object(),
+            epoch_unix=0.0,
+            step=0,
+            step_seconds=1,
+            horizon_ticks=3,
+            horizon_ticks_by_gs={"gs-short": 1, "gs-long": 3},
+            gs_reference_bodies={"gs-short": "earth", "gs-long": "earth"},
+            propagator_id="test",
+            ground_link_model="geometry_only",
+        ),
+        ground_link_model="geometry_only",
+    )
+
+    assert result.visible_per_station["gs-short"][0].remaining_visible_s == 1.0
+    assert result.visible_per_station["gs-long"][0].remaining_visible_s == 2.0
 
 
 def test_longest_remaining_pass_without_lookahead_fails_loudly():
@@ -313,6 +432,33 @@ def test_longest_remaining_pass_without_lookahead_fails_loudly():
             gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
             **_gs_default_kwargs(),
             **_physical_kwargs(),
+        )
+
+
+def test_longest_remaining_pass_lookahead_requires_reference_body():
+    gs_geo = GeoPosition(0.0, 0.0, 0.0)
+
+    with pytest.raises(ValueError, match="missing reference_body"):
+        evaluate_ground_visibility(
+            satellite_ids=("sat-a",),
+            sat_states={"sat-a": _state("sat-a", GeoPosition(0.0, 0.0, 550.0))},
+            gs_positions={"gs-equator": (geodetic_to_ecef(gs_geo), gs_geo)},
+            gs_min_elevations={"gs-equator": 25.0},
+            gs_selection_policy_names={"gs-equator": "longest-remaining-pass"},
+            pass_lookahead=GroundPassLookahead(
+                satellites=(),
+                addressing=object(),
+                epoch_unix=0.0,
+                step=0,
+                step_seconds=1,
+                horizon_ticks=5,
+                horizon_ticks_by_gs={"gs-equator": 5},
+                gs_reference_bodies={},
+                propagator_id="test",
+                ground_link_model="geometry_only",
+            ),
+            ground_link_model="geometry_only",
+            **_gs_default_kwargs(),
         )
 
 

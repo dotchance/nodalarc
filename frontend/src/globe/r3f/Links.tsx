@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
  * Links — the batched ISL + ground link renderer. Wraps LinkBatch (the faithful port of
- * globe/links.ts) in the R3F lifecycle: the batch's LineSegments2 is created lazily and
+ * link batch in the R3F lifecycle: the batch's LineSegments2 is created lazily and
  * added to this group (a child of the Earth body frame, so its local-space endpoints are
  * correct), metadata reconciles on each snapshot, and endpoints are re-resolved + uploaded
  * every frame. The fat-line material resolution tracks the actual canvas size (not the

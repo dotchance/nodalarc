@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
  * Constellation — all satellites as one InstancedMesh (O(1) draw call at any scale).
- * Reproduces globe/satellites.ts: the snapshot seeds instance slots + colors; every frame
+ * The snapshot seeds instance slots + colors; every frame
  * each satellite's position is PROPAGATED client-side (the reused SGP4 worker, or the
  * main-thread propagateToSceneXYZ fallback) keyed on the EMA-interpolated sim time — NOT
  * interpolated between snapshot positions. The truth layer (worker, propagateToSceneXYZ,
@@ -13,7 +13,7 @@
  * Lives inside <Body id="earth">, so its instances are in the Earth local frame.
  */
 
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
 import { SAT_RADIUS, SAT_SEGMENTS, AREA_COLORS, getPlaneColor } from "../../config";
@@ -80,6 +80,14 @@ export function Constellation({
   );
   const material = useMemo(() => new THREE.MeshBasicMaterial(), []);
 
+  useEffect(
+    () => () => {
+      geometry.dispose();
+      material.dispose();
+    },
+    [geometry, material],
+  );
+
   // Reconcile instance slots + colors on snapshot / colorMode change. useLayoutEffect so
   // count is correct before the first paint (the args max-count would otherwise render
   // MAX_SATELLITES garbage instances for one frame).
@@ -128,7 +136,7 @@ export function Constellation({
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }, [nodes, colorMode, relations, bodyId]);
 
-  // Per-frame propagation — identical model to globe/satellites.ts animateSatellites.
+  // Per-frame propagation from the latest ephemeris and sim clock.
   useFrame(() => {
     const mesh = meshRef.current;
     if (!mesh || !ephemeris) return;

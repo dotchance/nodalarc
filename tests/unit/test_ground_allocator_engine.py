@@ -38,7 +38,12 @@ def _policy_kwargs(
     return {
         "gs_selection_policies": {gs_id: _selection_policy(policy) for gs_id in gs_ids},
         "gs_handover_policies": {gs_id: _handover_policy(handover_policy) for gs_id in gs_ids},
-        "ranking_order": ("service_priority", "selection_score", "lex_pair"),
+        "ranking_order": (
+            "service_priority",
+            "selection_score",
+            "satellite_ground_terminal_capacity",
+            "lex_pair",
+        ),
         "handover_mode": handover_mode,
         "mbb_preemption": "off",
         "successor_abort_policy": "hard_release",
@@ -541,6 +546,40 @@ def test_current_incumbent_visibility_loss_emits_allocation_event():
     assert event.policy_name is None
 
 
+def test_allocator_rejects_unsupported_multi_overlap_mbb_reserve():
+    import pytest
+
+    with pytest.raises(ValueError, match="multi-overlap allocator support"):
+        allocate_ground_links(
+            step=0,
+            visible_per_station={
+                "gs-A": [
+                    GroundVisibility(
+                        sat_id="sat-a",
+                        visible=True,
+                        elevation_deg=40.0,
+                        range_km=1000.0,
+                        remaining_visible_s=None,
+                        reject_reason="ok",
+                    )
+                ]
+            },
+            ground_station_ids={"gs-A"},
+            current_associations={},
+            pending_teardowns={},
+            gs_terminal_counts={"gs-A": 4},
+            **_policy_kwargs({"gs-A"}, handover_mode="mbb"),
+            gs_min_elevations={"gs-A": 25.0},
+            gs_service_priorities={"gs-A": 10},
+            gs_tenant_ids={"gs-A": "default"},
+            gs_reference_bodies={"gs-A": "earth"},
+            sat_ground_terminals={"sat-a": 4},
+            sat_ground_terminal_indices_by_body=_sat_body_pools({"sat-a": 4}),
+            mbb_overlap_ticks=3,
+            mbb_reserve=2,
+        )
+
+
 def test_missing_tenant_id_fails_loudly():
     """Direction 2: every unscheduled-pair record carries tenant scope.
     Missing per-GS tenant_id is fatal at the allocator boundary."""
@@ -647,6 +686,57 @@ def test_handover_policy_none_displaces_without_hysteresis_margin():
     replaced = [u for u in result.unscheduled_pairs if u.pair == old_pair]
     assert len(replaced) == 1
     assert replaced[0].unscheduled_reason == "replaced_by_successor"
+
+
+def test_default_ranking_order_prefers_candidate_specific_scarce_satellite_capacity():
+    """Default ties prefer the satellite with fewer terminals for the candidate body."""
+    result = allocate_ground_links(
+        step=0,
+        visible_per_station={
+            "gs-A": [
+                GroundVisibility(
+                    sat_id="sat-a-wide",
+                    visible=True,
+                    elevation_deg=50.0,
+                    range_km=900.0,
+                    remaining_visible_s=None,
+                    reject_reason="ok",
+                ),
+                GroundVisibility(
+                    sat_id="sat-z-scarce",
+                    visible=True,
+                    elevation_deg=50.0,
+                    range_km=900.0,
+                    remaining_visible_s=None,
+                    reject_reason="ok",
+                ),
+            ]
+        },
+        ground_station_ids={"gs-A"},
+        current_associations={},
+        pending_teardowns={},
+        gs_terminal_counts={"gs-A": 1},
+        **_policy_kwargs({"gs-A"}),
+        gs_min_elevations={"gs-A": 25.0},
+        gs_service_priorities={"gs-A": 10},
+        gs_tenant_ids={"gs-A": "default"},
+        gs_reference_bodies={"gs-A": "earth"},
+        sat_ground_terminals={"sat-a-wide": 3, "sat-z-scarce": 3},
+        sat_ground_terminal_indices_by_body={
+            "sat-a-wide": {"earth": (0, 1), "luna": (2,)},
+            "sat-z-scarce": {"earth": (0,), "luna": (1, 2)},
+        },
+        mbb_overlap_ticks=3,
+        mbb_reserve=0,
+    )
+
+    assert result.associations == {("gs-A", "sat-z-scarce"): (0, 0)}
+    assert result.policy_audit.ranking_order == (
+        "service_priority",
+        "selection_score",
+        "satellite_ground_terminal_capacity",
+        "lex_pair",
+    )
 
 
 def test_configured_ranking_order_can_prioritize_per_gs_rank_before_service_priority():

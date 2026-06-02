@@ -252,6 +252,18 @@ class TestEngineConfigValidation:
         with pytest.raises(ValidationError, match="MBB handover requires"):
             SessionConfig.model_validate(data)
 
+    def test_mbb_reserve_above_one_requires_future_multi_overlap_support(self):
+        data = dict(_SAMPLE_SESSION)
+        data["scheduling"] = {
+            "ground": _ground_scheduling(
+                handover_mode="mbb",
+                mbb_overlap_ticks=3,
+                mbb_reserve=2,
+            )
+        }
+        with pytest.raises(ValidationError, match="multi-overlap allocator support"):
+            SessionConfig.model_validate(data)
+
     def test_routing_rejects_deprecated_mbb_fields(self):
         data = dict(_SAMPLE_SESSION)
         data["routing"] = {

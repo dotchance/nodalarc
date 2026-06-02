@@ -23,8 +23,8 @@ function link(a: string, b: string, state = "active"): LinkState {
 
 const decisions: GroundDecisionsSnapshot = {
   // intentionally generic shape; only the fields the classifier reads matter
-  decisions: [{ pair: ["gs-1", "sat-rej"], reject_reason: "below_elevation_mask" }],
-  unscheduled_pairs: [{ pair: ["sat-elig", "gs-1"], unscheduled_reason: "capacity_withheld" }],
+  decisions: [{ pair: ["gs-1", "sat-rej"], reject_reason: "elevation_below_min" }],
+  unscheduled_pairs: [{ pair: ["sat-elig", "gs-1"], unscheduled_reason: "gs_capacity" }],
 } as unknown as GroundDecisionsSnapshot;
 
 describe("gsCandidateRelations (single source: globe agrees with the card)", () => {
@@ -49,7 +49,7 @@ describe("gsCandidateRelations (single source: globe agrees with the card)", () 
 
   it("connected wins over a withheld/rejected classification for the same sat", () => {
     const d: GroundDecisionsSnapshot = {
-      decisions: [{ pair: ["gs-1", "sat-x"], reject_reason: "below_elevation_mask" }],
+      decisions: [{ pair: ["gs-1", "sat-x"], reject_reason: "elevation_below_min" }],
       unscheduled_pairs: [],
     } as unknown as GroundDecisionsSnapshot;
     const rel = gsCandidateRelations("gs-1", d, [link("sat-x", "gs-1")]);

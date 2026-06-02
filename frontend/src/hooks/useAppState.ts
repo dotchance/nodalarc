@@ -8,7 +8,6 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { setTrailsVisible } from "../globe/orbitalTrails";
 import type {
   ViewMode,
   ColorMode,
@@ -78,10 +77,6 @@ export function useAppState(inputs: AppStateInputs) {
   const toggleView = useCallback(() => {
     setViewMode((prev) => (prev === "globe" ? "topology" : "globe"));
   }, []);
-
-  useEffect(() => {
-    setTrailsVisible(showTrails);
-  }, [showTrails]);
 
   // --- CLI drawer ---
   const [cliDrawerOpen, setCliDrawerOpen] = useState(false);

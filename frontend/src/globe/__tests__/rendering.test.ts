@@ -7,33 +7,11 @@
 // was discovered during live deployment.
 
 import { describe, it, expect } from "vitest";
-import * as THREE from "three";
 import { tokens } from "../../styles/tokens";
 import {
   SCENE_EARTH_RADIUS,
   SCENE_KM_PER_UNIT,
 } from "../../sim/orbitalMath";
-import type { LinkState } from "../../types";
-
-function makeIslLink(index: number): LinkState {
-  const plane = Math.floor(index / 11);
-  const slot = index % 11;
-  const peerSlot = (slot + 1) % 11;
-  return {
-    node_a: `sat-P${String(plane).padStart(2, "0")}S${String(slot).padStart(2, "0")}`,
-    node_b: `sat-P${String(plane).padStart(2, "0")}S${String(peerSlot).padStart(2, "0")}`,
-    state: "active",
-    link_type: "intra_plane_isl",
-    link_reason: null,
-    latency_ms: 1,
-    bandwidth_mbps: 1000,
-    range_km: 1000,
-    traffic_load_pct: null,
-    interface_a: "isl0",
-    interface_b: "isl1",
-  };
-}
-
 describe("rendering invariants", () => {
   describe("label visibility at default camera distance", () => {
     // BUG: Labels were invisible because FADE_IN_DIST (60) was less
@@ -74,31 +52,4 @@ describe("rendering invariants", () => {
     });
   });
 
-  describe("satellite indexing consistency", () => {
-    // BUG: InstancedMesh intersection returns instanceId, but the
-    // picker was looking for userData["nodeId"] which doesn't exist
-    // on InstancedMesh instances. Need instanceId → nodeId mapping.
-    it("indexToId mapping must be exported from satellites module", async () => {
-      const mod = await import("../satellites");
-      expect(Array.isArray(mod.indexToId)).toBe(true);
-    });
-  });
-
-  describe("link renderer capacity", () => {
-    // BUG: VS-API can bootstrap with an empty first snapshot and then receive
-    // hundreds of links. The globe renderer used to allocate from that empty
-    // first snapshot and silently drop every ISL beyond its fallback capacity.
-    it("grows instead of silently dropping ISLs after an empty first snapshot", async () => {
-      const mod = await import("../links");
-      const earthFrame = new THREE.Object3D();
-      const links = Array.from({ length: 352 }, (_, i) => makeIslLink(i));
-
-      mod.clearLinks();
-      mod.updateLinks([], earthFrame, true);
-      mod.updateLinks(links, earthFrame, true);
-
-      expect(mod.getLinks().size).toBe(352);
-      mod.clearLinks();
-    });
-  });
 });

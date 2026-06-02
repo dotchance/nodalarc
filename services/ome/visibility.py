@@ -61,6 +61,7 @@ class GroundVisibility(NamedTuple):
     reject_reason: GroundVisibilityRejectReason
     rejecting_endpoint: GroundVisibilityRejectingEndpoint = "none"
     azimuth_deg: float | None = None
+    sat_off_nadir_deg: float | None = None
 
 
 class IslVisibility(NamedTuple):
@@ -325,18 +326,17 @@ def _ground_for_allows(
     return _angle_between_deg(bore, target) <= field_of_regard_deg / 2.0
 
 
-def _sat_ground_for_allows(
+def _sat_ground_off_nadir_deg(
     *,
     sat_ecef: Vec3,
     gs_ecef: Vec3,
     boresight: SatGroundTerminalBoresight,
-    field_of_regard_deg: float,
-) -> bool:
+) -> float:
     if boresight.mode != "nadir":
         raise ValueError(f"Unsupported satellite ground-terminal boresight mode={boresight.mode!r}")
     los_to_gs = Vec3(gs_ecef.x - sat_ecef.x, gs_ecef.y - sat_ecef.y, gs_ecef.z - sat_ecef.z)
     nadir = Vec3(-sat_ecef.x, -sat_ecef.y, -sat_ecef.z)
-    return _angle_between_deg(nadir, los_to_gs) <= field_of_regard_deg / 2.0
+    return _angle_between_deg(nadir, los_to_gs)
 
 
 def _limiting_endpoint(
@@ -570,24 +570,27 @@ def check_ground_visibility(
             azimuth_deg=azimuth,
         )
 
+    sat_off_nadir_deg = None
     if sat_boresight is not None and sat_field_of_regard_deg is None:
         raise ValueError("Satellite boresight visibility requires sat_field_of_regard_deg")
-    if sat_boresight is not None and not _sat_ground_for_allows(
-        sat_ecef=sat_ecef,
-        gs_ecef=gs_ecef,
-        boresight=sat_boresight,
-        field_of_regard_deg=sat_field_of_regard_deg,
-    ):
-        return GroundVisibility(
-            sat_id="",
-            visible=False,
-            elevation_deg=elevation,
-            range_km=range_km,
-            remaining_visible_s=None,
-            reject_reason="field_of_regard",
-            rejecting_endpoint="satellite",
-            azimuth_deg=azimuth,
+    if sat_boresight is not None:
+        sat_off_nadir_deg = _sat_ground_off_nadir_deg(
+            sat_ecef=sat_ecef,
+            gs_ecef=gs_ecef,
+            boresight=sat_boresight,
         )
+        if sat_off_nadir_deg > sat_field_of_regard_deg / 2.0:
+            return GroundVisibility(
+                sat_id="",
+                visible=False,
+                elevation_deg=elevation,
+                range_km=range_km,
+                remaining_visible_s=None,
+                reject_reason="field_of_regard",
+                rejecting_endpoint="satellite",
+                azimuth_deg=azimuth,
+                sat_off_nadir_deg=sat_off_nadir_deg,
+            )
 
     if effective_max_tracking_rate_deg_s is not None:
         if sat_velocity_ecef_km_s is None:
@@ -621,6 +624,7 @@ def check_ground_visibility(
         reject_reason="ok",
         rejecting_endpoint="none",
         azimuth_deg=azimuth,
+        sat_off_nadir_deg=sat_off_nadir_deg,
     )
 
 

@@ -373,6 +373,7 @@ def _make_decision_wire(pair: tuple[str, str]) -> GroundVisibilityDecisionWire:
         range_km=900.0,
         elevation_deg=45.0,
         azimuth_deg=180.0,
+        sat_off_nadir_deg=0.0,
         observer_frame="body_local",
         reject_reason="ok",
         applied_min_elevation_deg=25.0,

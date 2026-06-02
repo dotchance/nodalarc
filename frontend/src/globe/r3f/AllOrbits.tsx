@@ -2,14 +2,13 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
  * AllOrbits — full-constellation orbit rings, the "Satellite Paths" toggle, rendered as ONE
- * batched LineSegments2 fat-line draw call. Faithful port of globe/allOrbits.ts into the R3F
+ * batched LineSegments2 fat-line draw call. Implemented in the R3F
  * lifecycle: for each satellite with velocity + plane it derives the orbit's world-frame
  * position + velocity (registry world position + velocityToScene·worldVelocity with the live
  * view-frame rotation/angular velocity), samples a 180-segment closed ring via the reused
- * orbitPins.computeOrbitPositions, and packs every ring into a single position/color buffer
+ * orbitGeometry.computeOrbitPositions, and packs every ring into a single position/color buffer
  * with per-vertex getPlaneColor. The rings are world-frame curves, so the batch lives at
- * SCENE ROOT (a Universe child) — NOT inside the Earth body — exactly like the legacy version
- * which added the batch to scene and read getNodeWorldPosition / worldVelocity.
+ * SCENE ROOT (a Universe child) — NOT inside the Earth body — exactly like the world-frame renderer: the batch lives in the scene root and reads getNodeWorldPosition / worldVelocity.
  *
  * Rebuild gate is preserved verbatim: the buffer is regenerated only when the satellite COUNT
  * changes (legacy lastSatCount). On a steady count we leave the geometry alone and only sync
@@ -36,11 +35,10 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
 import { worldVelocity, EARTH_ROTATION_RATE_RAD_S } from "../astronomy";
-import { computeOrbitPositions } from "../orbitPins";
+import { computeOrbitPositions, ORBIT_SAMPLES } from "./orbitGeometry";
 import type { NodeState, ReferenceFrame } from "../../types";
 import { getNodeLocalPosition, getNodeWorldPosition } from "./positions";
 
-const ORBIT_SAMPLES = 180;
 const SEGMENTS_PER_ORBIT = ORBIT_SAMPLES; // closed ring = N segments from N+1 vertices
 const FLOATS_PER_ORBIT = SEGMENTS_PER_ORBIT * 6;
 
@@ -129,7 +127,7 @@ export function AllOrbits({ nodes, show, earthFrame, referenceFrame }: AllOrbits
     teardown();
   }, [referenceFrame, teardown]);
 
-  // Rebuild the batch from the current satellite set, mirroring allOrbits.ts updateAllOrbits.
+  // Rebuild the batch from the current satellite set.
   // Returns false if no rings were produced (count gate keeps retrying next frame).
   const rebuild = (
     sats: NodeState[],

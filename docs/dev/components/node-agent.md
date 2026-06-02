@@ -161,11 +161,11 @@ The Node Agent is stateless across restarts. On startup, it diffs desired state 
 | File | Content |
 |------|---------|
 | `__main__.py` | Entry point, NATS subscription, startup gate |
-| `handlers.py` | BatchLinkUp/Down/SetLatency request handlers |
+| `handlers.py` | BatchLinkUp/Down/SetLatency/KernelInventory request handlers |
 | `command_contract.py` | Envelope, enum, identity, and required-field validation |
 | `manifest_contract.py` / `wiring_status.py` | Typed wiring manifest and readiness status |
 | `operation_plan.py` / `operation_executor.py` | Deterministic planned execution and rollback evidence |
-| `kernel_verifier.py` / `kernel_inventory.py` | MVP proof and read-only substrate inventory |
+| `kernel_verifier.py` | MVP kernel proof helpers, including read-only KernelInventory proof |
 | `namespace_ops.py` | `setns()`-based namespace entry, `_HOST_NS_FD` |
 | `vxlan.py` | VXLAN tunnel creation/destruction |
 | `wiring.py` | Initial pod interface wiring from manifest |

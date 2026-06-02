@@ -1,14 +1,13 @@
 // Copyright 2024-2026 .chance (dotchance)
 // Licensed under the Apache License, Version 2.0. See LICENSE file.
 /**
- * OrbitPins — the ctrl/cmd-click "pinned" orbit rings (globe/orbitPins.ts), rendered as ONE
+ * OrbitPins — the ctrl/cmd-click "pinned" orbit rings, rendered as ONE
  * batched LineSegments2 fat-line at the SCENE ROOT (world frame), like <AllOrbits> but for the
  * small pinned-satellite set and drawn brighter/thicker (the emphasis a pin is meant to give).
  * Each pinned satellite's ring is the great circle through its world position in the
- * position/velocity plane (the reused orbitPins.computeOrbitPositions + worldVelocity), seeded
+ * position/velocity plane (orbitGeometry.computeOrbitPositions + worldVelocity), seeded
  * from the live registry world position + the view-frame rotation/angular velocity, and
- * re-seeded when the pin set or the reference frame changes — matching the legacy seed-at-pin /
- * reseed-on-frame-toggle behavior (the ring is static between, the satellite moves along it).
+ * re-seeded when the pin set or the reference frame changes. The ring is static between seed points; the satellite moves along it.
  */
 
 import { useEffect, useMemo, useRef } from "react";
@@ -20,11 +19,10 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { getPlaneColor } from "../../config";
 import { velocityToScene } from "../geo";
 import { worldVelocity, EARTH_ROTATION_RATE_RAD_S } from "../astronomy";
-import { computeOrbitPositions } from "../orbitPins";
+import { computeOrbitPositions, ORBIT_SAMPLES } from "./orbitGeometry";
 import type { NodeState, ReferenceFrame } from "../../types";
 import { getNodeLocalPosition, getNodeWorldPosition } from "./positions";
 
-const ORBIT_SAMPLES = 180;
 const FLOATS_PER_ORBIT = ORBIT_SAMPLES * 6;
 
 const _worldPos = new THREE.Vector3();

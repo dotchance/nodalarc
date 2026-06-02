@@ -144,7 +144,7 @@ class TimelineEvent:
 # Per-step computation — extracted for real-time stepped emission
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -189,6 +189,7 @@ class StepContext:
     mbb_overlap_ticks: int = 3
     mbb_reserve: int = 0
     ground_policy_lookahead_horizon_ticks: int = 0
+    ground_policy_lookahead_horizon_ticks_by_gs: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -442,13 +443,14 @@ def build_step_context(
         ranking_order=tuple(ground_scheduling.ranking_order),
     )
 
-    lookahead_horizon_ticks = 0
-    for policy in gs_selection_policies.values():
-        if policy.name == "longest-remaining-pass":
-            lookahead_horizon_ticks = max(
-                lookahead_horizon_ticks,
-                int(policy.params["lookahead_horizon_ticks"]),
-            )
+    lookahead_horizon_ticks_by_gs = {
+        gs_id: int(policy.params["lookahead_horizon_ticks"])
+        for gs_id, policy in gs_selection_policies.items()
+        if policy.name == "longest-remaining-pass"
+    }
+    lookahead_horizon_ticks = (
+        max(lookahead_horizon_ticks_by_gs.values()) if lookahead_horizon_ticks_by_gs else 0
+    )
 
     ignored_capacity_tuple = tuple(sorted(set(ignored_capacity_fields)))
     policy_audit = _build_policy_audit(
@@ -494,6 +496,7 @@ def build_step_context(
         mbb_overlap_ticks=ground_scheduling.mbb_overlap_ticks,
         mbb_reserve=effective_mbb_reserve,
         ground_policy_lookahead_horizon_ticks=lookahead_horizon_ticks,
+        ground_policy_lookahead_horizon_ticks_by_gs=lookahead_horizon_ticks_by_gs,
     )
 
 
@@ -646,6 +649,7 @@ def compute_step(
                 step=step,
                 step_seconds=step_seconds,
                 horizon_ticks=ctx.ground_policy_lookahead_horizon_ticks,
+                horizon_ticks_by_gs=ctx.ground_policy_lookahead_horizon_ticks_by_gs,
                 propagator_id=ctx.propagator_id,
                 ground_link_model=ctx.ground_link_model,
                 gs_reference_bodies=ctx.gs_reference_bodies,

@@ -108,6 +108,85 @@ def _bootstrap_substrate_identity(generation: str) -> None:
     substrate_monitor.set_identity("root-test", generation)
 
 
+def _seed_substrate_measurement(
+    generation: str,
+    *,
+    source_node: str,
+    source_ip: str,
+    target_node: str,
+    target_ip: str,
+    reason: str,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import MagicMock
+
+    from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
+    from nodalarc.substrate.measurement_contract import (
+        RequiredSubstratePair,
+        SubstrateMeasurement,
+    )
+    from node_agent import substrate_monitor
+
+    pair = RequiredSubstratePair.build(
+        source_node=source_node,
+        source_ip=source_ip,
+        target_node=target_node,
+        target_ip=target_ip,
+        reasons=[reason],
+    )
+    manifest = WiringManifest.model_validate(
+        {
+            "session_id": "root-test",
+            "wiring_generation": generation,
+            "required_phases": list(REQUIRED_WIRING_PHASES),
+            "nodes": {
+                source_node: {
+                    "node_type": "satellite",
+                    "plane": 0,
+                    "slot": 0,
+                    "sysctls": {"net.ipv6.conf.all.forwarding": "1"},
+                    "isl_interfaces": [],
+                    "gnd_interfaces": [],
+                    "mpls_enable": True,
+                    "segment_routing": False,
+                    "mtu": 9000,
+                    "remove_default_route": True,
+                }
+            },
+            "ground_bridges": {},
+            "required_substrate_pairs": [pair.model_dump(mode="json")],
+            "isl_link_count": 0,
+        }
+    )
+
+    def _measurement(required: RequiredSubstratePair) -> SubstrateMeasurement:
+        measured_at = datetime.now(UTC)
+        return SubstrateMeasurement(
+            session_id="root-test",
+            wiring_generation=generation,
+            source_node=required.source_node,
+            source_ip=required.source_ip,
+            target_node=required.target_node,
+            target_ip=required.target_ip,
+            measured_at=measured_at,
+            stale_after=measured_at + timedelta(seconds=120),
+            status="ok",
+            sample_count=10,
+            success_count=10,
+            median_rtt_ms=1.25,
+            min_rtt_ms=1.0,
+            max_rtt_ms=1.5,
+        )
+
+    substrate_monitor.configure_required_measurements(
+        v1=MagicMock(),
+        namespace="nodalarc",
+        hostname=source_node,
+        manifest=manifest,
+        measure_fn=_measurement,
+    )
+
+
 def _create_host_dummy(ifname: str, cidr: str) -> None:
     _run("ip", "link", "add", ifname, "type", "dummy")
     _run("ip", "addr", "add", cidr, "dev", ifname)
@@ -355,6 +434,14 @@ def test_handle_batch_link_up_down_proves_cross_node_isl_vxlan_and_qdisc(monkeyp
     monkeypatch.setenv("HOST_IP", local_ip)
     monkeypatch.setattr(handlers, "_local_ip", None)
     _bootstrap_substrate_identity(generation)
+    _seed_substrate_measurement(
+        generation,
+        source_node="root-local",
+        source_ip=local_ip,
+        target_node="root-remote",
+        target_ip=remote_ip,
+        reason="isl",
+    )
 
     try:
         _create_host_dummy(dummy, f"{local_ip}/24")
@@ -444,6 +531,14 @@ def test_handle_batch_link_up_down_proves_cross_node_ground_vxlan_mirred_and_qdi
     monkeypatch.setenv("HOST_IP", local_ip)
     monkeypatch.setattr(handlers, "_local_ip", None)
     _bootstrap_substrate_identity(generation)
+    _seed_substrate_measurement(
+        generation,
+        source_node="root-local",
+        source_ip=local_ip,
+        target_node="root-remote",
+        target_ip=remote_ip,
+        reason="ground",
+    )
 
     try:
         _create_host_dummy(dummy, f"{local_ip}/24")

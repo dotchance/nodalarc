@@ -119,7 +119,7 @@ tests/integration/      Integration tests
 |------|---------------|
 | `lib/nodalarc/nats_channels.py` | All NATS subject definitions. Single source of truth. |
 | `lib/nodalarc/models/events.py` | Pydantic event models shared across all services |
-| `services/scheduler/dispatcher.py` | `_reconcile_links` - the only path to the Node Agent |
+| `services/scheduler/dispatcher.py` | `_reconcile_links` - the automatic schedule-progression path to the Node Agent; explicit operator repair is the serialized exception |
 | `services/node_agent/handlers.py` | BatchLinkUp/Down: the kernel operations |
 | `services/nodalarc_operator/session_deployer.py` | Session creation: pods, placement, config delivery |
 | `services/ome/main.py` | OME entry point, pacing thread, publisher thread |

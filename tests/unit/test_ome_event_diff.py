@@ -135,6 +135,24 @@ def test_isl_event_diff_emits_only_state_changes_and_preserves_authority_values(
     assert unchanged.state == diff.state
 
 
+def test_isl_event_diff_maps_capacity_to_terminal_capacity_reason():
+    pair = ("sat-a", "sat-b")
+    diff = diff_isl_visibility_events(
+        sim_time=SIM,
+        feasibility={pair: _isl_result(pair)},
+        scheduled_links={pair: _scheduled(pair, scheduled=False)},
+        previous_state={},
+    )
+
+    assert diff.state[pair] == (True, False)
+    assert len(diff.events) == 1
+    event = diff.events[0]
+    assert event.visible is True
+    assert event.scheduled is False
+    assert event.visibility_reject_reason == "ok"
+    assert event.unscheduled_reason == "isl_terminal_capacity"
+
+
 def test_ground_event_diff_sets_terminal_indices_and_one_way_latency():
     pair = ("gs-den", "sat-a")
     allocation = GroundAllocationResult(

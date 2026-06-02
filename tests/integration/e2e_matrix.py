@@ -198,6 +198,33 @@ MBB_BAD_OPS_CODES = {
 }
 
 
+def _classify_matrix_result(evidence: dict, perm: dict) -> str:
+    """Apply xfail/xpass accounting to one matrix result in place."""
+    if evidence.get("result") == "PASS" and perm.get("xfail"):
+        evidence["result"] = "XPASS"
+        evidence["xfail_reason"] = perm["xfail"]
+        return "xpass"
+    if evidence.get("result") == "PASS":
+        return "pass"
+    if perm.get("xfail"):
+        evidence["result"] = "XFAIL"
+        evidence["xfail_reason"] = perm["xfail"]
+        return "xfail"
+    return "fail"
+
+
+def _perm_declares_ground(perm: dict) -> bool:
+    """Return whether the scenario declaration includes ground endpoints."""
+    ground = perm.get("gs", perm.get("ground_stations"))
+    if ground is None:
+        return False
+    if isinstance(ground, str):
+        return bool(ground.strip())
+    if isinstance(ground, (list, tuple, set)):
+        return len(ground) > 0
+    return bool(ground)
+
+
 def get_token(retries: int = 12, delay: float = 5.0) -> str:
     for _attempt in range(retries):
         try:
@@ -379,6 +406,14 @@ def check_routing(token: str, perm: dict) -> dict:
     }
 
 
+def _routing_neighbor_command(protocol: str) -> str:
+    return "show ip ospf neighbor" if protocol == "ospf" else "show isis neighbor"
+
+
+def _routing_neighbor_up(output: str, protocol: str) -> bool:
+    return "Full" in output if protocol == "ospf" else "Up" in output
+
+
 def check_websocket(token: str) -> dict:
     """Check WebSocket delivers advancing sim_time."""
     state1 = request_json("GET", "/api/v1/state", token=token)
@@ -426,13 +461,11 @@ def _derive_loopback_ip(node_id: str, gs_nodes: list) -> str | None:
 
 
 def check_ping(token: str, perm: dict) -> dict:
-    """Ping between nodes that are actually connected in the current topology.
+    """Prove routed connectivity for the declared topology.
 
-    Strategy:
-    1. Get current state with links from VS-API
-    2. Find two satellites that have IS-IS adjacencies (they are connected)
-    3. Ping loopback-to-loopback between them
-    4. If no connected satellite pair found, report SKIP with topology details
+    Ground sessions must prove a ground-originated routed ping and routing adjacency.
+    Satellite-only sessions fall back to an ISL loopback ping. SKIP is valid only when
+    the session declares no ground endpoint and no connected satellite pair exists.
     """
     import subprocess
 
@@ -448,8 +481,36 @@ def check_ping(token: str, perm: dict) -> dict:
 
     gs_nodes = [n for n in nodes if n.get("node_id", "").startswith("gs-")]
     sat_nodes = [n for n in nodes if n.get("node_id", "").startswith("sat-")]
+    declares_ground = _perm_declares_ground(perm)
 
-    # Find active links to identify connected pairs
+    if declares_ground or gs_nodes:
+        if declares_ground and not gs_nodes:
+            return {
+                "result": "FAIL",
+                "mode": "ground_to_ground",
+                "reason": "declared ground topology materialized no ground nodes",
+                "ground_declared": True,
+                "ground_node_count": 0,
+                "active_link_count": len([l for l in links if l.get("state") == "active"]),
+            }
+        ground_probe = _find_routed_ground_probe(token, protocol=protocol, wait_s=120)
+        if ground_probe and ground_probe.get("result") == "PASS":
+            return {
+                **ground_probe,
+                "ground_declared": declares_ground,
+                "ground_node_count": len(gs_nodes),
+            }
+        return {
+            "result": "FAIL",
+            "mode": "ground_to_ground",
+            "reason": (ground_probe or {}).get("reason", "ground connectivity was not proven"),
+            "ground_declared": declares_ground,
+            "ground_node_count": len(gs_nodes),
+            "active_link_count": len([l for l in links if l.get("state") == "active"]),
+            "last_probe": ground_probe,
+        }
+
+    # Find active links to identify connected pairs in satellite-only sessions.
     active_links = [l for l in links if l.get("state") == "active"]
 
     # Strategy 1: Find two satellites connected by an ISL
@@ -761,7 +822,9 @@ def _ground_node_ids(state: dict) -> list[str]:
     )
 
 
-def _find_routed_ground_probe(token: str, *, wait_s: int = 180) -> dict | None:
+def _find_routed_ground_probe(
+    token: str, *, protocol: str = "isis", wait_s: int = 180
+) -> dict | None:
     deadline = time.monotonic() + wait_s
     last_reason = "no routed ground probe found"
     while time.monotonic() < deadline:
@@ -777,16 +840,22 @@ def _find_routed_ground_probe(token: str, *, wait_s: int = 180) -> dict | None:
                     last_reason = f"could not read loopback for {dst_gs}"
                     continue
                 route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
-                neigh = _kubectl_exec(src, "vtysh -c 'show isis neighbor'", timeout=10)
+                neigh = _kubectl_exec(
+                    src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
+                )
                 ping = _kubectl_exec(src, f"ping -c 1 -W 1 {dst_ip}", timeout=10)
                 fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
-                neighbor_up = neigh["rc"] == 0 and "Up" in neigh["stdout"]
+                neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
                 packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
                 if fib_ready and neighbor_up and packet_ready:
                     return {
+                        "result": "PASS",
+                        "mode": "ground_to_ground",
+                        "protocol": protocol,
                         "key": f"{src}->{dst_gs}",
                         "src": src,
                         "dst_gs": dst_gs,
+                        "dst": dst_gs,
                         "dst_ip": dst_ip,
                         "active_ground_links": by_gs[src],
                         "fib_ready": fib_ready,
@@ -803,7 +872,7 @@ def _find_routed_ground_probe(token: str, *, wait_s: int = 180) -> dict | None:
     return {"result": "FAIL", "reason": last_reason}
 
 
-def _find_all_routed_ground_probes(token: str) -> list[dict]:
+def _find_all_routed_ground_probes(token: str, *, protocol: str = "isis") -> list[dict]:
     state = request_json("GET", "/api/v1/state", token=token)
     ground_ids = _ground_node_ids(state)
     by_gs = _ground_links_by_gs(state)
@@ -816,14 +885,18 @@ def _find_all_routed_ground_probes(token: str) -> list[dict]:
             if not dst_ip:
                 continue
             route = _kubectl_exec(src, f"ip route get {dst_ip}", timeout=10)
-            neigh = _kubectl_exec(src, "vtysh -c 'show isis neighbor'", timeout=10)
+            neigh = _kubectl_exec(
+                src, f"vtysh -c '{_routing_neighbor_command(protocol)}'", timeout=10
+            )
             ping = _kubectl_exec(src, f"ping -c 1 -W 1 {dst_ip}", timeout=10)
             fib_ready = route["rc"] == 0 and dst_ip in route["stdout"]
-            neighbor_up = neigh["rc"] == 0 and "Up" in neigh["stdout"]
+            neighbor_up = neigh["rc"] == 0 and _routing_neighbor_up(neigh["stdout"], protocol)
             packet_ready = ping["rc"] == 0 and "0% packet loss" in ping["stdout"]
             if fib_ready and neighbor_up and packet_ready:
                 probes.append(
                     {
+                        "mode": "ground_to_ground",
+                        "protocol": protocol,
                         "key": f"{src}->{dst_gs}",
                         "src": src,
                         "dst_gs": dst_gs,
@@ -881,6 +954,15 @@ def _packet_handover_correlation(output: dict, terminal_observation: dict | None
         "loss_near_overlap": _seq_near_ranges(overlap_seq, missing_ranges),
         "loss_near_terminal": _seq_near_ranges(terminal_seq, missing_ranges),
     }
+
+
+def _mbb_packet_window_passed(output: dict, overlap: dict | None, bad_events: list[dict]) -> bool:
+    """Hard-gate emulator-side MBB proof; packet loss is recorded, not hidden."""
+    return (
+        bool(output.get("protocol_observed"))
+        and bool(overlap and overlap.get("successor_fib_ready"))
+        and not bad_events
+    )
 
 
 def _routing_layer_outcome(overlap: dict | None) -> str:
@@ -1164,7 +1246,8 @@ def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float =
 
     overlap = overlap_by_key.get(selected_key)
     output = outputs[selected_key]
-    passed = output["protocol_observed"] and not bad_events
+    overlap_ready = bool(overlap and overlap.get("successor_fib_ready"))
+    passed = _mbb_packet_window_passed(output, overlap, bad_events)
     probe = probe_by_key[selected_key]
     terminal_observation = terminal_observation_by_key.get(selected_key)
     return {
@@ -1178,6 +1261,9 @@ def _run_mbb_packet_window(token: str, *, count: int = 1200, interval_s: float =
         "packet_outcome": output["packet_outcome"],
         "zero_loss": output["zero_loss"],
         "protocol_observed": output["protocol_observed"],
+        "overlap_required": True,
+        "overlap_ready": overlap_ready,
+        "packet_loss_policy": "recorded_not_gated",
         "reply_count": output.get("reply_count"),
         "missing_ranges": output.get("missing_ranges"),
         "overlap_proof": overlap,
@@ -1230,23 +1316,6 @@ def check_mbb_packet_behavior(
         "max_wait_s": max_wait_s,
         "attempts": attempts,
     }
-
-
-def check_zero_loss_mbb_ping(
-    token: str,
-    *,
-    count: int = 1200,
-    interval_s: float = 0.2,
-    max_wait_s: int = 900,
-) -> dict:
-    evidence = check_mbb_packet_behavior(
-        token,
-        count=count,
-        interval_s=interval_s,
-        max_wait_s=max_wait_s,
-    )
-    evidence["zero_loss_required"] = False
-    return evidence
 
 
 def _acceptance_session_yaml(
@@ -1802,7 +1871,7 @@ def run_phase6_seek_during_mbb_acceptance() -> dict:
 def run_mbb_acceptance() -> dict:
     evidence: dict = {
         "id": "C-J",
-        "label": "mbb-packet-behavior-acceptance",
+        "label": "mbb-routing-packet-observation",
         "session_file": str(MBB_ACCEPTANCE_SESSION),
         "started_at": datetime.now(UTC).isoformat(),
     }
@@ -1924,8 +1993,9 @@ def run_permutation(perm: dict) -> dict:
         ws_result = check_websocket(token)
         evidence["websocket"] = ws_result
 
-        # Check GS-to-GS ping (or MPLS for NodalPath)
-        print("  Checking GS-to-GS connectivity...")
+        # Check declared connectivity. Ground sessions must prove a GS-originated path;
+        # satellite-only sessions may fall back to an ISL loopback path.
+        print("  Checking declared connectivity...")
         ping_result = check_ping(token, perm)
         evidence["ping"] = ping_result
         print(
@@ -1934,7 +2004,9 @@ def run_permutation(perm: dict) -> dict:
         )
 
         # Determine pass/fail
-        ping_ok = ping_result.get("result") in ("PASS", "SKIP")
+        ping_ok = ping_result.get("result") == "PASS" or (
+            ping_result.get("result") == "SKIP" and ping_result.get("ground_node_count", 0) == 0
+        )
         passed = (
             ready_result.get("phase") == "Ready"
             and pod_result["running"] == pod_result["total"]
@@ -1996,26 +2068,28 @@ def main():
         passed = 0
         failed = 0
         xfailed = 0
+        xpassed = 0
 
         if os.environ.get("NODALARC_PHASE6_ONLY") != "1":
             for perm in MATRIX:
                 evidence = run_permutation(perm)
+                bucket = _classify_matrix_result(evidence, perm)
                 results.append(evidence)
 
-                # Write per-permutation evidence immediately
+                if bucket == "pass":
+                    passed += 1
+                elif bucket == "xpass":
+                    xpassed += 1
+                elif bucket == "xfail":
+                    xfailed += 1
+                else:
+                    failed += 1
+
+                # Write per-permutation evidence immediately, after xfail/xpass classification.
                 eid = perm["id"]
                 label = evidence.get("label", "unknown")
                 evidence_file = evidence_dir / f"perm-{eid:02d}-{label}.json"
                 evidence_file.write_text(json.dumps(evidence, indent=2))
-
-                if evidence["result"] == "PASS":
-                    passed += 1
-                elif perm.get("xfail"):
-                    xfailed += 1
-                    evidence["result"] = "XFAIL"
-                    evidence["xfail_reason"] = perm["xfail"]
-                else:
-                    failed += 1
 
         if os.environ.get("NODALARC_RUN_MBB_ACCEPTANCE") == "1":
             evidence = run_mbb_acceptance()
@@ -2059,6 +2133,7 @@ def main():
             "passed": passed,
             "failed": failed,
             "xfailed": xfailed,
+            "xpassed": xpassed,
             "results": [
                 {"id": r["id"], "label": r.get("label"), "result": r["result"]} for r in results
             ],
@@ -2079,8 +2154,10 @@ def main():
         print()
         print("=" * 60)
         xfail_str = f", {xfailed} xfail" if xfailed else ""
+        xpass_str = f", {xpassed} xpass" if xpassed else ""
         print(
-            f"E2E Matrix: {passed}/{len(results)} passed, {failed}/{len(results)} failed{xfail_str}"
+            f"E2E Matrix: {passed}/{len(results)} passed, {failed}/{len(results)} failed"
+            f"{xfail_str}{xpass_str}"
         )
         print(f"Duration: {duration_s:.0f}s")
         print(f"Run token: {run_token}")
@@ -2092,6 +2169,8 @@ def main():
                 if status == "PASS"
                 else "XFAIL"
                 if status == "XFAIL"
+                else "XPASS"
+                if status == "XPASS"
                 else "FAIL"
                 if status == "FAIL"
                 else status

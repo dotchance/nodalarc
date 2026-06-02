@@ -1,44 +1,18 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""C-A subset invariant repro test (Phase 1.4).
+"""C-A scheduler authority invariant regression tests.
 
-The Scheduler safety net at `dispatcher.py:_apply_events_to_desired`
-(today around lines 926-932) retains a ground pair in `_desired_links`
-when:
-- OME emits a release event for the pair: `vis(visible=True,
-  scheduled=False)` after MBB teardown elapsed.
-- The pair was previously in teardown (`pair in self._teardown_pairs`).
-- The Scheduler's `_actual_links` shows no OTHER active ground link
-  on the same GS (the replacement BatchLinkUp ACK has not landed yet
-  or returned failure).
+OME owns desired link authority. The Scheduler may reconcile kernel state
+toward OME authority, but it must not keep or create a desired link outside
+the current OME view. Earlier foundations work had a defensive MBB teardown
+override that retained the old ground pair after OME released it if the
+replacement had not become active. That hid an actuator failure behind a
+plausible-looking desired link.
 
-This was added defensively to prevent the GS from being orphaned
-without ground connectivity during a dispatch race. It is a
-documented violation of the OME authority and scheduler fail-loud contracts
-(no special cases hiding owning-component bugs).
-
-Phase 1.4 introduces a PASSIVE divergence detector: `_ome_view` and
-`authority_subset_violation()`. This test reproduces the failed-
-replacement scenario and asserts the divergence is observable —
-WITHOUT changing production behavior. Phase 5 of the foundations plan
-removes the override and adds the fail-loud actuator path; at that
-point `authority_subset_violation()` graduates to a production
-`RuntimeError`.
-
-The test pins TWO invariants:
-
-1. **Current (broken) behavior**: after the failed-replacement event
-   sequence, the override fires and the old pair survives in
-   `_desired_links`. (Sub-phase 1.4 does NOT fix this.)
-
-2. **Divergence is observable via `_ome_view`**: `_ome_view` correctly
-   reflects the OME's stated `(visible=True, scheduled=False)` for
-   the released pair, so `authority_subset_violation()` returns the
-   pair. (Sub-phase 1.4 DOES provide this observation.)
-
-When Phase 5 lands, this file's assertions flip: the override is
-gone, `_desired_links` correctly excludes the released pair, and
-`authority_subset_violation()` stays green.
+These tests pin the current contract: release events remove the old desired
+pair, `_ome_view` records OME's visible-but-unscheduled fact, and
+`authority_subset_violation()` remains green after the fold. A true subset
+violation is now a production fail-loud condition, not a passive diagnostic.
 """
 
 from __future__ import annotations
@@ -183,7 +157,7 @@ def _old_active_info() -> ActiveLinkInfo:
 
 
 class TestCAReproFailedReplacement:
-    """Reproduces the safety-net override scenario.
+    """Reproduces the former failed-replacement override scenario.
 
     Setup:
       - 2-terminal GS with MBB enabled.
@@ -193,10 +167,13 @@ class TestCAReproFailedReplacement:
       - OME's teardown timer elapses; OME emits release event for the
         old pair: vis(visible=True, scheduled=False).
 
-    Expected divergence:
-      - _desired_links: contains old pair (safety net kept it alive).
-      - _ome_view: marks old pair as (visible=True, scheduled=False).
-      - authority_subset_violation() returns {old_pair}.
+    Expected current behavior:
+      - _desired_links drops the old pair and follows OME authority.
+      - _ome_view records the release as (visible=True, scheduled=False).
+      - authority_subset_violation() remains empty.
+
+    A replacement failure is surfaced through actuation diagnostics; it is not
+    hidden by keeping a desired link that OME no longer schedules.
     """
 
     def _drive_failed_replacement(self) -> Dispatcher:

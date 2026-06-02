@@ -15,9 +15,10 @@ from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpe
 from nodalarc.models.ground_station import GroundStationConfig, GroundStationFile, GroundTerminalDef
 from nodalarc.models.session import GroundSchedulingConfig
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
+from nodalarc.orbital import elements_from_params
 from ome.event_stream import build_step_context
 from ome.ground_visibility_engine import GroundPassLookahead, evaluate_ground_visibility
-from ome.propagation_engine import PropagatedState
+from ome.propagation_engine import PropagatedState, propagate_satellites
 from ome.visibility import GroundVisibility
 
 
@@ -242,6 +243,60 @@ def test_ground_visibility_carries_rejection_reason_for_invisible_pair():
     assert decision.visible is False
     assert decision.reject_reason == "elevation_below_min"
     assert decision.rejecting_endpoint == "none"
+
+
+def test_longest_remaining_pass_lookahead_uses_real_propagation():
+    addressing = AddressingScheme()
+    satellite = constellation_loader.SatelliteNode(
+        plane=0,
+        slot=0,
+        elements=elements_from_params(550.0, 0.0, 0.0, 0.0),
+        isl_terminal_count=2,
+        ground_terminal_count=1,
+    )
+    epoch_unix = 1735689600.0
+    sat_id = addressing.sat_id(0, 0)
+    sat_states = propagate_satellites(
+        satellites=[satellite],
+        addressing=addressing,
+        epoch_unix=epoch_unix,
+        dt=0.0,
+        propagator_id="keplerian-circular",
+    )
+    current_geo = sat_states[sat_id].geodetic
+    gs_id = "gs-underpass"
+    # Keep the site just above the ellipsoid so the LOS endpoint is not
+    # numerically treated as body-occluded by the exact surface.
+    gs_geo = GeoPosition(current_geo.lat_deg, current_geo.lon_deg, 0.01)
+
+    result = evaluate_ground_visibility(
+        satellite_ids=(sat_id,),
+        sat_states=sat_states,
+        gs_positions={gs_id: (geodetic_to_ecef(gs_geo), gs_geo)},
+        gs_min_elevations={gs_id: 0.0},
+        gs_selection_policy_names={gs_id: "longest-remaining-pass"},
+        pass_lookahead=GroundPassLookahead(
+            satellites=(satellite,),
+            addressing=addressing,
+            epoch_unix=epoch_unix,
+            step=0,
+            step_seconds=1,
+            horizon_ticks=2,
+            horizon_ticks_by_gs={gs_id: 2},
+            gs_reference_bodies={gs_id: "earth"},
+            propagator_id="keplerian-circular",
+            ground_link_model="geometry_only",
+        ),
+        ground_link_model="geometry_only",
+        **_gs_default_kwargs(gs_id),
+    )
+
+    pair = (gs_id, sat_id)
+    assert result.decisions[pair].visible is True
+    visible = result.visible_per_station[gs_id]
+    assert len(visible) == 1
+    assert visible[0].sat_id == sat_id
+    assert visible[0].remaining_visible_s == pytest.approx(2.0)
 
 
 def test_longest_remaining_pass_populates_sampled_dwell(monkeypatch):

@@ -2019,10 +2019,9 @@ class Dispatcher:
                 )
                 continue
 
-            # Update _ome_view: this is the OME's stated truth for the
-            # pair, independent of what the Scheduler's own
-            # _desired_links holds (which may diverge via the
-            # safety-net override at line 926-932 — see C-A repro test).
+            # Update _ome_view: this is OME's stated truth for the pair,
+            # independent of Scheduler desired state. A desired link outside
+            # this view is a production C-A violation checked after the fold.
             self._ome_view[pair] = (
                 vis.visible,
                 vis.scheduled,

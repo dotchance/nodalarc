@@ -157,12 +157,13 @@ and must not be dirty.
 | `nodalarc.links.{session_id}.up` | NODALARC_LINKS | LinkUp confirmation |
 | `nodalarc.links.{session_id}.down` | NODALARC_LINKS | LinkDown confirmation |
 | `nodalarc.links.{session_id}.latency` | NODALARC_LINKS | LatencyUpdate |
+| `nodalarc.links.{session_id}.actual.{scheduler_instance_id}` | NODALARC_LINKS | ActualLinkSnapshot: Scheduler-verified kernel-active pairs plus pending actuation clocks |
 
 ## Key Files
 
 | File | Content |
 |------|---------|
-| `dispatcher.py` | `Dispatcher`, `DispatchIntent`, `_reconcile_links`, `_build_dispatch_intent`, `_on_scenario_command` |
+| `dispatcher.py` | `Dispatcher`, `DispatchIntent`, `_reconcile_links`, `_build_dispatch_intent`, `_on_scenario_command`, `ActualLinkSnapshot` publication |
 | `__main__.py` | Entry point, session config loading, wiring gate, K8s setup |
 | `scenario_handler.py` | `parse_scenario_command` - pure command parsing |
 | `latency_model.py` | `PositionTable` - retained on-demand ephemeris propagation helper for diagnostics/tests, not live dispatch authority |

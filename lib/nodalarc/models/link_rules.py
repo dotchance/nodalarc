@@ -12,8 +12,9 @@ checks owned by the resolver. See ``specs/plans/multi-segment-yaml-grammar.md``.
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from nodalarc.frozen import FrozenDict
 from nodalarc.models.ground_policy import SelectionPolicySpec
 from nodalarc.models.segments import Identifier, LocalNodeId, TerminalMedium
 
@@ -29,20 +30,20 @@ class NodeSelector(BaseModel):
     A selector matching zero nodes is invalid (semantic validation).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     segment: Identifier
-    node_ids: list[LocalNodeId] | None = None
-    node_tags: list[Identifier] | None = None
-    planes: list[int] | None = None
-    slots: list[int] | None = None
-    names: list[Identifier] | None = None
+    node_ids: tuple[LocalNodeId, ...] | None = None
+    node_tags: tuple[Identifier, ...] | None = None
+    planes: tuple[int, ...] | None = None
+    slots: tuple[int, ...] | None = None
+    names: tuple[Identifier, ...] | None = None
 
 
 class Endpoint(BaseModel):
     """One end of a link rule: a node set plus the terminal it links through."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     selector: NodeSelector
     terminal_role: TerminalRole
@@ -53,36 +54,36 @@ class Endpoint(BaseModel):
 
 
 class VisibleCandidatesTopology(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: Literal["visible_candidates"]
 
 
 class NearestVisibleTopology(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: Literal["nearest_visible"]
 
 
 class NearestNTopology(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: Literal["nearest_n"]
     n: int = Field(gt=0)
 
 
 class ExplicitPair(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     a: LocalNodeId
     b: LocalNodeId
 
 
 class ExplicitPairsTopology(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     mode: Literal["explicit_pairs"]
-    pairs: list[ExplicitPair] = Field(min_length=1)
+    pairs: tuple[ExplicitPair, ...] = Field(min_length=1)
 
 
 LinkTopology = Annotated[
@@ -95,10 +96,12 @@ LinkTopology = Annotated[
 
 
 class LinkRuleConstraints(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # int applies to every node; the map keys are segment IDs.
-    max_links_per_node: int | dict[Identifier, int] | None = None
+    # int applies to every node; the map keys are segment IDs (frozen if a map).
+    max_links_per_node: (
+        int | Annotated[dict[Identifier, int], AfterValidator(FrozenDict)] | None
+    ) = None
     max_range_km: float | None = None
     require_mutual_visibility: bool | None = None
     scheduling_policy: SelectionPolicySpec | None = None
@@ -112,7 +115,7 @@ class ProtocolBoundary(BaseModel):
     protocol boundary must not create an OSPF/ISIS adjacency.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool
     adapter: Literal["static_ip", "bgp", "dtn_bundle", "custom"]
@@ -123,7 +126,7 @@ class ProtocolBoundary(BaseModel):
 class LinkRule(BaseModel):
     """A declared permission for two node groups to form physical links."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: Identifier
     kind: LinkKind
@@ -132,4 +135,4 @@ class LinkRule(BaseModel):
     topology: LinkTopology
     constraints: LinkRuleConstraints | None = None
     protocol_boundary: ProtocolBoundary | None = None
-    tags: list[Identifier] | None = None
+    tags: tuple[Identifier, ...] | None = None

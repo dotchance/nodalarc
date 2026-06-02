@@ -324,11 +324,11 @@ class TestEngineConfigValidation:
             )
         }
         config = SessionConfig.model_validate(data)
-        assert config.scheduling.ground.ranking_order == [
+        assert config.scheduling.ground.ranking_order == (
             "selection_score",
             "service_priority",
             "lex_pair",
-        ]
+        )
 
     def test_reserved_cross_tenant_displacement_policy_is_rejected(self):
         data = dict(_SAMPLE_SESSION)

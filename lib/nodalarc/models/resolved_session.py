@@ -210,17 +210,34 @@ class ResolvedSession(BaseModel):
         if len(set(ids)) != len(ids):
             dupes = sorted({i for i in ids if ids.count(i) > 1})
             raise ValueError(f"duplicate runtime node_id(s): {dupes}")
+        node_segment = {n.node_id: n.segment_id for n in self.nodes}
+        known_segments = set(node_segment.values())
+
         seg_ids = [b.segment_id for b in self.sid_blocks]
         if len(set(seg_ids)) != len(seg_ids):
             raise ValueError("duplicate segment_id in sid_blocks")
-        known = set(ids)
+        ghost_blocks = sorted(s for s in seg_ids if s not in known_segments)
+        if ghost_blocks:
+            raise ValueError(f"sid_blocks name segment(s) with no resolved nodes: {ghost_blocks}")
+
         for rule in self.link_rules:
             for endpoint in rule.endpoints:
-                missing = [nid for nid in endpoint.node_ids if nid not in known]
+                missing = [nid for nid in endpoint.node_ids if nid not in node_segment]
                 if missing:
                     raise ValueError(
                         f"link rule {rule.rule_id!r} endpoint references unknown "
                         f"node_id(s): {missing}"
+                    )
+                # An endpoint claims one segment; every node it lists must belong
+                # to that segment (no cross-segment endpoint membership).
+                foreign = sorted(
+                    nid for nid in endpoint.node_ids if node_segment[nid] != endpoint.segment_id
+                )
+                if foreign:
+                    raise ValueError(
+                        f"link rule {rule.rule_id!r} endpoint segment "
+                        f"{endpoint.segment_id!r} contains node(s) from another "
+                        f"segment: {foreign}"
                     )
         return self
 

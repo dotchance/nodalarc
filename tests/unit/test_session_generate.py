@@ -111,7 +111,7 @@ class TestGenerateSessionYaml:
             session.session.name == f"{constellation}-{protocol}-{'-'.join(extensions) or 'plain'}"
         )
         assert session.routing.protocol == protocol
-        assert session.routing.extensions == extensions
+        assert session.routing.extensions == tuple(extensions)
         assert session.routing.stack is None  # Wizard sessions use protocol, not stack
 
     @pytest.mark.parametrize("area_strategy", ["flat", "stripe", "per-plane"])

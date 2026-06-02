@@ -2,10 +2,12 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Session configuration models — top-level YAML schema."""
 
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from nodalarc.frozen import FrozenDict, ImmutableStrDict
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
     HandoverPolicySpec,
@@ -57,8 +59,8 @@ class AreaMapping(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    planes: list[int] | None = None
-    ground_stations: str | list[str] | None = None  # "all" or list of names
+    planes: tuple[int, ...] | None = None
+    ground_stations: str | tuple[str, ...] | None = None  # "all" or list of names
     area_id: str
 
 
@@ -69,7 +71,7 @@ class AreaAssignmentConfig(BaseModel):
 
     strategy: str  # "stripe", "per-plane", "flat", "explicit"
     planes_per_stripe: int | None = None  # Required for "stripe"
-    assignments: list[AreaMapping] | None = None  # Required for "explicit"
+    assignments: tuple[AreaMapping, ...] | None = None  # Required for "explicit"
     gs_area_id: str | None = None  # Area for ground stations
 
     @model_validator(mode="after")
@@ -93,10 +95,10 @@ class RoutingConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     protocol: str | None = None  # "ospf" | "isis" | "static" | "nodalpath"
-    extensions: list[str] = []  # ["te", "mpls", "sr"]
+    extensions: tuple[str, ...] = ()  # ["te", "mpls", "sr"]
     stack: str | None = None  # Legacy path — bypass resolution
     compression_factor: int = 1
-    config_overrides: dict[str, Any] = {}
+    config_overrides: ImmutableStrDict = Field(default_factory=FrozenDict)
     area_assignment: AreaAssignmentConfig | None = None
 
     # BFD — cross-protocol, independent of IS-IS/OSPF choice
@@ -256,13 +258,13 @@ class GroundSchedulingConfig(BaseModel):
             params=HysteresisParameters().model_dump(),
         )
     )
-    ranking_order: list[RankingComponent] = Field(
-        default_factory=lambda: [
+    ranking_order: tuple[RankingComponent, ...] = Field(
+        default_factory=lambda: (
             "service_priority",
             "selection_score",
             "satellite_ground_terminal_capacity",
             "lex_pair",
-        ]
+        )
     )
 
     handover_mode: Literal["bbm", "mbb"] = "bbm"
@@ -312,42 +314,26 @@ class GroundSchedulingConfig(BaseModel):
             )
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_handover_params(cls, data):
+        # Fill hysteresis defaults before the frozen HandoverPolicySpec is built,
+        # so the spec is never mutated after construction. SelectionPolicySpec
+        # self-normalizes its own params.
+        if not isinstance(data, dict):
+            return data
+        handover = data.get("handover_policy")
+        if isinstance(handover, HandoverPolicySpec):
+            handover = handover.model_dump()
+        if isinstance(handover, Mapping) and handover.get("name") == "hysteresis":
+            normalized = HysteresisParameters(**dict(handover.get("params") or {})).model_dump()
+            data = {**data, "handover_policy": {**handover, "params": normalized}}
+        return data
+
     @model_validator(mode="after")
     def _resolve_policy_surface(self):
-        selection_params = dict(self.selection_policy.params)
-        if self.selection_policy.name in ("highest-elevation", "lowest-elevation"):
-            if selection_params:
-                raise ValueError(
-                    f"selection_policy.name={self.selection_policy.name!r} requires empty params"
-                )
-        elif self.selection_policy.name == "longest-remaining-pass":
-            extra = sorted(set(selection_params) - {"lookahead_horizon_ticks"})
-            if extra:
-                raise ValueError(
-                    "selection_policy.name='longest-remaining-pass' received unsupported "
-                    f"params: {', '.join(extra)}"
-                )
-            horizon = selection_params.get("lookahead_horizon_ticks")
-            if horizon is None or int(horizon) <= 0:
-                raise ValueError(
-                    "longest-remaining-pass requires "
-                    "scheduling.ground.selection_policy.params.lookahead_horizon_ticks > 0"
-                )
-            selection_params["lookahead_horizon_ticks"] = int(horizon)
-            self.selection_policy.params = selection_params
-        else:  # pragma: no cover - Literal should make this unreachable.
-            raise ValueError(f"Unknown selection_policy.name={self.selection_policy.name!r}")
-
-        if self.handover_policy.name == "none":
-            if self.handover_policy.params:
-                raise ValueError("handover_policy.name='none' requires empty params")
-        elif self.handover_policy.name == "hysteresis":
-            self.handover_policy.params = HysteresisParameters(
-                **self.handover_policy.params
-            ).model_dump()
-        else:  # pragma: no cover - Literal should make this unreachable.
-            raise ValueError(f"Unknown handover_policy.name={self.handover_policy.name!r}")
-
+        # selection_policy and handover_policy validate/normalize themselves; this
+        # enforces only the cross-field ground-scheduling rules.
         if not self.ranking_order:
             raise ValueError("scheduling.ground.ranking_order must not be empty")
         if self.ranking_order[-1] != "lex_pair":

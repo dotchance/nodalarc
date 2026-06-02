@@ -277,3 +277,74 @@ def test_unsupported_feature_error_message():
     assert "space_node_set" in str(err)
     assert "mars" in str(err)
     assert len(err.features) == 2
+
+
+# --- Deep immutability: nested containers/models cannot be mutated after validation ---
+
+
+def _resolved_rule(segment_id: str = "default-space", node_id: str = "sat-p00s00"):
+    ep = ResolvedEndpoint(segment_id=segment_id, terminal_role="isl", node_ids=(node_id,))
+    return ResolvedLinkRule(
+        rule_id="r",
+        kind="relay",
+        enabled=True,
+        endpoints=(ep, ep),
+        topology=VisibleCandidatesTopology(mode="visible_candidates"),
+    )
+
+
+def test_routing_extensions_is_immutable():
+    rs = _resolved_session(routing=RoutingConfig(protocol="isis", extensions=("te",)))
+    assert rs.routing.extensions == ("te",)
+    with pytest.raises(AttributeError):  # tuple, not list
+        rs.routing.extensions.append("sr")
+
+
+def test_routing_config_overrides_is_frozen():
+    rs = _resolved_session(routing=RoutingConfig(protocol="isis", config_overrides={"x": 1}))
+    assert rs.routing.config_overrides["x"] == 1  # readable
+    with pytest.raises(TypeError):
+        rs.routing.config_overrides["y"] = 2
+
+
+def test_selection_policy_spec_is_frozen():
+    rs = _resolved_session()
+    with pytest.raises(ValidationError):
+        rs.scheduling.ground.selection_policy.name = "lowest-elevation"
+    with pytest.raises(TypeError):
+        rs.scheduling.ground.handover_policy.params["discount_factor"] = 99.0
+
+
+def test_link_rule_topology_is_frozen():
+    rs = _resolved_session(link_rules=(_resolved_rule(),))
+    with pytest.raises(ValidationError):
+        rs.link_rules[0].topology.mode = "mutated"
+
+
+def test_ranking_order_is_immutable_tuple():
+    rs = _resolved_session()
+    assert isinstance(rs.scheduling.ground.ranking_order, tuple)
+    with pytest.raises(AttributeError):
+        rs.scheduling.ground.ranking_order.append("service_priority")
+
+
+# --- New invariants: endpoint segment membership + SID block segment membership ---
+
+
+def test_endpoint_cross_segment_membership_rejected():
+    # node sat-p00s00 belongs to "default-space"; an endpoint claiming "other" lies.
+    rule = _resolved_rule(segment_id="other", node_id="sat-p00s00")
+    with pytest.raises(ValidationError, match="another"):
+        _resolved_session(link_rules=(rule,))
+
+
+def test_ghost_sid_block_rejected():
+    with pytest.raises(ValidationError, match="no resolved nodes"):
+        _resolved_session(sid_blocks=(SidBlock(segment_id="ghost", sid_start=1, sid_end=2),))
+
+
+def test_sid_block_for_real_segment_ok():
+    rs = _resolved_session(
+        sid_blocks=(SidBlock(segment_id="default-space", sid_start=1, sid_end=10),)
+    )
+    assert rs.sid_blocks[0].segment_id == "default-space"

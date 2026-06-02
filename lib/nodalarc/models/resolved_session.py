@@ -128,6 +128,13 @@ class ResolvedEndpoint(BaseModel):
     # Resolved runtime node IDs; a selector that matched zero nodes is invalid.
     node_ids: tuple[str, ...] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def _unique_node_ids(self) -> ResolvedEndpoint:
+        if len(set(self.node_ids)) != len(self.node_ids):
+            dupes = sorted({n for n in self.node_ids if self.node_ids.count(n) > 1})
+            raise ValueError(f"endpoint contains duplicate node_id(s): {dupes}")
+        return self
+
 
 class ResolvedLinkRule(BaseModel):
     """A link rule after selector resolution. Candidate generation starts here."""
@@ -219,6 +226,28 @@ class ResolvedSession(BaseModel):
         ghost_blocks = sorted(s for s in seg_ids if s not in known_segments)
         if ghost_blocks:
             raise ValueError(f"sid_blocks name segment(s) with no resolved nodes: {ghost_blocks}")
+        # SID blocks must be disjoint — overlapping ranges defeat per-segment SID
+        # allocation and silently corrupt forwarding.
+        ordered = sorted(self.sid_blocks, key=lambda b: b.sid_start)
+        for prev, cur in zip(ordered, ordered[1:], strict=False):
+            if cur.sid_start <= prev.sid_end:
+                raise ValueError(
+                    f"SID blocks overlap: {prev.segment_id!r} "
+                    f"[{prev.sid_start}..{prev.sid_end}] and {cur.segment_id!r} "
+                    f"[{cur.sid_start}..{cur.sid_end}]"
+                )
+
+        rule_ids = [r.rule_id for r in self.link_rules]
+        if len(set(rule_ids)) != len(rule_ids):
+            dupes = sorted({r for r in rule_ids if rule_ids.count(r) > 1})
+            raise ValueError(f"duplicate link rule id(s): {dupes}")
+        flow_ids = [f.flow_id for f in self.traffic_flows]
+        if len(set(flow_ids)) != len(flow_ids):
+            dupes = sorted({f for f in flow_ids if flow_ids.count(f) > 1})
+            raise ValueError(f"duplicate traffic flow id(s): {dupes}")
+        link_pairs = [frozenset((t.station_a, t.station_b)) for t in self.terrestrial_links]
+        if len(set(link_pairs)) != len(link_pairs):
+            raise ValueError("duplicate terrestrial link station pair(s)")
 
         for rule in self.link_rules:
             for endpoint in rule.endpoints:

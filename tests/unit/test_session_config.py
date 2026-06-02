@@ -163,6 +163,67 @@ def test_valid_selectors_still_accepted():
     NodeSelector(segment="leo", planes=[0, 1, 2])
 
 
+def test_routing_extensions_normalize_and_reject():
+    # Known long-form aliases canonicalize so the stack resolver consumes them.
+    assert RoutingConfig(protocol="isis", extensions=("traffic-engineering",)).extensions == ("te",)
+    assert RoutingConfig(protocol="isis", extensions=("segment-routing",)).extensions == ("sr",)
+    # Unknown / duplicate-after-normalization fail loud (no silent drop).
+    for bad in [("not-real",), ("te", "te"), ("te", "traffic-engineering")]:
+        with pytest.raises(ValidationError):
+            RoutingConfig(protocol="isis", extensions=bad)
+
+
+@pytest.mark.parametrize(
+    "pairs",
+    [
+        [{"a": "n1", "b": "n1"}],  # self-pair
+        [{"a": "n1", "b": "n2"}, {"a": "n1", "b": "n2"}],  # exact duplicate
+        [{"a": "n1", "b": "n2"}, {"a": "n2", "b": "n1"}],  # reversed duplicate (undirected)
+    ],
+)
+def test_explicit_pairs_topology_rejects_bad_pairs(pairs):
+    from nodalarc.models.link_rules import ExplicitPairsTopology
+
+    with pytest.raises(ValidationError):
+        ExplicitPairsTopology(mode="explicit_pairs", pairs=pairs)
+
+
+def test_isl_override_rejects_duplicate_terminal():
+    from nodalarc.models.constellation import IslLink, IslOverride
+
+    with pytest.raises(ValidationError, match="same terminal"):
+        IslOverride(
+            node="sat-P00S00",
+            links=[
+                IslLink(terminal="isl0", peer="sat-P01S00"),
+                IslLink(terminal="isl0", peer="sat-P02S00"),
+            ],
+        )
+
+
+def test_explicit_ground_station_area_mapping_is_applied():
+    # Regression: an explicit per-GS area mapping must be honored, not silently
+    # replaced by the default area.
+    from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
+    from nodalarc.models.session import AreaAssignmentConfig, AreaMapping
+
+    scheme = AddressingScheme(config=None, satellites=None, gs_file=None)
+    cfg = AreaAssignmentConfig(
+        strategy="explicit",
+        assignments=[AreaMapping(ground_stations=("hawthorne",), area_id="49.1234")],
+    )
+    areas = compute_area_assignments(
+        cfg,
+        plane_count=1,
+        sats_per_plane=1,
+        addressing=scheme,
+        gs_names=["hawthorne", "other"],
+        protocol="isis",
+    )
+    assert areas[scheme.gs_id("hawthorne")] == "49.1234"
+    assert areas[scheme.gs_id("other")] == "49.0000"  # unmapped -> default
+
+
 def _ground_scheduling(**overrides):
     ground = {
         "selection_policy": {"name": "highest-elevation", "params": {}},

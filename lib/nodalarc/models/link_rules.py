@@ -106,6 +106,20 @@ class ExplicitPairsTopology(BaseModel):
     mode: Literal["explicit_pairs"]
     pairs: tuple[ExplicitPair, ...] = Field(min_length=1)
 
+    @field_validator("pairs")
+    @classmethod
+    def _valid_pairs(cls, v: tuple[ExplicitPair, ...]) -> tuple[ExplicitPair, ...]:
+        seen: set[frozenset[str]] = set()
+        for pair in v:
+            if pair.a == pair.b:
+                raise ValueError(f"explicit pair is a self-pair: {pair.a!r}")
+            # Physical links are undirected: (a, b) and (b, a) are the same pair.
+            key = frozenset((pair.a, pair.b))
+            if key in seen:
+                raise ValueError(f"duplicate explicit pair (links are undirected): {sorted(key)}")
+            seen.add(key)
+        return v
+
 
 LinkTopology = Annotated[
     VisibleCandidatesTopology | NearestVisibleTopology | NearestNTopology | ExplicitPairsTopology,

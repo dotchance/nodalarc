@@ -363,3 +363,41 @@ def test_sid_block_for_real_segment_ok():
         sid_blocks=(SidBlock(segment_id="default-space", sid_start=1, sid_end=10),)
     )
     assert rs.sid_blocks[0].segment_id == "default-space"
+
+
+# --- Authoritative-boundary self-defense: overlap + duplicate intent ---
+
+
+def test_overlapping_sid_blocks_rejected():
+    def _seg_node(node_id: str, segment_id: str) -> ResolvedNode:
+        return ResolvedNode(
+            node_id=node_id,
+            local_node_id=node_id,
+            segment_id=segment_id,
+            namespace=segment_id,
+            kind="satellite",
+            frame_id="earth",
+        )
+
+    with pytest.raises(ValidationError, match="overlap"):
+        _resolved_session(
+            nodes=(_seg_node("a", "seg-a"), _seg_node("b", "seg-b")),
+            sid_blocks=(
+                SidBlock(segment_id="seg-a", sid_start=100, sid_end=200),
+                SidBlock(segment_id="seg-b", sid_start=150, sid_end=300),
+            ),
+        )
+
+
+def test_resolved_endpoint_rejects_duplicate_node_ids():
+    with pytest.raises(ValidationError, match="duplicate node_id"):
+        ResolvedEndpoint(
+            segment_id="default-space",
+            terminal_role="isl",
+            node_ids=("sat-p00s00", "sat-p00s00"),
+        )
+
+
+def test_duplicate_link_rule_id_rejected():
+    with pytest.raises(ValidationError, match="duplicate link rule id"):
+        _resolved_session(link_rules=(_resolved_rule(), _resolved_rule()))

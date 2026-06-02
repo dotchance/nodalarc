@@ -215,8 +215,13 @@ class IslOverride(BaseModel):
 
     @field_validator("links")
     @classmethod
-    def _nonempty_links(cls, v: list[IslLink]) -> list[IslLink]:
-        return nonempty(v)
+    def _valid_links(cls, v: list[IslLink]) -> list[IslLink]:
+        nonempty(v)
+        terminals = [link.terminal for link in v]
+        if len(set(terminals)) != len(terminals):
+            dupes = sorted({t for t in terminals if terminals.count(t) > 1})
+            raise ValueError(f"IslOverride assigns the same terminal more than once: {dupes}")
+        return v
 
 
 class PlaneOverride(BaseModel):

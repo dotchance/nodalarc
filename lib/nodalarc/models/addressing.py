@@ -161,6 +161,12 @@ def compute_area_assignments(
     strategy = config.strategy
     is_ospf = protocol == "ospf"
 
+    # Explicit per-ground-station area overrides (applied below). "all" maps every
+    # station; a name list (or bare name) maps those stations. These are honored,
+    # never silently dropped.
+    gs_name_to_area: dict[str, str] = {}
+    explicit_all_gs_area: str | None = None
+
     if strategy == "flat":
         default = "0.0.0.0" if is_ospf else "49.0001"
         area_id = config.gs_area_id or default
@@ -190,17 +196,27 @@ def compute_area_assignments(
             if mapping.planes is not None:
                 for p in mapping.planes:
                     plane_to_area[p] = mapping.area_id
+            if mapping.ground_stations is not None:
+                if mapping.ground_stations == "all":
+                    explicit_all_gs_area = mapping.area_id
+                elif isinstance(mapping.ground_stations, str):
+                    gs_name_to_area[mapping.ground_stations] = mapping.area_id
+                else:
+                    for name in mapping.ground_stations:
+                        gs_name_to_area[name] = mapping.area_id
         fallback = "0.0.0.0" if is_ospf else "49.0001"
         for p in range(plane_count):
             area_id = plane_to_area.get(p, fallback)
             for s in range(sats_per_plane):
                 result[addressing.sat_id(p, s)] = area_id
 
-    # Ground stations: for OSPF flat, area 0. For IS-IS, gs_area_id.
-    gs_area = (config.gs_area_id or "0.0.0.0") if is_ospf else (config.gs_area_id or "49.0000")
+    # Ground stations: explicit per-GS/all overrides win; else gs_area_id; else
+    # the protocol default (OSPF backbone / IS-IS 49.0000).
+    gs_default = (config.gs_area_id or "0.0.0.0") if is_ospf else (config.gs_area_id or "49.0000")
     if gs_names:
         for name in gs_names:
-            result[addressing.gs_id(name)] = gs_area
+            area = gs_name_to_area.get(name, explicit_all_gs_area or gs_default)
+            result[addressing.gs_id(name)] = area
 
     return result
 

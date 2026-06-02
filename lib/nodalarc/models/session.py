@@ -116,7 +116,10 @@ class RoutingConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     protocol: str | None = None  # "ospf" | "isis" | "static" | "nodalpath"
-    extensions: tuple[str, ...] = ()  # ["te", "mpls", "sr"]
+    # Normalized to the canonical {te, sr, mpls} the stack resolver consumes;
+    # known long-form aliases are accepted, unknown values rejected (never
+    # silently dropped). See _normalize_extensions.
+    extensions: tuple[str, ...] = ()
     stack: str | None = None  # Legacy path — bypass resolution
     compression_factor: int = Field(default=1, gt=0)
     config_overrides: ImmutableStrDict = Field(default_factory=FrozenDict)
@@ -143,6 +146,31 @@ class RoutingConfig(BaseModel):
     ospf_spf_delay: int = Field(default=50, ge=0)  # ms — SPF throttle
     ospf_spf_initial_hold: int = Field(default=200, ge=0)  # ms
     ospf_spf_max_hold: int = Field(default=1000, ge=0)  # ms
+
+    @field_validator("extensions")
+    @classmethod
+    def _normalize_extensions(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        # Canonicalize aliases so the stack resolver actually consumes them, and
+        # reject anything it would silently ignore.
+        aliases = {
+            "te": "te",
+            "traffic-engineering": "te",
+            "sr": "sr",
+            "segment-routing": "sr",
+            "mpls": "mpls",
+        }
+        normalized: list[str] = []
+        for ext in v:
+            canon = aliases.get(ext)
+            if canon is None:
+                raise ValueError(
+                    f"unknown routing extension {ext!r}; valid: "
+                    "te/traffic-engineering, sr/segment-routing, mpls"
+                )
+            normalized.append(canon)
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("routing.extensions must not contain duplicate extensions")
+        return tuple(normalized)
 
     @model_validator(mode="after")
     def _require_stack_or_protocol(self):

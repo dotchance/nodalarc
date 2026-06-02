@@ -22,7 +22,7 @@ from pydantic import (
     model_validator,
 )
 
-from nodalarc.model_validation import nonempty, nonempty_unique
+from nodalarc.model_validation import NonEmptyReference, NonEmptyString, nonempty, nonempty_unique
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 
 
@@ -203,14 +203,14 @@ class PolarSeamConfig(BaseModel):
 class IslLink(BaseModel):
     """Single ISL terminal-to-peer mapping within an override."""
 
-    terminal: str  # e.g. "isl0"
-    peer: str  # e.g. "sat-P01S00"
+    terminal: NonEmptyReference  # e.g. "isl0"
+    peer: NonEmptyReference  # e.g. "sat-P01S00"
 
 
 class IslOverride(BaseModel):
     """ISL override for a specific node — manually assigns terminals to peers."""
 
-    node: str
+    node: NonEmptyReference
     links: list[IslLink]
 
     @field_validator("links")
@@ -231,7 +231,7 @@ class PlaneOverride(BaseModel):
     """
 
     planes: list[NonNegativeInt]
-    satellite_type: str | None = None  # Reference to satellite type file
+    satellite_type: NonEmptyReference | None = None  # Reference to satellite type file
     terminals: TerminalConfig | None = None  # Deprecated: inline terminals
 
     @field_validator("planes")
@@ -255,7 +255,7 @@ class SatelliteConfig(BaseModel):
     plane: int = Field(ge=0)
     slot: int = Field(ge=0)
     orbit: OrbitalElements
-    satellite_type: str | None = None  # Override satellite type for this node
+    satellite_type: NonEmptyReference | None = None  # Override satellite type for this node
     terminals: TerminalConfig | None = None  # Deprecated: inline terminals
 
 
@@ -275,10 +275,10 @@ class ParametricConstellation(BaseModel):
     """Constellation defined by Walker-delta/star orbital parameters."""
 
     mode: Literal["parametric"]
-    name: str
+    name: NonEmptyString
     orbit: OrbitParams
     planes: PlaneParams
-    satellite_type: str | None = None  # Reference to satellite type file
+    satellite_type: NonEmptyReference | None = None  # Reference to satellite type file
     default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     polar_seam: PolarSeamConfig | None = None
     plane_overrides: list[PlaneOverride] | None = None
@@ -295,9 +295,9 @@ class ExplicitConstellation(BaseModel):
     """Constellation with per-satellite orbital elements."""
 
     mode: Literal["explicit"]
-    name: str
+    name: NonEmptyString
     satellites: list[SatelliteConfig]
-    satellite_type: str | None = None  # Reference to satellite type file
+    satellite_type: NonEmptyReference | None = None  # Reference to satellite type file
     default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     isl_overrides: list[IslOverride] | None = None
 
@@ -320,10 +320,10 @@ class TLEConstellation(BaseModel):
     """Constellation defined by a TLE file."""
 
     mode: Literal["tle"]
-    name: str
-    tle_file: str
+    name: NonEmptyString
+    tle_file: NonEmptyReference
     filter: TLEFilter | None = None
-    satellite_type: str | None = None  # Reference to satellite type file
+    satellite_type: NonEmptyReference | None = None  # Reference to satellite type file
     default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     isl_overrides: list[IslOverride] | None = None
 

@@ -284,7 +284,7 @@ def compute_pod_placement(
         return result
 
     if placement.policy == "planeGroupPerNode":
-        ppg = placement.planes_per_group or max(1, len(available_nodes))
+        ppg = placement.planes_per_group
         result = {}
         for nid, vars in node_vars.items():
             if vars.get("node_type") == "ground_station":

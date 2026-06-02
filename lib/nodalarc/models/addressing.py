@@ -199,8 +199,6 @@ def compute_area_assignments(
             if mapping.ground_stations is not None:
                 if mapping.ground_stations == "all":
                     explicit_all_gs_area = mapping.area_id
-                elif isinstance(mapping.ground_stations, str):
-                    gs_name_to_area[mapping.ground_stations] = mapping.area_id
                 else:
                     for name in mapping.ground_stations:
                         gs_name_to_area[name] = mapping.area_id
@@ -210,6 +208,11 @@ def compute_area_assignments(
         if out_of_range:
             raise ValueError(
                 f"explicit area assignment maps plane(s) outside [0, {plane_count}): {out_of_range}"
+            )
+        explicit_gs_intent = explicit_all_gs_area is not None or bool(gs_name_to_area)
+        if explicit_gs_intent and gs_names is None:
+            raise ValueError(
+                "explicit ground-station area assignment requires the known gs_names universe"
             )
         if gs_names is not None:
             known = set(gs_names)

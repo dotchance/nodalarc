@@ -3,7 +3,7 @@
 """Session configuration models — top-level YAML schema."""
 
 from collections.abc import Mapping
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -15,7 +15,7 @@ from pydantic import (
 )
 
 from nodalarc.frozen import FrozenDict, ImmutableStrDict
-from nodalarc.model_validation import nonempty_unique
+from nodalarc.model_validation import NonEmptyReference, NonEmptyString, nonempty_unique
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
     HandoverPolicySpec,
@@ -32,9 +32,9 @@ class SessionMeta(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    name: str
-    run_id: str | None = None
-    data_dir: str = "/var/nodalarc/sessions"
+    name: NonEmptyString
+    run_id: NonEmptyReference | None = None
+    data_dir: NonEmptyReference = "/var/nodalarc/sessions"
 
     @field_validator("run_id")
     @classmethod
@@ -54,22 +54,22 @@ class AddressingConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    sat_id_template: str = "sat-P{plane:02d}S{slot:02d}"
-    gs_id_template: str = "gs-{name}"
-    ipv4_sat_template: str = "10.{plane}.{slot}.1"
-    ipv4_gs_template: str = "10.255.{gs_index}.1"
-    ipv6_sat_template: str = "fd00::{plane}:{slot}:1"
-    ipv6_gs_template: str = "fd00::ff:{gs_index}:1"
+    sat_id_template: NonEmptyReference = "sat-P{plane:02d}S{slot:02d}"
+    gs_id_template: NonEmptyReference = "gs-{name}"
+    ipv4_sat_template: NonEmptyReference = "10.{plane}.{slot}.1"
+    ipv4_gs_template: NonEmptyReference = "10.255.{gs_index}.1"
+    ipv6_sat_template: NonEmptyReference = "fd00::{plane}:{slot}:1"
+    ipv6_gs_template: NonEmptyReference = "fd00::ff:{gs_index}:1"
 
 
 class AreaMapping(BaseModel):
-    """Area assignment for explicit strategy."""
+    """One explicit area mapping. Only explicit strategy owns this shape."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     planes: tuple[NonNegativeInt, ...] | None = None
-    ground_stations: str | tuple[str, ...] | None = None  # "all" or list of names
-    area_id: str
+    ground_stations: Literal["all"] | tuple[NonEmptyReference, ...] | None = None
+    area_id: NonEmptyReference
 
     @field_validator("planes")
     @classmethod
@@ -79,85 +79,110 @@ class AreaMapping(BaseModel):
     @field_validator("ground_stations")
     @classmethod
     def _valid_ground_stations(cls, v):
-        # "all" (str) is a keyword; a list of names must be non-empty and unique.
+        # "all" is the only scalar keyword; specific stations must be a non-empty
+        # list/tuple so a lone typo cannot masquerade as a keyword.
         if isinstance(v, (list, tuple)):
             return nonempty_unique(v)
         return v
 
     @model_validator(mode="after")
     def _targets_something(self):
-        # A mapping that selects neither planes nor ground stations is a no-op.
         if self.planes is None and self.ground_stations is None:
             raise ValueError("AreaMapping must target planes and/or ground_stations")
         return self
 
 
-class AreaAssignmentConfig(BaseModel):
-    """Routing area assignment configuration."""
+class FlatAreaAssignmentConfig(BaseModel):
+    """All nodes share one routing area."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    strategy: Literal["flat", "per-plane", "stripe", "explicit"]
-    planes_per_stripe: int | None = None  # Required for "stripe"
-    assignments: tuple[AreaMapping, ...] | None = None  # Required for "explicit"
-    gs_area_id: str | None = None  # Area for ground stations
+    strategy: Literal["flat"]
+    gs_area_id: NonEmptyReference | None = None
+
+
+class PerPlaneAreaAssignmentConfig(BaseModel):
+    """Each orbital plane gets a deterministic routing area."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    strategy: Literal["per-plane"]
+    gs_area_id: NonEmptyReference | None = None
+
+
+class StripeAreaAssignmentConfig(BaseModel):
+    """Adjacent planes are grouped into fixed-size area stripes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    strategy: Literal["stripe"]
+    planes_per_stripe: int = Field(gt=0)
+    gs_area_id: NonEmptyReference | None = None
+
+
+class ExplicitAreaAssignmentConfig(BaseModel):
+    """Only explicit strategy may carry per-plane/per-GS mappings."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    strategy: Literal["explicit"]
+    assignments: tuple[AreaMapping, ...] = Field(min_length=1)
+    gs_area_id: NonEmptyReference | None = None
 
     @model_validator(mode="after")
-    def _validate_strategy_fields(self):
-        if self.strategy == "stripe" and (
-            self.planes_per_stripe is None or self.planes_per_stripe <= 0
-        ):
-            raise ValueError("strategy 'stripe' requires planes_per_stripe > 0")
-        if self.strategy == "explicit":
-            if not self.assignments:
-                raise ValueError("strategy 'explicit' requires assignments list")
-            # No mapping may overwrite another's intent (last-write-win is silent).
-            seen_planes: set[int] = set()
-            seen_gs: set[str] = set()
-            has_all_gs = False
-            for m in self.assignments:
-                for p in m.planes or ():
-                    if p in seen_planes:
-                        raise ValueError(f"plane {p} is mapped by more than one assignment")
-                    seen_planes.add(p)
-                if m.ground_stations == "all":
-                    has_all_gs = True
-                elif isinstance(m.ground_stations, str):
-                    if m.ground_stations in seen_gs:
+    def _validate_unique_targets(self):
+        seen_planes: set[int] = set()
+        seen_gs: set[str] = set()
+        has_all_gs = False
+        for mapping in self.assignments:
+            for plane in mapping.planes or ():
+                if plane in seen_planes:
+                    raise ValueError(f"plane {plane} is mapped by more than one assignment")
+                seen_planes.add(plane)
+            if mapping.ground_stations == "all":
+                if has_all_gs:
+                    raise ValueError("ground_stations='all' is mapped by more than one assignment")
+                has_all_gs = True
+            elif mapping.ground_stations is not None:
+                for name in mapping.ground_stations:
+                    if name in seen_gs:
                         raise ValueError(
-                            f"ground station {m.ground_stations!r} is mapped more than once"
+                            f"ground station {name!r} is mapped by more than one assignment"
                         )
-                    seen_gs.add(m.ground_stations)
-                elif m.ground_stations is not None:
-                    for name in m.ground_stations:
-                        if name in seen_gs:
-                            raise ValueError(
-                                f"ground station {name!r} is mapped by more than one assignment"
-                            )
-                        seen_gs.add(name)
-            if has_all_gs and seen_gs:
-                raise ValueError(
-                    "explicit area assignment mixes ground_stations='all' with specific "
-                    "station mappings (ambiguous)"
-                )
+                    seen_gs.add(name)
+        if has_all_gs and seen_gs:
+            raise ValueError(
+                "explicit area assignment mixes ground_stations='all' with specific "
+                "station mappings (ambiguous)"
+            )
         return self
+
+
+AreaAssignmentConfig = Annotated[
+    FlatAreaAssignmentConfig
+    | PerPlaneAreaAssignmentConfig
+    | StripeAreaAssignmentConfig
+    | ExplicitAreaAssignmentConfig,
+    Field(discriminator="strategy"),
+]
 
 
 class RoutingConfig(BaseModel):
     """Routing configuration.
 
-    Either ``stack`` (legacy path to a routing-stack directory) or
-    ``protocol`` (resolved via stack_resolver) must be set.
+    Runtime routing authority is ``protocol`` plus normalized ``extensions``.
+    ``stack`` is rejected because it creates divergent routing truth across
+    services.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    protocol: str | None = None  # "ospf" | "isis" | "static" | "nodalpath"
+    protocol: NonEmptyReference | None = None  # resolved by stack_resolver
     # Normalized to the canonical {te, sr, mpls} the stack resolver consumes;
     # known long-form aliases are accepted, unknown values rejected (never
     # silently dropped). See _normalize_extensions.
     extensions: tuple[str, ...] = ()
-    stack: str | None = None  # Legacy path — bypass resolution
+    stack: NonEmptyReference | None = None  # Unsupported legacy path; rejected below.
     compression_factor: int = Field(default=1, gt=0)
     config_overrides: ImmutableStrDict = Field(default_factory=FrozenDict)
     area_assignment: AreaAssignmentConfig | None = None
@@ -194,9 +219,17 @@ class RoutingConfig(BaseModel):
         return normalize_extensions(v)
 
     @model_validator(mode="after")
-    def _require_stack_or_protocol(self):
-        if self.stack is None and self.protocol is None:
-            raise ValueError("Either 'stack' or 'protocol' must be set")
+    def _require_single_runtime_authority(self):
+        # The current Operator/Scheduler runtime resolves protocol/extensions and does
+        # not honor routing.stack. Accepting stack would create different routing truth
+        # in different services, so fail here instead of preserving a split-brain path.
+        if self.stack is not None:
+            raise ValueError(
+                "routing.stack is not supported by the current runtime; use "
+                "routing.protocol with routing.extensions"
+            )
+        if self.protocol is None:
+            raise ValueError("routing.protocol must be set")
         return self
 
 
@@ -506,12 +539,12 @@ class TrafficFlowConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    flow_id: str = Field(min_length=1)
-    src: str = Field(min_length=1)
-    dst: str = Field(min_length=1)
-    protocol: str  # "udp" or "tcp"
+    flow_id: NonEmptyReference
+    src: NonEmptyReference
+    dst: NonEmptyReference
+    protocol: Literal["udp", "tcp"]
     bandwidth_kbps: float = Field(gt=0)
-    probe_type: str  # "continuous" or "burst"
+    probe_type: Literal["continuous", "burst"]
 
     @model_validator(mode="after")
     def _distinct_endpoints(self):
@@ -541,7 +574,7 @@ class MiConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     enabled: bool = False
-    adapter: str | None = None  # e.g. "frr_isis_adapter"
+    adapter: NonEmptyReference | None = None  # e.g. "frr_isis_adapter"
     convergence: ConvergenceConfig = ConvergenceConfig()
 
 
@@ -550,8 +583,8 @@ class TerrestrialLinkConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    station_a: str = Field(min_length=1)
-    station_b: str = Field(min_length=1)
+    station_a: NonEmptyReference
+    station_b: NonEmptyReference
     bandwidth_mbps: float = Field(default=10000.0, gt=0)
     latency_ms: float = Field(default=5.0, ge=0)
     loss_pct: float = Field(default=0.0, ge=0, le=100)
@@ -588,20 +621,35 @@ class ObservabilityConfig(BaseModel):
     decision_trace: DecisionTraceConfig = Field(default_factory=DecisionTraceConfig)
 
 
-class PlacementConfig(BaseModel):
-    """Pod placement policy for multi-node deployment.
-
-    allOnOne: all pods on the first available node; explicit single-node/debug policy.
-    planePerNode: one orbital plane per K3s node. Intra-plane ISLs are
-        LOCAL (direct veth), cross-plane ISLs are CROSS_NODE (VXLAN). This is
-        the default so multi-node deployments exercise the real substrate.
-    planeGroupPerNode: multiple adjacent planes per node, round-robin.
-    """
+class AllOnOnePlacementConfig(BaseModel):
+    """All pods land on the first available K3s node."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    policy: str = "planePerNode"  # allOnOne | planePerNode | planeGroupPerNode
-    planes_per_group: int | None = Field(default=None, gt=0)  # For planeGroupPerNode
+    policy: Literal["allOnOne"]
+
+
+class PlanePerNodePlacementConfig(BaseModel):
+    """One orbital plane per K3s node; ground stations use deterministic spread."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    policy: Literal["planePerNode"] = "planePerNode"
+
+
+class PlaneGroupPerNodePlacementConfig(BaseModel):
+    """Adjacent planes grouped by an explicit group size."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
+
+    policy: Literal["planeGroupPerNode"]
+    planes_per_group: int = Field(gt=0)
+
+
+PlacementConfig = Annotated[
+    AllOnOnePlacementConfig | PlanePerNodePlacementConfig | PlaneGroupPerNodePlacementConfig,
+    Field(discriminator="policy"),
+]
 
 
 class SessionConfig(BaseModel):
@@ -625,9 +673,13 @@ class SessionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session: SessionMeta
-    constellation: str | dict  # Path to constellation file OR inline definition
-    ground_stations: str | list[str] | dict  # Set name, path, station list, OR inline GS definition
-    satellite_type: str | None = None  # Override satellite type (independent of constellation)
+    constellation: NonEmptyReference | dict  # Path to constellation file OR inline definition
+    ground_stations: (
+        NonEmptyReference | list[NonEmptyReference] | dict
+    )  # Set name, path, station list, OR inline GS definition
+    satellite_type: NonEmptyReference | None = (
+        None  # Override satellite type (independent of constellation)
+    )
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = (
         None  # For direct station lists
     )
@@ -641,7 +693,7 @@ class SessionConfig(BaseModel):
     time: TimeConfig = TimeConfig()
     traffic_flows: list[TrafficFlowConfig] | None = None
     terrestrial_links: list[TerrestrialLinkConfig] | None = None
-    placement: PlacementConfig = PlacementConfig()
+    placement: PlacementConfig = Field(default_factory=PlanePerNodePlacementConfig)
     mi: MiConfig = MiConfig()
     convergence: ConvergenceConfig = ConvergenceConfig()  # backward compat — use mi.convergence
 

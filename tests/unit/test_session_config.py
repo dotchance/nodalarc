@@ -7,15 +7,21 @@ import yaml
 from nodalarc.models.session import (
     ActuationConfig,
     AreaAssignmentConfig,
+    AreaMapping,
     ConvergenceConfig,
+    ExplicitAreaAssignmentConfig,
+    FlatAreaAssignmentConfig,
     OrbitConfig,
+    PerPlaneAreaAssignmentConfig,
     PlacementConfig,
+    PlaneGroupPerNodePlacementConfig,
     RoutingConfig,
     SessionConfig,
+    StripeAreaAssignmentConfig,
     TerrestrialLinkConfig,
     TrafficFlowConfig,
 )
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from tests.conftest import FIXTURES_DIR
 
@@ -46,7 +52,7 @@ def test_physical_config_floats_reject_non_finite(factory, bad):
         lambda: RoutingConfig(protocol="isis", compression_factor=-1),
         lambda: RoutingConfig(protocol="isis", bfd_rx_interval=0),
         lambda: RoutingConfig(protocol="ospf", ospf_dead_interval=-1),
-        lambda: PlacementConfig(policy="planeGroupPerNode", planes_per_group=0),
+        lambda: PlaneGroupPerNodePlacementConfig(policy="planeGroupPerNode", planes_per_group=0),
         lambda: TrafficFlowConfig(
             flow_id="f",
             src="a",
@@ -173,6 +179,114 @@ def test_routing_extensions_normalize_and_reject():
             RoutingConfig(protocol="isis", extensions=bad)
 
 
+def test_routing_stack_is_rejected_as_split_brain_authority():
+    for bad in [
+        {"stack": "configs/routing-stacks/isis-te"},
+        {"protocol": "isis", "stack": "configs/routing-stacks/isis-te"},
+        {"protocol": "isis", "extensions": ("te",), "stack": "configs/routing-stacks/isis-te"},
+    ]:
+        with pytest.raises(ValidationError, match="routing.stack is not supported"):
+            RoutingConfig(**bad)
+
+
+def test_area_assignment_variants_reject_irrelevant_fields():
+    adapter = TypeAdapter(AreaAssignmentConfig)
+    bad_shapes = [
+        {"strategy": "flat", "assignments": [{"planes": [0], "area_id": "49.0001"}]},
+        {"strategy": "flat", "planes_per_stripe": 2},
+        {"strategy": "per-plane", "assignments": [{"planes": [0], "area_id": "49.0001"}]},
+        {"strategy": "per-plane", "planes_per_stripe": 2},
+        {
+            "strategy": "stripe",
+            "planes_per_stripe": 2,
+            "assignments": [{"planes": [0], "area_id": "49.0001"}],
+        },
+        {
+            "strategy": "explicit",
+            "planes_per_stripe": 2,
+            "assignments": [{"planes": [0], "area_id": "49.0001"}],
+        },
+        {
+            "strategy": "explicit",
+            "assignments": [{"ground_stations": "denver", "area_id": "49.0001"}],
+        },
+    ]
+    for shape in bad_shapes:
+        with pytest.raises(ValidationError):
+            adapter.validate_python(shape)
+
+
+def test_placement_variants_reject_irrelevant_fields():
+    adapter = TypeAdapter(PlacementConfig)
+    bad_shapes = [
+        {"policy": "allOnOne", "planes_per_group": 2},
+        {"policy": "planePerNode", "planes_per_group": 2},
+        {"policy": "planeGroupPerNode"},
+        {"policy": "bogus"},
+    ]
+    for shape in bad_shapes:
+        with pytest.raises(ValidationError):
+            adapter.validate_python(shape)
+
+
+def test_identity_reference_strings_reject_empty_or_whitespace():
+    from nodalarc.models.constellation import IslLink, IslOverride
+
+    bad_factories = [
+        lambda: AreaMapping(planes=(0,), area_id=""),
+        lambda: AreaMapping(ground_stations=(" ",), area_id="49.0001"),
+        lambda: TerrestrialLinkConfig(station_a=" ", station_b="b"),
+        lambda: TrafficFlowConfig(
+            flow_id=" ",
+            src="a",
+            dst="b",
+            protocol="udp",
+            bandwidth_kbps=1,
+            probe_type="continuous",
+        ),
+        lambda: IslLink(terminal="", peer="sat-P00S01"),
+        lambda: IslLink(terminal="isl0", peer=" "),
+        lambda: IslOverride(node="", links=[IslLink(terminal="isl0", peer="sat-P00S01")]),
+    ]
+    for factory in bad_factories:
+        with pytest.raises(ValidationError):
+            factory()
+
+
+def test_legacy_catalog_reference_strings_reject_empty_or_whitespace():
+    from nodalarc.models.ground_station import GroundStationConfig, GroundStationSetConfig
+    from nodalarc.models.routing_stack import ConfigTemplate, RoutingStackConfig
+    from nodalarc.models.satellite_type import GroundTerminalDef as SatGroundTerminalDef
+    from nodalarc.models.satellite_type import IslTerminalDef, SatelliteTypeConfig
+
+    bad_factories = [
+        lambda: SessionConfig.model_validate({**_SAMPLE_SESSION, "session": {"name": ""}}),
+        lambda: SessionConfig.model_validate({**_SAMPLE_SESSION, "constellation": ""}),
+        lambda: SessionConfig.model_validate({**_SAMPLE_SESSION, "ground_stations": " "}),
+        lambda: GroundStationConfig(name="", lat_deg=0, lon_deg=0),
+        lambda: GroundStationSetConfig(name="demo", stations=[""]),
+        lambda: IslTerminalDef(
+            type="",
+            count=1,
+            max_range_km=1000,
+            bandwidth_mbps=1000,
+            max_tracking_rate_deg_s=1,
+        ),
+        lambda: SatGroundTerminalDef(type=" ", count=1, bandwidth_mbps=1000),
+        lambda: SatelliteTypeConfig(name="", isl_terminals=[], ground_terminals=[]),
+        lambda: ConfigTemplate(src="", dst="/etc/frr/frr.conf"),
+        lambda: ConfigTemplate(src="frr.conf.j2", dst=" "),
+        lambda: RoutingStackConfig(
+            name="",
+            image="frrouting/frr",
+            config_templates=[ConfigTemplate(src="frr.conf.j2", dst="/etc/frr/frr.conf")],
+        ),
+    ]
+    for factory in bad_factories:
+        with pytest.raises(ValidationError):
+            factory()
+
+
 @pytest.mark.parametrize(
     "pairs",
     [
@@ -203,14 +317,14 @@ def test_isl_override_rejects_duplicate_terminal():
 
 def test_area_assignment_fails_loud_on_bad_config():
     from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
-    from nodalarc.models.session import AreaAssignmentConfig, AreaMapping
+    from nodalarc.models.session import AreaMapping
 
     with pytest.raises(ValidationError):  # unknown strategy
-        AreaAssignmentConfig(strategy="typo")
+        TypeAdapter(AreaAssignmentConfig).validate_python({"strategy": "typo"})
     with pytest.raises(ValidationError):  # mapping targets nothing
         AreaMapping(area_id="49.1")
     with pytest.raises(ValidationError):  # duplicate plane mapping (last-write-win)
-        AreaAssignmentConfig(
+        ExplicitAreaAssignmentConfig(
             strategy="explicit",
             assignments=[
                 AreaMapping(planes=(1,), area_id="a"),
@@ -220,7 +334,7 @@ def test_area_assignment_fails_loud_on_bad_config():
     scheme = AddressingScheme(config=None, satellites=None, gs_file=None)
     with pytest.raises(ValueError, match="outside"):  # plane that does not exist
         compute_area_assignments(
-            AreaAssignmentConfig(
+            ExplicitAreaAssignmentConfig(
                 strategy="explicit", assignments=[AreaMapping(planes=(99,), area_id="a")]
             ),
             plane_count=2,
@@ -231,7 +345,7 @@ def test_area_assignment_fails_loud_on_bad_config():
         )
     with pytest.raises(ValueError, match="unknown ground station"):
         compute_area_assignments(
-            AreaAssignmentConfig(
+            ExplicitAreaAssignmentConfig(
                 strategy="explicit",
                 assignments=[AreaMapping(ground_stations=("typo",), area_id="a")],
             ),
@@ -274,10 +388,10 @@ def test_explicit_ground_station_area_mapping_is_applied():
     # Regression: an explicit per-GS area mapping must be honored, not silently
     # replaced by the default area.
     from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
-    from nodalarc.models.session import AreaAssignmentConfig, AreaMapping
+    from nodalarc.models.session import AreaMapping
 
     scheme = AddressingScheme(config=None, satellites=None, gs_file=None)
-    cfg = AreaAssignmentConfig(
+    cfg = ExplicitAreaAssignmentConfig(
         strategy="explicit",
         assignments=[AreaMapping(ground_stations=("hawthorne",), area_id="49.1234")],
     )
@@ -430,26 +544,26 @@ class TestSessionConfigLoading:
 class TestAreaAssignmentValidation:
     def test_stripe_requires_planes_per_stripe(self):
         with pytest.raises(ValidationError, match="planes_per_stripe"):
-            AreaAssignmentConfig(strategy="stripe")
+            StripeAreaAssignmentConfig(strategy="stripe")
 
     def test_stripe_rejects_zero(self):
         with pytest.raises(ValidationError, match="planes_per_stripe"):
-            AreaAssignmentConfig(strategy="stripe", planes_per_stripe=0)
+            StripeAreaAssignmentConfig(strategy="stripe", planes_per_stripe=0)
 
     def test_explicit_requires_assignments(self):
         with pytest.raises(ValidationError, match="assignments"):
-            AreaAssignmentConfig(strategy="explicit")
+            ExplicitAreaAssignmentConfig(strategy="explicit")
 
     def test_flat_no_extra_fields_needed(self):
-        config = AreaAssignmentConfig(strategy="flat")
+        config = FlatAreaAssignmentConfig(strategy="flat")
         assert config.strategy == "flat"
 
     def test_per_plane_no_extra_fields_needed(self):
-        config = AreaAssignmentConfig(strategy="per-plane")
+        config = PerPlaneAreaAssignmentConfig(strategy="per-plane")
         assert config.strategy == "per-plane"
 
     def test_explicit_with_assignments(self):
-        config = AreaAssignmentConfig(
+        config = ExplicitAreaAssignmentConfig(
             strategy="explicit",
             assignments=[
                 {"planes": [0, 1], "area_id": "49.0001"},

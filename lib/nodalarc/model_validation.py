@@ -9,7 +9,15 @@ at parse time, not become no-op behavior the resolver has to interpret. Use
 these as Pydantic ``AfterValidator``s on the field type.
 """
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
+
+# Generic primitives for strings that encode identity/reference rather than prose.
+# Descriptions, notes, and labels may stay plain strings; node/station/terminal/path
+# references must be present and cannot be whitespace.
+NonEmptyString = Annotated[str, Field(min_length=1, pattern=r".*\S.*")]
+NonEmptyReference = Annotated[str, Field(min_length=1, pattern=r"^\S+$")]
 
 
 def nonempty(values: Any) -> Any:

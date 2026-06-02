@@ -20,7 +20,7 @@ from nodalarc.models.session import (
     MiConfig,
     ObservabilityConfig,
     OrbitConfig,
-    PlacementConfig,
+    PlanePerNodePlacementConfig,
     RoutingConfig,
     SchedulingConfig,
     SessionMeta,
@@ -80,7 +80,7 @@ def _resolved_session(**overrides) -> ResolvedSession:
         "addressing": AddressingConfig(),
         "observability": ObservabilityConfig(),
         "time": TimeConfig(),
-        "placement": PlacementConfig(),
+        "placement": PlanePerNodePlacementConfig(),
         "mi": MiConfig(),
         "source_context": SourceContext(origin="test"),
     }
@@ -429,3 +429,52 @@ def test_duplicate_terrestrial_link_pair_rejected():
                 TerrestrialLinkConfig(station_a="y", station_b="x"),
             )
         )
+
+
+def test_resolved_runtime_identity_references_reject_empty_or_whitespace():
+    bad_factories = [
+        lambda: ResolvedTerminalBlock(
+            terminal_id="",
+            owner_node_id="sat-p00s00",
+            endpoint_role="isl",
+            medium="optical",
+            count=1,
+            source_ref="satellite_type:demo#isl[0]",
+        ),
+        lambda: ResolvedTerminalBlock(
+            terminal_id="sat-p00s00#isl[0]",
+            owner_node_id=" ",
+            endpoint_role="isl",
+            medium="optical",
+            count=1,
+            source_ref="satellite_type:demo#isl[0]",
+        ),
+        lambda: ResolvedNode(
+            node_id="",
+            local_node_id="sat-P00S00",
+            segment_id="default-space",
+            kind="satellite",
+            frame_id="earth",
+        ),
+        lambda: ResolvedEndpoint(segment_id="", terminal_role="isl", node_ids=("sat-p00s00",)),
+        lambda: ResolvedEndpoint(segment_id="default-space", terminal_role="isl", node_ids=(" ",)),
+        lambda: ResolvedLinkRule(
+            rule_id="",
+            kind="relay",
+            enabled=True,
+            endpoints=(
+                ResolvedEndpoint(
+                    segment_id="default-space", terminal_role="isl", node_ids=("sat-p00s00",)
+                ),
+                ResolvedEndpoint(
+                    segment_id="default-space", terminal_role="isl", node_ids=("sat-p00s01",)
+                ),
+            ),
+            topology=VisibleCandidatesTopology(mode="visible_candidates"),
+        ),
+        lambda: SidBlock(segment_id="", sid_start=100, sid_end=199),
+        lambda: SourceContext(origin=""),
+    ]
+    for factory in bad_factories:
+        with pytest.raises(ValidationError):
+            factory()

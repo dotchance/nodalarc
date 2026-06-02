@@ -4,11 +4,12 @@ import pytest
 from nodalarc.constellation_loader import load_constellation
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.session import (
-    AreaAssignmentConfig,
+    FlatAreaAssignmentConfig,
     OrbitConfig,
     RoutingConfig,
     SessionConfig,
     SessionMeta,
+    StripeAreaAssignmentConfig,
     TimeConfig,
 )
 from nodalarc.template_vars import build_template_vars
@@ -62,7 +63,7 @@ def flat_session():
         routing=RoutingConfig(
             protocol="isis",
             extensions=["sr"],
-            area_assignment=AreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
+            area_assignment=FlatAreaAssignmentConfig(strategy="flat", gs_area_id="49.0001"),
         ),
         time=TimeConfig(compression=1),
         scheduling=_EXPLICIT_SCHEDULING,
@@ -80,7 +81,7 @@ def stripe_session():
         routing=RoutingConfig(
             protocol="isis",
             extensions=["sr"],
-            area_assignment=AreaAssignmentConfig(
+            area_assignment=StripeAreaAssignmentConfig(
                 strategy="stripe",
                 planes_per_stripe=2,
                 gs_area_id="49.0000",

@@ -3,7 +3,7 @@
 """Stack resolver — derives routing stack configuration from (protocol, extensions).
 
 Replaces the need for per-stack directories when deploying via the wizard.
-Legacy deploys using routing.stack still load from stack.yaml directly.
+Session routing uses protocol/extensions only; routing.stack is rejected at parse time.
 
 The resolver is the single source of truth for per-permutation configuration:
 sysctls, template variables, derived SID ranges, and constraint validation.

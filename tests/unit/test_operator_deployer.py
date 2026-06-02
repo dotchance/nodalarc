@@ -20,7 +20,12 @@ from unittest.mock import MagicMock, create_autospec, patch
 import kubernetes.client
 import pytest
 import yaml
-from nodalarc.models.session import PlacementConfig
+from nodalarc.models.session import (
+    AllOnOnePlacementConfig,
+    PlacementConfig,
+    PlaneGroupPerNodePlacementConfig,
+    PlanePerNodePlacementConfig,
+)
 from nodalarc.substrate.manifest_contract import REQUIRED_WIRING_PHASES, WiringManifest
 from nodalarc.substrate.wiring_status import failed_status, ready_status, status_configmap_data
 from nodalarc_operator.session_deployer import (
@@ -39,6 +44,7 @@ from nodalarc_operator.session_deployer import (
     teardown_session,
     write_wiring_manifest,
 )
+from pydantic import TypeAdapter, ValidationError
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -166,20 +172,20 @@ class TestPodPlacement:
 
     def test_all_on_one_single_node(self):
         nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
-        placement = PlacementConfig(policy="allOnOne")
+        placement = AllOnOnePlacementConfig(policy="allOnOne")
         result = compute_pod_placement(placement, nv, ["node01"])
         assert all(v == "node01" for v in result.values())
         assert len(result) == len(nv)
 
     def test_all_on_one_ignores_extra_nodes(self):
         nv = _make_node_vars(planes=2, sats_per_plane=3, gs_count=2)
-        placement = PlacementConfig(policy="allOnOne")
+        placement = AllOnOnePlacementConfig(policy="allOnOne")
         result = compute_pod_placement(placement, nv, ["node01", "node02", "node03", "node04"])
         assert all(v == "node01" for v in result.values())
 
     def test_plane_per_node_same_plane_same_node(self):
         nv = _make_node_vars(planes=4, sats_per_plane=3, gs_count=0)
-        placement = PlacementConfig(policy="planePerNode")
+        placement = PlanePerNodePlacementConfig(policy="planePerNode")
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         plane0_nodes = {result[nid] for nid, v in nv.items() if v["plane"] == 0}
@@ -190,7 +196,7 @@ class TestPodPlacement:
 
     def test_plane_per_node_wraps_modulo(self):
         nv = _make_node_vars(planes=6, sats_per_plane=2, gs_count=0)
-        placement = PlacementConfig(policy="planePerNode")
+        placement = PlanePerNodePlacementConfig(policy="planePerNode")
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         plane0_node = result["sat-P00S00"]
@@ -199,7 +205,7 @@ class TestPodPlacement:
 
     def test_plane_per_node_gs_uses_hrw(self):
         nv = _make_node_vars(planes=2, sats_per_plane=2, gs_count=7)
-        placement = PlacementConfig(policy="planePerNode")
+        placement = PlanePerNodePlacementConfig(policy="planePerNode")
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         gs_nodes = {result[nid] for nid in nv if nid.startswith("gs-")}
@@ -207,31 +213,26 @@ class TestPodPlacement:
 
     def test_plane_group_per_node_groups(self):
         nv = _make_node_vars(planes=4, sats_per_plane=2, gs_count=0)
-        placement = PlacementConfig(policy="planeGroupPerNode", planes_per_group=2)
+        placement = PlaneGroupPerNodePlacementConfig(policy="planeGroupPerNode", planes_per_group=2)
         nodes = ["node01", "node02", "node03", "node04"]
         result = compute_pod_placement(placement, nv, nodes)
         assert result["sat-P00S00"] == result["sat-P01S00"]
         assert result["sat-P02S00"] == result["sat-P03S00"]
         assert result["sat-P00S00"] != result["sat-P02S00"]
 
-    def test_plane_group_per_node_default_ppg(self):
-        nv = _make_node_vars(planes=8, sats_per_plane=1, gs_count=0)
-        placement = PlacementConfig(policy="planeGroupPerNode")
-        nodes = ["node01", "node02", "node03", "node04"]
-        result = compute_pod_placement(placement, nv, nodes)
-        assert len(set(result.values())) <= len(nodes)
+    def test_plane_group_per_node_requires_explicit_group_size(self):
+        with pytest.raises(ValidationError, match="planes_per_group"):
+            TypeAdapter(PlacementConfig).validate_python({"policy": "planeGroupPerNode"})
 
     def test_no_nodes_raises(self):
         nv = _make_node_vars(planes=1, sats_per_plane=1, gs_count=0)
-        placement = PlacementConfig(policy="allOnOne")
+        placement = AllOnOnePlacementConfig(policy="allOnOne")
         with pytest.raises(ValueError, match="No available"):
             compute_pod_placement(placement, nv, [])
 
-    def test_unknown_policy_raises(self):
-        nv = _make_node_vars(planes=1, sats_per_plane=1, gs_count=0)
-        placement = PlacementConfig(policy="bogus")
-        with pytest.raises(ValueError, match="Unknown placement policy"):
-            compute_pod_placement(placement, nv, ["node01"])
+    def test_unknown_policy_rejected_at_parse_boundary(self):
+        with pytest.raises(ValidationError):
+            TypeAdapter(PlacementConfig).validate_python({"policy": "bogus"})
 
     def test_tainted_node_excluded(self):
         """discover_available_nodes filters out tainted nodes."""

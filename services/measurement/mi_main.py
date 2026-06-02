@@ -394,26 +394,21 @@ def main() -> None:
 
     gs_file = load_ground_stations(session.ground_stations)
 
-    if session.routing.stack is not None:
-        stack_dir = Path(session.routing.stack)
-        stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
-        stack_config = RoutingStackConfig.model_validate(stack_yaml["stack"])
-    else:
-        from nodalarc.stack_resolver import resolve_stack
+    from nodalarc.stack_resolver import resolve_stack
 
-        resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
-        stack_config = RoutingStackConfig(
-            name=f"{session.routing.protocol}-{'-'.join(session.routing.extensions) or 'plain'}",
-            image=resolved.image,
-            daemons=resolved.daemons or None,
-            config_templates=[],
-            template_variables=resolved.template_variables,
-            mi_adapter=resolved.mi_adapter,
-            segment_routing=resolved.segment_routing,
-            ttl_propagation=resolved.ttl_propagation,
-            max_compression=resolved.max_compression,
-            reconfigure_command=resolved.reconfigure_command,
-        )
+    resolved = resolve_stack(session.routing.protocol, session.routing.extensions)
+    stack_config = RoutingStackConfig(
+        name=f"{session.routing.protocol}-{'-'.join(session.routing.extensions) or 'plain'}",
+        image=resolved.image,
+        daemons=resolved.daemons or None,
+        config_templates=[],
+        template_variables=resolved.template_variables,
+        mi_adapter=resolved.mi_adapter,
+        segment_routing=resolved.segment_routing,
+        ttl_propagation=resolved.ttl_propagation,
+        max_compression=resolved.max_compression,
+        reconfigure_command=resolved.reconfigure_command,
+    )
 
     service = MIService(
         session=session,

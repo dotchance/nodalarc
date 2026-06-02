@@ -16,6 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import FrameBodyName, SupportedSurfaceBody
+from nodalarc.model_validation import NonEmptyReference
 from nodalarc.models.identity import IdentityMode
 from nodalarc.models.link_rules import (
     LinkKind,
@@ -60,8 +61,8 @@ class ResolvedTerminalBlock(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    terminal_id: str
-    owner_node_id: str
+    terminal_id: NonEmptyReference
+    owner_node_id: NonEmptyReference
     endpoint_role: TerminalRole  # ground | isl | relay
     medium: TerminalMediumLiteral  # rf | optical
     count: int = Field(gt=0)
@@ -72,7 +73,7 @@ class ResolvedTerminalBlock(BaseModel):
     tracking_rate_deg_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     bandwidth_mbps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     # Provenance for audit/debug only (e.g. "satellite_type:starlink-v2-laser#isl[0]").
-    source_ref: str
+    source_ref: NonEmptyReference
 
 
 class ResolvedNode(BaseModel):
@@ -84,17 +85,17 @@ class ResolvedNode(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    node_id: str
-    local_node_id: str
-    segment_id: str
-    namespace: str | None
+    node_id: NonEmptyReference
+    local_node_id: NonEmptyReference
+    segment_id: NonEmptyReference
+    namespace: NonEmptyReference | None
     kind: NodeKind
-    frame_id: str
+    frame_id: NonEmptyReference
     central_body: FrameBodyName | None = None
     reference_body: SupportedSurfaceBody | None = None
-    tags: tuple[str, ...] = ()
-    satellite_type: str | None = None
-    tenant_id: str = "default"
+    tags: tuple[NonEmptyReference, ...] = ()
+    satellite_type: NonEmptyReference | None = None
+    tenant_id: NonEmptyReference = "default"
     terminal_inventory: tuple[ResolvedTerminalBlock, ...] = ()
     # Complete resolved policy for ground stations; None for space nodes.
     ground_scheduling: GroundSchedulingConfig | None = None
@@ -122,11 +123,11 @@ class ResolvedEndpoint(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    segment_id: str
+    segment_id: NonEmptyReference
     terminal_role: TerminalRole
     terminal_medium: TerminalMediumLiteral | None = None
     # Resolved runtime node IDs; a selector that matched zero nodes is invalid.
-    node_ids: tuple[str, ...] = Field(min_length=1)
+    node_ids: tuple[NonEmptyReference, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def _unique_node_ids(self) -> ResolvedEndpoint:
@@ -141,14 +142,14 @@ class ResolvedLinkRule(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    rule_id: str
+    rule_id: NonEmptyReference
     kind: LinkKind
     enabled: bool
     endpoints: tuple[ResolvedEndpoint, ResolvedEndpoint]
     topology: LinkTopology
     constraints: LinkRuleConstraints | None = None
     protocol_boundary: ProtocolBoundary | None = None
-    tags: tuple[str, ...] = ()
+    tags: tuple[NonEmptyReference, ...] = ()
 
 
 class SidBlock(BaseModel):
@@ -161,7 +162,7 @@ class SidBlock(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    segment_id: str
+    segment_id: NonEmptyReference
     sid_start: int = Field(ge=0)
     sid_end: int = Field(ge=0)
 
@@ -181,9 +182,9 @@ class SourceContext(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # e.g. "vs_api.deploy", "operator.reconcile", "wizard", "test".
-    origin: str
-    session_path: str | None = None
-    run_id: str | None = None
+    origin: NonEmptyReference
+    session_path: NonEmptyReference | None = None
+    run_id: NonEmptyReference | None = None
 
 
 class ResolvedSession(BaseModel):

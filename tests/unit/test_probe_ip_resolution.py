@@ -14,8 +14,8 @@ from nodalarc.models.ground_station import (
 )
 from nodalarc.models.session import (
     AddressingConfig,
-    AreaAssignmentConfig,
     ConvergenceConfig,
+    FlatAreaAssignmentConfig,
     OrbitConfig,
     RoutingConfig,
     SessionConfig,
@@ -47,7 +47,7 @@ def _make_session() -> SessionConfig:
         routing=RoutingConfig(
             protocol="isis",
             extensions=["sr"],
-            area_assignment=AreaAssignmentConfig(strategy="flat"),
+            area_assignment=FlatAreaAssignmentConfig(strategy="flat"),
         ),
         time=TimeConfig(),
         scheduling=_EXPLICIT_SCHEDULING,

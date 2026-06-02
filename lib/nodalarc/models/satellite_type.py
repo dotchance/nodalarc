@@ -9,6 +9,7 @@ and are referenced by name from constellation definitions.
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from nodalarc.model_validation import NonEmptyReference
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 
 
@@ -17,10 +18,10 @@ class IslTerminalDef(BaseModel):
 
     model_config = ConfigDict(allow_inf_nan=False)
 
-    type: str  # "optical" or "rf"
-    band: str | None = None  # Frequency band for RF terminals
+    type: NonEmptyReference  # "optical" or "rf"
+    band: NonEmptyReference | None = None  # Frequency band for RF terminals
     count: int
-    role: str | None = None  # "intra-plane", "cross-plane", or None (pool)
+    role: NonEmptyReference | None = None  # "intra-plane", "cross-plane", or None (pool)
     max_range_km: float
     bandwidth_mbps: float
     max_tracking_rate_deg_s: float
@@ -81,8 +82,8 @@ class GroundTerminalDef(BaseModel):
 
     model_config = ConfigDict(allow_inf_nan=False)
 
-    type: str  # "optical" or "rf"
-    band: str | None = None  # Frequency band for RF terminals
+    type: NonEmptyReference  # "optical" or "rf"
+    band: NonEmptyReference | None = None  # Frequency band for RF terminals
     count: int
     bandwidth_mbps: float
     max_range_km: float | None = None
@@ -162,8 +163,8 @@ class SatelliteTypeConfig(BaseModel):
 
     model_config = ConfigDict(allow_inf_nan=False)
 
-    name: str
-    tenant_id: str = "default"
+    name: NonEmptyReference
+    tenant_id: NonEmptyReference = "default"
     description: str | None = None
     ut_serving_capacity: int = 100  # Number of logical UTs this sat can serve
     isl_terminals: list[IslTerminalDef]

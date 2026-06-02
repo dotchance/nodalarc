@@ -104,13 +104,8 @@ class SessionContext:
         # Parse session config for metadata
         session_data = yaml.safe_load(Path(session_config_path).read_text())
         session = SessionConfig.model_validate(session_data)
-        if session.routing.stack is not None:
-            self.routing_stack: str = Path(session.routing.stack).name
-        else:
-            ext_str = (
-                "-".join(session.routing.extensions) if session.routing.extensions else "plain"
-            )
-            self.routing_stack = f"{session.routing.protocol}-{ext_str}"
+        ext_str = "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+        self.routing_stack = f"{session.routing.protocol}-{ext_str}"
         if isinstance(session.constellation, dict):
             self.constellation_name: str = session.constellation.get("name", "custom")
         else:

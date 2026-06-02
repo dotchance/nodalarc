@@ -29,8 +29,11 @@ from nodalarc.models.ground_station import (
     GroundTerminalDef,
 )
 from nodalarc.models.session import (
+    AllOnOnePlacementConfig,
     OrbitConfig,
     PlacementConfig,
+    PlaneGroupPerNodePlacementConfig,
+    PlanePerNodePlacementConfig,
     RoutingConfig,
     SessionConfig,
     SessionMeta,
@@ -45,6 +48,7 @@ from nodalarc.session_validator import (
 )
 from nodalarc.stack_resolver import ResolvedStack, resolve_stack
 from ome.main import _effective_ground_scheduling_for_runtime
+from pydantic import TypeAdapter, ValidationError
 
 from tests.conftest import CONFIGS_DIR
 
@@ -63,6 +67,20 @@ _EXPLICIT_SCHEDULING = {
 
 ISS_TLE_LINE_1 = "1 25544U 98067A   21075.51041667  .00001264  00000-0  29660-4 0  9993"
 ISS_TLE_LINE_2 = "2 25544  51.6442  21.5417 0002426  95.1670  21.8444 15.48974333273145"
+
+
+def _placement_config(placement_policy: str, planes_per_group: int | None) -> PlacementConfig:
+    if placement_policy == "allOnOne":
+        return AllOnOnePlacementConfig(policy="allOnOne")
+    if placement_policy == "planePerNode":
+        return PlanePerNodePlacementConfig(policy="planePerNode")
+    if placement_policy == "planeGroupPerNode":
+        return PlaneGroupPerNodePlacementConfig(
+            policy="planeGroupPerNode",
+            planes_per_group=planes_per_group,
+        )
+    raise ValueError(f"unsupported placement policy in test helper: {placement_policy}")
+
 
 # ---------------------------------------------------------------------------
 # Helpers — build minimal valid models for testing
@@ -109,10 +127,7 @@ def _make_session(
         ),
         time=TimeConfig(step_seconds=step_seconds),
         scheduling=_EXPLICIT_SCHEDULING,
-        placement=PlacementConfig(
-            policy=placement_policy,
-            planes_per_group=planes_per_group,
-        ),
+        placement=_placement_config(placement_policy, planes_per_group),
     )
 
 
@@ -1137,31 +1152,13 @@ class TestGroundPhysicsFidelityGates:
 
 
 class TestE007:
-    def test_plane_group_without_planes_per_group(self):
-        """planeGroupPerNode without planes_per_group = error."""
-        session = _make_session(
-            placement_policy="planeGroupPerNode",
-            planes_per_group=None,
-        )
-        gs = _make_gs_file()
-        sats = _make_satellites()
-        constellation = _make_constellation()
-        stack = _make_resolved_stack()
-
-        results = validate_session_readiness(
-            session,
-            constellation,
-            sats,
-            gs,
-            stack,
-        )
-
-        errors = [r for r in results if r.level == "error" and r.code == "E007"]
-        assert len(errors) == 1
-        assert "planes_per_group" in errors[0].message
+    def test_plane_group_without_planes_per_group_rejected_at_parse_boundary(self):
+        """planeGroupPerNode without planes_per_group is unrepresentable post-parse."""
+        with pytest.raises(ValidationError, match="planes_per_group"):
+            TypeAdapter(PlacementConfig).validate_python({"policy": "planeGroupPerNode"})
 
     def test_plane_group_with_planes_per_group_ok(self):
-        """planeGroupPerNode with planes_per_group set = no error."""
+        """planeGroupPerNode with planes_per_group set reaches readiness with no E007."""
         session = _make_session(
             placement_policy="planeGroupPerNode",
             planes_per_group=4,

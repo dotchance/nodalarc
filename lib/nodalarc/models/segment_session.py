@@ -27,6 +27,7 @@ from nodalarc.models.session import (
     ObservabilityConfig,
     OrbitConfig,
     PlacementConfig,
+    PlanePerNodePlacementConfig,
     RoutingConfig,
     SchedulingConfig,
     SessionMeta,
@@ -64,5 +65,5 @@ class SegmentSessionConfig(BaseModel):
     time: TimeConfig = Field(default_factory=TimeConfig)
     traffic_flows: list[TrafficFlowConfig] | None = None
     terrestrial_links: list[TerrestrialLinkConfig] | None = None
-    placement: PlacementConfig = Field(default_factory=PlacementConfig)
+    placement: PlacementConfig = Field(default_factory=PlanePerNodePlacementConfig)
     mi: MiConfig = Field(default_factory=MiConfig)

@@ -114,15 +114,10 @@ class SessionManager:
             try:
                 raw = yaml.safe_load(resolved_path.read_text())
                 session = SessionConfig.model_validate(raw)
-                if session.routing.stack is not None:
-                    routing_label = Path(session.routing.stack).name
-                else:
-                    ext_str = (
-                        "-".join(session.routing.extensions)
-                        if session.routing.extensions
-                        else "plain"
-                    )
-                    routing_label = f"{session.routing.protocol}-{ext_str}"
+                ext_str = (
+                    "-".join(session.routing.extensions) if session.routing.extensions else "plain"
+                )
+                routing_label = f"{session.routing.protocol}-{ext_str}"
                 if isinstance(session.constellation, dict):
                     const_label = session.constellation.get("name", "custom")
                 else:

@@ -11,6 +11,7 @@ Three formats are supported:
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
+from nodalarc.model_validation import NonEmptyReference
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
 from nodalarc.models.terminal_physics import TerminalBoresight
 
@@ -48,9 +49,9 @@ class GroundSegment(BaseModel):
     and a mobility class.
     """
 
-    tenant_id: str = "default"
+    tenant_id: NonEmptyReference = "default"
     reference_body: SupportedSurfaceBody = "earth"
-    mobility: str = "fixed"  # "fixed", "terrestrial", "maritime", "aerial"
+    mobility: NonEmptyReference = "fixed"  # "fixed", "terrestrial", "maritime", "aerial"
     service_priority: int = 10  # Lower = higher priority. Headroom: 1, 5, 10, 20...
     selection_policy: SelectionPolicySpec | None = None
     handover_policy: HandoverPolicySpec | None = None
@@ -74,7 +75,7 @@ class GroundSegment(BaseModel):
 class TerrestrialPrefix(BaseModel):
     """Explicit terrestrial prefix for a ground station."""
 
-    prefix: str  # CIDR notation, e.g. "172.16.100.0/24"
+    prefix: NonEmptyReference  # CIDR notation, e.g. "172.16.100.0/24"
     metric: int
 
     @field_validator("metric")
@@ -88,8 +89,8 @@ class TerrestrialPrefix(BaseModel):
 class TerrestrialPrefixTemplate(BaseModel):
     """Default terrestrial prefix template using {gs_index}."""
 
-    ipv4_template: str = "172.16.{gs_index}.0/24"
-    ipv6_template: str = "fd10::{gs_index}:0/112"
+    ipv4_template: NonEmptyReference = "172.16.{gs_index}.0/24"
+    ipv6_template: NonEmptyReference = "fd10::{gs_index}:0/112"
     metric: int = 10
     default_route: bool = False
     default_route_metric: int = 100
@@ -107,7 +108,7 @@ class GroundTerminalDef(BaseModel):
 
     model_config = ConfigDict(allow_inf_nan=False)
 
-    type: str  # "optical" or "rf"
+    type: NonEmptyReference  # "optical" or "rf"
     count: int
     bandwidth_mbps: float
     tracking_capacity: int
@@ -118,8 +119,8 @@ class GroundTerminalDef(BaseModel):
     )
     max_tracking_rate_deg_s: float | None = None
     boresight: TerminalBoresight | None = None
-    frequency_band: str | None = None  # For future environmental modeling
-    band: str | None = None  # Shorthand band identifier (Ka, Ku, E, V)
+    frequency_band: NonEmptyReference | None = None  # For future environmental modeling
+    band: NonEmptyReference | None = None  # Shorthand band identifier (Ka, Ku, E, V)
     gateway_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
     user_terminal_beam_quota: int | None = None  # Accepted in Phase 3, not enforced yet.
 
@@ -188,7 +189,7 @@ class GroundStationConfig(GroundSegment):
 
     model_config = ConfigDict(allow_inf_nan=False)
 
-    name: str
+    name: NonEmptyReference
     lat_deg: float
     lon_deg: float
     alt_m: float = 0.0
@@ -202,7 +203,7 @@ class GroundStationConfig(GroundSegment):
     # For now they document what physical hardware exists at the site.
     antennas: int | None = Field(default=None, gt=0)  # Number of physical antennas at site
     antenna_diameter_m: float | None = Field(default=None, gt=0)
-    band: str | None = None  # Primary frequency band (Ka, Ku, E, V)
+    band: NonEmptyReference | None = None  # Primary frequency band (Ka, Ku, E, V)
 
     # Data provenance
     verified: VerificationInfo | None = None
@@ -268,9 +269,9 @@ class GroundStationSetConfig(BaseModel):
     Station names resolve to configs/ground-stations/stations/{name}.yaml.
     """
 
-    name: str
+    name: NonEmptyReference
     description: str | None = None
-    stations: list[str]
+    stations: list[NonEmptyReference]
     default_terminals: list[GroundTerminalDef] | None = None
     default_terrestrial_prefixes: TerrestrialPrefixTemplate | None = None
     default_min_elevation_deg: float | None = None

@@ -470,4 +470,3 @@ def insert_operator_intervention_event(conn: sqlite3.Connection, event: dict) ->
 def upsert_operator_intervention_event(conn: sqlite3.Connection, event: dict) -> int | None:
     """Backward-compatible alias for the append-only intervention writer."""
     return insert_operator_intervention_event(conn, event)
-    conn.commit()

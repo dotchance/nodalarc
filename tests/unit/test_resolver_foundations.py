@@ -4,10 +4,14 @@
 
 import pytest
 from nodalarc.models.identity import IdentityMode
+from nodalarc.models.link_rules import VisibleCandidatesTopology
 from nodalarc.models.resolved_session import (
+    ResolvedEndpoint,
+    ResolvedLinkRule,
     ResolvedNode,
     ResolvedSession,
     ResolvedTerminalBlock,
+    SidBlock,
     SourceContext,
 )
 from nodalarc.models.session import (
@@ -122,6 +126,113 @@ def test_resolved_node_exposes_both_identities():
     # node_id (runtime) and local_node_id (source) are distinct and both present.
     assert node.node_id == "leo-sat-p00s00"
     assert node.local_node_id == "sat-P00S00"
+
+
+# --- Deep immutability across the boundary (nested mutation must fail) ---
+
+
+def test_node_clock_is_frozen():
+    node = _node()
+    with pytest.raises(ValidationError):
+        node.clock.model = "affine"
+
+
+def test_embedded_config_is_frozen_nested():
+    rs = _resolved_session()
+    # Nested config carried on the resolved view is genuinely immutable.
+    with pytest.raises(ValidationError):
+        rs.simulation.actuation.expected_latency_ms = 999.0
+    with pytest.raises(ValidationError):
+        rs.time.compression = 5
+    with pytest.raises(ValidationError):
+        rs.orbit.propagator = "sgp4-tle"
+
+
+# --- The resolved model cannot represent impossible truth ---
+
+
+def test_duplicate_node_id_rejected():
+    with pytest.raises(ValidationError, match="duplicate runtime node_id"):
+        _resolved_session(nodes=(_node("dup"), _node("dup")))
+
+
+def test_empty_endpoint_node_ids_rejected():
+    with pytest.raises(ValidationError):
+        ResolvedEndpoint(segment_id="s", terminal_role="ground", node_ids=())
+
+
+def test_reversed_sid_block_rejected():
+    with pytest.raises(ValidationError, match="reversed"):
+        SidBlock(segment_id="leo", sid_start=10, sid_end=5)
+
+
+def test_nonpositive_terminal_count_rejected():
+    with pytest.raises(ValidationError):
+        ResolvedTerminalBlock(
+            terminal_id="t",
+            owner_node_id="n",
+            endpoint_role="isl",
+            medium="optical",
+            count=0,
+            source_ref="x",
+        )
+
+
+def test_duplicate_terminal_id_within_node_rejected():
+    blk = ResolvedTerminalBlock(
+        terminal_id="dup",
+        owner_node_id="n",
+        endpoint_role="isl",
+        medium="optical",
+        count=1,
+        source_ref="x",
+    )
+    with pytest.raises(ValidationError, match="duplicate terminal_id"):
+        ResolvedNode(
+            node_id="n",
+            local_node_id="n",
+            segment_id="s",
+            namespace=None,
+            kind="satellite",
+            frame_id="earth",
+            terminal_inventory=(blk, blk),
+        )
+
+
+def test_terminal_owner_mismatch_rejected():
+    blk = ResolvedTerminalBlock(
+        terminal_id="t",
+        owner_node_id="other-node",
+        endpoint_role="isl",
+        medium="optical",
+        count=1,
+        source_ref="x",
+    )
+    with pytest.raises(ValidationError, match="owner_node_id"):
+        ResolvedNode(
+            node_id="n",
+            local_node_id="n",
+            segment_id="s",
+            namespace=None,
+            kind="satellite",
+            frame_id="earth",
+            terminal_inventory=(blk,),
+        )
+
+
+def test_link_rule_endpoint_referencing_unknown_node_rejected():
+    rule = ResolvedLinkRule(
+        rule_id="r",
+        kind="access",
+        enabled=True,
+        endpoints=(
+            ResolvedEndpoint(segment_id="s", terminal_role="ground", node_ids=("ghost",)),
+            ResolvedEndpoint(segment_id="space", terminal_role="ground", node_ids=("sat-p00s00",)),
+        ),
+        topology=VisibleCandidatesTopology(mode="visible_candidates"),
+    )
+    with pytest.raises(ValidationError, match="unknown"):
+        _resolved_session(link_rules=(rule,))
 
 
 # --- Runtime-support matrix ---

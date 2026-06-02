@@ -201,6 +201,32 @@ def test_future_sun_frame_body_parses_structurally():
     assert seg.frame.primary_body == "sun"
 
 
+def test_constellation_inline_source_is_structurally_validated():
+    # A path string source is accepted verbatim.
+    seg = ConstellationSegment.model_validate(
+        {
+            "id": "leo",
+            "kind": "constellation",
+            "source": "configs/constellations/demo-36.yaml",
+            "namespace": "leo",
+            "central_body": "earth",
+        }
+    )
+    assert seg.source == "configs/constellations/demo-36.yaml"
+    # An inline dict source is validated against the ConstellationConfig union, so
+    # a malformed inline fails structurally rather than being silently accepted.
+    with pytest.raises(ValidationError):
+        ConstellationSegment.model_validate(
+            {
+                "id": "leo",
+                "kind": "constellation",
+                "source": {"mode": "not-a-real-mode"},
+                "namespace": "leo",
+                "central_body": "earth",
+            }
+        )
+
+
 def test_segment_identifier_pattern_enforced():
     # Uppercase / dotted segment ids violate the Identifier pattern.
     with pytest.raises(ValidationError):
@@ -317,13 +343,55 @@ def test_ephemeris_manifest_parses():
                     "checksum": "abc123",
                     "targets": ["earth", "luna"],
                     "frame": "gcrs",
-                    "coverage_start": "2025-01-01T00:00:00",
-                    "coverage_end": "2030-01-01T00:00:00",
+                    "coverage_start": "2025-01-01T00:00:00Z",
+                    "coverage_end": "2030-01-01T00:00:00Z",
                 }
             ],
         }
     )
     assert eph.kernels[0].targets == ["earth", "luna"]
+
+
+def test_ephemeris_rejects_naive_datetimes():
+    with pytest.raises(ValidationError):
+        EphemerisConfig.model_validate(
+            {
+                "provider": "skyfield_bsp",
+                "quality_tier": "jpl_de_bsp",
+                "kernels": [
+                    {
+                        "id": "de440",
+                        "path": "kernels/de440.bsp",
+                        "checksum": "abc123",
+                        "targets": ["earth", "luna"],
+                        "frame": "gcrs",
+                        "coverage_start": "2025-01-01T00:00:00",  # naive: rejected
+                        "coverage_end": "2030-01-01T00:00:00",
+                    }
+                ],
+            }
+        )
+
+
+def test_ephemeris_rejects_reversed_window():
+    with pytest.raises(ValidationError, match="coverage_end must be after"):
+        EphemerisConfig.model_validate(
+            {
+                "provider": "skyfield_bsp",
+                "quality_tier": "jpl_de_bsp",
+                "kernels": [
+                    {
+                        "id": "de440",
+                        "path": "kernels/de440.bsp",
+                        "checksum": "abc123",
+                        "targets": ["earth"],
+                        "frame": "gcrs",
+                        "coverage_start": "2030-01-01T00:00:00Z",
+                        "coverage_end": "2025-01-01T00:00:00Z",
+                    }
+                ],
+            }
+        )
 
 
 def test_ephemeris_requires_at_least_one_kernel():

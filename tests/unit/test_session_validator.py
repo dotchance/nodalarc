@@ -116,6 +116,25 @@ def _make_session(
     )
 
 
+def _with_ground(session: SessionConfig, **overrides) -> SessionConfig:
+    """Return ``session`` with ground-scheduling overrides applied.
+
+    Config sub-models are frozen, so test setup applies overrides via
+    ``model_copy(update=)`` — which also bypasses re-validation, the same effect
+    as a tool mutating the parsed model after Pydantic validation (the case the
+    readiness validator must still catch as defense in depth).
+    """
+    new_ground = session.scheduling.ground.model_copy(update=overrides)
+    session.scheduling = session.scheduling.model_copy(update={"ground": new_ground})
+    return session
+
+
+def _with_simulation(session: SessionConfig, **overrides) -> SessionConfig:
+    """Return ``session`` with simulation-config overrides applied (see _with_ground)."""
+    session.simulation = session.simulation.model_copy(update=overrides)
+    return session
+
+
 def _selection_policy(name: str, *, horizon: int | None = None) -> SelectionPolicySpec:
     params = {"lookahead_horizon_ticks": horizon} if horizon is not None else {}
     return SelectionPolicySpec(name=name, params=params)
@@ -705,7 +724,9 @@ class TestE022:
 
     def test_per_gs_rank_ranking_allows_incompatible_raw_policy_score_scales(self):
         session = _make_session()
-        session.scheduling.ground.ranking_order = ["service_priority", "per_gs_rank", "lex_pair"]
+        session = _with_ground(
+            session, ranking_order=["service_priority", "per_gs_rank", "lex_pair"]
+        )
         stations = [
             GroundStationConfig(
                 name="dwell-gs",
@@ -738,9 +759,7 @@ class TestE022:
 class TestE010:
     def test_mbb_requires_capacity_for_steady_link_plus_reserve(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -772,10 +791,8 @@ class TestE010:
 
     def test_mbb_incapable_session_can_only_run_degraded_with_explicit_acknowledgement(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
-        session.simulation.acknowledge_bbm_handover_gap = True
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
+        session = _with_simulation(session, acknowledge_bbm_handover_gap=True)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -808,9 +825,7 @@ class TestE010:
 
     def test_ome_runtime_rejects_unacknowledged_mbb_capacity_shortfall(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -835,10 +850,8 @@ class TestE010:
 
     def test_ome_runtime_converts_acknowledged_mbb_shortfall_to_bbm(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
-        session.simulation.acknowledge_bbm_handover_gap = True
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
+        session = _with_simulation(session, acknowledge_bbm_handover_gap=True)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -865,9 +878,7 @@ class TestE010:
 
     def test_mbb_capacity_uses_terminal_count_times_tracking_capacity(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        session.scheduling.ground.mbb_reserve = 1
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=1)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -903,10 +914,10 @@ class TestE010:
 class TestE023:
     def test_mbb_reserve_above_one_is_rejected_even_if_capacity_exists(self):
         session = _make_session()
-        session.scheduling.ground.handover_mode = "mbb"
-        session.scheduling.ground.mbb_overlap_ticks = 3
-        # Simulate a tool mutating the parsed model after Pydantic validation.
-        session.scheduling.ground.mbb_reserve = 2
+        # Simulate a tool mutating the parsed model after Pydantic validation:
+        # model_copy(update=) bypasses the model validator that otherwise rejects
+        # mbb_reserve > 1, so the readiness validator must still catch it (E023).
+        session = _with_ground(session, handover_mode="mbb", mbb_overlap_ticks=3, mbb_reserve=2)
         gs = _make_gs_file(
             stations=[
                 GroundStationConfig(
@@ -997,8 +1008,9 @@ class TestE011:
 class TestGroundPhysicsFidelityGates:
     def test_geometry_only_requires_explicit_acknowledgement(self):
         session = _make_session()
-        session.simulation.ground_link_model = "geometry_only"
-        session.simulation.acknowledge_geometry_only = False
+        session = _with_simulation(
+            session, ground_link_model="geometry_only", acknowledge_geometry_only=False
+        )
         gs = _make_gs_file()
         sats = _make_satellites()
         constellation = _make_constellation()
@@ -1012,8 +1024,9 @@ class TestGroundPhysicsFidelityGates:
 
     def test_acknowledged_geometry_only_warns_but_does_not_emit_e020(self):
         session = _make_session()
-        session.simulation.ground_link_model = "geometry_only"
-        session.simulation.acknowledge_geometry_only = True
+        session = _with_simulation(
+            session, ground_link_model="geometry_only", acknowledge_geometry_only=True
+        )
         gs = _make_gs_file()
         sats = _make_satellites()
         constellation = _make_constellation()

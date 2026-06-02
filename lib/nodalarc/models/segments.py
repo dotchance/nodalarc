@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import FrameBodyName, SupportedSurfaceBody
-from nodalarc.models.constellation import OrbitalElements
+from nodalarc.models.constellation import ConstellationConfig, OrbitalElements
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
     HandoverPolicySpec,
@@ -53,9 +53,11 @@ class SegmentClock(BaseModel):
     OME remains responsible for aligning all computed facts to the session master
     timeline; per-node time is metadata for propagation and future relativistic
     modeling. Link decisions and events still carry session master sim time.
+
+    Frozen: it is embedded in the frozen ``ResolvedNode`` and is parsed once.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: Literal["session", "affine"] = "session"
     offset_s: float | None = None
@@ -99,10 +101,10 @@ class ConstellationSegment(BaseModel):
 
     id: Identifier
     kind: Literal["constellation"]
-    # path or inline constellation; the inline form is resolved + validated by
-    # ``load_constellation`` at resolve time (the single constellation-validation
-    # authority), mirroring the legacy ``SessionConfig.constellation: str | dict``.
-    source: str | dict
+    # A path string to a constellation file, or an inline constellation. The
+    # inline form is the typed ConstellationConfig union so JSON Schema validates
+    # its shape; catalog/cross-file checks remain resolver semantics.
+    source: str | ConstellationConfig
     # Required in segment_namespaced; forbidden in legacy_compatible. Enforced by
     # the resolver per the session identity mode, not at this structural layer.
     namespace: Namespace | None = None
@@ -149,8 +151,11 @@ class GroundSegment(BaseModel):
 
     id: Identifier
     kind: Literal["ground_set"]
-    # path or inline ground set/file; resolved + validated by
-    # ``load_ground_stations`` at resolve time.
+    # A path string, or an inline ground source. Inline ground sources are
+    # genuinely heterogeneous (a station-set file, a monolithic station file, or
+    # a name list per ``load_ground_stations``), so their structural validation is
+    # resolver-owned (the single ground-loading authority) rather than expressed
+    # as one lossy structural union here. See the grammar doc, "Ground Segment".
     source: str | dict
     # Required after resolution in multi-body sessions (semantic validation).
     reference_body: SupportedSurfaceBody | None = None

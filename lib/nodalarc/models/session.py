@@ -20,7 +20,7 @@ from nodalarc.models.ground_station import HysteresisParameters, TerrestrialPref
 class SessionMeta(BaseModel):
     """Session metadata."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     run_id: str | None = None
@@ -42,7 +42,7 @@ class SessionMeta(BaseModel):
 class AddressingConfig(BaseModel):
     """Addressing scheme overrides — all have defaults."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     sat_id_template: str = "sat-P{plane:02d}S{slot:02d}"
     gs_id_template: str = "gs-{name}"
@@ -55,7 +55,7 @@ class AddressingConfig(BaseModel):
 class AreaMapping(BaseModel):
     """Area assignment for explicit strategy."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     planes: list[int] | None = None
     ground_stations: str | list[str] | None = None  # "all" or list of names
@@ -65,7 +65,7 @@ class AreaMapping(BaseModel):
 class AreaAssignmentConfig(BaseModel):
     """Routing area assignment configuration."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     strategy: str  # "stripe", "per-plane", "flat", "explicit"
     planes_per_stripe: int | None = None  # Required for "stripe"
@@ -90,7 +90,7 @@ class RoutingConfig(BaseModel):
     ``protocol`` (resolved via stack_resolver) must be set.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     protocol: str | None = None  # "ospf" | "isis" | "static" | "nodalpath"
     extensions: list[str] = []  # ["te", "mpls", "sr"]
@@ -140,7 +140,7 @@ class ActuationConfig(BaseModel):
     against measured single-pair actuation (~25-37 ms p99 on the reference cluster).
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     expected_latency_ms: float = 250.0
     fault_after_ms: float = 1200.0
@@ -167,7 +167,7 @@ class CandidateLimits(BaseModel):
     before OME starts, rather than materializing an unbounded all-by-all matrix.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_pairs_per_rule: int
     max_pairs_per_tick: int | None = None
@@ -190,7 +190,7 @@ class CandidateLimits(BaseModel):
 class SimulationConfig(BaseModel):
     """Simulation contract fields exposed to session YAML."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: int = 2
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
@@ -211,7 +211,7 @@ class SimulationConfig(BaseModel):
 class OrbitConfig(BaseModel):
     """Orbit propagation model selection."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     propagator: Literal["keplerian-circular", "j2-mean-elements", "sgp4-tle"]
     tle_max_age_days: float | None = None
@@ -247,7 +247,7 @@ class GroundSchedulingConfig(BaseModel):
     specs and dispatches to registered pure policy hooks.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     selection_policy: SelectionPolicySpec = Field(default_factory=SelectionPolicySpec)
     handover_policy: HandoverPolicySpec = Field(
@@ -371,7 +371,7 @@ class GroundSchedulingConfig(BaseModel):
 class SchedulingConfig(BaseModel):
     """Scheduling policy surface."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     ground: GroundSchedulingConfig = Field(default_factory=GroundSchedulingConfig)
 
@@ -379,7 +379,7 @@ class SchedulingConfig(BaseModel):
 class SubstrateCompensationConfig(BaseModel):
     """Substrate latency compensation settings."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     measurement_source: Literal["node-agent-rtt"] = "node-agent-rtt"
     rtt_to_one_way: Literal["half-rtt"] = "half-rtt"
@@ -388,7 +388,7 @@ class SubstrateCompensationConfig(BaseModel):
 class DispatchConfig(BaseModel):
     """Dispatch authority, latency freshness, and kernel-proof cadence."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     latency_authority: Literal["ome"] = "ome"
     max_latency_age_ticks: int = 1
@@ -415,7 +415,7 @@ class DispatchConfig(BaseModel):
 class TimeConfig(BaseModel):
     """Time configuration."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     compression: int = 1
     start_time: str | None = None  # ISO 8601 (default: now per R-OME-005)
@@ -448,7 +448,7 @@ def resolve_session_epoch(time_config: TimeConfig) -> float:
 class TrafficFlowConfig(BaseModel):
     """Traffic flow configuration."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     flow_id: str
     src: str
@@ -461,7 +461,7 @@ class TrafficFlowConfig(BaseModel):
 class ConvergenceConfig(BaseModel):
     """Convergence detection settings for MI probe measurement."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     stability_period_s: float = 2.0
     timeout_s: float = 30.0
@@ -476,7 +476,7 @@ class MiConfig(BaseModel):
     When disabled (default), no MI processes start and no MI ports bind.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = False
     adapter: str | None = None  # e.g. "frr_isis_adapter"
@@ -486,7 +486,7 @@ class MiConfig(BaseModel):
 class TerrestrialLinkConfig(BaseModel):
     """A static terrestrial link between two ground stations."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     station_a: str
     station_b: str
@@ -498,7 +498,7 @@ class TerrestrialLinkConfig(BaseModel):
 class DecisionTraceConfig(BaseModel):
     """User-facing audit trace retention settings."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     active_links: Literal["always"] = "always"
     rejected_candidates_retention: Literal["none", "bounded", "full"] = "bounded"
@@ -515,7 +515,7 @@ class DecisionTraceConfig(BaseModel):
 class ObservabilityConfig(BaseModel):
     """Observability and provenance knobs exposed in session YAML."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     decision_trace: DecisionTraceConfig = Field(default_factory=DecisionTraceConfig)
 
@@ -551,6 +551,9 @@ class SessionConfig(BaseModel):
     contain the intended satellite type and this field is ignored.
     """
 
+    # Not frozen: this is the legacy session-input model that tests/tools mutate
+    # and that the resolver only consumes as a migration input. The resolved
+    # runtime contract is ResolvedSession (frozen), not this model.
     model_config = ConfigDict(extra="forbid")
 
     session: SessionMeta

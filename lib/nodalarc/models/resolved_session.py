@@ -13,7 +13,7 @@ Owns Runtime Identity").
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nodalarc.body_frames import FrameBodyName, SupportedSurfaceBody
 from nodalarc.models.identity import IdentityMode
@@ -64,13 +64,13 @@ class ResolvedTerminalBlock(BaseModel):
     owner_node_id: str
     endpoint_role: TerminalRole  # ground | isl | relay
     medium: TerminalMediumLiteral  # rf | optical
-    count: int
-    tracking_capacity: int | None = None
-    max_range_km: float | None = None
-    min_elevation_deg: float | None = None
-    field_of_regard_deg: float | None = None
-    tracking_rate_deg_s: float | None = None
-    bandwidth_mbps: float | None = None
+    count: int = Field(gt=0)
+    tracking_capacity: int | None = Field(default=None, gt=0)
+    max_range_km: float | None = Field(default=None, gt=0)
+    min_elevation_deg: float | None = Field(default=None, ge=-90.0, le=90.0)
+    field_of_regard_deg: float | None = Field(default=None, gt=0, le=360.0)
+    tracking_rate_deg_s: float | None = Field(default=None, gt=0)
+    bandwidth_mbps: float | None = Field(default=None, gt=0)
     # Provenance for audit/debug only (e.g. "satellite_type:starlink-v2-laser#isl[0]").
     source_ref: str
 
@@ -100,6 +100,22 @@ class ResolvedNode(BaseModel):
     ground_scheduling: GroundSchedulingConfig | None = None
     clock: SegmentClock = SegmentClock()
 
+    @model_validator(mode="after")
+    def _validate_terminals(self) -> ResolvedNode:
+        seen: set[str] = set()
+        for block in self.terminal_inventory:
+            if block.terminal_id in seen:
+                raise ValueError(
+                    f"node {self.node_id!r} has duplicate terminal_id {block.terminal_id!r}"
+                )
+            seen.add(block.terminal_id)
+            if block.owner_node_id != self.node_id:
+                raise ValueError(
+                    f"terminal {block.terminal_id!r} owner_node_id "
+                    f"{block.owner_node_id!r} != node_id {self.node_id!r}"
+                )
+        return self
+
 
 class ResolvedEndpoint(BaseModel):
     """A link-rule endpoint after selector resolution to concrete runtime node IDs."""
@@ -109,7 +125,8 @@ class ResolvedEndpoint(BaseModel):
     segment_id: str
     terminal_role: TerminalRole
     terminal_medium: TerminalMediumLiteral | None = None
-    node_ids: tuple[str, ...]  # resolved runtime node IDs; never empty (validated)
+    # Resolved runtime node IDs; a selector that matched zero nodes is invalid.
+    node_ids: tuple[str, ...] = Field(min_length=1)
 
 
 class ResolvedLinkRule(BaseModel):
@@ -138,8 +155,17 @@ class SidBlock(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     segment_id: str
-    sid_start: int
-    sid_end: int
+    sid_start: int = Field(ge=0)
+    sid_end: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> SidBlock:
+        if self.sid_end < self.sid_start:
+            raise ValueError(
+                f"SID block for segment {self.segment_id!r} is reversed: "
+                f"sid_end {self.sid_end} < sid_start {self.sid_start}"
+            )
+        return self
 
 
 class SourceContext(BaseModel):
@@ -177,6 +203,26 @@ class ResolvedSession(BaseModel):
     traffic_flows: tuple[TrafficFlowConfig, ...] = ()
     terrestrial_links: tuple[TerrestrialLinkConfig, ...] = ()
     source_context: SourceContext
+
+    @model_validator(mode="after")
+    def _validate_consistency(self) -> ResolvedSession:
+        ids = [n.node_id for n in self.nodes]
+        if len(set(ids)) != len(ids):
+            dupes = sorted({i for i in ids if ids.count(i) > 1})
+            raise ValueError(f"duplicate runtime node_id(s): {dupes}")
+        seg_ids = [b.segment_id for b in self.sid_blocks]
+        if len(set(seg_ids)) != len(seg_ids):
+            raise ValueError("duplicate segment_id in sid_blocks")
+        known = set(ids)
+        for rule in self.link_rules:
+            for endpoint in rule.endpoints:
+                missing = [nid for nid in endpoint.node_ids if nid not in known]
+                if missing:
+                    raise ValueError(
+                        f"link rule {rule.rule_id!r} endpoint references unknown "
+                        f"node_id(s): {missing}"
+                    )
+        return self
 
     def node_ids(self) -> tuple[str, ...]:
         """All runtime node IDs in resolution order."""

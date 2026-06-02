@@ -25,7 +25,9 @@ from nodalarc.models.session import (
     SchedulingConfig,
     SessionMeta,
     SimulationConfig,
+    TerrestrialLinkConfig,
     TimeConfig,
+    TrafficFlowConfig,
 )
 from nodalarc.runtime_support import (
     FeatureCategory,
@@ -401,3 +403,29 @@ def test_resolved_endpoint_rejects_duplicate_node_ids():
 def test_duplicate_link_rule_id_rejected():
     with pytest.raises(ValidationError, match="duplicate link rule id"):
         _resolved_session(link_rules=(_resolved_rule(), _resolved_rule()))
+
+
+def test_duplicate_traffic_flow_id_rejected():
+    def flow(fid, src, dst):
+        return TrafficFlowConfig(
+            flow_id=fid,
+            src=src,
+            dst=dst,
+            protocol="udp",
+            bandwidth_kbps=1.0,
+            probe_type="continuous",
+        )
+
+    with pytest.raises(ValidationError, match="traffic flow id"):
+        _resolved_session(traffic_flows=(flow("f", "a", "b"), flow("f", "c", "d")))
+
+
+def test_duplicate_terrestrial_link_pair_rejected():
+    # Same pair in reverse order is the same physical link.
+    with pytest.raises(ValidationError, match="terrestrial link"):
+        _resolved_session(
+            terrestrial_links=(
+                TerrestrialLinkConfig(station_a="x", station_b="y"),
+                TerrestrialLinkConfig(station_a="y", station_b="x"),
+            )
+        )

@@ -84,13 +84,20 @@ class AreaMapping(BaseModel):
             return nonempty_unique(v)
         return v
 
+    @model_validator(mode="after")
+    def _targets_something(self):
+        # A mapping that selects neither planes nor ground stations is a no-op.
+        if self.planes is None and self.ground_stations is None:
+            raise ValueError("AreaMapping must target planes and/or ground_stations")
+        return self
+
 
 class AreaAssignmentConfig(BaseModel):
     """Routing area assignment configuration."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    strategy: str  # "stripe", "per-plane", "flat", "explicit"
+    strategy: Literal["flat", "per-plane", "stripe", "explicit"]
     planes_per_stripe: int | None = None  # Required for "stripe"
     assignments: tuple[AreaMapping, ...] | None = None  # Required for "explicit"
     gs_area_id: str | None = None  # Area for ground stations
@@ -101,8 +108,38 @@ class AreaAssignmentConfig(BaseModel):
             self.planes_per_stripe is None or self.planes_per_stripe <= 0
         ):
             raise ValueError("strategy 'stripe' requires planes_per_stripe > 0")
-        if self.strategy == "explicit" and not self.assignments:
-            raise ValueError("strategy 'explicit' requires assignments list")
+        if self.strategy == "explicit":
+            if not self.assignments:
+                raise ValueError("strategy 'explicit' requires assignments list")
+            # No mapping may overwrite another's intent (last-write-win is silent).
+            seen_planes: set[int] = set()
+            seen_gs: set[str] = set()
+            has_all_gs = False
+            for m in self.assignments:
+                for p in m.planes or ():
+                    if p in seen_planes:
+                        raise ValueError(f"plane {p} is mapped by more than one assignment")
+                    seen_planes.add(p)
+                if m.ground_stations == "all":
+                    has_all_gs = True
+                elif isinstance(m.ground_stations, str):
+                    if m.ground_stations in seen_gs:
+                        raise ValueError(
+                            f"ground station {m.ground_stations!r} is mapped more than once"
+                        )
+                    seen_gs.add(m.ground_stations)
+                elif m.ground_stations is not None:
+                    for name in m.ground_stations:
+                        if name in seen_gs:
+                            raise ValueError(
+                                f"ground station {name!r} is mapped by more than one assignment"
+                            )
+                        seen_gs.add(name)
+            if has_all_gs and seen_gs:
+                raise ValueError(
+                    "explicit area assignment mixes ground_stations='all' with specific "
+                    "station mappings (ambiguous)"
+                )
         return self
 
 
@@ -150,27 +187,11 @@ class RoutingConfig(BaseModel):
     @field_validator("extensions")
     @classmethod
     def _normalize_extensions(cls, v: tuple[str, ...]) -> tuple[str, ...]:
-        # Canonicalize aliases so the stack resolver actually consumes them, and
-        # reject anything it would silently ignore.
-        aliases = {
-            "te": "te",
-            "traffic-engineering": "te",
-            "sr": "sr",
-            "segment-routing": "sr",
-            "mpls": "mpls",
-        }
-        normalized: list[str] = []
-        for ext in v:
-            canon = aliases.get(ext)
-            if canon is None:
-                raise ValueError(
-                    f"unknown routing extension {ext!r}; valid: "
-                    "te/traffic-engineering, sr/segment-routing, mpls"
-                )
-            normalized.append(canon)
-        if len(set(normalized)) != len(normalized):
-            raise ValueError("routing.extensions must not contain duplicate extensions")
-        return tuple(normalized)
+        # Single source of truth for the extension vocabulary lives in the stack
+        # resolver, which is the API that actually consumes these.
+        from nodalarc.stack_resolver import normalize_extensions
+
+        return normalize_extensions(v)
 
     @model_validator(mode="after")
     def _require_stack_or_protocol(self):
@@ -485,12 +506,18 @@ class TrafficFlowConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    flow_id: str
-    src: str
-    dst: str
+    flow_id: str = Field(min_length=1)
+    src: str = Field(min_length=1)
+    dst: str = Field(min_length=1)
     protocol: str  # "udp" or "tcp"
     bandwidth_kbps: float = Field(gt=0)
     probe_type: str  # "continuous" or "burst"
+
+    @model_validator(mode="after")
+    def _distinct_endpoints(self):
+        if self.src == self.dst:
+            raise ValueError("traffic flow src and dst must differ")
+        return self
 
 
 class ConvergenceConfig(BaseModel):
@@ -523,11 +550,17 @@ class TerrestrialLinkConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    station_a: str
-    station_b: str
+    station_a: str = Field(min_length=1)
+    station_b: str = Field(min_length=1)
     bandwidth_mbps: float = Field(default=10000.0, gt=0)
     latency_ms: float = Field(default=5.0, ge=0)
     loss_pct: float = Field(default=0.0, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _distinct_endpoints(self):
+        if self.station_a == self.station_b:
+            raise ValueError("terrestrial link endpoints must be distinct stations")
+        return self
 
 
 class DecisionTraceConfig(BaseModel):

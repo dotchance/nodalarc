@@ -204,11 +204,28 @@ def compute_area_assignments(
                 else:
                     for name in mapping.ground_stations:
                         gs_name_to_area[name] = mapping.area_id
+        # A mapping that targets a non-existent plane or station does nothing —
+        # fail loud rather than silently drop it.
+        out_of_range = sorted(p for p in plane_to_area if not 0 <= p < plane_count)
+        if out_of_range:
+            raise ValueError(
+                f"explicit area assignment maps plane(s) outside [0, {plane_count}): {out_of_range}"
+            )
+        if gs_names is not None:
+            known = set(gs_names)
+            unknown = sorted(n for n in gs_name_to_area if n not in known)
+            if unknown:
+                raise ValueError(
+                    f"explicit area assignment maps unknown ground station(s): {unknown}"
+                )
         fallback = "0.0.0.0" if is_ospf else "49.0001"
         for p in range(plane_count):
             area_id = plane_to_area.get(p, fallback)
             for s in range(sats_per_plane):
                 result[addressing.sat_id(p, s)] = area_id
+
+    else:
+        raise ValueError(f"unknown area-assignment strategy: {strategy!r}")
 
     # Ground stations: explicit per-GS/all overrides win; else gs_area_id; else
     # the protocol default (OSPF backbone / IS-IS 49.0000).

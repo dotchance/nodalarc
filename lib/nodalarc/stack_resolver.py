@@ -153,12 +153,44 @@ def validate_constellation_constraints(
         )
 
 
+# Canonical routing-extension vocabulary. Aliases normalize to the short form the
+# resolver actually consumes; anything else is rejected (never silently ignored).
+_EXTENSION_ALIASES: dict[str, str] = {
+    "te": "te",
+    "traffic-engineering": "te",
+    "sr": "sr",
+    "segment-routing": "sr",
+    "mpls": "mpls",
+}
+
+
+def normalize_extensions(extensions: list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    """Canonicalize routing-extension aliases to {te, sr, mpls}.
+
+    Raises ValueError on unknown or duplicate extensions. This is the owning
+    boundary for the extension vocabulary; both RoutingConfig and resolve_stack
+    route through it so no caller can pass a value the resolver would drop.
+    """
+    normalized: list[str] = []
+    for ext in extensions:
+        canon = _EXTENSION_ALIASES.get(ext)
+        if canon is None:
+            raise ValueError(
+                f"unknown routing extension {ext!r}; valid: "
+                "te/traffic-engineering, sr/segment-routing, mpls"
+            )
+        normalized.append(canon)
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("routing extensions must not contain duplicates")
+    return tuple(normalized)
+
+
 def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
     """Resolve a (protocol, extensions) pair into a full stack configuration.
 
     Raises ValueError for invalid combinations.
     """
-    ext_set = set(extensions)
+    ext_set = set(normalize_extensions(extensions))
 
     # --- Validate constraints ---
     if protocol == "nodalpath":

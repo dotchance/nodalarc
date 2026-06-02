@@ -201,6 +201,75 @@ def test_isl_override_rejects_duplicate_terminal():
         )
 
 
+def test_area_assignment_fails_loud_on_bad_config():
+    from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
+    from nodalarc.models.session import AreaAssignmentConfig, AreaMapping
+
+    with pytest.raises(ValidationError):  # unknown strategy
+        AreaAssignmentConfig(strategy="typo")
+    with pytest.raises(ValidationError):  # mapping targets nothing
+        AreaMapping(area_id="49.1")
+    with pytest.raises(ValidationError):  # duplicate plane mapping (last-write-win)
+        AreaAssignmentConfig(
+            strategy="explicit",
+            assignments=[
+                AreaMapping(planes=(1,), area_id="a"),
+                AreaMapping(planes=(1,), area_id="b"),
+            ],
+        )
+    scheme = AddressingScheme(config=None, satellites=None, gs_file=None)
+    with pytest.raises(ValueError, match="outside"):  # plane that does not exist
+        compute_area_assignments(
+            AreaAssignmentConfig(
+                strategy="explicit", assignments=[AreaMapping(planes=(99,), area_id="a")]
+            ),
+            plane_count=2,
+            sats_per_plane=1,
+            addressing=scheme,
+            gs_names=["g"],
+            protocol="isis",
+        )
+    with pytest.raises(ValueError, match="unknown ground station"):
+        compute_area_assignments(
+            AreaAssignmentConfig(
+                strategy="explicit",
+                assignments=[AreaMapping(ground_stations=("typo",), area_id="a")],
+            ),
+            plane_count=1,
+            sats_per_plane=1,
+            addressing=scheme,
+            gs_names=["real"],
+            protocol="isis",
+        )
+
+
+def test_resolve_stack_is_the_extension_owning_boundary():
+    from nodalarc.stack_resolver import resolve_stack
+
+    with pytest.raises(ValueError):  # raw API rejects unknown, not silently ignores
+        resolve_stack("isis", ["not-real"])
+    # traffic-engineering normalizes to te and is actually consumed (not dropped).
+    assert resolve_stack("isis", ["traffic-engineering"]) != resolve_stack("isis", [])
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: TerrestrialLinkConfig(station_a="x", station_b="x"),  # self-link
+        lambda: TerrestrialLinkConfig(station_a="", station_b="y"),  # empty id
+        lambda: TrafficFlowConfig(
+            flow_id="f", src="a", dst="a", protocol="udp", bandwidth_kbps=1, probe_type="continuous"
+        ),  # src == dst
+        lambda: TrafficFlowConfig(
+            flow_id="", src="a", dst="b", protocol="udp", bandwidth_kbps=1, probe_type="continuous"
+        ),  # empty flow_id
+    ],
+)
+def test_terrestrial_and_traffic_objects_reject_impossible_intent(factory):
+    with pytest.raises(ValidationError):
+        factory()
+
+
 def test_explicit_ground_station_area_mapping_is_applied():
     # Regression: an explicit per-GS area mapping must be honored, not silently
     # replaced by the default area.

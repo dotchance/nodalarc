@@ -5,9 +5,17 @@
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    field_validator,
+    model_validator,
+)
 
 from nodalarc.frozen import FrozenDict, ImmutableStrDict
+from nodalarc.model_validation import nonempty_unique
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
     HandoverPolicySpec,
@@ -59,9 +67,22 @@ class AreaMapping(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    planes: tuple[int, ...] | None = None
+    planes: tuple[NonNegativeInt, ...] | None = None
     ground_stations: str | tuple[str, ...] | None = None  # "all" or list of names
     area_id: str
+
+    @field_validator("planes")
+    @classmethod
+    def _valid_planes(cls, v: tuple[int, ...] | None) -> tuple[int, ...] | None:
+        return nonempty_unique(v)
+
+    @field_validator("ground_stations")
+    @classmethod
+    def _valid_ground_stations(cls, v):
+        # "all" (str) is a keyword; a list of names must be non-empty and unique.
+        if isinstance(v, (list, tuple)):
+            return nonempty_unique(v)
+        return v
 
 
 class AreaAssignmentConfig(BaseModel):

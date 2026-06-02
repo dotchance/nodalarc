@@ -12,9 +12,18 @@ checks owned by the resolver. See ``specs/plans/multi-segment-yaml-grammar.md``.
 
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    PositiveInt,
+    field_validator,
+)
 
 from nodalarc.frozen import FrozenDict
+from nodalarc.model_validation import nonempty_unique
 from nodalarc.models.ground_policy import SelectionPolicySpec
 from nodalarc.models.segments import (
     Identifier,
@@ -44,6 +53,12 @@ class NodeSelector(BaseModel):
     planes: tuple[NonNegativeInt, ...] | None = None
     slots: tuple[NonNegativeInt, ...] | None = None
     names: tuple[Identifier, ...] | None = None
+
+    @field_validator("node_ids", "node_tags", "planes", "slots", "names")
+    @classmethod
+    def _nonempty_unique_filters(cls, v):
+        # A present selector filter must select something and not repeat intent.
+        return nonempty_unique(v)
 
 
 class Endpoint(BaseModel):

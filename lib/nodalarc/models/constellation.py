@@ -15,11 +15,14 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    NonNegativeInt,
+    PositiveInt,
     Tag,
     field_validator,
     model_validator,
 )
 
+from nodalarc.model_validation import nonempty, nonempty_unique
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 
 
@@ -210,6 +213,11 @@ class IslOverride(BaseModel):
     node: str
     links: list[IslLink]
 
+    @field_validator("links")
+    @classmethod
+    def _nonempty_links(cls, v: list[IslLink]) -> list[IslLink]:
+        return nonempty(v)
+
 
 class PlaneOverride(BaseModel):
     """Override terminal config for specific orbital planes.
@@ -217,9 +225,14 @@ class PlaneOverride(BaseModel):
     Can reference a satellite type by name or provide inline terminals.
     """
 
-    planes: list[int]
+    planes: list[NonNegativeInt]
     satellite_type: str | None = None  # Reference to satellite type file
     terminals: TerminalConfig | None = None  # Deprecated: inline terminals
+
+    @field_validator("planes")
+    @classmethod
+    def _valid_planes(cls, v: list[int]) -> list[int]:
+        return nonempty_unique(v)
 
     @model_validator(mode="after")
     def _require_one_source(self):
@@ -244,8 +257,13 @@ class SatelliteConfig(BaseModel):
 class TLEFilter(BaseModel):
     """Filter for TLE mode — select satellites from TLE file."""
 
-    norad_ids: list[int] | None = None
+    norad_ids: list[PositiveInt] | None = None
     max_count: int | None = Field(default=None, gt=0)
+
+    @field_validator("norad_ids")
+    @classmethod
+    def _valid_norad_ids(cls, v: list[int] | None) -> list[int] | None:
+        return nonempty_unique(v)
 
 
 class ParametricConstellation(BaseModel):
@@ -277,6 +295,11 @@ class ExplicitConstellation(BaseModel):
     satellite_type: str | None = None  # Reference to satellite type file
     default_terminals: TerminalConfig | None = None  # Deprecated: inline terminals
     isl_overrides: list[IslOverride] | None = None
+
+    @field_validator("satellites")
+    @classmethod
+    def _nonempty_satellites(cls, v: list[SatelliteConfig]) -> list[SatelliteConfig]:
+        return nonempty(v)
 
     @model_validator(mode="after")
     def _validate(self):

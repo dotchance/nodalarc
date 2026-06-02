@@ -94,7 +94,7 @@ class TerrestrialPrefixTemplate(BaseModel):
     default_route: bool = False
     default_route_metric: int = 100
 
-    @field_validator("metric")
+    @field_validator("metric", "default_route_metric")
     @classmethod
     def _non_negative_metric(cls, v: int) -> int:
         if v < 0:

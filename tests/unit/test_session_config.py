@@ -119,6 +119,50 @@ def test_source_catalog_rejects_impossible_physics(idx):
         factory()
 
 
+def _bad_selector_factories():
+    from nodalarc.models.constellation import IslOverride, PlaneOverride, TLEFilter
+    from nodalarc.models.ground_station import TerrestrialPrefixTemplate
+    from nodalarc.models.link_rules import NodeSelector
+    from nodalarc.models.session import AreaMapping
+
+    return [
+        lambda: PlaneOverride(planes=[-1], satellite_type="x"),
+        lambda: PlaneOverride(planes=[], satellite_type="x"),
+        lambda: PlaneOverride(planes=[1, 1], satellite_type="x"),
+        lambda: AreaMapping(planes=[-1], area_id="49.0001"),
+        lambda: AreaMapping(planes=[], area_id="49.0001"),
+        lambda: AreaMapping(planes=[1, 1], area_id="49.0001"),
+        lambda: AreaMapping(ground_stations=[], area_id="49.0001"),
+        lambda: AreaMapping(ground_stations=["a", "a"], area_id="49.0001"),
+        lambda: TerrestrialPrefixTemplate(default_route_metric=-1),
+        lambda: TLEFilter(norad_ids=[]),
+        lambda: TLEFilter(norad_ids=[-1]),
+        lambda: TLEFilter(norad_ids=[1, 1]),
+        lambda: IslOverride(node="sat-P00S00", links=[]),
+        lambda: NodeSelector(segment="leo", planes=[]),
+        lambda: NodeSelector(segment="leo", planes=[1, 1]),
+        lambda: NodeSelector(segment="leo", names=["a", "a"]),
+    ]
+
+
+@pytest.mark.parametrize("idx", range(16))
+def test_selectors_reject_empty_negative_duplicate(idx):
+    factory = _bad_selector_factories()[idx]
+    with pytest.raises(ValidationError):
+        factory()
+
+
+def test_valid_selectors_still_accepted():
+    from nodalarc.models.constellation import PlaneOverride, TLEFilter
+    from nodalarc.models.link_rules import NodeSelector
+    from nodalarc.models.session import AreaMapping
+
+    PlaneOverride(planes=[0, 6, 12], satellite_type="x")
+    AreaMapping(ground_stations="all", area_id="0.0.0.0")  # "all" keyword
+    TLEFilter(norad_ids=[25544, 43013])
+    NodeSelector(segment="leo", planes=[0, 1, 2])
+
+
 def _ground_scheduling(**overrides):
     ground = {
         "selection_policy": {"name": "highest-elevation", "params": {}},

@@ -1,14 +1,35 @@
 """Test session configuration models."""
 
+import math
+
 import pytest
 import yaml
 from nodalarc.models.session import (
+    ActuationConfig,
     AreaAssignmentConfig,
+    ConvergenceConfig,
+    OrbitConfig,
     SessionConfig,
+    TerrestrialLinkConfig,
 )
 from pydantic import ValidationError
 
 from tests.conftest import FIXTURES_DIR
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda v: ActuationConfig(expected_latency_ms=1.0, fault_after_ms=v),
+        lambda v: OrbitConfig(propagator="sgp4-tle", tle_max_age_days=v),
+        lambda v: TerrestrialLinkConfig(station_a="a", station_b="b", bandwidth_mbps=v),
+        lambda v: ConvergenceConfig(timeout_s=v),
+    ],
+)
+@pytest.mark.parametrize("bad", [math.inf, -math.inf, math.nan])
+def test_physical_config_floats_reject_non_finite(factory, bad):
+    with pytest.raises(ValidationError):
+        factory(bad)
 
 
 def _ground_scheduling(**overrides):

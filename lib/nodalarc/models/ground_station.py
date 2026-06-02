@@ -8,7 +8,7 @@ Three formats are supported:
 - Monolithic legacy file (top-level keys: 'default_terminals', 'stations', etc.)
 """
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
@@ -19,6 +19,8 @@ MAX_GROUND_TERMINAL_COUNT = 128
 
 class HysteresisParameters(BaseModel):
     """Parameters for ground segment handover dampening (hysteresis)."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
     discount_factor: float = 1.15  # Score multiplier for active links
     mask_fade_range_deg: float = 5.0  # Taper discount as elevation hits mask

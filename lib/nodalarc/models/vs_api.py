@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from nodalarc.body_frames import SupportedSurfaceBody
+from nodalarc.models.scheduler_ops import ActuationState
 
 
 class NodeState(BaseModel):
@@ -150,7 +151,7 @@ class ActuationNotice(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     gs_id: str
-    actuation_state: str
+    actuation_state: ActuationState
     reason_code: str
     message: str
     since: str | None = None
@@ -169,7 +170,7 @@ class ActuationHealthGroundStation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     gs_id: str
-    actuation_state: str
+    actuation_state: ActuationState
     since: str | None = None
     reason_code: str | None = None
     blocking_new_ground_link_up: bool

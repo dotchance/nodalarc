@@ -18,7 +18,6 @@ from datetime import datetime
 
 from nodalarc.models.decision_explanation import (
     ActuationFacts,
-    ActuationStateName,
     CandidateFacts,
     DecisionExplanationFacts,
     EffectiveEnvelopeFacts,
@@ -34,6 +33,7 @@ from nodalarc.models.link_decisions import (
     GroundVisibilityDecisionWire,
     UnscheduledPair,
 )
+from nodalarc.models.scheduler_ops import ActuationState, parse_actuation_state
 
 Pair = tuple[str, str]
 
@@ -247,7 +247,7 @@ def compose_gs_explanation(
     gs_id: str,
     snapshot: GroundLinkDecisionSnapshot,
     active_pairs: frozenset[Pair],
-    actuation_state_by_gs: Mapping[str, ActuationStateName],
+    actuation_state_by_gs: Mapping[str, ActuationState | str],
     pending_by_pair: Mapping[Pair, PendingActuation] | None = None,
     expected_latency_ms: float | None = None,
     fault_after_ms: float | None = None,
@@ -277,7 +277,7 @@ def compose_gs_explanation(
     scheduled = [d for d in visible if _ordered_pair(d.pair) not in unscheduled]
     withheld = [d for d in visible if _ordered_pair(d.pair) in unscheduled]
 
-    actuation_state: ActuationStateName = actuation_state_by_gs.get(gs_id, "unknown")
+    actuation_state = parse_actuation_state(actuation_state_by_gs.get(gs_id))
     reference_body = decisions[0].reference_body
     tenant_id = decisions[0].tenant_id
 
@@ -339,9 +339,9 @@ def compose_gs_explanation(
         kernel_up = _ordered_pair(focal.pair) in active_pairs
         ome_desired = True
         viable_withheld = False
-        if actuation_state in ("kernel_dirty", "actuation_blocked"):
+        if actuation_state in (ActuationState.KERNEL_DIRTY, ActuationState.ACTUATION_BLOCKED):
             binding_gate = "actuation_proof"
-            binding_reason = actuation_state
+            binding_reason = actuation_state.value
             actuation_pass = False
         elif not kernel_up:
             # OME desires it and the roster is not failing, but the kernel does not have

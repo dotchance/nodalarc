@@ -20,7 +20,7 @@ gathers what happened. VF shows it to a human.
 ```
                         +---------------------------------+
                         |  Visualization Frontend (VF)    |
-                        |  React 19 + Three.js            |
+                        |  React 19 + R3F + Three.js      |
                         |  3D globe, topology graph       |
                         +----------|----------------------+
                                    | WebSocket ~1Hz

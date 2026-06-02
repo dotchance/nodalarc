@@ -60,6 +60,7 @@ from nodalarc.models.link_state import LinkStateSnapshot
 from nodalarc.models.scheduler_ops import (
     ActualLinkSnapshot,
     ActuationOpsDetails,
+    ActuationState,
     OperatorRepairCommand,
     OperatorRepairResponse,
     PendingActuationPair,
@@ -100,7 +101,6 @@ from scheduler.actuation import (
     ActuationFailureClass,
     ActuationResult,
     GroundActuationState,
-    GroundActuationStateName,
     next_verify_time,
 )
 from scheduler.actuation import (
@@ -1270,9 +1270,9 @@ class Dispatcher:
             )
 
     def _actuation_state_code_for(self, state: GroundActuationState) -> SchedulerOpsCode:
-        if state.state == GroundActuationStateName.KERNEL_DIRTY:
+        if state.state == ActuationState.KERNEL_DIRTY:
             return SchedulerOpsCode.KERNEL_DIRTY
-        if state.state == GroundActuationStateName.ACTUATION_BLOCKED:
+        if state.state == ActuationState.ACTUATION_BLOCKED:
             return SchedulerOpsCode.ACTUATION_BLOCKED
         return SchedulerOpsCode.ACTUATION_CLEAN
 
@@ -1565,7 +1565,7 @@ class Dispatcher:
         self,
         *,
         gs_id: str,
-        state_name: GroundActuationStateName,
+        state_name: ActuationState,
         code: SchedulerOpsCode,
         operation: str,
         failure_class: ActuationFailureClass,
@@ -1622,7 +1622,7 @@ class Dispatcher:
         )
         state_code = (
             SchedulerOpsCode.KERNEL_DIRTY
-            if state_name == GroundActuationStateName.KERNEL_DIRTY
+            if state_name == ActuationState.KERNEL_DIRTY
             else SchedulerOpsCode.ACTUATION_BLOCKED
         )
         if state_code != code:
@@ -1696,10 +1696,10 @@ class Dispatcher:
                 in {ActuationFailureClass.GROUND_KERNEL_DIRTY, ActuationFailureClass.GROUND_UNKNOWN}
                 for f in failures
             ):
-                state_name = GroundActuationStateName.KERNEL_DIRTY
+                state_name = ActuationState.KERNEL_DIRTY
                 failure_class = ActuationFailureClass.GROUND_KERNEL_DIRTY
             else:
-                state_name = GroundActuationStateName.ACTUATION_BLOCKED
+                state_name = ActuationState.ACTUATION_BLOCKED
                 failure_class = ActuationFailureClass.GROUND_CLEAN_FAILURE
             await self._set_gs_nonclean(
                 gs_id=gs_id,
@@ -1762,10 +1762,7 @@ class Dispatcher:
                 allowed.add(pair)
                 continue
             state = self._ground_state(gs_id)
-            if (
-                state.recovery.active_intervention_id
-                or state.state == GroundActuationStateName.KERNEL_DIRTY
-            ):
+            if state.recovery.active_intervention_id or state.state == ActuationState.KERNEL_DIRTY:
                 blocked.add(pair)
             else:
                 allowed.add(pair)
@@ -1839,7 +1836,7 @@ class Dispatcher:
         )
         after = GroundActuationState(
             gs_id=gs_id,
-            state=GroundActuationStateName.KERNEL_DIRTY,
+            state=ActuationState.KERNEL_DIRTY,
             reason_code=(
                 SchedulerOpsCode.KERNEL_VERIFY_EXHAUSTED
                 if exhausted
@@ -1892,7 +1889,7 @@ class Dispatcher:
         outcomes: dict[str, bool] = {}
         for gs_id in selected:
             state_before = self._ground_state(gs_id)
-            if state_before.state != GroundActuationStateName.CLEAN:
+            if state_before.state != ActuationState.CLEAN:
                 continue
 
             expected_up = self._actual_ground_pairs_for_gs(gs_id)
@@ -1929,7 +1926,7 @@ class Dispatcher:
             if result.has_failures:
                 await self._set_gs_nonclean(
                     gs_id=gs_id,
-                    state_name=GroundActuationStateName.KERNEL_DIRTY,
+                    state_name=ActuationState.KERNEL_DIRTY,
                     code=SchedulerOpsCode.KERNEL_DIRTY,
                     operation="KernelInventoryAudit",
                     failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
@@ -1946,7 +1943,7 @@ class Dispatcher:
     async def _run_due_kernel_verifications(self, *, sim_time: datetime) -> None:
         for gs_id, state in list(self._gs_actuation.items()):
             next_time = state.recovery.next_verify_after
-            if state.state == GroundActuationStateName.CLEAN or next_time is None:
+            if state.state == ActuationState.CLEAN or next_time is None:
                 continue
             if state.recovery.verify_exhausted or state.recovery.operator_action_required:
                 continue
@@ -2384,7 +2381,7 @@ class Dispatcher:
             )
             return
         state = self._ground_state(cmd.gs_id)
-        if state.state == GroundActuationStateName.CLEAN:
+        if state.state == ActuationState.CLEAN:
             await self._reject_repair(msg, cmd, f"Ground station {cmd.gs_id} is already clean")
             return
         if state.recovery.active_intervention_id:
@@ -2531,7 +2528,7 @@ class Dispatcher:
                 if down_verify.has_failures:
                     await self._set_gs_nonclean(
                         gs_id=gs_id,
-                        state_name=GroundActuationStateName.KERNEL_DIRTY,
+                        state_name=ActuationState.KERNEL_DIRTY,
                         code=SchedulerOpsCode.KERNEL_DIRTY,
                         operation="OperatorRepairDownVerify",
                         failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
@@ -2576,7 +2573,7 @@ class Dispatcher:
             if final_verify is not None and final_verify.has_failures:
                 await self._set_gs_nonclean(
                     gs_id=gs_id,
-                    state_name=GroundActuationStateName.KERNEL_DIRTY,
+                    state_name=ActuationState.KERNEL_DIRTY,
                     code=SchedulerOpsCode.KERNEL_DIRTY,
                     operation="OperatorRepairFinalVerify",
                     failure_class=ActuationFailureClass.GROUND_KERNEL_DIRTY,
@@ -2623,7 +2620,7 @@ class Dispatcher:
             )
             self._gs_actuation[gs_id] = GroundActuationState(
                 gs_id=gs_id,
-                state=GroundActuationStateName.KERNEL_DIRTY,
+                state=ActuationState.KERNEL_DIRTY,
                 reason_code=SchedulerOpsCode.OPERATOR_REPAIR_FAILED,
                 since=current.since,
                 affected_pairs=current.affected_pairs,

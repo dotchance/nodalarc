@@ -19,6 +19,7 @@ Add a backend field or reason code and forget the frontend, and this fails.
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 from pathlib import Path
 from typing import get_args
 
@@ -29,17 +30,25 @@ from nodalarc.models.decision_explanation import (
     DecisionExplanationFacts,
     EffectiveEnvelopeFacts,
     EnvelopeEndpoint,
+    ExplanationProducer,
+    FunnelGate,
+    GateState,
+    GsDecisionReasonCount,
+    GsDecisionTimelineFacts,
+    GsDecisionTimelineSample,
     LadderGate,
 )
 from nodalarc.models.link_decisions import (
     GroundAllocationEventCategory,
     GroundUnscheduledReason,
+    GroundVisibilityRejectingEndpoint,
     GroundVisibilityRejectReason,
 )
 from nodalarc.models.link_events import LINK_EVENT_REASONS
 from nodalarc.models.scheduler_ops import ActuationFailureClass, ActuationState, SchedulerOpsCode
 
 _REASONS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/reasons.ts"
+_FAMILIES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/families.ts"
 _TYPES_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/types.ts"
 _LINK_EVENTS_TS = Path(__file__).resolve().parents[2] / "frontend/src/explain/linkEvents.ts"
 
@@ -51,6 +60,9 @@ _WIRE_MODELS = [
     (EnvelopeEndpoint, "EnvelopeEndpoint"),
     (CandidateFacts, "CandidateFacts"),
     (ActuationFacts, "ActuationFacts"),
+    (GsDecisionTimelineSample, "GsDecisionTimelineSample"),
+    (GsDecisionReasonCount, "GsDecisionReasonCount"),
+    (GsDecisionTimelineFacts, "GsDecisionTimelineFacts"),
 ]
 
 
@@ -80,15 +92,17 @@ def test_wire_shape_field_names_match_backend():
         )
 
 
-def _frontend_array(const_name: str) -> set[str]:
-    """Extract the string members of an exported readonly array from reasons.ts."""
-    text = _REASONS_TS.read_text(encoding="utf-8")
+def _frontend_array(const_name: str, path: Path = _REASONS_TS) -> set[str]:
+    """Extract the string members of an exported readonly array from a TS module."""
+    text = path.read_text(encoding="utf-8")
     match = re.search(rf"export const {const_name}\b[^=]*=\s*\[(.*?)\]", text, re.DOTALL)
-    assert match, f"{const_name} not found as an exported array in {_REASONS_TS}"
+    assert match, f"{const_name} not found as an exported array in {path}"
     return set(re.findall(r'"([^"]+)"', match.group(1)))
 
 
 def _literal_values(literal_type: object) -> set[str]:
+    if isinstance(literal_type, type) and issubclass(literal_type, StrEnum):
+        return {m.value for m in literal_type}
     return set(get_args(literal_type))
 
 
@@ -134,6 +148,24 @@ def test_actuation_failure_classes_match_backend():
 
 def test_scheduler_ops_codes_match_backend():
     assert _frontend_array("SCHEDULER_OPS_CODES") == {m.value for m in SchedulerOpsCode}
+
+
+def test_funnel_gates_match_backend():
+    assert _frontend_array("FUNNEL_GATES", _FAMILIES_TS) == _literal_values(FunnelGate)
+
+
+def test_gate_states_match_backend():
+    assert _frontend_array("GATE_STATES", _FAMILIES_TS) == _literal_values(GateState)
+
+
+def test_explanation_producers_match_backend():
+    assert _frontend_array("PRODUCERS", _FAMILIES_TS) == _literal_values(ExplanationProducer)
+
+
+def test_rejecting_endpoints_match_backend():
+    assert _frontend_array("REJECTING_ENDPOINTS", _FAMILIES_TS) == _literal_values(
+        GroundVisibilityRejectingEndpoint
+    )
 
 
 def test_actuation_explanation_reasons_match_backend():

@@ -44,7 +44,7 @@ from nodalarc.models.decision_explanation import (
     PendingActuation,
 )
 from nodalarc.models.link_decisions import GroundLinkDecisionSnapshot
-from nodalarc.models.scheduler_ops import ActualLinkSnapshot
+from nodalarc.models.scheduler_ops import ActualLinkSnapshot, ActuationState, parse_actuation_state
 from nodalarc.models.session import SessionConfig
 from nodalarc.models.vs_api import (
     AlmanacState,
@@ -878,7 +878,8 @@ class SessionContext:
         instance_id = details.get("scheduler_instance_id")
         if not gs_id or not instance_id:
             return
-        after = details.get("actuation_state_after") or "unknown"
+        after_state = parse_actuation_state(details.get("actuation_state_after"))
+        after = after_state.value
         key = (instance_id, gs_id)
         generation = details.get("wiring_generation")
         if event.get("code") == "ACTUATION_CLEAN":
@@ -901,7 +902,7 @@ class SessionContext:
             "reason_code": event.get("code", ""),
             "message": event.get("message", ""),
             "since": event.get("timestamp"),
-            "blocking_new_ground_link_up": after != "clean",
+            "blocking_new_ground_link_up": after_state != ActuationState.CLEAN,
             "affected_pairs": details.get("affected_pairs", []),
             "desired_pairs_for_gs": details.get("desired_pairs_for_gs", []),
             "actual_pairs_for_gs": details.get("actual_pairs_for_gs", []),
@@ -976,7 +977,7 @@ class SessionContext:
         for (instance_id, gs_id), event in latest_items:
             details = event.get("details") or {}
             hostname = details.get("hostname") or event.get("hostname", "")
-            state = details.get("actuation_state_after") or "unknown"
+            state = parse_actuation_state(details.get("actuation_state_after")).value
             inst = by_instance.setdefault(
                 instance_id,
                 {
@@ -992,18 +993,18 @@ class SessionContext:
                     "actuation_state": state,
                     "since": event.get("timestamp"),
                     "reason_code": event.get("code"),
-                    "blocking_new_ground_link_up": state != "clean",
+                    "blocking_new_ground_link_up": state != ActuationState.CLEAN.value,
                     "recovery_status": details.get("recovery_status") or {},
                     "last_event": event,
                 }
             )
         for inst in by_instance.values():
             states = {gs["actuation_state"] for gs in inst["ground_stations"]}
-            if "kernel_dirty" in states:
+            if ActuationState.KERNEL_DIRTY.value in states:
                 inst["status"] = "dirty"
-            elif "actuation_blocked" in states:
+            elif ActuationState.ACTUATION_BLOCKED.value in states:
                 inst["status"] = "degraded"
-            elif "unknown" in states:
+            elif ActuationState.UNKNOWN.value in states:
                 inst["status"] = "unknown"
             else:
                 inst["status"] = "clean"

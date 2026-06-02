@@ -4,6 +4,8 @@
  *  Field names are snake_case to match Pydantic JSON output.
  */
 
+import type { ActuationState } from "./explain/reasons";
+
 export interface NodeState {
   node_id: string;
   node_type: string; // "satellite" | "ground_station"
@@ -120,7 +122,7 @@ export interface OpsEvent {
 
 export interface ActuationNotice {
   gs_id: string;
-  actuation_state: string;
+  actuation_state: ActuationState;
   reason_code: string;
   message: string;
   since: string | null;
@@ -135,7 +137,7 @@ export interface ActuationNotice {
 
 export interface ActuationHealthGroundStation {
   gs_id: string;
-  actuation_state: string;
+  actuation_state: ActuationState;
   since: string | null;
   reason_code: string | null;
   blocking_new_ground_link_up: boolean;

@@ -16,8 +16,26 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ActuationState = Literal["clean", "actuation_blocked", "kernel_dirty", "unknown"]
 InstanceHealthStatus = Literal["clean", "degraded", "dirty", "unknown"]
+
+
+class ActuationState(StrEnum):
+    CLEAN = "clean"
+    ACTUATION_BLOCKED = "actuation_blocked"
+    KERNEL_DIRTY = "kernel_dirty"
+    UNKNOWN = "unknown"
+
+
+def parse_actuation_state(value: object) -> ActuationState:
+    """Parse operator-facing actuation state without inventing a clean default."""
+    if isinstance(value, ActuationState):
+        return value
+    if isinstance(value, str):
+        try:
+            return ActuationState(value)
+        except ValueError:
+            return ActuationState.UNKNOWN
+    return ActuationState.UNKNOWN
 
 
 class SchedulerOpsCode(StrEnum):
@@ -83,8 +101,8 @@ class ActuationOpsDetails(BaseModel):
     actual_pairs_for_gs: list[list[str]] = Field(default_factory=list)
     ome_visible_scheduled_pairs_for_gs: list[list[str]] = Field(default_factory=list)
     node_agent_results: list[dict[str, Any]] = Field(default_factory=list)
-    actuation_state_before: ActuationState = "unknown"
-    actuation_state_after: ActuationState = "unknown"
+    actuation_state_before: ActuationState = ActuationState.UNKNOWN
+    actuation_state_after: ActuationState = ActuationState.UNKNOWN
     recovery_status: RecoveryStatus = Field(default_factory=RecoveryStatus)
     intervention_id: str | None = None
     reason: str | None = None

@@ -45,7 +45,8 @@ export type RemediationLayer =
   | "actuation"; // not a model refusal — a realization/proof state.
 
 /** Which source-of-truth component owns a gate's verdict. */
-export type Producer = "ome_visibility" | "ome_allocator" | "scheduler" | "node_agent";
+export const PRODUCERS = ["ome_visibility", "ome_allocator", "scheduler", "node_agent"] as const;
+export type Producer = (typeof PRODUCERS)[number];
 
 /** The canonical decision funnel. A pair stops at exactly one binding gate. */
 export const FUNNEL_GATES = [
@@ -62,10 +63,12 @@ export const FUNNEL_GATES = [
 export type FunnelGate = (typeof FUNNEL_GATES)[number];
 
 /** A gate's evaluation result. `not_applicable` matters for non-Earth/space nodes. */
-export type GateState = "pass" | "fail" | "not_evaluated" | "not_applicable";
+export const GATE_STATES = ["pass", "fail", "not_evaluated", "not_applicable"] as const;
+export type GateState = (typeof GATE_STATES)[number];
 
 /** Which ground-link endpoint imposed a terminal-bound rejection. */
-export type RejectingEndpoint = "none" | "ground" | "satellite" | "both";
+export const REJECTING_ENDPOINTS = ["none", "ground", "satellite", "both"] as const;
+export type RejectingEndpoint = (typeof REJECTING_ENDPOINTS)[number];
 
 function cssToHex(css: string): number {
   return parseInt(css.replace("#", ""), 16);

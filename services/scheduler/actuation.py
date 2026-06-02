@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from nodalarc.models.scheduler_ops import SchedulerOpsCode
+from nodalarc.models.scheduler_ops import ActuationState, SchedulerOpsCode
 from nodalarc.proto import node_agent_pb2
 
 LinkPair = tuple[str, str]
@@ -24,12 +24,6 @@ class ActuationFailureClass(StrEnum):
     GROUND_KERNEL_DIRTY = "ground_kernel_dirty"
     GROUND_UNKNOWN = "ground_unknown"
     ISL_FAILURE = "isl_failure"
-
-
-class GroundActuationStateName(StrEnum):
-    CLEAN = "clean"
-    ACTUATION_BLOCKED = "actuation_blocked"
-    KERNEL_DIRTY = "kernel_dirty"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +51,7 @@ class RecoveryStatus:
 @dataclass(frozen=True, slots=True)
 class GroundActuationState:
     gs_id: str
-    state: GroundActuationStateName = GroundActuationStateName.CLEAN
+    state: ActuationState = ActuationState.CLEAN
     reason_code: SchedulerOpsCode = SchedulerOpsCode.ACTUATION_CLEAN
     since: datetime = field(default_factory=lambda: datetime.now(UTC))
     affected_pairs: frozenset[LinkPair] = frozenset()
@@ -67,9 +61,13 @@ class GroundActuationState:
 
     @property
     def blocking_new_ground_link_up(self) -> bool:
-        return self.state != GroundActuationStateName.CLEAN
+        return self.state != ActuationState.CLEAN
 
     def __post_init__(self) -> None:
+        if self.state == ActuationState.UNKNOWN:
+            raise ValueError(
+                "GroundActuationState cannot store unknown; unknown is a wire fallback"
+            )
         if not isinstance(self.reason_code, SchedulerOpsCode):
             raise TypeError(f"reason_code must be SchedulerOpsCode, got {self.reason_code!r}")
 

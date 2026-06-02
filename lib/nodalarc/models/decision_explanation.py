@@ -26,6 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from nodalarc.models.link_decisions import GroundVisibilityRejectingEndpoint
+from nodalarc.models.scheduler_ops import ActuationState
 
 # The canonical decision funnel, in order. A pair stops at exactly one binding gate.
 FunnelGate = Literal[
@@ -44,9 +45,6 @@ GateState = Literal["pass", "fail", "not_evaluated", "not_applicable"]
 
 # Which source-of-truth component owns a gate's verdict.
 ExplanationProducer = Literal["ome_visibility", "ome_allocator", "scheduler", "node_agent"]
-
-# Mirror of the Scheduler actuation state set (lib/nodalarc/models/scheduler_ops.ActuationState).
-ActuationStateName = Literal["clean", "actuation_blocked", "kernel_dirty", "unknown"]
 
 NodeFocus = Literal["gs", "sat", "pair"]
 DecisionSampleState = Literal["scheduled", "eligible_unselected", "expected_no_link"]
@@ -172,7 +170,7 @@ class ActuationFacts(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    state: ActuationStateName
+    state: ActuationState
     ome_desired: bool | None
     kernel_up: bool | None
     diverged: bool | None

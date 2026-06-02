@@ -12,6 +12,12 @@ from nodalarc.constants import WGS84_A, WGS84_B
 SupportedSurfaceBody = Literal["earth", "luna", "mars"]
 SUPPORTED_BODY_NAMES: tuple[SupportedSurfaceBody, ...] = ("earth", "luna", "mars")
 
+# Frame bodies extend surface bodies with celestial frames that are not surface
+# bodies for ground-station math. "sun" is a frame body only (Lagrange /
+# interplanetary frames); it has no surface-physics BodyFrame entry.
+FrameBodyName = Literal["earth", "luna", "mars", "sun"]
+FRAME_BODY_NAMES: tuple[FrameBodyName, ...] = ("earth", "luna", "mars", "sun")
+
 
 @dataclass(frozen=True, slots=True)
 class BodyFrame:

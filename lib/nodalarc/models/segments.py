@@ -1,0 +1,263 @@
+# Copyright 2024-2026 .chance (dotchance)
+# Licensed under the Apache License, Version 2.0. See LICENSE file.
+"""Segment grammar — building blocks that produce runtime nodes.
+
+Structural schema for the segment-based session grammar. This layer is permissive
+on cross-field/identity-mode rules (those belong to semantic + runtime-support
+validation); it is strict on shape (``extra="forbid"``). Runtime-future segment
+kinds (``space_node_set``, ``lagrange_point``) are defined here so future-looking
+YAML validates structurally, then fails runtime-support validation with a typed
+reason. See ``specs/plans/multi-segment-yaml-grammar.md``.
+"""
+
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from nodalarc.body_frames import FrameBodyName, SupportedSurfaceBody
+from nodalarc.models.constellation import OrbitalElements
+from nodalarc.models.ground_policy import (
+    CrossTenantDisplacementPolicy,
+    HandoverPolicySpec,
+    MbbPreemptionPolicy,
+    RankingComponent,
+    SelectionPolicySpec,
+    SuccessorAbortPolicy,
+)
+
+# --- Grammar primitives (lexical types shared across the grammar modules) ---
+
+# Identifier ::= /[a-z][a-z0-9-]*/
+Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$")]
+# LocalNodeId ::= string without whitespace (source IDs before namespace expansion)
+LocalNodeId = Annotated[str, Field(pattern=r"^\S+$")]
+# Namespace prefixes runtime node IDs in segment_namespaced mode.
+Namespace = Identifier
+# TerminalMedium ::= "rf" | "optical"
+TerminalMedium = Literal["rf", "optical"]
+# LagrangePoint ::= "L1" | "L2" | "L3" | "L4" | "L5"
+LagrangePoint = Literal["L1", "L2", "L3", "L4", "L5"]
+
+SegmentKind = Literal[
+    "constellation",
+    "ground_set",
+    "space_node",
+    "space_node_set",
+    "lagrange_point",
+]
+
+
+class SegmentClock(BaseModel):
+    """Optional, future-facing per-segment clock offset/rate from session time.
+
+    OME remains responsible for aligning all computed facts to the session master
+    timeline; per-node time is metadata for propagation and future relativistic
+    modeling. Link decisions and events still carry session master sim time.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: Literal["session", "affine"] = "session"
+    offset_s: float | None = None
+    rate: float | None = None
+
+    @model_validator(mode="after")
+    def _validate_clock(self) -> SegmentClock:
+        if self.model == "affine":
+            if self.rate is None or self.rate <= 0:
+                raise ValueError("clock.model='affine' requires rate > 0")
+        else:  # session
+            if self.offset_s is not None or self.rate is not None:
+                raise ValueError("clock.model='session' must not set offset_s or rate")
+        return self
+
+
+# --- Constellation segment ---
+
+
+class InternalIslConfig(BaseModel):
+    """In-segment ISL behavior. In-segment ISLs never permit cross-segment links."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    scope: Literal["intra_segment"] = "intra_segment"
+
+
+class InternalLinkConfig(BaseModel):
+    """Ordinary in-segment links produced by a constellation segment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    isl: InternalIslConfig | None = None
+
+
+class ConstellationSegment(BaseModel):
+    """A segment that references or inlines a constellation file."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Identifier
+    kind: Literal["constellation"]
+    # path or inline constellation; the inline form is resolved + validated by
+    # ``load_constellation`` at resolve time (the single constellation-validation
+    # authority), mirroring the legacy ``SessionConfig.constellation: str | dict``.
+    source: str | dict
+    # Required in segment_namespaced; forbidden in legacy_compatible. Enforced by
+    # the resolver per the session identity mode, not at this structural layer.
+    namespace: Namespace | None = None
+    # Required after resolution in multi-segment sessions (semantic validation).
+    central_body: FrameBodyName | None = None
+    satellite_type: Identifier | None = None
+    internal_links: InternalLinkConfig | None = None
+    display_name: str | None = None
+    tags: list[Identifier] | None = None
+    clock: SegmentClock | None = None
+
+
+# --- Ground segment ---
+
+
+class GroundSchedulingPolicy(BaseModel):
+    """All-optional ground scheduling override surface.
+
+    Mirrors the fields of ``session.GroundSchedulingConfig`` but every field is
+    optional: it is a partial override merged by the resolver in the order
+    station > segment > source-set default > explicit session default. The
+    resolver fails validation if the effective policy is incomplete after merge;
+    it never falls through to hidden code defaults.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection_policy: SelectionPolicySpec | None = None
+    handover_policy: HandoverPolicySpec | None = None
+    ranking_order: list[RankingComponent] | None = None
+    handover_mode: Literal["bbm", "mbb"] | None = None
+    mbb_overlap_ticks: int | None = None
+    mbb_reserve: int | None = None
+    mbb_preemption: MbbPreemptionPolicy | None = None
+    successor_abort_policy: SuccessorAbortPolicy | None = None
+    cross_tenant_displacement: CrossTenantDisplacementPolicy | None = None
+    bbm_acquire_timeout_ticks: int | None = None
+
+
+class GroundSegment(BaseModel):
+    """A segment that references a ground station set or inline ground config."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Identifier
+    kind: Literal["ground_set"]
+    # path or inline ground set/file; resolved + validated by
+    # ``load_ground_stations`` at resolve time.
+    source: str | dict
+    # Required after resolution in multi-body sessions (semantic validation).
+    reference_body: SupportedSurfaceBody | None = None
+    namespace: Namespace | None = None
+    display_name: str | None = None
+    tags: list[Identifier] | None = None
+    scheduling: GroundSchedulingPolicy | None = None
+
+
+# --- Space node segment (MVP runtime: Luna milestone) ---
+
+
+class StateVector(BaseModel):
+    """Explicit position/velocity state for a space node, in a named frame."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    frame: Identifier
+    position_km: tuple[float, float, float]
+    velocity_km_s: tuple[float, float, float]
+
+
+class ExplicitSpaceNode(BaseModel):
+    """One explicitly placed relay/spacecraft node."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Identifier
+    satellite_type: Identifier | None = None
+    state: StateVector | OrbitalElements
+    tags: list[Identifier] | None = None
+    clock: SegmentClock | None = None
+
+
+class SpaceNodeSegment(BaseModel):
+    """A single explicitly placed relay/spacecraft node (MVP: one node)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Identifier
+    kind: Literal["space_node"]
+    namespace: Namespace
+    satellite_type: Identifier
+    node: ExplicitSpaceNode
+    tags: list[Identifier] | None = None
+
+
+class SpaceNodeSetSegment(BaseModel):
+    """Explicit group of space nodes. Structurally valid but runtime-future."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Identifier
+    kind: Literal["space_node_set"]
+    namespace: Namespace
+    satellite_type: Identifier | None = None
+    nodes: list[ExplicitSpaceNode] = Field(min_length=1)
+    tags: list[Identifier] | None = None
+
+
+# --- Lagrange point segment (runtime-future) ---
+
+
+class LagrangeEphemeris(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: Literal["configured_state", "lagrange_approximation", "external_ephemeris"]
+    state: StateVector | None = None
+    source: str | None = None
+
+
+class LagrangeFrame(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    primary_body: FrameBodyName
+    secondary_body: FrameBodyName
+    point: LagrangePoint
+    ephemeris: LagrangeEphemeris
+
+
+class LagrangePointSegment(BaseModel):
+    """One relay node anchored to a Lagrange point. Structurally valid, runtime-future."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: Identifier
+    kind: Literal["lagrange_point"]
+    namespace: Namespace
+    frame: LagrangeFrame
+    satellite_type: Identifier
+    display_name: str | None = None
+    tags: list[Identifier] | None = None
+    clock: SegmentClock | None = None
+
+
+# --- The Segment discriminated union ---
+
+Segment = Annotated[
+    ConstellationSegment
+    | GroundSegment
+    | SpaceNodeSegment
+    | SpaceNodeSetSegment
+    | LagrangePointSegment,
+    Field(discriminator="kind"),
+]
+
+# Segment kinds that produce runtime nodes (all of them, today).
+NODE_PRODUCING_KINDS: frozenset[str] = frozenset(
+    {"constellation", "ground_set", "space_node", "space_node_set", "lagrange_point"}
+)

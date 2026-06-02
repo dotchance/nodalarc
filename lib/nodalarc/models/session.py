@@ -159,6 +159,34 @@ class ActuationConfig(BaseModel):
         return self
 
 
+class CandidateLimits(BaseModel):
+    """Bounds on link-rule candidate generation (segment grammar).
+
+    Multi-segment sessions must declare ``candidate_limits`` so a link rule whose
+    static endpoint-pair upper bound exceeds the limit fails semantic validation
+    before OME starts, rather than materializing an unbounded all-by-all matrix.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_pairs_per_rule: int
+    max_pairs_per_tick: int | None = None
+
+    @field_validator("max_pairs_per_rule")
+    @classmethod
+    def _positive_per_rule(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("simulation.candidate_limits.max_pairs_per_rule must be > 0")
+        return value
+
+    @field_validator("max_pairs_per_tick")
+    @classmethod
+    def _positive_per_tick(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("simulation.candidate_limits.max_pairs_per_tick must be > 0")
+        return value
+
+
 class SimulationConfig(BaseModel):
     """Simulation contract fields exposed to session YAML."""
 
@@ -169,6 +197,8 @@ class SimulationConfig(BaseModel):
     acknowledge_geometry_only: bool = False
     acknowledge_bbm_handover_gap: bool = False
     actuation: ActuationConfig = Field(default_factory=ActuationConfig)
+    # Required for multi-segment sessions; unused (None) on legacy single-constellation.
+    candidate_limits: CandidateLimits | None = None
 
     @field_validator("schema_version")
     @classmethod

@@ -136,7 +136,7 @@ describe("candidateStatus", () => {
         rejectReason: "elevation_below_min",
         unscheduledReason: null,
       }),
-    ).toEqual({ family: "expected_no_link", label: "elevation_below_min" });
+    ).toEqual({ family: "expected_no_link", label: "Below elevation mask" });
   });
   it("withheld (visible) takes the unscheduled reason's registry family", () => {
     expect(
@@ -146,7 +146,7 @@ describe("candidateStatus", () => {
         rejectReason: "ok",
         unscheduledReason: "gs_capacity",
       }),
-    ).toEqual({ family: "eligible_unselected", label: "gs_capacity" });
+    ).toEqual({ family: "eligible_unselected", label: "Ground capacity full" });
   });
   it("scheduled (visible, not withheld) reads neutral — actuation is not in the raw decision", () => {
     expect(

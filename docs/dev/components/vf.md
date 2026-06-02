@@ -126,7 +126,8 @@ make deploy-vf
 src/
 ├── App.tsx              Main app, state management, keyboard actions
 ├── globe/              3D globe rendering
-│   ├── GlobeView.tsx   R3F canvas shell and controls
+│   ├── Universe.tsx    R3F canvas shell
+│   ├── Scene.tsx       R3F scene and controls
 │   └── r3f/            R3F scene primitives and batched renderers
 │       ├── Links.tsx   ISL/ground link batch
 │       ├── Trails.tsx  Trail ring buffer batch

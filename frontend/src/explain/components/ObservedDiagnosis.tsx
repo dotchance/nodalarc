@@ -4,6 +4,7 @@
 
 import { FAMILY_TONE, type Family } from "../families";
 import type { DecisionSampleState, GsDecisionTimelineFacts } from "../types";
+import { reasonLabel } from "../reasons";
 import { ReasonText } from "./ReasonText";
 
 const STATE_FAMILY: Record<DecisionSampleState, Family> = {
@@ -98,7 +99,8 @@ export function ObservedDiagnosis({
         {timeline.samples.map((sample) => {
           const family = STATE_FAMILY[sample.state];
           const peer = peerOf(sample.pair, timeline.gs_id);
-          const title = `${STATE_LABEL[sample.state]}${peer ? ` · ${peer}` : ""}${sample.reason_code ? ` · ${sample.reason_code}` : ""}`;
+          const reason = reasonLabel(sample.reason_code);
+          const title = `${STATE_LABEL[sample.state]}${peer ? ` · ${peer}` : ""}${reason ? ` · ${reason}` : ""}`;
           return (
             <button
               key={`${sample.epoch_id}:${sample.snapshot_seq}`}

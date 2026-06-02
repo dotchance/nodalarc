@@ -146,13 +146,13 @@ export function candidateStatus(o: {
 }): { family: Family; label: string } {
   if (o.visible && o.isWithheld) {
     const rec = o.unscheduledReason ? REASON_REGISTRY[o.unscheduledReason] : undefined;
-    return { family: rec?.family ?? "eligible_unselected", label: o.unscheduledReason ?? "withheld" };
+    return { family: rec?.family ?? "eligible_unselected", label: rec?.label ?? "Withheld" };
   }
   if (o.visible) {
     return { family: "unknown", label: "scheduled" };
   }
   const rec = REASON_REGISTRY[o.rejectReason];
-  return { family: rec?.family ?? "expected_no_link", label: o.rejectReason };
+  return { family: rec?.family ?? "expected_no_link", label: rec?.label ?? "Unknown reason" };
 }
 
 /** A one-line headline for the focal pair, built from the binding reason + facts. */

@@ -144,6 +144,8 @@ describe("GroundStationCard", () => {
     render(<GroundStationCard facts={faulted} />);
     expect(screen.getByText("Faulted")).toBeTruthy();
     expect(screen.queryByText("Expected no-link")).toBeNull();
+    expect(screen.getByText("Kernel dirty")).toBeTruthy();
+    expect(screen.queryByText("kernel_dirty")).toBeNull();
     expect(screen.getByText(/OME desired, kernel not up/i)).toBeTruthy();
     // The convergence deadline: 2.0 s elapsed past the 1.2 s fault threshold.
     expect(screen.getByText(/2\.0s elapsed \/ fault at 1\.2s/)).toBeTruthy();
@@ -202,7 +204,7 @@ describe("GroundStationCard", () => {
     expect(screen.getByText(/2 samples/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "30" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getAllByText("Below elevation mask").length).toBeGreaterThan(0);
-    const sampleButton = screen.getAllByTitle(/sat-P00S02/)[0];
+    const sampleButton = screen.getAllByTitle(/Below elevation mask/)[0];
     if (!sampleButton) throw new Error("sample button not found");
     fireEvent.click(sampleButton);
     expect(inspected).toBe("sat-P00S02");

@@ -200,7 +200,7 @@ Scheduler    Desired topology, reconciliation, and link intent
 Node Agent   Host kernel operations and proof of actual state
 Operator     Session lifecycle, pods, configs, and deployment
 VS-API       Browser/API front door and state aggregation
-VF           React + Three.js visualization frontend
+VF           React + R3F + Three.js visualization frontend
 NATS         Event bus and durable fact stream
 ```
 
@@ -210,7 +210,7 @@ The boundary matters. OME computes the sky. The Scheduler decides what should ex
 
 ```text
 services/       Backend services: OME, Scheduler, Node Agent, VS-API, Operator
-frontend/       Visualization frontend: React + Three.js
+frontend/       Visualization frontend: React + R3F + Three.js
 lib/            Shared Python library
 images/         Container images: FRR and probe
 deploy/         Helm chart and deployment tooling

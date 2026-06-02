@@ -8,6 +8,7 @@
  */
 
 import { FAMILY_TONE } from "../families";
+import { reasonLabel } from "../reasons";
 import { deriveFamily, headline } from "../derive";
 import type { DecisionFacts, GsDecisionTimelineFacts } from "../types";
 import { BestCandidate } from "./BestCandidate";
@@ -48,7 +49,7 @@ export function GroundStationCard({
         <div className="gs-card-actuation">
           <div className="detail-row">
             <span className="detail-label">Actuation</span>
-            <span className="detail-value">{facts.actuation.state}</span>
+            <span className="detail-value">{reasonLabel(facts.actuation.state)}</span>
           </div>
           {facts.actuation.diverged ? (
             <div className="detail-row">

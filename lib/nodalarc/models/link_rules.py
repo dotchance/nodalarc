@@ -12,11 +12,16 @@ checks owned by the resolver. See ``specs/plans/multi-segment-yaml-grammar.md``.
 
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, NonNegativeInt, PositiveInt
 
 from nodalarc.frozen import FrozenDict
 from nodalarc.models.ground_policy import SelectionPolicySpec
-from nodalarc.models.segments import Identifier, LocalNodeId, TerminalMedium
+from nodalarc.models.segments import (
+    Identifier,
+    LocalNodeId,
+    PositiveFiniteFloat,
+    TerminalMedium,
+)
 
 LinkKind = Literal["access", "inter_constellation", "inter_body_relay", "relay"]
 TerminalRole = Literal["ground", "isl", "relay"]
@@ -35,8 +40,9 @@ class NodeSelector(BaseModel):
     segment: Identifier
     node_ids: tuple[LocalNodeId, ...] | None = None
     node_tags: tuple[Identifier, ...] | None = None
-    planes: tuple[int, ...] | None = None
-    slots: tuple[int, ...] | None = None
+    # Plane/slot indices are constellation array positions: non-negative.
+    planes: tuple[NonNegativeInt, ...] | None = None
+    slots: tuple[NonNegativeInt, ...] | None = None
     names: tuple[Identifier, ...] | None = None
 
 
@@ -98,11 +104,12 @@ LinkTopology = Annotated[
 class LinkRuleConstraints(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # int applies to every node; the map keys are segment IDs (frozen if a map).
+    # Positive int applies to every node; the map keys are segment IDs with
+    # positive per-segment caps (frozen if a map). Zero/negative caps are invalid.
     max_links_per_node: (
-        int | Annotated[dict[Identifier, int], AfterValidator(FrozenDict)] | None
+        PositiveInt | Annotated[dict[Identifier, PositiveInt], AfterValidator(FrozenDict)] | None
     ) = None
-    max_range_km: float | None = None
+    max_range_km: PositiveFiniteFloat | None = None
     require_mutual_visibility: bool | None = None
     scheduling_policy: SelectionPolicySpec | None = None
 

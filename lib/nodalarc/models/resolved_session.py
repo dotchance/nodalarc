@@ -66,11 +66,11 @@ class ResolvedTerminalBlock(BaseModel):
     medium: TerminalMediumLiteral  # rf | optical
     count: int = Field(gt=0)
     tracking_capacity: int | None = Field(default=None, gt=0)
-    max_range_km: float | None = Field(default=None, gt=0)
-    min_elevation_deg: float | None = Field(default=None, ge=-90.0, le=90.0)
-    field_of_regard_deg: float | None = Field(default=None, gt=0, le=360.0)
-    tracking_rate_deg_s: float | None = Field(default=None, gt=0)
-    bandwidth_mbps: float | None = Field(default=None, gt=0)
+    max_range_km: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    min_elevation_deg: float | None = Field(default=None, ge=-90.0, le=90.0, allow_inf_nan=False)
+    field_of_regard_deg: float | None = Field(default=None, gt=0, le=360.0, allow_inf_nan=False)
+    tracking_rate_deg_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    bandwidth_mbps: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     # Provenance for audit/debug only (e.g. "satellite_type:starlink-v2-laser#isl[0]").
     source_ref: str
 

@@ -178,6 +178,21 @@ def test_nonpositive_terminal_count_rejected():
         )
 
 
+def test_terminal_block_rejects_non_finite_range():
+    import math
+
+    with pytest.raises(ValidationError):
+        ResolvedTerminalBlock(
+            terminal_id="t",
+            owner_node_id="n",
+            endpoint_role="isl",
+            medium="optical",
+            count=1,
+            max_range_km=math.inf,
+            source_ref="x",
+        )
+
+
 def test_duplicate_terminal_id_within_node_rejected():
     blk = ResolvedTerminalBlock(
         terminal_id="dup",

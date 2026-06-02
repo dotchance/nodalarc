@@ -8,13 +8,17 @@ and JSON Schema export. Cross-object/identity-mode semantics are owned by the
 resolver and tested separately.
 """
 
+import math
+
 import pytest
 from nodalarc.models.ephemeris import EphemerisConfig
 from nodalarc.models.identity import IdentityConfig, IdentityMode
 from nodalarc.models.link_rules import (
     ExplicitPairsTopology,
     LinkRule,
+    LinkRuleConstraints,
     NearestNTopology,
+    NodeSelector,
     VisibleCandidatesTopology,
 )
 from nodalarc.models.segment_session import SegmentSessionConfig
@@ -25,6 +29,7 @@ from nodalarc.models.segments import (
     SegmentClock,
     SpaceNodeSegment,
     SpaceNodeSetSegment,
+    StateVector,
 )
 from pydantic import ValidationError
 
@@ -245,8 +250,12 @@ def test_segment_identifier_pattern_enforced():
 
 
 def test_segment_clock_affine_requires_positive_rate():
-    with pytest.raises(ValidationError, match="rate > 0"):
+    # rate=0 is rejected by the positive-finite field constraint.
+    with pytest.raises(ValidationError, match="greater than 0"):
         SegmentClock.model_validate({"model": "affine", "rate": 0})
+    # rate omitted is rejected by the affine cross-field rule.
+    with pytest.raises(ValidationError, match="positive rate"):
+        SegmentClock.model_validate({"model": "affine"})
 
 
 def test_segment_clock_session_forbids_offset_and_rate():
@@ -269,6 +278,51 @@ def test_topology_discriminator_dispatch():
 def test_nearest_n_requires_positive_n():
     with pytest.raises(ValidationError):
         NearestNTopology.model_validate({"mode": "nearest_n", "n": 0})
+
+
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        {"max_links_per_node": 0},
+        {"max_links_per_node": -1},
+        {"max_links_per_node": {"leo": 0}},
+        {"max_links_per_node": {"leo": -2}},
+        {"max_range_km": 0},
+        {"max_range_km": -5},
+        {"max_range_km": math.inf},
+        {"max_range_km": math.nan},
+    ],
+)
+def test_link_rule_constraints_reject_impossible_numbers(constraints):
+    with pytest.raises(ValidationError):
+        LinkRuleConstraints.model_validate(constraints)
+
+
+def test_link_rule_constraints_accept_valid_numbers():
+    c = LinkRuleConstraints.model_validate(
+        {"max_links_per_node": {"leo": 4}, "max_range_km": 5000.0}
+    )
+    assert c.max_range_km == 5000.0
+    assert c.max_links_per_node["leo"] == 4
+
+
+@pytest.mark.parametrize("bad", [{"planes": [-1]}, {"slots": [-2]}])
+def test_node_selector_rejects_negative_indices(bad):
+    with pytest.raises(ValidationError):
+        NodeSelector.model_validate({"segment": "leo", **bad})
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_state_vector_rejects_non_finite_geometry(bad):
+    with pytest.raises(ValidationError):
+        StateVector.model_validate(
+            {"frame": "gcrs", "position_km": (bad, 0.0, 0.0), "velocity_km_s": (0.0, 0.0, 0.0)}
+        )
+
+
+def test_segment_clock_rejects_non_finite_rate():
+    with pytest.raises(ValidationError):
+        SegmentClock.model_validate({"model": "affine", "rate": math.inf})
 
 
 def test_explicit_pairs_requires_pairs():

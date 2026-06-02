@@ -37,6 +37,9 @@ Namespace = Identifier
 TerminalMedium = Literal["rf", "optical"]
 # LagrangePoint ::= "L1" | "L2" | "L3" | "L4" | "L5"
 LagrangePoint = Literal["L1", "L2", "L3", "L4", "L5"]
+# Non-finite geometry/physics inputs (NaN/Inf) are banned at the grammar layer.
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+PositiveFiniteFloat = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
 SegmentKind = Literal[
     "constellation",
@@ -60,14 +63,14 @@ class SegmentClock(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: Literal["session", "affine"] = "session"
-    offset_s: float | None = None
-    rate: float | None = None
+    offset_s: FiniteFloat | None = None
+    rate: PositiveFiniteFloat | None = None
 
     @model_validator(mode="after")
     def _validate_clock(self) -> SegmentClock:
         if self.model == "affine":
-            if self.rate is None or self.rate <= 0:
-                raise ValueError("clock.model='affine' requires rate > 0")
+            if self.rate is None:
+                raise ValueError("clock.model='affine' requires a positive rate")
         else:  # session
             if self.offset_s is not None or self.rate is not None:
                 raise ValueError("clock.model='session' must not set offset_s or rate")
@@ -174,8 +177,8 @@ class StateVector(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     frame: Identifier
-    position_km: tuple[float, float, float]
-    velocity_km_s: tuple[float, float, float]
+    position_km: tuple[FiniteFloat, FiniteFloat, FiniteFloat]
+    velocity_km_s: tuple[FiniteFloat, FiniteFloat, FiniteFloat]
 
 
 class ExplicitSpaceNode(BaseModel):

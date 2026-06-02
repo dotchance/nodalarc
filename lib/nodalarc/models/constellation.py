@@ -10,7 +10,15 @@ Supports three modes via discriminated union on the `mode` field:
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Discriminator, Field, Tag, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Discriminator,
+    Field,
+    Tag,
+    field_validator,
+    model_validator,
+)
 
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 
@@ -18,8 +26,12 @@ from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 class OrbitalElements(BaseModel):
     """Orbital elements for explicit-mode satellites."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     altitude_km: float
-    inclination_deg: float
+    inclination_deg: float = Field(ge=0, le=180)
+    # raan/true-anomaly are finite (allow_inf_nan=False); not range-bounded because
+    # callers may pass non-canonical or computed (pre-mod-360) angles.
     raan_deg: float
     true_anomaly_deg: float
 
@@ -34,13 +46,15 @@ class OrbitalElements(BaseModel):
 class IslTerminal(BaseModel):
     """ISL terminal specification."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     type: str  # "optical" or "rf"
     count: int
     role: str | None = None  # "intra-plane", "cross-plane", or None for pooled terminals
-    max_range_km: float
-    bandwidth_mbps: float
+    max_range_km: float = Field(gt=0)
+    bandwidth_mbps: float = Field(gt=0)
     max_tracking_rate_deg_s: float
-    field_of_regard_deg: float = 360.0
+    field_of_regard_deg: float = Field(default=360.0, ge=0, le=360)
 
     @field_validator("count")
     @classmethod
@@ -66,6 +80,8 @@ class IslTerminal(BaseModel):
 
 class GroundTerminal(BaseModel):
     """Ground-link terminal specification for satellites."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
     type: str  # "optical" or "rf"
     count: int
@@ -133,6 +149,8 @@ class TerminalConfig(BaseModel):
 class OrbitParams(BaseModel):
     """Orbital parameters for parametric mode."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     altitude_km: float
     inclination_deg: float
     pattern: str  # "walker-delta" or "walker-star"
@@ -155,14 +173,18 @@ class OrbitParams(BaseModel):
 class PlaneParams(BaseModel):
     """Orbital plane parameters for parametric mode."""
 
-    count: int
-    raan_spacing_deg: float
-    sats_per_plane: int
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    count: int = Field(gt=0)
+    raan_spacing_deg: float = Field(ge=0)
+    sats_per_plane: int = Field(gt=0)
     phase_offset_deg: float
 
 
 class PolarSeamConfig(BaseModel):
     """Polar seam configuration — hard latitude cutoff for cross-plane ISLs."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
     enabled: bool = False
     latitude_threshold_deg: float = 70.0
@@ -212,8 +234,8 @@ class SatelliteConfig(BaseModel):
     Node ID is derived from plane/slot via AddressingScheme — never stored here.
     """
 
-    plane: int
-    slot: int
+    plane: int = Field(ge=0)
+    slot: int = Field(ge=0)
     orbit: OrbitalElements
     satellite_type: str | None = None  # Override satellite type for this node
     terminals: TerminalConfig | None = None  # Deprecated: inline terminals
@@ -223,7 +245,7 @@ class TLEFilter(BaseModel):
     """Filter for TLE mode — select satellites from TLE file."""
 
     norad_ids: list[int] | None = None
-    max_count: int | None = None
+    max_count: int | None = Field(default=None, gt=0)
 
 
 class ParametricConstellation(BaseModel):

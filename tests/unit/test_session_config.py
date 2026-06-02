@@ -9,8 +9,11 @@ from nodalarc.models.session import (
     AreaAssignmentConfig,
     ConvergenceConfig,
     OrbitConfig,
+    PlacementConfig,
+    RoutingConfig,
     SessionConfig,
     TerrestrialLinkConfig,
+    TrafficFlowConfig,
 )
 from pydantic import ValidationError
 
@@ -30,6 +33,90 @@ from tests.conftest import FIXTURES_DIR
 def test_physical_config_floats_reject_non_finite(factory, bad):
     with pytest.raises(ValidationError):
         factory(bad)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        # Reachable runtime config: invalid finite values.
+        lambda: ConvergenceConfig(probe_interval_ms=0),
+        lambda: ConvergenceConfig(timeout_s=-1),
+        lambda: TerrestrialLinkConfig(station_a="a", station_b="b", loss_pct=101),
+        lambda: TerrestrialLinkConfig(station_a="a", station_b="b", latency_ms=-1),
+        lambda: RoutingConfig(protocol="isis", compression_factor=-1),
+        lambda: RoutingConfig(protocol="isis", bfd_rx_interval=0),
+        lambda: RoutingConfig(protocol="ospf", ospf_dead_interval=-1),
+        lambda: PlacementConfig(policy="planeGroupPerNode", planes_per_group=0),
+        lambda: TrafficFlowConfig(
+            flow_id="f",
+            src="a",
+            dst="b",
+            protocol="udp",
+            bandwidth_kbps=-1,
+            probe_type="continuous",
+        ),
+    ],
+)
+def test_reachable_config_rejects_impossible_finite_values(factory):
+    with pytest.raises(ValidationError):
+        factory()
+
+
+def _source_catalog_bad_factories():
+    from nodalarc.models.constellation import (
+        GroundTerminal,
+        IslTerminal,
+        OrbitalElements,
+        OrbitParams,
+        PlaneParams,
+    )
+    from nodalarc.models.ground_station import GroundStationConfig
+    from nodalarc.models.satellite_type import GroundTerminalDef as SatGroundTerminalDef
+    from nodalarc.models.satellite_type import IslTerminalDef
+
+    inf = math.inf
+    return [
+        lambda: IslTerminal(
+            type="optical",
+            count=1,
+            max_range_km=inf,
+            bandwidth_mbps=1e4,
+            max_tracking_rate_deg_s=1.0,
+        ),
+        lambda: IslTerminal(
+            type="optical",
+            count=1,
+            max_range_km=-5,
+            bandwidth_mbps=1e4,
+            max_tracking_rate_deg_s=1.0,
+        ),
+        lambda: GroundTerminal(type="rf", count=1, bandwidth_mbps=inf),
+        lambda: OrbitParams(altitude_km=inf, inclination_deg=53.0, pattern="walker-delta"),
+        lambda: OrbitalElements(
+            altitude_km=550, inclination_deg=53, raan_deg=0, true_anomaly_deg=inf
+        ),
+        lambda: OrbitalElements(
+            altitude_km=550, inclination_deg=200, raan_deg=0, true_anomaly_deg=0
+        ),
+        lambda: PlaneParams(count=-1, raan_spacing_deg=5, sats_per_plane=22, phase_offset_deg=0),
+        lambda: PlaneParams(count=6, raan_spacing_deg=5, sats_per_plane=0, phase_offset_deg=0),
+        lambda: IslTerminalDef(
+            type="optical",
+            count=1,
+            max_range_km=inf,
+            bandwidth_mbps=1e4,
+            max_tracking_rate_deg_s=1.0,
+        ),
+        lambda: SatGroundTerminalDef(type="rf", count=1, bandwidth_mbps=inf),
+        lambda: GroundStationConfig(name="x", lat_deg=0, lon_deg=0, alt_m=inf),
+    ]
+
+
+@pytest.mark.parametrize("idx", range(11))
+def test_source_catalog_rejects_impossible_physics(idx):
+    factory = _source_catalog_bad_factories()[idx]
+    with pytest.raises(ValidationError):
+        factory()
 
 
 def _ground_scheduling(**overrides):

@@ -105,6 +105,8 @@ class TerrestrialPrefixTemplate(BaseModel):
 class GroundTerminalDef(BaseModel):
     """Terminal definition for ground stations."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     type: str  # "optical" or "rf"
     count: int
     bandwidth_mbps: float
@@ -184,11 +186,13 @@ class VerificationInfo(BaseModel):
 class GroundStationConfig(GroundSegment):
     """Configuration for a single ground station."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     name: str
     lat_deg: float
     lon_deg: float
     alt_m: float = 0.0
-    min_elevation_deg: float | None = None  # Override default
+    min_elevation_deg: float | None = None  # Override default (validated below)
     terminals: list[GroundTerminalDef] | None = None  # Override default
     terrestrial_prefixes: list[TerrestrialPrefix] | None = None  # Override template
 
@@ -196,8 +200,8 @@ class GroundStationConfig(GroundSegment):
     # NMTS migration target: these flat fields will be replaced by
     # ANTENNA_PATTERN + BAND_PROFILE models when ARCH-005 lands.
     # For now they document what physical hardware exists at the site.
-    antennas: int | None = None  # Number of physical antennas at site
-    antenna_diameter_m: float | None = None
+    antennas: int | None = Field(default=None, gt=0)  # Number of physical antennas at site
+    antenna_diameter_m: float | None = Field(default=None, gt=0)
     band: str | None = None  # Primary frequency band (Ka, Ku, E, V)
 
     # Data provenance

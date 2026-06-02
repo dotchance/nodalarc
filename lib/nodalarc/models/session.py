@@ -97,31 +97,31 @@ class RoutingConfig(BaseModel):
     protocol: str | None = None  # "ospf" | "isis" | "static" | "nodalpath"
     extensions: tuple[str, ...] = ()  # ["te", "mpls", "sr"]
     stack: str | None = None  # Legacy path — bypass resolution
-    compression_factor: int = 1
+    compression_factor: int = Field(default=1, gt=0)
     config_overrides: ImmutableStrDict = Field(default_factory=FrozenDict)
     area_assignment: AreaAssignmentConfig | None = None
 
     # BFD — cross-protocol, independent of IS-IS/OSPF choice
     bfd: bool = False
-    bfd_detect_multiplier: int = 3
-    bfd_rx_interval: int = 300  # ms
-    bfd_tx_interval: int = 300  # ms
+    bfd_detect_multiplier: int = Field(default=3, gt=0)
+    bfd_rx_interval: int = Field(default=300, gt=0)  # ms
+    bfd_tx_interval: int = Field(default=300, gt=0)  # ms
 
     # IS-IS timers (used when protocol=isis)
-    isis_hello_interval: int = 1  # seconds
-    isis_hello_multiplier: int = 3
-    spf_init_delay: int = 50  # ms — IETF SPF backoff algorithm
-    spf_short_delay: int = 200  # ms
-    spf_long_delay: int = 1000  # ms
-    spf_holddown: int = 2000  # ms
-    spf_time_to_learn: int = 500  # ms
+    isis_hello_interval: int = Field(default=1, gt=0)  # seconds
+    isis_hello_multiplier: int = Field(default=3, gt=0)
+    spf_init_delay: int = Field(default=50, ge=0)  # ms — IETF SPF backoff algorithm
+    spf_short_delay: int = Field(default=200, ge=0)  # ms
+    spf_long_delay: int = Field(default=1000, ge=0)  # ms
+    spf_holddown: int = Field(default=2000, ge=0)  # ms
+    spf_time_to_learn: int = Field(default=500, ge=0)  # ms
 
     # OSPF timers (used when protocol=ospf)
-    ospf_hello_interval: int = 1  # seconds
-    ospf_dead_interval: int = 3  # seconds
-    ospf_spf_delay: int = 50  # ms — SPF throttle
-    ospf_spf_initial_hold: int = 200  # ms
-    ospf_spf_max_hold: int = 1000  # ms
+    ospf_hello_interval: int = Field(default=1, gt=0)  # seconds
+    ospf_dead_interval: int = Field(default=3, gt=0)  # seconds
+    ospf_spf_delay: int = Field(default=50, ge=0)  # ms — SPF throttle
+    ospf_spf_initial_hold: int = Field(default=200, ge=0)  # ms
+    ospf_spf_max_hold: int = Field(default=1000, ge=0)  # ms
 
     @model_validator(mode="after")
     def _require_stack_or_protocol(self):
@@ -440,7 +440,7 @@ class TrafficFlowConfig(BaseModel):
     src: str
     dst: str
     protocol: str  # "udp" or "tcp"
-    bandwidth_kbps: float
+    bandwidth_kbps: float = Field(gt=0)
     probe_type: str  # "continuous" or "burst"
 
 
@@ -449,9 +449,9 @@ class ConvergenceConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    stability_period_s: float = 2.0
-    timeout_s: float = 30.0
-    probe_interval_ms: int = 100
+    stability_period_s: float = Field(default=2.0, gt=0)
+    timeout_s: float = Field(default=30.0, gt=0)
+    probe_interval_ms: int = Field(default=100, gt=0)
 
 
 class MiConfig(BaseModel):
@@ -476,9 +476,9 @@ class TerrestrialLinkConfig(BaseModel):
 
     station_a: str
     station_b: str
-    bandwidth_mbps: float = 10000.0
-    latency_ms: float = 5.0
-    loss_pct: float = 0.0
+    bandwidth_mbps: float = Field(default=10000.0, gt=0)
+    latency_ms: float = Field(default=5.0, ge=0)
+    loss_pct: float = Field(default=0.0, ge=0, le=100)
 
 
 class DecisionTraceConfig(BaseModel):
@@ -519,7 +519,7 @@ class PlacementConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
     policy: str = "planePerNode"  # allOnOne | planePerNode | planeGroupPerNode
-    planes_per_group: int | None = None  # For planeGroupPerNode
+    planes_per_group: int | None = Field(default=None, gt=0)  # For planeGroupPerNode
 
 
 class SessionConfig(BaseModel):

@@ -7,13 +7,15 @@ in a constellation. Satellite type files live in configs/satellite-types/
 and are referenced by name from constellation definitions.
 """
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight
 
 
 class IslTerminalDef(BaseModel):
     """ISL terminal definition within a satellite type."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
     type: str  # "optical" or "rf"
     band: str | None = None  # Frequency band for RF terminals
@@ -76,6 +78,8 @@ class IslTerminalDef(BaseModel):
 
 class GroundTerminalDef(BaseModel):
     """Ground terminal definition within a satellite type."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
     type: str  # "optical" or "rf"
     band: str | None = None  # Frequency band for RF terminals
@@ -155,6 +159,8 @@ class SatelliteTypeConfig(BaseModel):
     Referenced by name from constellation YAML files. The name is the
     filename without extension (e.g., 'iridium-next.yaml' → 'iridium-next').
     """
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
     name: str
     tenant_id: str = "default"

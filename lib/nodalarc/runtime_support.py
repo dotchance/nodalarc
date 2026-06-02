@@ -9,8 +9,7 @@ here with a typed ``UnsupportedFeature`` reason — never silently ignored.
 
 The matrix is data, not code branches: ``resolve_session`` takes a
 ``RuntimeSupport`` so a later milestone flips a feature on by widening the
-supported sets, with no change to call sites. See the MVP Runtime Support Matrix
-in ``specs/plans/multi-segment-yaml-grammar.md``.
+supported sets, with no change to call sites.
 """
 
 from enum import StrEnum

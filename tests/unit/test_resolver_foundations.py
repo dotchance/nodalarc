@@ -17,6 +17,7 @@ from nodalarc.models.resolved_session import (
 from nodalarc.models.session import (
     AddressingConfig,
     DispatchConfig,
+    GroundSchedulingConfig,
     MiConfig,
     ObservabilityConfig,
     OrbitConfig,
@@ -212,6 +213,7 @@ def test_duplicate_terminal_id_within_node_rejected():
             namespace=None,
             kind="satellite",
             frame_id="earth",
+            central_body="earth",
             terminal_inventory=(blk, blk),
         )
 
@@ -233,8 +235,116 @@ def test_terminal_owner_mismatch_rejected():
             namespace=None,
             kind="satellite",
             frame_id="earth",
+            central_body="earth",
             terminal_inventory=(blk,),
         )
+
+
+def test_ground_station_requires_ground_scheduling():
+    with pytest.raises(ValidationError, match="ground_scheduling"):
+        ResolvedNode(
+            node_id="gs-denver",
+            local_node_id="denver",
+            segment_id="gnd",
+            namespace=None,
+            kind="ground_station",
+            frame_id="earth-surface",
+            reference_body="earth",
+        )
+
+
+def test_ground_station_terminal_requires_tracking_capacity():
+    block = ResolvedTerminalBlock(
+        terminal_id="gs-denver#ground[0]",
+        owner_node_id="gs-denver",
+        endpoint_role="ground",
+        medium="rf",
+        count=1,
+        source_ref="station:denver#ground[0]",
+    )
+    with pytest.raises(ValidationError, match="tracking_capacity"):
+        ResolvedNode(
+            node_id="gs-denver",
+            local_node_id="denver",
+            segment_id="gnd",
+            namespace=None,
+            kind="ground_station",
+            frame_id="earth-surface",
+            reference_body="earth",
+            terminal_inventory=(block,),
+            ground_scheduling=GroundSchedulingConfig(),
+        )
+
+
+def test_ground_station_rejects_non_ground_terminal_role():
+    block = ResolvedTerminalBlock(
+        terminal_id="gs-denver#isl[0]",
+        owner_node_id="gs-denver",
+        endpoint_role="isl",
+        medium="optical",
+        count=1,
+        tracking_capacity=1,
+        source_ref="station:denver#isl[0]",
+    )
+    with pytest.raises(ValidationError, match="non-ground endpoint_role"):
+        ResolvedNode(
+            node_id="gs-denver",
+            local_node_id="denver",
+            segment_id="gnd",
+            namespace=None,
+            kind="ground_station",
+            frame_id="earth-surface",
+            reference_body="earth",
+            terminal_inventory=(block,),
+            ground_scheduling=GroundSchedulingConfig(),
+        )
+
+
+def test_non_ground_node_rejects_tracking_capacity():
+    block = ResolvedTerminalBlock(
+        terminal_id="sat#ground[0]",
+        owner_node_id="sat",
+        endpoint_role="ground",
+        medium="rf",
+        count=1,
+        tracking_capacity=1,
+        source_ref="satellite_type:demo#ground[0]",
+    )
+    with pytest.raises(ValidationError, match="must not set tracking_capacity"):
+        ResolvedNode(
+            node_id="sat",
+            local_node_id="sat",
+            segment_id="space",
+            namespace=None,
+            kind="satellite",
+            frame_id="earth",
+            central_body="earth",
+            terminal_inventory=(block,),
+        )
+
+
+def test_ground_station_terminal_inventory_valid_when_complete():
+    block = ResolvedTerminalBlock(
+        terminal_id="gs-denver#ground[0]",
+        owner_node_id="gs-denver",
+        endpoint_role="ground",
+        medium="rf",
+        count=1,
+        tracking_capacity=1,
+        source_ref="station:denver#ground[0]",
+    )
+    node = ResolvedNode(
+        node_id="gs-denver",
+        local_node_id="denver",
+        segment_id="gnd",
+        namespace=None,
+        kind="ground_station",
+        frame_id="earth-surface",
+        reference_body="earth",
+        terminal_inventory=(block,),
+        ground_scheduling=GroundSchedulingConfig(),
+    )
+    assert node.terminal_inventory[0].tracking_capacity == 1
 
 
 def test_link_rule_endpoint_referencing_unknown_node_rejected():
@@ -299,13 +409,18 @@ def test_unsupported_feature_error_message():
 # --- Deep immutability: nested containers/models cannot be mutated after validation ---
 
 
-def _resolved_rule(segment_id: str = "default-space", node_id: str = "sat-p00s00"):
-    ep = ResolvedEndpoint(segment_id=segment_id, terminal_role="isl", node_ids=(node_id,))
+def _resolved_rule(
+    segment_id: str = "default-space",
+    node_a: str = "sat-p00s00",
+    node_b: str = "sat-p00s01",
+):
+    ep_a = ResolvedEndpoint(segment_id=segment_id, terminal_role="isl", node_ids=(node_a,))
+    ep_b = ResolvedEndpoint(segment_id=segment_id, terminal_role="isl", node_ids=(node_b,))
     return ResolvedLinkRule(
         rule_id="r",
         kind="relay",
         enabled=True,
-        endpoints=(ep, ep),
+        endpoints=(ep_a, ep_b),
         topology=VisibleCandidatesTopology(mode="visible_candidates"),
     )
 
@@ -333,7 +448,9 @@ def test_selection_policy_spec_is_frozen():
 
 
 def test_link_rule_topology_is_frozen():
-    rs = _resolved_session(link_rules=(_resolved_rule(),))
+    rs = _resolved_session(
+        nodes=(_node("sat-p00s00"), _node("sat-p00s01")), link_rules=(_resolved_rule(),)
+    )
     with pytest.raises(ValidationError):
         rs.link_rules[0].topology.mode = "mutated"
 
@@ -350,9 +467,9 @@ def test_ranking_order_is_immutable_tuple():
 
 def test_endpoint_cross_segment_membership_rejected():
     # node sat-p00s00 belongs to "default-space"; an endpoint claiming "other" lies.
-    rule = _resolved_rule(segment_id="other", node_id="sat-p00s00")
+    rule = _resolved_rule(segment_id="other", node_a="sat-p00s00", node_b="sat-p00s01")
     with pytest.raises(ValidationError, match="another"):
-        _resolved_session(link_rules=(rule,))
+        _resolved_session(nodes=(_node("sat-p00s00"), _node("sat-p00s01")), link_rules=(rule,))
 
 
 def test_ghost_sid_block_rejected():
@@ -379,6 +496,7 @@ def test_overlapping_sid_blocks_rejected():
             namespace=segment_id,
             kind="satellite",
             frame_id="earth",
+            central_body="earth",
         )
 
     with pytest.raises(ValidationError, match="overlap"):
@@ -400,9 +518,34 @@ def test_resolved_endpoint_rejects_duplicate_node_ids():
         )
 
 
+def test_resolved_link_rule_rejects_endpoint_node_overlap():
+    with pytest.raises(ValidationError, match="both endpoints"):
+        ResolvedLinkRule(
+            rule_id="r",
+            kind="relay",
+            enabled=True,
+            endpoints=(
+                ResolvedEndpoint(
+                    segment_id="default-space",
+                    terminal_role="isl",
+                    node_ids=("sat-p00s00", "sat-p00s01"),
+                ),
+                ResolvedEndpoint(
+                    segment_id="default-space",
+                    terminal_role="isl",
+                    node_ids=("sat-p00s01", "sat-p00s02"),
+                ),
+            ),
+            topology=VisibleCandidatesTopology(mode="visible_candidates"),
+        )
+
+
 def test_duplicate_link_rule_id_rejected():
     with pytest.raises(ValidationError, match="duplicate link rule id"):
-        _resolved_session(link_rules=(_resolved_rule(), _resolved_rule()))
+        _resolved_session(
+            nodes=(_node("sat-p00s00"), _node("sat-p00s01")),
+            link_rules=(_resolved_rule(), _resolved_rule()),
+        )
 
 
 def test_duplicate_traffic_flow_id_rejected():

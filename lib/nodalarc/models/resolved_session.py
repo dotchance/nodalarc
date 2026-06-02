@@ -1,14 +1,13 @@
 # Copyright 2024-2026 .chance (dotchance)
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
-"""ResolvedSession — the single authoritative runtime view (CDR-6).
+"""ResolvedSession — the frozen runtime view produced by session resolution.
 
-``resolve_session`` turns either legacy or segment-form session YAML into one
-``ResolvedSession``. Every runtime consumer (OME, Scheduler, Operator, VS-API,
-MI, coverage preview) reads this model; none reconstruct a runtime view from raw
-``SessionConfig`` + ``expand_constellation``, and none reload satellite-type or
-ground-station source files — terminal truth is materialized here. Frozen across
-the boundary. See ``specs/plans/multi-body-implementation-plan.md`` ("Resolver
-Owns Runtime Identity").
+This module defines the authoritative object that the resolver will hand to OME,
+Scheduler, Operator, VS-API, MI, and coverage preview. The model self-defends the
+runtime truth it can validate locally: immutable config, concrete node identity,
+materialized terminal inventory, disjoint SID blocks, and resolved link-rule
+node sets. Consumer cutover happens in the resolver implementation; until that
+lands, existing services still consume legacy ``SessionConfig`` paths.
 """
 
 from typing import Literal
@@ -115,6 +114,31 @@ class ResolvedNode(BaseModel):
                     f"terminal {block.terminal_id!r} owner_node_id "
                     f"{block.owner_node_id!r} != node_id {self.node_id!r}"
                 )
+            if self.kind == "ground_station":
+                if block.endpoint_role != "ground":
+                    raise ValueError(
+                        f"ground station {self.node_id!r} terminal {block.terminal_id!r} "
+                        f"has non-ground endpoint_role {block.endpoint_role!r}"
+                    )
+                if block.tracking_capacity is None:
+                    raise ValueError(
+                        f"ground station {self.node_id!r} terminal {block.terminal_id!r} "
+                        "requires tracking_capacity"
+                    )
+            elif block.tracking_capacity is not None:
+                raise ValueError(
+                    f"non-ground node {self.node_id!r} terminal {block.terminal_id!r} "
+                    "must not set tracking_capacity"
+                )
+        if self.kind == "ground_station":
+            if self.reference_body is None:
+                raise ValueError(f"ground station {self.node_id!r} requires reference_body")
+            if self.ground_scheduling is None:
+                raise ValueError(f"ground station {self.node_id!r} requires ground_scheduling")
+        elif self.ground_scheduling is not None:
+            raise ValueError(f"non-ground node {self.node_id!r} must not set ground_scheduling")
+        if self.kind == "satellite" and self.central_body is None:
+            raise ValueError(f"satellite {self.node_id!r} requires central_body")
         return self
 
 
@@ -150,6 +174,15 @@ class ResolvedLinkRule(BaseModel):
     constraints: LinkRuleConstraints | None = None
     protocol_boundary: ProtocolBoundary | None = None
     tags: tuple[NonEmptyReference, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_endpoint_sets(self) -> ResolvedLinkRule:
+        left = set(self.endpoints[0].node_ids)
+        right = set(self.endpoints[1].node_ids)
+        overlap = sorted(left & right)
+        if overlap:
+            raise ValueError(f"link rule {self.rule_id!r} has node(s) on both endpoints: {overlap}")
+        return self
 
 
 class SidBlock(BaseModel):

@@ -15,7 +15,6 @@ The backend therefore carries NO family vocabulary and NO human text — that
 keeps the Expected/Faulted color law and the explanation strings single-source
 on the client, with nothing to drift across the language boundary.
 
-See specs/plans/link-explainability-ux.md, "Data Contracts".
 """
 
 from __future__ import annotations

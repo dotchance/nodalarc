@@ -6,7 +6,7 @@ Earth-only LEO/MEO/GEO sessions do not require ``ephemeris``; Earth-Luna session
 do. ``skyfield_bsp`` is the first runtime-supported provider; the others are
 structurally valid but runtime-future. Runtime network download of ephemeris
 files is forbidden — kernels are local, checksum-verified, and must cover the
-session time window. See ``specs/plans/multi-segment-yaml-grammar.md``.
+session time window.
 """
 
 from typing import Literal

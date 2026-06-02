@@ -24,6 +24,7 @@ from nodalarc.models.link_rules import (
 from nodalarc.models.segment_session import SegmentSessionConfig
 from nodalarc.models.segments import (
     ConstellationSegment,
+    GroundSchedulingPolicy,
     GroundSegment,
     LagrangePointSegment,
     SegmentClock,
@@ -206,8 +207,65 @@ def test_future_sun_frame_body_parses_structurally():
     assert seg.frame.primary_body == "sun"
 
 
+@pytest.mark.parametrize(
+    "ephemeris",
+    [
+        {"model": "external_ephemeris"},
+        {"model": "external_ephemeris", "source": ""},
+        {"model": "configured_state"},
+        {
+            "model": "configured_state",
+            "state": {"frame": "gcrs", "position_km": [1, 2, 3], "velocity_km_s": [0, 0, 0]},
+            "source": "x.spice",
+        },
+        {"model": "lagrange_approximation", "source": "x.spice"},
+    ],
+)
+def test_lagrange_ephemeris_rejects_mode_incoherent_fields(ephemeris):
+    with pytest.raises(ValidationError):
+        LagrangePointSegment.model_validate(
+            {
+                "id": "eml1",
+                "kind": "lagrange_point",
+                "namespace": "em-l1",
+                "satellite_type": "cislunar-relay",
+                "frame": {
+                    "primary_body": "earth",
+                    "secondary_body": "luna",
+                    "point": "L1",
+                    "ephemeris": ephemeris,
+                },
+            }
+        )
+
+
+def test_configured_lagrange_ephemeris_requires_state_and_parses():
+    seg = LagrangePointSegment.model_validate(
+        {
+            "id": "eml1",
+            "kind": "lagrange_point",
+            "namespace": "em-l1",
+            "satellite_type": "cislunar-relay",
+            "frame": {
+                "primary_body": "earth",
+                "secondary_body": "luna",
+                "point": "L1",
+                "ephemeris": {
+                    "model": "configured_state",
+                    "state": {
+                        "frame": "gcrs",
+                        "position_km": [326400.0, 0.0, 0.0],
+                        "velocity_km_s": [0.0, 1.0, 0.0],
+                    },
+                },
+            },
+        }
+    )
+    assert seg.frame.ephemeris.model == "configured_state"
+
+
 def test_constellation_inline_source_is_structurally_validated():
-    # A path string source is accepted verbatim.
+    # A path string source is accepted verbatim when it is a real reference.
     seg = ConstellationSegment.model_validate(
         {
             "id": "leo",
@@ -230,6 +288,29 @@ def test_constellation_inline_source_is_structurally_validated():
                 "central_body": "earth",
             }
         )
+
+
+@pytest.mark.parametrize(
+    "segment_factory",
+    [
+        lambda source: ConstellationSegment.model_validate(
+            {
+                "id": "leo",
+                "kind": "constellation",
+                "source": source,
+                "namespace": "leo",
+                "central_body": "earth",
+            }
+        ),
+        lambda source: GroundSegment.model_validate(
+            {"id": "gnd", "kind": "ground_set", "source": source, "reference_body": "earth"}
+        ),
+    ],
+)
+def test_segment_source_path_rejects_empty_or_whitespace(segment_factory):
+    for source in ("", " "):
+        with pytest.raises(ValidationError):
+            segment_factory(source)
 
 
 def test_segment_identifier_pattern_enforced():
@@ -261,6 +342,39 @@ def test_segment_clock_affine_requires_positive_rate():
 def test_segment_clock_session_forbids_offset_and_rate():
     with pytest.raises(ValidationError, match="must not set offset_s or rate"):
         SegmentClock.model_validate({"model": "session", "offset_s": 5.0})
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"ranking_order": []},
+        {"ranking_order": ["selection_score"]},
+        {"ranking_order": ["lex_pair"]},
+        {"ranking_order": ["selection_score", "selection_score", "lex_pair"]},
+        {"mbb_overlap_ticks": -1},
+        {"mbb_reserve": -1},
+        {"mbb_reserve": 2},
+        {"bbm_acquire_timeout_ticks": 2},
+        {"handover_mode": "mbb", "mbb_overlap_ticks": 0},
+        {"handover_mode": "mbb", "mbb_reserve": 0},
+    ],
+)
+def test_ground_scheduling_policy_rejects_impossible_supplied_values(override):
+    with pytest.raises(ValidationError):
+        GroundSchedulingPolicy.model_validate(override)
+
+
+def test_ground_scheduling_policy_accepts_valid_partial_values():
+    policy = GroundSchedulingPolicy.model_validate(
+        {
+            "ranking_order": ["selection_score", "lex_pair"],
+            "handover_mode": "mbb",
+            "mbb_overlap_ticks": 1,
+            "mbb_reserve": 1,
+            "bbm_acquire_timeout_ticks": 1,
+        }
+    )
+    assert policy.ranking_order == ("selection_score", "lex_pair")
 
 
 # --- Link rules / topology / endpoints ---

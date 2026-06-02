@@ -10,8 +10,7 @@ reuses the existing session config models (``SimulationConfig``, ``OrbitConfig``
 Cross-object and identity-mode semantics (segment/namespace/node-ID uniqueness,
 selector cardinality, identity-mode coherence, candidate budgets, ground policy
 completeness, runtime-support) are owned by ``resolve_session`` — the single
-semantic authority — not duplicated here. See
-``specs/plans/multi-segment-yaml-grammar.md``.
+semantic authority — not duplicated here.
 """
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,7 +49,7 @@ class SegmentSessionConfig(BaseModel):
 
     session: SessionMeta
     segments: list[Segment] = Field(min_length=1)
-    link_rules: list[LinkRule] = []
+    link_rules: list[LinkRule] = Field(default_factory=list)
     identity: IdentityConfig = Field(default_factory=IdentityConfig)
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     ephemeris: EphemerisConfig | None = None

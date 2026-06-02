@@ -3,18 +3,19 @@
 """Segment grammar — building blocks that produce runtime nodes.
 
 Structural schema for the segment-based session grammar. This layer is permissive
-on cross-field/identity-mode rules (those belong to semantic + runtime-support
-validation); it is strict on shape (``extra="forbid"``). Runtime-future segment
-kinds (``space_node_set``, ``lagrange_point``) are defined here so future-looking
-YAML validates structurally, then fails runtime-support validation with a typed
-reason. See ``specs/plans/multi-segment-yaml-grammar.md``.
+on cross-object/identity-mode rules (those belong to semantic + runtime-support
+validation); it is strict on object shape and local field meaning. Runtime-future
+segment kinds (``space_node_set``, ``lagrange_point``) are defined here so
+future-looking YAML validates structurally, then fails runtime-support validation
+with a typed reason until the runtime implements them.
 """
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, field_validator, model_validator
 
 from nodalarc.body_frames import FrameBodyName, SupportedSurfaceBody
+from nodalarc.model_validation import NonEmptyReference
 from nodalarc.models.constellation import ConstellationConfig, OrbitalElements
 from nodalarc.models.ground_policy import (
     CrossTenantDisplacementPolicy,
@@ -107,7 +108,7 @@ class ConstellationSegment(BaseModel):
     # A path string to a constellation file, or an inline constellation. The
     # inline form is the typed ConstellationConfig union so JSON Schema validates
     # its shape; catalog/cross-file checks remain resolver semantics.
-    source: str | ConstellationConfig
+    source: NonEmptyReference | ConstellationConfig
     # Required in segment_namespaced; forbidden in legacy_compatible. Enforced by
     # the resolver per the session identity mode, not at this structural layer.
     namespace: Namespace | None = None
@@ -137,14 +138,43 @@ class GroundSchedulingPolicy(BaseModel):
 
     selection_policy: SelectionPolicySpec | None = None
     handover_policy: HandoverPolicySpec | None = None
-    ranking_order: list[RankingComponent] | None = None
+    ranking_order: tuple[RankingComponent, ...] | None = None
     handover_mode: Literal["bbm", "mbb"] | None = None
-    mbb_overlap_ticks: int | None = None
-    mbb_reserve: int | None = None
+    mbb_overlap_ticks: NonNegativeInt | None = None
+    mbb_reserve: Annotated[int, Field(ge=0, le=1)] | None = None
     mbb_preemption: MbbPreemptionPolicy | None = None
     successor_abort_policy: SuccessorAbortPolicy | None = None
     cross_tenant_displacement: CrossTenantDisplacementPolicy | None = None
-    bbm_acquire_timeout_ticks: int | None = None
+    bbm_acquire_timeout_ticks: Literal[1] | None = None
+
+    @field_validator("ranking_order")
+    @classmethod
+    def _validate_ranking_order(
+        cls, value: tuple[RankingComponent, ...] | None
+    ) -> tuple[RankingComponent, ...] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("ground segment scheduling.ranking_order must not be empty")
+        if value[-1] != "lex_pair":
+            raise ValueError("ground segment scheduling.ranking_order must end with 'lex_pair'")
+        if len(value) == 1:
+            raise ValueError(
+                "ground segment scheduling.ranking_order must include at least one "
+                "decision component before 'lex_pair'"
+            )
+        if len(set(value)) != len(value):
+            raise ValueError("ground segment scheduling.ranking_order must not contain duplicates")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_partial_mbb_surface(self) -> GroundSchedulingPolicy:
+        if self.handover_mode == "mbb":
+            if self.mbb_overlap_ticks is not None and self.mbb_overlap_ticks <= 0:
+                raise ValueError("MBB ground segment override requires mbb_overlap_ticks > 0")
+            if self.mbb_reserve is not None and self.mbb_reserve <= 0:
+                raise ValueError("MBB ground segment override requires mbb_reserve > 0")
+        return self
 
 
 class GroundSegment(BaseModel):
@@ -159,7 +189,7 @@ class GroundSegment(BaseModel):
     # a name list per ``load_ground_stations``), so their structural validation is
     # resolver-owned (the single ground-loading authority) rather than expressed
     # as one lossy structural union here. See the grammar doc, "Ground Segment".
-    source: str | dict
+    source: NonEmptyReference | dict
     # Required after resolution in multi-body sessions (semantic validation).
     reference_body: SupportedSurfaceBody | None = None
     namespace: Namespace | None = None
@@ -222,12 +252,30 @@ class SpaceNodeSetSegment(BaseModel):
 # --- Lagrange point segment (runtime-future) ---
 
 
-class LagrangeEphemeris(BaseModel):
+class ConfiguredStateLagrangeEphemeris(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model: Literal["configured_state", "lagrange_approximation", "external_ephemeris"]
-    state: StateVector | None = None
-    source: str | None = None
+    model: Literal["configured_state"]
+    state: StateVector
+
+
+class LagrangeApproximationEphemeris(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: Literal["lagrange_approximation"]
+
+
+class ExternalLagrangeEphemeris(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: Literal["external_ephemeris"]
+    source: NonEmptyReference
+
+
+LagrangeEphemeris = Annotated[
+    ConfiguredStateLagrangeEphemeris | LagrangeApproximationEphemeris | ExternalLagrangeEphemeris,
+    Field(discriminator="model"),
+]
 
 
 class LagrangeFrame(BaseModel):

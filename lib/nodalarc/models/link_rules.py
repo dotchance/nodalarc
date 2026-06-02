@@ -7,7 +7,7 @@ groups may form physical links; OME computes feasibility, allocation policy
 schedules, and the Scheduler/Node Agent prove kernel state. This module is the
 structural schema; selector cardinality, terminal compatibility, candidate
 budgets, and protocol-boundary runtime support are semantic/runtime-support
-checks owned by the resolver. See ``specs/plans/multi-segment-yaml-grammar.md``.
+checks owned by the resolver.
 """
 
 from typing import Annotated, Literal

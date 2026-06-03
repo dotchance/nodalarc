@@ -186,7 +186,7 @@ MATRIX = [
     },
 ]
 
-MBB_ACCEPTANCE_SESSION = Path("configs/sessions/starlink-176-mbb-test.yaml")
+MBB_ACCEPTANCE_SESSION = Path("configs/sessions/earth-leo-handover-mbb.yaml")
 MBB_BAD_OPS_CODES = {
     "KERNEL_DIRTY",
     "ACTUATION_BLOCKED",

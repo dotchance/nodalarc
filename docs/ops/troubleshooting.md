@@ -93,7 +93,7 @@ kernel or manifest problem before expecting the Scheduler gate to open.
 ### Check Interface State
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- \
   ip -br link show
 ```
 
@@ -106,14 +106,14 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c
 ### Check FRR is Running
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- \
   vtysh -c "show daemons"
 ```
 
 Should list `zebra`, `isisd` (or `ospfd`), and possibly `staticd`. If daemons aren't running, check the FRR config delivery:
 
 ```bash
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- \
   cat /etc/frr/frr.conf
 ```
 

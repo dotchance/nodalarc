@@ -118,7 +118,7 @@ Open http://localhost:3000 to see the visualization. If deploying on a remote ma
 
 ```bash
 # Quick check: do satellites have routing neighbors?
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c frr -- vtysh -c "show ip ospf neighbor"
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- vtysh -c "show ip ospf neighbor"
 ```
 
 You should see adjacent satellites listed as FULL neighbors. If running IS-IS instead of OSPF, use `show isis neighbor`.
@@ -127,7 +127,7 @@ You should see adjacent satellites listed as FULL neighbors. If running IS-IS in
 
 ```bash
 # Switch to a 176-satellite IS-IS constellation
-make session DEFAULT_SESSION=configs/sessions/starlink-176-isis-te.yaml
+make session DEFAULT_SESSION=configs/sessions/earth-leo-walker.yaml
 ```
 
 Or users can deploy sessions from the browser wizard at http://localhost:3000.
@@ -136,10 +136,12 @@ Available session configs:
 
 | Session | Satellites | Routing | Description |
 |---------|-----------|---------|-------------|
-| `demo-36-ospf.yaml` | 36 | OSPF | Default. Single ring, fast deploy |
-| `starlink-176-isis-te.yaml` | 176 | IS-IS + TE | Full Walker constellation |
-| `starlink-576-isis-te.yaml` | 576 | IS-IS + TE | Large-scale testing |
-| `iridium-66.yaml` (constellation) | 66 | varies | Polar orbit topology |
+| `earth-leo-quickstart.yaml` | 36 | OSPF | Default. Single LEO ring, fast deploy |
+| `earth-leo-walker.yaml` | 176 | IS-IS + TE | Walker-delta LEO starter |
+| `earth-leo-handover-bbm.yaml` | 176 | IS-IS + TE | Break-before-make handover observation |
+| `earth-leo-handover-mbb.yaml` | 176 | IS-IS + TE + BFD | Make-before-break handover observation |
+| `earth-leo-polar.yaml` | 36 | IS-IS + TE | Polar LEO starter with high-latitude ground stations |
+| `earth-leo-scale-576.yaml` | 576 | IS-IS + TE | Large LEO scale run |
 
 ## Step 5: Teardown
 

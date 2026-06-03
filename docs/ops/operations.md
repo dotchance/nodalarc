@@ -11,7 +11,7 @@ Users can switch sessions from the browser wizard. They select a new constellati
 ### From the Command Line
 
 ```bash
-make session DEFAULT_SESSION=configs/sessions/starlink-176-isis-te.yaml
+make session DEFAULT_SESSION=configs/sessions/earth-leo-walker.yaml
 ```
 
 No manual teardown needed. The system switches sessions automatically.
@@ -140,15 +140,15 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-vs-api -n
 
 ```bash
 # Check IS-IS adjacencies on a random satellite
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- \
   vtysh -c "show isis neighbor"
 
 # Check a ground station has adjacencies
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec gs-hawthorne -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec ground-gs-hawthorne -n nodalarc -c frr -- \
   vtysh -c "show isis neighbor"
 
 # End-to-end ping through the constellation
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec gs-hawthorne -n nodalarc -c frr -- \
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec ground-gs-hawthorne -n nodalarc -c frr -- \
   ping -c 3 -W 5 10.255.4.1
 ```
 
@@ -176,7 +176,7 @@ chmod 600 nodalarc-ssh-key
 Then SSH to any pod:
 
 ```bash
-POD_IP=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pod sat-P00S00 -n nodalarc \
+POD_IP=$(sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pod space-sat-p00s00 -n nodalarc \
   -o jsonpath='{.status.podIP}')
 ssh -i nodalarc-ssh-key -o StrictHostKeyChecking=no operator@$POD_IP
 ```

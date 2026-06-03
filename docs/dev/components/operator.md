@@ -20,8 +20,29 @@ metadata:
 spec:
   sessionYaml: |
     session:
-      name: demo-36-ospf
-    constellation: configs/constellations/demo-36.yaml
+      name: earth-leo-quickstart
+    identity:
+      mode: segment_namespaced
+    segments:
+      - id: space
+        kind: constellation
+        source: configs/constellations/demo-36.yaml
+        namespace: space
+        central_body: earth
+      - id: ground
+        kind: ground_set
+        source: configs/ground-stations/sets/demo.yaml
+        namespace: ground
+        reference_body: earth
+    link_rules:
+      - id: ground-access
+        kind: access
+        endpoints:
+          - selector: {segment: ground}
+            terminal_role: ground
+          - selector: {segment: space}
+            terminal_role: ground
+        topology: {mode: visible_candidates}
     ...
 status:
   phase: Ready       # Creating | Wiring | Ready | Error
@@ -71,9 +92,9 @@ FRR's stock entrypoint (`docker-start`) waits for a sentinel file before startin
 
 ## Platform Hash
 
-`compute_platform_hash()` hashes the platform-relevant fields from the session config (constellation, ground stations, routing). If the hash differs between old and new session, platform services (OME, Scheduler) are restarted to pick up the new configuration.
+`compute_platform_hash()` resolves `spec.sessionYaml` through the shared session resolver and hashes the resolved runtime model plus referenced catalog assets that affect platform services. If the hash differs between old and new session, platform services (OME, Scheduler) are restarted to pick up the new configuration.
 
-This function parses the `sessionYaml` string and hashes fields inside it - they're not at the top level of the CR spec.
+The hash intentionally excludes only operator-owned runtime lineage such as `session.run_id`; changes to constellation, ground station, routing, scheduling, simulation, addressing, placement, or referenced asset contents trigger a platform restart.
 
 ## Error Propagation
 

@@ -185,13 +185,13 @@ sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec -it deploy/nodalarc-sched
 
 ```bash
 # Check a satellite's interfaces
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c frr -- ip -br link show
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- ip -br link show
 
 # Check routing state
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c frr -- vtysh -c "show isis neighbor"
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- vtysh -c "show isis neighbor"
 
 # Check latency shaping
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S00 -n nodalarc -c frr -- tc qdisc show dev isl0
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s00 -n nodalarc -c frr -- tc qdisc show dev isl0
 ```
 
 ## Multi-Node Development

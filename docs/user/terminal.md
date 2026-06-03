@@ -11,7 +11,7 @@ Every satellite and ground station in NodalArc runs a real FRRouting daemon. You
 You land directly in the FRR CLI prompt:
 
 ```
-sat-P00S00#
+space-sat-p00s00#
 ```
 
 ![Browser Terminal](../images/user-terminal.png)

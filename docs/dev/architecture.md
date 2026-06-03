@@ -51,7 +51,7 @@ gathers what happened. VF shows it to a human.
                       veth pairs|   |tc netem/tbf
                                 v   v
     +----------+ +----------+ +----------+ +----------+
-    | sat-P00S00| sat-P00S01| sat-P01S00| gs-hawthorne|
+    | space-sat-p00s00| space-sat-p00s01| space-sat-p01s00| ground-gs-hawthorne|
     |  FRR     | |  FRR     | |  FRR     | |  FRR     |
     |  IS-IS   | |  IS-IS   | |  IS-IS   | |  IS-IS   |
     +----------+ +----------+ +----------+ +----------+

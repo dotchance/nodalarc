@@ -1,5 +1,5 @@
 session:
-  name: starlink-176-isis-te
+  name: earth-leo-handover-bbm
 identity:
   mode: segment_namespaced
 segments:
@@ -10,15 +10,17 @@ segments:
   central_body: earth
   tags:
   - earth
-  - orbit
+  - leo
+  - handover
 - id: ground
   kind: ground_set
-  source: configs/ground-stations/sets/starlink-176.yaml
+  source: configs/ground-stations/sets/handover-test.yaml
   namespace: ground
   reference_body: earth
   tags:
   - earth
   - ground
+  - handover
 link_rules:
 - id: ground-access
   kind: access
@@ -35,7 +37,7 @@ simulation:
   schema_version: 2
   ground_link_model: terminal_physics
   candidate_limits:
-    max_pairs_per_rule: 880
+    max_pairs_per_rule: 352
 orbit:
   propagator: j2-mean-elements
 scheduling:
@@ -44,10 +46,8 @@ scheduling:
       name: highest-elevation
       params: {}
     handover_policy:
-      name: hysteresis
-      params:
-        discount_factor: 1.15
-        mask_fade_range_deg: 5.0
+      name: none
+      params: {}
     handover_mode: bbm
     mbb_overlap_ticks: 0
     mbb_reserve: 0

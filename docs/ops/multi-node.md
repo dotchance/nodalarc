@@ -91,7 +91,7 @@ When two pods are on different K8s nodes, the Node Agent creates a VXLAN tunnel 
 ```
 Node A                                    Node B
 ┌─────────────────┐                      ┌─────────────────┐
-│ sat-P00S03 pod  │                      │ sat-P01S03 pod  │
+│ space-sat-p00s03 pod  │                      │ space-sat-p01s03 pod  │
 │   isl2 ←────── veth ── vxlan ──────── veth ──────→ isl3 │
 └─────────────────┘      UDP 4789        └─────────────────┘
 ```
@@ -141,7 +141,7 @@ ssh node02 "ip link show | grep -cE 'vx[0-9]{5}'"
 sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl logs -l app=nodalarc-node-agent -n nodalarc | grep substrate
 
 # Verify cross-plane adjacencies form
-sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec sat-P00S05 -n nodalarc -c frr -- vtysh -c "show isis neighbor" | grep isl2
+sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl exec space-sat-p00s05 -n nodalarc -c frr -- vtysh -c "show isis neighbor" | grep isl2
 ```
 
 ## Network Requirements

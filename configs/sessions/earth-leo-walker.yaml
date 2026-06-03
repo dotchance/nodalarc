@@ -1,24 +1,26 @@
 session:
-  name: starlink-gen2-scale
+  name: earth-leo-walker
 identity:
   mode: segment_namespaced
 segments:
 - id: space
   kind: constellation
-  source: configs/constellations/starlink-gen2-1584.yaml
+  source: configs/constellations/starlink-176.yaml
   namespace: space
   central_body: earth
   tags:
   - earth
-  - orbit
+  - leo
+  - walker
 - id: ground
   kind: ground_set
-  source: configs/ground-stations/sets/starlink-gen2-balanced.yaml
+  source: configs/ground-stations/sets/starlink-176.yaml
   namespace: ground
   reference_body: earth
   tags:
   - earth
   - ground
+  - walker
 link_rules:
 - id: ground-access
   kind: access
@@ -35,7 +37,7 @@ simulation:
   schema_version: 2
   ground_link_model: terminal_physics
   candidate_limits:
-    max_pairs_per_rule: 66528
+    max_pairs_per_rule: 880
 orbit:
   propagator: j2-mean-elements
 scheduling:
@@ -63,18 +65,5 @@ routing:
   - traffic-engineering
   area_assignment:
     strategy: per-plane
-  bfd: true
-  bfd_detect_multiplier: 3
-  bfd_rx_interval: 300
-  bfd_tx_interval: 300
-  isis_hello_interval: 1
-  isis_hello_multiplier: 3
-  spf_init_delay: 50
-  spf_short_delay: 200
-  spf_long_delay: 1000
-  spf_holddown: 2000
-  spf_time_to_learn: 500
 time:
   step_seconds: 1
-placement:
-  policy: planePerNode

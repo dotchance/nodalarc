@@ -50,6 +50,18 @@ def tmp_sessions(tmp_path):
     }
 
 
+class TestSessionCatalog:
+    def test_scan_sessions_reports_resolved_constellation_name(self, tmp_sessions):
+        mgr = SessionManager(str(tmp_sessions["sessions_dir"]))
+
+        sessions = mgr.list_sessions()
+
+        assert len(sessions) == 1
+        assert sessions[0]["name"] == "Test Session"
+        assert sessions[0]["constellation"] == "demo-36"
+        assert sessions[0]["routing_stack"] == "isis-plain"
+
+
 def _make_session_dir(data_dir: Path, session_id: str, mi_pid: int = 0, orch_pid: int = 0) -> Path:
     """Create a session directory with session-state.json."""
     d = data_dir / session_id

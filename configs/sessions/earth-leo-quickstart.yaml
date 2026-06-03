@@ -1,24 +1,26 @@
 session:
-  name: starlink-176-mbb-test
+  name: earth-leo-quickstart
 identity:
   mode: segment_namespaced
 segments:
 - id: space
   kind: constellation
-  source: configs/constellations/starlink-176.yaml
+  source: configs/constellations/demo-36.yaml
   namespace: space
   central_body: earth
   tags:
   - earth
-  - orbit
+  - leo
+  - quickstart
 - id: ground
   kind: ground_set
-  source: configs/ground-stations/sets/mbb-test.yaml
+  source: configs/ground-stations/sets/demo.yaml
   namespace: ground
   reference_body: earth
   tags:
   - earth
   - ground
+  - quickstart
 link_rules:
 - id: ground-access
   kind: access
@@ -35,7 +37,7 @@ simulation:
   schema_version: 2
   ground_link_model: terminal_physics
   candidate_limits:
-    max_pairs_per_rule: 1056
+    max_pairs_per_rule: 252
 orbit:
   propagator: j2-mean-elements
 scheduling:
@@ -48,9 +50,9 @@ scheduling:
       params:
         discount_factor: 1.15
         mask_fade_range_deg: 5.0
-    handover_mode: mbb
-    mbb_overlap_ticks: 3
-    mbb_reserve: 1
+    handover_mode: bbm
+    mbb_overlap_ticks: 0
+    mbb_reserve: 0
 dispatch:
   latency_authority: ome
   max_latency_age_ticks: 1
@@ -58,11 +60,8 @@ dispatch:
     measurement_source: node-agent-rtt
     rtt_to_one_way: half-rtt
 routing:
-  protocol: isis
-  extensions:
-  - traffic-engineering
+  protocol: ospf
   area_assignment:
-    strategy: per-plane
-  bfd: true
+    strategy: flat
 time:
   step_seconds: 1

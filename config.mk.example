@@ -20,7 +20,7 @@ SUDO_CTR ?= sudo
 MODE ?= auto
 
 # Default session for `make session`
-DEFAULT_SESSION ?= configs/sessions/starlink-176-isis-te.yaml
+DEFAULT_SESSION ?= configs/sessions/earth-leo-walker.yaml
 
 # Extra Helm arguments for non-image chart values.
 # Runtime image values are generated from scripts/na-images.sh. Do not put

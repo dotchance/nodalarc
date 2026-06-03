@@ -576,11 +576,11 @@ def _reset_ome_playback_globals() -> None:
 
 
 def _demo_phase6_session_path(tmp_path: Path) -> Path:
-    session_path = tmp_path / "demo-36-ospf.yaml"
+    session_path = tmp_path / "earth-leo-quickstart.yaml"
     session_path.write_text(
         yaml.dump(
             build_segment_session_dict(
-                name="demo-36-ospf",
+                name="earth-leo-quickstart",
                 constellation="configs/constellations/demo-36.yaml",
                 ground_stations="configs/ground-stations/sets/demo.yaml",
                 protocol="ospf",

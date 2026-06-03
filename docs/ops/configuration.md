@@ -4,25 +4,41 @@ NodalArc sessions are configured through YAML files that define what to emulate:
 
 ## Session Configuration
 
-A session config assembles the building blocks - constellation, ground stations, routing protocol - into a deployable emulation:
+A session config assembles reusable building blocks - constellation segments, ground segments, declared link rules, routing protocol, and timing - into a deployable emulation:
 
 ```yaml
 session:
-  name: starlink-176-isis-te
-
-constellation: configs/constellations/starlink-176.yaml
-ground_stations: configs/ground-stations/sets/global.yaml
-
+  name: earth-leo-walker
+identity:
+  mode: segment_namespaced
+segments:
+  - id: space
+    kind: constellation
+    source: configs/constellations/starlink-176.yaml
+    namespace: space
+    central_body: earth
+  - id: ground
+    kind: ground_set
+    source: configs/ground-stations/sets/starlink-176.yaml
+    namespace: ground
+    reference_body: earth
+link_rules:
+  - id: ground-access
+    kind: access
+    endpoints:
+      - selector: {segment: ground}
+        terminal_role: ground
+      - selector: {segment: space}
+        terminal_role: ground
+    topology: {mode: visible_candidates}
 routing:
   protocol: isis
   extensions:
     - traffic-engineering
   area_assignment:
     strategy: per-plane
-
 placement:
   policy: planePerNode
-
 time:
   step_seconds: 1
 ```
@@ -32,8 +48,10 @@ time:
 | Field | Required | Default | Description |
 |-------|:---:|---------|-------------|
 | `session.name` | yes | - | Session identifier |
-| `constellation` | yes | - | Path to constellation YAML |
-| `ground_stations` | yes | - | Path to ground station set YAML |
+| `identity.mode` | yes | `segment_namespaced` | Runtime node IDs are allocated as `{namespace}-{local}` |
+| `segments` | yes | - | Constellation and ground-set building blocks |
+| `segments[].namespace` | yes | - | Node-producing segment namespace used in runtime IDs |
+| `link_rules` | yes | - | Declared connectivity between segments |
 | `routing.protocol` | yes | - | `isis` or `ospf` |
 | `routing.extensions` | no | none | Protocol extensions (see below) |
 | `routing.area_assignment.strategy` | no | `flat` | `flat`, `per-plane`, or `stripe` |
@@ -41,7 +59,7 @@ time:
 | `routing.config_overrides` | no | none | Key-value overrides for FRR templates |
 | `placement.policy` | no | `planePerNode` | `allOnOne`, `planePerNode`, `planeGroupPerNode` |
 | `time.step_seconds` | no | 1 | Simulation time step in seconds |
-| `satellite_type` | no | from constellation | Override the constellation's satellite type |
+| `segments[].satellite_type` | no | from constellation | Override a constellation segment's satellite type |
 
 ### Routing Protocols
 
@@ -204,7 +222,7 @@ ground_station:
 
 | Field | Description |
 |-------|-------------|
-| `name` | Identifier (becomes `gs-{name}` in the network) |
+| `name` | Identifier (becomes `{namespace}-gs-{name}` in the network) |
 | `lat_deg`, `lon_deg` | WGS84 coordinates |
 | `alt_m` | Altitude above sea level (meters) |
 | `min_elevation_deg` | Minimum satellite elevation for link formation |

@@ -34,7 +34,7 @@ make all
 make nuke && make all
 
 # Start a specific session
-make session DEFAULT_SESSION=configs/sessions/starlink-176-isis-te.yaml
+make session DEFAULT_SESSION=configs/sessions/earth-leo-walker.yaml
 
 # Update an existing platform without teardown
 make build && make load && make upgrade

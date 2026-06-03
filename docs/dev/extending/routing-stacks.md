@@ -26,7 +26,7 @@ The template has access to:
 
 | Variable | Type | Content |
 |----------|------|---------|
-| `node_id` | str | e.g., `sat-P00S00` or `gs-hawthorne` |
+| `node_id` | str | e.g., `space-sat-p00s00` or `ground-gs-hawthorne` |
 | `node_type` | str | `satellite` or `ground_station` |
 | `loopback_ip` | str | Node's loopback address |
 | `interfaces` | list | All interfaces with peer info, IP, bandwidth |
@@ -61,8 +61,28 @@ In `services/nodalarc_operator/frr_renderer.py`, add the protocol to the templat
 # configs/sessions/test-newprotocol.yaml
 session:
   name: test-newprotocol
-constellation: configs/constellations/demo-36.yaml
-ground_stations: configs/ground-stations/sets/demo.yaml
+identity:
+  mode: segment_namespaced
+segments:
+  - id: space
+    kind: constellation
+    source: configs/constellations/demo-36.yaml
+    namespace: space
+    central_body: earth
+  - id: ground
+    kind: ground_set
+    source: configs/ground-stations/sets/demo.yaml
+    namespace: ground
+    reference_body: earth
+link_rules:
+  - id: ground-access
+    kind: access
+    endpoints:
+      - selector: {segment: ground}
+        terminal_role: ground
+      - selector: {segment: space}
+        terminal_role: ground
+    topology: {mode: visible_candidates}
 routing:
   protocol: yourprotocol
 ```

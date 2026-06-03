@@ -5,7 +5,7 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-nodalarc}"
-DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/demo-36-ospf.yaml}"
+DEFAULT_SESSION="${DEFAULT_SESSION:-configs/sessions/earth-leo-quickstart.yaml}"
 REGISTRY_HOST="${REGISTRY_HOST:-}"
 TAG="${TAG:-dev}"
 

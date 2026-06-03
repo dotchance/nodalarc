@@ -113,13 +113,13 @@ See [VS-API component docs](../components/vs-api.md) for the full schema. Key fi
 {
   "sim_time": "2026-04-03T19:48:03Z",
   "nodes": [
-    {"node_id": "sat-P00S00", "node_type": "satellite", "lat_deg": 42.9, "lon_deg": -84.9, "alt_km": 552.7, ...}
+    {"node_id": "space-sat-p00s00", "node_type": "satellite", "lat_deg": 42.9, "lon_deg": -84.9, "alt_km": 552.7, ...}
   ],
   "links": [
-    {"node_a": "sat-P00S00", "node_b": "sat-P00S01", "link_type": "intra_plane_isl", "latency_ms": 13.0, ...}
+    {"node_a": "space-sat-p00s00", "node_b": "space-sat-p00s01", "link_type": "intra_plane_isl", "latency_ms": 13.0, ...}
   ],
   "recent_events": [
-    {"sim_time": "...", "node_id": "gs-hawthorne", "event_type": "link_up", "summary": "..."}
+    {"sim_time": "...", "node_id": "ground-gs-hawthorne", "event_type": "link_up", "summary": "..."}
   ],
   "network_health": {"status": "converged", ...}
 }

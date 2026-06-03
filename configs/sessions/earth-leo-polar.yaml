@@ -1,24 +1,26 @@
 session:
-  name: starlink-176-multinode-test
+  name: earth-leo-polar
 identity:
   mode: segment_namespaced
 segments:
 - id: space
   kind: constellation
-  source: configs/constellations/starlink-176.yaml
+  source: configs/constellations/iridium-small-36.yaml
   namespace: space
   central_body: earth
   tags:
   - earth
-  - orbit
+  - leo
+  - polar
 - id: ground
   kind: ground_set
-  source: configs/ground-stations/sets/multinode-test.yaml
+  source: configs/ground-stations/sets/polar-emphasis.yaml
   namespace: ground
   reference_body: earth
   tags:
   - earth
   - ground
+  - polar
 link_rules:
 - id: ground-access
   kind: access
@@ -35,7 +37,7 @@ simulation:
   schema_version: 2
   ground_link_model: terminal_physics
   candidate_limits:
-    max_pairs_per_rule: 2112
+    max_pairs_per_rule: 216
 orbit:
   propagator: j2-mean-elements
 scheduling:
@@ -63,7 +65,5 @@ routing:
   - traffic-engineering
   area_assignment:
     strategy: per-plane
-placement:
-  policy: planePerNode
 time:
   step_seconds: 1

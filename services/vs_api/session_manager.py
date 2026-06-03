@@ -94,7 +94,7 @@ class SessionManager:
             self._status_detail = value
 
     def scan_sessions(self) -> list[dict]:
-        """Read each YAML in sessions_dir, parse with SessionConfig, return metadata."""
+        """Read each segment YAML in sessions_dir, resolve it, return metadata."""
         results = []
         if not self._sessions_dir.is_dir():
             log.warning(f"Sessions directory not found: {self._sessions_dir}")
@@ -123,7 +123,7 @@ class SessionManager:
                     "-".join(session.routing.extensions) if session.routing.extensions else "plain"
                 )
                 routing_label = f"{session.routing.protocol}-{ext_str}"
-                const_label = resolution.primary_constellation.segment.id
+                const_label = resolution.primary_constellation.config.name
                 results.append(
                     {
                         "name": session.session.name,

@@ -56,14 +56,14 @@ for link in s['links']:
 ```bash
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   http://localhost:8080/api/v1/trace \
-  -d '{"src_node": "gs-hawthorne", "dst_node": "gs-frankfurt"}'
+  -d '{"src_node": "ground-gs-hawthorne", "dst_node": "ground-gs-frankfurt"}'
 ```
 
 Returns the hop-by-hop path and total latency:
 
 ```json
 {
-  "hops": ["gs-hawthorne", "sat-P02S03", "sat-P02S04", "sat-P03S04", "gs-frankfurt"],
+  "hops": ["ground-gs-hawthorne", "space-sat-p02s03", "space-sat-p02s04", "space-sat-p03s04", "ground-gs-frankfurt"],
   "success": true,
   "total_latency_ms": 42.3
 }

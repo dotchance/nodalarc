@@ -18,7 +18,8 @@ import { useEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { getNodeWorldPosition } from "./positions";
+import { isOccludedBySphere } from "../labels";
+import { getNodeBodySphere, getNodeWorldPosition } from "./positions";
 import { EARTH_RADIUS_RENDER } from "./units";
 import type { GlobeActions } from "../actions";
 
@@ -26,10 +27,10 @@ import type { GlobeActions } from "../actions";
 const _world = new THREE.Vector3();
 const _ndc = new THREE.Vector3();
 const _dirA = new THREE.Vector3();
-const _dirB = new THREE.Vector3();
 const _camDir = new THREE.Vector3();
 const _centroid = new THREE.Vector3();
 const _fallback = new THREE.Vector3();
+const _bodyCenter = new THREE.Vector3();
 
 interface GlobeActionsBridgeProps {
   actionsRef: MutableRefObject<GlobeActions | null>;
@@ -84,10 +85,14 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
       flyToNode: (nodeId: string) => {
         const controls = controlsRef.current;
         if (getNodeWorldPosition(nodeId, _world)) {
-          controls?.target.set(0, 0, 0);
-          const dist = camera.position.length();
-          _world.normalize();
-          camera.position.copy(_world.multiplyScalar(dist));
+          const target = _world.clone();
+          const currentTarget = controls?.target ?? _fallback.set(0, 0, 0);
+          const dist = Math.max(camera.position.distanceTo(currentTarget), EARTH_RADIUS_RENDER * 2.5);
+          _dirA.copy(camera.position).sub(target);
+          if (_dirA.lengthSq() < 1e-6) _dirA.set(0, 0, 1);
+          _dirA.normalize();
+          controls?.target.copy(target);
+          camera.position.copy(target).add(_dirA.multiplyScalar(dist));
           controls?.update();
         }
       },
@@ -109,10 +114,14 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
         _centroid.multiplyScalar(1 / count);
         if (_centroid.lengthSq() < 1e-6) _centroid.copy(_fallback);
         if (_centroid.lengthSq() === 0) return;
-        controls?.target.set(0, 0, 0);
-        const dist = camera.position.length();
-        _centroid.normalize();
-        camera.position.copy(_centroid.multiplyScalar(dist));
+        const target = _centroid.clone();
+        const currentTarget = controls?.target ?? _fallback.set(0, 0, 0);
+        const dist = Math.max(camera.position.distanceTo(currentTarget), EARTH_RADIUS_RENDER * 4);
+        _dirA.copy(camera.position).sub(target);
+        if (_dirA.lengthSq() < 1e-6) _dirA.set(0, 0, 1);
+        _dirA.normalize();
+        controls?.target.copy(target);
+        camera.position.copy(target).add(_dirA.multiplyScalar(dist));
         controls?.update();
       },
       getNodeScreenPosition: (nodeId: string) => {
@@ -120,14 +129,16 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
         _ndc.copy(_world).project(camera);
         // Behind camera.
         if (_ndc.z > 1) return { x: 0, y: 0, visible: false };
-        // Earth-limb occlusion (same test as the legacy actionsRef block / GS labels).
+        // Body-limb occlusion: each node is hidden only by its own body frame. Earth-only
+        // sessions match the legacy action path; lunar nodes are not tested against Earth origin.
         const cameraPos = camera.position;
-        _dirA.copy(_world).sub(cameraPos).normalize();
-        _dirB.copy(cameraPos).multiplyScalar(-1).normalize();
-        const dot = _dirA.dot(_dirB);
-        const distToCenter = cameraPos.length();
-        const sinAngle = EARTH_RADIUS_RENDER / distToCenter;
-        if (dot > Math.sqrt(1 - sinAngle * sinAngle) && _world.length() < distToCenter) {
+        const bodySphere = getNodeBodySphere(nodeId, _bodyCenter);
+        if (bodySphere && isOccludedBySphere(
+          _world.x, _world.y, _world.z,
+          cameraPos.x, cameraPos.y, cameraPos.z,
+          _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
+          bodySphere.radius,
+        )) {
           return { x: 0, y: 0, visible: false };
         }
         const w = sizeRef.current.width;
@@ -148,12 +159,12 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
   useFrame(() => {
     const id = followTargetRef.current;
     if (!id || !getNodeWorldPosition(id, _world)) return;
-    const dist = camera.position.length();
-    _world.normalize();
-    _camDir.copy(camera.position).normalize();
-    _camDir.lerp(_world, 0.05).normalize();
-    camera.position.copy(_camDir.multiplyScalar(dist));
-    controlsRef.current?.target.set(0, 0, 0);
+    const controls = controlsRef.current;
+    const target = controls?.target ?? _fallback.set(0, 0, 0);
+    const dist = Math.max(camera.position.distanceTo(target), EARTH_RADIUS_RENDER * 2.5);
+    _camDir.copy(camera.position).sub(target).normalize();
+    target.lerp(_world, 0.05);
+    camera.position.copy(target).add(_camDir.multiplyScalar(dist));
   });
 
   return null;

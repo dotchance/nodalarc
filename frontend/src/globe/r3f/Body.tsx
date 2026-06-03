@@ -40,11 +40,11 @@ export const Body = forwardRef<THREE.Group, BodyProps>(function Body(
 
   const attach = useCallback(
     (group: THREE.Group | null) => {
-      setBodyFrame(id, group);
+      setBodyFrame(id, group, radiusRender);
       if (typeof ref === "function") ref(group);
       else if (ref) ref.current = group;
     },
-    [id, ref],
+    [id, radiusRender, ref],
   );
 
   return (

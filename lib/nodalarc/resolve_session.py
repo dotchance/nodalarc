@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from nodalarc.body_frames import body_frame_for
 from nodalarc.catalog_paths import (
     CatalogRoots,
     config_value_for,
@@ -35,7 +36,13 @@ from nodalarc.constellation_loader import (
     satellite_local_plane_slot,
     satellite_node_id,
 )
-from nodalarc.frames import EcefVec3, GeoPosition
+from nodalarc.ephemeris_runtime import (
+    EphemerisValidationError,
+    SkyfieldBspEphemeris,
+    body_states_at,
+    validate_ephemeris_manifest,
+)
+from nodalarc.frames import EcefVec3, GeoPosition, Vec3
 from nodalarc.frozen import FrozenDict
 from nodalarc.geo import geodetic_to_ecef
 from nodalarc.ground_handover import resolve_station_ground_scheduling
@@ -65,14 +72,19 @@ from nodalarc.models.resolved_session import (
     SourceContext,
 )
 from nodalarc.models.segment_session import SegmentSessionConfig
-from nodalarc.models.segments import ConstellationSegment, GroundSegment
+from nodalarc.models.segments import ConstellationSegment, GroundSegment, SpaceNodeSegment
 from nodalarc.models.session import (
     AddressingConfig,
     GroundSchedulingConfig,
     SessionConfig,
     resolve_session_epoch,
 )
-from nodalarc.propagator import propagate_j2_mean_elements, propagate_keplerian
+from nodalarc.orbital import OrbitalElements
+from nodalarc.propagator import (
+    propagate_j2_mean_elements_for_body,
+    propagate_keplerian_for_body,
+    propagate_sgp4_tle,
+)
 from nodalarc.runtime_naming import (
     gs_bridge_port_name,
     isl_host_name,
@@ -90,7 +102,7 @@ class SessionResolutionError(ValueError):
 
 @dataclass(frozen=True)
 class ResolvedConstellationAssets:
-    segment: ConstellationSegment
+    segment: ConstellationSegment | SpaceNodeSegment
     source: str | dict[str, Any]
     config: ConstellationConfig
     satellites: tuple[SatelliteNode, ...]
@@ -122,6 +134,8 @@ class SessionResolution:
     declared_candidates: tuple[DeclaredLinkCandidate, ...]
     neighbors: frozenset[tuple[str, NeighborAssignment]]
     ground_candidate_satellites_by_gs: FrozenDict
+    body_ephemeris: SkyfieldBspEphemeris | None
+    active_bodies: frozenset[str]
 
     @property
     def primary_constellation(self) -> ResolvedConstellationAssets:
@@ -184,7 +198,7 @@ def resolve_session_with_assets(
         )
 
     roots = catalog_roots or default_catalog_roots()
-    support = runtime_support or RuntimeSupport.mvp_m1()
+    support = runtime_support or RuntimeSupport.mvp_m3()
     context = source_context or SourceContext(origin="resolve_session")
 
     try:
@@ -195,14 +209,24 @@ def resolve_session_with_assets(
         raise SessionResolutionError(f"invalid segment session: {exc}") from exc
 
     _check_runtime_support(cfg, support)
+    active_bodies = _active_bodies(cfg)
+    required_ephemeris_bodies = active_bodies & support.ephemeris_required_bodies
+    body_ephemeris = _build_body_ephemeris(
+        cfg,
+        required_bodies=required_ephemeris_bodies,
+        epoch_unix=resolve_session_epoch(cfg.time),
+    )
 
     const_assets: list[ResolvedConstellationAssets] = []
     ground_assets: list[ResolvedGroundAssets] = []
+    space_assets: list[ResolvedConstellationAssets] = []
     for segment in cfg.segments:
         if isinstance(segment, ConstellationSegment):
             const_assets.append(_load_constellation_segment(segment, roots))
         elif isinstance(segment, GroundSegment):
             ground_assets.append(_load_ground_segment(segment, roots))
+        elif isinstance(segment, SpaceNodeSegment):
+            space_assets.append(_load_space_node_segment(segment))
         else:
             # RuntimeSupport should catch this before we get here. Keep the guard
             # fail-loud so a future matrix bug does not silently skip a segment.
@@ -210,12 +234,12 @@ def resolve_session_with_assets(
 
     if not const_assets or len(ground_assets) != 1:
         raise SessionResolutionError(
-            "M2 runtime supports one or more constellation segments and exactly one ground_set segment; "
+            "M3 runtime supports one or more satellite-producing segments and exactly one ground_set segment; "
             f"got {len(const_assets)} constellation segment(s), {len(ground_assets)} ground_set segment(s)"
         )
 
     ground_set = ground_assets[0]
-    const_assets = list(_assign_constellation_runtime_identities(const_assets))
+    const_assets = list(_assign_constellation_runtime_identities([*const_assets, *space_assets]))
     for constellation in const_assets:
         if not constellation.satellites:
             raise SessionResolutionError(
@@ -270,6 +294,8 @@ def resolve_session_with_assets(
         satellites=all_satellites,
         addressing=addressing,
         gs_file=ground_set.config,
+        body_ephemeris=body_ephemeris,
+        active_bodies=active_bodies,
     )
     try:
         declared_candidates = generate_declared_link_candidates(resolved, pair_rank=pair_rank)
@@ -295,6 +321,8 @@ def resolve_session_with_assets(
         declared_candidates=declared_candidates,
         neighbors=neighbors,
         ground_candidate_satellites_by_gs=ground_candidate_satellites_by_gs,
+        body_ephemeris=body_ephemeris,
+        active_bodies=frozenset(active_bodies),
     )
 
 
@@ -343,6 +371,50 @@ def _check_runtime_support(cfg: SegmentSessionConfig, support: RuntimeSupport) -
         raise UnsupportedFeatureError(unsupported)
 
 
+def _active_bodies(cfg: SegmentSessionConfig) -> set[str]:
+    bodies: set[str] = {"earth"}
+    for segment in cfg.segments:
+        central_body = getattr(segment, "central_body", None)
+        if central_body is not None:
+            bodies.add(str(central_body))
+        reference_body = getattr(segment, "reference_body", None)
+        if reference_body is not None:
+            bodies.add(str(reference_body))
+    return bodies
+
+
+def _build_body_ephemeris(
+    cfg: SegmentSessionConfig,
+    *,
+    required_bodies: set[str],
+    epoch_unix: float,
+) -> SkyfieldBspEphemeris | None:
+    if not required_bodies:
+        if cfg.ephemeris is not None:
+            try:
+                validate_ephemeris_manifest(
+                    cfg.ephemeris,
+                    required_bodies=set(),
+                    epoch_unix=epoch_unix,
+                )
+            except EphemerisValidationError as exc:
+                raise SessionResolutionError(str(exc)) from exc
+        return None
+    if cfg.ephemeris is None:
+        raise SessionResolutionError(
+            "session uses body/bodies requiring ephemeris but declares no ephemeris manifest: "
+            + ", ".join(sorted(required_bodies))
+        )
+    try:
+        return SkyfieldBspEphemeris.from_config(
+            cfg.ephemeris,
+            required_bodies=required_bodies,
+            epoch_unix=epoch_unix,
+        )
+    except EphemerisValidationError as exc:
+        raise SessionResolutionError(str(exc)) from exc
+
+
 def _load_constellation_segment(
     segment: ConstellationSegment,
     roots: CatalogRoots,
@@ -389,6 +461,49 @@ def _load_ground_segment(segment: GroundSegment, roots: CatalogRoots) -> Resolve
     return ResolvedGroundAssets(segment=segment, source=source, config=config)
 
 
+def _load_space_node_segment(segment: SpaceNodeSegment) -> ResolvedConstellationAssets:
+    from nodalarc.models.segments import StateVector
+
+    if isinstance(segment.node.state, StateVector):
+        raise SessionResolutionError(
+            f"space_node segment {segment.id!r} uses StateVector; M3 runtime supports "
+            "orbital-elements space nodes only so propagation remains authoritative"
+        )
+    if segment.central_body is None:
+        raise SessionResolutionError(
+            f"space_node segment {segment.id!r} requires central_body for orbital-elements state"
+        )
+    raw = {
+        "mode": "explicit",
+        "name": segment.id,
+        "satellite_type": segment.satellite_type,
+        "satellites": [
+            {
+                "plane": 0,
+                "slot": 0,
+                "orbit": segment.node.state.model_dump(mode="python"),
+            }
+        ],
+    }
+    config = load_constellation(raw)
+    expanded = tuple(expand_constellation(config))
+    if len(expanded) != 1:
+        raise SessionResolutionError(
+            f"space_node segment {segment.id!r} expanded to {len(expanded)} nodes, expected 1"
+        )
+    sat = clone_satellite_node(
+        expanded[0],
+        local_node_id=segment.node.id,
+        central_body=segment.central_body,
+    )
+    return ResolvedConstellationAssets(
+        segment=segment,
+        source=raw,
+        config=config,
+        satellites=(sat,),
+    )
+
+
 def _normalize_runtime_token(value: str) -> str:
     token = _NORMALIZE_RE.sub("-", value.strip().lower()).strip("-")
     if not token:
@@ -425,6 +540,15 @@ def _assign_constellation_runtime_identities(
                 raise SessionResolutionError(f"duplicate runtime satellite node_id {runtime_id!r}")
             seen_ids.add(runtime_id)
             local_plane, local_slot = satellite_local_plane_slot(sat)
+            central_body = asset.segment.central_body or getattr(sat, "central_body", "earth")
+            source_altitude_km = sat.elements.semi_major_axis_km - EARTH_RADIUS_KM
+            body_frame = body_frame_for(central_body)
+            body_elements = OrbitalElements(
+                semi_major_axis_km=body_frame.equatorial_radius_km + source_altitude_km,
+                inclination_rad=sat.elements.inclination_rad,
+                raan_rad=sat.elements.raan_rad,
+                true_anomaly_rad=sat.elements.true_anomaly_rad,
+            )
             sats.append(
                 clone_satellite_node(
                     sat,
@@ -435,6 +559,8 @@ def _assign_constellation_runtime_identities(
                     node_id=runtime_id,
                     local_node_id=local_id,
                     segment_id=asset.segment.id,
+                    central_body=str(central_body),
+                    elements=body_elements,
                 )
             )
         plane_offset += len(local_planes)
@@ -465,8 +591,9 @@ def _terminal_config_from_satellite(sat: SatelliteNode) -> TerminalConfig:
 
 
 def _orbit_config_from_satellite(sat: SatelliteNode) -> ConfigOrbitalElements:
+    body_frame = body_frame_for(getattr(sat, "central_body", "earth"))
     return ConfigOrbitalElements(
-        altitude_km=sat.elements.semi_major_axis_km - EARTH_RADIUS_KM,
+        altitude_km=sat.elements.semi_major_axis_km - body_frame.equatorial_radius_km,
         inclination_deg=math.degrees(sat.elements.inclination_rad),
         raan_deg=math.degrees(sat.elements.raan_rad),
         true_anomaly_deg=math.degrees(sat.elements.true_anomaly_rad),
@@ -582,15 +709,22 @@ def _materialize_nodes(
             local_id = satellite_local_node_id(sat)
             node_id = satellite_node_id(sat, addressing)
             local_plane, local_slot = satellite_local_plane_slot(sat)
-            tags = tuple(const_segment.tags or ())
+            node_tags = getattr(getattr(const_segment, "node", None), "tags", None) or ()
+            tags = (*(const_segment.tags or ()), *node_tags)
+            central_body = str(getattr(sat, "central_body", const_segment.central_body or "earth"))
+            segment_clock = getattr(const_segment, "clock", None) or getattr(
+                getattr(const_segment, "node", None),
+                "clock",
+                None,
+            )
             node = ResolvedNode(
                 node_id=node_id,
                 local_node_id=local_id,
                 segment_id=const_segment.id,
                 namespace=const_segment.namespace,
                 kind="satellite",
-                frame_id=str(const_segment.central_body),
-                central_body=const_segment.central_body,
+                frame_id=central_body,
+                central_body=central_body,
                 tags=tags,
                 satellite_type=const_segment.satellite_type
                 or getattr(constellation.config, "satellite_type", None),
@@ -598,7 +732,7 @@ def _materialize_nodes(
                 terminal_inventory=tuple(
                     _satellite_terminal_blocks(node_id, sat, const_segment.id)
                 ),
-                clock=const_segment.clock or cfg_clock_default(),
+                clock=segment_clock or cfg_clock_default(),
             )
             nodes.append(node)
             meta[node_id] = {
@@ -795,13 +929,25 @@ def _validate_link_rule_runtime_shape(
     rules: list[ResolvedLinkRule],
     nodes: list[ResolvedNode],
 ) -> None:
-    """Validate M2-supported link-rule kind/endpoint semantics."""
+    """Validate runtime-supported link-rule kind/endpoint semantics."""
     node_kind = {node.node_id: node.kind for node in nodes}
+    node_body = {
+        node.node_id: node.central_body or node.reference_body or "earth" for node in nodes
+    }
     for rule in rules:
         endpoint_node_kinds = [
             {node_kind[node_id] for node_id in endpoint.node_ids} for endpoint in rule.endpoints
         ]
+        endpoint_bodies = [
+            {str(node_body[node_id]) for node_id in endpoint.node_ids}
+            for endpoint in rule.endpoints
+        ]
         if rule.kind == "access":
+            if rule.protocol_boundary is not None:
+                raise SessionResolutionError(
+                    f"access link_rule {rule.rule_id!r} must not declare protocol_boundary; "
+                    "protocol boundaries are only runtime-supported for inter_body_relay"
+                )
             if {frozenset(kinds) for kinds in endpoint_node_kinds} != {
                 frozenset({"ground_station"}),
                 frozenset({"satellite"}),
@@ -816,6 +962,12 @@ def _validate_link_rule_runtime_shape(
                     "on both endpoints"
                 )
         elif rule.kind in {"inter_constellation", "relay"}:
+            if rule.protocol_boundary is not None:
+                raise SessionResolutionError(
+                    f"{rule.kind} link_rule {rule.rule_id!r} must not declare "
+                    "protocol_boundary; use kind='inter_body_relay' for static inter-body "
+                    "routing boundaries"
+                )
             if any(kinds != {"satellite"} for kinds in endpoint_node_kinds):
                 raise SessionResolutionError(
                     f"{rule.kind} link_rule {rule.rule_id!r} must connect satellite nodes"
@@ -825,10 +977,44 @@ def _validate_link_rule_runtime_shape(
                     f"{rule.kind} link_rule {rule.rule_id!r} requires terminal_role='isl' "
                     "on both endpoints"
                 )
+            if endpoint_bodies[0] != endpoint_bodies[1]:
+                raise SessionResolutionError(
+                    f"{rule.kind} link_rule {rule.rule_id!r} crosses bodies "
+                    f"{sorted(endpoint_bodies[0])}<->{sorted(endpoint_bodies[1])}; "
+                    "cross-body satellite links require kind='inter_body_relay' with "
+                    "protocol_boundary.adapter='static_ip'"
+                )
         elif rule.kind == "inter_body_relay":
-            raise SessionResolutionError(
-                f"inter_body_relay link_rule {rule.rule_id!r} is reserved for the Luna milestone"
-            )
+            if any(kinds != {"satellite"} for kinds in endpoint_node_kinds):
+                raise SessionResolutionError(
+                    f"inter_body_relay link_rule {rule.rule_id!r} must connect satellite-like "
+                    "relay nodes"
+                )
+            if any(endpoint.terminal_role != "isl" for endpoint in rule.endpoints):
+                raise SessionResolutionError(
+                    f"inter_body_relay link_rule {rule.rule_id!r} requires terminal_role='isl' "
+                    "on both endpoints for M3"
+                )
+            if len(endpoint_bodies[0]) != 1 or len(endpoint_bodies[1]) != 1:
+                raise SessionResolutionError(
+                    f"inter_body_relay link_rule {rule.rule_id!r} endpoints must each resolve "
+                    "to one central body"
+                )
+            if endpoint_bodies[0] == endpoint_bodies[1]:
+                raise SessionResolutionError(
+                    f"inter_body_relay link_rule {rule.rule_id!r} does not cross bodies"
+                )
+            boundary = rule.protocol_boundary
+            if boundary is None or not boundary.enabled or boundary.adapter != "static_ip":
+                raise SessionResolutionError(
+                    f"inter_body_relay link_rule {rule.rule_id!r} requires an enabled "
+                    "protocol_boundary.adapter='static_ip'"
+                )
+            if boundary.routing_domain_a is None or boundary.routing_domain_b is None:
+                raise SessionResolutionError(
+                    f"inter_body_relay link_rule {rule.rule_id!r} requires routing_domain_a "
+                    "and routing_domain_b for operator explanation and static boundary audit"
+                )
         else:
             raise SessionResolutionError(
                 f"unsupported link_rule kind {rule.kind!r} for rule {rule.rule_id!r}"
@@ -973,6 +1159,8 @@ def _rank_pairs_by_epoch_range(
     satellites: tuple[SatelliteNode, ...],
     addressing: AddressingScheme,
     gs_file: GroundStationFile,
+    body_ephemeris: SkyfieldBspEphemeris | None,
+    active_bodies: set[str],
 ) -> FrozenDict:
     """Rank satellite pairs by physical range at the session epoch.
 
@@ -982,19 +1170,64 @@ def _rank_pairs_by_epoch_range(
     a later runtime capability and remains fail-loud until implemented.
     """
     epoch_unix = resolve_session_epoch(cfg.time)
+    body_states = body_states_at(body_ephemeris, set(active_bodies), epoch_unix)
     positions: dict[str, EcefVec3] = {}
+
+    def _common_position(body_id: str, local_position: EcefVec3) -> EcefVec3:
+        body_state = body_states.get(body_id)
+        if body_state is None:
+            raise SessionResolutionError(
+                f"nearest_n ranking missing common-frame ephemeris state for body {body_id!r}"
+            )
+        return EcefVec3(
+            Vec3(
+                body_state.position_km.x + local_position.x,
+                body_state.position_km.y + local_position.y,
+                body_state.position_km.z + local_position.z,
+            )
+        )
+
     for sat in satellites:
         node_id = satellite_node_id(sat, addressing)
+        central_body = str(getattr(sat, "central_body", "earth"))
+        body_frame = body_frame_for(central_body)
         if cfg.orbit.propagator == "keplerian-circular":
-            pos, _vel, _geo = propagate_keplerian(sat.elements, epoch_unix, 0.0)
+            _pos_fixed, _vel_fixed, _geo, pos_inertial, _vel_inertial = (
+                propagate_keplerian_for_body(
+                    sat.elements,
+                    epoch_unix,
+                    0.0,
+                    body_frame=body_frame,
+                )
+            )
         elif cfg.orbit.propagator == "j2-mean-elements":
-            pos, _vel, _geo = propagate_j2_mean_elements(sat.elements, epoch_unix, 0.0)
+            _pos_fixed, _vel_fixed, _geo, pos_inertial, _vel_inertial = (
+                propagate_j2_mean_elements_for_body(
+                    sat.elements,
+                    epoch_unix,
+                    0.0,
+                    body_frame=body_frame,
+                )
+            )
+        elif cfg.orbit.propagator == "sgp4-tle":
+            if central_body != "earth":
+                raise SessionResolutionError("nearest_n SGP4/TLE ranking is Earth-only")
+            if sat.tle_line_1 is None or sat.tle_line_2 is None:
+                raise SessionResolutionError(
+                    f"Satellite {node_id!r} has no TLE lines for nearest_n ranking"
+                )
+            pos_inertial, _vel, _geo = propagate_sgp4_tle(
+                sat.tle_line_1,
+                sat.tle_line_2,
+                epoch_unix,
+                0.0,
+            )
         else:
             raise SessionResolutionError(
                 "nearest_n physical ranking does not support orbit.propagator="
                 f"{cfg.orbit.propagator!r} yet"
             )
-        positions[node_id] = pos
+        positions[node_id] = _common_position(central_body, pos_inertial)
     for station in gs_file.stations:
         node_id = addressing.gs_id(station.name)
         geo = GeoPosition(
@@ -1002,7 +1235,10 @@ def _rank_pairs_by_epoch_range(
             station.lon_deg,
             (station.alt_m or 0.0) / 1000.0,
         )
-        positions[node_id] = geodetic_to_ecef(geo)
+        body_id = str(station.reference_body)
+        positions[node_id] = _common_position(
+            body_id, geodetic_to_ecef(geo, body_frame_for(body_id))
+        )
 
     def _range(a: EcefVec3, b: EcefVec3) -> float:
         return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
@@ -1092,12 +1328,12 @@ def _validate_declared_candidate_constraints(
     resolved: ResolvedSession,
     candidates: tuple[DeclaredLinkCandidate, ...],
 ) -> None:
-    """Enforce the M2-supported subset of link-rule constraints.
+    """Enforce the runtime-supported subset of link-rule constraints.
 
     ``max_links_per_node`` is a static graph constraint and is enforceable at
     resolve time. Range/mutual-visibility/scheduling constraints are dynamic OME
     semantics; accepting them before OME consumes them would be a lie, so they
-    are rejected loudly for M2.
+    are rejected loudly for M3.
     """
     nodes = {node.node_id: node for node in resolved.nodes}
     degree_by_rule_node: dict[tuple[str, str], int] = {}
@@ -1119,7 +1355,7 @@ def _validate_declared_candidate_constraints(
             unsupported.append("scheduling_policy")
         if unsupported:
             raise SessionResolutionError(
-                f"link_rule {rule.rule_id!r} uses unsupported M2 constraint(s): "
+                f"link_rule {rule.rule_id!r} uses unsupported runtime constraint(s): "
                 + ", ".join(unsupported)
             )
         if constraints.max_links_per_node is None:
@@ -1260,8 +1496,10 @@ def _build_isl_neighbors_from_resolved_rules(
     seen_pairs: set[tuple[str, str]] = set()
 
     for asset in constellations:
-        internal = asset.segment.internal_links
+        internal = getattr(asset.segment, "internal_links", None)
         if internal is not None and internal.isl is not None and not internal.isl.enabled:
+            continue
+        if internal is None and isinstance(asset.segment, SpaceNodeSegment):
             continue
         local_identity_sats = [
             clone_satellite_node(
@@ -1312,12 +1550,17 @@ def _build_isl_neighbors_from_resolved_rules(
                 f"{candidate.rule_id!r} duplicates an existing internal ISL"
             )
         seen_pairs.add(candidate.pair)
+        link_type = (
+            f"static_ip:{candidate.rule_id}"
+            if candidate.kind == "inter_body_relay"
+            else f"link_rule:{candidate.rule_id}"
+        )
         _add_neighbor_pair(
             assignments,
             used_interfaces,
             node_a,
             node_b,
-            link_type=f"link_rule:{candidate.rule_id}",
+            link_type=link_type,
             priority=base_priority + candidate.priority,
             rule_id=candidate.rule_id,
             medium=candidate.terminal_medium,

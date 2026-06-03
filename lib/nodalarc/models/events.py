@@ -369,6 +369,8 @@ class EphemerisNodeKeplerian(BaseModel):
     local_node_id: str | None = None
     namespace: str | None = None
     tags: tuple[str, ...] = ()
+    reference_body: str = "earth"
+    frame_id: str = "earth"
 
 
 class EphemerisNodeTLE(BaseModel):
@@ -386,6 +388,8 @@ class EphemerisNodeTLE(BaseModel):
     local_node_id: str | None = None
     namespace: str | None = None
     tags: tuple[str, ...] = ()
+    reference_body: str = "earth"
+    frame_id: str = "earth"
 
     @model_validator(mode="after")
     def _validate_tle_pair(self):
@@ -408,12 +412,39 @@ class EphemerisNodeFixed(BaseModel):
     local_node_id: str | None = None
     namespace: str | None = None
     tags: tuple[str, ...] = ()
+    reference_body: str = "earth"
+    frame_id: str = "earth"
 
 
 EphemerisNode = Annotated[
     EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed,
     Field(discriminator="type"),
 ]
+
+
+class EphemerisBodyFrame(BaseModel):
+    """Body origin in the session common frame at ``epoch_unix``.
+
+    Positions and velocities are Earth-relative GCRS-like km vectors supplied by
+    the backend ephemeris provider. The renderer may apply a visual scale or
+    camera-relative transform, but these numbers remain the authoritative
+    physical frame facts used to place bodies relative to one another.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    body_id: str
+    radius_km: float
+    origin_x_km: float
+    origin_y_km: float
+    origin_z_km: float
+    vel_x_km_s: float
+    vel_y_km_s: float
+    vel_z_km_s: float
+    provider: str
+    kernel_id: str
+    quality_tier: str
+    frame: str
 
 
 class SessionEphemeris(BaseModel):
@@ -433,6 +464,7 @@ class SessionEphemeris(BaseModel):
     sim_time: datetime
     epoch_unix: float  # Unix timestamp for propagation dt calculation
     nodes: dict[str, EphemerisNode]
+    body_frames: dict[str, EphemerisBodyFrame] = Field(default_factory=dict)
 
 
 class PlaybackState(BaseModel):

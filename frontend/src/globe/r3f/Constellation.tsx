@@ -10,7 +10,7 @@
  * reimplemented declaratively. Positions are mirrored into the shared registry so links,
  * selection, labels, and the camera read the same per-frame truth.
  *
- * Lives inside <Body id="earth">, so its instances are in the Earth local frame.
+ * Lives inside a <Body>, so its instances are in that body's local frame.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
@@ -70,7 +70,8 @@ export function Constellation({
   const lastPropagateRef = useRef(0);
   // The body these satellites live in — written with each position so the registry resolves them
   // through this body's frame (no Earth assumption). Read via a ref so the useFrame closure is stable.
-  const bodyId = useBodyFrame().id;
+  const bodyFrame = useBodyFrame();
+  const bodyId = bodyFrame.id;
   const bodyIdRef = useRef(bodyId);
   bodyIdRef.current = bodyId;
 
@@ -104,7 +105,7 @@ export function Constellation({
         idx = countRef.current++;
         satIndex.current.set(node.node_id, idx);
         indexToId.current[idx] = node.node_id;
-        const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
+        const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km, bodyFrame.radiusRender);
         _tmpMatrix.makeTranslation(p.x, p.y, p.z);
         mesh.setMatrixAt(idx, _tmpMatrix);
         setNodeLocalPosition(node.node_id, bodyId, p.x, p.y, p.z);
@@ -134,7 +135,7 @@ export function Constellation({
     mesh.count = countRef.current;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [nodes, colorMode, relations, bodyId]);
+  }, [nodes, colorMode, relations, bodyId, bodyFrame.radiusRender]);
 
   // Per-frame propagation from the latest ephemeris and sim clock.
   useFrame(() => {
@@ -153,8 +154,9 @@ export function Constellation({
     for (const [nodeId, idx] of satIndex.current) {
       const ephNode = ephemeris.nodes[nodeId];
       if (!ephNode || ephNode.type !== "keplerian") continue;
+      const nodeBody = ephNode.reference_body ?? "earth";
       let x: number, y: number, z: number;
-      if (workerReady && readPosition(nodeId, simTimeUnix, _workerPos)) {
+      if (workerReady && nodeBody === "earth" && readPosition(nodeId, simTimeUnix, _workerPos)) {
         x = _workerPos.x;
         y = _workerPos.y;
         z = _workerPos.z;

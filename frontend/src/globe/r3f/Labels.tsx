@@ -23,10 +23,9 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
-import { isOccludedByEarth, getLabelsEnabled } from "../labels";
+import { isOccludedBySphere, getLabelsEnabled } from "../labels";
 import { getGsLabelsEnabled } from "../groundStations";
-import { getNodeWorldPosition } from "./positions";
-import { EARTH_RADIUS_RENDER } from "./units";
+import { getNodeBodySphere, getNodeWorldPosition } from "./positions";
 import type { NodeState } from "../../types";
 import { nodeDisplayLabel } from "../../networkIdentity";
 
@@ -38,15 +37,10 @@ const SAT_FADE_OUT_DIST = 500;
 const GS_FADE_IN_DIST = 200;
 const GS_FADE_OUT_DIST = 500;
 
-// Occlusion radius passed to isOccludedByEarth. EARTH_RADIUS_RENDER (= SCENE_EARTH_RADIUS = 100,
-// one Earth radius) equals the legacy config EARTH_RADIUS at this shared scale; isOccludedByEarth
-// applies its own 0.985 OCC_RADIUS_FACTOR internally, so we pass the FULL radius here exactly as
-// the legacy animateLabels / updateGSLabels do (the effective occluder is EARTH_RADIUS_RENDER*0.985).
-const OCC_EARTH_RADIUS = EARTH_RADIUS_RENDER;
-
 // Per-frame projection temporaries — hoisted to module scope (zero useFrame heap alloc).
 const _worldPos = new THREE.Vector3();
 const _ndc = new THREE.Vector3();
+const _bodyCenter = new THREE.Vector3();
 
 /** Build the satellite label div (globe/labels.ts updateLabels — cssText copied so CSS vars resolve). */
 function createSatLabel(label: string): HTMLDivElement {
@@ -188,13 +182,13 @@ export function Labels({ nodes, containerRef }: LabelsProps) {
           div.style.display = "none";
           continue;
         }
-        if (
-          isOccludedByEarth(
-            _worldPos.x, _worldPos.y, _worldPos.z,
-            cameraPos.x, cameraPos.y, cameraPos.z,
-            OCC_EARTH_RADIUS,
-          )
-        ) {
+        const bodySphere = getNodeBodySphere(id, _bodyCenter);
+        if (bodySphere && isOccludedBySphere(
+          _worldPos.x, _worldPos.y, _worldPos.z,
+          cameraPos.x, cameraPos.y, cameraPos.z,
+          _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
+          bodySphere.radius,
+        )) {
           div.style.display = "none";
           continue;
         }
@@ -245,13 +239,13 @@ export function Labels({ nodes, containerRef }: LabelsProps) {
           div.style.display = "none";
           continue;
         }
-        if (
-          isOccludedByEarth(
-            _worldPos.x, _worldPos.y, _worldPos.z,
-            cameraPos.x, cameraPos.y, cameraPos.z,
-            OCC_EARTH_RADIUS,
-          )
-        ) {
+        const bodySphere = getNodeBodySphere(id, _bodyCenter);
+        if (bodySphere && isOccludedBySphere(
+          _worldPos.x, _worldPos.y, _worldPos.z,
+          cameraPos.x, cameraPos.y, cameraPos.z,
+          _bodyCenter.x, _bodyCenter.y, _bodyCenter.z,
+          bodySphere.radius,
+        )) {
           div.style.display = "none";
           continue;
         }

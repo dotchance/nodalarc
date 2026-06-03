@@ -119,8 +119,12 @@ def build_link_state_snapshot(
     downstream components to decide whether to invent or reject physics.
     """
     ecef: dict[str, EcefVec3] = {}
+    common: dict[str, EcefVec3] = {}
+    central_body: dict[str, str] = {}
     for node_id, state in source.propagated_states.items():
         ecef[node_id] = state.position_ecef_km
+        common[node_id] = state.position_common_km
+        central_body[node_id] = state.central_body
     if fixed_positions:
         for node_id, (position_ecef, _geo) in fixed_positions.items():
             ecef[node_id] = position_ecef
@@ -130,7 +134,10 @@ def build_link_state_snapshot(
         node_b: str,
         link_type: str,
     ) -> tuple[float, float]:
-        pa, pb = ecef.get(node_a), ecef.get(node_b)
+        if link_type == "isl" and central_body.get(node_a) != central_body.get(node_b):
+            pa, pb = common.get(node_a), common.get(node_b)
+        else:
+            pa, pb = ecef.get(node_a), ecef.get(node_b)
         if pa is None or pb is None:
             missing = ", ".join(node for node, pos in ((node_a, pa), (node_b, pb)) if pos is None)
             raise ValueError(

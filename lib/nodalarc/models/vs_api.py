@@ -41,6 +41,7 @@ class NodeState(BaseModel):
     # tints by tenant without an Earth/default assumption. Defaults keep single-shell Earth
     # sessions unchanged; multi-shell / lunar sessions set them per node.
     reference_body: SupportedSurfaceBody = "earth"
+    frame_id: str = "earth"
     tenant_id: str = "default"
     segment_id: str | None = None
     local_node_id: str | None = None

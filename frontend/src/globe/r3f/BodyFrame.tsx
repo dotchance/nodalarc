@@ -6,7 +6,7 @@
  * near the body); the body itself sits in the universe frame at its scaled
  * position. This context lets a body's children resolve "where is local origin,
  * how big is this body" without assuming Earth — the same components render Earth,
- * Luna, or Mars. The cross-body float64 positioning is deferred (units.ts).
+ * Luna, or Mars.
  */
 
 import { createContext, useContext } from "react";

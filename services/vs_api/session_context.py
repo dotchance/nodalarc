@@ -1030,15 +1030,16 @@ class SessionContext:
         Called on each ClockTick. Propagates satellite positions using the
         ephemeris model published by OME. Ground station positions are static.
         """
+        from nodalarc.body_frames import body_frame_for
         from nodalarc.models.events import (
             EphemerisNodeFixed,
             EphemerisNodeKeplerian,
             EphemerisNodeTLE,
         )
-        from nodalarc.orbital import elements_from_params
+        from nodalarc.orbital import elements_from_params_for_radius
         from nodalarc.propagator import (
-            propagate_j2_mean_elements,
-            propagate_keplerian,
+            propagate_j2_mean_elements_for_body,
+            propagate_keplerian_for_body,
             propagate_sgp4_tle,
         )
 
@@ -1055,24 +1056,32 @@ class SessionContext:
 
             for node_id, node in self.cached_ephemeris_obj.nodes.items():
                 if isinstance(node, EphemerisNodeKeplerian):
-                    elements = elements_from_params(
+                    body_frame = body_frame_for(node.reference_body)
+                    elements = elements_from_params_for_radius(
                         node.altitude_km,
                         node.inclination_deg,
                         node.raan_deg,
                         node.true_anomaly_deg,
+                        body_frame.equatorial_radius_km,
                     )
                     dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
                     if node.propagator == "j2-mean-elements":
-                        _pos_ecef, vel_ecef, geo = propagate_j2_mean_elements(
-                            elements,
-                            self.cached_ephemeris_obj.epoch_unix,
-                            dt,
+                        _pos_ecef, vel_ecef, geo, _pos_inertial, _vel_inertial = (
+                            propagate_j2_mean_elements_for_body(
+                                elements,
+                                self.cached_ephemeris_obj.epoch_unix,
+                                dt,
+                                body_frame=body_frame,
+                            )
                         )
                     else:
-                        _pos_ecef, vel_ecef, geo = propagate_keplerian(
-                            elements,
-                            self.cached_ephemeris_obj.epoch_unix,
-                            dt,
+                        _pos_ecef, vel_ecef, geo, _pos_inertial, _vel_inertial = (
+                            propagate_keplerian_for_body(
+                                elements,
+                                self.cached_ephemeris_obj.epoch_unix,
+                                dt,
+                                body_frame=body_frame,
+                            )
                         )
 
                     existing = self.nodes.get(node_id)
@@ -1091,7 +1100,8 @@ class SessionContext:
                         neighbor_count=existing.neighbor_count if existing else 0,
                         prefix=existing.prefix if existing else None,
                         beam_falloff_exponent=self.beam_falloff_exponent,
-                        reference_body=existing.reference_body if existing else "earth",
+                        reference_body=node.reference_body,
+                        frame_id=node.frame_id,
                         tenant_id=existing.tenant_id if existing else "default",
                         segment_id=node.segment_id,
                         local_node_id=node.local_node_id,
@@ -1100,6 +1110,11 @@ class SessionContext:
                     )
 
                 elif isinstance(node, EphemerisNodeTLE):
+                    if node.reference_body != "earth":
+                        raise ValueError(
+                            f"Ephemeris node {node_id!r} uses TLE propagation with "
+                            f"reference_body={node.reference_body!r}; SGP4/TLE is Earth-only"
+                        )
                     dt = sim_time_unix - self.cached_ephemeris_obj.epoch_unix
                     _pos_ecef, vel_ecef, geo = propagate_sgp4_tle(
                         node.tle_line_1,
@@ -1124,7 +1139,8 @@ class SessionContext:
                         neighbor_count=existing.neighbor_count if existing else 0,
                         prefix=existing.prefix if existing else None,
                         beam_falloff_exponent=self.beam_falloff_exponent,
-                        reference_body=existing.reference_body if existing else "earth",
+                        reference_body=node.reference_body,
+                        frame_id=node.frame_id,
                         tenant_id=existing.tenant_id if existing else "default",
                         segment_id=node.segment_id,
                         local_node_id=node.local_node_id,
@@ -1149,7 +1165,8 @@ class SessionContext:
                         neighbor_count=existing.neighbor_count if existing else 0,
                         prefix=existing.prefix if existing else None,
                         min_elevation_deg=self.gs_elevation_map.get(node_id),
-                        reference_body=existing.reference_body if existing else "earth",
+                        reference_body=node.reference_body,
+                        frame_id=node.frame_id,
                         tenant_id=existing.tenant_id if existing else "default",
                         segment_id=node.segment_id,
                         local_node_id=node.local_node_id,

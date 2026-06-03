@@ -10,6 +10,7 @@ from typing import Literal
 
 from nodalarc.body_frames import body_frame_for
 from nodalarc.constellation_loader import SatelliteNode
+from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
 from nodalarc.frames import EcefVec3, GeoPosition
 from nodalarc.ground_terminals import TerminalPhysicsProfile
 from nodalarc.models.addressing import AddressingScheme
@@ -55,6 +56,8 @@ class GroundPassLookahead:
     ground_link_model: Literal["geometry_only", "terminal_physics"] = "terminal_physics"
     gs_terminal_profiles: Mapping[str, TerminalPhysicsProfile] | None = None
     sat_ground_terminal_profiles: Mapping[str, TerminalPhysicsProfileSet] | None = None
+    body_ephemeris: SkyfieldBspEphemeris | None = None
+    active_bodies: frozenset[str] = frozenset({"earth"})
 
 
 def _require_complete_profile(
@@ -165,12 +168,18 @@ def _estimate_remaining_visible_seconds(
 
     for tick_offset in range(1, lookahead.horizon_ticks + 1):
         future_dt = (lookahead.step + tick_offset) * lookahead.step_seconds
+        future_unix = lookahead.epoch_unix + future_dt
         future_states = propagate_satellites(
             satellites=list(lookahead.satellites),
             addressing=lookahead.addressing,
             epoch_unix=lookahead.epoch_unix,
             dt=future_dt,
             propagator_id=lookahead.propagator_id,
+            body_states=body_states_at(
+                lookahead.body_ephemeris,
+                set(lookahead.active_bodies),
+                future_unix,
+            ),
         )
 
         for gs_id, sat_id in tuple(open_pairs):

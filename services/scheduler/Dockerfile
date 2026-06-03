@@ -50,5 +50,6 @@ COPY services/scheduler/ services/scheduler/
 COPY configs/satellite-types/ configs/satellite-types/
 COPY configs/ground-stations/ configs/ground-stations/
 COPY configs/constellations/ configs/constellations/
+COPY configs/ephemerides/ configs/ephemerides/
 
 ENTRYPOINT ["python", "-m", "scheduler"]

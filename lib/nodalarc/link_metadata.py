@@ -106,6 +106,9 @@ def build_link_metadata_maps(
                 if assignment.link_type.startswith("link_rule:"):
                     rule_id = assignment.link_type.removeprefix("link_rule:")
                     topology_mode = "declared"
+                elif assignment.link_type.startswith("static_ip:"):
+                    rule_id = assignment.link_type.removeprefix("static_ip:")
+                    topology_mode = "static_ip"
                 elif segment_a is not None and segment_a == segment_b:
                     rule_id = f"{segment_a}.internal_isl"
                     topology_mode = "structural"

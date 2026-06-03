@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import * as THREE from "three";
 import {
   clearPositions,
+  getNodeBodySphere,
   getNodeLocalPosition,
   getNodeWorldPosition,
   removeNode,
@@ -38,14 +39,14 @@ describe("r3f position registry (per-body)", () => {
   it("world position is UNAVAILABLE (false) until the node's body frame is registered", () => {
     setNodeLocalPosition("sat-1", "earth", 1, 2, 3);
     expect(getNodeWorldPosition("sat-1", new THREE.Vector3())).toBe(false);
-    setBodyFrame("earth", new THREE.Group());
+    setBodyFrame("earth", new THREE.Group(), 100);
     expect(getNodeWorldPosition("sat-1", new THREE.Vector3())).toBe(true);
   });
 
   it("applies the body-frame rotation for world position", () => {
     const g = new THREE.Group();
     g.rotation.y = Math.PI / 2;
-    setBodyFrame("earth", g);
+    setBodyFrame("earth", g, 100);
     setNodeLocalPosition("sat-1", "earth", 1, 0, 0); // local +X
     const t = new THREE.Vector3();
     getNodeWorldPosition("sat-1", t);
@@ -61,7 +62,7 @@ describe("r3f position registry (per-body)", () => {
     for (const rotY of [0, Math.PI / 3, Math.PI, -1.2]) {
       const g = new THREE.Group();
       g.rotation.y = rotY;
-      setBodyFrame("earth", g);
+      setBodyFrame("earth", g, 100);
       setNodeLocalPosition("sat-x", "earth", 3, -4, 5);
       const fromRegistry = new THREE.Vector3();
       expect(getNodeWorldPosition("sat-x", fromRegistry)).toBe(true);
@@ -82,8 +83,8 @@ describe("r3f position registry (per-body)", () => {
     const luna = new THREE.Group();
     luna.position.set(100, 0, 0); // a body offset in the universe frame
     luna.updateWorldMatrix(true, false);
-    setBodyFrame("earth", earth);
-    setBodyFrame("luna", luna);
+    setBodyFrame("earth", earth, 100);
+    setBodyFrame("luna", luna, 27.27);
 
     setNodeLocalPosition("earth-sat", "earth", 5, 0, 0);
     setNodeLocalPosition("luna-sat", "luna", 5, 0, 0);
@@ -97,9 +98,20 @@ describe("r3f position registry (per-body)", () => {
   });
 
   it("a node whose body frame is not registered is unavailable even if other bodies are", () => {
-    setBodyFrame("earth", new THREE.Group());
+    setBodyFrame("earth", new THREE.Group(), 100);
     setNodeLocalPosition("luna-sat", "luna", 1, 2, 3); // luna frame NOT registered
     expect(getNodeWorldPosition("luna-sat", new THREE.Vector3())).toBe(false);
+  });
+
+  it("resolves the owning body sphere for body-aware occlusion", () => {
+    const luna = new THREE.Group();
+    luna.position.set(100, 20, -5);
+    setBodyFrame("luna", luna, 27.27);
+    setNodeLocalPosition("luna-sat", "luna", 5, 0, 0);
+    const center = new THREE.Vector3();
+    const sphere = getNodeBodySphere("luna-sat", center);
+    expect(sphere).toEqual({ body: "luna", radius: 27.27 });
+    expect([center.x, center.y, center.z]).toEqual([100, 20, -5]);
   });
 
   it("removes a node and clears all", () => {

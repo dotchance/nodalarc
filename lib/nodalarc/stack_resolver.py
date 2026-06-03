@@ -214,7 +214,7 @@ def resolve_stack(protocol: str, extensions: list[str]) -> ResolvedStack:
 
 
 def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:
-    daemons = ["zebra", "ospfd"]
+    daemons = ["zebra", "ospfd", "staticd"]
     template_vars: dict[str, Any] = {
         "protocol": "ospf",
         "reference_bandwidth": 10000,
@@ -250,7 +250,7 @@ def _resolve_ospf(ext_set: set[str]) -> ResolvedStack:
 
 
 def _resolve_isis(ext_set: set[str]) -> ResolvedStack:
-    daemons = ["zebra", "isisd"]
+    daemons = ["zebra", "isisd", "staticd"]
     template_vars: dict[str, Any] = {
         "protocol": "isis",
         "reference_bandwidth": 10000,

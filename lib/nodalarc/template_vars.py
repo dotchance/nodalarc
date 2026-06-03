@@ -70,6 +70,7 @@ def _build_interface_info(
     interfaces: dict[str, dict[str, Any]] = {}
     for na in node_neighbors:
         peer_area = area_assignments.get(na.peer_node_id, "")
+        static_only = na.link_type.startswith("static_ip:")
         info: dict[str, Any] = {
             "peer_node_id": na.peer_node_id,
             "link_type": na.link_type,
@@ -77,6 +78,7 @@ def _build_interface_info(
             "peer_area_id": peer_area,
             "cross_area": node_area != peer_area and node_area != "" and peer_area != "",
             "bandwidth_mbps": bandwidth_mbps,
+            "static_only": static_only,
         }
         if na.peer_node_id in lb:
             info["peer_loopback_ipv4"] = lb[na.peer_node_id]

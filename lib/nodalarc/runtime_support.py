@@ -104,6 +104,19 @@ class RuntimeSupport(BaseModel):
             ephemeris_required_bodies=frozenset({"luna", "mars"}),
         )
 
+    @classmethod
+    def mvp_m3(cls) -> RuntimeSupport:
+        """M3: Earth + Luna demonstrator with explicit cislunar relay support."""
+        return cls(
+            supported_segment_kinds=frozenset({"constellation", "ground_set", "space_node"}),
+            supported_central_bodies=frozenset({"earth", "luna"}),
+            supported_reference_bodies=frozenset({"earth", "luna"}),
+            supported_frame_bodies=frozenset({"earth", "luna"}),
+            supported_protocol_adapters=frozenset({"static_ip"}),
+            supported_ephemeris_providers=frozenset({"skyfield_bsp"}),
+            ephemeris_required_bodies=frozenset({"luna"}),
+        )
+
     def _unsupported(self, category: FeatureCategory, value: str, what: str) -> UnsupportedFeature:
         milestone = PLANNED_MILESTONE.get((category, value))
         suffix = f" Planned for {milestone}." if milestone else ""

@@ -27,6 +27,8 @@ export interface NodeState {
   /** Celestial body this node is anchored to (earth | luna | mars). Optional for forward-compat
    *  with pre-parameterization snapshots; consumers default to "earth". */
   reference_body?: string;
+  /** Placement frame id from the resolved session. Defaults to the reference body for old payloads. */
+  frame_id?: string;
   /** Owning tenant (multi-tenant from day one). Optional; consumers default to "default". */
   tenant_id?: string;
   /** Segment metadata from the resolved session. Used for grouping/filtering, not runtime identity. */

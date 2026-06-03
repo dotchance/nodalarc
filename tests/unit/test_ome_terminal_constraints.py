@@ -137,8 +137,9 @@ def test_cross_plane_isl_uses_cross_plane_tracking_limit(monkeypatch):
     pos_b = EcefVec3(Vec3(7121.0, 0.0, 0.0))
     vel_b = EcefVec3(Vec3(0.0, -7.59, 0.0))
 
-    def fake_propagation(*, satellites, addressing, epoch_unix, dt, propagator_id):
+    def fake_propagation(*, satellites, addressing, epoch_unix, dt, propagator_id, body_states):
         del satellites, addressing, propagator_id
+        assert set(body_states) == {"earth"}
         sim_time_unix = epoch_unix + dt
         return {
             node_a: PropagatedState(

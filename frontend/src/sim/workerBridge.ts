@@ -94,6 +94,7 @@ export function sendEphemeris(ephemeris: SessionEphemeris): void {
   for (const [id, node] of Object.entries(ephemeris.nodes)) {
     if (node.type !== "keplerian") continue;
     const kep = node as EphemerisNodeKeplerian;
+    if ((kep.reference_body ?? "earth") !== "earth") continue;
     sats.push({
       id,
       elements: {

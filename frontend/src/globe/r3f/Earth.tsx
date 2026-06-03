@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { useFrame, useLoader } from "@react-three/fiber";
 import type { GlobeMode } from "../../types";
+import { useBodyFrame } from "./BodyFrame";
 import { EARTH_RADIUS_RENDER } from "./units";
 
 const ATMO_VERT = `
@@ -247,6 +248,16 @@ export function Earth({
       <Boundaries visible={showBoundaries} />
       <Sun simTimeIso={simTimeIso} intensity={sunIntensity} dayNightMaterial={dayNightMaterial} />
     </>
+  );
+}
+
+export function Moon() {
+  const { radiusRender } = useBodyFrame();
+  return (
+    <mesh>
+      <sphereGeometry args={[radiusRender, 48, 48]} />
+      <meshStandardMaterial color={0xb8b4aa} roughness={0.9} metalness={0.0} />
+    </mesh>
   );
 }
 

@@ -10,10 +10,15 @@ import { EARTH_RADIUS, KM_PER_UNIT } from "../config";
  * Must match Three.js SphereGeometry UV mapping so markers align with texture.
  * Three.js sphere: lat=0,lon=0 → positive X axis (prime meridian, equator).
  */
-export function geoToWorld(lat_deg: number, lon_deg: number, alt_km: number): THREE.Vector3 {
+export function geoToWorld(
+  lat_deg: number,
+  lon_deg: number,
+  alt_km: number,
+  radiusRender: number = EARTH_RADIUS,
+): THREE.Vector3 {
   const lat = (lat_deg * Math.PI) / 180;
   const lon = (lon_deg * Math.PI) / 180;
-  const r = EARTH_RADIUS + alt_km / KM_PER_UNIT;
+  const r = radiusRender + alt_km / KM_PER_UNIT;
 
   return new THREE.Vector3(
     r * Math.cos(lat) * Math.cos(lon),   // X: prime meridian at equator

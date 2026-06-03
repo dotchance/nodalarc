@@ -10,8 +10,8 @@
  *
  * Glyph/cone geometry (GS_COLOR, GS_SIZE, R*1.001 surface offset, (0,0,-1)->outward
  * orientation, computeConeRadius) reproduce globe/groundStations.ts. GS are static in the
- * Earth local frame; each registers its local position so the selection ring / links /
- * camera can find it. Rendered inside <Body id="earth">; one sprite/cone per GS (few GS).
+ * current body local frame; each registers its local position so the selection ring / links /
+ * camera can find it. Rendered inside a <Body>; one sprite/cone per GS (few GS).
  */
 
 import { useEffect, useMemo, useRef } from "react";
@@ -23,7 +23,6 @@ import { computeConeRadius } from "../groundStations";
 import { FAMILY_TONE } from "../../explain/families";
 import { groundStationFamily, type GsFamily } from "../../explain/groundStationFamily";
 import type { EffectiveEnvelopeFacts } from "../../explain/types";
-import { EARTH_RADIUS_RENDER } from "./units";
 import { removeNode, setNodeLocalPosition } from "./positions";
 import { useBodyFrame } from "./BodyFrame";
 import type { HoverInfo } from "./Tooltip";
@@ -94,7 +93,8 @@ function GroundStation({
   onHover,
 }: GroundStationProps) {
   const spriteRef = useRef<THREE.Sprite>(null);
-  const bodyId = useBodyFrame().id;
+  const bodyFrame = useBodyFrame();
+  const bodyId = bodyFrame.id;
   const faulted = family.family === "faulted";
   // Pulse the glyph only for a true fault (spec: "Fault pulse only for real faults"). Driven by
   // the R3F render clock (wall-clock), so it keeps alerting even when the sim is paused.
@@ -108,17 +108,17 @@ function GroundStation({
   // Taxonomy caption for the hover tooltip — same family label the inspector/logs use.
   const caption = `${FAMILY_TONE[family.family].label}${family.reason ? `. ${family.reason}` : ""}`;
   const geom = useMemo(() => {
-    const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km);
+    const p = geoToWorld(node.lat_deg, node.lon_deg, node.alt_km, bodyFrame.radiusRender);
     const outward = p.clone().normalize();
-    const surface = outward.clone().multiplyScalar(EARTH_RADIUS_RENDER * 1.001);
+    const surface = outward.clone().multiplyScalar(bodyFrame.radiusRender * 1.001);
     const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), outward);
     // Only the selected GS has resolved envelope floors; others (cone hidden) fall back to
     // the configured mask. Effective is the binding floor; configured is the wider mask.
     const fallback = node.min_elevation_deg ?? 25;
     const effElev = (selected ? effectiveMinElevDeg : null) ?? fallback;
     const confElev = (selected ? configuredMinElevDeg : null) ?? fallback;
-    const effRadius = computeConeRadius(effElev, orbitalAltKm);
-    const confRadius = computeConeRadius(confElev, orbitalAltKm);
+    const effRadius = computeConeRadius(effElev, orbitalAltKm, bodyFrame.radiusKm);
+    const confRadius = computeConeRadius(confElev, orbitalAltKm, bodyFrame.radiusKm);
     // Show the configured reference only when the mask is genuinely non-binding (the
     // effective floor is higher → a tighter cone), i.e. the FoR-bound / dead-knob case.
     const showConfigured = confRadius - effRadius > 0.5;
@@ -141,6 +141,8 @@ function GroundStation({
     selected,
     effectiveMinElevDeg,
     configuredMinElevDeg,
+    bodyFrame.radiusRender,
+    bodyFrame.radiusKm,
   ]);
 
   useEffect(

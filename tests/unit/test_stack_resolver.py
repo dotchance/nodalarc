@@ -9,7 +9,7 @@ from nodalarc.stack_resolver import resolve_stack
 class TestOSPF:
     def test_ospf_plain(self):
         r = resolve_stack("ospf", [])
-        assert r.daemons == ["zebra", "ospfd"]
+        assert r.daemons == ["zebra", "ospfd", "staticd"]
         assert r.image == "frr"
         assert r.mi_adapter == "frr_ospf_adapter"
         assert r.segment_routing is False
@@ -19,17 +19,18 @@ class TestOSPF:
         template_srcs = [t.src for t in r.template_files]
         assert "zebra.conf.j2" in template_srcs
         assert "ospfd.conf.j2" in template_srcs
+        assert "staticd.conf.j2" in template_srcs
 
     def test_ospf_te(self):
         r = resolve_stack("ospf", ["te"])
-        assert r.daemons == ["zebra", "ospfd"]
+        assert r.daemons == ["zebra", "ospfd", "staticd"]
         assert r.template_variables["te_enabled"] is True
         assert "mpls_enabled" not in r.template_variables
         assert r.segment_routing is False
 
     def test_ospf_te_mpls(self):
         r = resolve_stack("ospf", ["te", "mpls"])
-        assert r.daemons == ["zebra", "ospfd", "ldpd"]
+        assert r.daemons == ["zebra", "ospfd", "staticd", "ldpd"]
         assert r.template_variables["te_enabled"] is True
         assert r.template_variables["mpls_enabled"] is True
         template_srcs = [t.src for t in r.template_files]
@@ -39,7 +40,7 @@ class TestOSPF:
 class TestISIS:
     def test_isis_plain(self):
         r = resolve_stack("isis", [])
-        assert r.daemons == ["zebra", "isisd"]
+        assert r.daemons == ["zebra", "isisd", "staticd"]
         assert r.mi_adapter == "frr_isis_adapter"
         assert r.segment_routing is False
         assert r.template_variables["protocol"] == "isis"
@@ -47,7 +48,7 @@ class TestISIS:
 
     def test_isis_sr(self):
         r = resolve_stack("isis", ["sr"])
-        assert r.daemons == ["zebra", "isisd", "pathd"]
+        assert r.daemons == ["zebra", "isisd", "staticd", "pathd"]
         assert r.segment_routing is True
         assert r.ttl_propagation == "pipe"
         assert r.sysctls["net.mpls.ip_ttl_propagate"] == "0"
@@ -60,13 +61,13 @@ class TestISIS:
 
     def test_isis_te(self):
         r = resolve_stack("isis", ["te"])
-        assert r.daemons == ["zebra", "isisd"]
+        assert r.daemons == ["zebra", "isisd", "staticd"]
         assert r.template_variables["te_enabled"] is True
         assert r.segment_routing is False
 
     def test_isis_te_mpls(self):
         r = resolve_stack("isis", ["te", "mpls"])
-        assert r.daemons == ["zebra", "isisd", "ldpd"]
+        assert r.daemons == ["zebra", "isisd", "staticd", "ldpd"]
         assert r.template_variables["te_enabled"] is True
         assert r.template_variables["mpls_enabled"] is True
 

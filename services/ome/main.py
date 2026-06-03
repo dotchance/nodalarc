@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from nodal.logging import configure as _configure_logging
 from nodal.logging import connect as _connect_logging
-from nodalarc.constants import EARTH_RADIUS_KM
+from nodalarc.body_frames import body_frame_for
 from nodalarc.constellation_loader import SatelliteNode, satellite_node_id
 from nodalarc.link_metadata import LinkRuleMetadata, build_link_metadata_maps
 from nodalarc.models.addressing import AddressingScheme
@@ -41,7 +41,7 @@ from ome.event_stream import (
     precompute_timeline,
     write_timeline_jsonl,
 )
-from ome.propagator import orbital_period
+from ome.propagator import orbital_period_for_body
 from ome.types import MbbTeardownLifecycleEvent, MbbTeardownState
 
 if TYPE_CHECKING:
@@ -66,6 +66,8 @@ class _SessionBundle(NamedTuple):
     rule_map: dict[tuple[str, str], LinkRuleMetadata]
     ground_candidate_satellites_by_gs: dict[str, tuple[str, ...]]
     node_metadata: dict[str, dict[str, object]]
+    body_ephemeris: object | None
+    active_bodies: frozenset[str]
 
 
 def _load_session_config(session_path: str | Path) -> _SessionBundle:
@@ -96,7 +98,8 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
         )
 
     period = max(
-        orbital_period(sat.elements.semi_major_axis_km - EARTH_RADIUS_KM) for sat in satellites
+        orbital_period_for_body(sat.elements, body_frame_for(getattr(sat, "central_body", "earth")))
+        for sat in satellites
     )
     addressing = resolution.addressing
     neighbors = resolution.neighbors
@@ -144,9 +147,13 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
                 "local_node_id": node.local_node_id,
                 "namespace": node.namespace,
                 "tags": tuple(node.tags),
+                "reference_body": node.reference_body or node.central_body or "earth",
+                "frame_id": node.frame_id,
             }
             for node in resolution.resolved.nodes
         },
+        body_ephemeris=resolution.body_ephemeris,
+        active_bodies=resolution.active_bodies,
     )
 
 
@@ -971,6 +978,8 @@ def _run_pacing(
         ground_defaults_applied=True,
         ground_candidate_satellites_by_gs=cfg.ground_candidate_satellites_by_gs,
         node_metadata=cfg.node_metadata,
+        body_ephemeris=cfg.body_ephemeris,
+        active_bodies=cfg.active_bodies,
     )
 
     step_seconds = session.time.step_seconds

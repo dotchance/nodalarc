@@ -45,6 +45,7 @@ router isis NODAL
 exit
 
 {% for iface_name, info in interface_info.items() %}
+{% if not info.static_only | default(false) %}
 interface {{ iface_name }}
  ip router isis NODAL
  isis network point-to-point
@@ -55,6 +56,7 @@ interface {{ iface_name }}
  isis bfd
 {% endif %}
 exit
+{% endif %}
 {% endfor %}
 
 {% for iface in gnd_interfaces %}

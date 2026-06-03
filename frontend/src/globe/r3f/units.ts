@@ -8,9 +8,10 @@
  * worker, geoToWorld, positionLookup) VERBATIM with no rescale factor — the lowest-risk
  * path to faithful parity (see specs/plans/ux2-r3f-migration.md, "Scale decision").
  *
- * Earth + LEO sits comfortably within float32 at this scale; the float64 /
- * floating-origin precision layer is deferred until a second body lands (it is keyed on
- * the per-body frame, not the absolute unit, so adding it later is an addition).
+ * M3 keeps node coordinates local to each body and places the body frame in the shared
+ * universe. Cislunar distances are still small enough at this scale for the demonstrator;
+ * the future Mars/Lagrange fidelity layer should add camera-relative/floating-origin render
+ * coordinates without changing these truth units.
  */
 
 import { EARTH_RADIUS_KM, SCENE_EARTH_RADIUS, SCENE_KM_PER_UNIT } from "../../sim/orbitalMath";

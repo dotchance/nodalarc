@@ -230,6 +230,10 @@ class SpaceNodeSegment(BaseModel):
     id: Identifier
     kind: Literal["space_node"]
     namespace: Namespace
+    # Required by the M3 runtime when node.state is orbital elements. StateVector
+    # space nodes are structurally valid but runtime-future until a common-frame
+    # fixed-state propagator is wired through OME/Node Agent.
+    central_body: FrameBodyName | None = None
     satellite_type: Identifier
     node: ExplicitSpaceNode
     tags: list[Identifier] | None = None

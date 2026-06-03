@@ -223,6 +223,7 @@ class SatelliteNode:
         "node_id",
         "local_node_id",
         "segment_id",
+        "central_body",
         "elements",
         "isl_terminal_count",
         "ground_terminal_count",
@@ -245,6 +246,7 @@ class SatelliteNode:
         node_id: str | None = None,
         local_node_id: str | None = None,
         segment_id: str | None = None,
+        central_body: str = "earth",
         isl_terminals: list | tuple | None = None,
         ground_terminals: list | tuple | None = None,
         tle_line_1: str | None = None,
@@ -258,6 +260,7 @@ class SatelliteNode:
         self.node_id = node_id
         self.local_node_id = local_node_id
         self.segment_id = segment_id
+        self.central_body = central_body
         self.elements = elements
         self.isl_terminal_count = isl_terminal_count
         self.ground_terminal_count = ground_terminal_count
@@ -299,6 +302,8 @@ def clone_satellite_node(
     node_id: str | None = None,
     local_node_id: str | None = None,
     segment_id: str | None = None,
+    central_body: str | None = None,
+    elements: OrbitalElements | None = None,
 ) -> SatelliteNode:
     """Copy a satellite while assigning resolver-owned runtime identity."""
     return SatelliteNode(
@@ -309,7 +314,8 @@ def clone_satellite_node(
         node_id=sat.node_id if node_id is None else node_id,
         local_node_id=sat.local_node_id if local_node_id is None else local_node_id,
         segment_id=sat.segment_id if segment_id is None else segment_id,
-        elements=sat.elements,
+        central_body=sat.central_body if central_body is None else central_body,
+        elements=sat.elements if elements is None else elements,
         isl_terminal_count=sat.isl_terminal_count,
         ground_terminal_count=sat.ground_terminal_count,
         isl_terminals=sat.isl_terminals,

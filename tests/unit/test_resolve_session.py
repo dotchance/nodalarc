@@ -5,6 +5,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from nodalarc.link_metadata import build_link_metadata_maps
 from nodalarc.models.identity import IdentityMode
 from nodalarc.resolve_session import (
@@ -14,7 +15,7 @@ from nodalarc.resolve_session import (
     resolve_session_with_assets,
 )
 from nodalarc.runtime_support import UnsupportedFeatureError
-from ome.event_stream import build_step_context, compute_step
+from ome.event_stream import build_session_ephemeris, build_step_context, compute_step
 from pydantic import ValidationError
 
 
@@ -110,22 +111,20 @@ def test_future_structural_grammar_fails_runtime_support_with_typed_error():
     data["segments"].append(
         {
             "id": "relay",
-            "kind": "space_node",
+            "kind": "lagrange_point",
             "namespace": "relay",
-            "satellite_type": "meo-geo-rf",
-            "node": {
-                "id": "relay",
-                "state": {
-                    "frame": "gcrs",
-                    "position_km": [400000.0, 0.0, 0.0],
-                    "velocity_km_s": [0.0, 1.0, 0.0],
-                },
+            "satellite_type": "cislunar-relay-rf",
+            "frame": {
+                "primary_body": "earth",
+                "secondary_body": "luna",
+                "point": "L1",
+                "ephemeris": {"model": "lagrange_approximation"},
             },
         }
     )
     with pytest.raises(UnsupportedFeatureError) as excinfo:
         resolve_session(data)
-    assert any(feature.value == "space_node" for feature in excinfo.value.features)
+    assert any(feature.value == "lagrange_point" for feature in excinfo.value.features)
 
 
 def test_terminal_inventory_is_materialized_from_source_satellite_type():
@@ -434,7 +433,7 @@ def test_static_max_links_per_node_constraint_is_enforced_at_resolve_time():
 def test_dynamic_link_rule_constraints_fail_until_ome_consumes_them():
     data = _segment_session()
     data["link_rules"][0]["constraints"] = {"max_range_km": 1000.0}
-    with pytest.raises(SessionResolutionError, match="unsupported M2 constraint"):
+    with pytest.raises(SessionResolutionError, match="unsupported runtime constraint"):
         resolve_session(data)
 
 
@@ -507,3 +506,98 @@ def test_earth_leo_meo_geo_demo_resolves_stitched_candidate_graph():
         if candidate.rule_id == "leo-to-meo-relay-candidates"
     ]
     assert not any(node_id.startswith("geo-") for pair in leo_meo_pairs for node_id in pair)
+
+
+def test_earth_luna_relay_demo_resolves_and_computes_common_frame_relay():
+    resolution = load_session_resolution_from_file(
+        Path("configs/sessions/earth-luna-relay.yaml"),
+        origin="test.resolve_session",
+    )
+
+    assert resolution.active_bodies == frozenset({"earth", "luna"})
+    assert resolution.body_ephemeris is not None
+    assert {"earth-relay", "luna-relay", "lunar-ground"} == {
+        node.segment_id for node in resolution.resolved.nodes
+    }
+    assert "earth-relay-gateway" in resolution.resolved.node_ids()
+    assert "luna-sat-p00s00" in resolution.resolved.node_ids()
+    assert any(
+        assignment.link_type == "static_ip:earth-luna-static-relay"
+        for _node_id, assignment in resolution.neighbors
+    )
+
+    node_metadata = {
+        node.node_id: {
+            "segment_id": node.segment_id,
+            "local_node_id": node.local_node_id,
+            "namespace": node.namespace,
+            "tags": tuple(node.tags),
+            "reference_body": node.reference_body or node.central_body or "earth",
+            "frame_id": node.frame_id,
+        }
+        for node in resolution.resolved.nodes
+    }
+    ctx = build_step_context(
+        satellites=list(resolution.satellites),
+        addressing=resolution.addressing,
+        gs_file=resolution.primary_ground_set.config,
+        neighbors=resolution.neighbors,
+        propagator_id=resolution.runtime_session.orbit.propagator,
+        ground_scheduling=resolution.runtime_session.scheduling.ground,
+        ground_link_model=resolution.runtime_session.simulation.ground_link_model,
+        ground_defaults_applied=True,
+        ground_candidate_satellites_by_gs=resolution.ground_candidate_satellites_by_gs,
+        node_metadata=node_metadata,
+        body_ephemeris=resolution.body_ephemeris,
+        active_bodies=resolution.active_bodies,
+    )
+
+    epoch_unix = 1704067200.0
+    ephemeris = build_session_ephemeris(ctx, epoch_unix, epoch_id=0)
+    assert set(ephemeris.body_frames) == {"earth", "luna"}
+    assert ephemeris.nodes["luna-sat-p00s00"].reference_body == "luna"
+    assert ephemeris.nodes["earth-relay-gateway"].reference_body == "earth"
+
+    result = compute_step(
+        ctx,
+        epoch_unix,
+        0,
+        resolution.runtime_session.time.step_seconds,
+        0.0,
+        {},
+        {},
+    )
+
+    static_pairs = {
+        candidate.pair
+        for candidate in resolution.declared_candidates
+        if candidate.rule_id == "earth-luna-static-relay"
+    }
+    assert len(static_pairs) == 1
+    static_pair = next(iter(static_pairs))
+    feasibility = result.isl_feasibility.get(static_pair) or result.isl_feasibility.get(
+        (static_pair[1], static_pair[0])
+    )
+    assert feasibility is not None
+    assert feasibility.feasible
+    assert feasibility.reject_reason == "ok"
+    assert feasibility.range_km > 300_000
+    assert feasibility.orbital_one_way_ms > 1_000
+
+
+def test_non_earth_session_requires_ephemeris_manifest():
+    data = yaml.safe_load(Path("configs/sessions/earth-luna-relay.yaml").read_text())
+    data.pop("ephemeris")
+
+    with pytest.raises(SessionResolutionError, match="declares no ephemeris manifest"):
+        resolve_session_with_assets(data)
+
+
+def test_ephemeris_manifest_must_cover_session_epoch():
+    data = yaml.safe_load(Path("configs/sessions/earth-luna-relay.yaml").read_text())
+    kernel = data["ephemeris"]["kernels"][0]
+    kernel["coverage_start"] = "1850-01-01T00:00:00Z"
+    kernel["coverage_end"] = "1900-01-01T00:00:00Z"
+
+    with pytest.raises(SessionResolutionError, match="does not cover session epoch"):
+        resolve_session_with_assets(data)

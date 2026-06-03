@@ -16,11 +16,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from nodalarc.body_frames import body_frame_for
 from nodalarc.constellation_loader import (
     SatelliteNode,
     isl_terminal_for_interface,
     satellite_node_id,
 )
+from nodalarc.ephemeris_runtime import SkyfieldBspEphemeris, body_states_at
 from nodalarc.ground_handover import resolve_station_ground_scheduling
 from nodalarc.ground_terminals import (
     TerminalPhysicsProfile,
@@ -33,6 +35,7 @@ from nodalarc.ground_terminals import (
 from nodalarc.models.addressing import AddressingScheme, NeighborAssignment, neighbors_by_node
 from nodalarc.models.events import (
     ClockTick,
+    EphemerisBodyFrame,
     EphemerisNodeFixed,
     EphemerisNodeKeplerian,
     EphemerisNodeTLE,
@@ -89,7 +92,7 @@ def build_session_ephemeris(
     """
     import math
 
-    from nodalarc.constants import EARTH_RADIUS_KM
+    from nodalarc.body_frames import body_frame_for
 
     nodes: dict[str, EphemerisNodeKeplerian | EphemerisNodeTLE | EphemerisNodeFixed] = {}
 
@@ -97,12 +100,21 @@ def build_session_ephemeris(
         raw = ctx.node_metadata.get(node_id, {})
         return {
             key: raw[key]
-            for key in ("segment_id", "local_node_id", "namespace", "tags")
+            for key in (
+                "segment_id",
+                "local_node_id",
+                "namespace",
+                "tags",
+                "reference_body",
+                "frame_id",
+            )
             if key in raw and raw[key] is not None
         }
 
     for sat in ctx.satellites:
         node_id = satellite_node_id(sat, ctx.addressing)
+        sat_body = getattr(sat, "central_body", "earth")
+        body_frame = body_frame_for(sat_body)
         if ctx.propagator_id == "sgp4-tle":
             if sat.tle_line_1 is None or sat.tle_line_2 is None:
                 raise ValueError(
@@ -119,7 +131,7 @@ def build_session_ephemeris(
         else:
             nodes[node_id] = EphemerisNodeKeplerian(
                 propagator=ctx.propagator_id,
-                altitude_km=sat.elements.semi_major_axis_km - EARTH_RADIUS_KM,
+                altitude_km=sat.elements.semi_major_axis_km - body_frame.equatorial_radius_km,
                 inclination_deg=math.degrees(sat.elements.inclination_rad),
                 raan_deg=math.degrees(sat.elements.raan_rad),
                 true_anomaly_deg=math.degrees(sat.elements.true_anomaly_rad),
@@ -136,11 +148,31 @@ def build_session_ephemeris(
             **_meta(gs_id),
         )
 
+    epoch_body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix)
+    body_frames: dict[str, EphemerisBodyFrame] = {}
+    for body_id, body_state in sorted(epoch_body_states.items()):
+        body_frame = body_frame_for(body_id)
+        body_frames[body_id] = EphemerisBodyFrame(
+            body_id=body_id,
+            radius_km=body_frame.equatorial_radius_km,
+            origin_x_km=body_state.position_km.x,
+            origin_y_km=body_state.position_km.y,
+            origin_z_km=body_state.position_km.z,
+            vel_x_km_s=body_state.velocity_km_s.x,
+            vel_y_km_s=body_state.velocity_km_s.y,
+            vel_z_km_s=body_state.velocity_km_s.z,
+            provider=body_state.provider,
+            kernel_id=body_state.kernel_id,
+            quality_tier=body_state.quality_tier,
+            frame=body_state.frame,
+        )
+
     return SessionEphemeris(
         epoch_id=epoch_id,
         sim_time=datetime.fromtimestamp(epoch_unix, tz=UTC),
         epoch_unix=epoch_unix,
         nodes=nodes,
+        body_frames=body_frames,
     )
 
 
@@ -203,8 +235,10 @@ class StepContext:
     sat_isl_terminal_constraints: dict[str, dict[str, IslTerminalConstraints]]
     sat_ground_terminals: dict[str, int]  # satellite ground terminal capacity
     propagator_id: PropagatorId
-    polar_seam_enabled: bool
-    latitude_threshold_deg: float
+    body_ephemeris: SkyfieldBspEphemeris | None = None
+    active_bodies: frozenset[str] = field(default_factory=lambda: frozenset({"earth"}))
+    polar_seam_enabled: bool = False
+    latitude_threshold_deg: float = 70.0
     ground_policy_lookahead_horizon_ticks: int = 0
     ground_policy_lookahead_horizon_ticks_by_gs: dict[str, int] = field(default_factory=dict)
 
@@ -332,6 +366,8 @@ def build_step_context(
     ground_defaults_applied: bool = False,
     ground_candidate_satellites_by_gs: Mapping[str, tuple[str, ...]] | None = None,
     node_metadata: Mapping[str, Mapping[str, object]] | None = None,
+    body_ephemeris: SkyfieldBspEphemeris | None = None,
+    active_bodies: frozenset[str] | None = None,
 ) -> StepContext:
     """Build the per-session-constant context for compute_step()."""
     by_node = neighbors_by_node(neighbors)
@@ -416,7 +452,7 @@ def build_step_context(
         for _i, station in enumerate(gs_file.stations):
             node_id = addressing.gs_id(station.name)
             geo = GeoPosition(station.lat_deg, station.lon_deg, (station.alt_m or 0) / 1000.0)
-            ecef = geodetic_to_ecef(geo)
+            ecef = geodetic_to_ecef(geo, body_frame_for(station.reference_body))
             gs_positions[node_id] = (ecef, geo)
             gs_min_elevations[node_id] = (
                 station.min_elevation_deg
@@ -556,6 +592,8 @@ def build_step_context(
         sat_isl_terminal_constraints=sat_isl_terminal_constraints,
         sat_ground_terminals=sat_ground_terminals,
         propagator_id=propagator_id,
+        body_ephemeris=body_ephemeris,
+        active_bodies=active_bodies or frozenset({"earth"}),
         polar_seam_enabled=polar_seam_enabled,
         latitude_threshold_deg=latitude_threshold_deg,
         ground_policy_lookahead_horizon_ticks=lookahead_horizon_ticks,
@@ -648,12 +686,14 @@ def compute_step(
     sim_time = datetime.fromtimestamp(epoch_unix + dt, tz=UTC)
 
     # 1. Propagate all satellite states using the session-selected engine.
+    body_states = body_states_at(ctx.body_ephemeris, set(ctx.active_bodies), epoch_unix + dt)
     sat_states = propagate_satellites(
         satellites=ctx.satellites,
         addressing=ctx.addressing,
         epoch_unix=epoch_unix,
         dt=dt,
         propagator_id=ctx.propagator_id,
+        body_states=body_states,
     )
 
     # 2. Build positions dict (for LinkStateSnapshot latency) and ClockTick
@@ -718,6 +758,8 @@ def compute_step(
                 gs_reference_bodies=ctx.gs_reference_bodies,
                 gs_terminal_profiles=ctx.gs_terminal_profiles,
                 sat_ground_terminal_profiles=ctx.sat_ground_terminal_profiles,
+                body_ephemeris=ctx.body_ephemeris,
+                active_bodies=ctx.active_bodies,
             )
             if "longest-remaining-pass" in set(ctx.gs_selection_policy_names.values())
             else None

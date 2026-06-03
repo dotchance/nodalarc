@@ -217,13 +217,15 @@ class TestBuildSessionEphemeris:
 
         import math
 
-        from nodalarc.constants import EARTH_RADIUS_KM
+        from nodalarc.body_frames import body_frame_for
 
         for sat in sats[:3]:
             nid = ctx.addressing.sat_id(sat.plane, sat.slot)
             node = eph.nodes[nid]
             assert isinstance(node, EphemerisNodeKeplerian)
-            expected_alt = sat.elements.semi_major_axis_km - EARTH_RADIUS_KM
+            expected_alt = (
+                sat.elements.semi_major_axis_km - body_frame_for("earth").equatorial_radius_km
+            )
             assert abs(node.altitude_km - expected_alt) < 0.001
             assert abs(node.inclination_deg - math.degrees(sat.elements.inclination_rad)) < 0.001
 

@@ -43,6 +43,8 @@ export interface EphemerisNodeKeplerian {
   local_node_id?: string | null;
   namespace?: string | null;
   tags?: string[];
+  reference_body?: string;
+  frame_id?: string;
 }
 
 export interface EphemerisNodeFixed {
@@ -54,15 +56,33 @@ export interface EphemerisNodeFixed {
   local_node_id?: string | null;
   namespace?: string | null;
   tags?: string[];
+  reference_body?: string;
+  frame_id?: string;
 }
 
 export type EphemerisNode = EphemerisNodeKeplerian | EphemerisNodeFixed;
+
+export interface EphemerisBodyFrame {
+  body_id: string;
+  radius_km: number;
+  origin_x_km: number;
+  origin_y_km: number;
+  origin_z_km: number;
+  vel_x_km_s: number;
+  vel_y_km_s: number;
+  vel_z_km_s: number;
+  provider: string;
+  kernel_id: string;
+  quality_tier: string;
+  frame: string;
+}
 
 export interface SessionEphemeris {
   epoch_id: number;
   sim_time: string; // ISO 8601
   epoch_unix: number;
   nodes: Record<string, EphemerisNode>;
+  body_frames?: Record<string, EphemerisBodyFrame>;
 }
 
 export interface PlaybackStateMsg {

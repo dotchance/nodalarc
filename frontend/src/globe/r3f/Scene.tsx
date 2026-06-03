@@ -7,11 +7,11 @@
  * overlay, and the HTML label layer — and drives the reference-frame rotation (FrameDriver).
  * It owns the cross-cutting lifecycle the legacy GlobeView held: feeding the EMA sim-clock
  * per snapshot, pausing the clock, driving the SGP4 worker on ephemeris change, and
- * registering the Earth body group as the position registry's world frame.
+ * registering each active body group as a position-registry frame.
  *
- * World-frame layers (trails, all-orbits, selection ring, labels) are scene-root children;
- * earth-local layers (Earth, sats, GS, links, flows, footprint, ground tracks) are children
- * of <Body>. R3F is the single production globe implementation.
+ * World-frame layers (links, flows, trails, all-orbits, selection ring, labels) are scene-root
+ * children; body-local layers (planet/moon appearance, sats, GS, footprint, ground tracks) are
+ * children of that body's <Body>. R3F is the single production globe implementation.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
@@ -27,13 +27,13 @@ import {
   requestFlush,
   sendEphemeris,
 } from "../../sim/workerBridge";
-import type { PlaybackStateMsg, SessionEphemeris } from "../../sim/ephemeris";
+import type { EphemerisBodyFrame, PlaybackStateMsg, SessionEphemeris } from "../../sim/ephemeris";
 import type { ColorMode, GlobeMode, ReferenceFrame, Selection, StateSnapshot } from "../../types";
 import type { GlobeActions } from "../actions";
 import { Universe } from "./Universe";
 import { GlobeActionsBridge } from "./GlobeActionsBridge";
 import { Body } from "./Body";
-import { Earth, Starfield } from "./Earth";
+import { Earth, Moon, Starfield } from "./Earth";
 import { Constellation } from "./Constellation";
 import { GroundStations } from "./GroundStation";
 import { GroundTracks } from "./GroundTracks";
@@ -48,9 +48,14 @@ import { Labels } from "./Labels";
 import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { FrameDriver } from "./FrameDriver";
-import { EARTH_RADIUS_KM } from "./units";
+import { EARTH_RADIUS_KM, kmToRender } from "./units";
 
 const MAX_PINS = 7;
+const BODY_RADIUS_KM: Record<string, number> = {
+  earth: EARTH_RADIUS_KM,
+  luna: 1737.4,
+  mars: 3389.5,
+};
 
 interface SceneProps {
   snapshot: StateSnapshot | null;
@@ -112,6 +117,34 @@ export function Scene({
   // declaratively via their resetKeys below; orbit rings re-seed on their own.
   const constellation = snapshot?.constellation_name ?? null;
   const nodes = snapshot?.nodes ?? [];
+  const earthNodes = useMemo(
+    () => nodes.filter((node) => (node.reference_body ?? "earth") === "earth"),
+    [nodes],
+  );
+  const simTimeUnix = snapshot?.sim_time ? Date.parse(snapshot.sim_time) / 1000 : null;
+  const bodies = useMemo(() => {
+    const frames = ephemeris?.body_frames ?? {};
+    const ids = new Set<string>(["earth"]);
+    for (const bodyId of Object.keys(frames)) ids.add(bodyId);
+    if (ephemeris?.body_frames) {
+      for (const node of nodes) ids.add(node.reference_body ?? "earth");
+    }
+
+    return [...ids]
+      .sort((a, b) => (a === "earth" ? -1 : b === "earth" ? 1 : a.localeCompare(b)))
+      .map((id) => {
+        const frame = frames[id];
+        if (id !== "earth" && !frame) return null;
+        return {
+          id,
+          radiusKm: frame?.radius_km ?? BODY_RADIUS_KM[id] ?? EARTH_RADIUS_KM,
+          position: bodyFramePosition(frame, ephemeris?.epoch_unix ?? null, simTimeUnix),
+        };
+      })
+      .filter((value): value is { id: string; radiusKm: number; position: [number, number, number] } =>
+        value !== null,
+      );
+  }, [ephemeris, nodes, simTimeUnix]);
 
   // On-select decision data, lifted here so the globe is internally single-sourced: the GS
   // envelope cone and the per-sat relation tinting both read from
@@ -214,48 +247,63 @@ export function Scene({
           resetKey={`${ephemeris?.epoch_id ?? "none"}|${referenceFrame}|${constellation ?? "none"}`}
         />
         <AllOrbits
-          nodes={nodes}
+          nodes={earthNodes}
           show={showSatPaths}
           earthFrame={earthGroupRef}
           referenceFrame={referenceFrame}
         />
         <OrbitPins
           pinnedIds={pinnedIds}
-          nodes={nodes}
+          nodes={earthNodes}
           earthFrame={earthGroupRef}
           referenceFrame={referenceFrame}
         />
-        <Body id="earth" radiusKm={EARTH_RADIUS_KM} ref={earthGroupRef}>
-          <Earth globeMode={globeMode} simTimeIso={snapshot?.sim_time ?? null} />
-          <Constellation
-            nodes={nodes}
-            ephemeris={ephemeris}
-            colorMode={colorMode}
-            onSelect={onSelect}
-            onTogglePin={togglePin}
-            onHover={setHover}
-            relations={relations}
-          />
-          <GroundStations
-            nodes={nodes}
-            selection={selection}
-            links={snapshot?.links ?? []}
-            actuationNotices={snapshot?.actuation_notices ?? []}
-            envelope={envelope}
-            onSelect={onSelect}
-            onHover={setHover}
-          />
-          <GroundTracks nodes={nodes} enabled={false} />
-          <Links
-            links={snapshot?.links ?? []}
-            kernelActualPairs={snapshot?.kernel_actual_pairs ?? []}
-            showIslLinks={showIslLinks}
-            showGroundLinks={showGroundLinks}
-            resetKey={constellation ?? "none"}
-          />
-          <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} />
-          <CoverageFootprint selection={selection} nodes={nodes} />
-        </Body>
+        <Links
+          links={snapshot?.links ?? []}
+          kernelActualPairs={snapshot?.kernel_actual_pairs ?? []}
+          showIslLinks={showIslLinks}
+          showGroundLinks={showGroundLinks}
+          resetKey={constellation ?? "none"}
+        />
+        <FlowPaths tracedPaths={snapshot?.traced_paths ?? []} />
+        {bodies.map((body) => {
+          const bodyNodes = nodes.filter((node) => (node.reference_body ?? "earth") === body.id);
+          return (
+            <Body
+              key={body.id}
+              id={body.id}
+              radiusKm={body.radiusKm}
+              position={body.position}
+              ref={body.id === "earth" ? earthGroupRef : undefined}
+            >
+              {body.id === "earth" ? (
+                <Earth globeMode={globeMode} simTimeIso={snapshot?.sim_time ?? null} />
+              ) : body.id === "luna" ? (
+                <Moon />
+              ) : null}
+              <Constellation
+                nodes={bodyNodes}
+                ephemeris={ephemeris}
+                colorMode={colorMode}
+                onSelect={onSelect}
+                onTogglePin={togglePin}
+                onHover={setHover}
+                relations={relations}
+              />
+              <GroundStations
+                nodes={bodyNodes}
+                selection={selection}
+                links={snapshot?.links ?? []}
+                actuationNotices={snapshot?.actuation_notices ?? []}
+                envelope={envelope}
+                onSelect={onSelect}
+                onHover={setHover}
+              />
+              <GroundTracks nodes={bodyNodes} enabled={false} />
+              <CoverageFootprint selection={selection} nodes={bodyNodes} />
+            </Body>
+          );
+        })}
         <SelectionOverlay selection={selection} />
       </Universe>
       {/* HTML label overlay — Labels (inside the canvas) projects positions into these divs. */}
@@ -303,4 +351,17 @@ export function Scene({
       )}
     </div>
   );
+}
+
+function bodyFramePosition(
+  frame: EphemerisBodyFrame | undefined,
+  epochUnix: number | null,
+  simTimeUnix: number | null,
+): [number, number, number] {
+  if (!frame) return [0, 0, 0];
+  const dt = epochUnix !== null && simTimeUnix !== null ? simTimeUnix - epochUnix : 0;
+  const xKm = frame.origin_x_km + frame.vel_x_km_s * dt;
+  const yKm = frame.origin_y_km + frame.vel_y_km_s * dt;
+  const zKm = frame.origin_z_km + frame.vel_z_km_s * dt;
+  return [kmToRender(xKm), kmToRender(zKm), -kmToRender(yKm)];
 }

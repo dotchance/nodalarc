@@ -37,3 +37,19 @@ def elements_from_params(
         raan_rad=math.radians(raan_deg),
         true_anomaly_rad=math.radians(true_anomaly_deg),
     )
+
+
+def elements_from_params_for_radius(
+    altitude_km: float,
+    inclination_deg: float,
+    raan_deg: float,
+    true_anomaly_deg: float,
+    radius_km: float,
+) -> OrbitalElements:
+    """Create circular elements around a body with the supplied reference radius."""
+    return OrbitalElements(
+        semi_major_axis_km=radius_km + altitude_km,
+        inclination_rad=math.radians(inclination_deg),
+        raan_rad=math.radians(raan_deg),
+        true_anomaly_rad=math.radians(true_anomaly_deg),
+    )

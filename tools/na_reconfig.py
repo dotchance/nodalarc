@@ -27,14 +27,9 @@ from pathlib import Path
 import yaml
 from jinja2 import Environment, FileSystemLoader
 from nodalarc.constants import LOG_FORMAT
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
-from nodalarc.models.addressing import AddressingScheme, compute_area_assignments
+from nodalarc.models.addressing import compute_area_assignments
 from nodalarc.models.routing_stack import RoutingStackConfig
-from nodalarc.models.session import SessionConfig
+from nodalarc.resolve_session import load_session_resolution_from_file
 from nodalarc.template_vars import _constellation_dims, build_template_vars
 
 log = logging.getLogger(__name__)
@@ -83,12 +78,12 @@ def reconfig(
     session_path: str, target: str, set_args: list[str] | None = None, vars_file: str | None = None
 ) -> None:
     """Re-render and push configs to targeted nodes."""
-    raw = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(raw)
-    constellation = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    addressing = AddressingScheme(session.addressing)
-    satellites = expand_constellation(constellation)
+    resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    session = resolution.runtime_session
+    constellation = resolution.primary_constellation.config
+    gs_file = resolution.primary_ground_set.config
+    addressing = resolution.addressing
+    satellites = list(resolution.primary_constellation.satellites)
 
     stack_dir = Path(session.routing.stack)
     stack_yaml = yaml.safe_load((stack_dir / "stack.yaml").read_text())
@@ -240,9 +235,9 @@ def add_flow(session_path: str, flow_spec: str) -> None:
     Configures the probe daemon on the source GS pod directly and
     records the flow in the session database.
     """
-    raw = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(raw)
-    gs_file = load_ground_stations(session.ground_stations)
+    resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    session = resolution.runtime_session
+    gs_file = resolution.primary_ground_set.config
 
     spec = _parse_flow_spec(flow_spec)
     from measurement import probe_client
@@ -267,9 +262,8 @@ def add_flow(session_path: str, flow_spec: str) -> None:
 
 def remove_flow(session_path: str, flow_id: str) -> None:
     """Remove a probe flow from a running session."""
-    raw = yaml.safe_load(Path(session_path).read_text())
-    session = SessionConfig.model_validate(raw)
-    gs_file = load_ground_stations(session.ground_stations)
+    resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
+    gs_file = resolution.primary_ground_set.config
 
     # We need to find which GS pod this flow runs on.
     # Check all GS pods for the flow.

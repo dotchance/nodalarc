@@ -25,7 +25,7 @@ fi
 echo "[session] Expected session pods: $expected_pods"
 
 echo "[session] Computing placement policy..."
-if ! placement_policy="$(PYTHONPATH=lib uv run python -c 'import sys, yaml; from pathlib import Path; from nodalarc.models.session import SessionConfig; session = SessionConfig.model_validate(yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))); print(session.placement.policy)' "$DEFAULT_SESSION")"; then
+if ! placement_policy="$(PYTHONPATH=lib uv run python -c 'import sys; from nodalarc.resolve_session import load_session_resolution_from_file; print(load_session_resolution_from_file(sys.argv[1], origin="na-session").runtime_session.placement.policy)' "$DEFAULT_SESSION")"; then
     echo "[session] ERROR: failed to compute placement policy for $DEFAULT_SESSION" >&2
     exit 1
 fi
@@ -160,25 +160,21 @@ verify_session_placement() {
     if ! expected_placement_nodes="$(
         PYTHONPATH=lib uv run python -c '
 import sys
-import yaml
 import importlib.util
-from pathlib import Path
 
-from nodalarc.constellation_loader import expand_constellation, load_constellation, load_ground_stations
-from nodalarc.models.addressing import AddressingScheme
-from nodalarc.models.session import SessionConfig
+from nodalarc.resolve_session import load_session_resolution_from_file
 
 spec = importlib.util.spec_from_file_location("session_deployer", "services/nodalarc_operator/session_deployer.py")
 session_deployer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(session_deployer)
 
-session = SessionConfig.model_validate(yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")))
+resolution = load_session_resolution_from_file(sys.argv[1], origin="na-session")
+session = resolution.runtime_session
 available_nodes = [n for n in sys.argv[2].split(",") if n]
-constellation = load_constellation(session.constellation)
-ground_stations = load_ground_stations(session.ground_stations)
-addressing = AddressingScheme(session.addressing)
+ground_stations = resolution.primary_ground_set.config
+addressing = resolution.addressing
 node_vars = {}
-for sat in expand_constellation(constellation):
+for sat in resolution.primary_constellation.satellites:
     node_vars[addressing.sat_id(sat.plane, sat.slot)] = {
         "node_type": "satellite",
         "plane": sat.plane,

@@ -6,6 +6,14 @@
 
 import type { ActuationState } from "./explain/reasons";
 
+export interface NodeAddress {
+  purpose: "router_loopback" | "site_interface" | "site_prefix";
+  family: "ipv4" | "ipv6";
+  address: string;
+  interface: string | null;
+  metric: number | null;
+}
+
 export interface NodeState {
   node_id: string;
   node_type: string; // "satellite" | "ground_station"
@@ -22,6 +30,7 @@ export interface NodeState {
   isl_count: number;
   gnd_count: number;
   prefix: string | null;
+  addresses?: NodeAddress[];
   min_elevation_deg: number | null;
   beam_falloff_exponent: number | null;
   /** Celestial body this node is anchored to (earth | luna | mars). Optional for forward-compat

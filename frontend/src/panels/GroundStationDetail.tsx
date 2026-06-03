@@ -22,6 +22,8 @@ interface GroundStationDetailProps {
 
 const _ordered = (a: string, b: string): string => [a, b].sort().join("|");
 
+const _withoutPrefixLen = (address: string): string => address.split("/")[0] ?? address;
+
 export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationDetailProps) {
   const [tracingFlow, setTracingFlow] = useState<string | null>(null);
   const [inspectedSat, setInspectedSat] = useState<string | null>(null);
@@ -68,6 +70,21 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
   const connectedLinks = snapshot.links.filter(
     (l) => l.node_a === node.node_id || l.node_b === node.node_id,
   );
+  const nodeAddresses = node.addresses ?? [];
+  const loopbacks = nodeAddresses.filter((a) => a.purpose === "router_loopback");
+  const siteInterfaces = nodeAddresses.filter((a) => a.purpose === "site_interface");
+  const sitePrefixes = nodeAddresses.filter((a) => a.purpose === "site_prefix");
+  const remoteSiteTargets = snapshot.nodes
+    .filter((n) => n.node_type === "ground_station" && n.node_id !== node.node_id)
+    .flatMap((n) =>
+      (n.addresses ?? [])
+        .filter((a) => a.purpose === "site_interface" && a.family === "ipv4")
+        .map((a) => ({
+          nodeId: n.node_id,
+          address: _withoutPrefixLen(a.address),
+        })),
+    )
+    .sort((a, b) => a.nodeId.localeCompare(b.nodeId));
 
   const flows = snapshot.active_flows.filter(
     (f) => f.src_node === node.node_id || f.dst_node === node.node_id,
@@ -176,6 +193,52 @@ export function GroundStationDetail({ node, snapshot, onSelect }: GroundStationD
           <span className="detail-value">{node.prefix}</span>
         </div>
       )}
+      {(loopbacks.length > 0 || siteInterfaces.length > 0 || sitePrefixes.length > 0) ? (
+        <>
+          <h3>Network Identities</h3>
+          {loopbacks.map((addr) => (
+            <div className="detail-row" key={`loopback:${addr.address}`}>
+              <span className="detail-label">Loopback {addr.family.toUpperCase()}</span>
+              <span className="detail-value detail-value--code">{addr.address}</span>
+            </div>
+          ))}
+          {siteInterfaces.map((addr) => (
+            <div className="detail-row" key={`site-iface:${addr.address}`}>
+              <span className="detail-label">{addr.interface ?? "site"} interface</span>
+              <span className="detail-value detail-value--code">{addr.address}</span>
+            </div>
+          ))}
+          {sitePrefixes.map((addr) => (
+            <div className="detail-row" key={`site-prefix:${addr.address}`}>
+              <span className="detail-label">Site prefix {addr.family.toUpperCase()}</span>
+              <span className="detail-value detail-value--code">{addr.address}</span>
+            </div>
+          ))}
+        </>
+      ) : null}
+      {remoteSiteTargets.length > 0 ? (
+        <>
+          <h3>Ground Site Targets</h3>
+          {remoteSiteTargets.slice(0, 8).map((target) => (
+            <div className="detail-row" key={`${target.nodeId}:${target.address}`}>
+              <span
+                className="detail-label detail-label--link"
+                onClick={() => selectPeer(target.nodeId)}
+                title={`Select ${target.nodeId}`}
+              >
+                {target.nodeId}
+              </span>
+              <span className="detail-value detail-value--code">{target.address}</span>
+            </div>
+          ))}
+          {remoteSiteTargets.length > 8 ? (
+            <div className="detail-row">
+              <span className="detail-label">More targets</span>
+              <span className="detail-value">{remoteSiteTargets.length - 8}</span>
+            </div>
+          ) : null}
+        </>
+      ) : null}
       <div className="detail-row">
         <span className="detail-label">Terminals</span>
         <span className="detail-value">

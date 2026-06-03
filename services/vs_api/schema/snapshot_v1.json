@@ -68,8 +68,7 @@
           "type": "string"
         },
         "actuation_state": {
-          "title": "Actuation State",
-          "type": "string"
+          "$ref": "#/$defs/ActuationState"
         },
         "since": {
           "anyOf": [
@@ -157,8 +156,7 @@
           "type": "string"
         },
         "actuation_state": {
-          "title": "Actuation State",
-          "type": "string"
+          "$ref": "#/$defs/ActuationState"
         },
         "reason_code": {
           "title": "Reason Code",
@@ -245,6 +243,16 @@
       "title": "ActuationNotice",
       "type": "object"
     },
+    "ActuationState": {
+      "enum": [
+        "clean",
+        "actuation_blocked",
+        "kernel_dirty",
+        "unknown"
+      ],
+      "title": "ActuationState",
+      "type": "string"
+    },
     "LinkState": {
       "description": "State of a single link between two nodes.",
       "properties": {
@@ -314,6 +322,52 @@
           "default": "",
           "title": "Interface B",
           "type": "string"
+        },
+        "link_rule_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Link Rule Id"
+        },
+        "topology_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Topology Mode"
+        },
+        "endpoint_segments": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Endpoint Segments"
         },
         "scheduling_state": {
           "default": "active",
@@ -410,6 +464,63 @@
         "last_convergence_ms"
       ],
       "title": "NetworkHealth",
+      "type": "object"
+    },
+    "NodeAddress": {
+      "description": "Configured network identity/address associated with one node.",
+      "properties": {
+        "purpose": {
+          "enum": [
+            "router_loopback",
+            "site_interface",
+            "site_prefix"
+          ],
+          "title": "Purpose",
+          "type": "string"
+        },
+        "family": {
+          "enum": [
+            "ipv4",
+            "ipv6"
+          ],
+          "title": "Family",
+          "type": "string"
+        },
+        "address": {
+          "title": "Address",
+          "type": "string"
+        },
+        "interface": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Interface"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        }
+      },
+      "required": [
+        "purpose",
+        "family",
+        "address"
+      ],
+      "title": "NodeAddress",
       "type": "object"
     },
     "NodeState": {
@@ -529,6 +640,14 @@
           "default": null,
           "title": "Prefix"
         },
+        "addresses": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NodeAddress"
+          },
+          "title": "Addresses",
+          "type": "array"
+        },
         "min_elevation_deg": {
           "anyOf": [
             {
@@ -552,6 +671,70 @@
           ],
           "default": null,
           "title": "Beam Falloff Exponent"
+        },
+        "reference_body": {
+          "default": "earth",
+          "enum": [
+            "earth",
+            "luna",
+            "mars"
+          ],
+          "title": "Reference Body",
+          "type": "string"
+        },
+        "frame_id": {
+          "default": "earth",
+          "title": "Frame Id",
+          "type": "string"
+        },
+        "tenant_id": {
+          "default": "default",
+          "title": "Tenant Id",
+          "type": "string"
+        },
+        "segment_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Segment Id"
+        },
+        "local_node_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Local Node Id"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Namespace"
+        },
+        "tags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
         }
       },
       "required": [
@@ -760,6 +943,16 @@
       "title": "Links",
       "type": "array"
     },
+    "kernel_actual_pairs": {
+      "items": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "title": "Kernel Actual Pairs",
+      "type": "array"
+    },
     "traced_paths": {
       "items": {
         "$ref": "#/$defs/TracedPath"
@@ -852,6 +1045,14 @@
         "$ref": "#/$defs/ActuationNotice"
       },
       "title": "Actuation Notices",
+      "type": "array"
+    },
+    "ome_lifecycle_notices": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Ome Lifecycle Notices",
       "type": "array"
     },
     "actuation_health": {

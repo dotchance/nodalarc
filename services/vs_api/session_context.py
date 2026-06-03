@@ -24,6 +24,7 @@ This class is the building block for multi-tenant support:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import sqlite3
@@ -52,6 +53,7 @@ from nodalarc.models.vs_api import (
     LinkDecisionTrace,
     LinkState,
     NetworkHealth,
+    NodeAddress,
     NodeState,
     RecentEvent,
 )
@@ -118,6 +120,10 @@ class SessionContext:
         self.gs_elevation_map: dict[str, float] = self._load_gs_elevation_map(
             resolution.primary_ground_set.config, resolution.addressing
         )
+        (
+            self._node_addresses_by_id,
+            self._node_primary_prefix_by_id,
+        ) = self._build_node_network_identity_map(resolution)
         self.beam_falloff_exponent: float = self._load_beam_falloff_exponent(session)
 
         # Wall-clock actuation-latency contract (simulation.actuation) — the
@@ -134,6 +140,10 @@ class SessionContext:
         """
         self.db_path: str = ""
         self.state_lock = threading.Lock()
+        if not hasattr(self, "_node_addresses_by_id"):
+            self._node_addresses_by_id = {}
+        if not hasattr(self, "_node_primary_prefix_by_id"):
+            self._node_primary_prefix_by_id = {}
         self.nodes: dict[str, NodeState] = {}
         self.links: dict[str, LinkState] = {}
         self.link_decision_traces: dict[str, LinkDecisionTrace] = {}
@@ -196,6 +206,8 @@ class SessionContext:
         self.routing_stack = "test"
         self.constellation_name = "test"
         self.gs_elevation_map = {}
+        self._node_addresses_by_id = {}
+        self._node_primary_prefix_by_id = {}
         self.beam_falloff_exponent = 2.0
         self.actuation_expected_latency_ms = 250.0
         self.actuation_fault_after_ms = 1200.0
@@ -1085,6 +1097,12 @@ class SessionContext:
                         )
 
                     existing = self.nodes.get(node_id)
+                    prefix = self._node_primary_prefix_by_id.get(
+                        node_id, existing.prefix if existing else None
+                    )
+                    addresses = self._node_addresses_by_id.get(
+                        node_id, existing.addresses if existing else ()
+                    )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
                         node_type="satellite",
@@ -1098,7 +1116,8 @@ class SessionContext:
                         slot=node.slot,
                         routing_area=existing.routing_area if existing else None,
                         neighbor_count=existing.neighbor_count if existing else 0,
-                        prefix=existing.prefix if existing else None,
+                        prefix=prefix,
+                        addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
                         reference_body=node.reference_body,
                         frame_id=node.frame_id,
@@ -1124,6 +1143,12 @@ class SessionContext:
                     )
 
                     existing = self.nodes.get(node_id)
+                    prefix = self._node_primary_prefix_by_id.get(
+                        node_id, existing.prefix if existing else None
+                    )
+                    addresses = self._node_addresses_by_id.get(
+                        node_id, existing.addresses if existing else ()
+                    )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
                         node_type="satellite",
@@ -1137,7 +1162,8 @@ class SessionContext:
                         slot=node.slot,
                         routing_area=existing.routing_area if existing else None,
                         neighbor_count=existing.neighbor_count if existing else 0,
-                        prefix=existing.prefix if existing else None,
+                        prefix=prefix,
+                        addresses=addresses,
                         beam_falloff_exponent=self.beam_falloff_exponent,
                         reference_body=node.reference_body,
                         frame_id=node.frame_id,
@@ -1150,6 +1176,12 @@ class SessionContext:
 
                 elif isinstance(node, EphemerisNodeFixed):
                     existing = self.nodes.get(node_id)
+                    prefix = self._node_primary_prefix_by_id.get(
+                        node_id, existing.prefix if existing else None
+                    )
+                    addresses = self._node_addresses_by_id.get(
+                        node_id, existing.addresses if existing else ()
+                    )
                     self.nodes[node_id] = NodeState(
                         node_id=node_id,
                         node_type="ground_station",
@@ -1163,7 +1195,8 @@ class SessionContext:
                         slot=None,
                         routing_area=existing.routing_area if existing else None,
                         neighbor_count=existing.neighbor_count if existing else 0,
-                        prefix=existing.prefix if existing else None,
+                        prefix=prefix,
+                        addresses=addresses,
                         min_elevation_deg=self.gs_elevation_map.get(node_id),
                         reference_body=node.reference_body,
                         frame_id=node.frame_id,
@@ -1368,6 +1401,102 @@ class SessionContext:
                 raise ValueError(f"No min_elevation_deg for {station.name}")
             result[gs_id] = elev
         return result
+
+    @staticmethod
+    def _node_addr(
+        *,
+        purpose: Literal["router_loopback", "site_interface", "site_prefix"],
+        address: str,
+        interface: str | None = None,
+        metric: int | None = None,
+    ) -> NodeAddress:
+        net = ipaddress.ip_network(address, strict=False)
+        family = "ipv4" if net.version == 4 else "ipv6"
+        return NodeAddress(
+            purpose=purpose,
+            family=family,
+            address=address,
+            interface=interface,
+            metric=metric,
+        )
+
+    @staticmethod
+    def _host_address_from_prefix(prefix: str) -> str:
+        net = ipaddress.ip_network(prefix, strict=False)
+        return f"{net.network_address + 1}/{net.prefixlen}"
+
+    @classmethod
+    def _build_node_network_identity_map(
+        cls, resolution
+    ) -> tuple[dict[str, tuple[NodeAddress, ...]], dict[str, str]]:
+        """Build configured network identities for the node detail panels.
+
+        These are configured addresses, not reachability claims. A route table or
+        live probe is still authoritative for whether one node can reach another.
+        """
+
+        addresses_by_id: dict[str, tuple[NodeAddress, ...]] = {}
+        primary_prefix_by_id: dict[str, str] = {}
+        addressing = resolution.addressing
+
+        for sat in resolution.satellites:
+            node_id = addressing.sat_id(sat.plane, sat.slot)
+            addresses_by_id[node_id] = (
+                cls._node_addr(
+                    purpose="router_loopback",
+                    address=f"{addressing.sat_ipv4(sat.plane, sat.slot)}/32",
+                    interface="lo",
+                ),
+                cls._node_addr(
+                    purpose="router_loopback",
+                    address=f"{addressing.sat_ipv6(sat.plane, sat.slot)}/128",
+                    interface="lo",
+                ),
+            )
+
+        gs_file = resolution.primary_ground_set.config
+        for index, station in enumerate(gs_file.stations):
+            node_id = addressing.gs_id(station.name)
+            node_addresses: list[NodeAddress] = [
+                cls._node_addr(
+                    purpose="router_loopback",
+                    address=f"{addressing.gs_ipv4(index)}/32",
+                    interface="lo",
+                ),
+                cls._node_addr(
+                    purpose="router_loopback",
+                    address=f"{addressing.gs_ipv6(index)}/128",
+                    interface="lo",
+                ),
+            ]
+            primary_prefix: str | None = None
+            for prefix_cfg in station.terrestrial_prefixes or ():
+                prefix = str(prefix_cfg.prefix)
+                net = ipaddress.ip_network(prefix, strict=False)
+                if net.prefixlen == 0:
+                    continue
+                node_addresses.append(
+                    cls._node_addr(
+                        purpose="site_prefix",
+                        address=prefix,
+                        metric=prefix_cfg.metric,
+                    )
+                )
+                node_addresses.append(
+                    cls._node_addr(
+                        purpose="site_interface",
+                        address=cls._host_address_from_prefix(prefix),
+                        interface="terr0",
+                        metric=prefix_cfg.metric,
+                    )
+                )
+                if primary_prefix is None and net.version == 4:
+                    primary_prefix = prefix
+            addresses_by_id[node_id] = tuple(node_addresses)
+            if primary_prefix is not None:
+                primary_prefix_by_id[node_id] = primary_prefix
+
+        return addresses_by_id, primary_prefix_by_id
 
     @staticmethod
     def _load_beam_falloff_exponent(session: SessionConfig) -> float:

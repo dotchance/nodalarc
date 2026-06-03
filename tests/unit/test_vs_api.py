@@ -284,6 +284,31 @@ class TestConstellationCRReadiness:
             m._extract_ready_cr_session(_constellation_cr(session_yaml=""))
 
 
+class TestSessionContextNetworkIdentity:
+    def test_exposes_loopback_and_site_prefix_addresses(self, tmp_path):
+        session_path = tmp_path / "session.yaml"
+        session_path.write_text(_session_yaml_text())
+
+        ctx = SessionContext("run-test-0001", str(session_path))
+
+        addresses = ctx._node_addresses_by_id["ground-gs-hawthorne"]
+        assert any(
+            a.purpose == "router_loopback" and a.family == "ipv4" and a.address == "10.255.0.1/32"
+            for a in addresses
+        )
+        assert any(
+            a.purpose == "site_prefix" and a.family == "ipv4" and a.address == "172.16.0.0/24"
+            for a in addresses
+        )
+        assert any(
+            a.purpose == "site_interface"
+            and a.address == "172.16.0.1/24"
+            and a.interface == "terr0"
+            for a in addresses
+        )
+        assert ctx._node_primary_prefix_by_id["ground-gs-hawthorne"] == "172.16.0.0/24"
+
+
 class TestStateSnapshot:
     """Test that SessionContext state manipulation produces correct snapshots."""
 

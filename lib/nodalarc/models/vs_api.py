@@ -14,6 +14,18 @@ from nodalarc.body_frames import SupportedSurfaceBody
 from nodalarc.models.scheduler_ops import ActuationState
 
 
+class NodeAddress(BaseModel):
+    """Configured network identity/address associated with one node."""
+
+    model_config = ConfigDict(frozen=True)
+
+    purpose: Literal["router_loopback", "site_interface", "site_prefix"]
+    family: Literal["ipv4", "ipv6"]
+    address: str
+    interface: str | None = None
+    metric: int | None = None
+
+
 class NodeState(BaseModel):
     """State of a single node in the constellation."""
 
@@ -34,6 +46,7 @@ class NodeState(BaseModel):
     isl_count: int = 0
     gnd_count: int = 0
     prefix: str | None = None  # Ground station advertised prefix
+    addresses: tuple[NodeAddress, ...] = ()
     min_elevation_deg: float | None = None  # Ground stations only
     beam_falloff_exponent: float | None = None  # Satellites only, from satellite type
     # Parameterization (D2/D3 from day one): which celestial body this node is anchored to and

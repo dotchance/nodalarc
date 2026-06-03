@@ -22,6 +22,7 @@ function node(node_id: string, segment_id: string, tags: string[]): NodeState {
     isl_count: 0,
     gnd_count: 0,
     prefix: null,
+    addresses: [],
     min_elevation_deg: null,
     beam_falloff_exponent: null,
     segment_id,

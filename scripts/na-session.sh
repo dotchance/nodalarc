@@ -162,31 +162,15 @@ verify_session_placement() {
 import sys
 import importlib.util
 
-from nodalarc.resolve_session import load_session_resolution_from_file
-
 spec = importlib.util.spec_from_file_location("session_deployer", "services/nodalarc_operator/session_deployer.py")
 session_deployer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(session_deployer)
 
-resolution = load_session_resolution_from_file(sys.argv[1], origin="na-session")
-session = resolution.runtime_session
 available_nodes = [n for n in sys.argv[2].split(",") if n]
-ground_stations = resolution.primary_ground_set.config
-addressing = resolution.addressing
-node_vars = {}
-for sat in resolution.primary_constellation.satellites:
-    node_vars[addressing.sat_id(sat.plane, sat.slot)] = {
-        "node_type": "satellite",
-        "plane": sat.plane,
-    }
-for index, station in enumerate(ground_stations.stations):
-    node_vars[addressing.gs_id(station.name)] = {
-        "node_type": "ground_station",
-        "gs_name": station.name,
-        "gs_index": index,
-    }
-placement = session_deployer.compute_pod_placement(session.placement, node_vars, available_nodes)
-print(len(set(placement.values())))
+print(session_deployer.compute_expected_placement_node_count(
+    {"sessionYaml": open(sys.argv[1], encoding="utf-8").read()},
+    available_nodes,
+))
 ' "$DEFAULT_SESSION" "$ready_node_csv"
     )"; then
         echo "[session] ERROR: failed to compute expected placement for $DEFAULT_SESSION" >&2

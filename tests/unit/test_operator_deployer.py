@@ -33,6 +33,7 @@ from nodalarc_operator.session_deployer import (
     _deterministic_node,
     _required_substrate_pairs,
     check_wiring_complete,
+    compute_expected_placement_node_count,
     compute_expected_pod_count,
     compute_platform_hash,
     compute_pod_placement,
@@ -542,6 +543,24 @@ class TestExpectedPodCount:
         spec = {"sessionYaml": _make_session_yaml(constellation_path="/nonexistent/path.yaml")}
         with pytest.raises(Exception):
             compute_expected_pod_count(spec)
+
+
+class TestExpectedPlacementNodeCount:
+    """Expected placement must use all resolved segments, not only the primary constellation."""
+
+    def test_earth_luna_relay_counts_relay_segment_placement(self):
+        session_yaml = (PROJECT_ROOT / "configs/sessions/earth-luna-relay.yaml").read_text()
+
+        count = compute_expected_placement_node_count(
+            {"sessionYaml": session_yaml},
+            ["node01", "node02", "node03"],
+        )
+
+        assert count == 3
+
+    def test_missing_session_yaml_raises(self):
+        with pytest.raises(ValueError, match="sessionYaml"):
+            compute_expected_placement_node_count({}, ["node01"])
 
 
 # ---------------------------------------------------------------------------

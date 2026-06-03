@@ -1099,3 +1099,39 @@ def test_clean_kernel_audit_due_gate_uses_injected_clock_and_is_reproducible() -
     asyncio.run(d._run_due_kernel_verifications(sim_time=SIM_TIME))
     d._send_kernel_inventory.assert_awaited_once()
     assert _published_ops_codes(d._js.publish) == ["KERNEL_VERIFY_ATTEMPTED"]
+
+
+def test_clean_kernel_audit_runs_after_due_latency_update_in_reconcile() -> None:
+    d = _make_dispatcher_with_two_terminal_gs()
+    pair = ("gs-multi", "sat-old")
+    actual = _info()
+    actual.latency_ms = 1.0
+    desired_info = _info()
+    desired_info.latency_ms = 2.0
+    d._actual_links[pair] = actual
+    d._last_latencies[pair] = actual.latency_ms
+    d._clean_kernel_audit_interval_s = 60.0
+    base = datetime(2026, 5, 27, 12, 0, 0, tzinfo=UTC)
+    d._now = lambda: base + timedelta(seconds=60)
+    d._last_clean_kernel_audit_at = base
+    d._js.publish = AsyncMock()
+    order: list[tuple[str, float]] = []
+
+    async def _latency_update(pairs, desired, sim_time):
+        assert pairs == {pair}
+        order.append(("set_latency", desired[pair].latency_ms))
+        d._actual_links[pair] = desired[pair]
+        d._last_latencies[pair] = desired[pair].latency_ms
+        return _success_result(pair=pair, operation="SetLatency")
+
+    async def _kernel_inventory(*, expected_up, **kwargs):
+        order.append(("clean_audit", expected_up[pair].latency_ms))
+        return _success_result(pair=pair, operation="KernelInventory")
+
+    d._send_authoritative_latency_updates = _latency_update
+    d._send_kernel_inventory = _kernel_inventory
+
+    asyncio.run(d._reconcile_links({pair: desired_info}, d._nc, SIM_TIME))
+
+    assert order == [("set_latency", 2.0), ("clean_audit", 2.0)]
+    assert d._actual_links[pair].latency_ms == 2.0

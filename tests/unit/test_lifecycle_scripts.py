@@ -209,6 +209,7 @@ def test_lifecycle_scripts_print_next_steps() -> None:
 def test_session_readiness_requires_expected_generation_and_pod_counts() -> None:
     script = (ROOT / "scripts/na-session.sh").read_text()
     assert "compute_expected_pod_count" in script
+    assert "compute_expected_placement_node_count" in script
     assert '{.status.phase}{"|"}{.status.observedGeneration}' in script
     assert '[ "$ready_pods" = "$expected_pods" ]' in script
     assert '[ "$pod_count" = "$expected_pods" ]' in script

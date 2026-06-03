@@ -1957,7 +1957,18 @@ class Dispatcher:
                 outcomes[gs_id] = True
         return outcomes
 
-    async def _run_due_kernel_verifications(self, *, sim_time: datetime) -> None:
+    async def _run_due_clean_kernel_audit(self, *, sim_time: datetime) -> None:
+        now = self._now()
+        interval_s = self._clean_kernel_audit_interval_s
+        if interval_s is not None and (now - self._last_clean_kernel_audit_at) >= timedelta(
+            seconds=interval_s
+        ):
+            self._last_clean_kernel_audit_at = now
+            await self._audit_clean_ground_kernel_state(sim_time=sim_time)
+
+    async def _run_due_kernel_verifications(
+        self, *, sim_time: datetime, include_clean_audit: bool = True
+    ) -> None:
         for gs_id, state in list(self._gs_actuation.items()):
             next_time = state.recovery.next_verify_after
             if state.state == ActuationState.CLEAN or next_time is None:
@@ -1967,14 +1978,10 @@ class Dispatcher:
             if self._now() >= next_time:
                 await self._verify_gs_against_current_authority(gs_id=gs_id, sim_time=sim_time)
 
-        now = self._now()
-        interval_s = self._clean_kernel_audit_interval_s
-        if interval_s is not None and (now - self._last_clean_kernel_audit_at) >= timedelta(
-            seconds=interval_s
-        ):
-            self._last_clean_kernel_audit_at = now
-            await self._audit_clean_ground_kernel_state(sim_time=sim_time)
+        if include_clean_audit:
+            await self._run_due_clean_kernel_audit(sim_time=sim_time)
 
+        now = self._now()
         heartbeat_interval_s = self._recoverable_state_heartbeat_interval_s
         if (now - self._last_recoverable_state_heartbeat_at) >= timedelta(
             seconds=heartbeat_interval_s
@@ -2911,7 +2918,7 @@ class Dispatcher:
         actual_before = frozenset(self._actual_links)
         pending_before = frozenset(self._pending_since)
         try:
-            await self._run_due_kernel_verifications(sim_time=sim_time)
+            await self._run_due_kernel_verifications(sim_time=sim_time, include_clean_audit=False)
 
             diff = diff_link_state(self._actual_links, desired)
             to_remove = self._filter_ground_down_mutations(
@@ -2944,6 +2951,7 @@ class Dispatcher:
                 actual_info.authority_sequence = desired_info.authority_sequence
 
             if not (to_remove or to_add or to_update_latency):
+                await self._run_due_clean_kernel_audit(sim_time=sim_time)
                 return
 
             # Publish-before-await: stamp the in_flight->faulted clock for the pairs we are
@@ -3006,6 +3014,8 @@ class Dispatcher:
                 await self._handle_actuation_result(
                     latency_result, sim_time=sim_time, operation_context="latency"
                 )
+
+            await self._run_due_clean_kernel_audit(sim_time=sim_time)
 
             if to_add or to_remove:
                 added_str = ", ".join(f"{a}<->{b}" for a, b in sorted(to_add)) if to_add else ""

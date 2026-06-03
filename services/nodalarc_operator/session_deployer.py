@@ -1622,6 +1622,55 @@ def compute_expected_pod_count(spec: dict) -> int:
     return count
 
 
+def _placement_node_vars_from_resolution(resolution: Any) -> dict[str, dict]:
+    """Build placement inputs from the same resolved assets used for pod creation."""
+
+    addressing = resolution.addressing
+    node_vars: dict[str, dict] = {}
+    for sat in resolution.satellites:
+        node_id = satellite_node_id(sat, addressing)
+        node_vars[node_id] = {
+            "node_type": "satellite",
+            "plane": sat.plane,
+            "slot": sat.slot,
+        }
+    ground_stations = resolution.primary_ground_set.config
+    for index, station in enumerate(ground_stations.stations):
+        node_vars[addressing.gs_id(station.name)] = {
+            "node_type": "ground_station",
+            "gs_name": station.name,
+            "gs_index": index,
+        }
+    return node_vars
+
+
+def compute_expected_placement_node_count(spec: dict, available_nodes: list[str]) -> int:
+    """Compute how many Kubernetes nodes the active placement policy should use.
+
+    This is the pure equivalent of the operator deployment path's placement step.
+    It intentionally uses ``resolution.satellites`` rather than the primary
+    constellation, so multi-segment sessions include relay/space segments in the
+    expected placement distribution.
+    """
+
+    session_yaml = spec.get("sessionYaml")
+    if not session_yaml:
+        raise ValueError("spec.sessionYaml is missing")
+    resolution = resolve_session_with_assets(
+        yaml.safe_load(session_yaml),
+        source_context=SourceContext(origin="operator.expected_placement"),
+    )
+    node_vars = _placement_node_vars_from_resolution(resolution)
+    if not node_vars:
+        raise ValueError("Session expands to 0 nodes — cannot compute placement")
+    placement = compute_pod_placement(
+        resolution.runtime_session.placement,
+        node_vars,
+        available_nodes,
+    )
+    return len(set(placement.values()))
+
+
 def check_pods_ready_condition(namespace: str) -> tuple[int, int]:
     """Count session pods with K8s Ready condition = True.
 

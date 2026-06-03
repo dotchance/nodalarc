@@ -49,6 +49,11 @@ import { Tooltip, type HoverInfo } from "./Tooltip";
 import { SelectionOverlay } from "./SelectionOverlay";
 import { FrameDriver } from "./FrameDriver";
 import { EARTH_RADIUS_KM, kmToRender } from "./units";
+import {
+  cameraDistanceForSceneRadius,
+  cameraFarForMaxDistance,
+  sceneRadiusForCamera,
+} from "./cameraBounds";
 
 const MAX_PINS = 7;
 const BODY_RADIUS_KM: Record<string, number> = {
@@ -145,6 +150,14 @@ export function Scene({
         value !== null,
       );
   }, [ephemeris, nodes, simTimeUnix]);
+  const controlsMaxDistance = useMemo(
+    () => cameraDistanceForSceneRadius(sceneRadiusForCamera(bodies, nodes)),
+    [bodies, nodes],
+  );
+  const cameraFar = useMemo(
+    () => cameraFarForMaxDistance(controlsMaxDistance),
+    [controlsMaxDistance],
+  );
 
   // On-select decision data, lifted here so the globe is internally single-sourced: the GS
   // envelope cone and the per-sat relation tinting both read from
@@ -214,10 +227,16 @@ export function Scene({
       <Universe
         controlsRef={controlsRef}
         onPointerMissed={(e) => missedRef.current(e)}
+        controlsMaxDistance={controlsMaxDistance}
+        cameraFar={cameraFar}
         afterControls={<Labels nodes={nodes} containerRef={labelContainerRef} />}
       >
         {actionsRef && (
-          <GlobeActionsBridge actionsRef={actionsRef} controlsRef={controlsRef} />
+          <GlobeActionsBridge
+            actionsRef={actionsRef}
+            controlsRef={controlsRef}
+            sceneFitDistance={controlsMaxDistance}
+          />
         )}
         {/* Click a beam to select the link; click empty space / Earth to deselect (legacy
             gpuPicker link path + onSelect(null)-on-miss). Sats/GS are picked by their own handlers. */}

@@ -18,6 +18,7 @@ import { useEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CAMERA_FOV } from "../../config";
 import { isOccludedBySphere } from "../labels";
 import { getNodeBodySphere, getNodeWorldPosition } from "./positions";
 import { EARTH_RADIUS_RENDER } from "./units";
@@ -31,13 +32,24 @@ const _camDir = new THREE.Vector3();
 const _centroid = new THREE.Vector3();
 const _fallback = new THREE.Vector3();
 const _bodyCenter = new THREE.Vector3();
+const HALF_FOV_SIN = Math.sin((CAMERA_FOV * Math.PI) / 360);
+
+function fitDistanceForRadius(radius: number, floor: number): number {
+  if (radius <= 0) return floor;
+  return Math.max(floor, (radius / Math.max(0.001, HALF_FOV_SIN)) * 1.35);
+}
 
 interface GlobeActionsBridgeProps {
   actionsRef: MutableRefObject<GlobeActions | null>;
   controlsRef: MutableRefObject<OrbitControls | null>;
+  sceneFitDistance: number;
 }
 
-export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBridgeProps) {
+export function GlobeActionsBridge({
+  actionsRef,
+  controlsRef,
+  sceneFitDistance,
+}: GlobeActionsBridgeProps) {
   const camera = useThree((s) => s.camera);
   const gl = useThree((s) => s.gl);
   const size = useThree((s) => s.size);
@@ -51,7 +63,7 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
     const actions: GlobeActions = {
       flyToTopView: () => {
         const controls = controlsRef.current;
-        const topDist = EARTH_RADIUS_RENDER * 4;
+        const topDist = Math.max(EARTH_RADIUS_RENDER * 4, sceneFitDistance);
         camera.position.set(0, topDist, 0);
         camera.lookAt(0, 0, 0);
         controls?.target.set(0, 0, 0);
@@ -114,9 +126,18 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
         _centroid.multiplyScalar(1 / count);
         if (_centroid.lengthSq() < 1e-6) _centroid.copy(_fallback);
         if (_centroid.lengthSq() === 0) return;
+        let radius = 0;
+        for (const nodeId of nodeIds) {
+          if (getNodeWorldPosition(nodeId, _world)) {
+            radius = Math.max(radius, _world.distanceTo(_centroid));
+          }
+        }
         const target = _centroid.clone();
         const currentTarget = controls?.target ?? _fallback.set(0, 0, 0);
-        const dist = Math.max(camera.position.distanceTo(currentTarget), EARTH_RADIUS_RENDER * 4);
+        const dist = Math.max(
+          camera.position.distanceTo(currentTarget),
+          fitDistanceForRadius(radius, EARTH_RADIUS_RENDER * 4),
+        );
         _dirA.copy(camera.position).sub(target);
         if (_dirA.lengthSq() < 1e-6) _dirA.set(0, 0, 1);
         _dirA.normalize();
@@ -152,7 +173,7 @@ export function GlobeActionsBridge({ actionsRef, controlsRef }: GlobeActionsBrid
     return () => {
       if (actionsRef.current === actions) actionsRef.current = null;
     };
-  }, [actionsRef, controlsRef, camera, gl]);
+  }, [actionsRef, controlsRef, camera, gl, sceneFitDistance]);
 
   // Follow-cam: lerp the camera 5%/frame toward the followed node, pivot fixed at the origin
   // (legacy followTarget loop). World position required — camera math is in world space.

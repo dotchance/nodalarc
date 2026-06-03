@@ -84,12 +84,6 @@ def build_link_metadata_maps(
         segment_id = getattr(sat, "segment_id", None)
         if segment_id is not None:
             node_segments[sat_id] = segment_id
-    for station in gs_file.stations:
-        # Ground stations currently come from one resolved ground segment. The
-        # declared candidates below carry the authoritative segment pair for
-        # access links, so this map is only a fallback for structural metadata.
-        gs_id = addressing.gs_id(station.name)
-        node_segments.setdefault(gs_id, "ground")
 
     for candidate in declared_candidates:
         rule_map[candidate.pair] = LinkRuleMetadata(

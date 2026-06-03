@@ -62,17 +62,27 @@ def _explicit_runtime_pairs(
         raise TypeError("explicit runtime pairs requested for non-explicit topology")
     left_segment = rule.endpoints[0].segment_id
     right_segment = rule.endpoints[1].segment_id
+    left_node_ids = set(rule.endpoints[0].node_ids)
+    right_node_ids = set(rule.endpoints[1].node_ids)
     pairs: list[tuple[str, str]] = []
     for item in topology.pairs:
         a = local_to_runtime.get((left_segment, item.a))
         b = local_to_runtime.get((right_segment, item.b))
+        normal_orientation = a in left_node_ids and b in right_node_ids
         if a is None or b is None:
             a = local_to_runtime.get((right_segment, item.a))
             b = local_to_runtime.get((left_segment, item.b))
+            normal_orientation = False
+        reverse_orientation = a in right_node_ids and b in left_node_ids
         if a is None or b is None:
             raise ValueError(
                 f"link_rule {rule.rule_id!r} explicit pair {item.a!r}<->{item.b!r} "
                 "does not resolve inside the rule endpoint segments"
+            )
+        if not normal_orientation and not reverse_orientation:
+            raise ValueError(
+                f"link_rule {rule.rule_id!r} explicit pair {item.a!r}<->{item.b!r} "
+                "is outside the resolved endpoint selector sets"
             )
         pairs.append(_pair(a, b))
     return tuple(pairs)

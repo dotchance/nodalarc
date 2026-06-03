@@ -349,6 +349,19 @@ def test_explicit_pairs_declare_permission_not_actual_connectivity():
     assert resolution.ground_candidate_satellites_by_gs["gnd-gs-ashburn"] == ()
 
 
+def test_explicit_pairs_must_stay_inside_resolved_endpoint_selectors():
+    data = _segment_session()
+    data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]
+    data["link_rules"][0]["endpoints"][1]["selector"]["slots"] = [0]
+    data["link_rules"][0]["topology"] = {
+        "mode": "explicit_pairs",
+        "pairs": [{"a": "gs-ashburn", "b": "sat-P00S00"}],
+    }
+
+    with pytest.raises(SessionResolutionError, match="outside the resolved endpoint selector sets"):
+        resolve_session(data)
+
+
 def test_declared_candidate_rule_metadata_feeds_link_metadata_maps():
     data = _segment_session()
     data["link_rules"][0]["endpoints"][0]["selector"]["names"] = ["denver"]

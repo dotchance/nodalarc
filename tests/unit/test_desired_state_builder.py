@@ -62,6 +62,7 @@ def test_visibility_event_builds_desired_link_without_recomputing_geometry():
         event,
         interface_map={PAIR: ("isl0", "isl1")},
         bandwidth_map={PAIR: 1000.0},
+        ground_station_ids=frozenset(),
     )
 
     assert pair == PAIR
@@ -96,12 +97,79 @@ def test_ground_visibility_event_uses_terminal_indices():
         event,
         interface_map={},
         bandwidth_map={("gs-a", "sat-a"): 500.0},
+        ground_station_ids=frozenset({"gs-a"}),
     )
 
     assert pair == ("gs-a", "sat-a")
     assert info.interface_a == "term2"
     assert info.interface_b == "gnd1"
     assert info.link_type == "ground"
+
+
+def test_ground_visibility_event_maps_interfaces_by_endpoint_role_for_sat_first_pair():
+    event = VisibilityEvent(
+        sim_time=SIM,
+        node_a="luna-sat-p01s00",
+        node_b="lunar-ground-gs-nearside-relay-site",
+        visible=True,
+        scheduled=True,
+        range_km=1800.0,
+        latency_ms=6.0,
+        elevation_deg=38.0,
+        terminal_type="rf",
+        link_type="ground",
+        gs_terminal_index=0,
+        sat_terminal_index=3,
+        visibility_reject_reason="ok",
+        unscheduled_reason=None,
+    )
+
+    pair, info = desired_link_from_visibility(
+        event,
+        interface_map={},
+        bandwidth_map={("luna-sat-p01s00", "lunar-ground-gs-nearside-relay-site"): 250.0},
+        ground_station_ids=frozenset({"lunar-ground-gs-nearside-relay-site"}),
+    )
+
+    assert pair == ("luna-sat-p01s00", "lunar-ground-gs-nearside-relay-site")
+    assert info.interface_a == "gnd3"
+    assert info.interface_b == "term0"
+    assert info.link_type == "ground"
+
+
+def test_ground_visibility_event_requires_exactly_one_ground_endpoint():
+    event = VisibilityEvent(
+        sim_time=SIM,
+        node_a="sat-a",
+        node_b="sat-b",
+        visible=True,
+        scheduled=True,
+        range_km=1800.0,
+        latency_ms=6.0,
+        elevation_deg=38.0,
+        terminal_type="rf",
+        link_type="ground",
+        gs_terminal_index=0,
+        sat_terminal_index=3,
+        visibility_reject_reason="ok",
+        unscheduled_reason=None,
+    )
+
+    with pytest.raises(ValueError, match="no ground endpoint"):
+        desired_link_from_visibility(
+            event,
+            interface_map={},
+            bandwidth_map={("sat-a", "sat-b"): 250.0},
+            ground_station_ids=frozenset({"gs-a"}),
+        )
+
+    with pytest.raises(ValueError, match="two ground endpoints"):
+        desired_link_from_visibility(
+            event,
+            interface_map={},
+            bandwidth_map={("sat-a", "sat-b"): 250.0},
+            ground_station_ids=frozenset({"sat-a", "sat-b"}),
+        )
 
 
 def test_missing_isl_interface_map_fails_loudly():
@@ -121,7 +189,12 @@ def test_missing_isl_interface_map_fails_loudly():
     )
 
     with pytest.raises(ValueError, match="no configured ISL interfaces"):
-        desired_link_from_visibility(event, interface_map={}, bandwidth_map={PAIR: 1000.0})
+        desired_link_from_visibility(
+            event,
+            interface_map={},
+            bandwidth_map={PAIR: 1000.0},
+            ground_station_ids=frozenset(),
+        )
 
 
 def test_snapshot_link_builds_desired_link_and_skips_down_links():
@@ -144,6 +217,7 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
             down,
             interface_map={PAIR: ("isl0", "isl1")},
             bandwidth_map={PAIR: 1000.0},
+            ground_station_ids=frozenset(),
             snapshot_sim_time=SIM,
             snapshot_seq=42,
         )
@@ -162,6 +236,7 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
         up,
         interface_map={PAIR: ("isl0", "isl1")},
         bandwidth_map={PAIR: 1000.0},
+        ground_station_ids=frozenset(),
         snapshot_sim_time=SIM,
         snapshot_seq=42,
     )
@@ -171,6 +246,40 @@ def test_snapshot_link_builds_desired_link_and_skips_down_links():
     assert info.authority_sim_time == SIM
     assert info.authority_source == "link_state_snapshot"
     assert info.authority_sequence == 42
+
+
+def test_snapshot_ground_link_maps_interfaces_by_endpoint_role_for_sat_first_pair():
+    pair = ("luna-sat-p01s00", "lunar-ground-gs-nearside-relay-site")
+    link = LinkState(
+        node_a=pair[0],
+        node_b=pair[1],
+        interface_a="",
+        interface_b="",
+        admin=AdminState.UP,
+        carrier=CarrierState.UP,
+        routing=RoutingState.UNKNOWN,
+        range_km=1800.0,
+        latency_ms=6.0,
+        bandwidth_mbps=250.0,
+        link_type="ground",
+        sim_time=SIM,
+        gs_terminal_index=0,
+        sat_terminal_index=3,
+    )
+
+    built_pair, info = desired_link_from_snapshot_link(
+        link,
+        interface_map={},
+        bandwidth_map={pair: 250.0},
+        ground_station_ids=frozenset({"lunar-ground-gs-nearside-relay-site"}),
+        snapshot_sim_time=SIM,
+        snapshot_seq=11,
+    )
+
+    assert built_pair == pair
+    assert info.interface_a == "gnd3"
+    assert info.interface_b == "term0"
+    assert info.authority_source == "link_state_snapshot"
 
 
 def test_snapshot_link_sim_time_mismatch_fails_loudly():
@@ -194,6 +303,7 @@ def test_snapshot_link_sim_time_mismatch_fails_loudly():
             link,
             interface_map={PAIR: ("isl0", "isl1")},
             bandwidth_map={PAIR: 1000.0},
+            ground_station_ids=frozenset(),
             snapshot_sim_time=SIM,
             snapshot_seq=42,
         )
@@ -220,6 +330,7 @@ def test_missing_or_nonpositive_bandwidth_fails_loudly():
             event,
             interface_map={PAIR: ("isl0", "isl1")},
             bandwidth_map={},
+            ground_station_ids=frozenset(),
         )
 
     with pytest.raises(ValueError, match="unknown physical rate"):
@@ -227,4 +338,5 @@ def test_missing_or_nonpositive_bandwidth_fails_loudly():
             event,
             interface_map={PAIR: ("isl0", "isl1")},
             bandwidth_map={PAIR: 0.0},
+            ground_station_ids=frozenset(),
         )

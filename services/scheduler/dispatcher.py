@@ -2021,6 +2021,7 @@ class Dispatcher:
         The dispatch worker never reads _desired_links directly — it
         only receives copies via the queue.
         """
+        ground_station_ids = frozenset(self._gs_capacities)
         for vis in vis_events:
             pair = (vis.node_a, vis.node_b)
             if (
@@ -2057,6 +2058,7 @@ class Dispatcher:
                         vis,
                         interface_map=self._interface_map,
                         bandwidth_map=self._bandwidth_map,
+                        ground_station_ids=ground_station_ids,
                     )
                     self._desired_links[pair] = info
             elif not vis.visible:
@@ -2103,6 +2105,7 @@ class Dispatcher:
         self._last_snapshot_epoch_id = snapshot.epoch_id
         desired: dict[tuple[str, str], ActiveLinkInfo] = {}
         self._teardown_pairs.clear()
+        ground_station_ids = frozenset(self._gs_capacities)
 
         # Snapshot is replace-not-merge for both _desired_links and
         # _ome_view (Phase 1.4). _ome_view captures the OME's stated
@@ -2133,6 +2136,7 @@ class Dispatcher:
                 link,
                 interface_map=self._interface_map,
                 bandwidth_map=self._bandwidth_map,
+                ground_station_ids=ground_station_ids,
                 snapshot_sim_time=snapshot.sim_time,
                 snapshot_seq=snapshot.snapshot_seq,
             )

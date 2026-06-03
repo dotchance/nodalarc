@@ -650,6 +650,9 @@ def _capture_ome_seek_stream(monkeypatch, tmp_path: Path) -> tuple[str, list[tup
 def _dispatcher_for_captured_records(
     *, session_id: str, records: list[tuple[str, bytes]], now_base: datetime
 ) -> Dispatcher:
+    def _is_ground_node_id(node_id: str) -> bool:
+        return node_id.startswith("gs-") or "-gs-" in node_id
+
     interface_map: dict[tuple[str, str], tuple[str, str]] = {}
     bandwidth_map: dict[tuple[str, str], float] = {}
     nodes: set[str] = set()
@@ -664,9 +667,13 @@ def _dispatcher_for_captured_records(
             interface_map[pair] = (link.interface_a, link.interface_b)
             bandwidth_map[pair] = link.bandwidth_mbps or 100.0
             nodes.update(pair)
-            for node_id in pair:
-                if node_id.startswith("gs-"):
-                    gs_ids.add(node_id)
+            if link.link_type == "ground":
+                ground_candidates = {node_id for node_id in pair if _is_ground_node_id(node_id)}
+                if len(ground_candidates) != 1:
+                    raise AssertionError(
+                        f"captured ground link {pair} has ambiguous ground endpoint"
+                    )
+                gs_ids.update(ground_candidates)
 
     loc = PodLocationMap()
     for node_id in nodes:

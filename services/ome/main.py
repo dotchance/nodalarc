@@ -108,7 +108,13 @@ def _load_session_config(session_path: str | Path) -> _SessionBundle:
         polar_seam_enabled = constellation_config.polar_seam.enabled
         latitude_threshold_deg = constellation_config.polar_seam.latitude_threshold_deg
 
-    metadata = build_link_metadata_maps(session, addressing)
+    metadata = build_link_metadata_maps(
+        session,
+        addressing,
+        constellation=constellation_config,
+        satellites=satellites,
+        gs_file=gs_file,
+    )
 
     return _SessionBundle(
         session=session,

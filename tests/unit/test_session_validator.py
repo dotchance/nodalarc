@@ -8,9 +8,6 @@ import pytest
 import yaml
 from nodalarc.constellation_loader import (
     SatelliteNode,
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
 )
 from nodalarc.models.constellation import (
     GroundTerminal,
@@ -28,6 +25,7 @@ from nodalarc.models.ground_station import (
     GroundStationFile,
     GroundTerminalDef,
 )
+from nodalarc.models.resolved_session import SourceContext
 from nodalarc.models.session import (
     AllOnOnePlacementConfig,
     OrbitConfig,
@@ -41,6 +39,7 @@ from nodalarc.models.session import (
 )
 from nodalarc.models.terminal_physics import SatGroundTerminalBoresight, TerminalBoresight
 from nodalarc.orbital import elements_from_params
+from nodalarc.resolve_session import resolve_session_with_assets
 from nodalarc.session_validator import (
     VALID_SCHEDULING_POLICIES,
     build_validation_report,
@@ -1680,11 +1679,16 @@ class TestExistingSessions:
     def test_existing_sessions_pass(self, session_path):
         """Real session YAML files must produce zero validation errors."""
         raw = yaml.safe_load(session_path.read_text())
-        session = SessionConfig.model_validate(raw)
-
-        constellation = load_constellation(session.constellation)
-        gs_file = load_ground_stations(session.ground_stations)
-        satellites = expand_constellation(constellation)
+        resolution = resolve_session_with_assets(
+            raw,
+            source_context=SourceContext(
+                origin="test.session_validator", session_path=str(session_path)
+            ),
+        )
+        session = resolution.runtime_session
+        constellation = resolution.primary_constellation.config
+        gs_file = resolution.primary_ground_set.config
+        satellites = list(resolution.primary_constellation.satellites)
 
         protocol = session.routing.protocol or "isis"
         extensions = session.routing.extensions

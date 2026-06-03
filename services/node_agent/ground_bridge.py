@@ -17,6 +17,11 @@ import os
 import threading
 from collections import defaultdict
 
+from nodalarc.runtime_naming import (
+    gs_bridge_port_name,
+    isl_host_name,
+    satellite_ground_host_name,
+)
 from pyroute2 import IPRoute
 
 from node_agent.namespace_ops import _in_namespace
@@ -31,61 +36,20 @@ _gs_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
 
 # ---------------------------------------------------------------------------
-# Naming helpers (link_manager.py L31-58)
+# Naming helpers
 # ---------------------------------------------------------------------------
 
 
-def _sat_short_id(sat_id: str) -> str:
-    """Stable short identifier from satellite ID.
-
-    "sat-P00S05" -> "P00S05"
-    """
-    if sat_id.startswith("sat-"):
-        return sat_id[4:]
-    return sat_id[-10:]
-
-
-def _gs_short_name(gs_id: str) -> str:
-    """Extract station name from gs_id, stripping 'gs-' prefix."""
-    return gs_id[3:] if gs_id.startswith("gs-") else gs_id
-
-
 def _gs_host_veth(gs_id: str, gs_ifname: str) -> str:
-    """Derive host-side GS veth from pod-side interface name.
-
-    gs_ifname comes from the Scheduler via protobuf — never
-    constructed here, never defaulted.
-    """
+    """Derive host-side GS veth from the Scheduler-provided pod interface."""
     idx = int(gs_ifname.removeprefix("term"))
-    return _gs_bridge_port_name(gs_id, idx)
+    return gs_bridge_port_name(gs_id, idx)
 
 
 def _sat_host_veth(sat_id: str, sat_ifname: str) -> str:
-    """Derive host-side satellite veth from pod-side interface name.
-
-    sat_ifname comes from the Scheduler via protobuf — never
-    constructed here, never defaulted.
-    """
+    """Derive host-side satellite veth from the Scheduler-provided interface."""
     idx = int(sat_ifname.removeprefix("gnd"))
-    return f"{_sat_gnd_host_name(sat_id)}-{idx}"[:15]
-
-
-def _gs_bridge_port_name(gs_id: str, idx: int = 0) -> str:
-    """Host-side veth name for GS bridge port. <=15 chars.
-
-    Format: _g{idx}-{name} — prefix shrunk to fit index + separator
-    within the 15-char Linux interface name limit.
-    """
-    name = _gs_short_name(gs_id)
-    result = f"_g{idx}-{name}"
-    if len(result) > 15:
-        result = result[:15]
-    return result
-
-
-def _sat_gnd_host_name(sat_id: str) -> str:
-    """Host-side veth name for satellite ground link. <=15 chars."""
-    return f"_gnd_{_sat_short_id(sat_id)}"[:15]
+    return satellite_ground_host_name(sat_id, idx)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +246,7 @@ def _detach_from_ground_bridge_unlocked(
 
 def _isl_host_name(node_id: str, isl_idx: int) -> str:
     """Host-side veth name for ISL endpoint. ≤15 chars."""
-    return f"_isl_{_sat_short_id(node_id)}_{isl_idx}"[:15]
+    return isl_host_name(node_id, isl_idx)
 
 
 def _isl_idx_from_ifname(ifname: str) -> int:

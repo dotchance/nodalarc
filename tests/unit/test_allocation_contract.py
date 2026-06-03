@@ -15,14 +15,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
-from nodalarc.models.session import SessionConfig
+from nodalarc.models.addressing import assign_isl_neighbors
+from nodalarc.resolve_session import load_session_resolution_from_file
 from ome.event_stream import build_step_context, compute_step
 
 
@@ -30,12 +24,12 @@ def _load_test_session():
     session_path = Path("configs/sessions/demo-36-ospf.yaml")
     if not session_path.exists():
         pytest.skip("demo-36-ospf.yaml not available")
-    data = yaml.safe_load(session_path.read_text())
-    session = SessionConfig.model_validate(data)
-    constellation_config = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation_config)
-    addressing = AddressingScheme(session.addressing)
+    resolution = load_session_resolution_from_file(session_path, origin="test.allocation_contract")
+    session = resolution.runtime_session
+    constellation_config = resolution.primary_constellation.config
+    gs_file = resolution.primary_ground_set.config
+    satellites = list(resolution.primary_constellation.satellites)
+    addressing = resolution.addressing
     neighbors = assign_isl_neighbors(constellation_config, addressing)
     return session, gs_file, satellites, addressing, neighbors
 

@@ -47,9 +47,19 @@ log = logging.getLogger(__name__)
 def _build_interface_map(
     session: SessionConfig,
     addressing: AddressingScheme,
+    *,
+    constellation,
+    satellites,
+    gs_file,
 ) -> tuple[dict[tuple[str, str], tuple[str, str]], dict[tuple[str, str], float]]:
-    """Build shared interface and bandwidth maps from physical terminal config."""
-    metadata = build_link_metadata_maps(session, addressing)
+    """Build shared interface and bandwidth maps from resolver-owned assets."""
+    metadata = build_link_metadata_maps(
+        session,
+        addressing,
+        constellation=constellation,
+        satellites=satellites,
+        gs_file=gs_file,
+    )
     return metadata.interface_map, metadata.bandwidth_map
 
 
@@ -247,7 +257,15 @@ def main() -> None:
     resolution = load_session_resolution_from_file(session_file, origin="scheduler")
     session = resolution.runtime_session
     addressing = resolution.addressing
-    interface_map, bandwidth_map = _build_interface_map(session, addressing)
+    satellites = list(resolution.primary_constellation.satellites)
+    gs_file = resolution.primary_ground_set.config
+    interface_map, bandwidth_map = _build_interface_map(
+        session,
+        addressing,
+        constellation=resolution.primary_constellation.config,
+        satellites=satellites,
+        gs_file=gs_file,
+    )
     log.debug("Interface map: %d link pairs", len(interface_map))
     session_id = require_session_run_id(session)
 
@@ -298,8 +316,6 @@ def main() -> None:
     pool = AgentPool()
 
     # Build capacity maps for MBB dispatch ordering from resolver assets.
-    satellites = resolution.primary_constellation.satellites
-    gs_file = resolution.primary_ground_set.config
 
     gs_terminal_capacities: dict[str, int] = {}
     for station in gs_file.stations:

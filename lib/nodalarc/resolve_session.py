@@ -29,11 +29,12 @@ from nodalarc.constellation_loader import (
     load_constellation,
     load_ground_stations,
 )
+from nodalarc.ground_terminals import ground_terminal_type, station_ground_terminal_type
 from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.constellation import ConstellationConfig
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.identity import IdentityMode
-from nodalarc.models.link_rules import LinkRule, NodeSelector
+from nodalarc.models.link_rules import LinkRule, NodeSelector, VisibleCandidatesTopology
 from nodalarc.models.resolved_session import (
     ResolvedEndpoint,
     ResolvedLinkRule,
@@ -49,6 +50,12 @@ from nodalarc.models.session import (
     AddressingConfig,
     GroundSchedulingConfig,
     SessionConfig,
+)
+from nodalarc.runtime_naming import (
+    gs_bridge_port_name,
+    isl_host_name,
+    satellite_ground_host_name,
+    validate_runtime_node_id,
 )
 from nodalarc.runtime_support import RuntimeSupport, UnsupportedFeature, UnsupportedFeatureError
 
@@ -202,6 +209,9 @@ def resolve_session_with_assets(
     nodes, node_meta = _materialize_nodes(
         constellation, ground_set, runtime_session, addressing, effective_ground
     )
+    _validate_runtime_identity_and_interface_names(nodes)
+    _validate_m1_link_rule_runtime_shape(cfg, constellation.segment.id, ground_set.segment.id)
+    _validate_m1_ground_terminal_compatibility(constellation, ground_set, addressing)
     link_rules = _resolve_link_rules(cfg.link_rules, nodes, node_meta)
     _validate_candidate_budgets(cfg, link_rules)
     sid_blocks = _allocate_sid_blocks(nodes)
@@ -523,6 +533,185 @@ def _ground_terminal_blocks(node_id: str, station: Any, gs_file: GroundStationFi
         )
 
 
+def _terminal_index(block: ResolvedTerminalBlock) -> int:
+    start = block.terminal_id.rfind("[")
+    end = block.terminal_id.rfind("]")
+    if start == -1 or end == -1 or end <= start + 1:
+        raise SessionResolutionError(
+            f"terminal_id {block.terminal_id!r} does not carry a bracketed terminal index"
+        )
+    try:
+        return int(block.terminal_id[start + 1 : end])
+    except ValueError as exc:
+        raise SessionResolutionError(
+            f"terminal_id {block.terminal_id!r} has a non-integer terminal index"
+        ) from exc
+
+
+def _validate_runtime_identity_and_interface_names(nodes: list[ResolvedNode]) -> None:
+    """Validate IDs and host interfaces before they reach Kubernetes/Linux."""
+    iface_owner: dict[str, str] = {}
+
+    def remember(ifname: str, owner: str) -> None:
+        previous = iface_owner.get(ifname)
+        if previous is not None and previous != owner:
+            raise SessionResolutionError(
+                f"host interface name collision: {ifname!r} for {owner} and {previous}"
+            )
+        iface_owner[ifname] = owner
+
+    for node in nodes:
+        try:
+            validate_runtime_node_id(node.node_id)
+        except ValueError as exc:
+            raise SessionResolutionError(str(exc)) from exc
+
+        for block in node.terminal_inventory:
+            index = _terminal_index(block)
+            try:
+                if node.kind == "ground_station" and block.endpoint_role == "ground":
+                    remember(
+                        gs_bridge_port_name(node.node_id, index),
+                        f"{node.node_id}:{block.terminal_id}",
+                    )
+                elif node.kind == "satellite" and block.endpoint_role == "ground":
+                    remember(
+                        satellite_ground_host_name(node.node_id, index),
+                        f"{node.node_id}:{block.terminal_id}",
+                    )
+                elif node.kind == "satellite" and block.endpoint_role == "isl":
+                    remember(
+                        isl_host_name(node.node_id, index), f"{node.node_id}:{block.terminal_id}"
+                    )
+            except ValueError as exc:
+                raise SessionResolutionError(str(exc)) from exc
+
+
+def _validate_m1_link_rule_runtime_shape(
+    cfg: SegmentSessionConfig,
+    constellation_segment_id: str,
+    ground_segment_id: str,
+) -> None:
+    """Reject link-rule semantics the M1 runtime cannot yet honor.
+
+    M1 still feeds the mature Earth access runtime through a one-constellation +
+    one-ground-set projection. That runtime can honestly implement exactly one
+    rule: all ground stations to all satellites using visible-candidate access.
+    More expressive rules are public grammar, but accepting them before OME
+    candidate generation consumes them would lie about the permission graph.
+    """
+    if len(cfg.link_rules) != 1:
+        raise SessionResolutionError(
+            "M1 runtime supports exactly one link_rule: all ground_set nodes to all "
+            "constellation nodes via topology.mode='visible_candidates'"
+        )
+    rule = cfg.link_rules[0]
+    if not rule.enabled:
+        raise SessionResolutionError("M1 runtime cannot execute a disabled link_rule")
+    if rule.kind != "access":
+        raise SessionResolutionError("M1 runtime supports only access link_rules")
+    if rule.constraints is not None:
+        raise SessionResolutionError("M1 runtime does not support link_rule constraints")
+    if rule.protocol_boundary is not None:
+        raise SessionResolutionError("M1 runtime does not support link_rule protocol_boundary")
+    if not isinstance(rule.topology, VisibleCandidatesTopology):
+        raise SessionResolutionError("M1 runtime supports only topology.mode='visible_candidates'")
+    segments = {rule.endpoints[0].selector.segment, rule.endpoints[1].selector.segment}
+    if segments != {ground_segment_id, constellation_segment_id}:
+        raise SessionResolutionError(
+            "M1 runtime link_rule must connect the single ground_set segment to the "
+            "single constellation segment"
+        )
+    for endpoint in rule.endpoints:
+        if endpoint.terminal_role != "ground":
+            raise SessionResolutionError(
+                "M1 access runtime supports only terminal_role='ground' endpoints"
+            )
+        if endpoint.terminal_medium is not None:
+            raise SessionResolutionError(
+                "M1 access runtime does not support terminal_medium filtering"
+            )
+        selector = endpoint.selector
+        narrowed = any(
+            value is not None
+            for value in (
+                selector.node_ids,
+                selector.node_tags,
+                selector.planes,
+                selector.slots,
+                selector.names,
+            )
+        )
+        if narrowed:
+            raise SessionResolutionError(
+                "M1 runtime does not support narrowed link_rule selectors; "
+                "link-rule-driven candidate generation lands in M2"
+            )
+
+
+def _validate_m1_ground_terminal_compatibility(
+    constellation: ResolvedConstellationAssets,
+    ground_set: ResolvedGroundAssets,
+    addressing: AddressingScheme,
+) -> None:
+    """Reject M1 access sessions whose selected terminals cannot talk.
+
+    M1 emits one all-ground-to-all-satellite access rule through the mature
+    ground-link runtime. That runtime does not yet carry terminal-block identity
+    per candidate, so every candidate pair must collapse to one compatible
+    ground-terminal medium. Mixed or mismatched media require M2's
+    terminal-aware candidate generation; accepting them now would make the
+    session appear valid while later services fail or silently produce no links.
+    """
+    sat_ground_types: dict[str, str] = {}
+    for sat in constellation.satellites:
+        sat_id = addressing.sat_id(sat.plane, sat.slot)
+        try:
+            sat_ground_types[sat_id] = ground_terminal_type(sat.ground_terminals)
+        except ValueError as exc:
+            raise SessionResolutionError(
+                f"satellite {sat_id!r} has unsupported ground-terminal media for M1: {exc}"
+            ) from exc
+
+    for station in ground_set.config.stations:
+        gs_id = addressing.gs_id(station.name)
+        try:
+            gs_type = station_ground_terminal_type(ground_set.config, station)
+        except ValueError as exc:
+            raise SessionResolutionError(
+                f"ground station {gs_id!r} has unsupported terminal media for M1: {exc}"
+            ) from exc
+        for sat_id, sat_type in sat_ground_types.items():
+            if gs_type != sat_type:
+                raise SessionResolutionError(
+                    f"M1 access terminal media mismatch for {gs_id}<->{sat_id}: "
+                    f"ground station uses {gs_type!r}, satellite uses {sat_type!r}. "
+                    "Mixed media require terminal-aware link_rule candidate generation."
+                )
+
+
+def _validate_endpoint_terminal_compatibility(
+    rule: LinkRule,
+    endpoint,
+    selected: list[ResolvedNode],
+) -> None:
+    """Every selected node must own a terminal matching the endpoint intent."""
+    for node in selected:
+        matches = [
+            block
+            for block in node.terminal_inventory
+            if block.endpoint_role == endpoint.terminal_role
+            and (endpoint.terminal_medium is None or block.medium == endpoint.terminal_medium)
+        ]
+        if not matches:
+            medium = f" medium={endpoint.terminal_medium!r}" if endpoint.terminal_medium else ""
+            raise SessionResolutionError(
+                f"link_rule {rule.id!r} endpoint segment {endpoint.selector.segment!r} "
+                f"selects node {node.node_id!r}, but that node has no "
+                f"terminal_role={endpoint.terminal_role!r}{medium} terminal"
+            )
+
+
 def _resolve_link_rules(
     rules: list[LinkRule],
     nodes: list[ResolvedNode],
@@ -536,18 +725,19 @@ def _resolve_link_rules(
 
     resolved: list[ResolvedLinkRule] = []
     for rule in rules:
-        endpoints = tuple(
-            ResolvedEndpoint(
-                segment_id=endpoint.selector.segment,
-                terminal_role=endpoint.terminal_role,
-                terminal_medium=endpoint.terminal_medium,
-                node_ids=tuple(
-                    node.node_id
-                    for node in _select_nodes(endpoint.selector, node_by_segment, node_meta)
-                ),
+        endpoints_list: list[ResolvedEndpoint] = []
+        for endpoint in rule.endpoints:
+            selected = _select_nodes(endpoint.selector, node_by_segment, node_meta)
+            _validate_endpoint_terminal_compatibility(rule, endpoint, selected)
+            endpoints_list.append(
+                ResolvedEndpoint(
+                    segment_id=endpoint.selector.segment,
+                    terminal_role=endpoint.terminal_role,
+                    terminal_medium=endpoint.terminal_medium,
+                    node_ids=tuple(node.node_id for node in selected),
+                )
             )
-            for endpoint in rule.endpoints
-        )
+        endpoints = tuple(endpoints_list)
         resolved.append(
             ResolvedLinkRule(
                 rule_id=rule.id,

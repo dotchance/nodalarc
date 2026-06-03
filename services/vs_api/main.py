@@ -2747,6 +2747,8 @@ async def preview_coverage(body: dict) -> dict:
     Computes visibility at 10-second steps for one orbital period.
     Returns ISL/GS coverage statistics and warnings.
     """
+    from functools import partial
+
     from ome.coverage_preview import compute_coverage_preview
 
     try:
@@ -2759,10 +2761,13 @@ async def preview_coverage(body: dict) -> dict:
     try:
         result = await loop.run_in_executor(
             None,
-            compute_coverage_preview,
-            constellation,
-            body.get("satellite_type"),
-            ground_stations,
+            partial(
+                compute_coverage_preview,
+                constellation,
+                body.get("satellite_type"),
+                ground_stations,
+                catalog_roots=_CATALOG_ROOTS,
+            ),
         )
     except CatalogPathError as exc:
         return _catalog_error(exc)

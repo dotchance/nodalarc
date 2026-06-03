@@ -5,14 +5,9 @@
 from __future__ import annotations
 
 import pytest
-from nodalarc.constellation_loader import (
-    expand_constellation,
-    load_constellation,
-    load_ground_stations,
-)
-from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
+from nodalarc.models.addressing import assign_isl_neighbors
 from nodalarc.models.ground_policy import SelectionPolicySpec
-from nodalarc.models.session import GroundSchedulingConfig, SessionConfig
+from nodalarc.models.session import GroundSchedulingConfig
 from ome.event_stream import (
     build_step_context,
     compute_step,
@@ -25,20 +20,20 @@ def _load_test_session():
     """Load a small test constellation for step comparison."""
     from pathlib import Path
 
-    import yaml
-
     session_path = Path("configs/sessions/demo-36-ospf.yaml")
     if not session_path.exists():
         import pytest
 
         pytest.skip("demo-36-ospf.yaml not available")
 
-    data = yaml.safe_load(session_path.read_text())
-    session = SessionConfig.model_validate(data)
-    constellation_config = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    satellites = expand_constellation(constellation_config)
-    addressing = AddressingScheme(session.addressing)
+    from nodalarc.resolve_session import load_session_resolution_from_file
+
+    resolution = load_session_resolution_from_file(session_path, origin="test.compute_step")
+    session = resolution.runtime_session
+    constellation_config = resolution.primary_constellation.config
+    gs_file = resolution.primary_ground_set.config
+    satellites = list(resolution.primary_constellation.satellites)
+    addressing = resolution.addressing
     neighbors = assign_isl_neighbors(constellation_config, addressing)
     return session, constellation_config, gs_file, satellites, addressing, neighbors
 
@@ -252,8 +247,8 @@ class TestComputeStepMatchesWindow:
         assert isinstance(positions, dict)
         assert len(positions) > 0
         # Positions should include both satellites and ground stations
-        sat_count = sum(1 for k in positions if k.startswith("sat-"))
-        gs_count = sum(1 for k in positions if k.startswith("gs-"))
+        sat_count = sum(1 for k in positions if k.startswith("space-sat-"))
+        gs_count = sum(1 for k in positions if k.startswith("ground-gs-"))
         assert sat_count > 0
         assert gs_count >= 0  # May be 0 if no GS configured
 

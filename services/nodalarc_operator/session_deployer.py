@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1489,18 +1490,51 @@ def check_wiring_complete(namespace: str, expected_count: int) -> tuple[bool, in
     return ready_count == expected_count, ready_count, None
 
 
+def _canonical_hash_value(value: Any) -> Any:
+    """Convert resolved runtime objects into deterministic JSON primitives."""
+    if hasattr(value, "model_dump"):
+        return _canonical_hash_value(value.model_dump(mode="json"))
+    if hasattr(value, "_asdict"):
+        return {str(k): _canonical_hash_value(v) for k, v in value._asdict().items()}
+    if isinstance(value, Mapping):
+        return {str(k): _canonical_hash_value(v) for k, v in sorted(value.items())}
+    if isinstance(value, tuple | list):
+        return [_canonical_hash_value(v) for v in value]
+    return value
+
+
+def _canonical_satellite_for_hash(sat: Any) -> dict[str, Any]:
+    return {
+        "plane": sat.plane,
+        "slot": sat.slot,
+        "elements": _canonical_hash_value(sat.elements),
+        "isl_terminal_count": sat.isl_terminal_count,
+        "ground_terminal_count": sat.ground_terminal_count,
+        "isl_terminals": _canonical_hash_value(sat.isl_terminals),
+        "ground_terminals": _canonical_hash_value(sat.ground_terminals),
+        "tle_line_1": sat.tle_line_1,
+        "tle_line_2": sat.tle_line_2,
+        "norad_id": sat.norad_id,
+    }
+
+
 def compute_platform_hash(spec: dict) -> str:
-    """Hash platform-impacting fields for service restart detection.
+    """Hash resolved runtime truth for service restart detection.
 
-    The CR spec carries sessionYaml as a string. This function parses it
-    and hashes the fields that affect platform services: session identity
-    (name → session_id → NATS subjects), constellation, ground stations,
-    routing protocol, and time config. Changes to non-platform fields
-    (placement policy, MI settings) do not trigger restarts.
+    OME, Scheduler, and NodalPath currently load session truth at startup. Any
+    user-authored YAML field or referenced catalog asset that can affect runtime
+    computation must therefore change this hash and trigger a platform-pod
+    restart. Hashing the raw segment YAML is insufficient because a session can
+    reference constellation, TLE, satellite-type, and ground-station files whose
+    contents can change while the reference string stays fixed.
 
-    restart_platform_pods uses this hash as a Deployment annotation.
-    A changed hash triggers a rolling restart so OME/Scheduler pick up
-    the new session configuration and publish to the correct NATS subjects.
+    The only excluded fields are operator-owned runtime lineage/context
+    (``session.run_id`` and ``source_context``). Everything else comes from the
+    resolver-owned runtime model and resolved assets.
+
+    restart_platform_pods uses this hash as a Deployment annotation. A changed
+    hash triggers a rolling restart so OME/Scheduler pick up the new session
+    configuration and publish to the correct NATS subjects.
 
     Returns a hex digest string (SHA-256).
     """
@@ -1510,11 +1544,23 @@ def compute_platform_hash(spec: dict) -> str:
     parsed = yaml.safe_load(session_yaml)
     if not isinstance(parsed, dict):
         raise ValueError("spec.sessionYaml must parse to a mapping for platform hashing")
-    platform_fields = {}
-    for key in ("session", "identity", "segments", "link_rules", "routing", "time"):
-        if key in parsed:
-            platform_fields[key] = parsed[key]
-    canonical = yaml.dump(platform_fields, default_flow_style=False, sort_keys=True)
+    resolution = resolve_session_with_assets(
+        parsed,
+        source_context=SourceContext(origin="operator.platform_hash"),
+    )
+    canonical_obj = {
+        "resolved": resolution.resolved.model_dump(
+            mode="json",
+            exclude={"session": {"run_id"}, "source_context": True},
+        ),
+        "primary_constellation": _canonical_hash_value(resolution.primary_constellation.config),
+        "primary_ground_set": _canonical_hash_value(resolution.primary_ground_set.config),
+        "satellites": [
+            _canonical_satellite_for_hash(sat)
+            for sat in resolution.primary_constellation.satellites
+        ],
+    }
+    canonical = json.dumps(canonical_obj, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 

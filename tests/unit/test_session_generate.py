@@ -227,7 +227,20 @@ class TestOrbitPropagatorGeneration:
                 },
             },
             custom_ground_stations=[
-                {"name": "ashburn", "lat_deg": 39.04, "lon_deg": -77.49, "alt_km": 0.095}
+                {
+                    "name": "ashburn",
+                    "lat_deg": 39.04,
+                    "lon_deg": -77.49,
+                    "alt_km": 0.095,
+                    "terminals": [
+                        {
+                            "type": "rf",
+                            "count": 1,
+                            "bandwidth_mbps": 1000,
+                            "tracking_capacity": 1,
+                        }
+                    ],
+                }
             ],
             orbit_propagator="sgp4-tle",
         )

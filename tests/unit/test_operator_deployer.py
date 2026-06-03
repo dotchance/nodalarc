@@ -82,7 +82,7 @@ def _make_node_vars(planes=4, sats_per_plane=3, gs_count=2):
 
 
 def _make_session_yaml(
-    constellation_path="configs/constellations/custom-example.yaml",
+    constellation_path="configs/constellations/demo-36.yaml",
     gs_path="configs/ground-stations/sets/demo.yaml",
     protocol="ospf",
     strategy="flat",
@@ -422,10 +422,43 @@ class TestPlatformHash:
         spec2 = {"sessionYaml": _make_session_yaml(step_seconds=5)}
         assert compute_platform_hash(spec1) != compute_platform_hash(spec2)
 
-    def test_placement_change_same_hash(self):
+    def test_placement_change_changes_hash(self):
         spec1 = {"sessionYaml": _make_session_yaml()}
-        spec2 = {"sessionYaml": _make_session_yaml(placement_policy="planePerNode")}
-        assert compute_platform_hash(spec1) == compute_platform_hash(spec2)
+        spec2 = {"sessionYaml": _make_session_yaml(placement_policy="allOnOne")}
+        assert compute_platform_hash(spec1) != compute_platform_hash(spec2)
+
+    def test_runtime_semantics_change_hash(self):
+        base = yaml.safe_load(_make_session_yaml())
+
+        scheduling = yaml.safe_load(_make_session_yaml())
+        scheduling["scheduling"]["ground"]["selection_policy"] = {
+            "name": "longest-remaining-pass",
+            "params": {"lookahead_horizon_ticks": 4},
+        }
+
+        simulation = yaml.safe_load(_make_session_yaml())
+        simulation["simulation"]["ground_link_model"] = "geometry_only"
+        simulation["simulation"]["acknowledge_geometry_only"] = True
+
+        dispatch = yaml.safe_load(_make_session_yaml())
+        dispatch["dispatch"] = {"max_latency_age_ticks": 7}
+
+        addressing = yaml.safe_load(_make_session_yaml())
+        addressing["addressing"] = {"ipv4_sat_template": "10.{plane}.{slot}.9"}
+
+        hashes = {
+            compute_platform_hash({"sessionYaml": yaml.dump(candidate, default_flow_style=False)})
+            for candidate in (base, scheduling, simulation, dispatch, addressing)
+        }
+        assert len(hashes) == 5
+
+    def test_operator_injected_run_id_does_not_change_hash(self):
+        base = yaml.safe_load(_make_session_yaml())
+        with_run_id = yaml.safe_load(_make_session_yaml())
+        with_run_id["session"]["run_id"] = "operator-owned-run"
+        assert compute_platform_hash({"sessionYaml": yaml.dump(base)}) == compute_platform_hash(
+            {"sessionYaml": yaml.dump(with_run_id)}
+        )
 
     def test_empty_session_yaml(self):
         h1 = compute_platform_hash({"sessionYaml": ""})
@@ -485,7 +518,7 @@ class TestExpectedPodCount:
     def test_inline_config_count(self):
         spec = {
             "sessionYaml": _make_session_yaml(
-                constellation_path="configs/constellations/custom-example.yaml",
+                constellation_path="configs/constellations/demo-36.yaml",
                 gs_path="configs/ground-stations/sets/demo.yaml",
             )
         }

@@ -139,10 +139,17 @@ def test_terminal_inventory_is_materialized_from_source_satellite_type():
     assert sat_ground_bandwidths(starlink) != sat_ground_bandwidths(rf)
 
 
-def test_zero_match_selector_fails_loudly():
+def test_m1_rejects_access_terminal_media_mismatch_at_resolve_boundary():
+    data = _segment_session()
+    data["segments"][0]["satellite_type"] = "generic-4isl"
+    with pytest.raises(SessionResolutionError, match="terminal media mismatch"):
+        resolve_session(data)
+
+
+def test_m1_rejects_narrowed_selector_before_candidate_generation():
     data = _segment_session()
     data["link_rules"][0]["endpoints"][1]["selector"]["planes"] = [99]
-    with pytest.raises(SessionResolutionError, match="matched zero nodes"):
+    with pytest.raises(SessionResolutionError, match="narrowed link_rule selectors"):
         resolve_session(data)
 
 
@@ -150,4 +157,74 @@ def test_candidate_budget_overflow_fails_before_runtime():
     data = _segment_session()
     data["simulation"]["candidate_limits"] = {"max_pairs_per_rule": 10}
     with pytest.raises(SessionResolutionError, match="max_pairs_per_rule"):
+        resolve_session(data)
+
+
+def test_m1_rejects_narrowed_link_rule_selector_until_runtime_honors_it():
+    data = _segment_session()
+    data["link_rules"][0]["endpoints"][1]["selector"]["planes"] = [0]
+    with pytest.raises(SessionResolutionError, match="narrowed link_rule selectors"):
+        resolve_session(data)
+
+
+def test_m1_rejects_disabled_link_rule_until_runtime_honors_it():
+    data = _segment_session()
+    data["link_rules"][0]["enabled"] = False
+    with pytest.raises(SessionResolutionError, match="disabled link_rule"):
+        resolve_session(data)
+
+
+def test_m1_rejects_unsupported_link_rule_topology_until_runtime_honors_it():
+    data = _segment_session()
+    data["link_rules"][0]["topology"] = {"mode": "nearest_n", "n": 1}
+    with pytest.raises(SessionResolutionError, match="visible_candidates"):
+        resolve_session(data)
+
+
+def test_m1_rejects_terminal_role_runtime_cannot_honor():
+    data = _segment_session()
+    data["link_rules"][0]["endpoints"][0]["terminal_role"] = "isl"
+    with pytest.raises(SessionResolutionError, match="terminal_role='ground'"):
+        resolve_session(data)
+
+
+def test_m1_rejects_terminal_medium_filter_until_runtime_honors_it():
+    data = _segment_session()
+    data["link_rules"][0]["endpoints"][0]["terminal_medium"] = "rf"
+    with pytest.raises(SessionResolutionError, match="terminal_medium filtering"):
+        resolve_session(data)
+
+
+def test_m1_rejects_link_rule_constraints_until_runtime_honors_them():
+    data = _segment_session()
+    data["link_rules"][0]["constraints"] = {"max_links_per_node": 1}
+    with pytest.raises(SessionResolutionError, match="link_rule constraints"):
+        resolve_session(data)
+
+
+def test_m1_rejects_protocol_boundary_until_runtime_honors_it():
+    data = _segment_session()
+    data["link_rules"][0]["protocol_boundary"] = {"enabled": True, "adapter": "bgp"}
+    with pytest.raises(UnsupportedFeatureError, match="protocol_adapter"):
+        resolve_session(data)
+
+
+def test_m1_rejects_multiple_link_rules_until_runtime_honors_them():
+    data = _segment_session()
+    data["link_rules"].append(dict(data["link_rules"][0], id="second-access"))
+    with pytest.raises(SessionResolutionError, match="exactly one link_rule"):
+        resolve_session(data)
+
+
+def test_m1_rejects_non_access_link_rule_until_runtime_honors_it():
+    data = _segment_session()
+    data["link_rules"][0]["kind"] = "relay"
+    with pytest.raises(SessionResolutionError, match="only access"):
+        resolve_session(data)
+
+
+def test_runtime_node_id_length_fails_before_kubernetes():
+    data = _segment_session()
+    data["segments"][0]["namespace"] = "n" * 60
+    with pytest.raises(SessionResolutionError, match="Kubernetes label value limit"):
         resolve_session(data)

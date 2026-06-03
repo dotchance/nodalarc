@@ -1,18 +1,43 @@
-# Demo-36 with OSPF: single orbital ring, 36 satellites, 7 ground stations.
-# Good for quick demos, evaluation, and learning. Deploys in under a minute.
 session:
   name: demo-36-ospf
-
-constellation: configs/constellations/demo-36.yaml
-ground_stations: configs/ground-stations/sets/demo.yaml
-
+identity:
+  mode: segment_namespaced
+segments:
+- id: space
+  kind: constellation
+  source: configs/constellations/demo-36.yaml
+  namespace: space
+  central_body: earth
+  tags:
+  - earth
+  - orbit
+- id: ground
+  kind: ground_set
+  source: configs/ground-stations/sets/demo.yaml
+  namespace: ground
+  reference_body: earth
+  tags:
+  - earth
+  - ground
+link_rules:
+- id: ground-access
+  kind: access
+  endpoints:
+  - selector:
+      segment: ground
+    terminal_role: ground
+  - selector:
+      segment: space
+    terminal_role: ground
+  topology:
+    mode: visible_candidates
 simulation:
   schema_version: 2
   ground_link_model: terminal_physics
-
+  candidate_limits:
+    max_pairs_per_rule: 252
 orbit:
   propagator: j2-mean-elements
-
 scheduling:
   ground:
     selection_policy:
@@ -26,18 +51,15 @@ scheduling:
     handover_mode: bbm
     mbb_overlap_ticks: 0
     mbb_reserve: 0
-
 dispatch:
   latency_authority: ome
   max_latency_age_ticks: 1
   substrate_compensation:
     measurement_source: node-agent-rtt
     rtt_to_one_way: half-rtt
-
 routing:
   protocol: ospf
   area_assignment:
     strategy: flat
-
 time:
   step_seconds: 1

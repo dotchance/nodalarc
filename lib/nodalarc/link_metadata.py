@@ -12,14 +12,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from nodalarc.constellation_loader import (
-    expand_constellation,
+    SatelliteNode,
     ground_link_bandwidth_mbps,
     isl_link_bandwidth_mbps,
-    load_constellation,
-    load_ground_stations,
 )
 from nodalarc.ground_terminals import ground_terminal_type, station_ground_terminal_type
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors, neighbors_by_node
+from nodalarc.models.constellation import ConstellationConfig
+from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig
 
 
@@ -34,14 +34,16 @@ class LinkMetadataMaps:
 def build_link_metadata_maps(
     session: SessionConfig,
     addressing: AddressingScheme,
+    *,
+    constellation: ConstellationConfig,
+    satellites: list[SatelliteNode] | tuple[SatelliteNode, ...],
+    gs_file: GroundStationFile,
 ) -> LinkMetadataMaps:
     """Build interface and bandwidth maps from physical terminal config.
 
     Bandwidth comes from terminal models. Missing bandwidth for any wireable
     link is a configuration error; callers must not substitute a nominal rate.
     """
-    constellation = load_constellation(session.constellation)
-    satellites = expand_constellation(constellation)
     neighbors = assign_isl_neighbors(constellation, addressing)
     by_node = neighbors_by_node(neighbors)
 
@@ -83,7 +85,6 @@ def build_link_metadata_maps(
             iface_b,
         )
 
-    gs_file = load_ground_stations(session.ground_stations)
     for station in gs_file.stations:
         gs_id = addressing.gs_id(station.name)
         gs_type = station_ground_terminal_type(gs_file, station)

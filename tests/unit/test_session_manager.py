@@ -21,7 +21,7 @@ def _segment_session_yaml(name: str, data_dir: Path) -> str:
         build_segment_session_dict(
             name=name,
             data_dir=str(data_dir),
-            constellation="configs/constellations/custom-example.yaml",
+            constellation="configs/constellations/demo-36.yaml",
             ground_stations="configs/ground-stations/sets/demo.yaml",
             protocol="isis",
             orbit_propagator="keplerian-circular",

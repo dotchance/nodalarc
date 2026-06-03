@@ -8,11 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-import yaml
 from nodalarc.constellation_loader import (
     expand_constellation,
     load_constellation,
-    load_ground_stations,
 )
 from nodalarc.models.addressing import AddressingScheme, assign_isl_neighbors
 from nodalarc.models.events import (
@@ -22,7 +20,8 @@ from nodalarc.models.events import (
     SessionEphemeris,
 )
 from nodalarc.models.ground_policy import HandoverPolicySpec, SelectionPolicySpec
-from nodalarc.models.session import GroundSchedulingConfig, SessionConfig
+from nodalarc.models.session import GroundSchedulingConfig
+from nodalarc.resolve_session import load_session_resolution_from_file
 from ome.event_stream import build_link_state_snapshot, build_session_ephemeris, build_step_context
 from ome.snapshot_builder import LinkSnapshotSource
 
@@ -42,12 +41,12 @@ def _load_test_ctx():
     if not session_path.exists():
         pytest.skip("demo-36-ospf.yaml not available")
 
-    data = yaml.safe_load(session_path.read_text())
-    session = SessionConfig.model_validate(data)
-    cc = load_constellation(session.constellation)
-    gs_file = load_ground_stations(session.ground_stations)
-    sats = expand_constellation(cc)
-    addressing = AddressingScheme(session.addressing)
+    resolution = load_session_resolution_from_file(session_path, origin="test.session_ephemeris")
+    session = resolution.runtime_session
+    cc = resolution.primary_constellation.config
+    gs_file = resolution.primary_ground_set.config
+    sats = list(resolution.primary_constellation.satellites)
+    addressing = resolution.addressing
     neighbors = assign_isl_neighbors(cc, addressing)
 
     ctx = build_step_context(
@@ -68,8 +67,8 @@ class TestBuildSessionEphemeris:
     def test_satellite_mapped_to_configured_mean_element_propagator(self):
         ctx, sats, _ = _load_test_ctx()
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        # First satellite should be P00S00
-        sat = eph.nodes["sat-P00S00"]
+        # First satellite should be P00S00 in the space segment namespace.
+        sat = eph.nodes["space-sat-p00s00"]
         assert isinstance(sat, EphemerisNodeKeplerian)
         assert sat.type == "keplerian"
         assert sat.plane == 0
@@ -88,7 +87,7 @@ class TestBuildSessionEphemeris:
             ground_scheduling=_ground_scheduling(),
         )
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
-        sat = eph.nodes["sat-P00S00"]
+        sat = eph.nodes["space-sat-p00s00"]
         assert isinstance(sat, EphemerisNodeKeplerian)
         assert sat.propagator == "j2-mean-elements"
 
@@ -133,7 +132,7 @@ class TestBuildSessionEphemeris:
         ctx, _, gs_file = _load_test_ctx()
         eph = build_session_ephemeris(ctx, EPOCH, epoch_id=0)
         # Find any ground station node
-        gs_nodes = {k: v for k, v in eph.nodes.items() if k.startswith("gs-")}
+        gs_nodes = {k: v for k, v in eph.nodes.items() if k.startswith("ground-gs-")}
         assert len(gs_nodes) > 0, "Expected at least one ground station"
         gs_name, gs = next(iter(gs_nodes.items()))
         assert isinstance(gs, EphemerisNodeFixed)

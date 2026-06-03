@@ -6,12 +6,12 @@ PRD line 822: flow management via --add-flow / --remove-flow.
 Usage:
   python -m tools.na_reconfig --session <path> --target all
   python -m tools.na_reconfig --session <path> --target plane:3
-  python -m tools.na_reconfig --session <path> --target node:sat-P03S07
+  python -m tools.na_reconfig --session <path> --target node:space-sat-p03s07
   python -m tools.na_reconfig --session <path> --target area:1
   python -m tools.na_reconfig --session <path> --target type:satellite
   python -m tools.na_reconfig --session <path> --target type:ground_station
   python -m tools.na_reconfig --session <path> --target all --set metric_type=wide
-  python -m tools.na_reconfig --session <path> --add-flow test1:gs-hawthorne:gs-frankfurt:udp:100:continuous
+  python -m tools.na_reconfig --session <path> --add-flow test1:ground-gs-hawthorne:ground-gs-frankfurt:udp:100:continuous
   python -m tools.na_reconfig --session <path> --remove-flow test1
 """
 
@@ -238,12 +238,13 @@ def add_flow(session_path: str, flow_spec: str) -> None:
     resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
     session = resolution.runtime_session
     gs_file = resolution.primary_ground_set.config
+    addressing = resolution.addressing
 
     spec = _parse_flow_spec(flow_spec)
     from measurement import probe_client
     from measurement.flow_manager import resolve_dst_ip, resolve_src_pod_ip
 
-    dst_ip = resolve_dst_ip(spec["dst"], gs_file, session)
+    dst_ip = resolve_dst_ip(spec["dst"], gs_file, session, addressing)
     src_pod_ip = resolve_src_pod_ip(spec["src"])
     if src_pod_ip is None:
         log.error(f"Cannot resolve pod IP for {spec['src']}")
@@ -264,6 +265,7 @@ def remove_flow(session_path: str, flow_id: str) -> None:
     """Remove a probe flow from a running session."""
     resolution = load_session_resolution_from_file(session_path, origin="na-reconfig")
     gs_file = resolution.primary_ground_set.config
+    addressing = resolution.addressing
 
     # We need to find which GS pod this flow runs on.
     # Check all GS pods for the flow.
@@ -271,7 +273,7 @@ def remove_flow(session_path: str, flow_id: str) -> None:
     from measurement.flow_manager import resolve_src_pod_ip
 
     for station in gs_file.stations:
-        gs_id = f"gs-{station.name}"
+        gs_id = addressing.gs_id(station.name)
         pod_ip = resolve_src_pod_ip(gs_id)
         if pod_ip is None:
             continue

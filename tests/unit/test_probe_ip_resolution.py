@@ -43,12 +43,12 @@ def _make_session() -> SessionConfig:
         constellation="configs/constellations/custom-example.yaml",
         ground_stations="configs/ground-stations/sets/us-conus.yaml",
         orbit=OrbitConfig(propagator="keplerian-circular"),
-        addressing=AddressingConfig(),
         routing=RoutingConfig(
             protocol="isis",
             extensions=["sr"],
             area_assignment=FlatAreaAssignmentConfig(strategy="flat"),
         ),
+        addressing=AddressingConfig(gs_id_template="ground-gs-{name}"),
         time=TimeConfig(),
         scheduling=_EXPLICIT_SCHEDULING,
         convergence=ConvergenceConfig(),
@@ -77,7 +77,7 @@ class TestResolveDstIp:
     """Test destination IP resolution from terrestrial prefixes."""
 
     def test_default_template(self):
-        """gs-frankfurt with default template 172.16.{gs_index}.0/24 → 172.16.0.1"""
+        """Resolved GS node with default template 172.16.{gs_index}.0/24 → 172.16.0.1"""
         gs_file = _make_gs_file(
             stations=[
                 GroundStationConfig(name="frankfurt", lat_deg=50.1, lon_deg=8.7),
@@ -88,7 +88,7 @@ class TestResolveDstIp:
             ),
         )
         session = _make_session()
-        ip = resolve_dst_ip("gs-frankfurt", gs_file, session)
+        ip = resolve_dst_ip("ground-gs-frankfurt", gs_file, session)
         assert ip == "172.16.0.1"
 
     def test_second_station_index(self):
@@ -104,7 +104,7 @@ class TestResolveDstIp:
             ),
         )
         session = _make_session()
-        ip = resolve_dst_ip("gs-frankfurt", gs_file, session)
+        ip = resolve_dst_ip("ground-gs-frankfurt", gs_file, session)
         assert ip == "172.16.1.1"
 
     def test_custom_prefix(self):
@@ -122,7 +122,7 @@ class TestResolveDstIp:
             ],
         )
         session = _make_session()
-        ip = resolve_dst_ip("gs-ashburn", gs_file, session)
+        ip = resolve_dst_ip("ground-gs-ashburn", gs_file, session)
         assert ip == "192.168.100.1"
 
     def test_custom_prefix_with_ipv6_first(self):
@@ -141,7 +141,7 @@ class TestResolveDstIp:
             ],
         )
         session = _make_session()
-        ip = resolve_dst_ip("gs-tokyo", gs_file, session)
+        ip = resolve_dst_ip("ground-gs-tokyo", gs_file, session)
         assert ip == "10.100.0.1"
 
     def test_unknown_station_raises(self):
@@ -152,7 +152,7 @@ class TestResolveDstIp:
         )
         session = _make_session()
         with pytest.raises(ValueError, match="Cannot resolve"):
-            resolve_dst_ip("gs-unknown", gs_file, session)
+            resolve_dst_ip("ground-gs-unknown", gs_file, session)
 
     def test_no_prefix_no_template_raises(self):
         """Station with no prefix and no default template."""
@@ -164,4 +164,19 @@ class TestResolveDstIp:
         )
         session = _make_session()
         with pytest.raises(ValueError, match="Cannot resolve"):
-            resolve_dst_ip("gs-noprefix", gs_file, session)
+            resolve_dst_ip("ground-gs-noprefix", gs_file, session)
+
+    def test_old_unqualified_node_id_rejected(self):
+        """Flow endpoints must use the resolved runtime node ID, not local GS names."""
+        gs_file = _make_gs_file(
+            stations=[
+                GroundStationConfig(name="frankfurt", lat_deg=50.1, lon_deg=8.7),
+            ],
+            default_template=TerrestrialPrefixTemplate(
+                ipv4_template="172.16.{gs_index}.0/24",
+                ipv6_template="fd10::{gs_index}:0/112",
+            ),
+        )
+        session = _make_session()
+        with pytest.raises(ValueError, match="Cannot resolve"):
+            resolve_dst_ip("gs-frankfurt", gs_file, session)

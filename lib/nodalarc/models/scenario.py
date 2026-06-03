@@ -49,7 +49,7 @@ class MeasureStep(BaseModel):
 
 class ReconfigStep(BaseModel):
     action: Literal["reconfig"]
-    target: str  # e.g. "all", "plane:3", "node:sat-P03S07"
+    target: str  # e.g. "all", "plane:3", "node:space-sat-p03s07"
     set_values: dict[str, str] = {}
 
 

@@ -2,9 +2,9 @@
 # Licensed under the Apache License, Version 2.0. See LICENSE file.
 """Flow lifecycle manager — manages active probe flows.
 
-Loads initial flows from SessionConfig.traffic_flows, resolves
-destination IPs from terrestrial prefixes, and configures probe
-daemons on source GS pods via probe_client.
+Loads initial flows from the resolver's runtime session projection, resolves
+destination IPs from terrestrial prefixes, and configures probe daemons on
+source GS pods via probe_client.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import ipaddress
 import logging
 from typing import Any
 
+from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.ground_station import GroundStationFile
 from nodalarc.models.session import SessionConfig, TrafficFlowConfig
 
@@ -23,21 +24,17 @@ def resolve_dst_ip(
     dst_node_id: str,
     gs_file: GroundStationFile,
     session: SessionConfig,
+    addressing: AddressingScheme | None = None,
 ) -> str:
     """Resolve destination node ID to first IPv4 from terrestrial prefix.
 
     Uses the first IPv4 address from the destination ground station's
     terrestrial prefix.
-
-    gs-frankfurt with 172.16.1.0/24 → 172.16.1.1
     """
-    # Find station by node_id (gs-{name})
-    gs_name = dst_node_id
-    if gs_name.startswith("gs-"):
-        gs_name = gs_name[3:]
+    addressing = addressing or AddressingScheme(session.addressing, gs_file=gs_file)
 
     for i, station in enumerate(gs_file.stations):
-        if station.name == gs_name:
+        if addressing.gs_id(station.name) == dst_node_id:
             # Check per-station terrestrial prefixes first
             if station.terrestrial_prefixes:
                 for tp in station.terrestrial_prefixes:
@@ -101,6 +98,7 @@ class FlowManager:
         session: SessionConfig,
         gs_file: GroundStationFile,
         namespace: str | None = None,
+        addressing: AddressingScheme | None = None,
     ) -> None:
         if namespace is None:
             from nodalarc.platform_config import get_platform_config
@@ -109,6 +107,7 @@ class FlowManager:
         self._session = session
         self._gs_file = gs_file
         self._namespace = namespace
+        self._addressing = addressing or AddressingScheme(session.addressing, gs_file=gs_file)
         self._active_flows: dict[str, dict[str, Any]] = {}
 
     @property
@@ -135,6 +134,7 @@ class FlowManager:
             flow_config.dst,
             self._gs_file,
             self._session,
+            self._addressing,
         )
         src_pod_ip = resolve_src_pod_ip(
             flow_config.src,

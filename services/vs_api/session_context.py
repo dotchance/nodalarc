@@ -595,14 +595,7 @@ class SessionContext:
             if current is not None and snapshot.epoch_id != current.epoch_id:
                 self.ground_decision_samples_by_gs.clear()
             self.latest_ground_link_decision_snapshot = snapshot
-            gs_ids = sorted(
-                {
-                    node
-                    for decision in snapshot.decisions
-                    for node in decision.pair
-                    if node.startswith("gs-")
-                }
-            )
+            gs_ids = sorted(snapshot.policy_audit.selection_policies)
             for gs_id in gs_ids:
                 sample = compose_gs_decision_timeline_sample(gs_id=gs_id, snapshot=snapshot)
                 if sample is None:
@@ -1349,10 +1342,10 @@ def _derive_link_type(node_a: str, node_b: str, raw_type: str | None = None) -> 
 
     if raw_type and raw_type != "isl":
         return raw_type
-    if node_a.startswith("gs-") or node_b.startswith("gs-"):
-        return "ground"
-    ma = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_a)
-    mb = re.match(r"sat-[Pp](\d+)[Ss]\d+", node_b)
+    if raw_type is None:
+        raise ValueError("link_type is required; VS-API does not infer ground links from node IDs")
+    ma = re.match(r"(?:[a-z0-9-]+-)?sat-[Pp](\d+)[Ss]\d+$", node_a)
+    mb = re.match(r"(?:[a-z0-9-]+-)?sat-[Pp](\d+)[Ss]\d+$", node_b)
     if ma and mb:
         if ma.group(1) == mb.group(1):
             return "intra_plane_isl"

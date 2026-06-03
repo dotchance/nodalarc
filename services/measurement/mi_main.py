@@ -31,6 +31,7 @@ from nodalarc.db.queries import (
     insert_probe_result,
 )
 from nodalarc.db.schema import create_tables
+from nodalarc.models.addressing import AddressingScheme
 from nodalarc.models.metrics import (
     ConvergenceResult,
     ProbeResult,
@@ -116,12 +117,14 @@ class MIService:
         stack_config: RoutingStackConfig,
         db_path: str,
         namespace: str | None = None,
+        addressing: AddressingScheme | None = None,
     ) -> None:
         if namespace is None:
             namespace = get_platform_config().kubernetes_namespace
         self._session = session
         self._session_id = require_session_run_id(session)
         self._gs_file = gs_file
+        self._addressing = addressing or AddressingScheme(session.addressing, gs_file=gs_file)
         self._stack_config = stack_config
         self._db_path = db_path
         self._namespace = namespace
@@ -177,6 +180,7 @@ class MIService:
             session=self._session,
             gs_file=self._gs_file,
             namespace=self._namespace,
+            addressing=self._addressing,
         )
         try:
             self._flow_manager.load_initial_flows()
@@ -419,6 +423,7 @@ def main() -> None:
         gs_file=gs_file,
         stack_config=stack_config,
         db_path=args.db,
+        addressing=resolution.addressing,
     )
     service.run()
 

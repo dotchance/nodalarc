@@ -57,12 +57,16 @@ type ActiveFocus =
   | { kind: "link"; nodeA: string; nodeB: string; follow: boolean };
 
 interface CameraFlight {
+  focus: ActiveFocus | null;
   startedAtMs: number;
   durationMs: number;
   startPosition: THREE.Vector3;
   startTarget: THREE.Vector3;
   endPosition: THREE.Vector3;
   endTarget: THREE.Vector3;
+  endDirection: THREE.Vector3;
+  floor: number;
+  distance?: number;
 }
 
 function focusLabel(focus: ActiveFocus | null): string {
@@ -134,12 +138,14 @@ export function GlobeActionsBridge({
       floor = CAMERA_MIN_DISTANCE * 1.15,
       distance,
     }: { floor?: number; distance?: number } = {},
+    focus: ActiveFocus | null = null,
   ) => {
     const controls = controlsRef.current;
     const target = frame.center.clone();
     const dist = distance ?? focusDistanceForFrame(frame, floor);
     cameraDirectionFromTarget(camera.position, target, _dirA);
     const endPosition = target.clone().add(_dirA.multiplyScalar(dist));
+    const endDirection = _dirA.clone().normalize();
     const startTarget = controls?.target.clone() ?? target.clone();
     if (CAMERA_FLY_TO_INSTANT) {
       flightRef.current = null;
@@ -149,12 +155,16 @@ export function GlobeActionsBridge({
       return;
     }
     flightRef.current = {
+      focus,
       startedAtMs: performance.now(),
       durationMs: flightDurationMs(camera.position, endPosition),
       startPosition: camera.position.clone(),
       startTarget,
       endPosition,
       endTarget: target,
+      endDirection,
+      floor,
+      distance,
     };
   };
 
@@ -170,7 +180,7 @@ export function GlobeActionsBridge({
     }
     focusRef.current = focus;
     onFocusChange?.(focusLabel(focus));
-    if (frame) applyFrame(frame, options);
+    if (frame) applyFrame(frame, options, focus);
   };
 
   const setFrameOnly = (
@@ -180,7 +190,7 @@ export function GlobeActionsBridge({
   ) => {
     focusRef.current = null;
     onFocusChange?.(label);
-    applyFrame(frame, options);
+    applyFrame(frame, options, null);
   };
 
   useEffect(() => {
@@ -229,12 +239,16 @@ export function GlobeActionsBridge({
           controls?.update();
         } else {
           flightRef.current = {
+            focus: null,
             startedAtMs: performance.now(),
             durationMs: flightDurationMs(camera.position, endPosition),
             startPosition: camera.position.clone(),
             startTarget: controls?.target.clone() ?? target.clone(),
             endPosition,
             endTarget: target,
+            endDirection: cameraDirectionFromTarget(camera.position, target, new THREE.Vector3()),
+            floor: CAMERA_MIN_DISTANCE * 1.15,
+            distance: sceneFitDistance,
           };
         }
       },
@@ -322,6 +336,14 @@ export function GlobeActionsBridge({
     const flight = flightRef.current;
     if (flight) {
       const controls = controlsRef.current;
+      if (flight.focus) {
+        const frame = resolveFocusFrame(flight.focus);
+        if (frame) {
+          const dist = flight.distance ?? focusDistanceForFrame(frame, flight.floor);
+          flight.endTarget.copy(frame.center);
+          flight.endPosition.copy(frame.center).addScaledVector(flight.endDirection, dist);
+        }
+      }
       const elapsed = performance.now() - flight.startedAtMs;
       const raw = flight.durationMs <= 0 ? 1 : Math.min(1, elapsed / flight.durationMs);
       const t = easeInOutCubic(raw);

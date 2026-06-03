@@ -125,11 +125,11 @@ class ConstellationSegment(BaseModel):
 class GroundSchedulingPolicy(BaseModel):
     """All-optional ground scheduling override surface.
 
-    Mirrors the fields of ``session.GroundSchedulingConfig`` but every field is
-    optional: it is a partial override merged by the resolver in the order
-    station > segment > source-set default > explicit session default. The
-    resolver fails validation if the effective policy is incomplete after merge;
-    it never falls through to hidden code defaults.
+    Mirrors ``session.GroundSchedulingConfig`` structurally so the grammar can
+    describe the intended future surface, but the resolver only accepts fields
+    the current runtime can honor at this level. Station-scoped fields are
+    partial overrides merged by the resolver; allocator-wide fields remain
+    top-level-only until OME consumes them per segment.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -380,23 +380,37 @@ def test_ground_segment_handover_override_beats_source_default():
     assert set(modes.values()) == {"bbm"}
 
 
-def test_mixed_ground_segments_reject_incompatible_global_scheduling_fields():
+def test_ground_segment_rejects_allocator_wide_scheduling_fields():
     data = _segment_session()
-    data.pop("scheduling")
     data["segments"][1]["scheduling"] = {"successor_abort_policy": "hard_release"}
-    data["segments"].append(
-        {
-            "id": "ground-soft",
-            "kind": "ground_set",
-            "source": "configs/ground-stations/sets/demo.yaml",
-            "namespace": "gnd-soft",
-            "reference_body": "earth",
-            "scheduling": {"successor_abort_policy": "soft_retain"},
-        }
-    )
 
-    with pytest.raises(SessionResolutionError, match="incompatible global scheduling fields"):
+    with pytest.raises(SessionResolutionError, match="allocator-wide scheduling field"):
         resolve_session_with_assets(data)
+
+
+def test_cross_body_access_link_rule_rejected_before_ome_wrong_frame_visibility():
+    data = yaml.safe_load(Path("configs/sessions/earth-luna-gateway-site.yaml").read_text())
+    data["link_rules"][0]["id"] = "bad-earth-ground-to-luna-access"
+    data["link_rules"][0]["endpoints"][1]["selector"] = {"segment": "luna-relay"}
+
+    with pytest.raises(SessionResolutionError, match="crosses bodies"):
+        resolve_session_with_assets(data)
+
+
+def test_access_terminal_id_rejected_when_node_has_unselected_compatible_terminal_blocks():
+    data = _site_terminal_session()
+    terminals = data["segments"][1]["source"]["ground_sites"][0]["nodes"][0]["terminals"]
+    backup = dict(terminals[0])
+    backup["id"] = "backup-ka"
+    terminals.append(backup)
+
+    with pytest.raises(SessionResolutionError, match="terminal-block-aware"):
+        resolve_session_with_assets(data)
+
+
+def test_direct_resolver_source_context_requires_typed_source_context():
+    with pytest.raises(SessionResolutionError, match="source_context must be a SourceContext"):
+        resolve_session(_segment_session(), source_context="test")  # type: ignore[arg-type]
 
 
 def test_m1_rejects_access_terminal_media_mismatch_at_resolve_boundary():

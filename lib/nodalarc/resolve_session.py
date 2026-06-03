@@ -192,6 +192,11 @@ def resolve_session_with_assets(
 ) -> SessionResolution:
     """Resolve segment YAML and return the authoritative model plus runtime assets."""
 
+    if source_context is not None and not isinstance(source_context, SourceContext):
+        raise SessionResolutionError(
+            "source_context must be a SourceContext instance; pass origin=... to "
+            "load_session_resolution_from_file for path-based loading"
+        )
     if not isinstance(raw_session, dict):
         raise SessionResolutionError("session YAML must parse to a mapping")
     if "segments" not in raw_session:
@@ -738,21 +743,27 @@ def _runtime_ground_default_from_segments(
     loudly here instead of being hidden behind an arbitrary first segment.
     """
 
-    if cfg.scheduling is not None:
-        return cfg.scheduling.ground
     if not segment_defaults:
         raise SessionResolutionError("ground runtime projection has no ground scheduling")
+    if cfg.scheduling is not None:
+        top_level = cfg.scheduling.ground
+        global_signature = _ground_scheduling_global_signature(top_level)
+        incompatible = [
+            default
+            for default in segment_defaults
+            if _ground_scheduling_global_signature(default) != global_signature
+        ]
+        if incompatible:
+            raise SessionResolutionError(
+                "ground segments or source defaults changed allocator-wide scheduling fields "
+                "that OME still consumes globally; keep those fields in top-level "
+                "scheduling.ground until OME supports per-segment allocator-wide policy"
+            )
+        return top_level
     if all(default == segment_defaults[0] for default in segment_defaults):
         return segment_defaults[0]
     global_signatures = {
-        tuple(
-            sorted(
-                (key, repr(value))
-                for key, value in default.model_dump(mode="python").items()
-                if key not in _STATION_SCOPED_GROUND_SCHEDULING_FIELDS
-            )
-        )
-        for default in segment_defaults
+        _ground_scheduling_global_signature(default) for default in segment_defaults
     }
     if len(global_signatures) != 1:
         raise SessionResolutionError(
@@ -761,6 +772,36 @@ def _runtime_ground_default_from_segments(
             "or make them identical across ground segments"
         )
     return segment_defaults[0]
+
+
+def _ground_scheduling_global_signature(
+    default: GroundSchedulingConfig,
+) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        sorted(
+            (key, repr(value))
+            for key, value in default.model_dump(mode="python").items()
+            if key not in _STATION_SCOPED_GROUND_SCHEDULING_FIELDS
+        )
+    )
+
+
+def _reject_segment_global_scheduling_fields(segment: GroundSegment) -> None:
+    scheduling = segment.scheduling
+    if scheduling is None:
+        return
+    global_fields = sorted(
+        field
+        for field in scheduling.model_fields_set
+        if field not in _STATION_SCOPED_GROUND_SCHEDULING_FIELDS
+    )
+    if not global_fields:
+        return
+    raise SessionResolutionError(
+        f"ground segment {segment.id!r} sets allocator-wide scheduling field(s) "
+        f"{', '.join(global_fields)}. Those fields are consumed globally by OME today; "
+        "set them in top-level scheduling.ground or leave them unset."
+    )
 
 
 def _terminal_config_from_satellite(sat: SatelliteNode) -> TerminalConfig:
@@ -853,6 +894,7 @@ def _effective_ground_scheduling(
             f"ground segment {segment.id!r} must declare scheduling, or the session "
             "must declare explicit scheduling defaults"
         )
+    _reject_segment_global_scheduling_fields(segment)
     data = (
         cfg.scheduling.ground.model_dump(mode="python")
         if cfg.scheduling is not None
@@ -1154,6 +1196,18 @@ def _validate_link_rule_runtime_shape(
                 raise SessionResolutionError(
                     f"access link_rule {rule.rule_id!r} requires terminal_role='ground' "
                     "on both endpoints"
+                )
+            if len(endpoint_bodies[0]) != 1 or len(endpoint_bodies[1]) != 1:
+                raise SessionResolutionError(
+                    f"access link_rule {rule.rule_id!r} endpoints must each resolve to "
+                    "one surface body"
+                )
+            if endpoint_bodies[0] != endpoint_bodies[1]:
+                raise SessionResolutionError(
+                    f"access link_rule {rule.rule_id!r} crosses bodies "
+                    f"{sorted(endpoint_bodies[0])}<->{sorted(endpoint_bodies[1])}. "
+                    "Ground access visibility is body-local today; cross-body links "
+                    "must use inter_body_relay."
                 )
         elif rule.kind in {"inter_constellation", "relay"}:
             if rule.protocol_boundary is not None:
@@ -1514,6 +1568,31 @@ def _validate_declared_candidate_terminal_compatibility(
             raise SessionResolutionError(
                 f"link_rule {candidate.rule_id!r} terminal_medium changed during validation"
             )
+        _validate_access_terminal_id_scope(candidate, node_a, terminal_id_a)
+        _validate_access_terminal_id_scope(candidate, node_b, terminal_id_b)
+
+
+def _validate_access_terminal_id_scope(
+    candidate: DeclaredLinkCandidate,
+    node: ResolvedNode,
+    terminal_id: str | None,
+) -> None:
+    if candidate.kind != "access" or terminal_id is None:
+        return
+    role_blocks = _blocks_for_role(node, candidate.terminal_role, candidate.terminal_medium)
+    selected = [block for block in role_blocks if block.source_terminal_id == terminal_id]
+    if not selected:
+        raise SessionResolutionError(
+            f"link_rule {candidate.rule_id!r} terminal_id={terminal_id!r} does not "
+            f"match any {candidate.terminal_role!r} terminal on node {node.node_id!r}"
+        )
+    if len(selected) != len(role_blocks):
+        raise SessionResolutionError(
+            f"link_rule {candidate.rule_id!r} narrows access node {node.node_id!r} "
+            f"to terminal_id={terminal_id!r}, but OME access allocation is not "
+            "terminal-block-aware yet. Put that terminal block on its own ground node "
+            "or omit terminal_id until per-block access allocation is implemented."
+        )
 
 
 def _candidate_terminal_id_for_node(

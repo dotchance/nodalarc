@@ -67,6 +67,7 @@ def _preview_segment_session(
     satellite_type_override: str | None,
     ground_stations_source: str | dict,
 ) -> dict:
+    preview_ground = _preview_ground_scheduling().model_dump(mode="python")
     constellation_segment = {
         "id": "space",
         "kind": "constellation",
@@ -87,7 +88,6 @@ def _preview_segment_session(
                 "source": ground_stations_source,
                 "namespace": "ground",
                 "reference_body": "earth",
-                "scheduling": _preview_ground_scheduling().model_dump(mode="python"),
             },
         ],
         "link_rules": [
@@ -107,6 +107,7 @@ def _preview_segment_session(
             "candidate_limits": {"max_pairs_per_rule": 100000},
         },
         "orbit": {"propagator": "keplerian-circular"},
+        "scheduling": {"ground": preview_ground},
         "routing": {"protocol": "isis", "extensions": []},
     }
 
